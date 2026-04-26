@@ -1582,6 +1582,8 @@ async function loadSettings(options = {}) {
     // UI Text
     if (document.getElementById('ui-logo-alt')) document.getElementById('ui-logo-alt').value = uiText.logoAlt || '';
     if (document.getElementById('ui-patron-page-title')) document.getElementById('ui-patron-page-title').value = uiText.pageTitle || '';
+    if (document.getElementById('ui-barcode-label')) document.getElementById('ui-barcode-label').value = uiText.barcodeLabel || '';
+    if (document.getElementById('ui-pin-label')) document.getElementById('ui-pin-label').value = uiText.pinLabel || '';
     if (document.getElementById('ui-login-prompt')) document.getElementById('ui-login-prompt').value = uiText.loginPrompt || 'Please enter your information below to start the suggestion process.';
     if (document.getElementById('ui-login-note')) document.getElementById('ui-login-note').value = uiText.loginNote || 'Use of this service requires a valid library card. Contact your library if you need assistance with your card or PIN.';
     if (document.getElementById('ui-suggestion-note')) document.getElementById('ui-suggestion-note').value = uiText.suggestionFormNote || 'If the library decides to purchase your suggestion, we will automatically place a hold on it and send a confirmation email. Make sure to check your spam folder if you don\'t see the email.';
@@ -1938,6 +1940,8 @@ function buildSettingsPayload() {
   const uiText = {
     logoAlt: document.getElementById('ui-logo-alt').value,
     pageTitle: document.getElementById('ui-patron-page-title').value,
+    barcodeLabel: document.getElementById('ui-barcode-label').value,
+    pinLabel: document.getElementById('ui-pin-label').value,
     loginPrompt: document.getElementById('ui-login-prompt').value,
     loginNote: document.getElementById('ui-login-note').value,
     suggestionFormNote: document.getElementById('ui-suggestion-note').value,
@@ -2034,8 +2038,9 @@ async function saveSettings(options = {}) {
     if (options.clearDelay !== 0) {
       setTimeout(() => msg.textContent = '', options.clearDelay || 3000);
     }
+    await loadSettings({ showErrors: false }); // Sync internal state
     await loadLibraryEmailSettings(currentTemplateOrgId);
-    loadStaffConfig(); // Refresh logo immediately after saving
+    await loadStaffConfig(); // Refresh logo and titles immediately after saving
     loadStaffUsers();
     return true;
   } catch (err) {

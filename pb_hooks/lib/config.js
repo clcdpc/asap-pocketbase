@@ -149,12 +149,18 @@ function getSettings() {
   const defaultUiText = {
     logoUrl: "/jpl.png",
     logoAlt: "Library Logo",
+    pageTitle: "Material Suggestion",
+    barcodeLabel: "Library Card",
+    pinLabel: "Pin",
     loginPrompt: "Please enter your information below to start the suggestion process.",
     suggestionFormNote: "If the library decides to purchase your suggestion, we will automatically place a hold on it and send a confirmation email. Make sure to check your spam folder if you don't see the email.",
     loginNote: "Use of this service requires a valid library card. Contact your library if you need assistance with your card or PIN.",
     successTitle: "Suggestion Submitted",
     successMessage: "You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>",
     alreadySubmittedMessage: "This suggestion has already been submitted. We only accept one suggestion per title. Check the catalog to see if the material was acquired and place a hold.<div>Thank you for using this library's suggestion service.</div>",
+    noEmailMessage: "No email is specified on your library account, which means we won't be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.",
+    ebookMessage: "<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
+    eaudiobookMessage: "<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
     publicationOptions: ["Already published", "Coming soon", "Published a while back"],
     formatLabels: {
       book: "Book",

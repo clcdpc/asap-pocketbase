@@ -41,7 +41,7 @@
     
     <form id="login-form" aria-labelledby="ui-login-prompt">
       <div class="form-group row">
-        <label for="barcode" class="col-5 col-form-label">Library Card</label>
+        <label id="lbl-barcode-login" for="barcode" class="col-5 col-form-label">Library Card</label>
         <div class="col-7">
           <div class="input-group">
             <div class="input-group-prepend">
@@ -52,7 +52,7 @@
         </div>
       </div>
       <div class="form-group row">
-        <label for="pin" class="col-5 col-form-label">Pin</label>
+        <label id="lbl-pin-login" for="pin" class="col-5 col-form-label">Pin</label>
         <div class="col-7">
           <input id="pin" name="password" type="password" required="required" class="form-control" aria-required="true">
         </div>
@@ -74,7 +74,7 @@
     <h2 class="h5" tabindex="-1">Suggestion Details</h2>
     <form id="suggestion-form" aria-label="Suggestion Details">
       <div class="form-group row">
-        <label for="display-barcode" class="col-5 col-form-label">Library Card</label>
+        <label id="lbl-barcode-display" for="display-barcode" class="col-5 col-form-label">Library Card</label>
         <div class="col-7" style="display: flex; align-items: center; justify-content: space-between;">
           <span id="display-barcode" tabindex="0"></span>
           <a href="#" class="btn-logout small text-muted">Logout / Switch User</a>
