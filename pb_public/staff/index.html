@@ -874,11 +874,11 @@
 <dialog id="noteDialog" style="padding: 0; border: none; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); max-width: 500px; width: 90%;">
   <div style="padding: 15px; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center; background: #f8f9fa; border-top-left-radius: 8px; border-top-right-radius: 8px;">
     <h5 style="margin: 0;">Full Note</h5>
-    <button type="button" onclick="document.getElementById('noteDialog').close()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; line-height: 1;">&times;</button>
+    <button type="button" onclick="document.getElementById('noteDialog').close()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; line-height: 1; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 4px;" aria-label="Close dialog">&times;</button>
   </div>
   <div id="noteDialogContent" style="padding: 20px; white-space: pre-wrap; font-size: 14px; max-height: 400px; overflow-y: auto;"></div>
   <div style="padding: 10px 15px; border-top: 1px solid #ddd; text-align: right; background: #f8f9fa; border-bottom-left-radius: 8px; border-bottom-right-radius: 8px;">
-    <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('noteDialog').close()">Close</button>
+    <button id="noteDialogCloseBtn" type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('noteDialog').close()">Close</button>
   </div>
 </dialog>
 
@@ -890,7 +890,7 @@
       style="padding: 12px 15px; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center; background: #f8f9fa; border-radius: 8px 8px 0 0;">
       <h5 id="editModalLabel" style="margin: 0; font-size: 1.1rem;">Edit Suggestion</h5>
       <button type="button" id="close-modal-x"
-        style="border: none; background: transparent; font-size: 1.5rem; line-height: 1; cursor: pointer;">&times;</button>
+        style="border: none; background: transparent; font-size: 1.5rem; line-height: 1; cursor: pointer; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 4px;" aria-label="Close dialog">&times;</button>
     </div>
 
     <div style="padding: 15px 20px; overflow-y: auto; flex: 1;">
@@ -990,7 +990,7 @@
       style="padding: 15px; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center;">
       <h5 style="margin: 0;">New Suggestion</h5>
       <button type="button" id="close-new-modal-x"
-        style="border: none; background: transparent; font-size: 1.5rem; line-height: 1; cursor: pointer;">&times;</button>
+        style="border: none; background: transparent; font-size: 1.5rem; line-height: 1; cursor: pointer; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 4px;" aria-label="Close dialog">&times;</button>
     </div>
     <div style="padding: 20px;">
       <p>Submit a suggestion on behalf of a patron.</p>

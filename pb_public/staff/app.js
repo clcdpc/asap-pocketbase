@@ -739,6 +739,7 @@ gridContainer.addEventListener('click', (e) => {
     const fullNote = truncateBtn.getAttribute('data-full-note');
     document.getElementById('noteDialogContent').textContent = fullNote;
     document.getElementById('noteDialog').showModal();
+    document.getElementById('noteDialogCloseBtn').focus();
     return;
   }
 
@@ -793,6 +794,7 @@ function openEdit(id, nextStatus, dialogTitle, actionStr) {
   verifiedBibId = row.bibid || '';
 
   document.getElementById('editModal').showModal();
+  document.getElementById('close-modal-btn').focus();
 }
 
 document.getElementById('edit-form').addEventListener('submit', async (e) => {
@@ -918,6 +920,7 @@ document.getElementById('btn-new-suggestion').addEventListener('click', () => {
   document.getElementById('new-error').classList.add('hidden');
   resetStaffPatronLookup();
   document.getElementById('newSuggestionModal').showModal();
+  document.getElementById('close-new-modal-btn').focus();
   document.getElementById('new-barcode').focus();
 });
 
