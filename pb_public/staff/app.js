@@ -154,7 +154,11 @@ function getSettingsSectionFromHash() {
 function activateStatusTab(status) {
   currentStatus = status;
   document.querySelectorAll('#status-tabs .nav-link').forEach(link => {
-    link.classList.toggle('active', link.getAttribute('data-status') === status);
+    const isActive = link.getAttribute('data-status') === status;
+    link.classList.toggle('active', isActive);
+    if (link.hasAttribute('role')) {
+      link.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    }
   });
 }
 

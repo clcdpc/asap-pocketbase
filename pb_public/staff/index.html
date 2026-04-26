@@ -155,7 +155,7 @@
     }
 
     .settings-nav-link.active {
-      background: #007bff;
+      background: #004a9b;
       color: #fff;
       box-shadow: 0 4px 10px rgba(0, 123, 255, 0.2);
     }
@@ -256,6 +256,41 @@
         margin-top: 10px;
       }
     }
+
+    /* Accessibility Overrides */
+    #logout-btn {
+      color: #0056b3;
+      font-weight: 600;
+    }
+    #logout-btn:hover {
+      color: #004a9b;
+      text-decoration: underline;
+    }
+    .btn-success {
+      background-color: #19692c !important;
+      border-color: #19692c !important;
+    }
+    .btn-success:hover {
+      background-color: #145523 !important;
+    }
+    .text-muted {
+      color: #5a6268 !important;
+    }
+    .settings-sidebar-card .text-muted {
+      color: #495057 !important;
+    }
+    .nav-link.text-primary.active {
+      color: #004a9b !important;
+      font-weight: 600;
+    }
+    code {
+      background-color: #f8f9fa;
+      color: #b11b5d; /* Darker version of code pink for contrast */
+      padding: 2px 5px;
+      border-radius: 4px;
+      border: 1px solid #dee2e6;
+      font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
   </style>
 </head>
 <main>
@@ -354,18 +389,18 @@
       <button id="btn-new-suggestion" class="btn btn-sm btn-success"><i class="fa fa-plus"></i> New Suggestion</button>
     </div>
 
-    <ul class="nav nav-tabs" id="status-tabs">
-      <li class="nav-item"><a class="nav-link active" data-status="suggestion">Suggestions <span
+    <ul class="nav nav-tabs" id="status-tabs" role="tablist">
+      <li class="nav-item" role="presentation"><a class="nav-link active" data-status="suggestion" role="tab" aria-selected="true">Suggestions <span
             class="badge badge-secondary tab-count" aria-label="0 records">0</span></a></li>
-      <li class="nav-item"><a class="nav-link" data-status="outstanding_purchase">Pending Purchase <span
+      <li class="nav-item" role="presentation"><a class="nav-link" data-status="outstanding_purchase" role="tab" aria-selected="false">Pending Purchase <span
             class="badge badge-secondary tab-count" aria-label="0 records">0</span></a></li>
-      <li class="nav-item"><a class="nav-link" data-status="pending_hold">Pending Hold <span
+      <li class="nav-item" role="presentation"><a class="nav-link" data-status="pending_hold" role="tab" aria-selected="false">Pending Hold <span
             class="badge badge-secondary tab-count" aria-label="0 records">0</span></a></li>
-      <li class="nav-item"><a class="nav-link" data-status="hold_placed">Hold Placed <span
+      <li class="nav-item" role="presentation"><a class="nav-link" data-status="hold_placed" role="tab" aria-selected="false">Hold Placed <span
             class="badge badge-secondary tab-count" aria-label="0 records">0</span></a></li>
-      <li class="nav-item"><a class="nav-link" data-status="closed">Closed <span class="badge badge-secondary tab-count"
+      <li class="nav-item" role="presentation"><a class="nav-link" data-status="closed" role="tab" aria-selected="false">Closed <span class="badge badge-secondary tab-count"
             aria-label="0 records">0</span></a></li>
-      <li class="nav-item" id="nav-settings"><a class="nav-link text-primary" data-status="settings"><i
+      <li class="nav-item" id="nav-settings" role="presentation"><a class="nav-link text-primary" data-status="settings" role="tab" aria-selected="false"><i
             class="fa fa-cog"></i> Settings</a></li>
     </ul>
 
@@ -388,20 +423,20 @@
       <form id="settings-form">
         <div class="settings-shell">
           <aside class="settings-sidebar" aria-label="Settings sections">
-            <div class="settings-sidebar-card">
-              <div class="small text-uppercase text-muted font-weight-bold mb-2">Settings</div>
-              <button type="button" class="settings-nav-link active" data-settings-target="start">Getting Started</button>
-              <button type="button" class="settings-nav-link" data-settings-target="polaris">Polaris</button>
-              <button type="button" class="settings-nav-link" data-settings-target="staff">Staff Access</button>
-              <button type="button" class="settings-nav-link" data-settings-target="smtp">Email / SMTP</button>
-              <button type="button" class="settings-nav-link" data-settings-target="workflow">Workflow</button>
-              <button type="button" class="settings-nav-link" data-settings-target="patron">Patron Experience</button>
-              <button type="button" class="settings-nav-link" data-settings-target="templates">Email Templates</button>
+            <div class="settings-sidebar-card" role="tablist" aria-label="Settings categories">
+              <div class="small text-uppercase text-muted font-weight-bold mb-2" role="presentation">Settings</div>
+              <button type="button" id="tab-start" role="tab" class="settings-nav-link active" data-settings-target="start" aria-controls="settings-start" aria-selected="true">Getting Started</button>
+              <button type="button" id="tab-polaris" role="tab" class="settings-nav-link" data-settings-target="polaris" aria-controls="settings-polaris" aria-selected="false">Polaris</button>
+              <button type="button" id="tab-staff" role="tab" class="settings-nav-link" data-settings-target="staff" aria-controls="settings-staff" aria-selected="false">Staff Access</button>
+              <button type="button" id="tab-smtp" role="tab" class="settings-nav-link" data-settings-target="smtp" aria-controls="settings-smtp" aria-selected="false">Email / SMTP</button>
+              <button type="button" id="tab-workflow" role="tab" class="settings-nav-link" data-settings-target="workflow" aria-controls="settings-workflow" aria-selected="false">Workflow</button>
+              <button type="button" id="tab-patron" role="tab" class="settings-nav-link" data-settings-target="patron" aria-controls="settings-patron" aria-selected="false">Patron Experience</button>
+              <button type="button" id="tab-templates" role="tab" class="settings-nav-link" data-settings-target="templates" aria-controls="settings-templates" aria-selected="false">Email Templates</button>
             </div>
           </aside>
 
           <div class="settings-main">
-            <section id="settings-start" class="settings-panel active" data-settings-section="start" tabindex="-1">
+            <section id="settings-start" class="settings-panel active" data-settings-section="start" role="tabpanel" aria-labelledby="tab-start" tabindex="-1">
               <div class="card settings-panel-card">
                 <div class="card-header">
                   <h2 class="h4 mb-1">Getting Started</h2>
@@ -433,7 +468,7 @@
               </div>
             </section>
 
-            <section id="settings-polaris" class="settings-panel" data-settings-section="polaris" tabindex="-1">
+            <section id="settings-polaris" class="settings-panel" data-settings-section="polaris" role="tabpanel" aria-labelledby="tab-polaris" tabindex="-1">
               <div class="card settings-panel-card">
                 <div class="card-header">
                   <h2 class="h4 mb-1">Polaris API Keys</h2>
@@ -470,7 +505,7 @@
               </div>
             </section>
 
-            <section id="settings-staff" class="settings-panel" data-settings-section="staff" tabindex="-1">
+            <section id="settings-staff" class="settings-panel" data-settings-section="staff" role="tabpanel" aria-labelledby="tab-staff" tabindex="-1">
               <div class="card settings-panel-card">
                 <div class="card-header">
                   <h2 class="h4 mb-1">Staff Access</h2>
@@ -511,7 +546,7 @@
               </div>
             </section>
 
-            <section id="settings-smtp" class="settings-panel" data-settings-section="smtp" tabindex="-1">
+            <section id="settings-smtp" class="settings-panel" data-settings-section="smtp" role="tabpanel" aria-labelledby="tab-smtp" tabindex="-1">
               <div class="card settings-panel-card">
                 <div class="card-header">
                   <h2 class="h4 mb-1">Email / SMTP</h2>
@@ -555,7 +590,7 @@
               </div>
             </section>
 
-            <section id="settings-workflow" class="settings-panel" data-settings-section="workflow" tabindex="-1">
+            <section id="settings-workflow" class="settings-panel" data-settings-section="workflow" role="tabpanel" aria-labelledby="tab-workflow" tabindex="-1">
               <div class="card settings-panel-card">
                 <div class="card-header">
                   <h2 class="h4 mb-1">Workflow</h2>
@@ -632,7 +667,7 @@
               </div>
             </section>
 
-            <section id="settings-patron" class="settings-panel" data-settings-section="patron" tabindex="-1">
+            <section id="settings-patron" class="settings-panel" data-settings-section="patron" role="tabpanel" aria-labelledby="tab-patron" tabindex="-1">
               <div class="card settings-panel-card">
                 <div class="card-header">
                   <h2 class="h4 mb-1">Patron Experience</h2>
@@ -722,7 +757,7 @@
               </div>
             </section>
 
-            <section id="settings-templates" class="settings-panel" data-settings-section="templates" tabindex="-1">
+            <section id="settings-templates" class="settings-panel" data-settings-section="templates" role="tabpanel" aria-labelledby="tab-templates" tabindex="-1">
               <div class="card settings-panel-card">
                 <div class="card-header d-flex justify-content-between align-items-center">
                   <div>
