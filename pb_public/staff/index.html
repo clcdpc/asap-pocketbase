@@ -291,6 +291,36 @@
       border: 1px solid #dee2e6;
       font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     }
+
+    /* In-page Toast Notifications */
+    #toast-container {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 1100;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      pointer-events: none;
+    }
+    .asap-toast {
+      background: #fff;
+      border: 1px solid #dee2e6;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      padding: 12px 16px;
+      max-width: 380px;
+      font-size: 14px;
+      font-weight: 600;
+      opacity: 0;
+      transform: translateX(20px);
+      transition: opacity 0.25s, transform 0.25s;
+      pointer-events: auto;
+    }
+    .asap-toast.show { opacity: 1; transform: translateX(0); }
+    .asap-toast-success { border-left: 4px solid #19692c; color: #19692c; }
+    .asap-toast-error   { border-left: 4px solid #dc3545; color: #dc3545; }
+    .asap-toast-info    { border-left: 4px solid #004a9b; color: #004a9b; }
   </style>
 </head>
 <main>
@@ -405,7 +435,7 @@
     </ul>
 
     <div class="d-flex justify-content-between align-items-center mt-3 mb-2">
-      <div id="tab-desc" class="text-muted small"></div>
+      <div id="tab-desc" class="text-muted small" tabindex="-1"></div>
       <div id="admin-actions-bar" class="hidden">
         <button type="button" id="btn-run-promoter-check" class="btn btn-warning btn-sm hidden"><i class="fa fa-search"></i> Run Auto Promoter Now</button>
         <button type="button" id="btn-run-hold-check" class="btn btn-danger btn-sm hidden"><i class="fa fa-hand-paper"></i> Run Hold Check Now</button>
@@ -869,6 +899,7 @@
   </div>
 </main>
 <div id="status-announcer" class="sr-only" aria-live="polite"></div>
+<div id="toast-container" aria-live="polite" aria-atomic="true"></div>
 
 <!-- Note Dialog -->
 <dialog id="noteDialog" style="padding: 0; border: none; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); max-width: 500px; width: 90%;">
@@ -1055,6 +1086,27 @@
       <button type="submit" class="btn btn-success" id="btn-submit-new" disabled>Submit</button>
     </div>
   </form>
+</dialog>
+
+<!-- Confirm Dialog -->
+<dialog id="confirm-dialog" style="padding: 0; border: none; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); max-width: 420px; width: 90%;">
+  <div style="padding: 24px 24px 20px;">
+    <p id="confirm-dialog-message" style="margin: 0 0 20px; font-size: 15px; line-height: 1.5;"></p>
+    <div style="display: flex; justify-content: flex-end; gap: 8px;">
+      <button type="button" id="confirm-dialog-cancel" class="btn btn-sm btn-secondary">Cancel</button>
+      <button type="button" id="confirm-dialog-ok" class="btn btn-sm btn-primary">OK</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- Alert Dialog -->
+<dialog id="alert-dialog" style="padding: 0; border: none; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); max-width: 420px; width: 90%;">
+  <div style="padding: 24px 24px 20px;">
+    <p id="alert-dialog-message" style="margin: 0 0 20px; font-size: 15px; line-height: 1.5;"></p>
+    <div style="text-align: right;">
+      <button type="button" id="alert-dialog-ok" class="btn btn-sm btn-primary">OK</button>
+    </div>
+  </div>
 </dialog>
 
 <script src="https://unpkg.com/pocketbase/dist/pocketbase.umd.js"></script>

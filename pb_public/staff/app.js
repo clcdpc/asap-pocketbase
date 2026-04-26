@@ -1,4 +1,5 @@
 const pb = new PocketBase(window.location.origin);
+const SETTINGS_RECORD_ID = 'settings0000001';
 
 const loginContainer = document.getElementById('login-container');
 const setupContainer = document.getElementById('setup-container');
@@ -128,6 +129,83 @@ let canAssignSuperAdmin = false;
 const settingsSectionIds = ['start', 'polaris', 'staff', 'smtp', 'workflow', 'patron', 'templates'];
 let currentSettingsSection = 'start';
 
+// --- DOM Field Helpers ---
+
+function setFieldValue(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.value = value;
+}
+
+function setFieldChecked(id, checked) {
+  const el = document.getElementById(id);
+  if (el) el.checked = checked;
+}
+
+function getFieldValue(id, fallback = '') {
+  const el = document.getElementById(id);
+  return el ? el.value : fallback;
+}
+
+function getFieldChecked(id, fallback = false) {
+  const el = document.getElementById(id);
+  return el ? el.checked : fallback;
+}
+
+// --- In-page Toast / Dialog Helpers ---
+
+function showToast(message, type = 'success') {
+  const container = document.getElementById('toast-container');
+  if (!container) return;
+  const toast = document.createElement('div');
+  toast.className = `asap-toast asap-toast-${type}`;
+  toast.textContent = message;
+  container.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('show'));
+  setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 300);
+  }, 3500);
+}
+
+function showAlert(message) {
+  return new Promise(resolve => {
+    const dialog = document.getElementById('alert-dialog');
+    if (!dialog) { alert(message); resolve(); return; }
+    document.getElementById('alert-dialog-message').textContent = message;
+    const okBtn = document.getElementById('alert-dialog-ok');
+    function onOk() {
+      dialog.close();
+      okBtn.removeEventListener('click', onOk);
+      resolve();
+    }
+    okBtn.addEventListener('click', onOk);
+    dialog.showModal();
+    okBtn.focus();
+  });
+}
+
+function showConfirm(message) {
+  return new Promise(resolve => {
+    const dialog = document.getElementById('confirm-dialog');
+    if (!dialog) { resolve(confirm(message)); return; }
+    document.getElementById('confirm-dialog-message').textContent = message;
+    const okBtn = document.getElementById('confirm-dialog-ok');
+    const cancelBtn = document.getElementById('confirm-dialog-cancel');
+    function cleanup(result) {
+      dialog.close();
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      resolve(result);
+    }
+    function onOk() { cleanup(true); }
+    function onCancel() { cleanup(false); }
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    dialog.showModal();
+    cancelBtn.focus();
+  });
+}
+
 function staffRole() {
   return pb.authStore.model ? String(pb.authStore.model.role || '').toLowerCase() : '';
 }
@@ -224,8 +302,6 @@ function initSettingsNavigation() {
 
   activateSettingsSection(getSettingsSectionFromHash() || currentSettingsSection, { updateHash: false });
 }
-
-initSettingsNavigation();
 
 function showBootstrapAdminMessage() {
   const alert = document.getElementById('bootstrap-admin-alert');
@@ -438,10 +514,8 @@ logoutBtn.addEventListener('click', (e) => {
 });
 
 document.querySelectorAll('#status-tabs .nav-link').forEach(link => {
-  link.addEventListener('click', (e) => {
-    const tab = e.target.closest('.nav-link');
-    if (!tab) return;
-    activateStatusTab(tab.getAttribute('data-status'));
+  link.addEventListener('click', () => {
+    activateStatusTab(link.getAttribute('data-status'));
     loadTab(currentStatus);
   });
 });
@@ -570,7 +644,7 @@ function updateTabCounts(records) {
 function formatStandardDate(d) {
   if (!d) return '';
   const date = (d instanceof Date) ? d : new Date(d);
-  return (date.getMonth() + 1) + "/" + date.getDate() + "/" + date.getFullYear();
+  return date.toLocaleDateString('en-US');
 }
 
 function formatDateTime(value) {
@@ -804,12 +878,12 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
   const bibid = document.getElementById('edit-bibid').value.trim();
   if (nextStatus === 'pending_hold') {
     if (!bibid) {
-      alert('BIB ID is required before moving a suggestion to Pending Hold.');
+      await showAlert('BIB ID is required before moving a suggestion to Pending Hold.');
       document.getElementById('edit-bibid').focus();
       return;
     }
     if (bibid !== verifiedBibId) {
-      alert('Please use the "Lookup BIB" button to verify this BIB ID before moving to Pending Hold.');
+      await showAlert('Please use the "Lookup BIB" button to verify this BIB ID before moving to Pending Hold.');
       document.getElementById('btn-bib-lookup').focus();
       return;
     }
@@ -852,12 +926,12 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
         'hold_placed': 'Hold Placed',
         'closed': 'Closed'
       };
-      alert(`Note: This request was moved straight to "${statusNames[updatedRecord.status] || updatedRecord.status}" because it was detected as already being on hold or having a BIB ID.`);
+      await showAlert(`Note: This request was moved straight to "${statusNames[updatedRecord.status] || updatedRecord.status}" because it was detected as already being on hold or having a BIB ID.`);
     }
 
     loadTab(currentStatus);
   } catch (err) {
-    alert(err.message || 'Error updating suggestion');
+    await showAlert(err.message || 'Error updating suggestion');
   }
 });
 
@@ -882,7 +956,7 @@ function setBibIdRequirement(nextStatus) {
 }
 
 async function undoRow(id) {
-  if (!confirm('Undo action and return this request to Suggestions?')) return;
+  if (!await showConfirm('Undo action and return this request to Suggestions?')) return;
   const row = currentSuggestions.find(r => r.id === id);
   if (!row) return;
   try {
@@ -904,7 +978,7 @@ async function undoRow(id) {
     }
     loadTab(currentStatus);
   } catch (err) {
-    alert(err.message || 'Error undoing suggestion');
+    await showAlert(err.message || 'Error undoing suggestion');
   }
 }
 
@@ -1086,12 +1160,8 @@ function normalizePublicationOptions(options) {
   return cleaned.length ? Array.from(new Set(cleaned)) : defaultPublicationOptions.slice();
 }
 
-function cloneJson(value) {
-  return JSON.parse(JSON.stringify(value));
-}
-
 function normalizePatronFormatRules(rules) {
-  const normalized = cloneJson(defaultPatronFormatRules);
+  const normalized = structuredClone(defaultPatronFormatRules);
   const incoming = rules && typeof rules === 'object' ? rules : {};
 
   patronFormatKeys.forEach(format => {
@@ -1305,14 +1375,14 @@ function dateOnly(value) {
 
 function collectSettingsPolaris() {
   return {
-    host: document.getElementById('polaris-host').value,
-    apiKey: document.getElementById('polaris-api-key').value,
-    accessId: document.getElementById('polaris-access-id').value,
-    staffDomain: document.getElementById('polaris-domain').value,
-    adminUser: document.getElementById('polaris-admin-user').value,
-    adminPassword: document.getElementById('polaris-admin-pass').value,
-    overridePassword: document.getElementById('polaris-override-pass').value,
-    autoPromote: document.getElementById('polaris-auto-promote').checked,
+    host: getFieldValue('polaris-host'),
+    apiKey: getFieldValue('polaris-api-key'),
+    accessId: getFieldValue('polaris-access-id'),
+    staffDomain: getFieldValue('polaris-domain'),
+    adminUser: getFieldValue('polaris-admin-user'),
+    adminPassword: getFieldValue('polaris-admin-pass'),
+    overridePassword: getFieldValue('polaris-override-pass'),
+    autoPromote: getFieldChecked('polaris-auto-promote'),
     langId: "1033",
     appId: "100",
     orgId: "1",
@@ -1529,7 +1599,7 @@ async function loadSettings(options = {}) {
   }
 
   try {
-    const record = await pb.collection('app_settings').getOne('settings0000001');
+    const record = await pb.collection('app_settings').getOne(SETTINGS_RECORD_ID);
 
     const smtp = record.smtp || {};
     const polaris = record.polaris || {};
@@ -1563,39 +1633,39 @@ async function loadSettings(options = {}) {
     toggleHoldPickupTimeoutGroup();
 
     // SMTP
-    if (document.getElementById('smtp-host')) document.getElementById('smtp-host').value = smtp.host || '';
-    if (document.getElementById('smtp-port')) document.getElementById('smtp-port').value = smtp.port || 587;
-    if (document.getElementById('smtp-username')) document.getElementById('smtp-username').value = smtp.username || '';
-    if (document.getElementById('smtp-password')) document.getElementById('smtp-password').value = smtp.password || '';
-    if (document.getElementById('smtp-from')) document.getElementById('smtp-from').value = smtp.from || '';
-    if (document.getElementById('smtp-from-name')) document.getElementById('smtp-from-name').value = smtp.fromName || '';
-    if (document.getElementById('smtp-tls')) document.getElementById('smtp-tls').checked = smtp.tls !== false;
+    setFieldValue('smtp-host', smtp.host || '');
+    setFieldValue('smtp-port', smtp.port || 587);
+    setFieldValue('smtp-username', smtp.username || '');
+    setFieldValue('smtp-password', smtp.password || '');
+    setFieldValue('smtp-from', smtp.from || '');
+    setFieldValue('smtp-from-name', smtp.fromName || '');
+    setFieldChecked('smtp-tls', smtp.tls !== false);
 
     // Polaris
-    if (document.getElementById('polaris-host')) document.getElementById('polaris-host').value = polaris.host || '';
-    if (document.getElementById('polaris-api-key')) document.getElementById('polaris-api-key').value = polaris.apiKey || '';
-    if (document.getElementById('polaris-access-id')) document.getElementById('polaris-access-id').value = polaris.accessId || '';
-    if (document.getElementById('polaris-domain')) document.getElementById('polaris-domain').value = polaris.staffDomain || '';
-    if (document.getElementById('polaris-admin-user')) document.getElementById('polaris-admin-user').value = polaris.adminUser || '';
-    if (document.getElementById('polaris-admin-pass')) document.getElementById('polaris-admin-pass').value = polaris.adminPassword || '';
-    if (document.getElementById('polaris-override-pass')) document.getElementById('polaris-override-pass').value = polaris.overridePassword || '';
-    if (document.getElementById('polaris-auto-promote')) document.getElementById('polaris-auto-promote').checked = polaris.autoPromote !== false;
-    if (document.getElementById('allowed-staff-users')) document.getElementById('allowed-staff-users').value = normalizeAllowedStaffUsers(record.allowedStaffUsers || '');
+    setFieldValue('polaris-host', polaris.host || '');
+    setFieldValue('polaris-api-key', polaris.apiKey || '');
+    setFieldValue('polaris-access-id', polaris.accessId || '');
+    setFieldValue('polaris-domain', polaris.staffDomain || '');
+    setFieldValue('polaris-admin-user', polaris.adminUser || '');
+    setFieldValue('polaris-admin-pass', polaris.adminPassword || '');
+    setFieldValue('polaris-override-pass', polaris.overridePassword || '');
+    setFieldChecked('polaris-auto-promote', polaris.autoPromote !== false);
+    setFieldValue('allowed-staff-users', normalizeAllowedStaffUsers(record.allowedStaffUsers || ''));
 
     // UI Text
-    if (document.getElementById('ui-logo-alt')) document.getElementById('ui-logo-alt').value = uiText.logoAlt || '';
-    if (document.getElementById('ui-patron-page-title')) document.getElementById('ui-patron-page-title').value = uiText.pageTitle || '';
-    if (document.getElementById('ui-barcode-label')) document.getElementById('ui-barcode-label').value = uiText.barcodeLabel || '';
-    if (document.getElementById('ui-pin-label')) document.getElementById('ui-pin-label').value = uiText.pinLabel || '';
-    if (document.getElementById('ui-login-prompt')) document.getElementById('ui-login-prompt').value = uiText.loginPrompt || 'Please enter your information below to start the suggestion process.';
-    if (document.getElementById('ui-login-note')) document.getElementById('ui-login-note').value = uiText.loginNote || 'Use of this service requires a valid library card. Contact your library if you need assistance with your card or PIN.';
-    if (document.getElementById('ui-suggestion-note')) document.getElementById('ui-suggestion-note').value = uiText.suggestionFormNote || 'If the library decides to purchase your suggestion, we will automatically place a hold on it and send a confirmation email. Make sure to check your spam folder if you don\'t see the email.';
-    if (document.getElementById('ui-no-email-msg')) document.getElementById('ui-no-email-msg').value = uiText.noEmailMessage || 'No email is specified on your library account, which means we won\'t be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.';
-    if (document.getElementById('ui-success-title')) document.getElementById('ui-success-title').value = uiText.successTitle || 'Suggestion Submitted';
-    if (document.getElementById('ui-success-msg')) document.getElementById('ui-success-msg').value = uiText.successMessage || 'You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>';
-    if (document.getElementById('ui-already-submitted-msg')) document.getElementById('ui-already-submitted-msg').value = uiText.alreadySubmittedMessage || 'This suggestion has already been submitted. We only accept one suggestion per title. Check the catalog to see if the material was acquired and place a hold.<div>Thank you for using this library\'s suggestion service.</div>';
-    if (document.getElementById('ui-ebook-msg')) document.getElementById('ui-ebook-msg').value = uiText.ebookMessage || '<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>';
-    if (document.getElementById('ui-eaudiobook-msg')) document.getElementById('ui-eaudiobook-msg').value = uiText.eaudiobookMessage || '<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>';
+    setFieldValue('ui-logo-alt', uiText.logoAlt || '');
+    setFieldValue('ui-patron-page-title', uiText.pageTitle || '');
+    setFieldValue('ui-barcode-label', uiText.barcodeLabel || '');
+    setFieldValue('ui-pin-label', uiText.pinLabel || '');
+    setFieldValue('ui-login-prompt', uiText.loginPrompt || 'Please enter your information below to start the suggestion process.');
+    setFieldValue('ui-login-note', uiText.loginNote || 'Use of this service requires a valid library card. Contact your library if you need assistance with your card or PIN.');
+    setFieldValue('ui-suggestion-note', uiText.suggestionFormNote || 'If the library decides to purchase your suggestion, we will automatically place a hold on it and send a confirmation email. Make sure to check your spam folder if you don\'t see the email.');
+    setFieldValue('ui-no-email-msg', uiText.noEmailMessage || 'No email is specified on your library account, which means we won\'t be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.');
+    setFieldValue('ui-success-title', uiText.successTitle || 'Suggestion Submitted');
+    setFieldValue('ui-success-msg', uiText.successMessage || 'You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>');
+    setFieldValue('ui-already-submitted-msg', uiText.alreadySubmittedMessage || 'This suggestion has already been submitted. We only accept one suggestion per title. Check the catalog to see if the material was acquired and place a hold.<div>Thank you for using this library\'s suggestion service.</div>');
+    setFieldValue('ui-ebook-msg', uiText.ebookMessage || '<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>');
+    setFieldValue('ui-eaudiobook-msg', uiText.eaudiobookMessage || '<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>');
     
     // Format Labels & Available Formats
     const labels = uiText.formatLabels || {};
@@ -1791,8 +1861,8 @@ async function loadLibraryEmailSettings(orgId) {
 }
 
 document.getElementById('btn-reset-library-templates').addEventListener('click', async () => {
-  if (!confirm('Are you sure you want to reset this library\'s templates to the system defaults? This will delete all custom changes for this library.')) return;
-  
+  if (!await showConfirm('Are you sure you want to reset this library\'s templates to the system defaults? This will delete all custom changes for this library.')) return;
+
   try {
     await authorizedJson('/api/asap/staff/settings/emails', {
       method: 'POST',
@@ -1929,68 +1999,69 @@ if (refreshStaffUsersBtn) {
 
 function buildSettingsPayload() {
   const smtp = {
-    host: document.getElementById('smtp-host').value,
-    port: parseInt(document.getElementById('smtp-port').value || '587', 10) || 587,
-    username: document.getElementById('smtp-username').value,
-    password: document.getElementById('smtp-password').value,
-    from: document.getElementById('smtp-from').value,
-    fromName: document.getElementById('smtp-from-name').value,
-    tls: document.getElementById('smtp-tls').checked
+    host: getFieldValue('smtp-host'),
+    port: parseInt(getFieldValue('smtp-port', '587'), 10) || 587,
+    username: getFieldValue('smtp-username'),
+    password: getFieldValue('smtp-password'),
+    from: getFieldValue('smtp-from'),
+    fromName: getFieldValue('smtp-from-name'),
+    tls: getFieldChecked('smtp-tls', true)
   };
 
   const polaris = collectSettingsPolaris();
 
   const uiText = {
-    logoAlt: document.getElementById('ui-logo-alt').value,
-    pageTitle: document.getElementById('ui-patron-page-title').value,
-    barcodeLabel: document.getElementById('ui-barcode-label').value,
-    pinLabel: document.getElementById('ui-pin-label').value,
-    loginPrompt: document.getElementById('ui-login-prompt').value,
-    loginNote: document.getElementById('ui-login-note').value,
-    suggestionFormNote: document.getElementById('ui-suggestion-note').value,
-    noEmailMessage: document.getElementById('ui-no-email-msg').value,
-    successTitle: document.getElementById('ui-success-title').value,
-    successMessage: document.getElementById('ui-success-msg').value,
-    alreadySubmittedMessage: document.getElementById('ui-already-submitted-msg').value,
-    ebookMessage: document.getElementById('ui-ebook-msg').value,
-    eaudiobookMessage: document.getElementById('ui-eaudiobook-msg').value,
+    logoAlt: getFieldValue('ui-logo-alt'),
+    pageTitle: getFieldValue('ui-patron-page-title'),
+    barcodeLabel: getFieldValue('ui-barcode-label'),
+    pinLabel: getFieldValue('ui-pin-label'),
+    loginPrompt: getFieldValue('ui-login-prompt'),
+    loginNote: getFieldValue('ui-login-note'),
+    suggestionFormNote: getFieldValue('ui-suggestion-note'),
+    noEmailMessage: getFieldValue('ui-no-email-msg'),
+    successTitle: getFieldValue('ui-success-title'),
+    successMessage: getFieldValue('ui-success-msg'),
+    alreadySubmittedMessage: getFieldValue('ui-already-submitted-msg'),
+    ebookMessage: getFieldValue('ui-ebook-msg'),
+    eaudiobookMessage: getFieldValue('ui-eaudiobook-msg'),
     formatLabels: collectFormatLabels(),
     availableFormats: collectAvailableFormats(),
-    publicationOptions: normalizePublicationOptions(document.getElementById('ui-publication-options').value),
+    publicationOptions: normalizePublicationOptions(getFieldValue('ui-publication-options')),
     formatRules: collectPatronFormatRules()
   };
 
   const emails = {
     suggestion_submitted: {
-      subject: document.getElementById('email-submit-subject').value,
-      body: document.getElementById('email-submit-body').value
+      subject: getFieldValue('email-submit-subject'),
+      body: getFieldValue('email-submit-body')
     },
     already_owned: {
-      subject: document.getElementById('email-owned-subject').value,
-      body: document.getElementById('email-owned-body').value
+      subject: getFieldValue('email-owned-subject'),
+      body: getFieldValue('email-owned-body')
     },
     rejected: {
-      subject: document.getElementById('email-rejected-subject').value,
-      body: document.getElementById('email-rejected-body').value
+      subject: getFieldValue('email-rejected-subject'),
+      body: getFieldValue('email-rejected-body')
     },
     hold_placed: {
-      subject: document.getElementById('email-hold-subject').value,
-      body: document.getElementById('email-hold-body').value
+      subject: getFieldValue('email-hold-subject'),
+      body: getFieldValue('email-hold-body')
     }
   };
+
   const payload = {
     smtp, polaris, ui_text: uiText, emails,
-    allowedStaffUsers: normalizeAllowedStaffUsers(document.getElementById('allowed-staff-users').value),
-    suggestionLimit: parseInt(document.getElementById('suggestion-limit').value || '5', 10) || 5,
-    suggestionLimitMessage: document.getElementById('suggestion-limit-msg').value || '',
-    outstandingTimeoutEnabled: document.getElementById('outstanding-timeout-enabled').checked,
-    outstandingTimeoutDays: parseInt(document.getElementById('outstanding-timeout-days').value || '30', 10) || 30,
-    holdPickupTimeoutEnabled: document.getElementById('hold-pickup-timeout-enabled').checked,
-    holdPickupTimeoutDays: parseInt(document.getElementById('hold-pickup-timeout-days').value || '14', 10) || 14
+    allowedStaffUsers: normalizeAllowedStaffUsers(getFieldValue('allowed-staff-users')),
+    suggestionLimit: parseInt(getFieldValue('suggestion-limit', '5'), 10) || 5,
+    suggestionLimitMessage: getFieldValue('suggestion-limit-msg'),
+    outstandingTimeoutEnabled: getFieldChecked('outstanding-timeout-enabled'),
+    outstandingTimeoutDays: parseInt(getFieldValue('outstanding-timeout-days', '30'), 10) || 30,
+    holdPickupTimeoutEnabled: getFieldChecked('hold-pickup-timeout-enabled'),
+    holdPickupTimeoutDays: parseInt(getFieldValue('hold-pickup-timeout-days', '14'), 10) || 14
   };
 
   const fileInput = document.getElementById('ui-logo-file');
-  if (fileInput.files.length > 0) {
+  if (fileInput && fileInput.files.length > 0) {
     payload.logo = fileInput.files[0];
   }
 
@@ -2032,7 +2103,7 @@ async function saveSettings(options = {}) {
       if (currentTemplateOrgId !== 'system') {
         delete payload.emails;
       }
-      globalPromise = pb.collection('app_settings').update('settings0000001', payload);
+      globalPromise = pb.collection('app_settings').update(SETTINGS_RECORD_ID, payload);
     }
 
     await Promise.all([globalPromise, emailPromise]);
@@ -2041,8 +2112,7 @@ async function saveSettings(options = {}) {
     if (options.clearDelay !== 0) {
       setTimeout(() => msg.textContent = '', options.clearDelay || 3000);
     }
-    await loadSettings({ showErrors: false }); // Sync internal state
-    await loadLibraryEmailSettings(currentTemplateOrgId);
+    await loadSettings({ showErrors: false }); // Sync internal state (also triggers loadLibraryEmailSettings)
     await loadStaffConfig(); // Refresh logo and titles immediately after saving
     loadStaffUsers();
     return true;
@@ -2087,6 +2157,7 @@ async function loadStaffConfig() {
 }
 
 async function initStaffApp() {
+  initSettingsNavigation();
   await loadStaffConfig();
   await loadSetupStatus();
   checkAuth();
@@ -2139,7 +2210,7 @@ function renderFormatSettings() {
   if (!container) return;
 
   // Show enabled formats first (in their saved order), then disabled ones
-  const enabledKeys = availableFormats.filter(k => formatMap[k] !== undefined || true);
+  const enabledKeys = availableFormats.filter(k => formatMap[k] !== undefined);
   const disabledKeys = Object.keys(formatMap).filter(k => !availableFormats.includes(k));
   const allKeys = [...enabledKeys, ...disabledKeys];
 
@@ -2261,12 +2332,12 @@ function updateModalFormatDropdowns() {
 
 const btnAddFormat = document.getElementById('btn-add-format');
 if (btnAddFormat) {
-  btnAddFormat.addEventListener('click', () => {
+  btnAddFormat.addEventListener('click', async () => {
     const name = prompt('Enter a short, unique name for the new format (e.g. "videogame"):');
     if (!name) return;
     const key = name.toLowerCase().replace(/[^a-z0-9_]/g, '_');
     if (formatMap[key]) {
-      alert('This format key already exists.');
+      await showAlert('This format key already exists.');
       return;
     }
     const label = name.charAt(0).toUpperCase() + name.slice(1);
@@ -2279,11 +2350,11 @@ if (btnAddFormat) {
 
 const formatSettingsContainer = document.getElementById('format-settings-container');
 if (formatSettingsContainer) {
-  formatSettingsContainer.addEventListener('click', (e) => {
+  formatSettingsContainer.addEventListener('click', async (e) => {
     if (e.target.classList.contains('btn-remove-format')) {
       const row = e.target.closest('tr');
       const key = row.getAttribute('data-key');
-      if (confirm(`Remove format "${key}"? This will only remove it from the settings list. Existing requests with this format will remain in the database.`)) {
+      if (await showConfirm(`Remove format "${key}"? This will only remove it from the settings list. Existing requests with this format will remain in the database.`)) {
         delete formatMap[key];
         availableFormats = availableFormats.filter(k => k !== key);
         renderFormatSettings();
