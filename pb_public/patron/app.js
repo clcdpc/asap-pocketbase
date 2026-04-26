@@ -97,6 +97,12 @@ function getApiUrl(path) {
   return window.location.origin + path;
 }
 
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
 async function request(path, options = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (authToken) headers['Authorization'] = authToken;
@@ -106,6 +112,16 @@ async function request(path, options = {}) {
   });
   
   if (!response.ok) {
+    if (response.status === 401) {
+      authToken = '';
+      const errorDiv = document.getElementById('login-error');
+      errorDiv.textContent = 'Your session has expired. Please log in again.';
+      errorDiv.classList.remove('hidden');
+      showStep(stepLogin);
+      const err = new Error('Session expired');
+      err.status = 401;
+      throw err;
+    }
     let message = response.statusText;
     try {
       const data = await response.json();
@@ -182,6 +198,7 @@ loginForm.addEventListener('submit', async (e) => {
   const btn = document.getElementById('login-btn');
   const errorDiv = document.getElementById('login-error');
   btn.disabled = true;
+  btn.textContent = 'Logging in...';
   errorDiv.classList.add('hidden');
 
   try {
@@ -219,10 +236,13 @@ loginForm.addEventListener('submit', async (e) => {
 
     showStep(stepForm);
   } catch (err) {
-    errorDiv.textContent = 'Incorrect Login - Please try again';
-    errorDiv.classList.remove('hidden');
+    if (err.status !== 401) {
+      errorDiv.textContent = 'Incorrect Login - Please try again';
+      errorDiv.classList.remove('hidden');
+    }
   } finally {
     btn.disabled = false;
+    btn.textContent = 'Next';
   }
 });
 
@@ -231,6 +251,7 @@ suggestionForm.addEventListener('submit', async (e) => {
   const btn = document.getElementById('submit-btn');
   const errorDiv = document.getElementById('submit-error');
   btn.disabled = true;
+  btn.textContent = 'Submitting...';
   errorDiv.classList.add('hidden');
 
   try {
@@ -243,7 +264,9 @@ suggestionForm.addEventListener('submit', async (e) => {
     applySuccessConfig(result);
     showStep(stepSuccess);
   } catch (err) {
-    if (err.status === 409) {
+    if (err.status === 401) {
+      // Session expired — already handled by request()
+    } else if (err.status === 409) {
       showStep(stepConflict);
     } else if (err.status === 406) {
       errorDiv.textContent = err.message || 'You have reached your weekly suggestion limit.';
@@ -254,12 +277,9 @@ suggestionForm.addEventListener('submit', async (e) => {
     }
   } finally {
     btn.disabled = false;
+    btn.textContent = 'Submit';
   }
 });
-
-function clone(value) {
-  return JSON.parse(JSON.stringify(value));
-}
 
 function normalizeMode(value, fallback) {
   return ['required', 'optional', 'hidden'].includes(value) ? value : fallback || 'optional';
@@ -270,7 +290,7 @@ function normalizeMessageBehavior(value, fallback) {
 }
 
 function normalizeFormatRules(rules) {
-  const normalized = clone(defaultFormatRules);
+  const normalized = structuredClone(defaultFormatRules);
   const incoming = rules && typeof rules === 'object' ? rules : {};
 
   formatKeys.forEach(format => {
@@ -390,10 +410,7 @@ function applySuccessConfig(config) {
   const nextConfig = normalizeUiConfig(config);
   if (nextConfig.successTitle || nextConfig.successMessage) {
     uiConfig = { ...uiConfig, ...nextConfig };
-    renderSuccessMessage();
-    return;
   }
-
   renderSuccessMessage();
 }
 
@@ -463,7 +480,7 @@ function updateFormatLabels() {
     // Rebuild the dropdown with only the enabled formats
     select.innerHTML = available.map(key => {
       const label = labels[key] || key;
-      return `<option value="${key}">${label}</option>`;
+      return `<option value="${escapeHtml(key)}">${escapeHtml(label)}</option>`;
     }).join('');
   } else {
     // No availableFormats config — just rename existing options

@@ -5,6 +5,7 @@
   <link id="app-icon" rel="icon" type="image/png" href="" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Material Suggestion</title>
+  <meta name="description" content="Suggest a purchase for your library. Log in with your library card to submit a material suggestion.">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.1.3/dist/css/bootstrap.min.css" integrity="sha384-MCw98/SFnGE8fJT3GXwEOngsV7Zt27NXFoaoApmYm81iuXoPkFOJwJ8ERdknLPMO" crossorigin="anonymous">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.css">
   <style>
@@ -35,7 +36,7 @@
   
   <div id="step-login">
     <div class="form-group row">
-      <label class="col-5 col-form-label" style="color: transparent;" aria-hidden="true">.</label>
+      <div class="col-5"></div>
       <div class="col-7" id="ui-login-prompt"></div>
     </div>
     
@@ -58,7 +59,7 @@
         </div>
       </div>
       <div class="form-group row reqAuth">
-        <label class="col-5" style="color: transparent;" aria-hidden="true">.</label>
+        <div class="col-5"></div>
         <div class="col-7" style="text-align: left;" id="ui-login-note-container" aria-live="polite"></div>
       </div>
       <div class="form-group row">
@@ -76,7 +77,7 @@
       <div class="form-group row">
         <label id="lbl-barcode-display" for="display-barcode" class="col-5 col-form-label">Library Card</label>
         <div class="col-7" style="display: flex; align-items: center; justify-content: space-between;">
-          <span id="display-barcode" tabindex="0"></span>
+          <span id="display-barcode"></span>
           <a href="#" class="btn-logout small text-muted">Logout / Switch User</a>
         </div>
       </div>
@@ -84,13 +85,13 @@
         <label for="display-email" class="col-5 col-form-label">Email</label>
         <div class="col-7" style="display: flex; align-items: center;">
           <div id="no-email-msg" class="hidden text-muted small"></div>
-          <span id="display-email" tabindex="0"></span>
+          <span id="display-email"></span>
         </div>
       </div>
       <div id="pickup-branch-container" class="form-group row hidden">
         <label for="display-pickup-branch" class="col-5 col-form-label">Pickup Location</label>
         <div class="col-7" style="display: flex; align-items: center;">
-          <span id="display-pickup-branch" tabindex="0"></span>
+          <span id="display-pickup-branch"></span>
         </div>
       </div>
       <div class="form-group row reqAuth">
@@ -123,6 +124,7 @@
         <div class="form-group row reqAuth" id="field-identifier">
           <label for="isbn" class="col-5 col-form-label" id="lbl-identifier">ISBN</label>
           <div class="col-7">
+            <!-- name="isbn" is mapped to the "identifier" DB field by the backend (records.js, format_rules.js) -->
             <input id="isbn" name="isbn" type="text" class="form-control">
           </div>
         </div>
