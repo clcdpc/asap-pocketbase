@@ -2,6 +2,8 @@
 
 ASAP is an automated material suggestion management system for public libraries using the Polaris ILS and PocketBase. It streamlines the lifecycle of patron suggestions—from submission and catalog monitoring to automated hold placement and fulfillment tracking.
 
+Credit to Somalia Jamall for the intial concept and for developing a fine PHP based implementaion: https://forum.innovativeusers.org/t/auto-suggest-a-purchase-code/2894
+
 ## 🚀 Getting Started
 
 ### 1. Installation
