@@ -103,6 +103,22 @@ You can manually trigger these jobs or adjust their settings from the **Settings
 
 ---
 
+## 🔒 Network & Security
+
+### 1. Internet Accessibility
+To make ASAP internet-accessible, you can use **NAT (Network Address Translation)** or, more ideally, a **Reverse Proxy** (e.g., Nginx, Caddy, or Apache).
+- **Reverse Proxy Recommended**: Using a reverse proxy is the gold standard for production. It allows you to easily manage SSL/TLS certificates (e.g., via Let's Encrypt), handle load balancing, and add extra security headers.
+
+### 2. Securing the Admin UI
+The PocketBase admin dashboard is accessible at `/_/`. **Do not leave this path exposed to the open internet.**
+- **Access Control**: Configure your firewall or reverse proxy to restrict access to `/_/` to trusted IP addresses or require a VPN connection for administrative tasks.
+
+### 3. Rate Limiting
+PocketBase provides built-in rate limiting to protect your server from brute-force attacks and automated abuse.
+- **Enable Rate Limits**: In the PocketBase Admin UI, navigate to **Settings > Application > Rate Limit** and configure appropriate thresholds for your environment. This is especially important if you are exposing the API to the public internet.
+
+---
+
 ## 🚢 Production Delivery Checklist
 
 Before sharing or deploying this project outside a local development machine:
