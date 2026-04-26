@@ -1,0 +1,342 @@
+function parseJsonObject(value, fallback) {
+  fallback = fallback || {};
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  var text = value.trim();
+  if (!text) {
+    return fallback;
+  }
+  try {
+    var parsed = JSON.parse(text);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed;
+    }
+    if (typeof parsed === "string") {
+      var nested = JSON.parse(parsed);
+      if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+        return nested;
+      }
+    }
+  } catch (err) {
+    return fallback;
+  }
+  return fallback;
+}
+
+function parseRecordJsonObject(record, fieldName, fallback) {
+  fallback = fallback || {};
+  if (!record) {
+    return fallback;
+  }
+  var fromString = "";
+  try {
+    fromString = record.getString(fieldName);
+  } catch (err) {
+    fromString = "";
+  }
+  var parsedString = parseJsonObject(fromString, null);
+  if (parsedString) {
+    return parsedString;
+  }
+  var direct = parseJsonObject(record.get(fieldName), null);
+  if (direct) {
+    return direct;
+  }
+  return fallback;
+}
+
+const DEFAULT_EMAILS = {
+  suggestion_submitted: {
+    subject: "Suggestion received: {{title}}",
+    body: "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format. Our collection development team has received your request and will review it.\n\nIf we add this item, we will place a hold for you automatically and send another update.\n\nThank you for helping us shape the library collection."
+  },
+  already_owned: {
+    subject: "{{title}} is already available",
+    body: "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format.\n\nThe library already owns this title or has it on order. We have placed a hold on card {{barcode}} so you will be notified when it is ready.\n\nThank you for using the library's suggestion service."
+  },
+  rejected: {
+    subject: "Update on your suggestion: {{title}}",
+    body: "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format.\n\nAfter review, we are not able to add this item to the collection at this time. We appreciate you taking the time to share your suggestion with us.\n\nThank you for helping us build a collection that reflects our community."
+  },
+  hold_placed: {
+    subject: "Hold placed for {{title}}",
+    body: "Hello {{name}},\n\nGood news. The library plans to add {{title}} by {{author}} in {{format}} format.\n\nWe have placed a hold on card {{barcode}}. You will receive the usual pickup notice when the item is ready.\n\nThank you for your suggestion."
+  }
+};
+
+const EMAIL_TEMPLATE_KEYS = ["suggestion_submitted", "already_owned", "rejected", "hold_placed"];
+const EMAIL_TEMPLATE_FIELDS = ["subject", "body"];
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function defaultEmailTemplates() {
+  return cloneJson(DEFAULT_EMAILS);
+}
+
+function mergeEmailTemplates(baseTemplates, overrideTemplates) {
+  var base = parseJsonObject(baseTemplates, defaultEmailTemplates());
+  var overrides = parseJsonObject(overrideTemplates, {});
+  var merged = {};
+
+  for (var i = 0; i < EMAIL_TEMPLATE_KEYS.length; i++) {
+    var key = EMAIL_TEMPLATE_KEYS[i];
+    merged[key] = {};
+    var baseTemplate = parseJsonObject(base[key], {});
+    var overrideTemplate = parseJsonObject(overrides[key], {});
+
+    for (var j = 0; j < EMAIL_TEMPLATE_FIELDS.length; j++) {
+      var field = EMAIL_TEMPLATE_FIELDS[j];
+      var overrideValue = overrideTemplate[field];
+      var baseValue = baseTemplate[field];
+      merged[key][field] = String(overrideValue || "").trim() ? String(overrideValue) : String(baseValue || "");
+    }
+  }
+
+  return merged;
+}
+
+function normalizeEmailTemplates(templates) {
+  return mergeEmailTemplates(defaultEmailTemplates(), templates);
+}
+
+function diffEmailTemplates(baseTemplates, nextTemplates) {
+  var base = normalizeEmailTemplates(baseTemplates);
+  var next = normalizeEmailTemplates(nextTemplates);
+  var diff = {};
+
+  for (var i = 0; i < EMAIL_TEMPLATE_KEYS.length; i++) {
+    var key = EMAIL_TEMPLATE_KEYS[i];
+    var templateDiff = {};
+    for (var j = 0; j < EMAIL_TEMPLATE_FIELDS.length; j++) {
+      var field = EMAIL_TEMPLATE_FIELDS[j];
+      var nextValue = String(next[key][field] || "").trim();
+      var baseValue = String(base[key][field] || "").trim();
+      if (nextValue && nextValue !== baseValue) {
+        templateDiff[field] = next[key][field];
+      }
+    }
+    if (Object.keys(templateDiff).length) {
+      diff[key] = templateDiff;
+    }
+  }
+
+  return diff;
+}
+
+function hasEmailTemplateOverrides(templates) {
+  templates = parseJsonObject(templates, {});
+  for (var i = 0; i < EMAIL_TEMPLATE_KEYS.length; i++) {
+    var key = EMAIL_TEMPLATE_KEYS[i];
+    var template = parseJsonObject(templates[key], {});
+    for (var j = 0; j < EMAIL_TEMPLATE_FIELDS.length; j++) {
+      var field = EMAIL_TEMPLATE_FIELDS[j];
+      if (String(template[field] || "").trim()) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function getSettings() {
+  const formatRules = require(`${__hooks}/lib/format_rules.js`);
+  const defaultUiText = {
+    logoUrl: "/jpl.png",
+    logoAlt: "Library Logo",
+    loginPrompt: "Please enter your information below to start the suggestion process.",
+    suggestionFormNote: "If the library decides to purchase your suggestion, we will automatically place a hold on it and send a confirmation email. Make sure to check your spam folder if you don't see the email.",
+    loginNote: "Use of this service requires a valid library card. Contact your library if you need assistance with your card or PIN.",
+    successTitle: "Suggestion Submitted",
+    successMessage: "You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>",
+    alreadySubmittedMessage: "This suggestion has already been submitted. We only accept one suggestion per title. Check the catalog to see if the material was acquired and place a hold.<div>Thank you for using this library's suggestion service.</div>",
+    publicationOptions: ["Already published", "Coming soon", "Published a while back"],
+    formatLabels: {
+      book: "Book",
+      audiobook_cd: "Audiobook (Physical CD)",
+      dvd: "DVD",
+      music_cd: "Music CD",
+      ebook: "eBook",
+      eaudiobook: "eAudiobook"
+    },
+    availableFormats: ["book", "audiobook_cd", "dvd", "music_cd", "ebook", "eaudiobook"],
+    formatRules: formatRules.defaultFormatRules()
+  };
+
+  const defaultEmails = defaultEmailTemplates();
+
+  try {
+    const record = $app.findRecordById("app_settings", "settings0000001");
+    let logoUrl = "/jpl.png";
+    const logoFile = record.get("logo");
+    if (logoFile) {
+      logoUrl = `/api/files/app_settings/${record.id}/${logoFile}`;
+    }
+
+    var dbUiText = parseRecordJsonObject(record, "ui_text", {});
+    var dbPolaris = parseRecordJsonObject(record, "polaris", {});
+    var dbSmtp = parseRecordJsonObject(record, "smtp", {});
+    var dbEmails = parseRecordJsonObject(record, "emails", {});
+
+    var mergedUiText = Object.assign({}, defaultUiText, dbUiText, { logoUrl: logoUrl });
+    mergedUiText.formatRules = formatRules.normalizeFormatRules(mergedUiText.formatRules);
+
+    return {
+      polaris: dbPolaris,
+      smtp: dbSmtp,
+      emails: mergeEmailTemplates(defaultEmails, dbEmails),
+      allowedStaffUsers: record.getString("allowedStaffUsers") || "",
+      suggestionLimit: record.getInt("suggestionLimit") || 5,
+      suggestionLimitMessage: record.getString("suggestionLimitMessage") || "Weekly suggestion limit reached",
+      outstandingTimeoutEnabled: record.getBool("outstandingTimeoutEnabled"),
+      outstandingTimeoutDays: record.getInt("outstandingTimeoutDays") || 30,
+      holdPickupTimeoutEnabled: record.getBool("holdPickupTimeoutEnabled"),
+      holdPickupTimeoutDays: record.getInt("holdPickupTimeoutDays") || 14,
+      ui_text: mergedUiText
+    };
+  } catch (err) {
+    return { polaris: {}, smtp: {}, emails: defaultEmailTemplates(), allowedStaffUsers: "", suggestionLimit: 5, suggestionLimitMessage: "Weekly suggestion limit reached", outstandingTimeoutEnabled: false, outstandingTimeoutDays: 30, holdPickupTimeoutEnabled: false, holdPickupTimeoutDays: 14, ui_text: defaultUiText };
+  }
+}
+
+function emails() {
+  return getSettings().emails;
+}
+
+function libraryEmails(app, libraryOrgId) {
+  const systemDefaults = emails();
+  libraryOrgId = String(libraryOrgId || "").trim();
+  if (!libraryOrgId) {
+    return systemDefaults;
+  }
+
+  try {
+    const record = app.findFirstRecordByData("library_email_settings", "libraryOrgId", libraryOrgId);
+    var dbEmails = parseRecordJsonObject(record, "emails", {});
+    return mergeEmailTemplates(systemDefaults, dbEmails);
+  } catch (err) {
+    return systemDefaults;
+  }
+}
+
+function polaris() {
+  const s = getSettings().polaris;
+  return {
+    host: s.host || "",
+    accessId: s.accessId || "SuggestAPI",
+    apiKey: s.apiKey || "",
+    staffDomain: s.staffDomain || "",
+    adminUser: s.adminUser || "",
+    adminPassword: s.adminPassword || "",
+    overridePassword: s.overridePassword || "",
+    langId: s.langId || "1033",
+    appId: s.appId || "100",
+    orgId: s.orgId || "1",
+    pickupOrgId: s.pickupOrgId || "0",
+    requestingOrgId: s.requestingOrgId || "3",
+    workstationId: s.workstationId || "1",
+    userId: s.userId || "1",
+  };
+}
+
+function mail() {
+  const s = getSettings().smtp;
+  return {
+    host: s.host || "",
+    port: parseInt(s.port, 10) || 587,
+    username: s.username || "",
+    password: s.password || "",
+    from: s.from || "",
+    fromName: s.fromName || "Library Collection Development",
+    tls: s.tls !== false,
+  };
+}
+
+function suggestionLimit() {
+  const s = getSettings();
+  return {
+    limit: s.suggestionLimit,
+    message: s.suggestionLimitMessage,
+  };
+}
+
+function outstandingTimeout() {
+  const s = getSettings();
+  return {
+    enabled: s.outstandingTimeoutEnabled,
+    days: s.outstandingTimeoutDays,
+  };
+}
+
+function holdPickupTimeout() {
+  const s = getSettings();
+  return {
+    enabled: s.holdPickupTimeoutEnabled,
+    days: s.holdPickupTimeoutDays,
+  };
+}
+
+function uiText() {
+  return getSettings().ui_text;
+}
+
+function allowedStaffUsers() {
+  const identity = require(`${__hooks}/lib/identity.js`);
+  const value = String(getSettings().allowedStaffUsers || "").trim();
+  if (!value) return [];
+  return identity.parseAllowedStaffUsers(value, polaris().staffDomain);
+}
+
+function importToken() {
+  var value = $os.getenv("ASAP_IMPORT_TOKEN");
+  return value ? String(value).trim() : "";
+}
+
+function applyMailSettings(app) {
+  var cfg = mail();
+  if (!cfg.from && !cfg.host) {
+    return;
+  }
+
+  var settings = app.settings();
+  if (cfg.from) {
+    settings.meta.senderAddress = cfg.from;
+    settings.meta.senderName = cfg.fromName;
+  }
+
+  if (cfg.host) {
+    settings.smtp.enabled = true;
+    settings.smtp.host = cfg.host;
+    settings.smtp.port = cfg.port;
+    settings.smtp.username = cfg.username;
+    settings.smtp.password = cfg.password;
+    settings.smtp.tls = cfg.tls;
+    settings.smtp.authMethod = cfg.username ? "LOGIN" : "";
+  }
+
+  app.save(settings);
+}
+
+module.exports = {
+  allowedStaffUsers: allowedStaffUsers,
+  applyMailSettings: applyMailSettings,
+  defaultEmailTemplates: defaultEmailTemplates,
+  diffEmailTemplates: diffEmailTemplates,
+  emails: emails,
+  hasEmailTemplateOverrides: hasEmailTemplateOverrides,
+  libraryEmails: libraryEmails,
+  holdPickupTimeout: holdPickupTimeout,
+  importToken: importToken,
+  mail: mail,
+  mergeEmailTemplates: mergeEmailTemplates,
+  normalizeEmailTemplates: normalizeEmailTemplates,
+  outstandingTimeout: outstandingTimeout,
+  polaris: polaris,
+  suggestionLimit: suggestionLimit,
+  uiText: uiText,
+};

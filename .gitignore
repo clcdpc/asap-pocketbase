@@ -1,0 +1,17 @@
+# Local PocketBase runtime artifacts. Users download the binary themselves.
+pocketbase
+pocketbase.exe
+pb_data/
+
+# Local environment and operational output.
+.env
+.env.*
+logs/
+db_data/
+
+# Build/dependency output.
+node_modules/
+dist/
+
+# OS/editor artifacts.
+.DS_Store
