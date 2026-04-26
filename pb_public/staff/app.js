@@ -787,7 +787,7 @@ function openEdit(id, nextStatus, dialogTitle, actionStr) {
   if (actionStr === 'silentClose') appendNotes = `${today} SILENTLY CLOSED by ${username}.`;
 
   const existingNotes = (row.notes || '').trim();
-  document.getElementById('edit-notes').value = appendNotes + (existingNotes ? '\n' + existingNotes : '');
+  document.getElementById('edit-notes').value = appendNotes + (appendNotes && existingNotes ? '\n' : '') + existingNotes;
 
   document.getElementById('bib-info-display').classList.add('hidden');
   document.getElementById('bib-info-text').textContent = '';
