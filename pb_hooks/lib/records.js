@@ -54,8 +54,21 @@ function normalizeStatus(value) {
     hold_placed: STATUS.HOLD_PLACED,
     outstanding_purchase: STATUS.OUTSTANDING_PURCHASE,
     closed: STATUS.CLOSED,
+    pendingHold: STATUS.PENDING_HOLD,
+    holdPlaced: STATUS.HOLD_PLACED,
+    outstandingPurchase: STATUS.OUTSTANDING_PURCHASE,
   };
   return map[String(value)] || STATUS.SUGGESTION;
+}
+
+function getStatusLabel(status) {
+  var map = {};
+  map[STATUS.SUGGESTION] = "Suggestions";
+  map[STATUS.PENDING_HOLD] = "Pending Hold";
+  map[STATUS.HOLD_PLACED] = "Hold Placed";
+  map[STATUS.OUTSTANDING_PURCHASE] = "Pending Purchase";
+  map[STATUS.CLOSED] = "Closed";
+  return map[status] || status;
 }
 
 function normalizeCloseReason(value) {
@@ -291,10 +304,14 @@ function updateTitleRequest(app, id, data, editedBy) {
     }
   }
   if (data.status !== undefined) {
+    var oldStatus = record.get("status");
     var nextStatus = normalizeStatus(data.status);
-    record.set("status", nextStatus);
-    if (nextStatus !== STATUS.CLOSED) {
-      record.set("closeReason", "");
+    if (nextStatus !== oldStatus) {
+      record.set("status", nextStatus);
+      if (nextStatus !== STATUS.CLOSED) {
+        record.set("closeReason", "");
+      }
+      appendSystemNote(record, "Moved from " + getStatusLabel(oldStatus) + " to " + getStatusLabel(nextStatus) + " by " + (editedBy || "system"));
     }
   }
   if (data.closeReason !== undefined) {
