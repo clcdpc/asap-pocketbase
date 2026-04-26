@@ -13,12 +13,22 @@
     .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
     .form-group label { text-align: right; font-weight: bold; }
     .reqAuth label { padding-top: 7px; }
+
+    /* Accessibility Overrides */
+    .btn-primary { background-color: #0056b3; border-color: #004a9b; }
+    .btn-primary:hover, .btn-primary:focus, .btn-primary:active { background-color: #004085; border-color: #003366; }
+    .text-muted { color: #5a6268 !important; }
+    .btn-logout.text-muted { color: #495057 !important; text-decoration: underline; }
+    .btn-logout.text-muted:hover { color: #212529 !important; }
+    .fa-check-circle { color: #1e7e34 !important; } /* Darker green */
+    .fa-exclamation-triangle { color: #856404 !important; } /* High contrast warning */
   </style>
 </head>
 <body>
 <main class="container" style="max-width: 600px; margin: 0 auto;">
   <div style="text-align: center; margin-bottom: 20px;">
     <img id="nav-logo" class="hidden" alt="Library Logo" style="height: 60px;">
+    <h1 id="main-title" class="h4 mt-2">Material Suggestion</h1>
   </div>
   
   <div id="status-announcer" class="sr-only" aria-live="assertive"></div>
@@ -61,26 +71,26 @@
   </div>
 
   <div id="step-form" class="hidden">
-    <h1 class="sr-only">Suggestion Form</h1>
+    <h2 class="h5" tabindex="-1">Suggestion Details</h2>
     <form id="suggestion-form" aria-label="Suggestion Details">
       <div class="form-group row">
-        <label class="col-5 col-form-label">Library Card</label>
+        <label for="display-barcode" class="col-5 col-form-label">Library Card</label>
         <div class="col-7" style="display: flex; align-items: center; justify-content: space-between;">
-          <span id="display-barcode"></span>
+          <span id="display-barcode" tabindex="0"></span>
           <a href="#" class="btn-logout small text-muted">Logout / Switch User</a>
         </div>
       </div>
       <div class="form-group row">
-        <label class="col-5 col-form-label">Email</label>
+        <label for="display-email" class="col-5 col-form-label">Email</label>
         <div class="col-7" style="display: flex; align-items: center;">
           <div id="no-email-msg" class="hidden text-muted small"></div>
-          <span id="display-email"></span>
+          <span id="display-email" tabindex="0"></span>
         </div>
       </div>
       <div id="pickup-branch-container" class="form-group row hidden">
-        <label class="col-5 col-form-label">Pickup Location</label>
+        <label for="display-pickup-branch" class="col-5 col-form-label">Pickup Location</label>
         <div class="col-7" style="display: flex; align-items: center;">
-          <span id="display-pickup-branch"></span>
+          <span id="display-pickup-branch" tabindex="0"></span>
         </div>
       </div>
       <div class="form-group row reqAuth">
@@ -137,8 +147,8 @@
           </div>
         </div>
         <div class="form-group row reqAuth">
-          <label class="col-5">Note</label>
-          <div class="col-7" id="ui-note-text"></div>
+          <label for="ui-note-text" class="col-5">Note</label>
+          <div class="col-7" id="ui-note-text" tabindex="0"></div>
         </div>
         <div class="form-group row">
           <div class="offset-5 col-7">
@@ -163,7 +173,7 @@
         <i class="fa fa-check-circle" style="color: #28a745; font-size: 3rem;" aria-hidden="true"></i>
       </div>
       <div class="col-7">
-        <h2 id="success-title" class="h5">Suggestion Submitted</h2>
+        <h2 id="success-title" class="h5" tabindex="-1">Suggestion Submitted</h2>
         <div id="success-body" class="mb-2"></div>
         <div class="mb-2">
           <button type="button" class="btn btn-primary btn-submit-another mr-2">Submit another suggestion</button>
@@ -179,7 +189,7 @@
         <i class="fa fa-exclamation-triangle" style="color: #ffc107; font-size: 3rem;" aria-hidden="true"></i>
       </div>
       <div class="col-7">
-        <h2 id="conflict-title" class="h5">Already Submitted</h2>
+        <h2 id="conflict-title" class="h5" tabindex="-1">Already Submitted</h2>
         <div id="conflict-body" class="mb-2"></div>
         <div class="mb-2">
           <button type="button" class="btn btn-primary btn-submit-another mr-2">Submit another suggestion</button>

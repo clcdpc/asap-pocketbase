@@ -81,6 +81,7 @@ const defaultUiText = {
   successTitle: 'Suggestion Submitted',
   successMessage: 'You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>',
   alreadySubmittedMessage: 'This suggestion has already been submitted. We only accept one suggestion per title. Check the catalog to see if the material was acquired and place a hold.<div>Thank you for using this library\'s suggestion service.</div>',
+  pageTitle: 'Material Suggestion',
   publicationOptions: defaultPublicationOptions,
   formatRules: defaultFormatRules
 };
@@ -408,6 +409,12 @@ function applyUiConfig() {
   const loginPrompt = document.getElementById('ui-login-prompt');
   const navLogo = document.getElementById('nav-logo');
   const appIcon = document.getElementById('app-icon');
+  const mainTitle = document.getElementById('main-title');
+
+  if (uiConfig.pageTitle && mainTitle) {
+    mainTitle.textContent = uiConfig.pageTitle;
+    document.title = uiConfig.pageTitle;
+  }
 
   if (uiConfig.suggestionFormNote && noteText) noteText.innerHTML = uiConfig.suggestionFormNote;
   if (uiConfig.loginNote && loginNote) loginNote.innerHTML = uiConfig.loginNote;
