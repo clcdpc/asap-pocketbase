@@ -262,7 +262,7 @@
   <div id="setup-container" class="hidden">
     <div class="text-center mb-4">
       <img id="setup-logo" src="" alt="Library Logo" style="height: 60px;">
-      <h4 class="mt-2">Initial Setup</h4>
+      <h2 class="h4 mt-2">Initial Setup</h2>
       <p class="text-muted">Configure Polaris before staff login is enabled. The first staff account created here will be the consortium super admin; later staff logins will be non-admin staff accounts.</p>
     </div>
     <form id="setup-form">
@@ -270,42 +270,42 @@
         Enter the Polaris PAPI credentials first. You can adjust advanced settings after setup from the Settings tab.
       </div>
       <div class="form-group">
-          <label>Initial Super Admin Username</label>
-        <input type="text" name="adminUsername" class="form-control" required>
+          <label for="setup-admin-username">Initial Super Admin Username</label>
+        <input type="text" id="setup-admin-username" name="adminUsername" class="form-control" required>
         <small class="form-text text-muted">Use the staff identity this admin will later use for Polaris login, such as DOMAIN\username or username@domain.</small>
       </div>
       <div class="form-group">
-        <label>Polaris Host</label>
-        <input type="text" name="polarisHost" class="form-control" required placeholder="https://your-papi-server.example.org">
+        <label for="setup-polaris-host">Polaris Host</label>
+        <input type="text" id="setup-polaris-host" name="polarisHost" class="form-control" required placeholder="https://your-papi-server.example.org">
       </div>
       <div class="form-row">
         <div class="form-group col-md-6">
-          <label>PAPI Access ID</label>
-          <input type="text" name="polarisAccessId" class="form-control" required>
+          <label for="setup-polaris-access-id">PAPI Access ID</label>
+          <input type="text" id="setup-polaris-access-id" name="polarisAccessId" class="form-control" required>
         </div>
         <div class="form-group col-md-6">
-          <label>PAPI API Key</label>
-          <input type="password" name="polarisApiKey" class="form-control" required>
+          <label for="setup-polaris-api-key">PAPI API Key</label>
+          <input type="password" id="setup-polaris-api-key" name="polarisApiKey" class="form-control" required>
         </div>
       </div>
       <div class="form-group">
-        <label>Staff Domain</label>
-        <input type="text" name="polarisStaffDomain" class="form-control">
+        <label for="setup-polaris-staff-domain">Staff Domain</label>
+        <input type="text" id="setup-polaris-staff-domain" name="polarisStaffDomain" class="form-control">
       </div>
       <div class="form-row">
         <div class="form-group col-md-6">
-          <label>System Staff Username</label>
-          <input type="text" name="polarisAdminUser" class="form-control">
+          <label for="setup-polaris-admin-user">System Staff Username</label>
+          <input type="text" id="setup-polaris-admin-user" name="polarisAdminUser" class="form-control">
         </div>
         <div class="form-group col-md-6">
-          <label>System Staff Password</label>
-          <input type="password" name="polarisAdminPassword" class="form-control">
+          <label for="setup-polaris-admin-password">System Staff Password</label>
+          <input type="password" id="setup-polaris-admin-password" name="polarisAdminPassword" class="form-control">
         </div>
       </div>
       <small class="form-text text-muted mb-3">Used for patron lookup, patron login, hold placement, and the Polaris connection test.</small>
       <div class="form-group">
-        <label>Emergency Override Password</label>
-        <input type="password" name="polarisOverridePassword" class="form-control">
+        <label for="setup-polaris-override-password">Emergency Override Password</label>
+        <input type="password" id="setup-polaris-override-password" name="polarisOverridePassword" class="form-control">
         <small class="form-text text-muted">Optional. Leave blank unless you need a temporary local bypass while configuring Polaris.</small>
       </div>
       <div class="d-flex align-items-center flex-wrap mb-3">
@@ -320,17 +320,17 @@
   <div id="login-container" class="hidden">
     <div class="text-center mb-4">
       <img id="login-logo" src="" alt="Library Logo" style="height: 60px;">
-      <h4 class="mt-2">Staff Login</h4>
+      <h2 class="h4 mt-2">Staff Login</h2>
     </div>
     <form id="login-form">
       <div class="form-group">
-        <label>Username</label>
-        <input type="text" name="username" class="form-control" required>
+        <label for="login-username">Username</label>
+        <input type="text" id="login-username" name="username" class="form-control" required>
         <small class="form-text text-muted">Use DOMAIN\username or username@domain when staff usernames may exist in multiple domains.</small>
       </div>
       <div class="form-group">
-        <label>Password</label>
-        <input type="password" name="password" class="form-control" required>
+        <label for="login-password">Password</label>
+        <input type="password" id="login-password" name="password" class="form-control" required>
       </div>
       <button type="submit" class="btn btn-primary btn-block">Login</button>
       <div id="login-error" class="text-danger mt-2 font-weight-bold hidden text-center" aria-live="assertive">Invalid
@@ -404,7 +404,7 @@
             <section id="settings-start" class="settings-panel active" data-settings-section="start" tabindex="-1">
               <div class="card settings-panel-card">
                 <div class="card-header">
-                  <h4 class="mb-1">Getting Started</h4>
+                  <h2 class="h4 mb-1">Getting Started</h2>
                   <p class="text-muted mb-0">Use the sections on the left to configure integrations, access, workflows, patron text, and email templates.</p>
                 </div>
                 <div class="card-body">
@@ -436,24 +436,24 @@
             <section id="settings-polaris" class="settings-panel" data-settings-section="polaris" tabindex="-1">
               <div class="card settings-panel-card">
                 <div class="card-header">
-                  <h4 class="mb-1">Polaris API Keys</h4>
+                  <h2 class="h4 mb-1">Polaris API Keys</h2>
                   <p class="text-muted mb-0">These credentials allow automated catalog lookups and hold placement. Use a Polaris staff account with PAPI search and hold permissions.</p>
                 </div>
                 <div class="card-body">
                   <div class="form-row">
-                    <div class="form-group col-md-6"><label>Host</label><input type="text" id="polaris-host" class="form-control">
+                    <div class="form-group col-md-6"><label for="polaris-host">Host</label><input type="text" id="polaris-host" class="form-control">
                     </div>
-                    <div class="form-group col-md-6"><label>API Key</label><input type="password" id="polaris-api-key"
+                    <div class="form-group col-md-6"><label for="polaris-api-key">API Key</label><input type="password" id="polaris-api-key"
                         class="form-control"></div>
-                    <div class="form-group col-md-6"><label>Access ID</label><input type="text" id="polaris-access-id"
+                    <div class="form-group col-md-6"><label for="polaris-access-id">Access ID</label><input type="text" id="polaris-access-id"
                         class="form-control"></div>
-                    <div class="form-group col-md-6"><label>Staff Domain</label><input type="text" id="polaris-domain"
+                    <div class="form-group col-md-6"><label for="polaris-domain">Staff Domain</label><input type="text" id="polaris-domain"
                         class="form-control"></div>
-                    <div class="form-group col-md-6"><label>System Staff Username</label><input type="text"
+                    <div class="form-group col-md-6"><label for="polaris-admin-user">System Staff Username</label><input type="text"
                         id="polaris-admin-user" class="form-control"></div>
-                    <div class="form-group col-md-6"><label>System Staff Password</label><input type="password"
+                    <div class="form-group col-md-6"><label for="polaris-admin-pass">System Staff Password</label><input type="password"
                         id="polaris-admin-pass" class="form-control"></div>
-                    <div class="form-group col-md-6"><label>Override Password (Bypass Polaris)</label><input type="password"
+                    <div class="form-group col-md-6"><label for="polaris-override-pass">Override Password (Bypass Polaris)</label><input type="password"
                         id="polaris-override-pass" class="form-control"></div>
                   </div>
                   <div>
@@ -473,7 +473,7 @@
             <section id="settings-staff" class="settings-panel" data-settings-section="staff" tabindex="-1">
               <div class="card settings-panel-card">
                 <div class="card-header">
-                  <h4 class="mb-1">Staff Access</h4>
+                  <h2 class="h4 mb-1">Staff Access</h2>
                   <p class="text-muted mb-0">Control who can log in, which role they receive, and how staff are scoped to Polaris library organizations.</p>
                 </div>
                 <div class="card-body">
@@ -514,34 +514,34 @@
             <section id="settings-smtp" class="settings-panel" data-settings-section="smtp" tabindex="-1">
               <div class="card settings-panel-card">
                 <div class="card-header">
-                  <h4 class="mb-1">Email / SMTP</h4>
+                  <h2 class="h4 mb-1">Email / SMTP</h2>
                   <p class="text-muted mb-0">Configure the mail server used for patron confirmations and status updates.</p>
                 </div>
                 <div class="card-body">
                   <div class="form-row">
-                    <div class="form-group col-md-6"><label>Host</label><input type="text" id="smtp-host" class="form-control">
+                    <div class="form-group col-md-6"><label for="smtp-host">Host</label><input type="text" id="smtp-host" class="form-control">
                     </div>
-                    <div class="form-group col-md-6"><label>Port</label><input type="number" id="smtp-port" class="form-control">
+                    <div class="form-group col-md-6"><label for="smtp-port">Port</label><input type="number" id="smtp-port" class="form-control">
                     </div>
-                    <div class="form-group col-md-6"><label>Username</label><input type="text" id="smtp-username"
+                    <div class="form-group col-md-6"><label for="smtp-username">Username</label><input type="text" id="smtp-username"
                         class="form-control"></div>
-                    <div class="form-group col-md-6"><label>Password</label><input type="password" id="smtp-password"
+                    <div class="form-group col-md-6"><label for="smtp-password">Password</label><input type="password" id="smtp-password"
                         class="form-control"></div>
-                    <div class="form-group col-md-6"><label>From Email</label><input type="email" id="smtp-from"
+                    <div class="form-group col-md-6"><label for="smtp-from">From Email</label><input type="email" id="smtp-from"
                         class="form-control"></div>
-                    <div class="form-group col-md-6"><label>From Name</label><input type="text" id="smtp-from-name"
+                    <div class="form-group col-md-6"><label for="smtp-from-name">From Name</label><input type="text" id="smtp-from-name"
                         class="form-control"></div>
                     <div class="form-group col-md-12">
                       <div class="form-check">
                         <input class="form-check-input" type="checkbox" id="smtp-tls">
-                        <label class="form-check-label">Use TLS (For port 465)</label>
+                        <label class="form-check-label" for="smtp-tls">Use TLS (For port 465)</label>
                       </div>
                       <small class="form-text text-muted">Uncheck this if you are using port 587 (STARTTLS). Most modern mail servers use port 587.</small>
                     </div>
                   </div>
                   <div class="mt-4 pt-3 border-top">
                     <div class="form-group mb-0">
-                      <label class="small font-weight-bold text-muted uppercase">Test SMTP Connection</label>
+                      <label for="smtp-test-email" class="small font-weight-bold text-muted uppercase">Test SMTP Connection</label>
                       <div class="input-group input-group-sm" style="max-width: 450px;">
                         <input type="email" id="smtp-test-email" class="form-control" placeholder="Enter recipient email address">
                         <div class="input-group-append">
@@ -558,11 +558,11 @@
             <section id="settings-workflow" class="settings-panel" data-settings-section="workflow" tabindex="-1">
               <div class="card settings-panel-card">
                 <div class="card-header">
-                  <h4 class="mb-1">Workflow</h4>
+                  <h2 class="h4 mb-1">Workflow</h2>
                   <p class="text-muted mb-0">Tune automation and patron submission limits.</p>
                 </div>
                 <div class="card-body">
-                  <h5>Workflow Automation</h5>
+                  <h3 class="h5">Workflow Automation</h3>
                   <div class="form-row align-items-center mb-3">
                     <div class="col-auto">
                       <div class="custom-control custom-switch">
@@ -618,12 +618,12 @@
                   </div>
 
                   <hr>
-                  <h5>Suggestion Limits</h5>
+                  <h3 class="h5">Suggestion Limits</h3>
                   <div class="form-row">
-                    <div class="form-group col-md-4"><label>Weekly Limit</label><input type="number" id="suggestion-limit"
+                    <div class="form-group col-md-4"><label for="suggestion-limit">Weekly Limit</label><input type="number" id="suggestion-limit"
                         class="form-control"></div>
                     <div class="form-group col-md-8">
-                      <label>Limit Reached Message</label>
+                      <label for="suggestion-limit-msg">Limit Reached Message</label>
                       <input type="text" id="suggestion-limit-msg" class="form-control">
                       <small class="form-text text-muted">Use <code>{{next_available_date}}</code> as a placeholder for when the patron can submit again.</small>
                     </div>
@@ -635,64 +635,64 @@
             <section id="settings-patron" class="settings-panel" data-settings-section="patron" tabindex="-1">
               <div class="card settings-panel-card">
                 <div class="card-header">
-                  <h4 class="mb-1">Patron Experience</h4>
+                  <h2 class="h4 mb-1">Patron Experience</h2>
                   <p class="text-muted mb-0">Customize the public patron form, messaging, logo, and publication timing options.</p>
                 </div>
                 <div class="card-body">
                   <div class="form-group">
-                    <label>Custom Logo (Replaces /jpl.png)</label>
+                    <label for="ui-logo-file">Custom Logo (Replaces /jpl.png)</label>
                     <input type="file" id="ui-logo-file" class="form-control-file"
                       accept="image/png, image/jpeg, image/svg+xml, image/gif">
                     <small class="form-text text-muted">Leave blank to keep the current logo.</small>
                   </div>
                   <div class="form-group">
-                    <label>Logo Alt Text (for Screen Readers)</label>
+                    <label for="ui-logo-alt">Logo Alt Text (for Screen Readers)</label>
                     <input type="text" id="ui-logo-alt" class="form-control">
                   </div>
                   <div class="form-group">
-                    <label>Login Prompt (Supports HTML)</label>
+                    <label for="ui-login-prompt">Login Prompt (Supports HTML)</label>
                     <textarea id="ui-login-prompt" class="form-control" rows="2"></textarea>
                   </div>
                   <div class="form-group">
-                    <label>Login Requirement Note (Supports HTML)</label>
+                    <label for="ui-login-note">Login Requirement Note (Supports HTML)</label>
                     <textarea id="ui-login-note" class="form-control" rows="3"></textarea>
                   </div>
                   <div class="form-group">
-                    <label>Suggestion Form Note (Supports HTML)</label>
+                    <label for="ui-suggestion-note">Suggestion Form Note (Supports HTML)</label>
                     <textarea id="ui-suggestion-note" class="form-control" rows="3"></textarea>
                   </div>
                   <div class="form-group">
-                    <label>No Email Warning Message (Supports HTML)</label>
+                    <label for="ui-no-email-msg">No Email Warning Message (Supports HTML)</label>
                     <textarea id="ui-no-email-msg" class="form-control" rows="3"></textarea>
                     <small class="form-text text-muted">Shown to patrons who do not have an email address on file in Polaris.</small>
                   </div>
                   <div class="form-row">
                     <div class="form-group col-md-4">
-                      <label>Success Title</label>
+                      <label for="ui-success-title">Success Title</label>
                       <input type="text" id="ui-success-title" class="form-control">
                     </div>
                     <div class="form-group col-md-8">
-                      <label>Success Message (Supports HTML)</label>
+                      <label for="ui-success-msg">Success Message (Supports HTML)</label>
                       <textarea id="ui-success-msg" class="form-control" rows="3"></textarea>
                     </div>
                   </div>
                   <div class="form-group">
-                    <label>Already Submitted Message (Supports HTML)</label>
+                    <label for="ui-already-submitted-msg">Already Submitted Message (Supports HTML)</label>
                     <textarea id="ui-already-submitted-msg" class="form-control" rows="3"></textarea>
                     <small class="form-text text-muted">Shown when a patron tries to submit a title they have already requested.</small>
                   </div>
                   <div class="form-group">
-                    <label>eBook Message (Supports HTML)</label>
+                    <label for="ui-ebook-msg">eBook Message (Supports HTML)</label>
                     <textarea id="ui-ebook-msg" class="form-control" rows="3"></textarea>
                     <small class="form-text text-muted">Shown to patrons when they select "eBook" as their format.</small>
                   </div>
                   <div class="form-group">
-                    <label>eAudiobook Message (Supports HTML)</label>
+                    <label for="ui-eaudiobook-msg">eAudiobook Message (Supports HTML)</label>
                     <textarea id="ui-eaudiobook-msg" class="form-control" rows="3"></textarea>
                     <small class="form-text text-muted">Shown to patrons when they select "eAudiobook" as their format.</small>
                   </div>
                   <div class="form-group">
-                    <label>Publication Timing Options</label>
+                    <label for="ui-publication-options">Publication Timing Options</label>
                     <textarea id="ui-publication-options" class="form-control" rows="3"></textarea>
                     <small class="form-text text-muted">One option per line. These appear on the patron form and staff new
                       suggestion form.</small>
@@ -726,7 +726,7 @@
               <div class="card settings-panel-card">
                 <div class="card-header d-flex justify-content-between align-items-center">
                   <div>
-                    <h4 class="mb-1">Email Templates</h4>
+                    <h2 class="h4 mb-1">Email Templates</h2>
                     <p class="text-muted mb-0">Use <code>{{name}}</code>, <code>{{title}}</code>, <code>{{author}}</code>,
                       <code>{{format}}</code>, and <code>{{barcode}}</code> as placeholders.</p>
                   </div>
@@ -758,9 +758,9 @@
                   <div class="card mb-3">
                     <div class="card-header"><strong>Submission Confirmation</strong></div>
                     <div class="card-body">
-                      <div class="form-group"><label>Subject</label><input type="text" id="email-submit-subject"
+                      <div class="form-group"><label for="email-submit-subject">Subject</label><input type="text" id="email-submit-subject"
                           class="form-control"></div>
-                      <div class="form-group"><label>Body</label><textarea id="email-submit-body" class="form-control"
+                      <div class="form-group"><label for="email-submit-body">Body</label><textarea id="email-submit-body" class="form-control"
                           rows="5"></textarea></div>
                     </div>
                   </div>
@@ -768,9 +768,9 @@
                   <div class="card mb-3">
                     <div class="card-header"><strong>Already Owned</strong></div>
                     <div class="card-body">
-                      <div class="form-group"><label>Subject</label><input type="text" id="email-owned-subject"
+                      <div class="form-group"><label for="email-owned-subject">Subject</label><input type="text" id="email-owned-subject"
                           class="form-control"></div>
-                      <div class="form-group"><label>Body</label><textarea id="email-owned-body" class="form-control"
+                      <div class="form-group"><label for="email-owned-body">Body</label><textarea id="email-owned-body" class="form-control"
                           rows="5"></textarea></div>
                     </div>
                   </div>
@@ -778,9 +778,9 @@
                   <div class="card mb-3">
                     <div class="card-header"><strong>Rejected</strong></div>
                     <div class="card-body">
-                      <div class="form-group"><label>Subject</label><input type="text" id="email-rejected-subject"
+                      <div class="form-group"><label for="email-rejected-subject">Subject</label><input type="text" id="email-rejected-subject"
                           class="form-control"></div>
-                      <div class="form-group"><label>Body</label><textarea id="email-rejected-body" class="form-control"
+                      <div class="form-group"><label for="email-rejected-body">Body</label><textarea id="email-rejected-body" class="form-control"
                           rows="5"></textarea></div>
                     </div>
                   </div>
@@ -788,9 +788,9 @@
                   <div class="card mb-0">
                     <div class="card-header"><strong>Hold Placed</strong></div>
                     <div class="card-body">
-                      <div class="form-group"><label>Subject</label><input type="text" id="email-hold-subject"
+                      <div class="form-group"><label for="email-hold-subject">Subject</label><input type="text" id="email-hold-subject"
                           class="form-control"></div>
-                      <div class="form-group"><label>Body</label><textarea id="email-hold-body" class="form-control"
+                      <div class="form-group"><label for="email-hold-body">Body</label><textarea id="email-hold-body" class="form-control"
                           rows="5"></textarea></div>
                     </div>
                   </div>
