@@ -119,6 +119,18 @@ PocketBase provides built-in rate limiting to protect your server from brute-for
 
 ---
 
+## 🔐 Emergency Access
+
+### Emergency Override Password
+The **Emergency Override Password** is a global setting that provides a local bypass for staff authentication. It is primarily intended for system recovery and troubleshooting.
+
+- **Purpose**: It allows staff users who have logged into ASAP at least once to access the Staff Dashboard even if the Polaris API is unavailable or connectivity is broken.
+- **How it works**: If a staff member enters their username and the Emergency Override Password (instead of their Polaris password), ASAP will bypass the Polaris API call and log them in based on their existing local account.
+- **When to use**: Use this during initial configuration if you are still resolving Polaris network issues, or during a Polaris outage to maintain access to the ASAP dashboard.
+- **Security Warning**: **This password should normally be blank in production.** If enabled, it provides a "backdoor" that applies to all staff accounts. Ensure it is a high-entropy password and only shared with trusted system administrators.
+
+---
+
 ## 🚢 Production Delivery Checklist
 
 Before sharing or deploying this project outside a local development machine:
@@ -128,7 +140,7 @@ Before sharing or deploying this project outside a local development machine:
 - Have each library download its own official PocketBase binary and run migrations against a fresh `pb_data/` folder.
 - Complete initial ASAP setup from a trusted network before exposing the service publicly.
 - Use HTTPS for the Polaris PAPI host in production. Protected PAPI calls include staff credentials, access secrets, patron PIN validation, patron data, and hold placement.
-- Review the optional Emergency Override Password setting before launch. It should normally be blank in production.
+- Review the [Emergency Access](#-emergency-access) section before launch. The override password should normally be blank in production.
 
 ---
 
