@@ -1829,7 +1829,7 @@ async function loadLibrarySettings(orgId) {
 
 function populateWorkflowForms(wf) {
   setFieldValue('suggestion-limit', wf.suggestionLimit !== undefined ? wf.suggestionLimit : '5');
-  setFieldValue('suggestion-limit-message', wf.suggestionLimitMessage || 'Weekly suggestion limit reached');
+  setFieldValue('suggestion-limit-msg', wf.suggestionLimitMessage || 'Weekly suggestion limit reached');
   document.getElementById('outstanding-timeout-enabled').checked = !!wf.outstandingTimeoutEnabled;
   setFieldValue('outstanding-timeout-days', wf.outstandingTimeoutDays !== undefined ? wf.outstandingTimeoutDays : '30');
   document.getElementById('hold-pickup-timeout-enabled').checked = !!wf.holdPickupTimeoutEnabled;

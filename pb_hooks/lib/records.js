@@ -35,7 +35,7 @@ const AGEGROUP = {
 
 const CLOSE_REASON = {
   REJECTED: "rejected",
-  SILENT: "silent",
+  SILENT: "Silently Closed",
   HOLD_COMPLETED: "hold_completed",
   HOLD_NOT_PICKED_UP: "hold_not_picked_up",
   MANUAL: "manual",
@@ -81,6 +81,8 @@ function normalizeCloseReason(value) {
     checkout: CLOSE_REASON.HOLD_COMPLETED,
     checked_out: CLOSE_REASON.HOLD_COMPLETED,
     manual: CLOSE_REASON.MANUAL,
+    silent: CLOSE_REASON.SILENT,
+    "Silently Closed": CLOSE_REASON.SILENT,
   };
   return map[String(value || "").trim()] || "";
 }

@@ -999,7 +999,7 @@ function updateLibrarySettings(e) {
     }
     var record = getOrCreateSettingsRecord(e.app);
     if (payload.emails) record.set("emails", config.normalizeEmailTemplates(parseJsonObject(payload.emails, {})));
-    if (payload.ui_text) record.set("ui_text", JSON.stringify(parseJsonObject(payload.ui_text, {})));
+    if (payload.ui_text) record.set("ui_text", parseJsonObject(payload.ui_text, {}));
     if (payload.workflow) {
       var wf = parseJsonObject(payload.workflow, {});
       if (wf.suggestionLimit !== undefined) record.set("suggestionLimit", wf.suggestionLimit);
@@ -1026,8 +1026,8 @@ function updateLibrarySettings(e) {
         record.set("libraryOrgId", orgId);
       }
       if (payload.emails) record.set("emails", config.normalizeEmailTemplates(parseJsonObject(payload.emails, {})));
-      if (payload.ui_text) record.set("ui_text", JSON.stringify(parseJsonObject(payload.ui_text, {})));
-      if (payload.workflow) record.set("workflow", JSON.stringify(parseJsonObject(payload.workflow, {})));
+      if (payload.ui_text) record.set("ui_text", parseJsonObject(payload.ui_text, {}));
+      if (payload.workflow) record.set("workflow", parseJsonObject(payload.workflow, {}));
       e.app.save(record);
     }
   }
