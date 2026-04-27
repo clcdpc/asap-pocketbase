@@ -732,6 +732,13 @@ function staffTitleRequestAction(e) {
       // Reconcile manual input with Polaris data
       polaris.reconcileRecord(e.app, staffAuth, record, bibid);
 
+      // The reconcileRecord function updates the record with the title from Polaris
+      // and prepends it to the original title in parentheses.
+      // We must pass this updated title and author through the `data` variable
+      // so it is correctly saved by `records.updateTitleRequest`.
+      data.title = record.get("title");
+      data.author = record.get("author");
+
       // If moving to Pending Hold, check Polaris for an existing hold
       if (nextStatus === records.STATUS.PENDING_HOLD) {
         try {
