@@ -148,7 +148,7 @@ function diffEmailTemplates(baseTemplates, nextTemplates) {
 
 function hasEmailTemplateOverrides(templates) {
   templates = parseJsonObject(templates, {});
-  
+
   if (String(templates.fromAddress || "").trim() || String(templates.fromName || "").trim()) {
     return true;
   }

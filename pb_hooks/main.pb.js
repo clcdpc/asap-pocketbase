@@ -132,8 +132,8 @@ onBootstrap((e) => {
     }
 
     let uiText = {};
-    try { uiText = JSON.parse(record.getString("ui_text") || "{}"); } catch(pe) {}
-    
+    try { uiText = JSON.parse(record.getString("ui_text") || "{}"); } catch (pe) { }
+
     const oldJplMsg = 'You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using this free service of the Jacksonville Public Library.</div>';
     const oldJplFormNote = "If the Jacksonville Public Library decides to purchase your suggestion, we will automatically place a hold on it and send a confirmation email based on the above form. Make sure to check your spam folder if you don't see the email.";
     const oldJplLoginNote = "Use of this service requires a Jacksonville Public Library card. If you are a Duval County resident and don't already have one, <a href=\"https://jaxpubliclibrary.org/services/get-library-card\">Sign up today</a>.<div>If you cannot remember your library card pin, <a href=\"https://auth.na4.iiivega.com/auth/realms/jaxpl/login-actions/reset-credentials?client_id=convergence&redirect_uri=https%3A%2F%2Fjaxpl.na4.iiivega.com\">you can reset your pin here</a>.</div>";
@@ -147,7 +147,7 @@ onBootstrap((e) => {
       record.set("ui_text", JSON.stringify(uiText));
       e.app.save(record);
     }
-  } catch (err) {}
+  } catch (err) { }
 });
 
 cronAdd("asap-hold-check", $os.getenv("ASAP_CRON_SCHEDULE") || "0 * * * *", () => {
