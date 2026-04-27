@@ -204,5 +204,6 @@ module.exports = {
   MESSAGE_BEHAVIORS: MESSAGE_BEHAVIORS,
   defaultFormatRules: defaultFormatRules,
   normalizeFormatRules: normalizeFormatRules,
+  normalizeMessageBehavior: normalizeMessageBehavior,
   sanitizePatronSuggestion: sanitizePatronSuggestion,
 };
