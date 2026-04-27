@@ -730,7 +730,11 @@ function staffTitleRequestAction(e) {
       }
 
       // Reconcile manual input with Polaris data
-      polaris.reconcileRecord(e.app, staffAuth, record, bibid);
+      var reconciled = polaris.reconcileRecord(e.app, staffAuth, record, bibid);
+      if (reconciled) {
+        data.title = reconciled.title;
+        data.author = reconciled.author;
+      }
 
       // If moving to Pending Hold, check Polaris for an existing hold
       if (nextStatus === records.STATUS.PENDING_HOLD) {
@@ -776,7 +780,12 @@ function staffTitleRequestAction(e) {
           try {
             localStaffAuth = polaris.adminStaffAuth();
           } catch(e) {}
-          polaris.reconcileRecord(e.app, localStaffAuth, record, bibid);
+          var reconciled = polaris.reconcileRecord(e.app, localStaffAuth, record, bibid);
+          if (reconciled) {
+            record.set("title", reconciled.title);
+            record.set("author", reconciled.author);
+            e.app.save(record);
+          }
           try {
             polaris.placeHold(localStaffAuth, bibid, patron.PatronID, false); // testMode = false
             records.appendSystemNote(record, "Auto-placed hold for patron since item is already owned (BIB " + bibid + ")");

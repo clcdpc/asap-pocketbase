@@ -300,18 +300,23 @@ function reconcileRecord(app, staff, record, bibId) {
       var pTitle = String(bibInfo.title || "").trim();
       var pAuthor = String(bibInfo.author || "").trim();
 
+      var newTitle = oldTitle;
+      var newAuthor = oldAuthor;
+
       if (pTitle && oldTitle !== pTitle && oldTitle.indexOf(pTitle + " (") !== 0) {
-        record.set("title", pTitle + " (" + oldTitle + ")");
+        newTitle = pTitle + " (" + oldTitle + ")";
       }
       if (pAuthor && oldAuthor !== pAuthor && oldAuthor.indexOf(pAuthor + " (") !== 0) {
-        record.set("author", pAuthor + " (" + oldAuthor + ")");
+        newAuthor = pAuthor + " (" + oldAuthor + ")";
       }
+      return { title: newTitle, author: newAuthor };
     }
   } catch (err) {
     if (app && app.logger) {
       app.logger().warn("Reconciliation failed", "bibId", bibId, "error", String(err));
     }
   }
+  return null;
 }
 
 module.exports = {
