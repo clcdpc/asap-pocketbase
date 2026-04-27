@@ -44,7 +44,7 @@ function suggestionSubmitted(app, record) {
   var format = formatLabel(record.get("format"));
   var name = (firstName + " " + lastName).trim() || "Library Patron";
   var libraryOrgId = record.get("libraryOrgId");
-  var tpl = config.libraryEmails(app, libraryOrgId).suggestion_submitted;
+  var tpl = config.librarySettings(app, libraryOrgId).emails.suggestion_submitted;
   var data = { 
     name: name, firstName: firstName, lastName: lastName, 
     title: title, author: author, format: format 
@@ -66,7 +66,7 @@ function alreadyOwned(app, record, patron) {
   var firstName = clean((patron && patron.NameFirst) || record.get("nameFirst"));
   var lastName = clean((patron && patron.NameLast) || record.get("nameLast"));
   var libraryOrgId = record.get("libraryOrgId");
-  var tpl = config.libraryEmails(app, libraryOrgId).already_owned;
+  var tpl = config.librarySettings(app, libraryOrgId).emails.already_owned;
   var data = { 
     name: name, firstName: firstName, lastName: lastName,
     title: title, author: author, format: format, barcode: barcode 
@@ -87,7 +87,7 @@ function rejected(app, record, patron) {
   var firstName = clean((patron && patron.NameFirst) || record.get("nameFirst"));
   var lastName = clean((patron && patron.NameLast) || record.get("nameLast"));
   var libraryOrgId = record.get("libraryOrgId");
-  var tpl = config.libraryEmails(app, libraryOrgId).rejected;
+  var tpl = config.librarySettings(app, libraryOrgId).emails.rejected;
   var data = { 
     name: name, firstName: firstName, lastName: lastName,
     title: title, author: author, format: format 
@@ -109,7 +109,7 @@ function holdPlaced(app, record, patron) {
   var firstName = clean((patron && patron.NameFirst) || record.get("nameFirst"));
   var lastName = clean((patron && patron.NameLast) || record.get("nameLast"));
   var libraryOrgId = record.get("libraryOrgId");
-  var tpl = config.libraryEmails(app, libraryOrgId).hold_placed;
+  var tpl = config.librarySettings(app, libraryOrgId).emails.hold_placed;
   var data = { 
     name: name, firstName: firstName, lastName: lastName,
     title: title, author: author, format: format, barcode: barcode 
@@ -130,7 +130,7 @@ function autoRejected(app, record) {
   var lastName = clean(record.get("nameLast"));
   var name = (firstName + " " + lastName).trim() || "Library Patron";
   var libraryOrgId = record.get("libraryOrgId");
-  var tpl = config.libraryEmails(app, libraryOrgId).rejected;
+  var tpl = config.librarySettings(app, libraryOrgId).emails.rejected;
   var data = { 
     name: name, firstName: firstName, lastName: lastName,
     title: title, author: author, format: format 

@@ -466,6 +466,33 @@
           </aside>
 
           <div class="settings-main">
+            <div id="library-context-wrapper" class="hidden">
+              <div id="library-context-bar" class="alert alert-info d-flex align-items-center justify-content-between mb-3">
+                <div class="d-flex align-items-center">
+                  <i class="fa fa-university fa-lg mr-3 text-primary"></i>
+                  <div>
+                    <div class="small text-muted text-uppercase font-weight-bold">Context</div>
+                    <div id="library-context-display" class="h6 mb-0">System Defaults</div>
+                  </div>
+                </div>
+                <div id="super-admin-library-selector" class="form-inline hidden">
+                  <label class="mr-2 small font-weight-bold">Switch Library:</label>
+                  <select id="select-library-context" class="form-control form-control-sm">
+                    <option value="system">System Defaults</option>
+                  </select>
+                </div>
+              </div>
+
+              <div id="library-override-status" class="alert alert-warning mb-3 hidden d-flex justify-content-between align-items-center">
+                <div id="library-override-msg">
+                  <i class="fa fa-info-circle mr-1"></i> This library is currently using <strong>System Defaults</strong> for these settings. Saving changes will create a library-specific override.
+                </div>
+                <button type="button" id="btn-reset-library-settings" class="btn btn-outline-danger btn-sm hidden ml-3 text-nowrap">
+                  <i class="fa fa-refresh mr-1"></i> Reset to System Defaults
+                </button>
+              </div>
+            </div>
+
             <section id="settings-start" class="settings-panel active" data-settings-section="start" role="tabpanel" aria-labelledby="tab-start" tabindex="-1">
               <div class="card settings-panel-card">
                 <div class="card-header">
@@ -814,30 +841,8 @@
                     <p class="text-muted mb-0">Use <code>{{name}}</code>, <code>{{title}}</code>, <code>{{author}}</code>,
                       <code>{{format}}</code>, and <code>{{barcode}}</code> as placeholders.</p>
                   </div>
-                  <button type="button" id="btn-reset-library-templates" class="btn btn-outline-danger btn-sm hidden">
-                    <i class="fa fa-refresh mr-1"></i> Reset to System Defaults
-                  </button>
                 </div>
                 <div class="card-body">
-                  <div class="alert alert-info d-flex align-items-center justify-content-between mb-4">
-                    <div class="d-flex align-items-center">
-                      <i class="fa fa-university fa-lg mr-3 text-primary"></i>
-                      <div>
-                        <div class="small text-muted text-uppercase font-weight-bold">Context</div>
-                        <div id="template-library-display" class="h6 mb-0">System Defaults</div>
-                      </div>
-                    </div>
-                    <div id="super-admin-library-selector" class="form-inline hidden">
-                      <label class="mr-2 small font-weight-bold">Switch Library:</label>
-                      <select id="select-template-library" class="form-control form-control-sm">
-                        <option value="system">System Defaults</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div id="library-template-status" class="alert alert-warning mb-4 hidden">
-                    <i class="fa fa-info-circle mr-1"></i> This library is currently using <strong>System Default</strong> templates. Saving changes will create a library-specific override.
-                  </div>
 
                   <div class="card mb-3">
                     <div class="card-header"><strong>Submission Confirmation</strong></div>

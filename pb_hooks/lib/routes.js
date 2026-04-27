@@ -503,12 +503,16 @@ function patronLogin(e) {
     return e.json(403, { message: "Your library could not be determined from Polaris." });
   }
   var record = records.upsertPatronUser(e.app, patron);
+  // Let patron use system defaults if library specifically hasn't overridden
+  var librarySettings = config.getLibrarySettings(e.app, patron.LibraryOrgID);
+
   return e.json(200, {
     token: record.newAuthToken(),
     record: record,
     email: patron.EmailAddress || "",
     preferredPickupBranchId: patron.PreferredPickupBranchID || "",
     preferredPickupBranchName: patron.PreferredPickupBranchName || "",
+    ui_text: librarySettings.ui_text
   });
 }
 
@@ -909,64 +913,82 @@ function staffBibLookup(e) {
 
 
 
-function getLibraryEmailSettings(e) {
+function getLibrarySettings(e) {
   try {
     var staff = requireAuth(e, "staff_users");
     var orgId = String(queryValue(e, "orgId") || "").trim();
 
-    // If no orgId specified, default to staff's libraryOrgId
     if (!orgId) {
       orgId = String(staff.get("libraryOrgId") || "").trim();
     }
 
-    // Security check: Only super_admin can view other libraries' settings
     if (orgId !== "system" && orgId !== String(staff.get("libraryOrgId") || "").trim() && !isSuperAdmin(staff)) {
       return e.json(403, { message: "Access denied to these library settings." });
     }
 
     var emails = {};
+    var ui_text = {};
+    var workflow = {};
     var isOverride = false;
 
     if (orgId === "system") {
       if (!isSuperAdmin(staff)) {
         return e.json(403, { message: "Only super admins can view system settings." });
       }
-      emails = config.emails();
+      var s = config.getSettings();
+      emails = s.emails;
+      ui_text = s.ui_text;
+      workflow = {
+        suggestionLimit: s.suggestionLimit,
+        suggestionLimitMessage: s.suggestionLimitMessage,
+        outstandingTimeoutEnabled: s.outstandingTimeoutEnabled,
+        outstandingTimeoutDays: s.outstandingTimeoutDays,
+        holdPickupTimeoutEnabled: s.holdPickupTimeoutEnabled,
+        holdPickupTimeoutDays: s.holdPickupTimeoutDays
+      };
     } else {
-      // Check if override exists
       try {
-        var record = e.app.findFirstRecordByData("library_email_settings", "libraryOrgId", orgId);
-        emails = parseRecordJsonObject(record, "emails", {});
+        var record = e.app.findFirstRecordByData("library_settings", "libraryOrgId", orgId);
+        var dbEmails = parseRecordJsonObject(record, "emails", {});
+        var dbUiText = parseRecordJsonObject(record, "ui_text", {});
+        var dbWorkflow = parseRecordJsonObject(record, "workflow", {});
         isOverride = true;
-        emails = config.mergeEmailTemplates(config.emails(), emails);
+        
+        var ls = config.librarySettings(e.app, orgId);
+        emails = ls.emails;
+        ui_text = ls.ui_text;
+        workflow = ls.workflow;
       } catch (err) {
-        emails = config.emails();
+        var ls = config.librarySettings(e.app, orgId);
+        emails = ls.emails;
+        ui_text = ls.ui_text;
+        workflow = ls.workflow;
       }
     }
 
     return e.json(200, {
       orgId: orgId,
       emails: emails,
+      ui_text: ui_text,
+      workflow: workflow,
       isOverride: isOverride
     });
   } catch (err) {
-    e.app.logger().error("Failed to load library email settings", "error", String(err));
+    e.app.logger().error("Failed to load library settings", "error", String(err));
     return e.json(500, { message: err.message || String(err) });
   }
 }
 
-function updateLibraryEmailSettings(e) {
+function updateLibrarySettings(e) {
   var staff = requireAuth(e, "staff_users");
   var payload = body(e);
   var orgId = String(payload.orgId || "").trim();
   var action = String(payload.action || "save").toLowerCase();
-  var emailTemplates = parseJsonObject(payload.emails, {});
-
+  
   if (!orgId) {
     return e.json(400, { message: "orgId is required." });
   }
 
-  // Security check
   if (orgId !== "system" && orgId !== String(staff.get("libraryOrgId") || "").trim() && !isSuperAdmin(staff)) {
     return e.json(403, { message: "Access denied to these library settings." });
   }
@@ -976,26 +998,36 @@ function updateLibraryEmailSettings(e) {
       return e.json(403, { message: "Only super admins can update system settings." });
     }
     var record = getOrCreateSettingsRecord(e.app);
-    record.set("emails", config.normalizeEmailTemplates(emailTemplates));
+    if (payload.emails) record.set("emails", config.normalizeEmailTemplates(parseJsonObject(payload.emails, {})));
+    if (payload.ui_text) record.set("ui_text", JSON.stringify(parseJsonObject(payload.ui_text, {})));
+    if (payload.workflow) {
+      var wf = parseJsonObject(payload.workflow, {});
+      if (wf.suggestionLimit !== undefined) record.set("suggestionLimit", wf.suggestionLimit);
+      if (wf.suggestionLimitMessage !== undefined) record.set("suggestionLimitMessage", wf.suggestionLimitMessage);
+      if (wf.outstandingTimeoutEnabled !== undefined) record.set("outstandingTimeoutEnabled", wf.outstandingTimeoutEnabled);
+      if (wf.outstandingTimeoutDays !== undefined) record.set("outstandingTimeoutDays", wf.outstandingTimeoutDays);
+      if (wf.holdPickupTimeoutEnabled !== undefined) record.set("holdPickupTimeoutEnabled", wf.holdPickupTimeoutEnabled);
+      if (wf.holdPickupTimeoutDays !== undefined) record.set("holdPickupTimeoutDays", wf.holdPickupTimeoutDays);
+    }
     e.app.save(record);
   } else {
     if (action === "reset") {
       try {
-        var record = e.app.findFirstRecordByData("library_email_settings", "libraryOrgId", orgId);
+        var record = e.app.findFirstRecordByData("library_settings", "libraryOrgId", orgId);
         e.app.delete(record);
-      } catch (err) {
-        // Record didn't exist anyway
-      }
+      } catch (err) {}
     } else {
       var record;
       try {
-        record = e.app.findFirstRecordByData("library_email_settings", "libraryOrgId", orgId);
+        record = e.app.findFirstRecordByData("library_settings", "libraryOrgId", orgId);
       } catch (err) {
-        var collection = e.app.findCollectionByNameOrId("library_email_settings");
+        var collection = e.app.findCollectionByNameOrId("library_settings");
         record = new Record(collection);
         record.set("libraryOrgId", orgId);
       }
-      record.set("emails", config.normalizeEmailTemplates(emailTemplates));
+      if (payload.emails) record.set("emails", config.normalizeEmailTemplates(parseJsonObject(payload.emails, {})));
+      if (payload.ui_text) record.set("ui_text", JSON.stringify(parseJsonObject(payload.ui_text, {})));
+      if (payload.workflow) record.set("workflow", JSON.stringify(parseJsonObject(payload.workflow, {})));
       e.app.save(record);
     }
   }
@@ -1038,7 +1070,7 @@ module.exports = {
   staffSyncOrganizations: staffSyncOrganizations,
   staffTestPolaris: staffTestPolaris,
   staffTestSmtp: staffTestSmtp,
-  getLibraryEmailSettings: getLibraryEmailSettings,
-  updateLibraryEmailSettings: updateLibraryEmailSettings,
+  getLibrarySettings: getLibrarySettings,
+  updateLibrarySettings: updateLibrarySettings,
   staffRunPromoterCheck: staffRunPromoterCheck,
 };

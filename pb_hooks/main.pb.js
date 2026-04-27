@@ -63,14 +63,14 @@ routerAdd("POST", "/api/asap/staff/users/{id}/role", (e) => {
   return routes.staffUserRoleUpdate(e);
 });
 
-routerAdd("GET", "/api/asap/staff/settings/emails", (e) => {
+routerAdd("GET", "/api/asap/staff/settings/library", (e) => {
   const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.getLibraryEmailSettings(e);
+  return routes.getLibrarySettings(e);
 });
 
-routerAdd("POST", "/api/asap/staff/settings/emails", (e) => {
+routerAdd("POST", "/api/asap/staff/settings/library", (e) => {
   const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.updateLibraryEmailSettings(e);
+  return routes.updateLibrarySettings(e);
 });
 
 routerAdd("GET", "/api/asap/staff/title-requests", (e) => {

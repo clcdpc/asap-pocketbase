@@ -211,6 +211,14 @@ loginForm.addEventListener('submit', async (e) => {
     
     authToken = result.token;
     
+    if (result.ui_text) {
+      Object.assign(uiConfig, result.ui_text);
+      if (uiConfig.formatRules) {
+        uiConfig.formatRules = normalizeFormatRules(uiConfig.formatRules);
+      }
+      applyUiConfig();
+    }
+    
     document.getElementById('display-barcode').textContent = data.username;
     const email = result.email || (result.record && result.record.email);
     if (email) {

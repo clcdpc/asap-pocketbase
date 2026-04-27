@@ -214,19 +214,59 @@ function emails() {
   return getSettings().emails;
 }
 
-function libraryEmails(app, libraryOrgId) {
-  const systemDefaults = emails();
+function librarySettings(app, libraryOrgId) {
+  const systemDefaults = getSettings();
   libraryOrgId = String(libraryOrgId || "").trim();
   if (!libraryOrgId) {
-    return systemDefaults;
+    return {
+      emails: systemDefaults.emails,
+      ui_text: systemDefaults.ui_text,
+      workflow: {
+        suggestionLimit: systemDefaults.suggestionLimit,
+        suggestionLimitMessage: systemDefaults.suggestionLimitMessage,
+        outstandingTimeoutEnabled: systemDefaults.outstandingTimeoutEnabled,
+        outstandingTimeoutDays: systemDefaults.outstandingTimeoutDays,
+        holdPickupTimeoutEnabled: systemDefaults.holdPickupTimeoutEnabled,
+        holdPickupTimeoutDays: systemDefaults.holdPickupTimeoutDays
+      }
+    };
   }
 
   try {
-    const record = app.findFirstRecordByData("library_email_settings", "libraryOrgId", libraryOrgId);
+    const record = app.findFirstRecordByData("library_settings", "libraryOrgId", libraryOrgId);
     var dbEmails = parseRecordJsonObject(record, "emails", {});
-    return mergeEmailTemplates(systemDefaults, dbEmails);
+    var dbUiText = parseRecordJsonObject(record, "ui_text", {});
+    var dbWorkflow = parseRecordJsonObject(record, "workflow", {});
+
+    const formatRules = require(`${__hooks}/lib/format_rules.js`);
+    var mergedUiText = Object.assign({}, systemDefaults.ui_text, dbUiText);
+    mergedUiText.formatRules = formatRules.normalizeFormatRules(mergedUiText.formatRules);
+
+    return {
+      emails: mergeEmailTemplates(systemDefaults.emails, dbEmails),
+      ui_text: mergedUiText,
+      workflow: {
+        suggestionLimit: typeof dbWorkflow.suggestionLimit === "number" ? dbWorkflow.suggestionLimit : systemDefaults.suggestionLimit,
+        suggestionLimitMessage: dbWorkflow.suggestionLimitMessage || systemDefaults.suggestionLimitMessage,
+        outstandingTimeoutEnabled: typeof dbWorkflow.outstandingTimeoutEnabled === "boolean" ? dbWorkflow.outstandingTimeoutEnabled : systemDefaults.outstandingTimeoutEnabled,
+        outstandingTimeoutDays: typeof dbWorkflow.outstandingTimeoutDays === "number" ? dbWorkflow.outstandingTimeoutDays : systemDefaults.outstandingTimeoutDays,
+        holdPickupTimeoutEnabled: typeof dbWorkflow.holdPickupTimeoutEnabled === "boolean" ? dbWorkflow.holdPickupTimeoutEnabled : systemDefaults.holdPickupTimeoutEnabled,
+        holdPickupTimeoutDays: typeof dbWorkflow.holdPickupTimeoutDays === "number" ? dbWorkflow.holdPickupTimeoutDays : systemDefaults.holdPickupTimeoutDays
+      }
+    };
   } catch (err) {
-    return systemDefaults;
+    return {
+      emails: systemDefaults.emails,
+      ui_text: systemDefaults.ui_text,
+      workflow: {
+        suggestionLimit: systemDefaults.suggestionLimit,
+        suggestionLimitMessage: systemDefaults.suggestionLimitMessage,
+        outstandingTimeoutEnabled: systemDefaults.outstandingTimeoutEnabled,
+        outstandingTimeoutDays: systemDefaults.outstandingTimeoutDays,
+        holdPickupTimeoutEnabled: systemDefaults.holdPickupTimeoutEnabled,
+        holdPickupTimeoutDays: systemDefaults.holdPickupTimeoutDays
+      }
+    };
   }
 }
 
@@ -263,32 +303,32 @@ function mail() {
   };
 }
 
-function suggestionLimit() {
-  const s = getSettings();
-  return {
-    limit: s.suggestionLimit,
-    message: s.suggestionLimitMessage,
-  };
+function suggestionLimit(app, orgId) {
+  if (!app) return getSettings();
+  return librarySettings(app, orgId).workflow;
 }
 
-function outstandingTimeout() {
-  const s = getSettings();
-  return {
-    enabled: s.outstandingTimeoutEnabled,
-    days: s.outstandingTimeoutDays,
-  };
+function outstandingTimeout(app, orgId) {
+  if (!app) {
+    const s = getSettings();
+    return { enabled: s.outstandingTimeoutEnabled, days: s.outstandingTimeoutDays };
+  }
+  const wf = librarySettings(app, orgId).workflow;
+  return { enabled: wf.outstandingTimeoutEnabled, days: wf.outstandingTimeoutDays };
 }
 
-function holdPickupTimeout() {
-  const s = getSettings();
-  return {
-    enabled: s.holdPickupTimeoutEnabled,
-    days: s.holdPickupTimeoutDays,
-  };
+function holdPickupTimeout(app, orgId) {
+  if (!app) {
+    const s = getSettings();
+    return { enabled: s.holdPickupTimeoutEnabled, days: s.holdPickupTimeoutDays };
+  }
+  const wf = librarySettings(app, orgId).workflow;
+  return { enabled: wf.holdPickupTimeoutEnabled, days: wf.holdPickupTimeoutDays };
 }
 
-function uiText() {
-  return getSettings().ui_text;
+function uiText(app, orgId) {
+  if (!app) return getSettings().ui_text;
+  return librarySettings(app, orgId).ui_text;
 }
 
 function allowedStaffUsers() {
@@ -335,7 +375,8 @@ module.exports = {
   diffEmailTemplates: diffEmailTemplates,
   emails: emails,
   hasEmailTemplateOverrides: hasEmailTemplateOverrides,
-  libraryEmails: libraryEmails,
+  getSettings: getSettings,
+  librarySettings: librarySettings,
   holdPickupTimeout: holdPickupTimeout,
   importToken: importToken,
   mail: mail,

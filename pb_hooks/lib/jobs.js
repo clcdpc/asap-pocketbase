@@ -103,68 +103,77 @@ function processOutstandingPurchases(app, staff, result) {
 }
 
 function processOutstandingTimeout(app, result) {
-  var cfg = config.outstandingTimeout();
-  if (!cfg.enabled) return;
-
-  var cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - cfg.days);
-
   var pending = app.findRecordsByFilter(
     "title_requests",
-    "status = {:status} && created < {:cutoff}",
+    "status = {:status}",
     "-created",
-    200,
+    2000,
     0,
-    { status: records.STATUS.SUGGESTION, cutoff: cutoff.toISOString() }
+    { status: records.STATUS.SUGGESTION }
   );
 
   for (var i = 0; i < pending.length; i++) {
     var record = pending[i];
-    record.set("status", records.STATUS.CLOSED);
-    record.set("closeReason", records.CLOSE_REASON.REJECTED);
-    record.set("editedBy", "system");
-    record.set("updated", new Date().toISOString());
-    records.appendSystemNote(record, "Auto-rejected due to " + cfg.days + " day timeout in Suggestions.");
-    app.save(record);
-    try {
-      mail.autoRejected(app, record);
-    } catch (mailErr) {
-      app.logger().error("Auto-reject email failed", "recordId", record.id, "error", String(mailErr));
+    var orgId = record.get("libraryOrgId");
+    var cfg = config.outstandingTimeout(app, orgId);
+    
+    if (!cfg.enabled) continue;
+
+    var cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - cfg.days);
+    var created = new Date(record.get("created"));
+
+    if (created < cutoff) {
+      record.set("status", records.STATUS.CLOSED);
+      record.set("closeReason", records.CLOSE_REASON.REJECTED);
+      record.set("editedBy", "system");
+      record.set("updated", new Date().toISOString());
+      records.appendSystemNote(record, "Auto-rejected due to " + cfg.days + " day timeout in Suggestions.");
+      app.save(record);
+      try {
+        mail.autoRejected(app, record);
+      } catch (mailErr) {
+        app.logger().error("Auto-reject email failed", "recordId", record.id, "error", String(mailErr));
+      }
+      result.timedOut++;
     }
-    result.timedOut++;
   }
 }
 
 function processHoldPickupTimeout(app, result) {
-  var cfg = config.holdPickupTimeout();
-  if (!cfg.enabled) return;
-
-  var cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - cfg.days);
-
-  // Find hold_placed records where the hold was placed more than cfg.days ago
   var holds = app.findRecordsByFilter(
     "title_requests",
-    "status = {:status} && updated < {:cutoff}",
+    "status = {:status}",
     "-updated",
-    200,
+    2000,
     0,
-    { status: records.STATUS.HOLD_PLACED, cutoff: cutoff.toISOString() }
+    { status: records.STATUS.HOLD_PLACED }
   );
 
   for (var i = 0; i < holds.length; i++) {
     var record = holds[i];
-    try {
-      record.set("status", records.STATUS.CLOSED);
-      record.set("closeReason", records.CLOSE_REASON.HOLD_NOT_PICKED_UP);
-      record.set("editedBy", "system");
-      record.set("updated", new Date().toISOString());
-      records.appendSystemNote(record, "Hold was not picked up by patron within " + cfg.days + " days. Auto-closed.");
-      app.save(record);
-      result.holdPickupTimeouts++;
-    } catch (err) {
-      result.errors++;
-      app.logger().error("ASAP hold pickup timeout failed", "recordId", record.id, "error", String(err));
+    var orgId = record.get("libraryOrgId");
+    var cfg = config.holdPickupTimeout(app, orgId);
+    
+    if (!cfg.enabled) continue;
+
+    var cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - cfg.days);
+    var updated = new Date(record.get("updated"));
+
+    if (updated < cutoff) {
+      try {
+        record.set("status", records.STATUS.CLOSED);
+        record.set("closeReason", records.CLOSE_REASON.HOLD_NOT_PICKED_UP);
+        record.set("editedBy", "system");
+        record.set("updated", new Date().toISOString());
+        records.appendSystemNote(record, "Hold was not picked up by patron within " + cfg.days + " days. Auto-closed.");
+        app.save(record);
+        result.holdPickupTimeouts++;
+      } catch (err) {
+        result.errors++;
+        app.logger().error("ASAP hold pickup timeout failed", "recordId", record.id, "error", String(err));
+      }
     }
   }
 }

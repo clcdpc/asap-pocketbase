@@ -119,9 +119,9 @@ let workflowSettings = {
   holdPickupTimeoutEnabled: false,
   holdPickupTimeoutDays: 14
 };
-let currentTemplateOrgId = 'system';
+let currentLibraryContextOrgId = 'system';
 let libraryTemplateOverrides = {}; // Map of orgId -> isOverride (boolean)
-let templateLoadSerial = 0;
+let libraryContextLoadSerial = 0;
 let librarySelectorBound = false;
 let bootstrapAdminMessage = '';
 let setupRequired = false;
@@ -249,6 +249,16 @@ function activateSettingsSection(section, options = {}) {
     panel.classList.toggle('active', isActive);
     panel.setAttribute('aria-hidden', isActive ? 'false' : 'true');
   });
+
+  const overridableSections = ['workflow', 'patron', 'templates'];
+  const wrapper = document.getElementById('library-context-wrapper');
+  if (wrapper) {
+    if (overridableSections.includes(targetSection)) {
+      wrapper.classList.remove('hidden');
+    } else {
+      wrapper.classList.add('hidden');
+    }
+  }
 
   document.querySelectorAll('[data-settings-target]').forEach(button => {
     const isActive = button.getAttribute('data-settings-target') === targetSection;
@@ -1580,14 +1590,14 @@ async function loadSettings(options = {}) {
     document.getElementById('super-admin-library-selector').classList.remove('hidden');
   } else {
     document.getElementById('super-admin-library-selector').classList.add('hidden');
-    currentTemplateOrgId = pb.authStore.model.libraryOrgId || 'system';
+    currentLibraryContextOrgId = pb.authStore.model.libraryOrgId || 'system';
     const libraryName = pb.authStore.model.libraryOrgName || 'My Library';
-    document.getElementById('template-library-display').textContent = currentTemplateOrgId === 'system'
+    document.getElementById('library-context-display').textContent = currentLibraryContextOrgId === 'system'
       ? libraryName
-      : `${libraryName} (ID ${currentTemplateOrgId})`;
+      : `${libraryName} (ID ${currentLibraryContextOrgId})`;
   }
 
-  await loadLibraryEmailSettings(currentTemplateOrgId);
+  await loadLibrarySettings(currentLibraryContextOrgId);
 
   if (!isSuper) {
     // Hide error, show form for library admins even if they can't load app_settings
@@ -1606,31 +1616,11 @@ async function loadSettings(options = {}) {
     const uiText = record.ui_text || {};
     const emails = record.emails || {};
 
-    // Basic Settings
-    const suggestionLimitField = document.getElementById('suggestion-limit');
-    if (suggestionLimitField) suggestionLimitField.value = record.suggestionLimit !== undefined ? record.suggestionLimit : 5;
-
-    const suggestionLimitMsgField = document.getElementById('suggestion-limit-msg');
-    if (suggestionLimitMsgField) suggestionLimitMsgField.value = record.suggestionLimitMessage || '';
-
-    const timeoutEnabledField = document.getElementById('outstanding-timeout-enabled');
-    if (timeoutEnabledField) timeoutEnabledField.checked = !!record.outstandingTimeoutEnabled;
-
-    const timeoutDaysField = document.getElementById('outstanding-timeout-days');
-    if (timeoutDaysField) timeoutDaysField.value = record.outstandingTimeoutDays || 30;
-
     workflowSettings.outstandingTimeoutEnabled = !!record.outstandingTimeoutEnabled;
     workflowSettings.outstandingTimeoutDays = parseInt(record.outstandingTimeoutDays || '30', 10) || 30;
     workflowSettings.autoPromote = polaris.autoPromote !== false;
 
-    const holdPickupEnabledField = document.getElementById('hold-pickup-timeout-enabled');
-    if (holdPickupEnabledField) holdPickupEnabledField.checked = !!record.holdPickupTimeoutEnabled;
-
-    const holdPickupDaysField = document.getElementById('hold-pickup-timeout-days');
-    if (holdPickupDaysField) holdPickupDaysField.value = record.holdPickupTimeoutDays || 14;
-
-    toggleTimeoutGroup();
-    toggleHoldPickupTimeoutGroup();
+    // Workflow form population is handled by loadLibrarySettings
 
     // SMTP
     setFieldValue('smtp-host', smtp.host || '');
@@ -1652,38 +1642,11 @@ async function loadSettings(options = {}) {
     setFieldChecked('polaris-auto-promote', polaris.autoPromote !== false);
     setFieldValue('allowed-staff-users', normalizeAllowedStaffUsers(record.allowedStaffUsers || ''));
 
-    // UI Text
-    setFieldValue('ui-logo-alt', uiText.logoAlt || '');
-    setFieldValue('ui-patron-page-title', uiText.pageTitle || '');
-    setFieldValue('ui-barcode-label', uiText.barcodeLabel || '');
-    setFieldValue('ui-pin-label', uiText.pinLabel || '');
-    setFieldValue('ui-login-prompt', uiText.loginPrompt || 'Please enter your information below to start the suggestion process.');
-    setFieldValue('ui-login-note', uiText.loginNote || 'Use of this service requires a valid library card. Contact your library if you need assistance with your card or PIN.');
-    setFieldValue('ui-suggestion-note', uiText.suggestionFormNote || 'If the library decides to purchase your suggestion, we will automatically place a hold on it and send a confirmation email. Make sure to check your spam folder if you don\'t see the email.');
-    setFieldValue('ui-no-email-msg', uiText.noEmailMessage || 'No email is specified on your library account, which means we won\'t be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.');
-    setFieldValue('ui-success-title', uiText.successTitle || 'Suggestion Submitted');
-    setFieldValue('ui-success-msg', uiText.successMessage || 'You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>');
-    setFieldValue('ui-already-submitted-msg', uiText.alreadySubmittedMessage || 'This suggestion has already been submitted. We only accept one suggestion per title. Check the catalog to see if the material was acquired and place a hold.<div>Thank you for using this library\'s suggestion service.</div>');
-    setFieldValue('ui-ebook-msg', uiText.ebookMessage || '<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>');
-    setFieldValue('ui-eaudiobook-msg', uiText.eaudiobookMessage || '<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>');
-    
-    // Format Labels & Available Formats
-    const labels = uiText.formatLabels || {};
-    const available = uiText.availableFormats || ['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'];
-    
-    // Merge into formatMap for the rest of the app
-    Object.keys(labels).forEach(k => formatMap[k] = labels[k]);
-    availableFormats = available;
-
-    renderFormatSettings();
-    updateModalFormatDropdowns();
-
-    const pubOptionsField = document.getElementById('ui-publication-options');
-    if (pubOptionsField) {
-      pubOptionsField.value = normalizePublicationOptions(uiText.publicationOptions).join('\n');
-    }
-    renderPatronFormatRulesEditor(uiText.formatRules);
-    setPublicationOptions(uiText.publicationOptions);
+    // UI Text and Formats are handled by populatePatronUiForms called via loadLibrarySettings
+    // but we can set them here if needed. Since loadLibrarySettings is called right before this, 
+    // it will be populated. Wait, loadLibrarySettings is called AT THE TOP of loadSettings asynchronously!
+    // So if it completes before loadSettings finishes, loadSettings might overwrite it?
+    // Actually, loadLibrarySettings is awaited at the top. So we should just remove the uiText Population from loadSettings and let loadLibrarySettings handle it.
     await loadStaffUsers();
 
 
@@ -1747,14 +1710,14 @@ function clearTemplateInputs() {
 }
 
 function setTemplateStatus(message, className, hidden = false) {
-  const statusAlert = document.getElementById('library-template-status');
+  const statusAlert = document.getElementById('library-override-status');
   if (!statusAlert) return;
   statusAlert.className = className || 'alert alert-warning mb-4';
   statusAlert.textContent = message || '';
   statusAlert.classList.toggle('hidden', hidden);
 }
 
-function loadTemplates(emails) {
+function populateEmailTemplateForms(emails) {
   emails = emails || {};
   const emailSubmit = emails.suggestion_submitted || {};
   if (document.getElementById('email-submit-subject')) document.getElementById('email-submit-subject').value = emailSubmit.subject || emailTemplateDefaults.suggestion_submitted.subject;
@@ -1774,11 +1737,11 @@ function loadTemplates(emails) {
 }
 
 async function populateLibrarySelector() {
-  const select = document.getElementById('select-template-library');
+  const select = document.getElementById('select-library-context');
   if (!select) return;
 
   try {
-    const selectedOrgId = currentTemplateOrgId || select.value || 'system';
+    const selectedOrgId = currentLibraryContextOrgId || select.value || 'system';
     select.disabled = true;
     select.innerHTML = '<option value="system">System Defaults</option>';
 
@@ -1795,18 +1758,18 @@ async function populateLibrarySelector() {
     });
 
     select.value = Array.from(select.options).some(option => option.value === selectedOrgId) ? selectedOrgId : 'system';
-    currentTemplateOrgId = select.value;
+    currentLibraryContextOrgId = select.value;
     const selectedOption = select.options[select.selectedIndex];
     if (selectedOption) {
-      document.getElementById('template-library-display').textContent = selectedOption.text;
+      document.getElementById('library-context-display').textContent = selectedOption.text;
     }
 
     if (!librarySelectorBound) {
       select.addEventListener('change', async (e) => {
-        currentTemplateOrgId = e.target.value || 'system';
+        currentLibraryContextOrgId = e.target.value || 'system';
         const display = e.target.options[e.target.selectedIndex].text;
-        document.getElementById('template-library-display').textContent = display;
-        await loadLibraryEmailSettings(currentTemplateOrgId);
+        document.getElementById('library-context-display').textContent = display;
+        await loadLibrarySettings(currentLibraryContextOrgId);
       });
       librarySelectorBound = true;
     }
@@ -1817,61 +1780,108 @@ async function populateLibrarySelector() {
   }
 }
 
-async function loadLibraryEmailSettings(orgId) {
-  const requestedOrgId = String(orgId || 'system');
-  const requestId = ++templateLoadSerial;
-  currentTemplateOrgId = requestedOrgId;
-  setTemplateInputsDisabled(true);
-  clearTemplateInputs();
-  setTemplateStatus('Loading templates...', 'alert alert-info mb-4');
+async function loadLibrarySettings(orgId) {
+  const requestedOrgId = orgId || 'system';
+  const requestId = ++libraryContextLoadSerial;
+  currentLibraryContextOrgId = requestedOrgId;
 
   try {
-    const result = await authorizedJson(`/api/asap/staff/settings/emails?orgId=${encodeURIComponent(requestedOrgId)}&_=${Date.now()}`, { cache: 'no-store' });
-    if (requestId !== templateLoadSerial || requestedOrgId !== currentTemplateOrgId) {
-      return;
+    let settings = {};
+    let isOverride = false;
+
+    const result = await authorizedJson(`/api/asap/staff/settings/library?orgId=${encodeURIComponent(requestedOrgId)}&_=${Date.now()}`, { cache: 'no-store' });
+    if (requestId !== libraryContextLoadSerial || requestedOrgId !== currentLibraryContextOrgId) {
+      return; // A newer request is in flight
     }
 
-    loadTemplates(result.emails);
-    libraryTemplateOverrides[result.orgId] = !!result.isOverride;
-    
-    const resetBtn = document.getElementById('btn-reset-library-templates');
+    settings = result;
+    isOverride = !!result.isOverride;
+
+    const resetBtn = document.getElementById('btn-reset-library-settings');
+    const statusAlert = document.getElementById('library-override-status');
+    const overrideMsg = document.getElementById('library-override-msg');
     
     if (requestedOrgId === 'system') {
-      setTemplateStatus('', 'alert alert-info mb-4', true);
-      if (resetBtn) resetBtn.classList.add('hidden');
+      resetBtn.classList.add('hidden');
+      statusAlert.classList.add('hidden');
     } else {
-      if (result.isOverride) {
-        setTemplateStatus('', 'alert alert-info mb-4', true);
-        if (resetBtn) resetBtn.classList.remove('hidden');
+      statusAlert.classList.remove('hidden');
+      if (isOverride) {
+        statusAlert.className = 'alert alert-info mb-3 d-flex justify-content-between align-items-center';
+        overrideMsg.innerHTML = '<i class="fa fa-check-circle mr-1"></i> This library has <strong>Custom Overrides</strong> saved.';
+        resetBtn.classList.remove('hidden');
       } else {
-        setTemplateStatus('This library is currently using System Default templates. Saving changes will create a library-specific override.', 'alert alert-warning mb-4');
-        if (resetBtn) resetBtn.classList.add('hidden');
+        statusAlert.className = 'alert alert-warning mb-3 d-flex justify-content-between align-items-center';
+        overrideMsg.innerHTML = '<i class="fa fa-info-circle mr-1"></i> This library is currently using <strong>System Defaults</strong> for these settings. Saving changes will create a library-specific override.';
+        resetBtn.classList.add('hidden');
       }
     }
+
+    populateEmailTemplateForms(settings.emails || {});
+    populatePatronUiForms(settings.ui_text || {});
+    populateWorkflowForms(settings.workflow || {});
+
   } catch (err) {
-    console.error('Failed to load library emails', err);
-    if (requestId === templateLoadSerial) {
-      setTemplateStatus('Failed to load templates for this library: ' + (err.message || 'Request failed.'), 'alert alert-danger mb-4');
-    }
-  } finally {
-    if (requestId === templateLoadSerial) {
-      setTemplateInputsDisabled(false);
-    }
+    console.error('Error loading library settings:', err);
+    showToast('Failed to load library settings', 'error');
   }
 }
 
-document.getElementById('btn-reset-library-templates').addEventListener('click', async () => {
-  if (!await showConfirm('Are you sure you want to reset this library\'s templates to the system defaults? This will delete all custom changes for this library.')) return;
+function populateWorkflowForms(wf) {
+  setFieldValue('suggestion-limit', wf.suggestionLimit !== undefined ? wf.suggestionLimit : '5');
+  setFieldValue('suggestion-limit-message', wf.suggestionLimitMessage || 'Weekly suggestion limit reached');
+  document.getElementById('outstanding-timeout-enabled').checked = !!wf.outstandingTimeoutEnabled;
+  setFieldValue('outstanding-timeout-days', wf.outstandingTimeoutDays !== undefined ? wf.outstandingTimeoutDays : '30');
+  document.getElementById('hold-pickup-timeout-enabled').checked = !!wf.holdPickupTimeoutEnabled;
+  setFieldValue('hold-pickup-timeout-days', wf.holdPickupTimeoutDays !== undefined ? wf.holdPickupTimeoutDays : '14');
+  toggleTimeoutGroup();
+  toggleHoldPickupTimeoutGroup();
+}
 
-  try {
-    await authorizedJson('/api/asap/staff/settings/emails', {
+function populatePatronUiForms(uiText) {
+  setFieldValue('ui-logo-alt', uiText.logoAlt || '');
+  setFieldValue('ui-patron-page-title', uiText.pageTitle || '');
+  setFieldValue('ui-barcode-label', uiText.barcodeLabel || '');
+  setFieldValue('ui-pin-label', uiText.pinLabel || '');
+  setFieldValue('ui-login-prompt', uiText.loginPrompt || 'Please enter your information below to start the suggestion process.');
+  setFieldValue('ui-login-note', uiText.loginNote || 'Use of this service requires a valid library card. Contact your library if you need assistance with your card or PIN.');
+  setFieldValue('ui-suggestion-note', uiText.suggestionFormNote || 'If the library decides to purchase your suggestion, we will automatically place a hold on it and send a confirmation email. Make sure to check your spam folder if you don\'t see the email.');
+  setFieldValue('ui-no-email-msg', uiText.noEmailMessage || 'No email is specified on your library account, which means we won\'t be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.');
+  setFieldValue('ui-success-title', uiText.successTitle || 'Suggestion Submitted');
+  setFieldValue('ui-success-msg', uiText.successMessage || 'You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>');
+  setFieldValue('ui-already-submitted-msg', uiText.alreadySubmittedMessage || 'This suggestion has already been submitted. We only accept one suggestion per title. Check the catalog to see if the material was acquired and place a hold.<div>Thank you for using this library\'s suggestion service.</div>');
+  setFieldValue('ui-ebook-msg', uiText.ebookMessage || '<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>');
+  setFieldValue('ui-eaudiobook-msg', uiText.eaudiobookMessage || '<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>');
+  
+  // Format Labels & Available Formats
+  const labels = uiText.formatLabels || {};
+  const available = uiText.availableFormats || ['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'];
+  
+  // Merge into formatMap for the rest of the app
+  Object.keys(labels).forEach(k => formatMap[k] = labels[k]);
+  availableFormats = available;
+
+  renderFormatSettings();
+  updateModalFormatDropdowns();
+
+  const pubOptionsField = document.getElementById('ui-publication-options');
+  if (pubOptionsField) {
+    pubOptionsField.value = normalizePublicationOptions(uiText.publicationOptions).join('\n');
+  }
+  renderPatronFormatRulesEditor(uiText.formatRules);
+  setPublicationOptions(uiText.publicationOptions);
+}
+
+document.getElementById('btn-reset-library-settings').addEventListener('click', async () => {
+  if (currentLibraryContextOrgId === 'system') return;
+  const confirmed = await showConfirm('Reset Library Settings', 'Are you sure you want to delete this library\'s overrides and revert to system defaults?');
+  if (confirmed) {
+    await authorizedJson('/api/asap/staff/settings/library', {
       method: 'POST',
-      body: JSON.stringify({ orgId: currentTemplateOrgId, action: 'reset' })
+      body: JSON.stringify({ orgId: currentLibraryContextOrgId, action: 'reset' })
     });
-    showToast('Templates reset to system defaults');
-    await loadLibraryEmailSettings(currentTemplateOrgId);
-  } catch (err) {
-    showToast('Failed to reset templates: ' + err.message, 'error');
+    showToast('Library settings reset to system defaults', 'success');
+    await loadLibrarySettings(currentLibraryContextOrgId);
   }
 });
 
@@ -2085,34 +2095,47 @@ async function saveSettings(options = {}) {
     const payload = buildSettingsPayload();
     
     // Save templates via the new library-scoped API
-    const emailPayload = {
-      orgId: currentTemplateOrgId,
-      emails: payload.emails
+    const libraryPayload = {
+      orgId: currentLibraryContextOrgId,
+      emails: payload.emails,
+      ui_text: payload.ui_text,
+      workflow: {
+        suggestionLimit: payload.suggestionLimit,
+        suggestionLimitMessage: payload.suggestionLimitMessage,
+        outstandingTimeoutEnabled: payload.outstandingTimeoutEnabled,
+        outstandingTimeoutDays: payload.outstandingTimeoutDays,
+        holdPickupTimeoutEnabled: payload.holdPickupTimeoutEnabled,
+        holdPickupTimeoutDays: payload.holdPickupTimeoutDays
+      }
     };
 
-    const emailPromise = authorizedJson('/api/asap/staff/settings/emails', {
+    const libraryPromise = authorizedJson('/api/asap/staff/settings/library', {
       method: 'POST',
-      body: JSON.stringify(emailPayload)
+      body: JSON.stringify(libraryPayload)
     });
 
-    // Save global settings ONLY if super admin
     let globalPromise = Promise.resolve();
     if (isSuper) {
-      // CRITICAL: If we are editing a specific library, don't overwrite the 
-      // global system templates in app_settings with this library's specific text!
-      if (currentTemplateOrgId !== 'system') {
+      if (currentLibraryContextOrgId !== 'system') {
         delete payload.emails;
+        delete payload.ui_text;
+        delete payload.suggestionLimit;
+        delete payload.suggestionLimitMessage;
+        delete payload.outstandingTimeoutEnabled;
+        delete payload.outstandingTimeoutDays;
+        delete payload.holdPickupTimeoutEnabled;
+        delete payload.holdPickupTimeoutDays;
       }
       globalPromise = pb.collection('app_settings').update(SETTINGS_RECORD_ID, payload);
     }
 
-    await Promise.all([globalPromise, emailPromise]);
+    await Promise.all([globalPromise, libraryPromise]);
     msg.textContent = options.successText || 'Settings saved successfully!';
     msg.className = 'mt-2 font-weight-bold text-success';
     if (options.clearDelay !== 0) {
       setTimeout(() => msg.textContent = '', options.clearDelay || 3000);
     }
-    await loadSettings({ showErrors: false }); // Sync internal state (also triggers loadLibraryEmailSettings)
+    await loadSettings({ showErrors: false }); // Sync internal state (also triggers loadLibrarySettings)
     await loadStaffConfig(); // Refresh logo and titles immediately after saving
     loadStaffUsers();
     return true;
