@@ -326,6 +326,7 @@ function reconcileRecord(app, staff, record, bibId) {
 
 module.exports = {
   adminStaffAuth: adminStaffAuth,
+  appendQuery: appendQuery,
   authenticatePatron: authenticatePatron,
   checkPatronCheckouts: checkPatronCheckouts,
   getBib: getBib,
