@@ -520,6 +520,8 @@ if (setupTestPolarisBtn) {
 logoutBtn.addEventListener('click', (e) => {
   e.preventDefault();
   pb.authStore.clear();
+  document.getElementById('login-form').reset();
+  document.getElementById('login-password').value = '';
   checkAuth();
 });
 
