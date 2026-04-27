@@ -184,6 +184,14 @@ function logout() {
   authToken = '';
   loginForm.reset();
   suggestionForm.reset();
+  
+  // Reset login button state
+  const btn = document.getElementById('login-btn');
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = 'Next';
+  }
+  
   document.getElementById('login-error').classList.add('hidden');
   document.getElementById('submit-error').classList.add('hidden');
   updateFormatUI();
