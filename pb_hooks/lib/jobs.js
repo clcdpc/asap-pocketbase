@@ -89,6 +89,7 @@ function processOutstandingPurchases(app, staff, result) {
       var bibId = polaris.searchBib(staff, identifier);
       if (bibId) {
         record.set("bibid", bibId);
+        polaris.reconcileRecord(app, staff, record, bibId);
         record.set("status", records.STATUS.PENDING_HOLD);
         record.set("editedBy", "system");
         record.set("updated", new Date().toISOString());
@@ -248,6 +249,7 @@ function processPendingHolds(app, staff, result) {
       var note = isDuplicate ? "HOLD ALREADY EXISTS IN POLARIS" : "HOLD PLACED FOR PATRON";
       
       record.set("bibid", bibId);
+      polaris.reconcileRecord(app, staff, record, bibId);
       record.set("status", records.STATUS.HOLD_PLACED);
       record.set("editedBy", "system");
       record.set("updated", new Date().toISOString());

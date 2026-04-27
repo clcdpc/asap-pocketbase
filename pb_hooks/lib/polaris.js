@@ -299,6 +299,31 @@ function getBib(staff, bibId) {
   return result;
 }
 
+
+function reconcileRecord(app, staff, record, bibId) {
+  if (!bibId) return;
+  try {
+    var bibInfo = getBib(staff, bibId);
+    if (bibInfo) {
+      var oldTitle = String(record.get("title") || "").trim();
+      var oldAuthor = String(record.get("author") || "").trim();
+      var pTitle = String(bibInfo.title || "").trim();
+      var pAuthor = String(bibInfo.author || "").trim();
+
+      if (pTitle && oldTitle !== pTitle && oldTitle.indexOf(pTitle + " (") !== 0) {
+        record.set("title", pTitle + " (" + oldTitle + ")");
+      }
+      if (pAuthor && oldAuthor !== pAuthor && oldAuthor.indexOf(pAuthor + " (") !== 0) {
+        record.set("author", pAuthor + " (" + oldAuthor + ")");
+      }
+    }
+  } catch (err) {
+    if (app && app.logger) {
+      app.logger().warn("Reconciliation failed", "bibId", bibId, "error", String(err));
+    }
+  }
+}
+
 module.exports = {
   adminStaffAuth: adminStaffAuth,
   authenticatePatron: authenticatePatron,
@@ -307,6 +332,7 @@ module.exports = {
   lookupPatron: lookupPatron,
   organizations: organizations,
   placeHold: placeHold,
+  reconcileRecord: reconcileRecord,
   searchBib: searchBib,
   staffAuth: staffAuth,
 };
