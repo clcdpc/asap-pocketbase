@@ -1410,6 +1410,26 @@ document.getElementById('btn-bib-lookup').addEventListener('click', async () => 
     display.classList.add('alert-info');
     
     let infoText = (data.title || 'No title') + (data.author ? ' by ' + data.author : '');
+
+    // Update title and author fields if they don't match the bib data
+    const titleInput = document.getElementById('edit-title');
+    const authorInput = document.getElementById('edit-author');
+
+    if (data.title) {
+      const oldTitle = titleInput.value.trim();
+      const pTitle = data.title.trim();
+      if (pTitle && oldTitle !== pTitle && oldTitle.indexOf(pTitle + " (") !== 0) {
+        titleInput.value = pTitle + " (" + oldTitle + ")";
+      }
+    }
+
+    if (data.author) {
+      const oldAuthor = authorInput.value.trim();
+      const pAuthor = data.author.trim();
+      if (pAuthor && oldAuthor !== pAuthor && oldAuthor.indexOf(pAuthor + " (") !== 0) {
+        authorInput.value = pAuthor + " (" + oldAuthor + ")";
+      }
+    }
     
     // Check for duplicate hold in Polaris
     if (data.patronHoldCheck && data.patronHoldCheck.statusValue === 29) {
