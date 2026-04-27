@@ -211,11 +211,15 @@ function processPendingHolds(app, staff, result) {
       }
 
       var hold = polaris.placeHold(staff, bibId, patron.PatronID);
-      // Status 29 means "Duplicate hold request" - i.e., the hold already exists in Polaris.
-      var isDuplicate = String(hold.statusValue) === "29";
+      // Status 29 or 6 means "Duplicate hold request" - i.e., the hold already exists in Polaris.
+      var isDuplicate = String(hold.statusValue) === "29" || String(hold.statusValue) === "6";
 
       if (!hold.ok && !isDuplicate) {
-        var errMsg = (hold.payload && hold.payload.ErrorMessage) || "Polaris Error " + hold.statusValue;
+        var errMsg = "";
+        if (hold.payload) {
+          errMsg = hold.payload.Message || hold.payload.ErrorMessage || "";
+        }
+        errMsg = errMsg || ("Polaris Error " + hold.statusValue);
         records.appendSystemNote(record, "SKIP: Hold placement failed. " + errMsg);
         app.save(record);
         app.logger().warn("ASAP hold placement skipped", "recordId", record.id, "statusValue", hold.statusValue, "payload", JSON.stringify(hold.payload));
