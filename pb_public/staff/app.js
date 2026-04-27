@@ -27,8 +27,8 @@ const defaultPublicationOptions = ['Already published', 'Coming soon', 'Publishe
 const defaultAgeGroups = ['Adult', 'Young Adult / Teen', 'Children'];
 const patronFormatKeys = ['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'];
 const patronFormatFields = [
-  { key: 'title', label: 'Title', storage: 'title' },
-  { key: 'author', label: 'Author / Creator', storage: 'author' },
+  { key: 'title', label: 'Title (Original)', storage: 'title' },
+  { key: 'author', label: 'Author (Original)', storage: 'author' },
   { key: 'identifier', label: 'Identifier', storage: 'identifier' },
   { key: 'agegroup', label: 'Age Group', storage: 'agegroup' },
   { key: 'publication', label: 'Publication Timing', storage: 'publication' }
@@ -686,8 +686,8 @@ function getGridColumns(status) {
   if (status === 'suggestion') {
     return [
       'Barcode',
-      'Title',
-      'Author',
+      'Title (Original)',
+      'Author (Original)',
       'Format',
       'Timing',
       'Submitted',
@@ -700,8 +700,8 @@ function getGridColumns(status) {
   if (status === 'closed') {
     return [
       'Barcode',
-      'Title',
-      'Author',
+      'Title (Original)',
+      'Author (Original)',
       'Format',
       'Submitted',
       'Closed Reason',
@@ -713,8 +713,8 @@ function getGridColumns(status) {
 
   return [
     'Barcode',
-    'Title',
-    'Author',
+    'Title (Original)',
+    'Author (Original)',
     'ISBN',
     'BIBID',
     'Age Group',

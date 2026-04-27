@@ -716,6 +716,12 @@ function staffTitleRequestAction(e) {
     if (data.bibid) {
       var bibid = String(data.bibid).trim();
       var barcode = record.get("barcode");
+      var staffAuth;
+      try {
+        staffAuth = polaris.adminStaffAuth();
+      } catch (err) {
+        e.app.logger().warn("Polaris auth failed", "error", String(err));
+      }
       var existing = e.app.findRecordsByFilter("title_requests", 
         "barcode = {:barcode} && bibid = {:bibid} && id != {:id} && status != 'closed'",
         "", 1, 0, { barcode: barcode, bibid: bibid, id: id });
@@ -723,10 +729,12 @@ function staffTitleRequestAction(e) {
          return e.json(400, { message: "Duplicate detected: This patron already has an open request for BIB ID " + bibid + "." });
       }
 
+      // Reconcile manual input with Polaris data
+      polaris.reconcileRecord(e.app, staffAuth, record, bibid);
+
       // If moving to Pending Hold, check Polaris for an existing hold
       if (nextStatus === records.STATUS.PENDING_HOLD) {
         try {
-          var staffAuth = polaris.adminStaffAuth();
           var pPatron = polaris.lookupPatron(staffAuth, barcode);
           if (pPatron && pPatron.PatronID) {
             var holdCheck = polaris.placeHold(staffAuth, bibid, pPatron.PatronID, true); // testMode = true
@@ -764,9 +772,13 @@ function staffTitleRequestAction(e) {
       if (action === "alreadyOwn") {
         var bibid = String(data.bibid || "").trim();
         if (bibid && patron && patron.PatronID) {
+          var localStaffAuth;
           try {
-            var staffAuth = polaris.adminStaffAuth();
-            polaris.placeHold(staffAuth, bibid, patron.PatronID, false); // testMode = false
+            localStaffAuth = polaris.adminStaffAuth();
+          } catch(e) {}
+          polaris.reconcileRecord(e.app, localStaffAuth, record, bibid);
+          try {
+            polaris.placeHold(localStaffAuth, bibid, patron.PatronID, false); // testMode = false
             records.appendSystemNote(record, "Auto-placed hold for patron since item is already owned (BIB " + bibid + ")");
           } catch (holdErr) {
             e.app.logger().error("Auto-hold failed during alreadyOwn action", "recordId", record.id, "bibid", bibid, "error", String(holdErr));

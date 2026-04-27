@@ -1,6 +1,17 @@
 const config = require(`${__hooks}/lib/config.js`);
 
+
+function getRealValue(combinedStr) {
+  if (!combinedStr) return combinedStr;
+  var parenIndex = combinedStr.indexOf(" (");
+  if (parenIndex > 0) {
+      return combinedStr.substring(0, parenIndex).trim();
+  }
+  return combinedStr.trim();
+}
+
 function clean(value) {
+
   return String(value === undefined || value === null ? "" : value).replace(/[<>]/g, "");
 }
 
@@ -41,8 +52,8 @@ function replacePlaceholders(template, data) {
 function suggestionSubmitted(app, record) {
   var firstName = clean(record.get("nameFirst"));
   var lastName = clean(record.get("nameLast"));
-  var title = clean(record.get("title"));
-  var author = clean(record.get("author"));
+  var title = getRealValue(clean(record.get("title")));
+  var author = getRealValue(clean(record.get("author")));
   var format = formatLabel(record.get("format"));
   var name = (firstName + " " + lastName).trim() || "Library Patron";
   var libraryOrgId = record.get("libraryOrgId");
@@ -61,8 +72,8 @@ function suggestionSubmitted(app, record) {
 }
 
 function alreadyOwned(app, record, patron) {
-  var title = clean(record.get("title"));
-  var author = clean(record.get("author"));
+  var title = getRealValue(clean(record.get("title")));
+  var author = getRealValue(clean(record.get("author")));
   var format = formatLabel(record.get("format"));
   var barcode = clean(record.get("barcode"));
   var name = patronName(record, patron);
@@ -84,8 +95,8 @@ function alreadyOwned(app, record, patron) {
 }
 
 function rejected(app, record, patron) {
-  var title = clean(record.get("title"));
-  var author = clean(record.get("author"));
+  var title = getRealValue(clean(record.get("title")));
+  var author = getRealValue(clean(record.get("author")));
   var format = formatLabel(record.get("format"));
   var name = patronName(record, patron);
   var firstName = clean((patron && patron.NameFirst) || record.get("nameFirst"));
@@ -106,8 +117,8 @@ function rejected(app, record, patron) {
 }
 
 function holdPlaced(app, record, patron) {
-  var title = clean(record.get("title"));
-  var author = clean(record.get("author"));
+  var title = getRealValue(clean(record.get("title")));
+  var author = getRealValue(clean(record.get("author")));
   var format = formatLabel(record.get("format"));
   var barcode = clean(record.get("barcode"));
   var name = patronName(record, patron);
@@ -129,8 +140,8 @@ function holdPlaced(app, record, patron) {
 }
 
 function autoRejected(app, record) {
-  var title = clean(record.get("title"));
-  var author = clean(record.get("author"));
+  var title = getRealValue(clean(record.get("title")));
+  var author = getRealValue(clean(record.get("author")));
   var format = formatLabel(record.get("format"));
   var firstName = clean(record.get("nameFirst"));
   var lastName = clean(record.get("nameLast"));
