@@ -146,4 +146,6 @@ function hmacSha1Base64(secret, message) {
 
 module.exports = {
   hmacSha1Base64: hmacSha1Base64,
+  sha1: sha1,
+  utf8Bytes: utf8Bytes,
 };
