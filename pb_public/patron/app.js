@@ -136,7 +136,13 @@ async function request(path, options = {}) {
 
 function getConfigUrl() {
   const params = new URLSearchParams(window.location.search);
-  const orgId = params.get('libraryOrgId') || '';
+  let orgId = params.get('libraryOrgId');
+  if (orgId) {
+    localStorage.setItem('asap_patron_library_org_id', orgId);
+  } else {
+    orgId = localStorage.getItem('asap_patron_library_org_id') || '';
+  }
+  
   let url = '/api/asap/config?t=' + Date.now();
   if (orgId) {
     url += '&libraryOrgId=' + encodeURIComponent(orgId);
@@ -216,6 +222,10 @@ loginForm.addEventListener('submit', async (e) => {
     });
     
     authToken = result.token;
+    
+    if (result.record && result.record.libraryOrgId) {
+      localStorage.setItem('asap_patron_library_org_id', result.record.libraryOrgId);
+    }
     
     if (result.ui_text) {
       Object.assign(uiConfig, result.ui_text);
