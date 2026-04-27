@@ -135,7 +135,13 @@ async function request(path, options = {}) {
 }
 
 function getConfigUrl() {
-  return '/api/asap/config?t=' + Date.now();
+  const params = new URLSearchParams(window.location.search);
+  const orgId = params.get('libraryOrgId') || '';
+  let url = '/api/asap/config?t=' + Date.now();
+  if (orgId) {
+    url += '&libraryOrgId=' + encodeURIComponent(orgId);
+  }
+  return url;
 }
 
 function showStep(stepElement) {

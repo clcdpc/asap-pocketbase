@@ -105,6 +105,10 @@ routerAdd("POST", "/api/asap/import/title-requests", (e) => {
 
 routerAdd("GET", "/api/asap/config", (e) => {
   const config = require(`${__hooks}/lib/config.js`);
+  const orgId = e.request.url.query().get("libraryOrgId") || "";
+  if (orgId) {
+    return e.json(200, config.uiText(e.app, orgId));
+  }
   return e.json(200, config.uiText());
 });
 

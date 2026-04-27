@@ -41,14 +41,18 @@ If this is a brand-new PocketBase database, the ASAP setup flow and the PocketBa
 For library consortia, staff accounts are scoped by Polaris domain, username, and parent library organization. Staff can log in as `DOMAIN\username`, `username@domain`, or a bare username when a default staff domain is configured in settings.
 
 After setup:
+After setup:
 - Use **Settings > Polaris** to manually sync the Polaris organization hierarchy when needed. The system also syncs organizations automatically once a day at 2 AM server time.
 - Use **Settings > Staff Access** to manage staff roles. `super_admin` users can manage global settings and all libraries; `admin` and `staff` users are scoped to their resolved parent library.
+- **Role-Based Access Control (RBAC)**: Only `super_admin` accounts can view or modify system-level configurations (SMTP Host, Polaris Credentials, Setup Wizard). Regular library `admin` users are restricted to modifying their specific branch's Workflow, Patron Experience, and Email Settings.
 
-### 5. Consortia & Multi-Library Templates
-In a consortia environment, ASAP allows each member library to maintain its own unique communication style:
-- **Cascading Templates**: The system follows a "most-specific" logic. If a library has custom email templates, they are used; otherwise, the system automatically falls back to the **System Default** templates defined in global settings.
-- **Library Admin Scoping**: Staff with the `admin` role can access the **Email Templates** section of settings but are locked to their own library's data. They can customize their library's messaging without affecting others.
-- **Super Admin Oversight**: `super_admin` users have a library selector that allows them to manage templates for any library in the system or update the global system defaults.
+### 5. Consortia Support & Branch Overrides
+In a consortia environment, ASAP allows each member library to maintain its own unique communication style and workflow rules:
+- **Cascading Overrides**: The system follows a "most-specific" logic. If a library has custom email templates, patron experience settings, or workflow timings, they are used; otherwise, the system automatically falls back to the **System Default** settings.
+- **Library Admin Scoping**: Staff with the `admin` role can access the **Workflow**, **Patron Experience**, and **Email Settings** tabs, but are locked to their own library's data. They can customize their library's messaging and behavior without affecting others.
+- **Custom Sender Identities**: Each branch can configure its own "From Email Address" and "From Name" in the Email Settings tab, allowing emails to appear as if they came directly from the local branch rather than a central consortia address.
+- **Patron Portal Pre-loading**: You can append `?libraryOrgId=<ID>` to the patron portal URL (e.g. `/patron/?libraryOrgId=2`) to pre-load a specific branch's custom logo, page title, and login prompt before the patron even logs in.
+- **Super Admin Oversight**: `super_admin` users have a library selector that allows them to manage overrides for any library in the system or update the global system defaults.
 - **Pre-population**: When creating a new library override, the system automatically pre-populates the editor with the current system defaults as a starting point.
 - **Reset Capability**: Libraries can easily revert to the consortia standard using the "Reset to System Defaults" tool.
 
@@ -149,8 +153,8 @@ Before sharing or deploying this project outside a local development machine:
 ## 💻 Technical Architecture
 
 - **Backend**: PocketBase (SQLite + Go VM) with custom JavaScript hooks.
-- **Frontend**: Vanilla JavaScript (ES6+), HTML5, and CSS3.
-- **No Build Step**: Built with native browser APIs and standard PocketBase hooks, with no `npm install` or frontend build step required.
+- **Frontend**: Vanilla JavaScript (ES6+), HTML5, and CSS3. Modal dialogs use native HTML `<dialog>` elements for maximum compatibility and minimal overhead.
+- **Zero Dependencies**: Built entirely with native browser APIs and standard PocketBase hooks. There are no `npm install` requirements, no external libraries, no hardcoded strings, and no frontend build steps (Webpack/Vite/Rollup) required to run or develop the application.
 - **Portable Runtime**: Deploy the source folders with an official PocketBase binary, then let each environment create and own its local `pb_data/`.
 
 ---
