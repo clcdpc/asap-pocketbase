@@ -131,11 +131,16 @@ function resolveParentLibrary(app, organizationId, options) {
 function attachPatronScope(app, patron, staffAuth, logger) {
   patron = patron || {};
   var patronOrgId = normalizeOrgId(patron.PatronOrgID || patron.patronOrgId);
+  if (logger) logger.info("Attaching patron scope", "patronOrgId", patronOrgId);
+  
   var scope = resolveParentLibrary(app, patronOrgId, { staffAuth: staffAuth, logger: logger });
   if (scope && scope.libraryOrgId) {
     patron.PatronOrgID = patronOrgId;
     patron.LibraryOrgID = scope.libraryOrgId;
     patron.LibraryOrgName = scope.libraryOrgName;
+    if (logger) logger.info("Patron scope resolved", "libraryOrgId", patron.LibraryOrgID);
+  } else {
+    if (logger) logger.warn("Patron scope NOT resolved", "patronOrgId", patronOrgId);
   }
 
   var pickupBranchId = normalizeOrgId(patron.RequestPickupBranchID || patron.preferredPickupBranchId);

@@ -112,7 +112,7 @@ async function request(path, options = {}) {
   });
   
   if (!response.ok) {
-    if (response.status === 401) {
+    if (response.status === 401 && !path.endsWith('/login')) {
       authToken = '';
       const errorDiv = document.getElementById('login-error');
       errorDiv.textContent = 'Your session has expired. Please log in again.';
@@ -244,13 +244,10 @@ loginForm.addEventListener('submit', async (e) => {
 
     showStep(stepForm);
   } catch (err) {
-    if (err.status !== 401) {
-      errorDiv.textContent = 'Incorrect Login - Please try again';
-      errorDiv.classList.remove('hidden');
-    }
-  } finally {
     btn.disabled = false;
     btn.textContent = 'Next';
+    errorDiv.textContent = err.message || 'Incorrect Login - Please try again';
+    errorDiv.classList.remove('hidden');
   }
 });
 

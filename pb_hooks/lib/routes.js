@@ -489,31 +489,38 @@ function staffLogin(e) {
 }
 
 function patronLogin(e) {
-  var data = body(e);
-  var barcode = String(data.username || data.barcode || "").trim();
-  var password = String(data.password || data.pin || "");
-  if (!barcode || !password) {
-    return e.json(400, { message: "Barcode and PIN are required" });
-  }
+  try {
+    var data = body(e);
+    var barcode = String(data.username || data.barcode || "").trim();
+    var password = String(data.password || data.pin || "");
+    
+    if (!barcode || !password) {
+      return e.json(400, { message: "Barcode and PIN are required" });
+    }
 
-  var staffAuth = polaris.adminStaffAuth();
-  var patron = polaris.authenticatePatron(barcode, password, staffAuth);
-  patron = orgs.attachPatronScope(e.app, patron, staffAuth, e.app.logger());
-  if (!patron.LibraryOrgID) {
-    return e.json(403, { message: "Your library could not be determined from Polaris." });
-  }
-  var record = records.upsertPatronUser(e.app, patron);
-  // Let patron use system defaults if library specifically hasn't overridden
-  var librarySettings = config.getLibrarySettings(e.app, patron.LibraryOrgID);
+    var staffAuth = polaris.adminStaffAuth();
+    var patron = polaris.authenticatePatron(barcode, password, staffAuth);
+    patron = orgs.attachPatronScope(e.app, patron, staffAuth, e.app.logger());
+    
+    if (!patron.LibraryOrgID) {
+      return e.json(403, { message: "Your library could not be determined from Polaris." });
+    }
+    
+    var record = records.upsertPatronUser(e.app, patron);
+    var librarySettings = config.librarySettings(e.app, patron.LibraryOrgID);
 
-  return e.json(200, {
-    token: record.newAuthToken(),
-    record: record,
-    email: patron.EmailAddress || "",
-    preferredPickupBranchId: patron.PreferredPickupBranchID || "",
-    preferredPickupBranchName: patron.PreferredPickupBranchName || "",
-    ui_text: librarySettings.ui_text
-  });
+    return e.json(200, {
+      token: record.newAuthToken(),
+      record: record,
+      email: patron.EmailAddress || "",
+      preferredPickupBranchId: patron.PreferredPickupBranchID || "",
+      preferredPickupBranchName: patron.PreferredPickupBranchName || "",
+      ui_text: librarySettings.ui_text
+    });
+  } catch (err) {
+    e.app.logger().error("Patron login failed", "error", String(err));
+    return e.json(401, { message: "Incorrect Login - Please try again" });
+  }
 }
 
 function createSuggestion(e) {

@@ -91,6 +91,10 @@ function send(method, ep, body, staffAuth, contentType, c) {
   if (result.statusCode < 200 || result.statusCode > 299) {
     var msg = "Polaris request failed with HTTP " + result.statusCode;
     if (payload && payload.ErrorMessage) msg += ": " + payload.ErrorMessage;
+    // Log full payload for debugging if it's an error
+    if ($app.logger) {
+      $app.logger().error("Polaris API Error Details", "url", ep.full, "status", result.statusCode, "payload", JSON.stringify(payload));
+    }
     throw new Error(msg);
   }
   if (payload.PAPIErrorCode !== undefined && payload.PAPIErrorCode < 0) {
@@ -131,11 +135,20 @@ function getPatronBasic(staff, barcode) {
 
 function authenticatePatron(barcode, password, staffAuth) {
   var staff = staffAuth || adminStaffAuth();
+  if (!staff || !staff.AccessToken) {
+    throw new Error("Admin staff authentication failed - check your Polaris settings.");
+  }
+  
   var ep = endpoint("public", "authenticator/patron");
+  if ($app.logger) {
+    $app.logger().info("Authenticating patron", "barcode", barcode);
+  }
+  
   send("POST", ep, JSON.stringify({
     Barcode: barcode,
     Password: password,
   }), staff);
+  
   return getPatronBasic(staff, barcode);
 }
 
