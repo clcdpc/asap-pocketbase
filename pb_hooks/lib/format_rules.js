@@ -200,9 +200,13 @@ function sanitizePatronSuggestion(data, uiText) {
 
 module.exports = {
   FIELD_KEYS: FIELD_KEYS,
+  FIELD_MODES: FIELD_MODES,
   FORMAT_KEYS: FORMAT_KEYS,
   MESSAGE_BEHAVIORS: MESSAGE_BEHAVIORS,
+  clone: clone,
   defaultFormatRules: defaultFormatRules,
+  normalizeFormat: normalizeFormat,
   normalizeFormatRules: normalizeFormatRules,
+  normalizeMode: normalizeMode,
   sanitizePatronSuggestion: sanitizePatronSuggestion,
 };
