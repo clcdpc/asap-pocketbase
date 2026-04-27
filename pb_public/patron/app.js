@@ -13,6 +13,7 @@ const titleInput = document.getElementById('title');
 const agegroupInput = document.getElementById('agegroup');
 const publicationInput = document.getElementById('publication');
 const defaultPublicationOptions = ['Already published', 'Coming soon', 'Published a while back'];
+const defaultAgeGroups = ['Adult', 'Young Adult / Teen', 'Children'];
 const formatKeys = ['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'];
 const fieldKeys = ['title', 'author', 'identifier', 'agegroup', 'publication'];
 const defaultFormatRules = {
@@ -85,9 +86,11 @@ const defaultUiText = {
   barcodeLabel: 'Library Card',
   pinLabel: 'Pin',
   publicationOptions: defaultPublicationOptions,
+  ageGroups: defaultAgeGroups,
   formatRules: defaultFormatRules
 };
 let publicationOptions = defaultPublicationOptions.slice();
+let ageGroups = defaultAgeGroups.slice();
 let uiConfig = { ...defaultUiText };
 let formatRules = normalizeFormatRules(defaultFormatRules);
 
@@ -536,14 +539,30 @@ function normalizePublicationOptions(options) {
 
 function setPublicationOptions(options) {
   publicationOptions = normalizePublicationOptions(options);
-  const selected = publicationInput.value || publicationOptions[0];
-  publicationInput.innerHTML = '';
-  publicationOptions.forEach(option => {
-    const item = document.createElement('option');
-    item.value = option;
-    item.textContent = option;
-    publicationInput.appendChild(item);
+  let ageGroups = defaultAgeGroups;
+  if (uiConfig.ageGroups && Array.isArray(uiConfig.ageGroups)) {
+    ageGroups = uiConfig.ageGroups;
+  }
+  
+  const pubSelect = document.getElementById('publication');
+  pubSelect.innerHTML = '';
+  publicationOptions.forEach(opt => {
+    const el = document.createElement('option');
+    el.value = opt;
+    el.textContent = opt;
+    pubSelect.appendChild(el);
   });
+  
+  const ageSelect = document.getElementById('agegroup');
+  ageSelect.innerHTML = '';
+  ageGroups.forEach(opt => {
+    const el = document.createElement('option');
+    el.value = opt;
+    el.textContent = opt;
+    ageSelect.appendChild(el);
+  });
+
+  const selected = publicationInput.value;
   publicationInput.value = publicationOptions.includes(selected) ? selected : publicationOptions[0];
 }
 

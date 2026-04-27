@@ -802,12 +802,19 @@
                     <textarea id="ui-eaudiobook-msg" class="form-control" rows="3"></textarea>
                     <small class="form-text text-muted">Shown to patrons when they select "eAudiobook" as their format.</small>
                   </div>
-                  <div class="form-group">
-                    <label for="ui-publication-options">Publication Timing Options</label>
-                    <textarea id="ui-publication-options" class="form-control" rows="3"></textarea>
-                    <small class="form-text text-muted">One option per line. These appear on the patron form and staff new
-                      suggestion form.</small>
+                  <div class="row">
+                    <div class="form-group col-md-6">
+                      <label for="ui-publication-options">Publication Timing Options</label>
+                      <textarea id="ui-publication-options" class="form-control" rows="3"></textarea>
+                      <small class="form-text text-muted">Enter options one per line.</small>
+                    </div>
+                    <div class="form-group col-md-6">
+                      <label for="ui-age-groups">Age Groups</label>
+                      <textarea id="ui-age-groups" class="form-control" rows="3"></textarea>
+                      <small class="form-text text-muted">Enter options one per line.</small>
+                    </div>
                   </div>
+                  <small class="form-text text-muted">One option per line. These appear on the patron form and staff new suggestion form.</small>
                   <div class="card mt-4">
                     <div class="card-header">
                       <strong>Format Display Names</strong>
@@ -993,9 +1000,6 @@
         <div class="form-group col-6 mb-2">
           <label class="small font-weight-bold mb-1">Age Group</label>
           <select id="edit-age" class="form-control form-control-sm">
-            <option value="adult">Adult</option>
-            <option value="teen">Teen</option>
-            <option value="children">Children</option>
           </select>
         </div>
       </div>
@@ -1077,9 +1081,6 @@
         <div class="form-group">
           <label>Age</label>
           <select id="new-age" class="form-control new-detail-field" disabled>
-            <option value="adult">Adult</option>
-            <option value="teen">Teen</option>
-            <option value="children">Children</option>
           </select>
         </div>
         <div class="form-group">

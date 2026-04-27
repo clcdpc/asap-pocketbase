@@ -184,6 +184,7 @@ function getSettings() {
     ebookMessage: "<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
     eaudiobookMessage: "<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
     publicationOptions: ["Already published", "Coming soon", "Published a while back"],
+    ageGroups: ["Adult", "Young Adult / Teen", "Children"],
     formatLabels: {
       book: "Book",
       audiobook_cd: "Audiobook (Physical CD)",

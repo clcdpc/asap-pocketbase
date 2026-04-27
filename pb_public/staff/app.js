@@ -24,6 +24,7 @@ const closeReasonMap = {
   manual: 'Manually closed'
 };
 const defaultPublicationOptions = ['Already published', 'Coming soon', 'Published a while back'];
+const defaultAgeGroups = ['Adult', 'Young Adult / Teen', 'Children'];
 const patronFormatKeys = ['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'];
 const patronFormatFields = [
   { key: 'title', label: 'Title', storage: 'title' },
@@ -1172,6 +1173,45 @@ function normalizePublicationOptions(options) {
   return cleaned.length ? Array.from(new Set(cleaned)) : defaultPublicationOptions.slice();
 }
 
+function normalizeAgeGroups(options) {
+  const raw = Array.isArray(options) ? options : String(options || '').split(/\r?\n/);
+  const cleaned = raw.map(option => String(option || '').trim()).filter(Boolean);
+  return cleaned.length ? Array.from(new Set(cleaned)) : defaultAgeGroups.slice();
+}
+
+function setPublicationOptions(options) {
+  const normalized = normalizePublicationOptions(options);
+  document.querySelectorAll('.publication-options-select').forEach(select => {
+    const val = select.value || normalized[0];
+    select.innerHTML = '';
+    normalized.forEach(opt => {
+      const el = document.createElement('option');
+      el.value = opt;
+      el.textContent = opt;
+      select.appendChild(el);
+    });
+    select.value = normalized.includes(val) ? val : normalized[0];
+  });
+}
+
+function setAgeGroups(options) {
+  const normalized = normalizeAgeGroups(options);
+  ['edit-age', 'new-age'].forEach(id => {
+    const select = document.getElementById(id);
+    if (!select) return;
+    const val = select.value || normalized[0];
+    select.innerHTML = '';
+    normalized.forEach(opt => {
+      const el = document.createElement('option');
+      el.value = opt;
+      el.textContent = opt;
+      select.appendChild(el);
+    });
+    // Try to preserve value, fallback to the first option
+    select.value = normalized.includes(val) ? val : normalized[0];
+  });
+}
+
 function normalizePatronFormatRules(rules) {
   const normalized = structuredClone(defaultPatronFormatRules);
   const incoming = rules && typeof rules === 'object' ? rules : {};
@@ -1885,8 +1925,13 @@ function populatePatronUiForms(uiText) {
   if (pubOptionsField) {
     pubOptionsField.value = normalizePublicationOptions(uiText.publicationOptions).join('\n');
   }
+  const ageGroupsField = document.getElementById('ui-age-groups');
+  if (ageGroupsField) {
+    ageGroupsField.value = normalizeAgeGroups(uiText.ageGroups).join('\n');
+  }
   renderPatronFormatRulesEditor(uiText.formatRules);
   setPublicationOptions(uiText.publicationOptions);
+  setAgeGroups(uiText.ageGroups);
 }
 
 document.getElementById('btn-reset-library-settings').addEventListener('click', async () => {
@@ -2052,6 +2097,7 @@ function buildSettingsPayload() {
     formatLabels: collectFormatLabels(),
     availableFormats: collectAvailableFormats(),
     publicationOptions: normalizePublicationOptions(getFieldValue('ui-publication-options')),
+    ageGroups: normalizeAgeGroups(getFieldValue('ui-age-groups')),
     formatRules: collectPatronFormatRules()
   };
 
