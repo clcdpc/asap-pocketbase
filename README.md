@@ -157,3 +157,24 @@ Before sharing or deploying this project outside a local development machine:
 
 ## 📝 License
 This project is licensed under the terms included in the [COPYING.md](COPYING.md) file.
+
+## 🧰 Visual Studio Local Host (No PocketBase Required)
+
+If you want to run ASAP directly from Visual Studio without PocketBase, use the included solution:
+
+- Solution: `visualstudio/Asap.VisualStudio.sln`
+- Project: `visualstudio/Asap.VisualStudioHost/Asap.VisualStudioHost.csproj`
+
+### What this mode does
+- Serves the existing `pb_public/` frontend directly from ASP.NET Core.
+- Uses controller-based API endpoints under `/api/asap/*`.
+- Includes a PocketBase compatibility controller for the specific staff UI calls the app makes.
+- Stores all data in memory for local testing (no PocketBase runtime, no `pb_data/`).
+
+### Run in Visual Studio
+1. Open `visualstudio/Asap.VisualStudio.sln`.
+2. Set `Asap.VisualStudioHost` as startup project.
+3. Press **F5**.
+4. The app launches at `http://localhost:5179` and routes to `/staff/`.
+
+> Note: This mode is intended for local development/testing and does not persist data between runs.
