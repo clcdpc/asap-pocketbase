@@ -2424,9 +2424,7 @@ function updateModalFormatDropdowns() {
     `).join('');
     
     // Try to restore value, or fallback to first
-    select.value = availableFormats.includes(val) ? val : availableFormats[0];
-    
-    select.value = val;
+    select.value = availableFormats.includes(val) ? val : (availableFormats[0] || '');
   });
 }
 
