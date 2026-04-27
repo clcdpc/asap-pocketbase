@@ -112,10 +112,16 @@ function processOutstandingTimeout(app, result) {
     { status: records.STATUS.SUGGESTION }
   );
 
+  var cfgCache = {};
+
   for (var i = 0; i < pending.length; i++) {
     var record = pending[i];
     var orgId = record.get("libraryOrgId");
-    var cfg = config.outstandingTimeout(app, orgId);
+
+    if (cfgCache[orgId] === undefined) {
+      cfgCache[orgId] = config.outstandingTimeout(app, orgId);
+    }
+    var cfg = cfgCache[orgId];
     
     if (!cfg.enabled) continue;
 
@@ -150,10 +156,16 @@ function processHoldPickupTimeout(app, result) {
     { status: records.STATUS.HOLD_PLACED }
   );
 
+  var cfgCache = {};
+
   for (var i = 0; i < holds.length; i++) {
     var record = holds[i];
     var orgId = record.get("libraryOrgId");
-    var cfg = config.holdPickupTimeout(app, orgId);
+
+    if (cfgCache[orgId] === undefined) {
+      cfgCache[orgId] = config.holdPickupTimeout(app, orgId);
+    }
+    var cfg = cfgCache[orgId];
     
     if (!cfg.enabled) continue;
 
@@ -188,6 +200,8 @@ function processPendingHolds(app, staff, result) {
     { status: records.STATUS.PENDING_HOLD }
   );
 
+  var patronCache = {};
+
   for (var i = 0; i < pending.length; i++) {
     var record = pending[i];
     try {
@@ -202,7 +216,11 @@ function processPendingHolds(app, staff, result) {
         continue;
       }
 
-      var patron = polaris.lookupPatron(staff, record.get("barcode"));
+      var barcode = record.get("barcode");
+      if (patronCache[barcode] === undefined) {
+        patronCache[barcode] = polaris.lookupPatron(staff, barcode);
+      }
+      var patron = patronCache[barcode];
       if (!patron.PatronID) {
         records.appendSystemNote(record, "SKIP: Patron not found in Polaris using barcode.");
         app.save(record);
@@ -260,10 +278,16 @@ function processCheckedOut(app, staff, result) {
     { status: records.STATUS.HOLD_PLACED }
   );
 
+  var checkoutsCache = {};
+
   for (var i = 0; i < holds.length; i++) {
     var record = holds[i];
     try {
-      var checkouts = polaris.checkPatronCheckouts(staff, record.get("barcode"));
+      var barcode = record.get("barcode");
+      if (checkoutsCache[barcode] === undefined) {
+        checkoutsCache[barcode] = polaris.checkPatronCheckouts(staff, barcode);
+      }
+      var checkouts = checkoutsCache[barcode];
       var bibId = String(record.get("bibid") || "");
       for (var j = 0; j < checkouts.length; j++) {
         if (String(checkouts[j].BibID) === bibId) {

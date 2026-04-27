@@ -1,0 +1,3 @@
+## 2026-04-27 - Cached config and patron lookups in background jobs
+**Learning:** Background jobs that process many rows were doing N+1 local DB queries (to fetch organization-specific settings) and N+1 external API calls (to fetch Polaris patron info/checkouts). Since multiple records often share the same `libraryOrgId` or `barcode`, this was a major performance bottleneck, especially for the external API calls.
+**Action:** Use simple local dictionary caches (e.g., `var cfgCache = {}`) scoped within the batch processing loops to memoize these lookups. Since the caches are local to the function execution, there is no risk of stale data across job runs, and it cleanly prevents redundant I/O.
