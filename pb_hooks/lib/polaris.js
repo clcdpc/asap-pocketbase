@@ -192,15 +192,14 @@ function organizations(kind, staff) {
 function placeHold(staff, bibId, patronId) {
   var c = cfg();
   var ep = endpoint("public", "holdrequest");
-  var body = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
-    "<HoldRequestCreateData>" +
-    "<PatronID>" + escapeXml(patronId) + "</PatronID>" +
-    "<BibID>" + escapeXml(bibId) + "</BibID>" +
-    "<PickupOrgID>" + escapeXml(c.pickupOrgId) + "</PickupOrgID>" +
-    "<WorkstationID>" + escapeXml(c.workstationId) + "</WorkstationID>" +
-    "<UserID>" + escapeXml(c.userId) + "</UserID>" +
-    "<RequestingOrgID>" + escapeXml(c.requestingOrgId) + "</RequestingOrgID>" +
-    "</HoldRequestCreateData>";
+  var body = buildXml("HoldRequestCreateData", {
+    PatronID: patronId,
+    BibID: bibId,
+    PickupOrgID: c.pickupOrgId,
+    WorkstationID: c.workstationId,
+    UserID: c.userId,
+    RequestingOrgID: c.requestingOrgId,
+  });
 
   var payload = send("POST", ep, body, staff, "application/xml");
   if (payload.StatusType === 1) {
@@ -217,14 +216,13 @@ function placeHold(staff, bibId, patronId) {
 function replyToHold(staff, holdPayload) {
   var c = cfg();
   var ep = endpoint("public", "holdrequest/" + encodeURIComponent(holdPayload.RequestGUID));
-  var body = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
-    "<HoldRequestReplyData>" +
-    "<TxnGroupQualifier>" + escapeXml(holdPayload.TxnGroupQualifer || holdPayload.TxnGroupQualifier || "") + "</TxnGroupQualifier>" +
-    "<TxnQualifier>" + escapeXml(holdPayload.TxnQualifier || "") + "</TxnQualifier>" +
-    "<RequestingOrgID>" + escapeXml(c.requestingOrgId) + "</RequestingOrgID>" +
-    "<Answer>1</Answer>" +
-    "<State>3</State>" +
-    "</HoldRequestReplyData>";
+  var body = buildXml("HoldRequestReplyData", {
+    TxnGroupQualifier: holdPayload.TxnGroupQualifer || holdPayload.TxnGroupQualifier || "",
+    TxnQualifier: holdPayload.TxnQualifier || "",
+    RequestingOrgID: c.requestingOrgId,
+    Answer: "1",
+    State: "3",
+  });
   return send("PUT", ep, body, staff, "application/xml");
 }
 
@@ -271,6 +269,18 @@ function escapeXml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
+}
+
+function buildXml(root, data) {
+  var xml = '<?xml version="1.0" encoding="UTF-8"?>';
+  xml += '<' + root + '>';
+  for (var key in data) {
+    if (Object.prototype.hasOwnProperty.call(data, key)) {
+      xml += '<' + key + '>' + escapeXml(data[key]) + '</' + key + '>';
+    }
+  }
+  xml += '</' + root + '>';
+  return xml;
 }
 
 function getBib(staff, bibId) {
