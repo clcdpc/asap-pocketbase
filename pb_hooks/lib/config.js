@@ -84,6 +84,11 @@ function mergeEmailTemplates(baseTemplates, overrideTemplates) {
   var overrides = parseJsonObject(overrideTemplates, {});
   var merged = {};
 
+  var overrideFromAddress = String(overrides.fromAddress || "").trim();
+  var overrideFromName = String(overrides.fromName || "").trim();
+  merged.fromAddress = overrideFromAddress ? overrideFromAddress : String(base.fromAddress || "");
+  merged.fromName = overrideFromName ? overrideFromName : String(base.fromName || "");
+
   for (var i = 0; i < EMAIL_TEMPLATE_KEYS.length; i++) {
     var key = EMAIL_TEMPLATE_KEYS[i];
     merged[key] = {};
@@ -110,6 +115,18 @@ function diffEmailTemplates(baseTemplates, nextTemplates) {
   var next = normalizeEmailTemplates(nextTemplates);
   var diff = {};
 
+  var nextFromAddress = String(next.fromAddress || "").trim();
+  var baseFromAddress = String(base.fromAddress || "").trim();
+  if (nextFromAddress && nextFromAddress !== baseFromAddress) {
+    diff.fromAddress = nextFromAddress;
+  }
+
+  var nextFromName = String(next.fromName || "").trim();
+  var baseFromName = String(base.fromName || "").trim();
+  if (nextFromName && nextFromName !== baseFromName) {
+    diff.fromName = nextFromName;
+  }
+
   for (var i = 0; i < EMAIL_TEMPLATE_KEYS.length; i++) {
     var key = EMAIL_TEMPLATE_KEYS[i];
     var templateDiff = {};
@@ -131,6 +148,11 @@ function diffEmailTemplates(baseTemplates, nextTemplates) {
 
 function hasEmailTemplateOverrides(templates) {
   templates = parseJsonObject(templates, {});
+  
+  if (String(templates.fromAddress || "").trim() || String(templates.fromName || "").trim()) {
+    return true;
+  }
+
   for (var i = 0; i < EMAIL_TEMPLATE_KEYS.length; i++) {
     var key = EMAIL_TEMPLATE_KEYS[i];
     var template = parseJsonObject(templates[key], {});
@@ -297,8 +319,6 @@ function mail() {
     port: parseInt(s.port, 10) || 587,
     username: s.username || "",
     password: s.password || "",
-    from: s.from || "",
-    fromName: s.fromName || "Library Collection Development",
     tls: s.tls !== false,
   };
 }
@@ -345,14 +365,15 @@ function importToken() {
 
 function applyMailSettings(app) {
   var cfg = mail();
-  if (!cfg.from && !cfg.host) {
+  var e = emails();
+  if (!e.fromAddress && !cfg.host) {
     return;
   }
 
   var settings = app.settings();
-  if (cfg.from) {
-    settings.meta.senderAddress = cfg.from;
-    settings.meta.senderName = cfg.fromName;
+  if (e.fromAddress) {
+    settings.meta.senderAddress = e.fromAddress;
+    settings.meta.senderName = e.fromName || "Library Collection Development";
   }
 
   if (cfg.host) {

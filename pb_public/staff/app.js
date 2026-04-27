@@ -1572,17 +1572,20 @@ async function loadSettings(options = {}) {
   const showErrors = options.showErrors !== false;
 
   // Filter sidebar for non-super admins
-  document.querySelectorAll('[data-settings-nav]').forEach(el => {
-    const section = el.getAttribute('data-settings-nav');
-    if (!isSuper && section !== 'templates') {
+  document.querySelectorAll('[data-settings-target]').forEach(el => {
+    const section = el.getAttribute('data-settings-target');
+    // Allow library admins to see settings they can override
+    const allowedForAdmins = ['templates', 'workflow', 'patron'];
+    if (!isSuper && !allowedForAdmins.includes(section)) {
       el.classList.add('hidden');
     } else {
       el.classList.remove('hidden');
     }
   });
 
-  // If not super admin, force them to the templates section
-  if (!isSuper && currentSettingsSection !== 'templates') {
+  // If not super admin, force them to an allowed section if they are on a hidden one
+  const allowedForAdmins = ['templates', 'workflow', 'patron'];
+  if (!isSuper && !allowedForAdmins.includes(currentSettingsSection)) {
     activateSettingsSection('templates', { updateHash: true });
   }
 
@@ -1629,9 +1632,11 @@ async function loadSettings(options = {}) {
     setFieldValue('smtp-port', smtp.port || 587);
     setFieldValue('smtp-username', smtp.username || '');
     setFieldValue('smtp-password', smtp.password || '');
-    setFieldValue('smtp-from', smtp.from || '');
-    setFieldValue('smtp-from-name', smtp.fromName || '');
     setFieldChecked('smtp-tls', smtp.tls !== false);
+    
+    // Also populate the duplicate SMTP fields with the emails value
+    setFieldValue('smtp-from', emails.fromAddress || '');
+    setFieldValue('smtp-from-name', emails.fromName || '');
 
     // Polaris
     setFieldValue('polaris-host', polaris.host || '');
@@ -1721,6 +1726,16 @@ function setTemplateStatus(message, className, hidden = false) {
 
 function populateEmailTemplateForms(emails) {
   emails = emails || {};
+  
+  if (document.getElementById('email-from-address')) document.getElementById('email-from-address').value = emails.fromAddress || '';
+  if (document.getElementById('email-from-name')) document.getElementById('email-from-name').value = emails.fromName || '';
+
+  // Sync to SMTP tab if we are modifying the system context
+  if (currentLibraryContextOrgId === 'system') {
+    if (document.getElementById('smtp-from')) document.getElementById('smtp-from').value = emails.fromAddress || '';
+    if (document.getElementById('smtp-from-name')) document.getElementById('smtp-from-name').value = emails.fromName || '';
+  }
+
   const emailSubmit = emails.suggestion_submitted || {};
   if (document.getElementById('email-submit-subject')) document.getElementById('email-submit-subject').value = emailSubmit.subject || emailTemplateDefaults.suggestion_submitted.subject;
   if (document.getElementById('email-submit-body')) document.getElementById('email-submit-body').value = emailSubmit.body || emailTemplateDefaults.suggestion_submitted.body;
@@ -2015,8 +2030,6 @@ function buildSettingsPayload() {
     port: parseInt(getFieldValue('smtp-port', '587'), 10) || 587,
     username: getFieldValue('smtp-username'),
     password: getFieldValue('smtp-password'),
-    from: getFieldValue('smtp-from'),
-    fromName: getFieldValue('smtp-from-name'),
     tls: getFieldChecked('smtp-tls', true)
   };
 
@@ -2043,6 +2056,8 @@ function buildSettingsPayload() {
   };
 
   const emails = {
+    fromAddress: getFieldValue('email-from-address'),
+    fromName: getFieldValue('email-from-name'),
     suggestion_submitted: {
       subject: getFieldValue('email-submit-subject'),
       body: getFieldValue('email-submit-body')
@@ -2388,3 +2403,15 @@ if (formatSettingsContainer) {
     }
   });
 }
+
+// Keep duplicate sender fields in sync between Email Settings and SMTP Settings
+function syncInputPair(idA, idB) {
+  const elA = document.getElementById(idA);
+  const elB = document.getElementById(idB);
+  if (elA && elB) {
+    elA.addEventListener('input', (e) => elB.value = e.target.value);
+    elB.addEventListener('input', (e) => elA.value = e.target.value);
+  }
+}
+syncInputPair('email-from-address', 'smtp-from');
+syncInputPair('email-from-name', 'smtp-from-name');

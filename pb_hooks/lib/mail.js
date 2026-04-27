@@ -4,22 +4,24 @@ function clean(value) {
   return String(value === undefined || value === null ? "" : value).replace(/[<>]/g, "");
 }
 
-function send(app, to, subject, text, html) {
+function send(app, to, subject, text, html, options) {
   to = String(to || "").trim();
   if (!to) {
     return false;
   }
 
-  var cfg = config.mail();
+  options = options || {};
   var settings = app.settings();
-  var fromAddress = cfg.from || settings.meta.senderAddress;
+  var fromAddress = options.fromAddress || settings.meta.senderAddress;
+  var fromName = options.fromName || settings.meta.senderName || "Library Collection Development";
+  
   if (!fromAddress) {
     app.logger().warn("Email skipped because no sender address is configured", "to", to, "subject", subject);
     return false;
   }
 
   var message = new MailerMessage({
-    from: { address: fromAddress, name: cfg.fromName || settings.meta.senderName || "Library Collection Development" },
+    from: { address: fromAddress, name: fromName },
     to: [{ address: to, name: "Library Patron" }],
     subject: subject,
     text: text,
@@ -44,7 +46,8 @@ function suggestionSubmitted(app, record) {
   var format = formatLabel(record.get("format"));
   var name = (firstName + " " + lastName).trim() || "Library Patron";
   var libraryOrgId = record.get("libraryOrgId");
-  var tpl = config.librarySettings(app, libraryOrgId).emails.suggestion_submitted;
+  var emailsConfig = config.librarySettings(app, libraryOrgId).emails;
+  var tpl = emailsConfig.suggestion_submitted;
   var data = { 
     name: name, firstName: firstName, lastName: lastName, 
     title: title, author: author, format: format 
@@ -54,7 +57,7 @@ function suggestionSubmitted(app, record) {
   var text = replacePlaceholders(tpl.body || "", data);
   var html = text.replace(/\n/g, "<br>");
 
-  return send(app, record.get("email"), subject, text, html);
+  return send(app, record.get("email"), subject, text, html, { fromAddress: emailsConfig.fromAddress, fromName: emailsConfig.fromName });
 }
 
 function alreadyOwned(app, record, patron) {
@@ -66,7 +69,8 @@ function alreadyOwned(app, record, patron) {
   var firstName = clean((patron && patron.NameFirst) || record.get("nameFirst"));
   var lastName = clean((patron && patron.NameLast) || record.get("nameLast"));
   var libraryOrgId = record.get("libraryOrgId");
-  var tpl = config.librarySettings(app, libraryOrgId).emails.already_owned;
+  var emailsConfig = config.librarySettings(app, libraryOrgId).emails;
+  var tpl = emailsConfig.already_owned;
   var data = { 
     name: name, firstName: firstName, lastName: lastName,
     title: title, author: author, format: format, barcode: barcode 
@@ -76,7 +80,7 @@ function alreadyOwned(app, record, patron) {
   var text = replacePlaceholders(tpl.body || "", data);
   var html = text.replace(/\n/g, "<br>");
 
-  return send(app, emailFor(record, patron), subject, text, html);
+  return send(app, emailFor(record, patron), subject, text, html, { fromAddress: emailsConfig.fromAddress, fromName: emailsConfig.fromName });
 }
 
 function rejected(app, record, patron) {
@@ -87,7 +91,8 @@ function rejected(app, record, patron) {
   var firstName = clean((patron && patron.NameFirst) || record.get("nameFirst"));
   var lastName = clean((patron && patron.NameLast) || record.get("nameLast"));
   var libraryOrgId = record.get("libraryOrgId");
-  var tpl = config.librarySettings(app, libraryOrgId).emails.rejected;
+  var emailsConfig = config.librarySettings(app, libraryOrgId).emails;
+  var tpl = emailsConfig.rejected;
   var data = { 
     name: name, firstName: firstName, lastName: lastName,
     title: title, author: author, format: format 
@@ -97,7 +102,7 @@ function rejected(app, record, patron) {
   var text = replacePlaceholders(tpl.body || "", data);
   var html = text.replace(/\n/g, "<br>");
 
-  return send(app, emailFor(record, patron), subject, text, html);
+  return send(app, emailFor(record, patron), subject, text, html, { fromAddress: emailsConfig.fromAddress, fromName: emailsConfig.fromName });
 }
 
 function holdPlaced(app, record, patron) {
@@ -109,7 +114,8 @@ function holdPlaced(app, record, patron) {
   var firstName = clean((patron && patron.NameFirst) || record.get("nameFirst"));
   var lastName = clean((patron && patron.NameLast) || record.get("nameLast"));
   var libraryOrgId = record.get("libraryOrgId");
-  var tpl = config.librarySettings(app, libraryOrgId).emails.hold_placed;
+  var emailsConfig = config.librarySettings(app, libraryOrgId).emails;
+  var tpl = emailsConfig.hold_placed;
   var data = { 
     name: name, firstName: firstName, lastName: lastName,
     title: title, author: author, format: format, barcode: barcode 
@@ -119,7 +125,7 @@ function holdPlaced(app, record, patron) {
   var text = replacePlaceholders(tpl.body || "", data);
   var html = text.replace(/\n/g, "<br>");
 
-  return send(app, emailFor(record, patron), subject, text, html);
+  return send(app, emailFor(record, patron), subject, text, html, { fromAddress: emailsConfig.fromAddress, fromName: emailsConfig.fromName });
 }
 
 function autoRejected(app, record) {
@@ -130,7 +136,8 @@ function autoRejected(app, record) {
   var lastName = clean(record.get("nameLast"));
   var name = (firstName + " " + lastName).trim() || "Library Patron";
   var libraryOrgId = record.get("libraryOrgId");
-  var tpl = config.librarySettings(app, libraryOrgId).emails.rejected;
+  var emailsConfig = config.librarySettings(app, libraryOrgId).emails;
+  var tpl = emailsConfig.rejected;
   var data = { 
     name: name, firstName: firstName, lastName: lastName,
     title: title, author: author, format: format 
@@ -140,7 +147,7 @@ function autoRejected(app, record) {
   var text = replacePlaceholders(tpl.body || "", data);
   var html = text.replace(/\n/g, "<br>");
 
-  return send(app, record.get("email"), subject, text, html);
+  return send(app, record.get("email"), subject, text, html, { fromAddress: emailsConfig.fromAddress, fromName: emailsConfig.fromName });
 }
 
 function emailFor(record, patron) {
