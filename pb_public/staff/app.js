@@ -1994,40 +1994,82 @@ function renderStaffUsers(users) {
     return;
   }
 
+  bodyEl.innerHTML = '';
+
   if (!users.length) {
-    bodyEl.innerHTML = '<tr><td colspan="6" class="text-muted">No staff users found.</td></tr>';
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 6;
+    td.className = 'text-muted';
+    td.textContent = 'No staff users found.';
+    tr.appendChild(td);
+    bodyEl.appendChild(tr);
     return;
   }
 
-  bodyEl.innerHTML = users.map(user => {
-    const id = escapeAttr(user.id || '');
-    const username = escapeAttr(user.username || '');
-    const domain = escapeAttr(user.domain || '');
-    const library = escapeAttr(user.libraryOrgName || user.libraryOrgId || (user.scope === 'system' ? 'System' : 'Unmapped'));
-    const displayName = escapeAttr(user.displayName || '');
+
+  for (const user of users) {
+    const tr = document.createElement('tr');
+    tr.setAttribute('data-staff-id', user.id || '');
+
+    const tdUsername = document.createElement('td');
+    const strongUsername = document.createElement('strong');
+    strongUsername.textContent = user.username || '';
+    tdUsername.appendChild(strongUsername);
+    tr.appendChild(tdUsername);
+
+    const tdDomain = document.createElement('td');
+    if (user.domain) {
+      tdDomain.textContent = user.domain;
+    } else {
+      const span = document.createElement('span');
+      span.className = 'text-muted';
+      span.textContent = 'Default';
+      tdDomain.appendChild(span);
+    }
+    tr.appendChild(tdDomain);
+
+    const tdLibrary = document.createElement('td');
+    tdLibrary.textContent = user.libraryOrgName || user.libraryOrgId || (user.scope === 'system' ? 'System' : 'Unmapped');
+    tr.appendChild(tdLibrary);
+
+    const tdDisplayName = document.createElement('td');
+    if (user.displayName) {
+      tdDisplayName.textContent = user.displayName;
+    } else {
+      const span = document.createElement('span');
+      span.className = 'text-muted';
+      span.textContent = 'No display name';
+      tdDisplayName.appendChild(span);
+    }
+    tr.appendChild(tdDisplayName);
+
+    const tdRole = document.createElement('td');
+    const select = document.createElement('select');
+    select.className = 'form-control form-control-sm staff-role-select';
+
     const role = ['staff', 'admin', 'super_admin'].includes(String(user.role || '').toLowerCase()) ? String(user.role || '').toLowerCase() : 'staff';
-    const superAdminOption = canAssignSuperAdmin
-      ? `<option value="super_admin"${role === 'super_admin' ? ' selected' : ''}>Super Admin</option>`
-      : '';
-    return `
-      <tr data-staff-id="${id}">
-        <td><strong>${username}</strong></td>
-        <td>${domain || '<span class="text-muted">Default</span>'}</td>
-        <td>${library}</td>
-        <td>${displayName || '<span class="text-muted">No display name</span>'}</td>
-        <td>
-          <select class="form-control form-control-sm staff-role-select">
-            <option value="staff"${role === 'staff' ? ' selected' : ''}>Staff</option>
-            <option value="admin"${role === 'admin' ? ' selected' : ''}>Admin</option>
-            ${superAdminOption}
-          </select>
-        </td>
-        <td>
-          <button type="button" class="btn btn-sm btn-primary staff-role-save">Save Role</button>
-        </td>
-      </tr>
-    `;
-  }).join('');
+
+    select.appendChild(new Option('Staff', 'staff', false, role === 'staff'));
+    select.appendChild(new Option('Admin', 'admin', false, role === 'admin'));
+
+    if (canAssignSuperAdmin) {
+      select.appendChild(new Option('Super Admin', 'super_admin', false, role === 'super_admin'));
+    }
+
+    tdRole.appendChild(select);
+    tr.appendChild(tdRole);
+
+    const tdSave = document.createElement('td');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-sm btn-primary staff-role-save';
+    btn.textContent = 'Save Role';
+    tdSave.appendChild(btn);
+    tr.appendChild(tdSave);
+
+    bodyEl.appendChild(tr);
+  }
 }
 
 const staffUsersTableBody = document.getElementById('staff-users-table-body');
