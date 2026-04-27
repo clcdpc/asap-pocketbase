@@ -861,7 +861,18 @@ function openEdit(id, nextStatus, dialogTitle, actionStr) {
   document.getElementById('edit-author').value = row.author || '';
   document.getElementById('edit-identifier').value = row.identifier || '';
   document.getElementById('edit-bibid').value = row.bibid || '';
-  document.getElementById('edit-format').value = row.format || 'book';
+  
+  const editFormat = document.getElementById('edit-format');
+  const fmt = row.format || 'book';
+  if (fmt && !availableFormats.includes(fmt)) {
+    if (!Array.from(editFormat.options).some(o => o.value === fmt)) {
+      const opt = document.createElement('option');
+      opt.value = fmt;
+      opt.textContent = formatMap[fmt] || fmt;
+      editFormat.appendChild(opt);
+    }
+  }
+  editFormat.value = fmt;
   document.getElementById('edit-age').value = row.agegroup || 'adult';
   setSelectValue(document.getElementById('edit-publication'), row.publication || publicationOptions[0]);
   document.getElementById('edit-exact-publication-date').value = dateOnly(row.exactPublicationDate);
@@ -2407,10 +2418,13 @@ function updateModalFormatDropdowns() {
     // Keep current value
     const val = select.value;
     
-    // Populate with ALL known formats (even disabled ones, to support legacy records)
-    select.innerHTML = Object.keys(formatMap).map(k => `
+    // Only include availableFormats
+    select.innerHTML = availableFormats.map(k => `
       <option value="${escapeAttr(k)}">${escapeAttr(formatMap[k] || k)}</option>
     `).join('');
+    
+    // Try to restore value, or fallback to first
+    select.value = availableFormats.includes(val) ? val : availableFormats[0];
     
     select.value = val;
   });
