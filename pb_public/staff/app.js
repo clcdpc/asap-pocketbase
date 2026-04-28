@@ -118,7 +118,9 @@ let workflowSettings = {
   outstandingTimeoutEnabled: false,
   outstandingTimeoutDays: 30,
   holdPickupTimeoutEnabled: false,
-  holdPickupTimeoutDays: 14
+  holdPickupTimeoutDays: 14,
+  pendingHoldTimeoutEnabled: false,
+  pendingHoldTimeoutDays: 14
 };
 let currentLibraryContextOrgId = 'system';
 let libraryTemplateOverrides = {}; // Map of orgId -> isOverride (boolean)
@@ -548,6 +550,14 @@ async function loadTab(status) {
       desc += ` Holds will move to Closed automatically when the patron checks out the item, or after ${workflowSettings.holdPickupTimeoutDays} days if the item is never picked up (auto-close enabled in Settings).`;
     } else {
       desc += ' Holds will only move to Closed when the patron checks out the item. Enable auto-close in Settings to also close holds that are never picked up.';
+    }
+  }
+
+  // Add auto-close info for Pending Hold
+  if (status === 'pending_hold') {
+    workflowSettings.pendingHoldTimeoutDays = parseInt(workflowSettings.pendingHoldTimeoutDays || '14', 10) || 14;
+    if (workflowSettings.pendingHoldTimeoutEnabled) {
+      desc += ` Pending Holds will be automatically closed after ${workflowSettings.pendingHoldTimeoutDays} days if they are not processed.`;
     }
   }
   tabDesc.textContent = desc;
@@ -1923,8 +1933,11 @@ function populateWorkflowForms(wf) {
   setFieldValue('outstanding-timeout-days', wf.outstandingTimeoutDays !== undefined ? wf.outstandingTimeoutDays : '30');
   document.getElementById('hold-pickup-timeout-enabled').checked = !!wf.holdPickupTimeoutEnabled;
   setFieldValue('hold-pickup-timeout-days', wf.holdPickupTimeoutDays !== undefined ? wf.holdPickupTimeoutDays : '14');
+  document.getElementById('pending-hold-timeout-enabled').checked = !!wf.pendingHoldTimeoutEnabled;
+  setFieldValue('pending-hold-timeout-days', wf.pendingHoldTimeoutDays !== undefined ? wf.pendingHoldTimeoutDays : '14');
   toggleTimeoutGroup();
   toggleHoldPickupTimeoutGroup();
+  togglePendingHoldTimeoutGroup();
 }
 
 function populatePatronUiForms(uiText) {
@@ -2204,7 +2217,9 @@ function buildSettingsPayload() {
     outstandingTimeoutEnabled: getFieldChecked('outstanding-timeout-enabled'),
     outstandingTimeoutDays: parseInt(getFieldValue('outstanding-timeout-days', '30'), 10) || 30,
     holdPickupTimeoutEnabled: getFieldChecked('hold-pickup-timeout-enabled'),
-    holdPickupTimeoutDays: parseInt(getFieldValue('hold-pickup-timeout-days', '14'), 10) || 14
+    holdPickupTimeoutDays: parseInt(getFieldValue('hold-pickup-timeout-days', '14'), 10) || 14,
+    pendingHoldTimeoutEnabled: getFieldChecked('pending-hold-timeout-enabled'),
+    pendingHoldTimeoutDays: parseInt(getFieldValue('pending-hold-timeout-days', '14'), 10) || 14
   };
 
   const fileInput = document.getElementById('ui-logo-file');
@@ -2242,7 +2257,9 @@ async function saveSettings(options = {}) {
         outstandingTimeoutEnabled: payload.outstandingTimeoutEnabled,
         outstandingTimeoutDays: payload.outstandingTimeoutDays,
         holdPickupTimeoutEnabled: payload.holdPickupTimeoutEnabled,
-        holdPickupTimeoutDays: payload.holdPickupTimeoutDays
+        holdPickupTimeoutDays: payload.holdPickupTimeoutDays,
+        pendingHoldTimeoutEnabled: payload.pendingHoldTimeoutEnabled,
+        pendingHoldTimeoutDays: payload.pendingHoldTimeoutDays
       }
     };
 
@@ -2262,6 +2279,8 @@ async function saveSettings(options = {}) {
         delete payload.outstandingTimeoutDays;
         delete payload.holdPickupTimeoutEnabled;
         delete payload.holdPickupTimeoutDays;
+        delete payload.pendingHoldTimeoutEnabled;
+        delete payload.pendingHoldTimeoutDays;
       }
       globalPromise = pb.collection('app_settings').update(SETTINGS_RECORD_ID, payload);
     }
@@ -2347,7 +2366,18 @@ function toggleHoldPickupTimeoutGroup() {
   }
 }
 
+function togglePendingHoldTimeoutGroup() {
+  const group = document.getElementById('pending-hold-timeout-group');
+  const enabled = document.getElementById('pending-hold-timeout-enabled').checked;
+  if (enabled) {
+    group.classList.remove('hidden');
+  } else {
+    group.classList.add('hidden');
+  }
+}
+
 document.getElementById('hold-pickup-timeout-enabled').addEventListener('change', toggleHoldPickupTimeoutGroup);
+document.getElementById('pending-hold-timeout-enabled').addEventListener('change', togglePendingHoldTimeoutGroup);
 
 document.getElementById('edit-bibid').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
