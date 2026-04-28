@@ -60,6 +60,8 @@ function processOutstandingPurchases(app, staff, result) {
     { status: records.STATUS.OUTSTANDING_PURCHASE }
   );
 
+  var bibCache = {};
+
   for (var i = 0; i < items.length; i++) {
     var record = items[i];
     var identifier = String(record.get("identifier") || "").trim();
@@ -86,7 +88,11 @@ function processOutstandingPurchases(app, staff, result) {
     }
 
     try {
-      var bibId = polaris.searchBib(staff, identifier);
+      if (bibCache[identifier] === undefined) {
+        bibCache[identifier] = polaris.searchBib(staff, identifier);
+      }
+      var bibId = bibCache[identifier];
+
       if (bibId) {
         record.set("bibid", bibId);
         polaris.reconcileRecord(app, staff, record, bibId);
@@ -202,13 +208,18 @@ function processPendingHolds(app, staff, result) {
   );
 
   var patronCache = {};
+  var bibCache = {};
 
   for (var i = 0; i < pending.length; i++) {
     var record = pending[i];
     try {
       var bibId = String(record.get("bibid") || "").trim();
       if (!bibId) {
-        bibId = polaris.searchBib(staff, record.get("identifier"));
+        var identifier = String(record.get("identifier") || "").trim();
+        if (bibCache[identifier] === undefined) {
+          bibCache[identifier] = polaris.searchBib(staff, identifier);
+        }
+        bibId = bibCache[identifier];
       }
       if (!bibId) {
         records.appendSystemNote(record, "SKIP: Could not find BIB ID in Polaris for hold placement.");
