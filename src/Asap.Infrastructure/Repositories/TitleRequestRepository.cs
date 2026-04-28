@@ -27,7 +27,7 @@ public sealed class TitleRequestRepository(ISqlConnectionFactory connectionFacto
             OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
             """;
 
-        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
         var results = await connection.QueryAsync<TitleRequest>(new CommandDefinition(
             sql,
             new
@@ -56,7 +56,7 @@ public sealed class TitleRequestRepository(ISqlConnectionFactory connectionFacto
               AND status NOT IN ('closed', 'hold_completed');
             """;
 
-        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
         var changed = await connection.ExecuteAsync(new CommandDefinition(sql, command, cancellationToken: cancellationToken));
         return changed > 0;
     }
@@ -74,7 +74,7 @@ public sealed class TitleRequestRepository(ISqlConnectionFactory connectionFacto
               AND DATEDIFF(day, created_at, SYSUTCDATETIME()) >= 30;
             """;
 
-        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
         return await connection.ExecuteAsync(new CommandDefinition(sql, cancellationToken: cancellationToken));
     }
 }
