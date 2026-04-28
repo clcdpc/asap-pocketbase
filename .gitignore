@@ -16,3 +16,7 @@ dist/
 
 # OS/editor artifacts.
 .DS_Store
+
+# .NET build output
+**/bin/
+**/obj/

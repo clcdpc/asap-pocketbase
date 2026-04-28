@@ -1,0 +1,25 @@
+legacy_method,legacy_route,target_method,target_route,controller,service_status,notes
+POST,/api/asap/staff/login,POST,/api/v1/auth/staff/login,AuthController,planned,Preserve DOMAIN\\user and default domain behaviors.
+GET,/api/asap/setup/status,GET,/api/v1/setup/status,SetupController,planned,Used by first-run bootstrap UX.
+POST,/api/asap/setup,POST,/api/v1/setup,SetupController,planned,Initial app setup and admin creation.
+POST,/api/asap/setup/test-polaris,POST,/api/v1/setup/test-polaris,SetupController,planned,Connectivity + credential validation.
+POST,/api/asap/patron/login,POST,/api/v1/auth/patron/login,AuthController,planned,Patron barcode/PIN login semantics.
+POST,/api/asap/patron/suggestions,POST,/api/v1/patron/suggestions,PatronController,planned,Submission limits + duplicate checks.
+POST,/api/asap/staff/suggestions,POST,/api/v1/staff/suggestions,StaffController,planned,Staff-created title request path.
+POST,/api/asap/staff/patron-lookup,POST,/api/v1/staff/patron-lookup,StaffController,planned,Polaris patron search.
+POST,/api/asap/staff/bib-lookup,POST,/api/v1/staff/bib-lookup,StaffController,planned,Polaris bib lookup.
+POST,/api/asap/staff/test-polaris,POST,/api/v1/staff/test-polaris,StaffController,planned,Manual Polaris test endpoint.
+POST,/api/asap/staff/test-smtp,POST,/api/v1/staff/test-smtp,StaffController,planned,SMTP verification.
+GET,/api/asap/staff/users,GET,/api/v1/staff/users,StaffController,planned,Scoped staff user listing.
+POST,/api/asap/staff/users/{id}/role,POST,/api/v1/staff/users/{id}/role,StaffController,planned,RBAC update with audit log.
+GET,/api/asap/staff/settings/library,GET,/api/v1/settings/library,SettingsController,planned,Branch override + fallback.
+POST,/api/asap/staff/settings/library,PUT,/api/v1/settings/library,SettingsController,planned,Upsert branch override settings.
+GET,/api/asap/staff/title-requests,GET,/api/v1/title-requests,TitleRequestsController,implemented,First vertical slice read endpoint.
+POST,/api/asap/staff/title-requests/{id}/action,POST,/api/v1/title-requests/{id}/reject,TitleRequestsController,implemented,Reject command from vertical slice; additional actions pending.
+POST,/api/asap/staff/organizations/sync,POST,/api/v1/organizations/sync,OrganizationsController,planned,Manual org sync trigger.
+POST,/api/asap/jobs/hold-check,POST,/api/v1/jobs/hold-check,JobsController,planned,Pending hold processor parity.
+POST,/api/asap/jobs/promoter-check,POST,/api/v1/jobs/promoter-check,JobsController,planned,Outstanding purchase promoter parity.
+POST,/api/asap/import/title-requests,POST,/api/v1/import/title-requests,ImportController,planned,One-time/delta import endpoint.
+GET,/api/asap/config,GET,/api/v1/config,ConfigController,planned,UI text fallback by libraryOrgId.
+CRON,asap-hold-check,HostedService,Jobs:OutstandingTimeoutCron,OutstandingTimeoutHostedService,implemented,Cronos-backed worker for outstanding timeout slice.
+CRON,asap-organization-sync,HostedService,Jobs:OrganizationSyncCron,OrganizationSyncHostedService,planned,Daily Polaris org sync.

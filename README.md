@@ -161,3 +161,14 @@ Before sharing or deploying this project outside a local development machine:
 
 ## 📝 License
 This project is licensed under the terms included in the [COPYING.md](COPYING.md) file.
+
+## ASP.NET Core Migration Scaffold (in progress)
+
+A first migration slice now exists under `src/` with:
+
+- ASP.NET Core Web API host (`src/Asap.Web`)
+- Dapper + SQL Server infrastructure (`src/Asap.Infrastructure`)
+- Core contracts (`src/Asap.Core`)
+- Route parity inventory and SQL migration docs (`docs/migration`)
+
+See `docs/migration/target-architecture.md` for current scope and next steps.
