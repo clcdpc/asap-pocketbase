@@ -409,6 +409,9 @@ function staffUserRoleUpdate(e) {
   }
 
   var currentRole = String(record.get("role") || "staff").toLowerCase();
+  if (currentRole === "super_admin" && !isSuperAdmin(admin)) {
+    return e.json(403, { message: "Only a super admin can modify a super admin's role." });
+  }
   if (currentRole === "super_admin" && nextRole !== "super_admin" && records.countSuperAdminUsers(e.app) <= 1) {
     return e.json(400, { message: "At least one super admin user must remain." });
   }
