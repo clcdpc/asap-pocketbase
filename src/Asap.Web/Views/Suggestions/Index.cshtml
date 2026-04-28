@@ -1,0 +1,41 @@
+@model IReadOnlyList<Asap.Web.Models.Suggestion>
+@{
+    ViewData["Title"] = "Suggestions";
+}
+
+<h1>Open Suggestions</h1>
+
+@if (TempData["SuccessMessage"] is string message)
+{
+    <p class="success">@message</p>
+}
+
+<p><a asp-action="Create">Create a suggestion</a></p>
+
+<table>
+    <thead>
+    <tr>
+        <th>ID</th>
+        <th>Patron</th>
+        <th>Title</th>
+        <th>Author</th>
+        <th>Format</th>
+        <th>Status</th>
+        <th>Created (UTC)</th>
+    </tr>
+    </thead>
+    <tbody>
+    @foreach (var item in Model)
+    {
+        <tr>
+            <td>@item.Id</td>
+            <td>@item.PatronBarcode</td>
+            <td>@item.Title</td>
+            <td>@item.Author</td>
+            <td>@item.Format</td>
+            <td>@item.Status</td>
+            <td>@item.CreatedUtc.ToString("u")</td>
+        </tr>
+    }
+    </tbody>
+</table>

@@ -1,0 +1,30 @@
+@model Asap.Web.Models.SuggestionCreateInput
+@{
+    ViewData["Title"] = "Create Suggestion";
+}
+
+<h1>Create Suggestion</h1>
+
+<form asp-action="Create" method="post">
+    <div>
+        <label asp-for="PatronBarcode"></label>
+        <input asp-for="PatronBarcode" />
+        <span asp-validation-for="PatronBarcode"></span>
+    </div>
+    <div>
+        <label asp-for="Title"></label>
+        <input asp-for="Title" />
+        <span asp-validation-for="Title"></span>
+    </div>
+    <div>
+        <label asp-for="Author"></label>
+        <input asp-for="Author" />
+        <span asp-validation-for="Author"></span>
+    </div>
+    <div>
+        <label asp-for="Format"></label>
+        <input asp-for="Format" />
+        <span asp-validation-for="Format"></span>
+    </div>
+    <button type="submit">Save</button>
+</form>
