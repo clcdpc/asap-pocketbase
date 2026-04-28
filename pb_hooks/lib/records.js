@@ -398,7 +398,8 @@ function enforceWeeklyLimit(app, barcode) {
 function enforceDuplicate(app, barcode, data) {
   var title = titleCase(data.title);
   var identifier = String(data.identifier || data.isbn || "").trim();
-  if (!title && !identifier) {
+  var bibid = String(data.bibid || "").trim();
+  if (!title && !identifier && !bibid) {
     return;
   }
 
@@ -414,6 +415,12 @@ function enforceDuplicate(app, barcode, data) {
   if (identifier) {
     filter += " || (identifier = {:identifier})";
     params.identifier = identifier;
+  }
+
+  // Check for BibID match if provided
+  if (bibid) {
+    filter += " || (bibid = {:bibid})";
+    params.bibid = bibid;
   }
 
   filter += ")";
