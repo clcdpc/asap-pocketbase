@@ -228,10 +228,12 @@ function getSettings() {
       outstandingTimeoutDays: record.getInt("outstandingTimeoutDays") || 30,
       holdPickupTimeoutEnabled: record.getBool("holdPickupTimeoutEnabled"),
       holdPickupTimeoutDays: record.getInt("holdPickupTimeoutDays") || 14,
+      pendingHoldTimeoutEnabled: record.getBool("pendingHoldTimeoutEnabled"),
+      pendingHoldTimeoutDays: record.getInt("pendingHoldTimeoutDays") || 14,
       ui_text: mergedUiText
     };
   } catch (err) {
-    return { polaris: {}, smtp: {}, emails: defaultEmailTemplates(), allowedStaffUsers: "", enabledLibraryOrgIds: "", suggestionLimit: 5, suggestionLimitMessage: "Weekly suggestion limit reached", outstandingTimeoutEnabled: false, outstandingTimeoutDays: 30, holdPickupTimeoutEnabled: false, holdPickupTimeoutDays: 14, ui_text: defaultUiText };
+    return { polaris: {}, smtp: {}, emails: defaultEmailTemplates(), allowedStaffUsers: "", suggestionLimit: 5, suggestionLimitMessage: "Weekly suggestion limit reached", outstandingTimeoutEnabled: false, outstandingTimeoutDays: 30, holdPickupTimeoutEnabled: false, holdPickupTimeoutDays: 14, pendingHoldTimeoutEnabled: false, pendingHoldTimeoutDays: 14, enabledLibraryOrgIds: "", ui_text: defaultUiText };
   }
 }
 
@@ -252,7 +254,9 @@ function librarySettings(app, libraryOrgId) {
         outstandingTimeoutEnabled: systemDefaults.outstandingTimeoutEnabled,
         outstandingTimeoutDays: systemDefaults.outstandingTimeoutDays,
         holdPickupTimeoutEnabled: systemDefaults.holdPickupTimeoutEnabled,
-        holdPickupTimeoutDays: systemDefaults.holdPickupTimeoutDays
+        holdPickupTimeoutDays: systemDefaults.holdPickupTimeoutDays,
+        pendingHoldTimeoutEnabled: systemDefaults.pendingHoldTimeoutEnabled,
+        pendingHoldTimeoutDays: systemDefaults.pendingHoldTimeoutDays
       }
     };
   }
@@ -276,7 +280,9 @@ function librarySettings(app, libraryOrgId) {
         outstandingTimeoutEnabled: typeof dbWorkflow.outstandingTimeoutEnabled === "boolean" ? dbWorkflow.outstandingTimeoutEnabled : systemDefaults.outstandingTimeoutEnabled,
         outstandingTimeoutDays: typeof dbWorkflow.outstandingTimeoutDays === "number" ? dbWorkflow.outstandingTimeoutDays : systemDefaults.outstandingTimeoutDays,
         holdPickupTimeoutEnabled: typeof dbWorkflow.holdPickupTimeoutEnabled === "boolean" ? dbWorkflow.holdPickupTimeoutEnabled : systemDefaults.holdPickupTimeoutEnabled,
-        holdPickupTimeoutDays: typeof dbWorkflow.holdPickupTimeoutDays === "number" ? dbWorkflow.holdPickupTimeoutDays : systemDefaults.holdPickupTimeoutDays
+        holdPickupTimeoutDays: typeof dbWorkflow.holdPickupTimeoutDays === "number" ? dbWorkflow.holdPickupTimeoutDays : systemDefaults.holdPickupTimeoutDays,
+        pendingHoldTimeoutEnabled: typeof dbWorkflow.pendingHoldTimeoutEnabled === "boolean" ? dbWorkflow.pendingHoldTimeoutEnabled : systemDefaults.pendingHoldTimeoutEnabled,
+        pendingHoldTimeoutDays: typeof dbWorkflow.pendingHoldTimeoutDays === "number" ? dbWorkflow.pendingHoldTimeoutDays : systemDefaults.pendingHoldTimeoutDays
       }
     };
   } catch (err) {
@@ -289,7 +295,9 @@ function librarySettings(app, libraryOrgId) {
         outstandingTimeoutEnabled: systemDefaults.outstandingTimeoutEnabled,
         outstandingTimeoutDays: systemDefaults.outstandingTimeoutDays,
         holdPickupTimeoutEnabled: systemDefaults.holdPickupTimeoutEnabled,
-        holdPickupTimeoutDays: systemDefaults.holdPickupTimeoutDays
+        holdPickupTimeoutDays: systemDefaults.holdPickupTimeoutDays,
+        pendingHoldTimeoutEnabled: systemDefaults.pendingHoldTimeoutEnabled,
+        pendingHoldTimeoutDays: systemDefaults.pendingHoldTimeoutDays
       }
     };
   }
@@ -349,6 +357,15 @@ function holdPickupTimeout(app, orgId) {
   return { enabled: wf.holdPickupTimeoutEnabled, days: wf.holdPickupTimeoutDays };
 }
 
+function pendingHoldTimeout(app, orgId) {
+  if (!app) {
+    const s = getSettings();
+    return { enabled: s.pendingHoldTimeoutEnabled, days: s.pendingHoldTimeoutDays };
+  }
+  const wf = librarySettings(app, orgId).workflow;
+  return { enabled: wf.pendingHoldTimeoutEnabled, days: wf.pendingHoldTimeoutDays };
+}
+
 function uiText(app, orgId) {
   if (!app) return getSettings().ui_text;
   return librarySettings(app, orgId).ui_text;
@@ -402,6 +419,7 @@ module.exports = {
   getSettings: getSettings,
   librarySettings: librarySettings,
   holdPickupTimeout: holdPickupTimeout,
+  pendingHoldTimeout: pendingHoldTimeout,
   importToken: importToken,
   mail: mail,
   mergeEmailTemplates: mergeEmailTemplates,

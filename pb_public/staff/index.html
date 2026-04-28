@@ -709,6 +709,28 @@
                     </div>
                   </div>
 
+                  <div class="form-row align-items-center mb-3">
+                    <div class="col-auto">
+                      <div class="custom-control custom-switch">
+                        <input type="checkbox" class="custom-control-input" id="pending-hold-timeout-enabled">
+                        <label class="custom-control-label" for="pending-hold-timeout-enabled">Auto-close skipped
+                          <strong>Pending Holds</strong></label>
+                      </div>
+                    </div>
+                  </div>
+                  <div id="pending-hold-timeout-group" class="mb-4 hidden">
+                    <label for="pending-hold-timeout-days">Days Before Expiry</label>
+                    <div class="form-row align-items-center">
+                      <div class="col-auto">
+                        <input type="number" id="pending-hold-timeout-days" class="form-control" style="width: 100px;">
+                      </div>
+                      <div class="col">
+                        <small class="text-muted">Number of days a request can stay in "Pending Hold" before it is auto-closed.
+                          The note field will be updated automatically.</small>
+                      </div>
+                    </div>
+                  </div>
+
                   <hr>
                   <h3 class="h5">Suggestion Limits</h3>
                   <div class="form-row">

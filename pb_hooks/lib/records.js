@@ -397,17 +397,35 @@ function enforceWeeklyLimit(app, barcode) {
 
 function enforceDuplicate(app, barcode, data) {
   var title = titleCase(data.title);
-  if (!title) {
+  var identifier = String(data.identifier || data.isbn || "").trim();
+  var bibid = String(data.bibid || "").trim();
+  if (!title && !identifier && !bibid) {
     return;
   }
-  var existing = app.findRecordsByFilter(
-    "title_requests",
-    "barcode = {:barcode} && title = {:title} && format = {:format}",
-    "-created",
-    1,
-    0,
-    { barcode: barcode, title: title, format: normalizeFormat(data.format) }
-  );
+
+  var filter = "barcode = {:barcode} && (";
+  var params = { barcode: barcode };
+
+  // Check for Title + Format match
+  filter += "(title = {:title} && format = {:format})";
+  params.title = title || "";
+  params.format = normalizeFormat(data.format);
+
+  // Check for Identifier (ISBN) match if provided
+  if (identifier) {
+    filter += " || (identifier = {:identifier})";
+    params.identifier = identifier;
+  }
+
+  // Check for BibID match if provided
+  if (bibid) {
+    filter += " || (bibid = {:bibid})";
+    params.bibid = bibid;
+  }
+
+  filter += ")";
+
+  var existing = app.findRecordsByFilter("title_requests", filter, "-created", 1, 0, params);
   if (existing.length) {
     var err = new Error("Duplicate suggestion");
     err.code = 409;
