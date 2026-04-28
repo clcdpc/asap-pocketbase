@@ -971,7 +971,9 @@ function getLibrarySettings(e) {
         outstandingTimeoutEnabled: s.outstandingTimeoutEnabled,
         outstandingTimeoutDays: s.outstandingTimeoutDays,
         holdPickupTimeoutEnabled: s.holdPickupTimeoutEnabled,
-        holdPickupTimeoutDays: s.holdPickupTimeoutDays
+        holdPickupTimeoutDays: s.holdPickupTimeoutDays,
+        pendingHoldTimeoutEnabled: s.pendingHoldTimeoutEnabled,
+        pendingHoldTimeoutDays: s.pendingHoldTimeoutDays
       };
     } else {
       try {
@@ -1035,6 +1037,8 @@ function updateLibrarySettings(e) {
       if (wf.outstandingTimeoutDays !== undefined) record.set("outstandingTimeoutDays", wf.outstandingTimeoutDays);
       if (wf.holdPickupTimeoutEnabled !== undefined) record.set("holdPickupTimeoutEnabled", wf.holdPickupTimeoutEnabled);
       if (wf.holdPickupTimeoutDays !== undefined) record.set("holdPickupTimeoutDays", wf.holdPickupTimeoutDays);
+      if (wf.pendingHoldTimeoutEnabled !== undefined) record.set("pendingHoldTimeoutEnabled", wf.pendingHoldTimeoutEnabled);
+      if (wf.pendingHoldTimeoutDays !== undefined) record.set("pendingHoldTimeoutDays", wf.pendingHoldTimeoutDays);
     }
     e.app.save(record);
   } else {

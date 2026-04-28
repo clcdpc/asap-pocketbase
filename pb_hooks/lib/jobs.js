@@ -18,6 +18,7 @@ function runScheduledHoldCheck(app) {
   var staff = polaris.adminStaffAuth();
   processOutstandingTimeout(app, result);
   processHoldPickupTimeout(app, result);
+  processPendingHoldTimeout(app, result);
   processOutstandingPurchases(app, staff, result);
   processPendingHolds(app, staff, result);
   processCheckedOut(app, staff, result);
@@ -149,6 +150,50 @@ function processOutstandingTimeout(app, result) {
         app.logger().error("Auto-reject email failed", "recordId", record.id, "error", String(mailErr));
       }
       result.timedOut++;
+    }
+  }
+}
+
+function processPendingHoldTimeout(app, result) {
+  var pending = app.findRecordsByFilter(
+    "title_requests",
+    "status = {:status}",
+    "-updated",
+    2000,
+    0,
+    { status: records.STATUS.PENDING_HOLD }
+  );
+
+  var cfgCache = {};
+
+  for (var i = 0; i < pending.length; i++) {
+    var record = pending[i];
+    var orgId = record.get("libraryOrgId");
+
+    if (cfgCache[orgId] === undefined) {
+      cfgCache[orgId] = config.pendingHoldTimeout(app, orgId);
+    }
+    var cfg = cfgCache[orgId];
+
+    if (!cfg.enabled) continue;
+
+    var cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - cfg.days);
+    var updated = new Date(record.get("updated"));
+
+    if (updated < cutoff) {
+      try {
+        record.set("status", records.STATUS.CLOSED);
+        record.set("closeReason", records.CLOSE_REASON.REJECTED);
+        record.set("editedBy", "system");
+        record.set("updated", new Date().toISOString());
+        records.appendSystemNote(record, "Auto-closed due to " + cfg.days + " day timeout in Pending Hold.");
+        app.save(record);
+        result.timedOut++;
+      } catch (err) {
+        result.errors++;
+        app.logger().error("ASAP pending hold timeout failed", "recordId", record.id, "error", String(err));
+      }
     }
   }
 }
