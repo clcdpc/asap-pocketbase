@@ -28,10 +28,12 @@ public sealed class TitleRequestsController(ITitleRequestService service) : Cont
     {
         if (string.IsNullOrWhiteSpace(body.CloseReason))
         {
-            return ValidationProblem(new Dictionary<string, string[]>
+            var errors = new Dictionary<string, string[]>
             {
                 [nameof(body.CloseReason)] = ["closeReason is required."]
-            });
+            };
+
+            return BadRequest(new ValidationProblemDetails(errors));
         }
 
         await service.RejectAsync(new RejectTitleRequestCommand
