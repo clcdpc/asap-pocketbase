@@ -18,6 +18,7 @@ let formatMap = {
 };
 let availableFormats = ['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'];
 const ageMap = { adult: 'Adult', teen: 'Teen', children: 'Children' };
+let currentRejectionTemplates = [];
 const closeReasonMap = {
   rejected: 'Rejected by staff',
   hold_completed: 'Hold placed / completed',
@@ -892,6 +893,22 @@ function openEdit(id, nextStatus, dialogTitle, actionStr) {
   document.getElementById('bib-info-text').textContent = '';
   verifiedBibId = row.bibid || '';
 
+  const rejectionContainer = document.getElementById('edit-rejection-template-container');
+  if (actionStr === 'reject' && currentRejectionTemplates.length > 0) {
+    rejectionContainer.classList.remove('hidden');
+    const select = document.getElementById('edit-rejection-template');
+    select.innerHTML = '<option value="">Default Rejection Template</option>';
+    currentRejectionTemplates.forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t.id;
+      opt.textContent = t.name || t.subject;
+      select.appendChild(opt);
+    });
+  } else {
+    rejectionContainer.classList.add('hidden');
+    document.getElementById('edit-rejection-template').value = '';
+  }
+
   document.getElementById('editModal').showModal();
   document.getElementById('close-modal-btn').focus();
 }
@@ -913,8 +930,9 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
       return;
     }
   }
+  const actionValue = document.getElementById('edit-action').value || undefined;
   const payload = {
-    action: document.getElementById('edit-action').value || undefined,
+    action: actionValue,
     status: nextStatus,
     title: document.getElementById('edit-title').value,
     author: document.getElementById('edit-author').value,
@@ -927,6 +945,10 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
     notes: document.getElementById('edit-notes').value,
     editedBy: pb.authStore.model.username
   };
+
+  if (actionValue === 'reject') {
+    payload.rejectionTemplateId = document.getElementById('edit-rejection-template').value;
+  }
 
   try {
     const res = await fetch(`/api/asap/staff/title-requests/${id}/action`, {
@@ -1820,6 +1842,9 @@ function populateEmailTemplateForms(emails) {
   if (document.getElementById('email-rejected-subject')) document.getElementById('email-rejected-subject').value = emailRejected.subject || emailTemplateDefaults.rejected.subject;
   if (document.getElementById('email-rejected-body')) document.getElementById('email-rejected-body').value = emailRejected.body || emailTemplateDefaults.rejected.body;
 
+  currentRejectionTemplates = Array.isArray(emails.rejection_templates) ? JSON.parse(JSON.stringify(emails.rejection_templates)) : [];
+  renderRejectionTemplates();
+
   const emailHold = emails.hold_placed || {};
   if (document.getElementById('email-hold-subject')) document.getElementById('email-hold-subject').value = emailHold.subject || emailTemplateDefaults.hold_placed.subject;
   if (document.getElementById('email-hold-body')) document.getElementById('email-hold-body').value = emailHold.body || emailTemplateDefaults.hold_placed.body;
@@ -2190,6 +2215,7 @@ function buildSettingsPayload() {
       subject: getFieldValue('email-rejected-subject'),
       body: getFieldValue('email-rejected-body')
     },
+    rejection_templates: currentRejectionTemplates,
     hold_placed: {
       subject: getFieldValue('email-hold-subject'),
       body: getFieldValue('email-hold-body')
@@ -2536,3 +2562,60 @@ function syncInputPair(idA, idB) {
 }
 syncInputPair('email-from-address', 'smtp-from');
 syncInputPair('email-from-name', 'smtp-from-name');
+
+function renderRejectionTemplates() {
+  const container = document.getElementById('rejection-templates-container');
+  if (!container) return;
+
+  if (currentRejectionTemplates.length === 0) {
+    container.innerHTML = '<div class="text-muted small">No additional rejection templates configured.</div>';
+    return;
+  }
+
+  container.innerHTML = '';
+  currentRejectionTemplates.forEach((template, index) => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'border rounded p-3 mb-3 bg-light position-relative';
+
+    wrapper.innerHTML = `
+      <button type="button" class="btn btn-sm btn-outline-danger position-absolute" style="top: 10px; right: 10px;" onclick="removeRejectionTemplate(${index})" title="Remove Template">&times;</button>
+      <div class="form-group">
+        <label>Template Name</label>
+        <input type="text" class="form-control form-control-sm" value="${escapeAttr(template.name || '')}" onchange="updateRejectionTemplate(${index}, 'name', this.value)">
+      </div>
+      <div class="form-group">
+        <label>Subject</label>
+        <input type="text" class="form-control form-control-sm" value="${escapeAttr(template.subject || '')}" onchange="updateRejectionTemplate(${index}, 'subject', this.value)">
+      </div>
+      <div class="form-group mb-0">
+        <label>Body</label>
+        <textarea class="form-control form-control-sm" rows="3" onchange="updateRejectionTemplate(${index}, 'body', this.value)">${escapeAttr(template.body || '')}</textarea>
+      </div>
+    `;
+    container.appendChild(wrapper);
+  });
+}
+
+function updateRejectionTemplate(index, field, value) {
+  if (currentRejectionTemplates[index]) {
+    currentRejectionTemplates[index][field] = value;
+  }
+}
+
+function removeRejectionTemplate(index) {
+  currentRejectionTemplates.splice(index, 1);
+  renderRejectionTemplates();
+}
+
+const btnAddRejectionTemplate = document.getElementById('btn-add-rejection-template');
+if (btnAddRejectionTemplate) {
+  btnAddRejectionTemplate.addEventListener('click', () => {
+    currentRejectionTemplates.push({
+      id: pb.authStore.model ? pb.authStore.model.id + '_' + Date.now() : 'tpl_' + Date.now(),
+      name: 'New Rejection Reason',
+      subject: emailTemplateDefaults.rejected.subject,
+      body: emailTemplateDefaults.rejected.body
+    });
+    renderRejectionTemplates();
+  });
+}

@@ -94,7 +94,7 @@ function alreadyOwned(app, record, patron) {
   return send(app, emailFor(record, patron), subject, text, html, { fromAddress: emailsConfig.fromAddress, fromName: emailsConfig.fromName });
 }
 
-function rejected(app, record, patron) {
+function rejected(app, record, patron, templateId) {
   var title = getRealValue(clean(record.get("title")));
   var author = getRealValue(clean(record.get("author")));
   var format = formatLabel(record.get("format"));
@@ -103,7 +103,17 @@ function rejected(app, record, patron) {
   var lastName = clean((patron && patron.NameLast) || record.get("nameLast"));
   var libraryOrgId = record.get("libraryOrgId");
   var emailsConfig = config.librarySettings(app, libraryOrgId).emails;
+
   var tpl = emailsConfig.rejected;
+  if (templateId && emailsConfig.rejection_templates && Array.isArray(emailsConfig.rejection_templates)) {
+    for (var i = 0; i < emailsConfig.rejection_templates.length; i++) {
+      if (emailsConfig.rejection_templates[i].id === templateId) {
+        tpl = emailsConfig.rejection_templates[i];
+        break;
+      }
+    }
+  }
+
   var data = { 
     name: name, firstName: firstName, lastName: lastName,
     title: title, author: author, format: format 
