@@ -509,9 +509,20 @@ function patronLogin(e) {
     if (!patron.LibraryOrgID) {
       return e.json(403, { message: "Your library could not be determined from Polaris." });
     }
+
+    var appSettings = config.getSettings();
+    var enabledLibraries = String(appSettings.enabledLibraryOrgIds || "").trim();
+    var librarySettings = config.librarySettings(e.app, patron.LibraryOrgID);
+
+    if (enabledLibraries) {
+      var enabledList = enabledLibraries.split(",").map(function(id) { return id.trim(); }).filter(function(id) { return id.length > 0; });
+      if (enabledList.length > 0 && enabledList.indexOf(String(patron.LibraryOrgID)) < 0) {
+        var msg = librarySettings.ui_text.systemNotEnabledMessage || "Your library does not currently participate in this suggestion service.";
+        return e.json(403, { message: msg });
+      }
+    }
     
     var record = records.upsertPatronUser(e.app, patron);
-    var librarySettings = config.librarySettings(e.app, patron.LibraryOrgID);
 
     return e.json(200, {
       token: record.newAuthToken(),
@@ -969,6 +980,7 @@ function getLibrarySettings(e) {
       emails = s.emails;
       ui_text = s.ui_text;
       workflow = {
+        enabledLibraryOrgIds: s.enabledLibraryOrgIds,
         suggestionLimit: s.suggestionLimit,
         suggestionLimitMessage: s.suggestionLimitMessage,
         outstandingTimeoutEnabled: s.outstandingTimeoutEnabled,
@@ -1032,6 +1044,7 @@ function updateLibrarySettings(e) {
     if (payload.ui_text) record.set("ui_text", parseJsonObject(payload.ui_text, {}));
     if (payload.workflow) {
       var wf = parseJsonObject(payload.workflow, {});
+      if (wf.enabledLibraryOrgIds !== undefined) record.set("enabledLibraryOrgIds", wf.enabledLibraryOrgIds);
       if (wf.suggestionLimit !== undefined) record.set("suggestionLimit", wf.suggestionLimit);
       if (wf.suggestionLimitMessage !== undefined) record.set("suggestionLimitMessage", wf.suggestionLimitMessage);
       if (wf.outstandingTimeoutEnabled !== undefined) record.set("outstandingTimeoutEnabled", wf.outstandingTimeoutEnabled);
