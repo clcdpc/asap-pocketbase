@@ -202,13 +202,14 @@ function processPendingHolds(app, staff, result) {
   );
 
   var patronCache = {};
+  var polarisConfigCache = config.polaris();
 
   for (var i = 0; i < pending.length; i++) {
     var record = pending[i];
     try {
       var bibId = String(record.get("bibid") || "").trim();
       if (!bibId) {
-        bibId = polaris.searchBib(staff, record.get("identifier"));
+        bibId = polaris.searchBib(staff, record.get("identifier"), polarisConfigCache);
       }
       if (!bibId) {
         records.appendSystemNote(record, "SKIP: Could not find BIB ID in Polaris for hold placement.");
@@ -219,7 +220,7 @@ function processPendingHolds(app, staff, result) {
 
       var barcode = record.get("barcode");
       if (patronCache[barcode] === undefined) {
-        patronCache[barcode] = polaris.lookupPatron(staff, barcode);
+        patronCache[barcode] = polaris.lookupPatron(staff, barcode, polarisConfigCache);
       }
       var patron = patronCache[barcode];
       if (!patron.PatronID) {
@@ -229,7 +230,7 @@ function processPendingHolds(app, staff, result) {
         continue;
       }
 
-      var hold = polaris.placeHold(staff, bibId, patron.PatronID);
+      var hold = polaris.placeHold(staff, bibId, patron.PatronID, polarisConfigCache);
       // Status 29 or 6 means "Duplicate hold request" - i.e., the hold already exists in Polaris.
       var isDuplicate = String(hold.statusValue) === "29" || String(hold.statusValue) === "6";
 
@@ -281,13 +282,14 @@ function processCheckedOut(app, staff, result) {
   );
 
   var checkoutsCache = {};
+  var polarisConfigCache = config.polaris();
 
   for (var i = 0; i < holds.length; i++) {
     var record = holds[i];
     try {
       var barcode = record.get("barcode");
       if (checkoutsCache[barcode] === undefined) {
-        checkoutsCache[barcode] = polaris.checkPatronCheckouts(staff, barcode);
+        checkoutsCache[barcode] = polaris.checkPatronCheckouts(staff, barcode, polarisConfigCache);
       }
       var checkouts = checkoutsCache[barcode];
       var bibId = String(record.get("bibid") || "");

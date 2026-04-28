@@ -29,13 +29,13 @@ function cfg(polarisConfig) {
 }
 
 function basePath(type, c) {
-  c = c || cfg();
+  var c = c ? cfg(c) : cfg();
   // Based on CLC C# client: /[type]/v1/[lang]/[app]/[org]
   return "/PAPIService/REST/" + type + "/v1/" + c.langId + "/" + c.appId + "/" + c.orgId;
 }
 
 function hostUrl(c) {
-  c = c || cfg();
+  c = c ? cfg(c) : cfg();
   var host = c.host.replace(/\/+$/, "");
   if (host.indexOf("http://") !== 0 && host.indexOf("https://") !== 0) {
     host = "https://" + host;
@@ -44,7 +44,7 @@ function hostUrl(c) {
 }
 
 function endpoint(type, path, c) {
-  c = c || cfg();
+  c = c ? cfg(c) : cfg();
   var rel = basePath(type, c) + "/" + path.replace(/^\/+/, "");
   var host = hostUrl(c);
   return {
@@ -54,7 +54,7 @@ function endpoint(type, path, c) {
 }
 
 function signedHeaders(method, signatureUri, accessSecret, contentType, c) {
-  c = c || cfg();
+  c = c ? cfg(c) : cfg();
   var date = new Date().toUTCString();
 
   var signature = crypto.hmacSha1Base64(c.apiKey, method.toUpperCase() + signatureUri + date + (accessSecret || ""));
@@ -69,7 +69,7 @@ function signedHeaders(method, signatureUri, accessSecret, contentType, c) {
 }
 
 function send(method, ep, body, staffAuth, contentType, c) {
-  c = c || cfg();
+  c = c ? cfg(c) : cfg();
   var headers = signedHeaders(method, ep.signature, staffAuth ? staffAuth.AccessSecret : "", contentType, c);
   var requestBody = body || "";
   if (requestBody) {
@@ -118,9 +118,9 @@ function adminStaffAuth(polarisConfig) {
   return staffAuth(c.adminUser, c.adminPassword, c, c.staffDomain);
 }
 
-function getPatronBasic(staff, barcode) {
-  var ep = endpoint("public", "patron/" + encodeURIComponent(barcode) + "/basicdata");
-  var payload = send("GET", ep, "", staff);
+function getPatronBasic(staff, barcode, c) {
+  var ep = endpoint("public", "patron/" + encodeURIComponent(barcode) + "/basicdata", c);
+  var payload = send("GET", ep, "", staff, undefined, c);
   var data = payload.PatronBasicData || {};
   return {
     PatronID: data.PatronID || "",
@@ -152,15 +152,15 @@ function authenticatePatron(barcode, password, staffAuth) {
   return getPatronBasic(staff, barcode);
 }
 
-function searchBib(staff, isbn) {
+function searchBib(staff, isbn, c) {
   var cleaned = String(isbn || "").replace(/[-\s]/g, "");
   if (!cleaned) {
     return "";
   }
-  var ep = endpoint("public", "search/bibs/keyword/ISBN");
+  var ep = endpoint("public", "search/bibs/keyword/ISBN", c);
   appendQuery(ep, "q=" + encodeURIComponent(cleaned));
 
-  var payload = send("GET", ep, "", staff);
+  var payload = send("GET", ep, "", staff, undefined, c);
   var rows = payload.BibSearchRows || [];
   if (!rows.length) {
     return "";
@@ -168,8 +168,8 @@ function searchBib(staff, isbn) {
   return String(rows[0].ControlNumber || "");
 }
 
-function lookupPatron(staff, barcode) {
-  return getPatronBasic(staff, barcode);
+function lookupPatron(staff, barcode, c) {
+  return getPatronBasic(staff, barcode, c);
 }
 
 function organizations(kind, staff) {
@@ -189,9 +189,9 @@ function organizations(kind, staff) {
   return rows;
 }
 
-function placeHold(staff, bibId, patronId) {
-  var c = cfg();
-  var ep = endpoint("public", "holdrequest");
+function placeHold(staff, bibId, patronId, polarisConfig) {
+  var c = cfg(polarisConfig);
+  var ep = endpoint("public", "holdrequest", c);
   var body = buildXml("HoldRequestCreateData", {
     PatronID: patronId,
     BibID: bibId,
@@ -201,21 +201,21 @@ function placeHold(staff, bibId, patronId) {
     RequestingOrgID: c.requestingOrgId,
   });
 
-  var payload = send("POST", ep, body, staff, "application/xml");
+  var payload = send("POST", ep, body, staff, "application/xml", c);
   if (payload.StatusType === 1) {
     return { ok: false, statusValue: payload.StatusValue || -1, payload: payload };
   }
 
   if ((payload.StatusType === 2 || payload.StatusType === 3) && payload.RequestGUID) {
-    replyToHold(staff, payload);
+    replyToHold(staff, payload, c);
   }
 
   return { ok: true, statusValue: payload.StatusValue || 0, payload: payload };
 }
 
-function replyToHold(staff, holdPayload) {
-  var c = cfg();
-  var ep = endpoint("public", "holdrequest/" + encodeURIComponent(holdPayload.RequestGUID));
+function replyToHold(staff, holdPayload, polarisConfig) {
+  var c = cfg(polarisConfig);
+  var ep = endpoint("public", "holdrequest/" + encodeURIComponent(holdPayload.RequestGUID), c);
   var body = buildXml("HoldRequestReplyData", {
     TxnGroupQualifier: holdPayload.TxnGroupQualifer || holdPayload.TxnGroupQualifier || "",
     TxnQualifier: holdPayload.TxnQualifier || "",
@@ -223,13 +223,13 @@ function replyToHold(staff, holdPayload) {
     Answer: "1",
     State: "3",
   });
-  return send("PUT", ep, body, staff, "application/xml");
+  return send("PUT", ep, body, staff, "application/xml", c);
 }
 
-function checkPatronCheckouts(staff, barcode) {
-  var ep = endpoint("public", "patron/" + encodeURIComponent(barcode) + "/itemsout/all");
+function checkPatronCheckouts(staff, barcode, c) {
+  var ep = endpoint("public", "patron/" + encodeURIComponent(barcode) + "/itemsout/all", c);
   appendQuery(ep, "excludeecontent=true");
-  var payload = send("GET", ep, "", staff);
+  var payload = send("GET", ep, "", staff, undefined, c);
   return payload.PatronItemsOutGetRows || [];
 }
 
