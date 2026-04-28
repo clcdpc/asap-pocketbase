@@ -181,6 +181,7 @@ function getSettings() {
     successMessage: "You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>",
     alreadySubmittedMessage: "This suggestion has already been submitted. We only accept one suggestion per title. Check the catalog to see if the material was acquired and place a hold.<div>Thank you for using this library's suggestion service.</div>",
     noEmailMessage: "No email is specified on your library account, which means we won't be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.",
+    systemNotEnabledMessage: "Your library does not currently participate in this suggestion service.",
     ebookMessage: "<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
     eaudiobookMessage: "<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
     publicationOptions: ["Already published", "Coming soon", "Published a while back"],
@@ -220,6 +221,7 @@ function getSettings() {
       smtp: dbSmtp,
       emails: mergeEmailTemplates(defaultEmails, dbEmails),
       allowedStaffUsers: record.getString("allowedStaffUsers") || "",
+      enabledLibraryOrgIds: record.getString("enabledLibraryOrgIds") || "",
       suggestionLimit: record.getInt("suggestionLimit") || 5,
       suggestionLimitMessage: record.getString("suggestionLimitMessage") || "Weekly suggestion limit reached",
       outstandingTimeoutEnabled: record.getBool("outstandingTimeoutEnabled"),
@@ -231,7 +233,7 @@ function getSettings() {
       ui_text: mergedUiText
     };
   } catch (err) {
-    return { polaris: {}, smtp: {}, emails: defaultEmailTemplates(), allowedStaffUsers: "", suggestionLimit: 5, suggestionLimitMessage: "Weekly suggestion limit reached", outstandingTimeoutEnabled: false, outstandingTimeoutDays: 30, holdPickupTimeoutEnabled: false, holdPickupTimeoutDays: 14, pendingHoldTimeoutEnabled: false, pendingHoldTimeoutDays: 14, ui_text: defaultUiText };
+    return { polaris: {}, smtp: {}, emails: defaultEmailTemplates(), allowedStaffUsers: "", suggestionLimit: 5, suggestionLimitMessage: "Weekly suggestion limit reached", outstandingTimeoutEnabled: false, outstandingTimeoutDays: 30, holdPickupTimeoutEnabled: false, holdPickupTimeoutDays: 14, pendingHoldTimeoutEnabled: false, pendingHoldTimeoutDays: 14, enabledLibraryOrgIds: "", ui_text: defaultUiText };
   }
 }
 
