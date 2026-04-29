@@ -677,92 +677,92 @@
                   <p class="text-muted mb-0">Tune automation and patron submission limits.</p>
                 </div>
                 <div class="card-body">
-                  <h3 class="h5">Workflow Automation</h3>
-                  <div class="form-row align-items-center mb-3">
-                    <div class="col-auto">
-                      <div class="custom-control custom-checkbox">
-                        <input type="checkbox" class="custom-control-input" id="polaris-auto-promote">
-                        <label class="custom-control-label font-weight-bold" for="polaris-auto-promote">Enable Auto-Promoter</label>
-                      </div>
-                      <small class="form-text text-muted">Automatically search Polaris for ISBNs and promote to hold phase.</small>
-                    </div>
-                  </div>
-
-                  <div class="form-row align-items-center mb-3">
-                    <div class="col-auto">
-                      <div class="custom-control custom-checkbox">
-                        <input type="checkbox" class="custom-control-input" id="outstanding-timeout-enabled">
-                        <label class="custom-control-label" for="outstanding-timeout-enabled">Auto-reject stalled
-                          <strong>Suggestions</strong></label>
-                      </div>
-                    </div>
-                  </div>
-                  <div id="timeout-config-group" class="mb-4">
-                    <label for="outstanding-timeout-days">Timeout Days</label>
-                    <div class="form-row align-items-center">
-                      <div class="col-auto">
-                        <input type="number" id="outstanding-timeout-days" class="form-control" style="width: 100px;">
-                      </div>
-                      <div class="col">
-                        <small class="text-muted">Number of days a suggestion can stay in "Suggestions" without being processed
-                          before it is auto-rejected.</small>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="form-row align-items-center mb-3">
-                    <div class="col-auto">
-                      <div class="custom-control custom-checkbox">
-                        <input type="checkbox" class="custom-control-input" id="hold-pickup-timeout-enabled">
-                        <label class="custom-control-label" for="hold-pickup-timeout-enabled">Auto-close unclaimed
-                          <strong>Holds</strong></label>
-                      </div>
-                    </div>
-                  </div>
-                  <div id="hold-pickup-timeout-group" class="mb-4 hidden">
-                    <label for="hold-pickup-timeout-days">Days Before Expiry</label>
-                    <div class="form-row align-items-center">
-                      <div class="col-auto">
-                        <input type="number" id="hold-pickup-timeout-days" class="form-control" style="width: 100px;">
-                      </div>
-                      <div class="col">
-                        <small class="text-muted">Number of days a hold can stay in "Hold Placed" before it is auto-closed
-                          as "Hold Not Picked Up". The note field will be updated automatically.</small>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="form-row align-items-center mb-3">
-                    <div class="col-auto">
-                      <div class="custom-control custom-checkbox">
-                        <input type="checkbox" class="custom-control-input" id="pending-hold-timeout-enabled">
-                        <label class="custom-control-label" for="pending-hold-timeout-enabled">Auto-close skipped
-                          <strong>Pending Holds</strong></label>
-                      </div>
-                    </div>
-                  </div>
-                  <div id="pending-hold-timeout-group" class="mb-4 hidden">
-                    <label for="pending-hold-timeout-days">Days Before Expiry</label>
-                    <div class="form-row align-items-center">
-                      <div class="col-auto">
-                        <input type="number" id="pending-hold-timeout-days" class="form-control" style="width: 100px;">
-                      </div>
-                      <div class="col">
-                        <small class="text-muted">Number of days a request can stay in "Pending Hold" before it is auto-closed.
-                          The note field will be updated automatically.</small>
-                      </div>
-                    </div>
-                  </div>
-
-                  <hr>
                   <h3 class="h5">Suggestion Limits</h3>
-                  <div class="form-row">
+                  <div class="form-row mb-4">
                     <div class="form-group col-md-4"><label for="suggestion-limit">Weekly Limit</label><input type="number" id="suggestion-limit"
                         class="form-control"></div>
                     <div class="form-group col-md-8">
                       <label for="suggestion-limit-msg">Limit Reached Message</label>
                       <input type="text" id="suggestion-limit-msg" class="form-control">
                       <small class="form-text text-muted">Use <code>{{next_available_date}}</code> as a placeholder for when the patron can submit again.</small>
+                    </div>
+                  </div>
+
+                  <hr>
+                  <h3 class="h5">Workflow Automation</h3>
+                  <p class="text-muted small mb-3">Automated rules that process requests through the pipeline stages.</p>
+
+                  <!-- Stage 1: Suggestions -->
+                  <div class="form-row align-items-center mb-2">
+                    <div class="col-auto">
+                      <div class="custom-control custom-checkbox">
+                        <input type="checkbox" class="custom-control-input" id="outstanding-timeout-enabled">
+                        <label class="custom-control-label font-weight-bold" for="outstanding-timeout-enabled">Auto-reject stalled <strong>Suggestions</strong></label>
+                      </div>
+                    </div>
+                  </div>
+                  <div id="timeout-config-group" class="mb-4">
+                    <div class="form-row align-items-center">
+                      <div class="col-auto">
+                        <input type="number" id="outstanding-timeout-days" class="form-control" style="width: 100px;">
+                      </div>
+                      <div class="col">
+                        <label for="outstanding-timeout-days" class="mb-0 mr-2">Timeout Days</label>
+                        <small class="text-muted">Days a suggestion can stay in "Suggestions" before auto-rejection.</small>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Automation: Promotion -->
+                  <div class="form-row align-items-center mb-4">
+                    <div class="col-auto">
+                      <div class="custom-control custom-checkbox">
+                        <input type="checkbox" class="custom-control-input" id="polaris-auto-promote">
+                        <label class="custom-control-label font-weight-bold" for="polaris-auto-promote">Enable Auto-Promoter</label>
+                      </div>
+                      <small class="form-text text-muted">Automatically search Polaris for ISBNs and promote to hold phase if found.</small>
+                    </div>
+                  </div>
+
+                  <!-- Stage 3: Pending Holds -->
+                  <div class="form-row align-items-center mb-2">
+                    <div class="col-auto">
+                      <div class="custom-control custom-checkbox">
+                        <input type="checkbox" class="custom-control-input" id="pending-hold-timeout-enabled">
+                        <label class="custom-control-label font-weight-bold" for="pending-hold-timeout-enabled">Auto-close skipped <strong>Pending Holds</strong></label>
+                      </div>
+                    </div>
+                  </div>
+                  <div id="pending-hold-timeout-group" class="mb-4 hidden">
+                    <div class="form-row align-items-center">
+                      <div class="col-auto">
+                        <input type="number" id="pending-hold-timeout-days" class="form-control" style="width: 100px;">
+                      </div>
+                      <div class="col">
+                        <label for="pending-hold-timeout-days" class="mb-0 mr-2">Days Before Expiry</label>
+                        <small class="text-muted">Days a request can stay in "Pending Hold" before auto-closing.</small>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Stage 4: Hold Placed -->
+                  <div class="form-row align-items-center mb-2">
+                    <div class="col-auto">
+                      <div class="custom-control custom-checkbox">
+                        <input type="checkbox" class="custom-control-input" id="hold-pickup-timeout-enabled">
+                        <label class="custom-control-label font-weight-bold" for="hold-pickup-timeout-enabled">Auto-close unclaimed <strong>Holds</strong></label>
+                      </div>
+                    </div>
+                  </div>
+                  <div id="hold-pickup-timeout-group" class="mb-4 hidden">
+                    <div class="form-row align-items-center">
+                      <div class="col-auto">
+                        <input type="number" id="hold-pickup-timeout-days" class="form-control" style="width: 100px;">
+                      </div>
+                      <div class="col">
+                        <label for="hold-pickup-timeout-days" class="mb-0 mr-2">Days Before Expiry</label>
+                        <small class="text-muted">Days a hold can stay in "Hold Placed" before auto-closing as "Not Picked Up".</small>
+                      </div>
                     </div>
                   </div>
 
