@@ -757,8 +757,6 @@ function staffTitleRequestsList(e) {
   var offset = 0;
   var filter = "id != ''";
   var params = {};
-  var includePendingIsbn = String(queryValue(e, "includePendingIsbn") || "").toLowerCase() === "true";
-
   if (!isSuperAdmin(staff)) {
     var libraryOrgId = String(staff.get("libraryOrgId") || "").trim();
     if (!libraryOrgId) {
@@ -766,12 +764,6 @@ function staffTitleRequestsList(e) {
     }
     filter = "libraryOrgId = {:libraryOrgId}";
     params.libraryOrgId = libraryOrgId;
-  }
-
-  if (!includePendingIsbn) {
-    filter += " && !(status = {:suggestionStatus} && isbnCheckStatus = {:isbnCheckStatusPending})";
-    params.suggestionStatus = records.STATUS.SUGGESTION;
-    params.isbnCheckStatusPending = "pending";
   }
 
   while (true) {
