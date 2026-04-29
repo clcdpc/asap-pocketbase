@@ -969,7 +969,13 @@ function openEdit(id, nextStatus, dialogTitle, actionStr) {
     rejectionContainer.classList.remove('hidden');
     const select = document.getElementById('edit-rejection-template');
     select.innerHTML = '<option value="">Default Rejection Template</option>';
-    currentRejectionTemplates.forEach(t => {
+    const sortedTemplates = [...currentRejectionTemplates].sort((a, b) => {
+      const nameA = (a.name || a.subject || '').toLowerCase();
+      const nameB = (b.name || b.subject || '').toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
+
+    sortedTemplates.forEach(t => {
       const opt = document.createElement('option');
       opt.value = t.id;
       opt.textContent = t.name || t.subject;
@@ -2725,7 +2731,7 @@ function removeRejectionTemplate(index) {
 const btnAddRejectionTemplate = document.getElementById('btn-add-rejection-template');
 if (btnAddRejectionTemplate) {
   btnAddRejectionTemplate.addEventListener('click', () => {
-    currentRejectionTemplates.push({
+    currentRejectionTemplates.unshift({
       id: pb.authStore.model ? pb.authStore.model.id + '_' + Date.now() : 'tpl_' + Date.now(),
       name: 'New Rejection Reason',
       subject: emailTemplateDefaults.rejected.subject,
