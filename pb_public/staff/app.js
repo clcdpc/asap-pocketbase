@@ -751,6 +751,11 @@ function getDuplicateBadgesHtml(row) {
       return true;
     }
 
+    // Check BibID match
+    if (r.bibid && row.bibid && r.bibid.trim().toLowerCase() === row.bibid.trim().toLowerCase()) {
+      return true;
+    }
+
     // Check title match
     if (r.title && row.title && r.title.trim().toLowerCase() === row.title.trim().toLowerCase()) {
       return true;

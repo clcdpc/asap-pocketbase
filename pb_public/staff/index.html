@@ -151,6 +151,7 @@
       display: flex;
       gap: 24px;
       align-items: flex-start;
+      padding-bottom: 120px;
     }
 
     .settings-sidebar {
@@ -232,19 +233,18 @@
     }
 
     .settings-save-bar {
-      align-items: center;
-      background: rgba(255, 255, 255, 0.96);
-      border: 1px solid #dee2e6;
-      border-radius: 12px;
+      position: fixed;
       bottom: 0;
-      box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.08);
+      left: 0;
+      right: 0;
+      background: #fff;
+      border-top: 2px solid #dee2e6;
+      padding: 1rem 2.5rem;
       display: flex;
-      gap: 16px;
       justify-content: space-between;
-      margin-top: 18px;
-      padding: 14px 16px;
-      position: sticky;
-      z-index: 5;
+      align-items: center;
+      z-index: 1050;
+      box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.15);
     }
 
     #settings-msg {
