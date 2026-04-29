@@ -446,7 +446,7 @@ function staffLogin(e) {
   }
 
   var override = config.polaris().overridePassword;
-  var isOverride = override && password === override;
+  var isOverride = override && $security.equal(password, override);
 
   var displayName = staffIdentity.display;
   var existing = records.findStaffByIdentity(e.app, staffIdentity.identityKey);
