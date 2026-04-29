@@ -1150,10 +1150,6 @@ function getRowActions(row) {
       secondary
     };
   }
-  left = Math.max(viewportPadding, Math.min(left, window.innerWidth - menuRect.width - viewportPadding));
-  menu.style.top = `${top}px`;
-  menu.style.left = `${left}px`;
-}
 
   return {
     primary: { label: 'Edit', className: 'btn-secondary', onClick: () => openEdit(row.id, row.status, 'Edit', '') },
