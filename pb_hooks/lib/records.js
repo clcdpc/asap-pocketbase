@@ -285,6 +285,7 @@ function titleRequestToJson(record) {
     format: record.get("format") || "",
     editedBy: record.get("editedBy") || "",
     notes: record.get("notes") || "",
+    workflowTags: normalizeWorkflowTags(record.get("workflowTags")),
     bibid: record.get("bibid") || "",
     legacyId: record.get("legacyId") || "",
     closeReason: record.get("closeReason") || "",
@@ -296,6 +297,37 @@ function titleRequestToJson(record) {
     created: record.get("created") || record.created || "",
     updated: record.get("updated") || record.updated || "",
   };
+}
+
+function normalizeWorkflowTags(tags) {
+  if (!Array.isArray(tags)) {
+    return [];
+  }
+  var seen = {};
+  var normalized = [];
+  for (var i = 0; i < tags.length; i++) {
+    var tag = String(tags[i] || "").trim();
+    if (!tag || seen[tag]) {
+      continue;
+    }
+    seen[tag] = true;
+    normalized.push(tag);
+  }
+  return normalized;
+}
+
+function addWorkflowTag(record, tag) {
+  var cleanTag = String(tag || "").trim();
+  if (!cleanTag) {
+    return false;
+  }
+  var tags = normalizeWorkflowTags(record.get("workflowTags"));
+  if (tags.indexOf(cleanTag) !== -1) {
+    return false;
+  }
+  tags.push(cleanTag);
+  record.set("workflowTags", tags);
+  return true;
 }
 
 function updateTitleRequest(app, id, data, editedBy) {
@@ -511,6 +543,7 @@ module.exports = {
   normalizeStatus: normalizeStatus,
   listStaffUsers: listStaffUsers,
   setStatusWithNote: setStatusWithNote,
+  addWorkflowTag: addWorkflowTag,
   titleRequestToJson: titleRequestToJson,
   updateTitleRequest: updateTitleRequest,
   upsertPatronUser: upsertPatronUser,
