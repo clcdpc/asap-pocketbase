@@ -117,11 +117,7 @@ body {
 }
 
 #grid-container .gridjs-td:last-child {
-  white-space: normal;
-}
-
-#grid-container .gridjs-td:last-child .btn {
-  margin: 2px;
+  white-space: nowrap;
 }
 
 #grid-container .gridjs-table {
@@ -269,6 +265,65 @@ body {
   align-items: center;
   z-index: 1050;
   box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.1);
+}
+
+.row-action-group {
+  display: inline-flex;
+  align-items: stretch;
+  white-space: nowrap;
+}
+
+.row-action-primary {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.row-action-menu-trigger {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  margin-left: -1px;
+  border-left-width: 1px;
+}
+
+.row-action-menu-trigger.btn-outline-secondary {
+  border-left-color: var(--bs-border-color, #ced4da);
+}
+
+.action-menu-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2000;
+}
+
+.row-action-menu {
+  position: fixed;
+  min-width: 190px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, .15);
+  border-radius: .5rem;
+  box-shadow: 0 .75rem 2rem rgba(0, 0, 0, .16);
+  padding: .35rem;
+  pointer-events: auto;
+}
+
+.row-action-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: .45rem .65rem;
+  border-radius: .35rem;
+}
+
+.row-action-menu-item:hover,
+.row-action-menu-item:focus {
+  background: rgba(0, 0, 0, .06);
+}
+
+.row-action-menu-item.danger {
+  color: #b42318;
 }
 
 #settings-msg {

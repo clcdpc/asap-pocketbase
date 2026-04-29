@@ -147,6 +147,7 @@ let currentSettingsSection = 'start';
 let settingsDirty = false;
 let settingsSaving = false;
 let settingsLoading = false;
+let activeActionMenu = null;
 
 // --- DOM Field Helpers ---
 
@@ -240,11 +241,7 @@ function showToast(message, type = 'success') {
 function showAlert(message) {
   return new Promise(resolve => {
     const dialog = document.getElementById('alert-dialog');
-    if (!dialog) {
-      showToast(message, 'error');
-      resolve();
-      return;
-    }
+    if (!dialog) return resolve();
     const previousFocus = document.activeElement;
     document.getElementById('alert-dialog-message').textContent = message;
     const okBtn = document.getElementById('alert-dialog-ok');
@@ -277,11 +274,7 @@ function showAlert(message) {
 function showConfirm(titleOrMessage, maybeMessage) {
   return new Promise(resolve => {
     const dialog = document.getElementById('confirm-dialog');
-    if (!dialog) {
-      showToast('Confirmation dialog is unavailable. Action cancelled.', 'error');
-      resolve(false);
-      return;
-    }
+    if (!dialog) return resolve(false);
     const previousFocus = document.activeElement;
     const message = maybeMessage || titleOrMessage;
     const title = maybeMessage ? titleOrMessage : 'Confirm action';
@@ -971,7 +964,7 @@ function getGridColumns(status) {
       'Submitted',
       { name: 'Notes', width: '200px' },
       'Edited by',
-      { name: 'Actions', width: '280px', sort: false },
+      { name: 'Actions', width: '160px', sort: false },
     ];
   }
 
@@ -985,7 +978,7 @@ function getGridColumns(status) {
       'Closed reason',
       { name: 'Notes', width: '200px' },
       'Edited by',
-      { name: 'Actions', width: '130px', sort: false },
+      { name: 'Actions', width: '150px', sort: false },
     ];
   }
 
@@ -1002,7 +995,7 @@ function getGridColumns(status) {
     'Last checked',
     { name: 'Notes', width: '200px' },
     'Edited by',
-    { name: 'Actions', width: '210px', sort: false },
+    { name: 'Actions', width: '160px', sort: false },
   ];
 }
 
@@ -1078,7 +1071,7 @@ function getGridRow(row, status) {
       formatStandardDate(row.created),
       formatNote(row.notes),
       row.editedBy,
-      gridjs.html(getActionButtons(row)),
+      renderRowActions(row),
     ];
   }
 
@@ -1092,7 +1085,7 @@ function getGridRow(row, status) {
       formatCloseReason(row),
       formatNote(row.notes),
       row.editedBy,
-      gridjs.html(getActionButtons(row)),
+      renderRowActions(row),
     ];
   }
 
@@ -1109,7 +1102,7 @@ function getGridRow(row, status) {
     formatDateTime(row.lastPromoterCheck),
     formatNote(row.notes),
     row.editedBy,
-    gridjs.html(getActionButtons(row)),
+    renderRowActions(row),
   ];
 }
 
@@ -1120,35 +1113,134 @@ function formatCloseReason(row) {
   return closeReasonMap[row.closeReason] || 'Closed';
 }
 
-function getActionButtons(row) {
-  const id = escapeAttr(row.id);
+function getRowActions(row) {
   const status = normalizeStatus(row.status);
 
   if (status === 'suggestion') {
-    return `<button type="button" class="btn btn-sm btn-primary" data-row-action="edit" data-row-id="${id}" data-next-status="outstanding_purchase" data-dialog-title="Approve for purchase" data-action-value="purchase">Purchase</button>
-            <button type="button" class="btn btn-sm btn-warning" data-row-action="edit" data-row-id="${id}" data-next-status="pending_hold" data-dialog-title="Already own" data-action-value="alreadyOwn">Already own</button>
-            <button type="button" class="btn btn-sm btn-danger" data-row-action="edit" data-row-id="${id}" data-next-status="closed" data-dialog-title="Reject" data-action-value="reject">Reject</button>
-            <button type="button" class="btn btn-sm btn-outline-danger" data-row-action="edit" data-row-id="${id}" data-next-status="closed" data-dialog-title="Silent close" data-action-value="silentClose">Silent close</button>
-            <button type="button" class="btn btn-sm btn-secondary" data-row-action="edit" data-row-id="${id}" data-next-status="suggestion" data-dialog-title="Edit suggestion" data-action-value="">Edit</button>`;
+    return {
+      primary: { label: 'Purchase', className: 'btn-primary', onClick: () => openEdit(row.id, 'outstanding_purchase', 'Approve for purchase', 'purchase') },
+      secondary: [
+        { label: 'Already own', onClick: () => openEdit(row.id, 'pending_hold', 'Already own', 'alreadyOwn') },
+        { label: 'Reject', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Reject', 'reject') },
+        { label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose') },
+        { label: 'Edit', onClick: () => openEdit(row.id, 'suggestion', 'Edit suggestion', '') },
+      ]
+    };
   }
 
   if (status === 'outstanding_purchase') {
-    return `<button type="button" class="btn btn-sm btn-success" data-row-action="edit" data-row-id="${id}" data-next-status="pending_hold" data-dialog-title="Move to Pending hold" data-action-value="">Ready for hold</button>
-            <button type="button" class="btn btn-sm btn-outline-danger" data-row-action="edit" data-row-id="${id}" data-next-status="closed" data-dialog-title="Silent close" data-action-value="silentClose">Silent close</button>
-            <button type="button" class="btn btn-sm btn-outline-secondary" data-row-action="undo" data-row-id="${id}">Undo</button>
-            <button type="button" class="btn btn-sm btn-secondary" data-row-action="edit" data-row-id="${id}" data-next-status="outstanding_purchase" data-dialog-title="Edit" data-action-value="">Edit</button>`;
+    return {
+      primary: { label: 'Ready for hold', className: 'btn-success', onClick: () => openEdit(row.id, 'pending_hold', 'Move to Pending hold', '') },
+      secondary: [
+        { label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose') },
+        { label: 'Undo', onClick: () => undoRow(row.id) },
+        { label: 'Edit', onClick: () => openEdit(row.id, 'outstanding_purchase', 'Edit', '') },
+      ]
+    };
   }
 
   if (status === 'pending_hold' || status === 'hold_placed' || status === 'closed') {
-    let buttons = `<button type="button" class="btn btn-sm btn-outline-secondary" data-row-action="undo" data-row-id="${id}">Undo</button>`;
-    if (status !== 'closed') {
-      buttons += `<button type="button" class="btn btn-sm btn-outline-danger" data-row-action="edit" data-row-id="${id}" data-next-status="closed" data-dialog-title="Silent close" data-action-value="silentClose">Silent close</button>`;
-    }
-    buttons += `<button type="button" class="btn btn-sm btn-secondary" data-row-action="edit" data-row-id="${id}" data-next-status="${escapeAttr(row.status)}" data-dialog-title="Edit" data-action-value="">Edit</button>`;
-    return buttons;
+    const secondary = [];
+    if (status !== 'closed') secondary.push({ label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose') });
+    secondary.push({ label: 'Edit', onClick: () => openEdit(row.id, row.status, 'Edit', '') });
+    return {
+      primary: { label: 'Undo', className: 'btn-outline-secondary', onClick: () => undoRow(row.id) },
+      secondary
+    };
   }
 
-  return `<button type="button" class="btn btn-sm btn-secondary" data-row-action="edit" data-row-id="${id}" data-next-status="${escapeAttr(row.status)}" data-dialog-title="Edit" data-action-value="">Edit</button>`;
+  return {
+    primary: { label: 'Edit', className: 'btn-secondary', onClick: () => openEdit(row.id, row.status, 'Edit', '') },
+    secondary: []
+  };
+}
+
+async function runRowAction(action) {
+  closeActionMenu();
+  try {
+    await action.onClick();
+  } catch (error) {
+    await showAlert(error.message || String(error) || 'Action failed');
+  }
+}
+
+function renderRowActions(row) {
+  const actions = getRowActions(row);
+  const wrapper = document.createElement('div');
+  wrapper.className = 'row-action-group';
+  const primaryButton = document.createElement('button');
+  primaryButton.type = 'button';
+  primaryButton.className = `btn btn-sm row-action-primary ${actions.primary.className || 'btn-primary'}`;
+  primaryButton.textContent = actions.primary.label;
+  primaryButton.addEventListener('click', async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    await runRowAction(actions.primary);
+  });
+  wrapper.appendChild(primaryButton);
+  if (actions.secondary?.length) {
+    const menuButton = document.createElement('button');
+    menuButton.type = 'button';
+    menuButton.className = 'btn btn-sm btn-outline-secondary row-action-menu-trigger';
+    menuButton.setAttribute('aria-haspopup', 'menu');
+    menuButton.setAttribute('aria-expanded', 'false');
+    menuButton.textContent = '⋯';
+    menuButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openActionMenu(menuButton, actions.secondary);
+    });
+    wrapper.appendChild(menuButton);
+  }
+  return wrapper;
+}
+
+function openActionMenu(triggerButton, actions) {
+  closeActionMenu();
+  const layer = document.getElementById('action-menu-layer');
+  if (!layer) return;
+  triggerButton.setAttribute('aria-expanded', 'true');
+  const menu = document.createElement('div');
+  menu.className = 'row-action-menu';
+  menu.setAttribute('role', 'menu');
+  actions.forEach((action) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = `row-action-menu-item ${action.className || ''}`.trim();
+    item.setAttribute('role', 'menuitem');
+    item.textContent = action.label;
+    item.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      await runRowAction(action);
+    });
+    menu.appendChild(item);
+  });
+  layer.appendChild(menu);
+  positionActionMenu(triggerButton, menu);
+  activeActionMenu = { triggerButton, menu };
+}
+
+function positionActionMenu(triggerButton, menu) {
+  const triggerRect = triggerButton.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const spacing = 6;
+  const viewportPadding = 8;
+  let top = triggerRect.bottom + spacing;
+  let left = triggerRect.right - menuRect.width;
+  if (top + menuRect.height > window.innerHeight - viewportPadding) {
+    top = triggerRect.top - menuRect.height - spacing;
+  }
+  left = Math.max(viewportPadding, Math.min(left, window.innerWidth - menuRect.width - viewportPadding));
+  menu.style.top = `${top}px`;
+  menu.style.left = `${left}px`;
+}
+
+function closeActionMenu() {
+  if (!activeActionMenu) return;
+  activeActionMenu.triggerButton?.setAttribute('aria-expanded', 'false');
+  activeActionMenu.menu?.remove();
+  activeActionMenu = null;
 }
 
 function escapeAttr(value) {
@@ -1170,22 +1262,19 @@ gridContainer.addEventListener('click', (e) => {
     return;
   }
 
-  const button = e.target.closest('[data-row-action]');
-  if (!button || !gridContainer.contains(button)) return;
-
-  const id = button.getAttribute('data-row-id');
-  if (button.getAttribute('data-row-action') === 'undo') {
-    undoRow(id);
-    return;
-  }
-
-  openEdit(
-    id,
-    button.getAttribute('data-next-status') || '',
-    button.getAttribute('data-dialog-title') || 'Edit',
-    button.getAttribute('data-action-value') || ''
-  );
 });
+
+document.addEventListener('click', (event) => {
+  if (!activeActionMenu) return;
+  const clickedMenu = activeActionMenu.menu.contains(event.target);
+  const clickedTrigger = activeActionMenu.triggerButton.contains(event.target);
+  if (!clickedMenu && !clickedTrigger) closeActionMenu();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') closeActionMenu();
+});
+window.addEventListener('resize', closeActionMenu);
+window.addEventListener('scroll', closeActionMenu, true);
 
 function openEdit(id, nextStatus, dialogTitle, actionStr) {
   const row = currentSuggestions.find(r => r.id === id);
