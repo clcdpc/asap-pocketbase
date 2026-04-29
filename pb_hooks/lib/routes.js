@@ -813,7 +813,7 @@ function staffTitleRequestAction(e) {
       }
       if (action === "reject") {
         try {
-          mail.rejected(e.app, record, patron);
+          mail.rejected(e.app, record, patron, data.rejectionTemplateId);
         } catch (mailErr) {
           e.app.logger().error("Rejected suggestion email failed", "recordId", record.id, "error", String(mailErr));
         }

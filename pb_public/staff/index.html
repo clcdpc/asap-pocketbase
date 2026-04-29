@@ -905,12 +905,22 @@
                   </div>
 
                   <div class="card mb-3">
-                    <div class="card-header"><strong>Rejected</strong></div>
+                    <div class="card-header"><strong>Rejected (Default)</strong></div>
                     <div class="card-body">
                       <div class="form-group"><label for="email-rejected-subject">Subject</label><input type="text" id="email-rejected-subject"
                           class="form-control"></div>
                       <div class="form-group"><label for="email-rejected-body">Body</label><textarea id="email-rejected-body" class="form-control"
                           rows="5"></textarea></div>
+                    </div>
+                  </div>
+
+                  <div class="card mb-3">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                      <strong>Additional Rejection Templates</strong>
+                      <button type="button" id="btn-add-rejection-template" class="btn btn-sm btn-outline-primary">Add Template</button>
+                    </div>
+                    <div class="card-body">
+                      <div id="rejection-templates-container"></div>
                     </div>
                   </div>
 
@@ -1044,6 +1054,13 @@
       <div class="form-group mb-0">
         <label class="small font-weight-bold mb-1">Notes</label>
         <textarea id="edit-notes" class="form-control form-control-sm" rows="2"></textarea>
+      </div>
+
+      <div class="form-group mt-2 mb-0 hidden" id="edit-rejection-template-container">
+        <label class="small font-weight-bold mb-1">Rejection Template</label>
+        <select id="edit-rejection-template" class="form-control form-control-sm">
+          <option value="">Default Rejection Template</option>
+        </select>
       </div>
     </div>
 

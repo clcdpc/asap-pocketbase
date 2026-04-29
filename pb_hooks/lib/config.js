@@ -103,6 +103,14 @@ function mergeEmailTemplates(baseTemplates, overrideTemplates) {
     }
   }
 
+  if (overrides.rejection_templates && Array.isArray(overrides.rejection_templates)) {
+    merged.rejection_templates = overrides.rejection_templates;
+  } else if (base.rejection_templates && Array.isArray(base.rejection_templates)) {
+    merged.rejection_templates = base.rejection_templates;
+  } else {
+    merged.rejection_templates = [];
+  }
+
   return merged;
 }
 
@@ -141,6 +149,10 @@ function diffEmailTemplates(baseTemplates, nextTemplates) {
     if (Object.keys(templateDiff).length) {
       diff[key] = templateDiff;
     }
+  }
+
+  if (next.rejection_templates && Array.isArray(next.rejection_templates)) {
+    diff.rejection_templates = next.rejection_templates;
   }
 
   return diff;
