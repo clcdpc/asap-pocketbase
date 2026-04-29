@@ -133,6 +133,8 @@ let bootstrapAdminMessage = '';
 let setupRequired = false;
 let canAssignSuperAdmin = false;
 let currentEmailStatus = { enabled: true };
+let organizationsStatus = 'not_loaded';
+let organizationsStatusMessage = 'Polaris organizations have not been loaded yet. Organization selection will be available after the Polaris organization sync completes.';
 const settingsSectionIds = ['start', 'polaris', 'staff', 'smtp', 'workflow', 'patron', 'templates'];
 let currentSettingsSection = 'start';
 
@@ -345,6 +347,35 @@ function updateEmailStatusBanner(status) {
   if (smtpMessage) {
     smtpMessage.textContent = message;
     smtpMessage.className = configured ? 'alert alert-success small' : 'alert alert-warning small';
+  }
+}
+
+function setOrganizationsStatus(status, message) {
+  organizationsStatus = status || 'not_loaded';
+  organizationsStatusMessage = message || '';
+  const statusEl = document.getElementById('organizations-status-message');
+  const container = document.getElementById('enabled-libraries-checkbox-container');
+  if (container && organizationsStatus !== 'loaded') {
+    container.removeAttribute('data-loaded');
+  }
+
+  if (statusEl) {
+    const classMap = {
+      not_loaded: 'alert alert-info small mb-3',
+      loading: 'alert alert-info small mb-3',
+      loaded: 'alert alert-success small mb-3',
+      error: 'alert alert-warning small mb-3'
+    };
+    statusEl.className = classMap[organizationsStatus] || classMap.not_loaded;
+    statusEl.textContent = organizationsStatusMessage || 'Polaris organization sync status is unknown.';
+  }
+
+  if (container && organizationsStatus === 'loading') {
+    container.innerHTML = '<div class="p-3 text-muted">Organizations loading...</div>';
+  } else if (container && organizationsStatus === 'error') {
+    container.innerHTML = '<div class="p-3 text-warning">Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.</div>';
+  } else if (container && organizationsStatus === 'not_loaded') {
+    container.innerHTML = '<div class="p-3 text-muted">Organizations not loaded yet.</div>';
   }
 }
 
@@ -589,11 +620,18 @@ setupForm.addEventListener('submit', async (e) => {
       throw new Error(result.message || 'Setup failed.');
     }
 
-    setupRequired = false;
-    bootstrapAdminMessage = result.bootstrapMessage || 'Initial setup is complete. Your account is the admin user; future staff logins will be non-admin staff accounts.';
-    pb.authStore.save(result.token, result.record);
-    checkAuth();
-  } catch (err) {
+	    setupRequired = false;
+	    bootstrapAdminMessage = result.bootstrapMessage || 'Initial setup is complete. Your account is the admin user; future staff logins will be non-admin staff accounts.';
+	    pb.authStore.save(result.token, result.record);
+	    currentStatus = 'settings';
+	    currentSettingsSection = 'start';
+	    window.history.replaceState(null, '', '#settings-start');
+	    setOrganizationsStatus('loading', 'Organizations loading from Polaris. Settings will unlock organization selection after this sync completes.');
+	    checkAuth();
+	    syncPolarisOrganizations().catch(() => {
+	      // The visible organization status already explains the failure.
+	    });
+	  } catch (err) {
     errDiv.textContent = err.message || 'Setup failed.';
     errDiv.classList.remove('hidden');
   } finally {
@@ -1696,19 +1734,43 @@ document.getElementById('btn-test-polaris').addEventListener('click', async (e) 
 });
 
 const syncOrganizationsBtn = document.getElementById('btn-sync-organizations');
+async function syncPolarisOrganizations(options = {}) {
+  const resultEl = document.getElementById('organizations-sync-result');
+  const btn = options.button || syncOrganizationsBtn;
+  if (btn) btn.disabled = true;
+  setOrganizationsStatus('loading', 'Organizations loading from Polaris. Organization selection will be available after this sync completes.');
+  setInlineResult(resultEl, 'Syncing organizations...', 'ml-2 text-muted');
+
+  try {
+    const result = await authorizedJson('/api/asap/staff/organizations/sync', { method: 'POST' });
+    const count = result.synced || 0;
+    setOrganizationsStatus('loaded', `Polaris organizations loaded successfully. ${count} organization record${count === 1 ? '' : 's'} synced. Leave all libraries unchecked to enable all organizations.`);
+    setInlineResult(resultEl, `Synced ${count} organization records.`, 'ml-2 text-success font-weight-bold');
+    const container = document.getElementById('enabled-libraries-checkbox-container');
+    if (container) {
+      container.removeAttribute('data-loaded');
+    }
+    if (isSuperAdminStaff()) {
+      await populateLibrarySelector();
+    }
+    await renderLibraryParticipationCheckboxes();
+    return result;
+  } catch (err) {
+    setOrganizationsStatus('error', 'Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.');
+    setInlineResult(resultEl, 'Warning: ' + (err.message || 'Organization sync failed.'), 'ml-2 text-warning font-weight-bold');
+    throw err;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 if (syncOrganizationsBtn) {
   syncOrganizationsBtn.addEventListener('click', async (e) => {
     e.preventDefault();
-    const resultEl = document.getElementById('organizations-sync-result');
-    syncOrganizationsBtn.disabled = true;
-    setInlineResult(resultEl, 'Syncing organizations...', 'ml-2 text-muted');
     try {
-      const result = await authorizedJson('/api/asap/staff/organizations/sync', { method: 'POST' });
-      setInlineResult(resultEl, `Synced ${result.synced || 0} organization records.`, 'ml-2 text-success font-weight-bold');
+      await syncPolarisOrganizations({ button: syncOrganizationsBtn });
     } catch (err) {
-      setInlineResult(resultEl, 'Error: ' + (err.message || 'Organization sync failed.'), 'ml-2 text-danger font-weight-bold');
-    } finally {
-      syncOrganizationsBtn.disabled = false;
+      // syncPolarisOrganizations already updates the visible warning state.
     }
   });
 }
@@ -2907,6 +2969,16 @@ async function renderLibraryParticipationCheckboxes() {
   const container = document.getElementById('enabled-libraries-checkbox-container');
   if (!container || container.getAttribute('data-loaded') === 'true') return;
 
+  if (organizationsStatus === 'loading') {
+    container.innerHTML = '<div class="p-3 text-muted">Organizations loading...</div>';
+    return;
+  }
+
+  if (organizationsStatus === 'error') {
+    container.innerHTML = '<div class="p-3 text-warning">Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.</div>';
+    return;
+  }
+
   try {
     const orgs = await pb.collection('polaris_organizations').getFullList({
       filter: 'organizationCodeId = "2"',
@@ -2914,10 +2986,15 @@ async function renderLibraryParticipationCheckboxes() {
     });
 
     if (!orgs.length) {
-      container.innerHTML = '<div class="col-12 text-muted">No libraries found.</div>';
+      if (organizationsStatus === 'not_loaded') {
+        container.innerHTML = '<div class="p-3 text-muted">Organizations have not been synced yet. Use Settings > Polaris > Sync Polaris Organizations Now.</div>';
+      } else {
+        container.innerHTML = '<div class="p-3 text-muted">Organization sync completed, but no library organizations were returned.</div>';
+      }
       return;
     }
 
+    setOrganizationsStatus('loaded', `Polaris organizations loaded. ${orgs.length} library organization${orgs.length === 1 ? '' : 's'} available. Leave all libraries unchecked to enable all organizations.`);
     container.innerHTML = `
       <table class="table table-sm table-hover mb-0">
         <thead class="bg-white" style="position: sticky; top: 0; z-index: 1;">
@@ -2955,7 +3032,8 @@ async function renderLibraryParticipationCheckboxes() {
     }
   } catch (err) {
     console.error('Failed to load libraries for participation list', err);
-    container.innerHTML = '<div class="col-12 text-danger">Failed to load libraries.</div>';
+    setOrganizationsStatus('error', 'Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.');
+    container.innerHTML = '<div class="p-3 text-warning">Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.</div>';
   }
 }
 
