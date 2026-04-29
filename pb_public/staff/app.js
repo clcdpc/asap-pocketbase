@@ -2032,7 +2032,7 @@ function collectSettingsPolaris() {
 document.getElementById('btn-test-polaris').addEventListener('click', async (e) => {
   e.preventDefault();
   const resSpan = document.getElementById('polaris-test-result');
-  const btn = e.target.closest('button');
+  const btn = e.currentTarget;
   const polarisPayload = collectSettingsPolaris();
 
   if (!polarisPayload.host || !polarisPayload.accessId || !polarisPayload.apiKey) {
@@ -2166,7 +2166,7 @@ document.getElementById('btn-test-smtp').addEventListener('click', async (e) => 
   e.preventDefault();
   const resSpan = document.getElementById('smtp-test-result');
   const testInput = document.getElementById('smtp-test-email');
-  const btn = e.target.closest('button');
+  const btn = e.currentTarget;
 
   const testEmail = testInput ? testInput.value.trim() : '';
   const smtpHost = getFieldValue('smtp-host').trim();
@@ -2197,6 +2197,10 @@ document.getElementById('btn-test-smtp').addEventListener('click', async (e) => 
   }
 
   try {
+    // Give PocketBase hooks a brief moment to apply freshly saved SMTP settings
+    // before issuing the test request.
+    await new Promise(resolve => setTimeout(resolve, 300));
+
     const res = await fetch('/api/asap/staff/test-smtp', {
       method: 'POST',
       headers: {
