@@ -56,7 +56,7 @@ function evaluatePurchase(app, staff, record, bibCache, result) {
     record.set("status", records.STATUS.PENDING_HOLD);
     record.set("editedBy", "system");
     record.set("updated", new Date().toISOString());
-    records.appendSystemNote(record, "Promoted to Pending Hold (Manual BIB ID found)");
+    records.appendSystemNote(record, "Moved to Pending hold because a manual BIB ID was found.");
     app.save(record);
     result.promoted++;
     return;
@@ -93,7 +93,7 @@ function processOutstandingPurchases(app, staff, result) {
   const autoPromote = settings.get("polaris").autoPromote !== false;
 
   if (!autoPromote) {
-    app.logger().info("ASAP Auto-Promoter is disabled in settings. Skipping.");
+    app.logger().info("ASAP auto-promoter is disabled in settings. Skipping.");
     return;
   }
 
@@ -148,7 +148,7 @@ function processOutstandingTimeout(app, result) {
       record.set("updated", new Date().toISOString());
       records.appendSystemNote(
         record, 
-        "Auto-rejected due to " + cfg.days + " day timeout in Suggestions." + (emailCfg.enabled ? " Rejection email queued." : " No rejection email sent.")
+        "Auto-rejected because it remained in Suggestions for more than " + cfg.days + " days." + (emailCfg.enabled ? " Rejection email queued." : " No rejection email sent.")
       );
       app.save(record);
       try {
@@ -198,7 +198,7 @@ function processPendingHoldTimeout(app, result) {
         record.set("closeReason", records.CLOSE_REASON.REJECTED);
         record.set("editedBy", "system");
         record.set("updated", new Date().toISOString());
-        records.appendSystemNote(record, "Auto-closed due to " + cfg.days + " day timeout in Pending Hold.");
+        records.appendSystemNote(record, "Auto-closed because it remained in Pending hold for more than " + cfg.days + " days.");
         app.save(record);
         result.timedOut++;
       } catch (err) {
@@ -242,7 +242,7 @@ function processHoldPickupTimeout(app, result) {
         record.set("closeReason", records.CLOSE_REASON.HOLD_NOT_PICKED_UP);
         record.set("editedBy", "system");
         record.set("updated", new Date().toISOString());
-        records.appendSystemNote(record, "Hold was not picked up by patron within " + cfg.days + " days. Auto-closed.");
+        records.appendSystemNote(record, "Auto-closed because the hold was not picked up within " + cfg.days + " days.");
         app.save(record);
         result.holdPickupTimeouts++;
       } catch (err) {

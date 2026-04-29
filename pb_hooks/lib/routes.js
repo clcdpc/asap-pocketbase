@@ -171,7 +171,7 @@ function canAccessTitleRequest(staff, record) {
 
 function requireTitleRequestAccess(e, staff, record) {
   if (!canAccessTitleRequest(staff, record)) {
-    return e.json(404, { message: "Title request not found." });
+    return e.json(404, { message: "Suggestion not found." });
   }
   return null;
 }
@@ -749,7 +749,7 @@ function staffTitleRequestAction(e) {
     try {
       record = e.app.findRecordById("title_requests", id);
     } catch (findErr) {
-      return e.json(404, { message: "Title request not found: " + id });
+      return e.json(404, { message: "Suggestion not found: " + id });
     }
     var accessError = requireTitleRequestAccess(e, staff, record);
     if (accessError) {
@@ -757,7 +757,7 @@ function staffTitleRequestAction(e) {
     }
 
     if (nextStatus === records.STATUS.PENDING_HOLD && !String(data.bibid || "").trim()) {
-      return e.json(400, { message: "BIB ID is required before moving a suggestion to Pending Hold." });
+      return e.json(400, { message: "BIB ID is required before moving this suggestion to Pending hold." });
     }
     
     // Check for duplicate open requests for this patron with same BIB ID
@@ -787,7 +787,7 @@ function staffTitleRequestAction(e) {
       data.title = record.get("title");
       data.author = record.get("author");
 
-      // If moving to Pending Hold, check Polaris for an existing hold
+      // If moving to Pending hold, check Polaris for an existing hold.
       if (nextStatus === records.STATUS.PENDING_HOLD) {
         try {
           var pPatron = polaris.lookupPatron(staffAuth, barcode);
@@ -795,10 +795,10 @@ function staffTitleRequestAction(e) {
             var holdCheck = polaris.placeHold(staffAuth, bibid, pPatron.PatronID, true); // testMode = true
             if (holdCheck && holdCheck.statusValue === 29) {
               // Already has a hold in Polaris! 
-              // We'll promote it straight to HOLD_PLACED instead of PENDING_HOLD
+              // Move directly to HOLD_PLACED instead of PENDING_HOLD.
               nextStatus = records.STATUS.HOLD_PLACED;
               data.status = nextStatus;
-              records.appendSystemNote(record, "Patron already has a hold in Polaris for this BIB ID. Moving straight to Hold Placed.");
+              records.appendSystemNote(record, "Patron already has a hold in Polaris for this BIB ID. Moving directly to Hold placed.");
             }
           }
         } catch (polarisErr) {

@@ -28,11 +28,11 @@ const defaultPublicationOptions = ['Already published', 'Coming soon', 'Publishe
 const defaultAgeGroups = ['Adult', 'Young Adult / Teen', 'Children'];
 const patronFormatKeys = ['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'];
 const patronFormatFields = [
-  { key: 'title', label: 'Title (Original)', storage: 'title' },
-  { key: 'author', label: 'Author (Original)', storage: 'author' },
+  { key: 'title', label: 'Title (original)', storage: 'title' },
+  { key: 'author', label: 'Author (original)', storage: 'author' },
   { key: 'identifier', label: 'Identifier', storage: 'identifier' },
-  { key: 'agegroup', label: 'Age Group', storage: 'agegroup' },
-  { key: 'publication', label: 'Publication Timing', storage: 'publication' }
+  { key: 'agegroup', label: 'Age group', storage: 'agegroup' },
+  { key: 'publication', label: 'Publication timing', storage: 'publication' }
 ];
 const defaultPatronFormatRules = {
   book: {
@@ -41,8 +41,8 @@ const defaultPatronFormatRules = {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Author' },
       identifier: { mode: 'optional', label: 'ISBN' },
-      agegroup: { mode: 'required', label: 'Age Group' },
-      publication: { mode: 'required', label: 'Publication Timing' }
+      agegroup: { mode: 'required', label: 'Age group' },
+      publication: { mode: 'required', label: 'Publication timing' }
     }
   },
   audiobook_cd: {
@@ -51,8 +51,8 @@ const defaultPatronFormatRules = {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Author' },
       identifier: { mode: 'optional', label: 'ISBN' },
-      agegroup: { mode: 'required', label: 'Age Group' },
-      publication: { mode: 'required', label: 'Publication Timing' }
+      agegroup: { mode: 'required', label: 'Age group' },
+      publication: { mode: 'required', label: 'Publication timing' }
     }
   },
   dvd: {
@@ -61,8 +61,8 @@ const defaultPatronFormatRules = {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Director/Actors/Producer' },
       identifier: { mode: 'hidden', label: 'UPC' },
-      agegroup: { mode: 'required', label: 'Age Group' },
-      publication: { mode: 'required', label: 'Publication Timing' }
+      agegroup: { mode: 'required', label: 'Age group' },
+      publication: { mode: 'required', label: 'Publication timing' }
     }
   },
   music_cd: {
@@ -71,8 +71,8 @@ const defaultPatronFormatRules = {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Artist' },
       identifier: { mode: 'hidden', label: 'UPC' },
-      agegroup: { mode: 'required', label: 'Age Group' },
-      publication: { mode: 'required', label: 'Publication Timing' }
+      agegroup: { mode: 'required', label: 'Age group' },
+      publication: { mode: 'required', label: 'Publication timing' }
     }
   },
   ebook: {
@@ -81,8 +81,8 @@ const defaultPatronFormatRules = {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Author' },
       identifier: { mode: 'optional', label: 'ISBN' },
-      agegroup: { mode: 'required', label: 'Age Group' },
-      publication: { mode: 'required', label: 'Publication Timing' }
+      agegroup: { mode: 'required', label: 'Age group' },
+      publication: { mode: 'required', label: 'Publication timing' }
     }
   },
   eaudiobook: {
@@ -91,19 +91,26 @@ const defaultPatronFormatRules = {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Author' },
       identifier: { mode: 'optional', label: 'ISBN' },
-      agegroup: { mode: 'required', label: 'Age Group' },
-      publication: { mode: 'required', label: 'Publication Timing' }
+      agegroup: { mode: 'required', label: 'Age group' },
+      publication: { mode: 'required', label: 'Publication timing' }
     }
   }
 };
 
 const descriptions = {
-  suggestion: 'Unprocessed suggestions submitted by library patrons.',
-  outstanding_purchase: 'Items approved for purchase that are not yet in the library catalog. The Auto-Promoter (if enabled in Settings) will search Polaris nightly for these items.',
-  pending_hold: 'Items in the catalog waiting for an automated hold to be placed.',
-  hold_placed: 'Materials that now have active holds placed for the patron.',
-  closed: 'Completed, rejected, or manually closed suggestions.',
-  settings: 'Manage application configuration and integrations.'
+  suggestion: 'Suggestions submitted by patrons and awaiting staff review. Review each suggestion and choose Purchase, Already own, Reject, or Silent close.',
+  outstanding_purchase: 'Pending purchase contains approved suggestions that are waiting to appear in Polaris. If the auto-promoter is enabled, ASAP will check Polaris automatically. Staff can also add a BIB ID manually.',
+  pending_hold: 'Pending hold contains suggestions with catalog matches that are waiting for hold placement. ASAP can place holds automatically during the hold check. Staff should confirm BIB IDs and resolve skipped items.',
+  hold_placed: 'Hold placed contains active holds ASAP is tracking for checkout or pickup completion. Staff should review items that do not close automatically.',
+  closed: 'Closed suggestions include rejected, silent-closed, fulfilled, or auto-closed suggestions. Use this tab to review outcomes or undo a closure when needed.',
+  settings: 'Settings control staff access, patron experience, workflow automation, Polaris, SMTP, and email templates.'
+};
+const emptyStateMessages = {
+  suggestion: 'No new suggestions need review.',
+  outstanding_purchase: 'No approved suggestions are waiting for catalog matches.',
+  pending_hold: 'No items are waiting for hold placement.',
+  hold_placed: 'No active holds are being tracked.',
+  closed: 'No closed suggestions found.'
 };
 
 const statusStages = ['suggestion', 'outstanding_purchase', 'pending_hold', 'hold_placed', 'closed'];
@@ -137,6 +144,9 @@ let organizationsStatus = 'not_loaded';
 let organizationsStatusMessage = 'Polaris organizations have not been loaded yet. Organization selection will be available after the Polaris organization sync completes.';
 const settingsSectionIds = ['start', 'polaris', 'staff', 'smtp', 'workflow', 'patron', 'templates'];
 let currentSettingsSection = 'start';
+let settingsDirty = false;
+let settingsSaving = false;
+let settingsLoading = false;
 
 // --- DOM Field Helpers ---
 
@@ -160,6 +170,28 @@ function getFieldChecked(id, fallback = false) {
   return el ? el.checked : fallback;
 }
 
+function setVisible(id, visible) {
+  const el = document.getElementById(id);
+  if (el) el.classList.toggle('hidden', !visible);
+}
+
+function setText(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = value || '';
+}
+
+function setDisabled(id, disabled) {
+  const el = document.getElementById(id);
+  if (el) el.disabled = !!disabled;
+}
+
+function setInlineStatus(id, message, type) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = message || '';
+  el.className = type ? `text-${type} font-weight-bold` : '';
+}
+
 // --- In-page Toast / Dialog Helpers ---
 
 function showToast(message, type = 'success') {
@@ -179,37 +211,78 @@ function showToast(message, type = 'success') {
 function showAlert(message) {
   return new Promise(resolve => {
     const dialog = document.getElementById('alert-dialog');
-    if (!dialog) { alert(message); resolve(); return; }
+    if (!dialog) {
+      showToast(message, 'error');
+      resolve();
+      return;
+    }
+    const previousFocus = document.activeElement;
     document.getElementById('alert-dialog-message').textContent = message;
     const okBtn = document.getElementById('alert-dialog-ok');
-    function onOk() {
-      dialog.close();
+    let settled = false;
+    function cleanup() {
+      if (settled) return;
+      settled = true;
+      if (dialog.open) dialog.close();
       okBtn.removeEventListener('click', onOk);
+      dialog.removeEventListener('cancel', onCancel);
+      if (previousFocus && typeof previousFocus.focus === 'function') {
+        previousFocus.focus();
+      }
       resolve();
     }
+    function onOk() {
+      cleanup();
+    }
+    function onCancel(event) {
+      event.preventDefault();
+      cleanup();
+    }
     okBtn.addEventListener('click', onOk);
+    dialog.addEventListener('cancel', onCancel);
     dialog.showModal();
     okBtn.focus();
   });
 }
 
-function showConfirm(message) {
+function showConfirm(titleOrMessage, maybeMessage) {
   return new Promise(resolve => {
     const dialog = document.getElementById('confirm-dialog');
-    if (!dialog) { resolve(confirm(message)); return; }
+    if (!dialog) {
+      showToast('Confirmation dialog is unavailable. Action cancelled.', 'error');
+      resolve(false);
+      return;
+    }
+    const previousFocus = document.activeElement;
+    const message = maybeMessage || titleOrMessage;
+    const title = maybeMessage ? titleOrMessage : 'Confirm action';
+    const titleEl = document.getElementById('confirm-dialog-title');
+    if (titleEl) titleEl.textContent = title;
     document.getElementById('confirm-dialog-message').textContent = message;
     const okBtn = document.getElementById('confirm-dialog-ok');
     const cancelBtn = document.getElementById('confirm-dialog-cancel');
+    let settled = false;
     function cleanup(result) {
-      dialog.close();
+      if (settled) return;
+      settled = true;
+      if (dialog.open) dialog.close();
       okBtn.removeEventListener('click', onOk);
       cancelBtn.removeEventListener('click', onCancel);
+      dialog.removeEventListener('cancel', onDialogCancel);
+      if (previousFocus && typeof previousFocus.focus === 'function') {
+        previousFocus.focus();
+      }
       resolve(result);
     }
     function onOk() { cleanup(true); }
     function onCancel() { cleanup(false); }
+    function onDialogCancel(event) {
+      event.preventDefault();
+      cleanup(false);
+    }
     okBtn.addEventListener('click', onOk);
     cancelBtn.addEventListener('click', onCancel);
+    dialog.addEventListener('cancel', onDialogCancel);
     dialog.showModal();
     cancelBtn.focus();
   });
@@ -247,6 +320,42 @@ function activateStatusTab(status) {
       link.setAttribute('aria-selected', isActive ? 'true' : 'false');
     }
   });
+}
+
+function updateSaveBarState(state) {
+  const title = document.getElementById('settings-save-title');
+  const detail = document.getElementById('settings-save-detail');
+  const msg = document.getElementById('settings-msg');
+  const effectiveState = state || (settingsDirty ? 'dirty' : 'clean');
+  const states = {
+    clean: ['No changes', 'Everything in the current settings context is saved.', 'text-muted'],
+    dirty: ['Unsaved changes', 'Save before leaving this library context to keep your edits.', 'text-warning'],
+    saving: ['Saving...', 'Please wait while ASAP applies these settings.', 'text-info'],
+    saved: ['Saved', 'Your settings were saved successfully.', 'text-success'],
+    error: ['Error saving', 'Review the message below and try again.', 'text-danger']
+  };
+  const next = states[effectiveState] || states.clean;
+  if (title) title.textContent = next[0];
+  if (detail) {
+    detail.textContent = next[1];
+    detail.className = 'small ' + next[2];
+  }
+  setDisabled('settings-save-btn', settingsSaving || effectiveState === 'clean');
+  if (msg && effectiveState === 'clean') {
+    msg.textContent = '';
+    msg.className = 'mt-2 font-weight-bold';
+  }
+}
+
+function markSettingsDirty() {
+  if (settingsLoading || settingsSaving) return;
+  settingsDirty = true;
+  updateSaveBarState('dirty');
+}
+
+function markSettingsClean(state = 'clean') {
+  settingsDirty = false;
+  updateSaveBarState(state);
 }
 
 function activateSettingsSection(section, options = {}) {
@@ -326,24 +435,21 @@ function showBootstrapAdminMessage() {
   const alert = document.getElementById('bootstrap-admin-alert');
   if (!alert) return;
   if (bootstrapAdminMessage) {
-    alert.textContent = bootstrapAdminMessage;
-    alert.classList.remove('hidden');
+    setText('bootstrap-admin-alert', bootstrapAdminMessage);
+    setVisible('bootstrap-admin-alert', true);
   } else {
-    alert.textContent = '';
-    alert.classList.add('hidden');
+    setText('bootstrap-admin-alert', '');
+    setVisible('bootstrap-admin-alert', false);
   }
 }
 
 function updateEmailStatusBanner(status) {
   currentEmailStatus = status || currentEmailStatus || { enabled: true };
-  const banner = document.getElementById('email-status-banner');
   const smtpMessage = document.getElementById('smtp-readiness-message');
   const configured = !!currentEmailStatus.enabled;
   const message = currentEmailStatus.message || 'Email notifications are not configured. Suggestions and staff workflows still work, but patron emails will not be sent.';
 
-  if (banner) {
-    banner.classList.toggle('hidden', configured);
-  }
+  setVisible('email-status-banner', !configured);
   if (smtpMessage) {
     smtpMessage.textContent = message;
     smtpMessage.className = configured ? 'alert alert-success small' : 'alert alert-warning small';
@@ -672,23 +778,25 @@ async function loadTab(status) {
 
   // Add auto-rejection info for Suggestions
   if (status === 'suggestion') {
-    desc += ` The Auto-Rejector (${workflowSettings.outstandingTimeoutEnabled ? 'enabled' : 'currently disabled'} in Settings) will automatically reject suggestions older than ${workflowSettings.outstandingTimeoutDays} days.`;
+    desc += workflowSettings.outstandingTimeoutEnabled
+      ? ` If auto-reject stalled suggestions is enabled, stalled suggestions will be rejected after ${workflowSettings.outstandingTimeoutDays} days.`
+      : ' Auto-reject stalled suggestions is currently disabled in Settings.';
   }
 
-  // Add auto-close info for Hold Placed
+  // Add auto-close info for Hold placed
   if (status === 'hold_placed') {
     if (workflowSettings.holdPickupTimeoutEnabled) {
-      desc += ` Holds will move to Closed automatically when the patron checks out the item, or after ${workflowSettings.holdPickupTimeoutDays} days if the item is never picked up (auto-close enabled in Settings).`;
+      desc += ` Auto-close unpicked-up holds is enabled, so holds will close after checkout or after ${workflowSettings.holdPickupTimeoutDays} days if the item is never picked up.`;
     } else {
-      desc += ' Holds will only move to Closed when the patron checks out the item. Enable auto-close in Settings to also close holds that are never picked up.';
+      desc += ' Holds will only move to Closed when the patron checks out the item. Enable auto-close unpicked-up holds in Settings to also close holds that are never picked up.';
     }
   }
 
-  // Add auto-close info for Pending Hold
+  // Add auto-close info for Pending hold
   if (status === 'pending_hold') {
     workflowSettings.pendingHoldTimeoutDays = parseInt(workflowSettings.pendingHoldTimeoutDays || '14', 10) || 14;
     if (workflowSettings.pendingHoldTimeoutEnabled) {
-      desc += ` Pending Holds will be automatically closed after ${workflowSettings.pendingHoldTimeoutDays} days if they are not processed.`;
+      desc += ` Auto-close pending holds is enabled, so items will close after ${workflowSettings.pendingHoldTimeoutDays} days if they are not processed.`;
     }
   }
   tabDesc.textContent = desc;
@@ -743,7 +851,7 @@ async function loadTab(status) {
     currentSuggestions = allSuggestions.filter(row => normalizeStatus(row.status) === status);
 
     if (!currentSuggestions.length) {
-      gridContainer.innerHTML = '<div class="alert alert-light border">No records in this stage.</div>';
+      gridContainer.innerHTML = `<div class="alert alert-light border">${escapeAttr(emptyStateMessages[status] || 'No suggestions found.')}</div>`;
       return;
     }
 
@@ -827,13 +935,13 @@ function getGridColumns(status) {
   if (status === 'suggestion') {
     return [
       'Barcode',
-      'Title (Original)',
-      'Author (Original)',
+      'Title (original)',
+      'Author (original)',
       'Format',
       'Timing',
       'Submitted',
       { name: 'Notes', width: '200px' },
-      'Edited By',
+      'Edited by',
       { name: 'Actions', width: '280px', sort: false },
     ];
   }
@@ -841,30 +949,30 @@ function getGridColumns(status) {
   if (status === 'closed') {
     return [
       'Barcode',
-      'Title (Original)',
-      'Author (Original)',
+      'Title (original)',
+      'Author (original)',
       'Format',
       'Submitted',
-      'Closed Reason',
+      'Closed reason',
       { name: 'Notes', width: '200px' },
-      'Edited By',
+      'Edited by',
       { name: 'Actions', width: '130px', sort: false },
     ];
   }
 
   return [
     'Barcode',
-    'Title (Original)',
-    'Author (Original)',
+    'Title (original)',
+    'Author (original)',
     'ISBN',
     'BIBID',
-    'Age Group',
+    'Age group',
     'Format',
     'Timing',
     'Submitted',
-    'Last Checked',
+    'Last checked',
     { name: 'Notes', width: '200px' },
-    'Edited By',
+    'Edited by',
     { name: 'Actions', width: '210px', sort: false },
   ];
 }
@@ -905,9 +1013,9 @@ function getDuplicateBadgesHtml(row) {
 
   const statusNames = {
     'suggestion': 'Suggestion',
-    'outstanding_purchase': 'Outstanding Purchase',
-    'pending_hold': 'Pending Hold',
-    'hold_placed': 'Hold Placed',
+    'outstanding_purchase': 'Pending purchase',
+    'pending_hold': 'Pending hold',
+    'hold_placed': 'Hold placed',
     'closed': 'Closed'
   };
 
@@ -988,16 +1096,16 @@ function getActionButtons(row) {
   const status = normalizeStatus(row.status);
 
   if (status === 'suggestion') {
-    return `<button type="button" class="btn btn-sm btn-primary" data-row-action="edit" data-row-id="${id}" data-next-status="outstanding_purchase" data-dialog-title="Approve for Purchase" data-action-value="purchase">Purchase</button>
-            <button type="button" class="btn btn-sm btn-warning" data-row-action="edit" data-row-id="${id}" data-next-status="pending_hold" data-dialog-title="Already Own" data-action-value="alreadyOwn">Already Own</button>
+    return `<button type="button" class="btn btn-sm btn-primary" data-row-action="edit" data-row-id="${id}" data-next-status="outstanding_purchase" data-dialog-title="Approve for purchase" data-action-value="purchase">Purchase</button>
+            <button type="button" class="btn btn-sm btn-warning" data-row-action="edit" data-row-id="${id}" data-next-status="pending_hold" data-dialog-title="Already own" data-action-value="alreadyOwn">Already own</button>
             <button type="button" class="btn btn-sm btn-danger" data-row-action="edit" data-row-id="${id}" data-next-status="closed" data-dialog-title="Reject" data-action-value="reject">Reject</button>
-            <button type="button" class="btn btn-sm btn-outline-danger" data-row-action="edit" data-row-id="${id}" data-next-status="closed" data-dialog-title="Silent Close" data-action-value="silentClose">Silent Close</button>
-            <button type="button" class="btn btn-sm btn-secondary" data-row-action="edit" data-row-id="${id}" data-next-status="suggestion" data-dialog-title="Edit Suggestion" data-action-value="">Edit</button>`;
+            <button type="button" class="btn btn-sm btn-outline-danger" data-row-action="edit" data-row-id="${id}" data-next-status="closed" data-dialog-title="Silent close" data-action-value="silentClose">Silent close</button>
+            <button type="button" class="btn btn-sm btn-secondary" data-row-action="edit" data-row-id="${id}" data-next-status="suggestion" data-dialog-title="Edit suggestion" data-action-value="">Edit</button>`;
   }
 
   if (status === 'outstanding_purchase') {
-    return `<button type="button" class="btn btn-sm btn-success" data-row-action="edit" data-row-id="${id}" data-next-status="pending_hold" data-dialog-title="Move to Pending Hold" data-action-value="">Ready for Hold</button>
-            <button type="button" class="btn btn-sm btn-outline-danger" data-row-action="edit" data-row-id="${id}" data-next-status="closed" data-dialog-title="Silent Close" data-action-value="silentClose">Silent Close</button>
+    return `<button type="button" class="btn btn-sm btn-success" data-row-action="edit" data-row-id="${id}" data-next-status="pending_hold" data-dialog-title="Move to Pending hold" data-action-value="">Ready for hold</button>
+            <button type="button" class="btn btn-sm btn-outline-danger" data-row-action="edit" data-row-id="${id}" data-next-status="closed" data-dialog-title="Silent close" data-action-value="silentClose">Silent close</button>
             <button type="button" class="btn btn-sm btn-outline-secondary" data-row-action="undo" data-row-id="${id}">Undo</button>
             <button type="button" class="btn btn-sm btn-secondary" data-row-action="edit" data-row-id="${id}" data-next-status="outstanding_purchase" data-dialog-title="Edit" data-action-value="">Edit</button>`;
   }
@@ -1005,7 +1113,7 @@ function getActionButtons(row) {
   if (status === 'pending_hold' || status === 'hold_placed' || status === 'closed') {
     let buttons = `<button type="button" class="btn btn-sm btn-outline-secondary" data-row-action="undo" data-row-id="${id}">Undo</button>`;
     if (status !== 'closed') {
-      buttons += `<button type="button" class="btn btn-sm btn-outline-danger" data-row-action="edit" data-row-id="${id}" data-next-status="closed" data-dialog-title="Silent Close" data-action-value="silentClose">Silent Close</button>`;
+      buttons += `<button type="button" class="btn btn-sm btn-outline-danger" data-row-action="edit" data-row-id="${id}" data-next-status="closed" data-dialog-title="Silent close" data-action-value="silentClose">Silent close</button>`;
     }
     buttons += `<button type="button" class="btn btn-sm btn-secondary" data-row-action="edit" data-row-id="${id}" data-next-status="${escapeAttr(row.status)}" data-dialog-title="Edit" data-action-value="">Edit</button>`;
     return buttons;
@@ -1098,7 +1206,7 @@ function openEdit(id, nextStatus, dialogTitle, actionStr) {
   if (actionStr === 'reject' && currentRejectionTemplates.length > 0) {
     rejectionContainer.classList.remove('hidden');
     const select = document.getElementById('edit-rejection-template');
-    select.innerHTML = '<option value="">Default Rejection Template</option>';
+    select.innerHTML = '<option value="">Default rejection template</option>';
     const sortedTemplates = [...currentRejectionTemplates].sort((a, b) => {
       const nameA = (a.name || a.subject || '').toLowerCase();
       const nameB = (b.name || b.subject || '').toLowerCase();
@@ -1127,12 +1235,12 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
   const bibid = document.getElementById('edit-bibid').value.trim();
   if (nextStatus === 'pending_hold') {
     if (!bibid) {
-      await showAlert('BIB ID is required before moving a suggestion to Pending Hold.');
+      await showAlert('BIB ID is required before moving this suggestion to Pending hold.');
       document.getElementById('edit-bibid').focus();
       return;
     }
     if (bibid !== verifiedBibId) {
-      await showAlert('Please use the "Lookup BIB" button to verify this BIB ID before moving to Pending Hold.');
+      await showAlert('Please use the "Lookup BIB" button to verify this BIB ID before moving to Pending hold.');
       document.getElementById('btn-bib-lookup').focus();
       return;
     }
@@ -1175,12 +1283,12 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
 
     if (updatedRecord && updatedRecord.status && updatedRecord.status !== nextStatus) {
       const statusNames = {
-        'outstanding_purchase': 'Pending Purchase',
-        'pending_hold': 'Pending Hold',
-        'hold_placed': 'Hold Placed',
+        'outstanding_purchase': 'Pending purchase',
+        'pending_hold': 'Pending hold',
+        'hold_placed': 'Hold placed',
         'closed': 'Closed'
       };
-      await showAlert(`Note: This request was moved straight to "${statusNames[updatedRecord.status] || updatedRecord.status}" because it was detected as already being on hold or having a BIB ID.`);
+      await showAlert(`Note: This suggestion moved directly to "${statusNames[updatedRecord.status] || updatedRecord.status}" because it was detected as already being on hold or having a BIB ID.`);
     }
 
     loadTab(currentStatus);
@@ -1204,13 +1312,13 @@ function setBibIdRequirement(nextStatus) {
     bibHint.classList.toggle('text-danger', isRequired);
     bibHint.classList.toggle('font-weight-bold', isRequired);
     bibHint.textContent = isRequired
-      ? 'Required for Pending Hold so the system can place the patron hold.'
+      ? 'Required for Pending hold so the system can place the patron hold.'
       : 'Needed before a hold can be placed for the patron.';
   }
 }
 
 async function undoRow(id) {
-  if (!await showConfirm('Undo action and return this request to Suggestions?')) return;
+  if (!await showConfirm('Undo action', 'Undo action and return this suggestion to Suggestions?')) return;
   const row = currentSuggestions.find(r => r.id === id);
   if (!row) return;
   try {
@@ -1498,7 +1606,7 @@ function renderPatronFormatRulesEditor(rules) {
             <strong>${escapeAttr(fieldInfo.label)}</strong>
             <div class="small text-muted">Saves to <code>${escapeAttr(fieldInfo.storage)}</code></div>
           </td>
-          <td style="min-width: 130px;">
+          <td class="format-rule-mode-cell">
             <select class="form-control form-control-sm format-rule-mode" data-format="${escapeAttr(format)}" data-field="${escapeAttr(fieldInfo.key)}"${titleLocked ? ' disabled' : ''}>
               <option value="required"${field.mode === 'required' ? ' selected' : ''}>Required</option>
               <option value="optional"${field.mode === 'optional' ? ' selected' : ''}>Optional</option>
@@ -1710,6 +1818,12 @@ document.getElementById('btn-test-polaris').addEventListener('click', async (e) 
   e.preventDefault();
   const resSpan = document.getElementById('polaris-test-result');
   const btn = e.target.closest('button');
+  const polarisPayload = collectSettingsPolaris();
+
+  if (!polarisPayload.host || !polarisPayload.accessId || !polarisPayload.apiKey) {
+    setInlineResult(resSpan, 'Enter the Polaris host, PAPI access ID, and PAPI API key before testing.', 'ml-2 text-danger font-weight-bold');
+    return;
+  }
 
   const saved = await saveSettings({
     button: btn,
@@ -1722,7 +1836,7 @@ document.getElementById('btn-test-polaris').addEventListener('click', async (e) 
     return;
   }
 
-  await postPolarisTest('/api/asap/staff/test-polaris', resSpan, { polaris: collectSettingsPolaris() }, {
+  await postPolarisTest('/api/asap/staff/test-polaris', resSpan, { polaris: polarisPayload }, {
     button: btn,
     token: pb.authStore.token,
     pendingText: 'Saving and testing...',
@@ -1790,7 +1904,7 @@ document.getElementById('btn-run-hold-check').addEventListener('click', async ()
     });
     const data = await res.json();
     if (res.ok) {
-      msg.textContent = `Hold check complete. Promoted: ${data.promoted}, Holds: ${data.holdsPlaced}, Closed: ${data.checkoutClosures}, Timed out: ${data.timedOut}`;
+      msg.textContent = `Hold check complete. Moved to Pending hold: ${data.promoted}, holds placed: ${data.holdsPlaced}, closed after checkout: ${data.checkoutClosures}, auto-closed: ${data.timedOut}`;
       msg.className = 'mb-3 font-weight-bold text-success';
       loadTab(currentStatus);
     } else {
@@ -1809,7 +1923,7 @@ document.getElementById('btn-run-promoter-check').addEventListener('click', asyn
   const msg = document.getElementById('job-msg');
 
   btn.disabled = true;
-  msg.textContent = 'Running auto promoter...';
+  msg.textContent = 'Running auto-promoter...';
   msg.className = 'mb-3 font-weight-bold text-info';
 
   try {
@@ -1819,7 +1933,7 @@ document.getElementById('btn-run-promoter-check').addEventListener('click', asyn
     });
     const data = await res.json();
     if (res.ok) {
-      msg.textContent = `Auto promoter complete. Promoted: ${data.promoted} items to Pending Hold.`;
+      msg.textContent = `Auto-promoter complete. Moved ${data.promoted} item${data.promoted === 1 ? '' : 's'} to Pending hold.`;
       msg.className = 'mb-3 font-weight-bold text-success';
       loadTab(currentStatus);
     } else {
@@ -1840,6 +1954,14 @@ document.getElementById('btn-test-smtp').addEventListener('click', async (e) => 
   const btn = e.target.closest('button');
 
   const testEmail = testInput ? testInput.value.trim() : '';
+  const smtpHost = getFieldValue('smtp-host').trim();
+  const sender = getFieldValue('smtp-from').trim() || getFieldValue('email-from-address').trim();
+
+  if (!smtpHost || !sender || !testEmail) {
+    resSpan.textContent = 'Enter SMTP host, sender address, and test recipient before testing SMTP.';
+    resSpan.className = 'mt-2 text-danger font-weight-bold small';
+    return;
+  }
 
   resSpan.textContent = "Saving and testing...";
   resSpan.className = "mt-2 text-muted small";
@@ -1881,64 +2003,62 @@ document.getElementById('btn-test-smtp').addEventListener('click', async (e) => 
 
 function showSettingsAccessDenied() {
   settingsContainer.classList.remove('hidden');
-  const errorEl = document.getElementById('settings-error');
-  if (errorEl) errorEl.classList.remove('hidden');
+  setVisible('settings-error', true);
   const formEl = document.getElementById('settings-form');
   if (formEl) formEl.classList.add('hidden');
 }
 
 function hideSettingsAccessDenied() {
-  const errorEl = document.getElementById('settings-error');
-  if (errorEl) errorEl.classList.add('hidden');
+  setVisible('settings-error', false);
 }
 
 async function loadSettings(options = {}) {
   const isSuper = isSuperAdminStaff();
   const showErrors = options.showErrors !== false;
-
-  // Filter sidebar for non-super admins
-  document.querySelectorAll('[data-settings-target]').forEach(el => {
-    const section = el.getAttribute('data-settings-target');
-    // Allow library admins to see settings they can override
-    const allowedForAdmins = ['templates', 'workflow', 'patron'];
-    if (!isSuper && !allowedForAdmins.includes(section)) {
-      el.classList.add('hidden');
-    } else {
-      el.classList.remove('hidden');
-    }
-  });
-
-  // If not super admin, force them to an allowed section if they are on a hidden one
-  const allowedForAdmins = ['templates', 'workflow', 'patron'];
-  if (!isSuper && !allowedForAdmins.includes(currentSettingsSection)) {
-    activateSettingsSection('templates', { updateHash: true });
-  }
-
-  // Load Library Selector for Super Admins
-  if (isSuper) {
-    await populateLibrarySelector();
-    document.getElementById('super-admin-library-selector').classList.remove('hidden');
-  } else {
-    document.getElementById('super-admin-library-selector').classList.add('hidden');
-    currentLibraryContextOrgId = pb.authStore.model.libraryOrgId || 'system';
-    const libraryName = pb.authStore.model.libraryOrgName || 'My Library';
-    document.getElementById('library-context-display').textContent = currentLibraryContextOrgId === 'system'
-      ? libraryName
-      : `${libraryName} (ID ${currentLibraryContextOrgId})`;
-  }
-
-  await loadLibrarySettings(currentLibraryContextOrgId);
-
-  if (!isSuper) {
-    // Hide error, show form for library admins even if they can't load app_settings
-    const errorEl = document.getElementById('settings-error');
-    if (errorEl) errorEl.classList.add('hidden');
-    const formEl = document.getElementById('settings-form');
-    if (formEl) formEl.classList.remove('hidden');
-    return;
-  }
+  settingsLoading = true;
 
   try {
+    // Filter sidebar for non-super admins
+    document.querySelectorAll('[data-settings-target]').forEach(el => {
+      const section = el.getAttribute('data-settings-target');
+      // Allow library admins to see settings they can override
+      const allowedForAdmins = ['templates', 'workflow', 'patron'];
+      if (!isSuper && !allowedForAdmins.includes(section)) {
+        el.classList.add('hidden');
+      } else {
+        el.classList.remove('hidden');
+      }
+    });
+
+    // If not super admin, force them to an allowed section if they are on a hidden one
+    const allowedForAdmins = ['templates', 'workflow', 'patron'];
+    if (!isSuper && !allowedForAdmins.includes(currentSettingsSection)) {
+      activateSettingsSection('templates', { updateHash: true });
+    }
+
+    // Load Library Selector for Super Admins
+    if (isSuper) {
+      await populateLibrarySelector();
+      document.getElementById('super-admin-library-selector').classList.remove('hidden');
+    } else {
+      document.getElementById('super-admin-library-selector').classList.add('hidden');
+      currentLibraryContextOrgId = pb.authStore.model.libraryOrgId || 'system';
+      const libraryName = pb.authStore.model.libraryOrgName || 'My Library';
+      document.getElementById('library-context-display').textContent = currentLibraryContextOrgId === 'system'
+        ? libraryName
+        : `${libraryName} (ID ${currentLibraryContextOrgId})`;
+    }
+
+    await loadLibrarySettings(currentLibraryContextOrgId);
+
+    if (!isSuper) {
+      // Hide error, show form for library admins even if they can't load app_settings
+      hideSettingsAccessDenied();
+      const formEl = document.getElementById('settings-form');
+      if (formEl) formEl.classList.remove('hidden');
+      return;
+    }
+
     const record = await pb.collection('app_settings').getOne(SETTINGS_RECORD_ID);
 
     const smtp = record.smtp || {};
@@ -1984,8 +2104,7 @@ async function loadSettings(options = {}) {
 
 
     // Success: hide error, show form
-    const errorEl = document.getElementById('settings-error');
-    if (errorEl) errorEl.classList.add('hidden');
+    hideSettingsAccessDenied();
     const formEl = document.getElementById('settings-form');
     if (formEl) formEl.classList.remove('hidden');
 
@@ -1994,6 +2113,9 @@ async function loadSettings(options = {}) {
     if (showErrors) {
       showSettingsAccessDenied();
     }
+  } finally {
+    settingsLoading = false;
+    markSettingsClean('clean');
   }
 }
 
@@ -2111,10 +2233,20 @@ async function populateLibrarySelector() {
 
     if (!librarySelectorBound) {
       select.addEventListener('change', async (e) => {
-        currentLibraryContextOrgId = e.target.value || 'system';
+        const nextOrgId = e.target.value || 'system';
+        const previousOrgId = currentLibraryContextOrgId || 'system';
+        if (settingsDirty) {
+          const proceed = await showConfirm('Unsaved changes', 'You have unsaved changes. Switch libraries without saving?');
+          if (!proceed) {
+            e.target.value = previousOrgId;
+            return;
+          }
+        }
+        currentLibraryContextOrgId = nextOrgId;
         const display = e.target.options[e.target.selectedIndex].text;
         document.getElementById('library-context-display').textContent = display;
         await loadLibrarySettings(currentLibraryContextOrgId);
+        markSettingsClean('clean');
       });
       librarySelectorBound = true;
     }
@@ -2160,11 +2292,11 @@ async function loadLibrarySettings(orgId) {
       }
       if (isOverride) {
         statusAlert.className = 'alert alert-info mb-3 d-flex justify-content-between align-items-center';
-        overrideMsg.innerHTML = '<i class="fa fa-check-circle mr-1"></i> This library has <strong>Custom Overrides</strong> saved.';
+        overrideMsg.innerHTML = '<i class="fa fa-check-circle mr-1"></i> Editing: <strong>' + escapeAttr(document.getElementById('library-context-display').textContent || 'selected library') + '</strong>. This library has custom settings.';
         resetBtn.classList.remove('hidden');
       } else {
         statusAlert.className = 'alert alert-warning mb-3 d-flex justify-content-between align-items-center';
-        overrideMsg.innerHTML = '<i class="fa fa-info-circle mr-1"></i> This library is currently using <strong>System Defaults</strong> for these settings. Saving changes will create a library-specific override.';
+        overrideMsg.innerHTML = '<i class="fa fa-info-circle mr-1"></i> Editing: <strong>' + escapeAttr(document.getElementById('library-context-display').textContent || 'selected library') + '</strong>. This library is using system defaults. Saving will create a library-specific override.';
         resetBtn.classList.add('hidden');
       }
     }
@@ -2258,7 +2390,7 @@ function populatePatronUiForms(uiText) {
 
 document.getElementById('btn-reset-library-settings').addEventListener('click', async () => {
   if (currentLibraryContextOrgId === 'system') return;
-  const confirmed = await showConfirm('Reset Library Settings', 'Are you sure you want to delete this library\'s overrides and revert to system defaults?');
+  const confirmed = await showConfirm('Reset library settings', 'Are you sure you want to delete this library\'s overrides and revert to system defaults?');
   if (confirmed) {
     await authorizedJson('/api/asap/staff/settings/library', {
       method: 'POST',
@@ -2266,6 +2398,7 @@ document.getElementById('btn-reset-library-settings').addEventListener('click', 
     });
     showToast('Library settings reset to system defaults', 'success');
     await loadLibrarySettings(currentLibraryContextOrgId);
+    markSettingsClean('clean');
   }
 });
 
@@ -2434,9 +2567,19 @@ if (refreshStaffUsersBtn) {
 }
 
 function buildSettingsPayload() {
+  function positiveInt(id, fallback, label) {
+    const raw = getFieldValue(id, String(fallback)).trim();
+    if (!raw) return fallback;
+    const value = parseInt(raw, 10);
+    if (!Number.isFinite(value) || value < 1) {
+      throw new Error(`${label} must be a number greater than 0.`);
+    }
+    return value;
+  }
+
   const smtp = {
     host: getFieldValue('smtp-host'),
-    port: parseInt(getFieldValue('smtp-port', '587'), 10) || 587,
+    port: positiveInt('smtp-port', 587, 'SMTP port'),
     username: getFieldValue('smtp-username'),
     password: getFieldValue('smtp-password'),
     tls: getFieldChecked('smtp-tls', true)
@@ -2501,16 +2644,16 @@ function buildSettingsPayload() {
   const payload = {
     smtp, polaris, ui_text: uiText, emails,
     allowedStaffUsers: normalizeAllowedStaffUsers(getFieldValue('allowed-staff-users')),
-    suggestionLimit: parseInt(getFieldValue('suggestion-limit', '5'), 10) || 5,
+    suggestionLimit: positiveInt('suggestion-limit', 5, 'Suggestion limit'),
     suggestionLimitMessage: getFieldValue('suggestion-limit-msg'),
     outstandingTimeoutEnabled: getFieldChecked('outstanding-timeout-enabled'),
-    outstandingTimeoutDays: parseInt(getFieldValue('outstanding-timeout-days', '30'), 10) || 30,
+    outstandingTimeoutDays: positiveInt('outstanding-timeout-days', 30, 'Auto-reject stalled suggestions days'),
     outstandingTimeoutSendEmail: sendAutoRejectEmail,
     outstandingTimeoutRejectionTemplateId: currentRejectionTemplates.length === 1 ? currentRejectionTemplates[0].id : selectedTemplateId,
     holdPickupTimeoutEnabled: getFieldChecked('hold-pickup-timeout-enabled'),
-    holdPickupTimeoutDays: parseInt(getFieldValue('hold-pickup-timeout-days', '14'), 10) || 14,
+    holdPickupTimeoutDays: positiveInt('hold-pickup-timeout-days', 14, 'Auto-close unpicked-up holds days'),
     pendingHoldTimeoutEnabled: getFieldChecked('pending-hold-timeout-enabled'),
-    pendingHoldTimeoutDays: parseInt(getFieldValue('pending-hold-timeout-days', '14'), 10) || 14,
+    pendingHoldTimeoutDays: positiveInt('pending-hold-timeout-days', 14, 'Auto-close pending holds days'),
     enabledLibraryOrgIds: collectEnabledLibraryIds(),
     commonAuthorsEnabled: getFieldChecked('wf-common-authors-enabled'),
     commonAuthorsList: sortAuthorsByLastName(getFieldValue('wf-common-authors-list')),
@@ -2530,7 +2673,11 @@ async function saveSettings(options = {}) {
   const triggerBtn = options.button || null;
   const buttons = Array.from(new Set([submitBtn, triggerBtn].filter(Boolean)));
   const msg = document.getElementById('settings-msg');
+  let saveHadError = false;
+  let saveSucceeded = false;
 
+  settingsSaving = true;
+  updateSaveBarState('saving');
   buttons.forEach(button => {
     button.disabled = true;
   });
@@ -2592,7 +2739,7 @@ async function saveSettings(options = {}) {
     }
 
     await Promise.all([globalPromise, libraryPromise]);
-    msg.textContent = options.successText || 'Settings saved successfully!';
+    msg.textContent = options.successText || 'Settings saved.';
     msg.className = 'mt-2 font-weight-bold text-success';
     if (options.clearDelay !== 0) {
       setTimeout(() => msg.textContent = '', options.clearDelay || 3000);
@@ -2600,16 +2747,22 @@ async function saveSettings(options = {}) {
     await loadSettings({ showErrors: false }); // Sync internal state (also triggers loadLibrarySettings)
     await loadStaffConfig(); // Refresh logo and titles immediately after saving
     loadStaffUsers();
+    saveSucceeded = true;
+    showToast('Settings saved.', 'success');
     return true;
   } catch (err) {
+    saveHadError = true;
     console.error(err);
-    msg.textContent = 'Failed to save settings.';
+    msg.textContent = err.message || 'Failed to save settings.';
     msg.className = 'mb-3 font-weight-bold text-danger';
+    updateSaveBarState('error');
     return false;
   } finally {
+    settingsSaving = false;
     buttons.forEach(button => {
       button.disabled = false;
     });
+    updateSaveBarState(saveHadError ? 'error' : (saveSucceeded ? 'saved' : (settingsDirty ? 'dirty' : 'clean')));
   }
 }
 
@@ -2617,6 +2770,8 @@ settingsForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   await saveSettings();
 });
+settingsForm.addEventListener('input', markSettingsDirty);
+settingsForm.addEventListener('change', markSettingsDirty);
 
 async function loadStaffConfig() {
   try {
@@ -2747,17 +2902,17 @@ function renderFormatSettings() {
       <table class="table table-sm mb-0">
         <thead>
           <tr>
-            <th style="width: 30px;"></th>
-            <th style="width: 50px;">Show</th>
-            <th style="width: 20%;">Format Key</th>
-            <th>Display Label</th>
-            <th style="width: 50px;"></th>
+            <th class="format-drag-col"></th>
+            <th class="format-show-col">Show</th>
+            <th class="format-key-col">Format key</th>
+            <th>Display label</th>
+            <th class="format-remove-col"></th>
           </tr>
         </thead>
         <tbody id="format-settings-body">
           ${allKeys.map(key => `
-            <tr class="format-setting-row" data-key="${escapeAttr(key)}" draggable="true" style="cursor: grab;">
-              <td class="align-middle text-muted" style="font-size: 1.1rem; cursor: grab; user-select: none;">&#8597;</td>
+            <tr class="format-setting-row" data-key="${escapeAttr(key)}" draggable="true">
+              <td class="align-middle text-muted format-drag-handle">&#8597;</td>
               <td class="align-middle">
                 <div class="custom-control custom-checkbox">
                   <input type="checkbox" class="custom-control-input format-enabled-check" id="fmt-chk-${key}" ${availableFormats.includes(key) ? 'checked' : ''}>
@@ -2790,18 +2945,18 @@ function initFormatDragSort() {
   tbody.addEventListener('dragstart', (e) => {
     draggingRow = e.target.closest('tr');
     if (draggingRow) {
-      draggingRow.style.opacity = '0.4';
+      draggingRow.classList.add('format-row-dragging');
       e.dataTransfer.effectAllowed = 'move';
     }
   });
 
   tbody.addEventListener('dragend', () => {
     if (draggingRow) {
-      draggingRow.style.opacity = '';
+      draggingRow.classList.remove('format-row-dragging');
       draggingRow = null;
     }
     // Remove all drag-over highlights
-    tbody.querySelectorAll('tr').forEach(r => r.style.borderTop = '');
+    tbody.querySelectorAll('tr').forEach(r => r.classList.remove('format-row-drop-target'));
   });
 
   tbody.addEventListener('dragover', (e) => {
@@ -2809,17 +2964,18 @@ function initFormatDragSort() {
     e.dataTransfer.dropEffect = 'move';
     const target = e.target.closest('tr');
     if (target && target !== draggingRow) {
-      tbody.querySelectorAll('tr').forEach(r => r.style.borderTop = '');
-      target.style.borderTop = '2px solid #007bff';
+      tbody.querySelectorAll('tr').forEach(r => r.classList.remove('format-row-drop-target'));
+      target.classList.add('format-row-drop-target');
     }
   });
 
   tbody.addEventListener('drop', (e) => {
     e.preventDefault();
     const target = e.target.closest('tr');
-    tbody.querySelectorAll('tr').forEach(r => r.style.borderTop = '');
+    tbody.querySelectorAll('tr').forEach(r => r.classList.remove('format-row-drop-target'));
     if (target && draggingRow && target !== draggingRow) {
       tbody.insertBefore(draggingRow, target);
+      markSettingsDirty();
     }
   });
 }
@@ -2864,19 +3020,36 @@ function updateModalFormatDropdowns() {
 
 const btnAddFormat = document.getElementById('btn-add-format');
 if (btnAddFormat) {
-  btnAddFormat.addEventListener('click', async () => {
-    const name = prompt('Enter a short, unique name for the new format (e.g. "videogame"):');
-    if (!name) return;
-    const key = name.toLowerCase().replace(/[^a-z0-9_]/g, '_');
-    if (formatMap[key]) {
-      await showAlert('This format key already exists.');
+  btnAddFormat.addEventListener('click', () => {
+    const keyInput = document.getElementById('new-format-key');
+    const labelInput = document.getElementById('new-format-label');
+    const rawKey = keyInput ? keyInput.value.trim() : '';
+    const rawLabel = labelInput ? labelInput.value.trim() : '';
+    const key = rawKey.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '');
+    if (!key) {
+      setInlineStatus('new-format-error', 'Enter a short format key, such as videogame.', 'danger');
+      if (keyInput) keyInput.focus();
       return;
     }
-    const label = name.charAt(0).toUpperCase() + name.slice(1);
+    if (!/^[a-z0-9_]+$/.test(key)) {
+      setInlineStatus('new-format-error', 'Use only letters, numbers, and underscores for the format key.', 'danger');
+      if (keyInput) keyInput.focus();
+      return;
+    }
+    if (formatMap[key]) {
+      setInlineStatus('new-format-error', 'This format key already exists.', 'danger');
+      if (keyInput) keyInput.focus();
+      return;
+    }
+    const label = rawLabel || key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
     formatMap[key] = label;
     availableFormats.push(key);
+    if (keyInput) keyInput.value = '';
+    if (labelInput) labelInput.value = '';
+    setInlineStatus('new-format-error', `Added ${label}. Save settings to keep this format.`, 'success');
     renderFormatSettings();
     renderPatronFormatRulesEditor(collectPatronFormatRules());
+    markSettingsDirty();
   });
 }
 
@@ -2886,7 +3059,7 @@ if (formatSettingsContainer) {
     if (e.target.classList.contains('btn-remove-format')) {
       const row = e.target.closest('tr');
       const key = row.getAttribute('data-key');
-      if (await showConfirm(`Remove format "${key}"? This will only remove it from the settings list. Existing requests with this format will remain in the database.`)) {
+      if (await showConfirm('Remove format', `Remove format "${key}"? This will only remove it from the settings list. Existing suggestions with this format will remain in the database.`)) {
         delete formatMap[key];
         availableFormats = availableFormats.filter(k => k !== key);
         renderFormatSettings();
@@ -2923,9 +3096,9 @@ function renderRejectionTemplates() {
     wrapper.className = 'border rounded p-3 mb-3 bg-light position-relative';
 
     wrapper.innerHTML = `
-      <button type="button" class="btn btn-sm btn-outline-danger position-absolute" style="top: 10px; right: 10px;" onclick="removeRejectionTemplate(${index})" title="Remove Template">&times;</button>
+      <button type="button" class="btn btn-sm btn-outline-danger position-absolute rejection-template-remove" onclick="removeRejectionTemplate(${index})" title="Remove template">&times;</button>
       <div class="form-group">
-        <label>Template Name</label>
+        <label>Template name</label>
         <input type="text" class="form-control form-control-sm" value="${escapeAttr(template.name || '')}" onchange="updateRejectionTemplate(${index}, 'name', this.value)">
       </div>
       <div class="form-group">
@@ -2944,12 +3117,14 @@ function renderRejectionTemplates() {
 function updateRejectionTemplate(index, field, value) {
   if (currentRejectionTemplates[index]) {
     currentRejectionTemplates[index][field] = value;
+    markSettingsDirty();
   }
 }
 
 function removeRejectionTemplate(index) {
   currentRejectionTemplates.splice(index, 1);
   renderRejectionTemplates();
+  markSettingsDirty();
 }
 
 const btnAddRejectionTemplate = document.getElementById('btn-add-rejection-template');
@@ -2962,6 +3137,7 @@ if (btnAddRejectionTemplate) {
       body: emailTemplateDefaults.rejected.body
     });
     renderRejectionTemplates();
+    markSettingsDirty();
   });
 }
 
@@ -2997,11 +3173,11 @@ async function renderLibraryParticipationCheckboxes() {
     setOrganizationsStatus('loaded', `Polaris organizations loaded. ${orgs.length} library organization${orgs.length === 1 ? '' : 's'} available. Leave all libraries unchecked to enable all organizations.`);
     container.innerHTML = `
       <table class="table table-sm table-hover mb-0">
-        <thead class="bg-white" style="position: sticky; top: 0; z-index: 1;">
+        <thead class="bg-white library-table-head">
           <tr>
-            <th style="width: 50px;">Enable</th>
-            <th>Library Name</th>
-            <th style="width: 80px;">ID</th>
+            <th class="library-enable-col">Enable</th>
+            <th>Library name</th>
+            <th class="library-id-col">ID</th>
           </tr>
         </thead>
         <tbody>
