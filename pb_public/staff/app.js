@@ -1903,8 +1903,15 @@ async function loadLibrarySettings(orgId) {
     if (requestedOrgId === 'system') {
       resetBtn.classList.add('hidden');
       statusAlert.classList.add('hidden');
+      if (document.getElementById('system-enabled-libraries-group')) {
+        document.getElementById('system-enabled-libraries-group').classList.remove('hidden');
+        renderLibraryParticipationCheckboxes();
+      }
     } else {
       statusAlert.classList.remove('hidden');
+      if (document.getElementById('system-enabled-libraries-group')) {
+        document.getElementById('system-enabled-libraries-group').classList.add('hidden');
+      }
       if (isOverride) {
         statusAlert.className = 'alert alert-info mb-3 d-flex justify-content-between align-items-center';
         overrideMsg.innerHTML = '<i class="fa fa-check-circle mr-1"></i> This library has <strong>Custom Overrides</strong> saved.';
@@ -1935,6 +1942,18 @@ function populateWorkflowForms(wf) {
   setFieldValue('hold-pickup-timeout-days', wf.holdPickupTimeoutDays !== undefined ? wf.holdPickupTimeoutDays : '14');
   document.getElementById('pending-hold-timeout-enabled').checked = !!wf.pendingHoldTimeoutEnabled;
   setFieldValue('pending-hold-timeout-days', wf.pendingHoldTimeoutDays !== undefined ? wf.pendingHoldTimeoutDays : '14');
+  
+  // Cache for checkbox renderer
+  window.lastWorkflowEnabledList = (wf.enabledLibraryOrgIds || '').split(',').map(s => s.trim()).filter(s => s.length > 0);
+  
+  const container = document.getElementById('enabled-libraries-checkbox-container');
+  if (container) {
+    const checkboxes = container.querySelectorAll('input[type="checkbox"]');
+    checkboxes.forEach(cb => {
+      cb.checked = window.lastWorkflowEnabledList.indexOf(cb.value) >= 0;
+    });
+  }
+
   toggleTimeoutGroup();
   toggleHoldPickupTimeoutGroup();
   togglePendingHoldTimeoutGroup();
@@ -2219,7 +2238,8 @@ function buildSettingsPayload() {
     holdPickupTimeoutEnabled: getFieldChecked('hold-pickup-timeout-enabled'),
     holdPickupTimeoutDays: parseInt(getFieldValue('hold-pickup-timeout-days', '14'), 10) || 14,
     pendingHoldTimeoutEnabled: getFieldChecked('pending-hold-timeout-enabled'),
-    pendingHoldTimeoutDays: parseInt(getFieldValue('pending-hold-timeout-days', '14'), 10) || 14
+    pendingHoldTimeoutDays: parseInt(getFieldValue('pending-hold-timeout-days', '14'), 10) || 14,
+    enabledLibraryOrgIds: collectEnabledLibraryIds()
   };
 
   const fileInput = document.getElementById('ui-logo-file');
@@ -2259,7 +2279,8 @@ async function saveSettings(options = {}) {
         holdPickupTimeoutEnabled: payload.holdPickupTimeoutEnabled,
         holdPickupTimeoutDays: payload.holdPickupTimeoutDays,
         pendingHoldTimeoutEnabled: payload.pendingHoldTimeoutEnabled,
-        pendingHoldTimeoutDays: payload.pendingHoldTimeoutDays
+        pendingHoldTimeoutDays: payload.pendingHoldTimeoutDays,
+        enabledLibraryOrgIds: payload.enabledLibraryOrgIds
       }
     };
 
@@ -2566,3 +2587,49 @@ function syncInputPair(idA, idB) {
 }
 syncInputPair('email-from-address', 'smtp-from');
 syncInputPair('email-from-name', 'smtp-from-name');
+
+async function renderLibraryParticipationCheckboxes() {
+  const container = document.getElementById('enabled-libraries-checkbox-container');
+  if (!container || container.getAttribute('data-loaded') === 'true') return;
+
+  try {
+    const orgs = await pb.collection('polaris_organizations').getFullList({
+      filter: 'organizationCodeId = "2"',
+      sort: 'displayName'
+    });
+
+    if (!orgs.length) {
+      container.innerHTML = '<div class="col-12 text-muted">No libraries found.</div>';
+      return;
+    }
+
+    container.innerHTML = orgs.map(org => `
+      <div class="col-md-6 mb-1">
+        <div class="custom-control custom-checkbox">
+          <input type="checkbox" class="custom-control-input lib-participation-cb" id="lib-p-${org.organizationId}" value="${org.organizationId}">
+          <label class="custom-control-label small" for="lib-p-${org.organizationId}">${org.displayName || org.name} (${org.organizationId})</label>
+        </div>
+      </div>
+    `).join('');
+
+    container.setAttribute('data-loaded', 'true');
+
+    // Restore checked state if we have it
+    if (window.lastWorkflowEnabledList) {
+      const checkboxes = container.querySelectorAll('.lib-participation-cb');
+      checkboxes.forEach(cb => {
+        cb.checked = window.lastWorkflowEnabledList.indexOf(cb.value) >= 0;
+      });
+    }
+  } catch (err) {
+    console.error('Failed to load libraries for participation list', err);
+    container.innerHTML = '<div class="col-12 text-danger">Failed to load libraries.</div>';
+  }
+}
+
+function collectEnabledLibraryIds() {
+  const container = document.getElementById('enabled-libraries-checkbox-container');
+  if (!container) return '';
+  const checked = Array.from(container.querySelectorAll('.lib-participation-cb:checked')).map(cb => cb.value);
+  return checked.join(',');
+}
