@@ -955,7 +955,19 @@ function formatNote(note) {
   return gridjs.html(`<button type="button" class="truncate-note" data-full-note="${escapeAttr(text)}" title="Click to view full note" aria-label="Truncated note, click to view full text">${escapeAttr(visibleText)}</button>`);
 }
 
+function getActionsColumnWidth(status) {
+  if (status === 'pending_hold' || status === 'hold_placed') {
+    return '120px';
+  }
+  if (status === 'closed') {
+    return '130px';
+  }
+  return '160px';
+}
+
 function getGridColumns(status) {
+  const actionsColumn = { name: 'Actions', width: getActionsColumnWidth(status), sort: false };
+
   if (status === 'suggestion') {
     return [
       'Barcode',
@@ -966,7 +978,7 @@ function getGridColumns(status) {
       'Submitted',
       { name: 'Notes', width: '200px' },
       'Edited by',
-      { name: 'Actions', width: '160px', sort: false },
+      actionsColumn,
     ];
   }
 
@@ -980,7 +992,7 @@ function getGridColumns(status) {
       'Closed reason',
       { name: 'Notes', width: '200px' },
       'Edited by',
-      { name: 'Actions', width: '150px', sort: false },
+      actionsColumn,
     ];
   }
 
@@ -997,7 +1009,7 @@ function getGridColumns(status) {
     'Last checked',
     { name: 'Notes', width: '200px' },
     'Edited by',
-    { name: 'Actions', width: '160px', sort: false },
+    actionsColumn,
   ];
 }
 
