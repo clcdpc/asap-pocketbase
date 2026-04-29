@@ -148,6 +148,8 @@ let settingsDirty = false;
 let settingsSaving = false;
 let settingsLoading = false;
 let activeActionMenu = null;
+let rowActionIdCounter = 0;
+const rowActionRegistry = new Map();
 
 // --- DOM Field Helpers ---
 
@@ -1071,7 +1073,7 @@ function getGridRow(row, status) {
       formatStandardDate(row.created),
       formatNote(row.notes),
       row.editedBy,
-      renderRowActions(row),
+      gridjs.html(renderRowActions(row)),
     ];
   }
 
@@ -1085,7 +1087,7 @@ function getGridRow(row, status) {
       formatCloseReason(row),
       formatNote(row.notes),
       row.editedBy,
-      renderRowActions(row),
+      gridjs.html(renderRowActions(row)),
     ];
   }
 
@@ -1102,7 +1104,7 @@ function getGridRow(row, status) {
     formatDateTime(row.lastPromoterCheck),
     formatNote(row.notes),
     row.editedBy,
-    renderRowActions(row),
+    gridjs.html(renderRowActions(row)),
   ];
 }
 
@@ -1148,6 +1150,10 @@ function getRowActions(row) {
       secondary
     };
   }
+  left = Math.max(viewportPadding, Math.min(left, window.innerWidth - menuRect.width - viewportPadding));
+  menu.style.top = `${top}px`;
+  menu.style.left = `${left}px`;
+}
 
   return {
     primary: { label: 'Edit', className: 'btn-secondary', onClick: () => openEdit(row.id, row.status, 'Edit', '') },
@@ -1164,38 +1170,31 @@ async function runRowAction(action) {
   }
 }
 
-function renderRowActions(row) {
-  const actions = getRowActions(row);
-  const wrapper = document.createElement('div');
-  wrapper.className = 'row-action-group';
-  const primaryButton = document.createElement('button');
-  primaryButton.type = 'button';
-  primaryButton.className = `btn btn-sm row-action-primary ${actions.primary.className || 'btn-primary'}`;
-  primaryButton.textContent = actions.primary.label;
-  primaryButton.addEventListener('click', async (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    await runRowAction(actions.primary);
-  });
-  wrapper.appendChild(primaryButton);
-  if (actions.secondary?.length) {
-    const menuButton = document.createElement('button');
-    menuButton.type = 'button';
-    menuButton.className = 'btn btn-sm btn-outline-secondary row-action-menu-trigger';
-    menuButton.setAttribute('aria-haspopup', 'menu');
-    menuButton.setAttribute('aria-expanded', 'false');
-    menuButton.textContent = '⋯';
-    menuButton.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      openActionMenu(menuButton, actions.secondary);
-    });
-    wrapper.appendChild(menuButton);
-  }
-  return wrapper;
+function registerRowAction(action) {
+  rowActionIdCounter += 1;
+  const actionId = `row-action-${rowActionIdCounter}`;
+  rowActionRegistry.set(actionId, action);
+  return actionId;
 }
 
-function openActionMenu(triggerButton, actions) {
+function getRegisteredRowAction(actionId) {
+  return rowActionRegistry.get(actionId);
+}
+
+function renderRowActions(row) {
+  const actions = getRowActions(row);
+  const primaryActionId = registerRowAction(actions.primary);
+  let markup = `<div class="row-action-group">`;
+  markup += `<button type="button" class="btn btn-sm row-action-primary ${escapeAttr(actions.primary.className || 'btn-primary')}" data-row-action-id="${primaryActionId}">${escapeAttr(actions.primary.label)}</button>`;
+  if (actions.secondary?.length) {
+    const menuActionIds = actions.secondary.map(action => registerRowAction(action)).join(',');
+    markup += `<button type="button" class="btn btn-sm btn-outline-secondary row-action-menu-trigger" aria-haspopup="menu" aria-expanded="false" data-row-menu-action-ids="${menuActionIds}">⋯</button>`;
+  }
+  markup += `</div>`;
+  return markup;
+}
+
+function openActionMenu(triggerButton, actionIds) {
   closeActionMenu();
   const layer = document.getElementById('action-menu-layer');
   if (!layer) return;
@@ -1203,17 +1202,15 @@ function openActionMenu(triggerButton, actions) {
   const menu = document.createElement('div');
   menu.className = 'row-action-menu';
   menu.setAttribute('role', 'menu');
-  actions.forEach((action) => {
+  actionIds.forEach((actionId) => {
+    const action = getRegisteredRowAction(actionId);
+    if (!action) return;
     const item = document.createElement('button');
     item.type = 'button';
     item.className = `row-action-menu-item ${action.className || ''}`.trim();
     item.setAttribute('role', 'menuitem');
+    item.setAttribute('data-row-action-id', actionId);
     item.textContent = action.label;
-    item.addEventListener('click', async (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      await runRowAction(action);
-    });
     menu.appendChild(item);
   });
   layer.appendChild(menu);
@@ -1253,6 +1250,24 @@ function escapeAttr(value) {
 }
 
 gridContainer.addEventListener('click', (e) => {
+  const actionButton = e.target.closest('[data-row-action-id]');
+  if (actionButton) {
+    e.preventDefault();
+    e.stopPropagation();
+    const action = getRegisteredRowAction(actionButton.getAttribute('data-row-action-id'));
+    if (action) runRowAction(action);
+    return;
+  }
+
+  const menuTrigger = e.target.closest('[data-row-menu-action-ids]');
+  if (menuTrigger) {
+    e.preventDefault();
+    e.stopPropagation();
+    const actionIds = (menuTrigger.getAttribute('data-row-menu-action-ids') || '').split(',').filter(Boolean);
+    openActionMenu(menuTrigger, actionIds);
+    return;
+  }
+
   const truncateBtn = e.target.closest('.truncate-note');
   if (truncateBtn && gridContainer.contains(truncateBtn)) {
     const fullNote = truncateBtn.getAttribute('data-full-note');
@@ -1265,6 +1280,14 @@ gridContainer.addEventListener('click', (e) => {
 });
 
 document.addEventListener('click', (event) => {
+  const menuActionButton = event.target.closest('#action-menu-layer [data-row-action-id]');
+  if (menuActionButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    const action = getRegisteredRowAction(menuActionButton.getAttribute('data-row-action-id'));
+    if (action) runRowAction(action);
+    return;
+  }
   if (!activeActionMenu) return;
   const clickedMenu = activeActionMenu.menu.contains(event.target);
   const clickedTrigger = activeActionMenu.triggerButton.contains(event.target);
