@@ -36,6 +36,15 @@ const mockConfig = {
       }
     };
   },
+  mail: function() {
+    return {
+      host: "smtp.library.org",
+      port: 587,
+      username: "",
+      password: "",
+      tls: true
+    };
+  },
   uiText: function() {
     return {
       formatLabels: {
