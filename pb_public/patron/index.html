@@ -65,7 +65,7 @@
       <div class="form-group row">
         <div class="offset-5 col-7">
           <button type="submit" class="btn btn-primary" id="login-btn">Next</button>
-          <div id="login-error" class="text-danger mt-2 font-weight-bold hidden" aria-live="assertive">Incorrect Login - Please try again</div>
+          <div id="login-error" class="text-danger mt-2 font-weight-bold hidden" aria-live="assertive" tabindex="-1">Incorrect Login - Please try again</div>
         </div>
       </div>
     </form>
@@ -118,7 +118,7 @@
         </div>
       </div>
 
-      <div id="common-author-msg-container" class="alert alert-info hidden mb-4">
+      <div id="common-author-msg-container" class="alert alert-info hidden mb-4" aria-live="polite">
         <div id="common-author-msg"></div>
       </div>
 
@@ -167,14 +167,14 @@
           <div class="offset-5 col-7">
             <button type="button" class="btn btn-outline-secondary btn-cancel mr-2">Reset</button>
             <button type="submit" class="btn btn-primary" id="submit-btn">Submit</button>
-            <div id="submit-error" class="text-danger mt-2 font-weight-bold hidden" aria-live="assertive"></div>
+            <div id="submit-error" class="text-danger mt-2 font-weight-bold hidden" aria-live="assertive" tabindex="-1"></div>
           </div>
         </div>
       </div>
 
       <div id="econtent-fields" class="hidden">
         <div class="form-group row">
-          <div class="offset-5 col-7" id="econtent-msg-container"></div>
+          <div class="offset-5 col-7" id="econtent-msg-container" aria-live="polite"></div>
         </div>
       </div>
     </form>
