@@ -43,6 +43,51 @@ function runScheduledOrganizationSync(app) {
   }
 }
 
+function evaluatePurchase(app, staff, record, bibCache, result) {
+  var identifier = String(record.get("identifier") || "").trim();
+  var existingBibId = String(record.get("bibid") || "").trim();
+
+  // Always update the check timestamp so staff knows the system is processing the record
+  record.set("lastPromoterCheck", new Date().toISOString());
+  app.save(record);
+
+  // If it already has a BIBID (manually entered by staff), promote it immediately
+  if (existingBibId) {
+    record.set("status", records.STATUS.PENDING_HOLD);
+    record.set("editedBy", "system");
+    record.set("updated", new Date().toISOString());
+    records.appendSystemNote(record, "Promoted to Pending Hold (Manual BIB ID found)");
+    app.save(record);
+    result.promoted++;
+    return;
+  }
+
+  // Only attempt auto-promotion search if an ISBN/Identifier is present
+  if (!identifier) {
+    return;
+  }
+
+  try {
+    if (bibCache[identifier] === undefined) {
+      bibCache[identifier] = polaris.searchBib(staff, identifier);
+    }
+    var bibId = bibCache[identifier];
+
+    if (bibId) {
+      record.set("bibid", bibId);
+      polaris.reconcileRecord(app, staff, record, bibId);
+      record.set("status", records.STATUS.PENDING_HOLD);
+      record.set("editedBy", "system");
+      record.set("updated", new Date().toISOString());
+      records.appendSystemNote(record, "Automated promoter found BIB ID: " + bibId);
+      app.save(record);
+      result.promoted++;
+    }
+  } catch (err) {
+    app.logger().error("Outstanding purchase promoter failed", "recordId", record.id, "error", String(err));
+  }
+}
+
 function processOutstandingPurchases(app, staff, result) {
   const settings = app.findFirstRecordByFilter("app_settings", "id = 'settings0000001'");
   const autoPromote = settings.get("polaris").autoPromote !== false;
@@ -64,49 +109,7 @@ function processOutstandingPurchases(app, staff, result) {
   var bibCache = {};
 
   for (var i = 0; i < items.length; i++) {
-    var record = items[i];
-    var identifier = String(record.get("identifier") || "").trim();
-    var existingBibId = String(record.get("bibid") || "").trim();
-    
-    // Always update the check timestamp so staff knows the system is processing the record
-    record.set("lastPromoterCheck", new Date().toISOString());
-    app.save(record);
-
-    // If it already has a BIBID (manually entered by staff), promote it immediately
-    if (existingBibId) {
-      record.set("status", records.STATUS.PENDING_HOLD);
-      record.set("editedBy", "system");
-      record.set("updated", new Date().toISOString());
-      records.appendSystemNote(record, "Promoted to Pending Hold (Manual BIB ID found)");
-      app.save(record);
-      result.promoted++;
-      continue;
-    }
-
-    // Only attempt auto-promotion search if an ISBN/Identifier is present
-    if (!identifier) {
-      continue;
-    }
-
-    try {
-      if (bibCache[identifier] === undefined) {
-        bibCache[identifier] = polaris.searchBib(staff, identifier);
-      }
-      var bibId = bibCache[identifier];
-
-      if (bibId) {
-        record.set("bibid", bibId);
-        polaris.reconcileRecord(app, staff, record, bibId);
-        record.set("status", records.STATUS.PENDING_HOLD);
-        record.set("editedBy", "system");
-        record.set("updated", new Date().toISOString());
-        records.appendSystemNote(record, "Automated promoter found BIB ID: " + bibId);
-        app.save(record);
-        result.promoted++;
-      }
-    } catch (err) {
-      app.logger().error("Outstanding purchase promoter failed", "recordId", record.id, "error", String(err));
-    }
+    evaluatePurchase(app, staff, items[i], bibCache, result);
   }
 }
 
