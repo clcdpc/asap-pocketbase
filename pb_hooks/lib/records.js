@@ -481,19 +481,28 @@ function enforceDuplicate(app, barcode, data) {
     return;
   }
 
-  var filter = "barcode = {:barcode} && (";
   var params = { barcode: barcode };
 
-  // Check for Title + Format match
-  filter += "(title = {:title} && format = {:format})";
+  // Check for Identifier (ISBN) duplicate for the same patron only.
+  if (identifier) {
+    var isbnExisting = app.findRecordsByFilter(
+      "title_requests",
+      "barcode = {:barcode} && identifier = {:identifier}",
+      "-created",
+      1,
+      0,
+      { barcode: barcode, identifier: identifier }
+    );
+    if (isbnExisting.length) {
+      var isbnErr = new Error("You have already submitted a suggestion for this ISBN.");
+      isbnErr.code = 409;
+      throw isbnErr;
+    }
+  }
+
+  var filter = "barcode = {:barcode} && (title = {:title} && format = {:format})";
   params.title = title || "";
   params.format = normalizeFormat(data.format);
-
-  // Check for Identifier (ISBN) match if provided
-  if (identifier) {
-    filter += " || (identifier = {:identifier})";
-    params.identifier = identifier;
-  }
 
   // Check for BibID match if provided
   if (bibid) {
@@ -501,11 +510,9 @@ function enforceDuplicate(app, barcode, data) {
     params.bibid = bibid;
   }
 
-  filter += ")";
-
   var existing = app.findRecordsByFilter("title_requests", filter, "-created", 1, 0, params);
   if (existing.length) {
-    var err = new Error("Duplicate suggestion");
+    var err = new Error("You have already submitted this suggestion.");
     err.code = 409;
     throw err;
   }

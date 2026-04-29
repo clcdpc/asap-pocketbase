@@ -81,7 +81,7 @@ const defaultFormatRules = {
 const defaultUiText = {
   successTitle: 'Suggestion Submitted',
   successMessage: 'You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>',
-  alreadySubmittedMessage: 'This suggestion has already been submitted. We only accept one suggestion per title. Check the catalog to see if the material was acquired and place a hold.<div>Thank you for using this library\'s suggestion service.</div>',
+  alreadySubmittedMessage: 'This suggestion has already been submitted from your account. You may submit an ISBN that other patrons have suggested, but you cannot submit the same ISBN twice from the same account. Check the catalog to see if the material was acquired and place a hold.<div>Thank you for using this library\'s suggestion service.</div>',
   pageTitle: 'Material Suggestion',
   barcodeLabel: 'Library Card',
   pinLabel: 'Pin',
