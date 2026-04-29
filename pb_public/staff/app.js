@@ -132,6 +132,7 @@ let librarySelectorBound = false;
 let bootstrapAdminMessage = '';
 let setupRequired = false;
 let canAssignSuperAdmin = false;
+let currentEmailStatus = { enabled: true };
 const settingsSectionIds = ['start', 'polaris', 'staff', 'smtp', 'workflow', 'patron', 'templates'];
 let currentSettingsSection = 'start';
 
@@ -331,6 +332,37 @@ function showBootstrapAdminMessage() {
   }
 }
 
+function updateEmailStatusBanner(status) {
+  currentEmailStatus = status || currentEmailStatus || { enabled: true };
+  const banner = document.getElementById('email-status-banner');
+  const smtpMessage = document.getElementById('smtp-readiness-message');
+  const configured = !!currentEmailStatus.enabled;
+  const message = currentEmailStatus.message || 'Email notifications are not configured. Suggestions and staff workflows still work, but patron emails will not be sent.';
+
+  if (banner) {
+    banner.classList.toggle('hidden', configured);
+  }
+  if (smtpMessage) {
+    smtpMessage.textContent = message;
+    smtpMessage.className = configured ? 'alert alert-success small' : 'alert alert-warning small';
+  }
+}
+
+async function loadEmailStatus(orgId) {
+  if (!pb.authStore.isValid || !pb.authStore.model || pb.authStore.model.collectionName !== 'staff_users') {
+    return;
+  }
+
+  const defaultOrgId = isSuperAdminStaff() ? 'system' : (pb.authStore.model.libraryOrgId || '');
+  const targetOrgId = orgId || defaultOrgId;
+  try {
+    const result = await authorizedJson(`/api/asap/staff/email-status?orgId=${encodeURIComponent(targetOrgId)}&_=${Date.now()}`, { cache: 'no-store' });
+    updateEmailStatusBanner(result);
+  } catch (err) {
+    console.warn('Failed to load email status', err);
+  }
+}
+
 function checkAuth() {
   if (pb.authStore.isValid && pb.authStore.model && pb.authStore.model.collectionName === 'staff_users') {
     setupContainer.classList.add('hidden');
@@ -341,6 +373,7 @@ function checkAuth() {
     document.getElementById('display-user').textContent = (pb.authStore.model.displayName || identityLabel) + (libraryName ? ` (${libraryName})` : '');
     document.getElementById('nav-settings').classList.remove('hidden');
     showBootstrapAdminMessage();
+    loadEmailStatus();
 
     const requestedSettingsSection = getSettingsSectionFromHash();
     if (requestedSettingsSection) {
@@ -2077,6 +2110,7 @@ async function loadLibrarySettings(orgId) {
     populateEmailTemplateForms(settings.emails || {});
     populatePatronUiForms(settings.ui_text || {});
     populateWorkflowForms(settings.workflow || {});
+    updateEmailStatusBanner(settings.emailStatus);
 
   } catch (err) {
     console.error('Error loading library settings:', err);

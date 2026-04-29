@@ -176,6 +176,10 @@ function requireTitleRequestAccess(e, staff, record) {
   return null;
 }
 
+function noteSkippedEmail(app, record) {
+  mail.noteSkipped(app, record);
+}
+
 function staffPublicJson(record) {
   return {
     id: record.id,
@@ -564,7 +568,9 @@ function createSuggestion(e) {
     
     // Trigger confirmation email
     try {
-      mail.suggestionSubmitted(e.app, record);
+      if (!mail.suggestionSubmitted(e.app, record)) {
+        noteSkippedEmail(e.app, record);
+      }
     } catch (mailErr) {
       e.app.logger().error("Confirmation email failed", "recordId", record.id, "error", String(mailErr));
     }
@@ -624,7 +630,9 @@ function staffCreateSuggestion(e) {
 
     // Trigger confirmation email
     try {
-      mail.suggestionSubmitted(e.app, record);
+      if (!mail.suggestionSubmitted(e.app, record)) {
+        noteSkippedEmail(e.app, record);
+      }
     } catch (mailErr) {
       e.app.logger().error("Confirmation email failed (staff submission)", "recordId", record.id, "error", String(mailErr));
     }
@@ -715,6 +723,18 @@ function staffTitleRequestsList(e) {
       superAdmin: isSuperAdmin(staff),
     }
   });
+}
+
+function staffEmailStatus(e) {
+  var staff = requireAuth(e, "staff_users");
+  var orgId = String(queryValue(e, "orgId") || "").trim();
+  if (!orgId) {
+    orgId = isSuperAdmin(staff) ? "system" : String(staff.get("libraryOrgId") || "").trim();
+  }
+  if (orgId !== "system" && orgId !== String(staff.get("libraryOrgId") || "").trim() && !isSuperAdmin(staff)) {
+    return e.json(403, { message: "Access denied to this library email status." });
+  }
+  return e.json(200, config.emailStatus(e.app, orgId === "system" ? "" : orgId));
 }
 
 function staffTitleRequestAction(e) {
@@ -820,14 +840,18 @@ function staffTitleRequestAction(e) {
           }
         }
         try {
-          mail.alreadyOwned(e.app, record, patron);
+          if (!mail.alreadyOwned(e.app, record, patron)) {
+            noteSkippedEmail(e.app, record);
+          }
         } catch (mailErr) {
           e.app.logger().error("Already-owned email failed", "recordId", record.id, "error", String(mailErr));
         }
       }
       if (action === "reject") {
         try {
-          mail.rejected(e.app, record, patron, data.rejectionTemplateId);
+          if (!mail.rejected(e.app, record, patron, data.rejectionTemplateId)) {
+            noteSkippedEmail(e.app, record);
+          }
         } catch (mailErr) {
           e.app.logger().error("Rejected suggestion email failed", "recordId", record.id, "error", String(mailErr));
         }
@@ -1034,6 +1058,7 @@ function getLibrarySettings(e) {
       emails: emails,
       ui_text: ui_text,
       workflow: workflow,
+      emailStatus: config.emailStatus(e.app, orgId === "system" ? "" : orgId),
       isOverride: isOverride
     });
   } catch (err) {
@@ -1157,6 +1182,7 @@ module.exports = {
   setupStatus: setupStatus,
   setupTestPolaris: setupTestPolaris,
   staffBibLookup: staffBibLookup,
+  staffEmailStatus: staffEmailStatus,
   staffLogin: staffLogin,
   staffLookupPatron: staffLookupPatron,
   staffUsersList: staffUsersList,

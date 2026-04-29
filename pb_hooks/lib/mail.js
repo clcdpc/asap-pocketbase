@@ -25,9 +25,10 @@ function send(app, to, subject, text, html, options) {
   var settings = app.settings();
   var fromAddress = options.fromAddress || settings.meta.senderAddress;
   var fromName = options.fromName || settings.meta.senderName || "Library Collection Development";
+  var smtp = config.mail();
   
-  if (!fromAddress) {
-    app.logger().warn("Email skipped because no sender address is configured", "to", to, "subject", subject);
+  if (!String(smtp.host || "").trim() || !fromAddress) {
+    app.logger().warn("Email skipped because notifications are not configured", "to", to, "subject", subject);
     return false;
   }
 
@@ -85,6 +86,15 @@ function dispatch(app, record, patron, templateKey, defaultSubject, templateId) 
   return send(app, emailFor(record, patron), subject, text, html, { fromAddress: emailsConfig.fromAddress, fromName: emailsConfig.fromName });
 }
 
+function noteSkipped(app, record) {
+  if (!record) {
+    return;
+  }
+  const records = require(`${__hooks}/lib/records.js`);
+  records.appendSystemNote(record, "Email not sent: email notifications are not configured.");
+  app.save(record);
+}
+
 function suggestionSubmitted(app, record) {
   return dispatch(app, record, null, "suggestion_submitted", "Your Material Purchase Suggestion Has Been Submitted");
 }
@@ -132,8 +142,8 @@ module.exports = {
   alreadyOwned: alreadyOwned,
   autoRejected: autoRejected,
   holdPlaced: holdPlaced,
+  noteSkipped: noteSkipped,
   rejected: rejected,
   send: send,
   suggestionSubmitted: suggestionSubmitted,
 };
-

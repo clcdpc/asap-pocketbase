@@ -153,7 +153,9 @@ function processOutstandingTimeout(app, result) {
       app.save(record);
       try {
         if (emailCfg.enabled) {
-          mail.autoRejected(app, record, emailCfg.templateId);
+          if (!mail.autoRejected(app, record, emailCfg.templateId)) {
+            mail.noteSkipped(app, record);
+          }
         }
       } catch (mailErr) {
         app.logger().error("Auto-reject email failed", "recordId", record.id, "error", String(mailErr));
@@ -321,7 +323,9 @@ function processPendingHolds(app, staff, result) {
       records.appendSystemNote(record, note);
       app.save(record);
       try {
-        mail.holdPlaced(app, record, patron);
+        if (!mail.holdPlaced(app, record, patron)) {
+          mail.noteSkipped(app, record);
+        }
       } catch (mailErr) {
         app.logger().error("Hold placement email failed", "recordId", record.id, "error", String(mailErr));
       }

@@ -366,6 +366,22 @@ function mail() {
   };
 }
 
+function emailStatus(app, orgId) {
+  var smtp = mail();
+  var e = app ? librarySettings(app, orgId).emails : emails();
+  var hasSmtp = !!String(smtp.host || "").trim();
+  var hasSender = !!String(e.fromAddress || "").trim();
+  var enabled = hasSmtp && hasSender;
+  return {
+    enabled: enabled,
+    hasSmtp: hasSmtp,
+    hasSender: hasSender,
+    message: enabled
+      ? "Email notifications are configured."
+      : "Email notifications are not configured. Suggestions and staff workflows still work, but patron emails will not be sent."
+  };
+}
+
 function suggestionLimit(app, orgId) {
   if (!app) return getSettings();
   return librarySettings(app, orgId).workflow;
@@ -466,6 +482,7 @@ module.exports = {
   applyMailSettings: applyMailSettings,
   defaultEmailTemplates: defaultEmailTemplates,
   diffEmailTemplates: diffEmailTemplates,
+  emailStatus: emailStatus,
   emails: emails,
   hasEmailTemplateOverrides: hasEmailTemplateOverrides,
   getSettings: getSettings,

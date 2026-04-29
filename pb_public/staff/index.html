@@ -484,6 +484,11 @@
       </div>
     </div>
     <div id="bootstrap-admin-alert" class="alert alert-info hidden" role="status"></div>
+    <div id="email-status-banner" class="alert alert-warning hidden" role="status">
+      <strong>Email notifications are not configured.</strong> Patrons can still submit suggestions and staff can still
+      process requests, but ASAP will not send status emails. To enable email, a super admin must open Settings and
+      configure the SMTP connection and sender address.
+    </div>
 
     <div class="mb-3">
       <button id="btn-new-suggestion" class="btn btn-sm btn-success"><i class="fa fa-plus"></i> New Suggestion</button>
@@ -728,24 +733,28 @@
               <div class="card settings-panel-card">
                 <div class="card-header">
                   <h2 class="h4 mb-1">Email / SMTP</h2>
-                  <p class="text-muted mb-0">Configure the mail server used for patron confirmations and status updates.
-                  </p>
+                  <p class="text-muted mb-0">Optional: SMTP is only needed for patron notification emails. The suggestion
+                    and purchase-request workflow will continue to function without it.</p>
                 </div>
                 <div class="card-body">
+                  <div id="smtp-readiness-message" class="alert alert-warning small">
+                    Email notifications are optional. Configure both SMTP and a sender address when you want ASAP to send
+                    patron emails.
+                  </div>
                   <div class="form-row">
-                    <div class="form-group col-md-6"><label for="smtp-host">Host</label><input type="text"
+                    <div class="form-group col-md-6"><label for="smtp-host">Host <span class="text-muted small">(optional for workflow, required for emails)</span></label><input type="text"
                         id="smtp-host" class="form-control">
                     </div>
-                    <div class="form-group col-md-6"><label for="smtp-port">Port</label><input type="number"
+                    <div class="form-group col-md-6"><label for="smtp-port">Port <span class="text-muted small">(required for emails)</span></label><input type="number"
                         id="smtp-port" class="form-control">
                     </div>
-                    <div class="form-group col-md-6"><label for="smtp-username">Username</label><input type="text"
+                    <div class="form-group col-md-6"><label for="smtp-username">Username <span class="text-muted small">(if required by SMTP)</span></label><input type="text"
                         id="smtp-username" class="form-control"></div>
-                    <div class="form-group col-md-6"><label for="smtp-password">Password</label><input type="password"
+                    <div class="form-group col-md-6"><label for="smtp-password">Password <span class="text-muted small">(if required by SMTP)</span></label><input type="password"
                         id="smtp-password" class="form-control"></div>
-                    <div class="form-group col-md-6"><label for="smtp-from">System Default From Email</label><input
+                    <div class="form-group col-md-6"><label for="smtp-from">System Default From Email <span class="text-muted small">(required for emails)</span></label><input
                         type="email" id="smtp-from" class="form-control"></div>
-                    <div class="form-group col-md-6"><label for="smtp-from-name">System Default From Name</label><input
+                    <div class="form-group col-md-6"><label for="smtp-from-name">System Default From Name <span class="text-muted small">(optional)</span></label><input
                         type="text" id="smtp-from-name" class="form-control"></div>
                     <div class="form-group col-md-12">
                       <div class="custom-control custom-checkbox">

@@ -53,6 +53,11 @@ routerAdd("POST", "/api/asap/staff/test-smtp", (e) => {
   return routes.staffTestSmtp(e);
 });
 
+routerAdd("GET", "/api/asap/staff/email-status", (e) => {
+  const routes = require(`${__hooks}/lib/routes.js`);
+  return routes.staffEmailStatus(e);
+});
+
 routerAdd("GET", "/api/asap/staff/users", (e) => {
   const routes = require(`${__hooks}/lib/routes.js`);
   return routes.staffUsersList(e);
