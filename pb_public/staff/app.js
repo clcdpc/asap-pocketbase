@@ -1050,6 +1050,11 @@ document.addEventListener('click', (e) => {
     return;
   }
 
+  const button = e.target.closest('[data-row-action]');
+  const inGrid = gridContainer.contains(e.target);
+  const layer = document.getElementById('action-menu-layer');
+  const inActionLayer = layer && layer.contains(e.target);
+
   if (activeActionMenuTrigger) {
     closeActionMenu();
   }
@@ -1062,11 +1067,6 @@ document.addEventListener('click', (e) => {
     document.getElementById('noteDialogCloseBtn').focus();
     return;
   }
-
-  const button = e.target.closest('[data-row-action]');
-  const inGrid = gridContainer.contains(e.target);
-  const layer = document.getElementById('action-menu-layer');
-  const inActionLayer = layer && layer.contains(e.target);
 
   if (button && (inGrid || inActionLayer)) {
     const id = button.getAttribute('data-row-id');
