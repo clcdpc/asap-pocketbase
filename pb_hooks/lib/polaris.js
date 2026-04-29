@@ -152,20 +152,56 @@ function authenticatePatron(barcode, password, staffAuth) {
   return getPatronBasic(staff, barcode);
 }
 
-function searchBib(staff, isbn) {
-  var cleaned = String(isbn || "").replace(/[-\s]/g, "");
-  if (!cleaned) {
-    return "";
+function normalizeIsbnIdentifier(isbn) {
+  var raw = String(isbn || "").trim();
+  if (!raw) {
+    return { ok: false, error: "missing_identifier", normalized: "" };
   }
-  var ep = endpoint("public", "search/bibs/keyword/ISBN");
-  appendQuery(ep, "q=" + encodeURIComponent(cleaned));
 
-  var payload = send("GET", ep, "", staff);
-  var rows = payload.BibSearchRows || [];
-  if (!rows.length) {
-    return "";
+  var normalized = raw.replace(/[\s\-_.:/]+/g, "").toUpperCase();
+  if (!normalized) {
+    return { ok: false, error: "missing_identifier", normalized: "" };
   }
-  return String(rows[0].ControlNumber || "");
+
+  var validChars = /^[0-9X]+$/;
+  if (!validChars.test(normalized)) {
+    return { ok: false, error: "invalid_characters", normalized: normalized };
+  }
+
+  if (normalized.length !== 10 && normalized.length !== 13) {
+    return { ok: false, error: "invalid_length", normalized: normalized };
+  }
+
+  if (normalized.length === 10 && normalized.slice(0, 9).indexOf("X") >= 0) {
+    return { ok: false, error: "invalid_isbn10_format", normalized: normalized };
+  }
+
+  if (normalized.length === 13 && normalized.indexOf("X") >= 0) {
+    return { ok: false, error: "invalid_isbn13_format", normalized: normalized };
+  }
+
+  return { ok: true, normalized: normalized };
+}
+
+function searchBib(staff, isbn) {
+  var check = normalizeIsbnIdentifier(isbn);
+  if (!check.ok) {
+    return { status: "error", bibId: "", error: check.error };
+  }
+
+  try {
+    var ep = endpoint("public", "search/bibs/keyword/ISBN");
+    appendQuery(ep, "q=" + encodeURIComponent(check.normalized));
+
+    var payload = send("GET", ep, "", staff);
+    var rows = payload.BibSearchRows || [];
+    if (!rows.length) {
+      return { status: "not_found", bibId: "", error: "" };
+    }
+    return { status: "found", bibId: String(rows[0].ControlNumber || ""), error: "" };
+  } catch (err) {
+    return { status: "error", bibId: "", error: err && err.message ? err.message : String(err) };
+  }
 }
 
 function lookupPatron(staff, barcode) {
