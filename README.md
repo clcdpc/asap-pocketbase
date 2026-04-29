@@ -154,7 +154,7 @@ Before sharing or deploying this project outside a local development machine:
 
 - **Backend**: PocketBase (SQLite + Go VM) with custom JavaScript hooks.
 - **Frontend**: Vanilla JavaScript (ES6+), HTML5, and CSS3. Modal dialogs use native HTML `<dialog>` elements for maximum compatibility and minimal overhead.
-- **Zero Dependencies**: Built entirely with native browser APIs and standard PocketBase hooks. There are no `npm install` requirements, no external libraries, no hardcoded strings, and no frontend build steps (Webpack/Vite/Rollup) required to run or develop the application.
+- **Zero Dependencies**: Built entirely with native browser APIs and standard PocketBase hooks. There are no `npm install` requirements, no external dependencies, no hardcoded strings, and no frontend build steps (Webpack/Vite/Rollup) required to run or develop the application. Note: The application does bundle `crypto-js` into `pb_hooks/lib/crypto.js` to provide standard HMAC-SHA1 encryption for Polaris APIs without requiring `node_modules`.
 - **Portable Runtime**: Deploy the source folders with an official PocketBase binary, then let each environment create and own its local `pb_data/`.
 
 ---
