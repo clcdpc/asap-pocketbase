@@ -176,6 +176,30 @@ function requireTitleRequestAccess(e, staff, record) {
   return null;
 }
 
+
+function isIsbnCapableFormat(format, uiText) {
+  var rules = formatRules.normalizeFormatRules(uiText && uiText.formatRules);
+  var key = String(format || "book").trim() || "book";
+  var rule = rules[key] || rules.book || {};
+  var fields = rule.fields || {};
+  var identifier = fields.identifier || {};
+  var mode = String(identifier.mode || "optional");
+  return mode === "required" || mode === "optional";
+}
+
+function applyIsbnCheckStatusForCreate(data, uiText) {
+  var identifier = String(data.identifier || data.isbn || "").trim();
+  if (!identifier) {
+    data.isbnCheckStatus = "skipped_no_isbn";
+    return;
+  }
+  if (isIsbnCapableFormat(data.format, uiText)) {
+    data.isbnCheckStatus = "pending";
+    return;
+  }
+  data.isbnCheckStatus = "skipped_no_isbn";
+}
+
 function noteSkippedEmail(app, record) {
   mail.noteSkipped(app, record);
 }
@@ -603,6 +627,7 @@ function createSuggestion(e) {
     }
     var uiText = config.uiText();
     var data = formatRules.sanitizePatronSuggestion(body(e), uiText);
+    applyIsbnCheckStatusForCreate(data, uiText);
     var record = records.createSuggestion(e.app, patron, data);
     
     // Trigger confirmation email
@@ -658,6 +683,7 @@ function staffCreateSuggestion(e) {
 
   try {
     data.staffLibraryOrgIdCreatedBy = staff.get("libraryOrgId") || "";
+    applyIsbnCheckStatusForCreate(data, config.uiText());
     var record = records.createSuggestion(e.app, patronRecord, data);
     
     var today = records.formatDate(new Date());
@@ -731,6 +757,7 @@ function staffTitleRequestsList(e) {
   var offset = 0;
   var filter = "id != ''";
   var params = {};
+  var includePendingIsbn = String(queryValue(e, "includePendingIsbn") || "").toLowerCase() === "true";
 
   if (!isSuperAdmin(staff)) {
     var libraryOrgId = String(staff.get("libraryOrgId") || "").trim();
@@ -739,6 +766,12 @@ function staffTitleRequestsList(e) {
     }
     filter = "libraryOrgId = {:libraryOrgId}";
     params.libraryOrgId = libraryOrgId;
+  }
+
+  if (!includePendingIsbn) {
+    filter += " && !(status = {:suggestionStatus} && isbnCheckStatus = {:isbnCheckStatusPending})";
+    params.suggestionStatus = records.STATUS.SUGGESTION;
+    params.isbnCheckStatusPending = "pending";
   }
 
   while (true) {
