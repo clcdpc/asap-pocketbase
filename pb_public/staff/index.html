@@ -6,7 +6,8 @@
   <link id="app-icon" rel="icon" type="image/png" href="" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ASAP Staff App</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.1.3/dist/css/bootstrap.min.css" integrity="sha384-MCw98/SFnGE8fJT3GXwEOngsV7Zt27NXFoaoApmYm81iuXoPkFOJwJ8ERdknLPMO" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.1.3/dist/css/bootstrap.min.css"
+    integrity="sha384-MCw98/SFnGE8fJT3GXwEOngsV7Zt27NXFoaoApmYm81iuXoPkFOJwJ8ERdknLPMO" crossorigin="anonymous">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridjs@6.2.0/dist/theme/mermaid.min.css">
   <style>
@@ -57,7 +58,7 @@
       vertical-align: top;
       margin-bottom: 0;
     }
-    
+
     .custom-control.custom-checkbox .custom-control-label::before,
     .custom-control.custom-checkbox .custom-control-label::after {
       width: 1.25rem;
@@ -70,7 +71,7 @@
       background-color: #007bff;
       border-color: #007bff;
     }
-    
+
     .custom-checkbox .custom-control-label::before {
       border-radius: 4px;
       border: 2px solid #adb5bd;
@@ -124,7 +125,9 @@
       font-size: inherit;
       text-align: left;
     }
-    .truncate-note:hover, .truncate-note:focus {
+
+    .truncate-note:hover,
+    .truncate-note:focus {
       color: #0056b3;
       text-decoration: underline solid;
       outline: none;
@@ -197,6 +200,7 @@
     .settings-main {
       flex: 1 1 auto;
       min-width: 0;
+      padding-bottom: 120px;
     }
 
     .settings-panel {
@@ -237,14 +241,15 @@
       bottom: 0;
       left: 0;
       right: 0;
+      width: 100%;
       background: #fff;
       border-top: 2px solid #dee2e6;
-      padding: 1rem 2.5rem;
+      padding: 1.25rem 2.5rem;
       display: flex;
       justify-content: space-between;
       align-items: center;
       z-index: 1050;
-      box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.15);
+      box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.1);
     }
 
     #settings-msg {
@@ -295,30 +300,38 @@
       color: #0056b3;
       font-weight: 600;
     }
+
     #logout-btn:hover {
       color: #004a9b;
       text-decoration: underline;
     }
+
     .btn-success {
       background-color: #19692c !important;
       border-color: #19692c !important;
     }
+
     .btn-success:hover {
       background-color: #145523 !important;
     }
+
     .text-muted {
       color: #5a6268 !important;
     }
+
     .settings-sidebar-card .text-muted {
       color: #495057 !important;
     }
+
     .nav-link.text-primary.active {
       color: #004a9b !important;
       font-weight: 600;
     }
+
     code {
       background-color: #f8f9fa;
-      color: #b11b5d; /* Darker version of code pink for contrast */
+      color: #b11b5d;
+      /* Darker version of code pink for contrast */
       padding: 2px 5px;
       border-radius: 4px;
       border: 1px solid #dee2e6;
@@ -336,11 +349,12 @@
       gap: 8px;
       pointer-events: none;
     }
+
     .asap-toast {
       background: #fff;
       border: 1px solid #dee2e6;
       border-radius: 8px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
       padding: 12px 16px;
       max-width: 380px;
       font-size: 14px;
@@ -350,10 +364,26 @@
       transition: opacity 0.25s, transform 0.25s;
       pointer-events: auto;
     }
-    .asap-toast.show { opacity: 1; transform: translateX(0); }
-    .asap-toast-success { border-left: 4px solid #19692c; color: #19692c; }
-    .asap-toast-error   { border-left: 4px solid #dc3545; color: #dc3545; }
-    .asap-toast-info    { border-left: 4px solid #004a9b; color: #004a9b; }
+
+    .asap-toast.show {
+      opacity: 1;
+      transform: translateX(0);
+    }
+
+    .asap-toast-success {
+      border-left: 4px solid #19692c;
+      color: #19692c;
+    }
+
+    .asap-toast-error {
+      border-left: 4px solid #dc3545;
+      color: #dc3545;
+    }
+
+    .asap-toast-info {
+      border-left: 4px solid #004a9b;
+      color: #004a9b;
+    }
   </style>
 </head>
 <main>
@@ -361,20 +391,23 @@
     <div class="text-center mb-4">
       <img id="setup-logo" src="" alt="Library Logo" style="height: 60px;">
       <h2 class="h4 mt-2">Initial Setup</h2>
-      <p class="text-muted">Configure Polaris before staff login is enabled. The first staff account created here will be the consortium super admin; later staff logins will be non-admin staff accounts.</p>
+      <p class="text-muted">Configure Polaris before staff login is enabled. The first staff account created here will
+        be the consortium super admin; later staff logins will be non-admin staff accounts.</p>
     </div>
     <form id="setup-form">
       <div class="alert alert-info">
         Enter the Polaris PAPI credentials first. You can adjust advanced settings after setup from the Settings tab.
       </div>
       <div class="form-group">
-          <label for="setup-admin-username">Initial Super Admin Username</label>
+        <label for="setup-admin-username">Initial Super Admin Username</label>
         <input type="text" id="setup-admin-username" name="adminUsername" class="form-control" required>
-        <small class="form-text text-muted">Use the staff identity this admin will later use for Polaris login, such as DOMAIN\username or username@domain.</small>
+        <small class="form-text text-muted">Use the staff identity this admin will later use for Polaris login, such as
+          DOMAIN\username or username@domain.</small>
       </div>
       <div class="form-group">
         <label for="setup-polaris-host">Polaris Host</label>
-        <input type="text" id="setup-polaris-host" name="polarisHost" class="form-control" required placeholder="https://your-papi-server.example.org">
+        <input type="text" id="setup-polaris-host" name="polarisHost" class="form-control" required
+          placeholder="https://your-papi-server.example.org">
       </div>
       <div class="form-row">
         <div class="form-group col-md-6">
@@ -400,11 +433,13 @@
           <input type="password" id="setup-polaris-admin-password" name="polarisAdminPassword" class="form-control">
         </div>
       </div>
-      <small class="form-text text-muted mb-3">Used for patron lookup, patron login, hold placement, and the Polaris connection test.</small>
+      <small class="form-text text-muted mb-3">Used for patron lookup, patron login, hold placement, and the Polaris
+        connection test.</small>
       <div class="form-group">
         <label for="setup-polaris-override-password">Emergency Override Password</label>
         <input type="password" id="setup-polaris-override-password" name="polarisOverridePassword" class="form-control">
-        <small class="form-text text-muted">Optional. Leave blank unless you need a temporary local bypass while configuring Polaris.</small>
+        <small class="form-text text-muted">Optional. Leave blank unless you need a temporary local bypass while
+          configuring Polaris.</small>
       </div>
       <div class="d-flex align-items-center flex-wrap mb-3">
         <button type="button" class="btn btn-info mr-2" id="setup-test-polaris-btn">Test Polaris</button>
@@ -424,11 +459,13 @@
       <div class="form-group">
         <label for="login-username">Username</label>
         <input type="text" id="login-username" name="username" class="form-control" autocomplete="username" required>
-        <small class="form-text text-muted">Use DOMAIN\username or username@domain when staff usernames may exist in multiple domains.</small>
+        <small class="form-text text-muted">Use DOMAIN\username or username@domain when staff usernames may exist in
+          multiple domains.</small>
       </div>
       <div class="form-group">
         <label for="login-password">Password</label>
-        <input type="password" id="login-password" name="password" class="form-control" autocomplete="new-password" required>
+        <input type="password" id="login-password" name="password" class="form-control" autocomplete="new-password"
+          required>
       </div>
       <button type="submit" class="btn btn-primary btn-block">Login</button>
       <div id="login-error" class="text-danger mt-2 font-weight-bold hidden text-center" aria-live="assertive">Invalid
@@ -453,25 +490,32 @@
     </div>
 
     <ul class="nav nav-tabs" id="status-tabs" role="tablist">
-      <li class="nav-item" role="presentation"><a class="nav-link active" data-status="suggestion" role="tab" aria-selected="true">Suggestions <span
-            class="badge badge-secondary tab-count" aria-label="0 records">0</span></a></li>
-      <li class="nav-item" role="presentation"><a class="nav-link" data-status="outstanding_purchase" role="tab" aria-selected="false">Pending Purchase <span
-            class="badge badge-secondary tab-count" aria-label="0 records">0</span></a></li>
-      <li class="nav-item" role="presentation"><a class="nav-link" data-status="pending_hold" role="tab" aria-selected="false">Pending Hold <span
-            class="badge badge-secondary tab-count" aria-label="0 records">0</span></a></li>
-      <li class="nav-item" role="presentation"><a class="nav-link" data-status="hold_placed" role="tab" aria-selected="false">Hold Placed <span
-            class="badge badge-secondary tab-count" aria-label="0 records">0</span></a></li>
-      <li class="nav-item" role="presentation"><a class="nav-link" data-status="closed" role="tab" aria-selected="false">Closed <span class="badge badge-secondary tab-count"
+      <li class="nav-item" role="presentation"><a class="nav-link active" data-status="suggestion" role="tab"
+          aria-selected="true">Suggestions <span class="badge badge-secondary tab-count"
             aria-label="0 records">0</span></a></li>
-      <li class="nav-item" id="nav-settings" role="presentation"><a class="nav-link text-primary" data-status="settings" role="tab" aria-selected="false"><i
-            class="fa fa-cog"></i> Settings</a></li>
+      <li class="nav-item" role="presentation"><a class="nav-link" data-status="outstanding_purchase" role="tab"
+          aria-selected="false">Pending Purchase <span class="badge badge-secondary tab-count"
+            aria-label="0 records">0</span></a></li>
+      <li class="nav-item" role="presentation"><a class="nav-link" data-status="pending_hold" role="tab"
+          aria-selected="false">Pending Hold <span class="badge badge-secondary tab-count"
+            aria-label="0 records">0</span></a></li>
+      <li class="nav-item" role="presentation"><a class="nav-link" data-status="hold_placed" role="tab"
+          aria-selected="false">Hold Placed <span class="badge badge-secondary tab-count"
+            aria-label="0 records">0</span></a></li>
+      <li class="nav-item" role="presentation"><a class="nav-link" data-status="closed" role="tab"
+          aria-selected="false">Closed <span class="badge badge-secondary tab-count" aria-label="0 records">0</span></a>
+      </li>
+      <li class="nav-item" id="nav-settings" role="presentation"><a class="nav-link text-primary" data-status="settings"
+          role="tab" aria-selected="false"><i class="fa fa-cog"></i> Settings</a></li>
     </ul>
 
     <div class="d-flex justify-content-between align-items-center mt-3 mb-2">
       <div id="tab-desc" class="text-muted small" tabindex="-1"></div>
       <div id="admin-actions-bar" class="hidden">
-        <button type="button" id="btn-run-promoter-check" class="btn btn-warning btn-sm hidden"><i class="fa fa-search"></i> Run Auto Promoter Now</button>
-        <button type="button" id="btn-run-hold-check" class="btn btn-danger btn-sm hidden"><i class="fa fa-hand-paper"></i> Run Hold Check Now</button>
+        <button type="button" id="btn-run-promoter-check" class="btn btn-warning btn-sm hidden"><i
+            class="fa fa-search"></i> Run Auto Promoter Now</button>
+        <button type="button" id="btn-run-hold-check" class="btn btn-danger btn-sm hidden"><i
+            class="fa fa-hand-paper"></i> Run Hold Check Now</button>
       </div>
     </div>
     <div id="job-msg" class="mb-3 font-weight-bold" style="font-size: 0.9rem;"></div>
@@ -480,7 +524,8 @@
 
     <div id="settings-container" class="hidden">
       <div id="settings-error" class="alert alert-danger hidden mt-3">
-        <strong>Access Denied:</strong> Only super admin users can view or edit settings. If you believe this is an error,
+        <strong>Access Denied:</strong> Only super admin users can view or edit settings. If you believe this is an
+        error,
         please log out and log back in to refresh your permissions.
       </div>
       <form id="settings-form">
@@ -488,19 +533,30 @@
           <aside class="settings-sidebar" aria-label="Settings sections">
             <div class="settings-sidebar-card" role="tablist" aria-label="Settings categories">
               <div class="small text-uppercase text-muted font-weight-bold mb-2" role="presentation">Settings</div>
-              <button type="button" id="tab-start" role="tab" class="settings-nav-link active" data-settings-target="start" aria-controls="settings-start" aria-selected="true">Getting Started</button>
-              <button type="button" id="tab-polaris" role="tab" class="settings-nav-link" data-settings-target="polaris" aria-controls="settings-polaris" aria-selected="false">Polaris</button>
-              <button type="button" id="tab-staff" role="tab" class="settings-nav-link" data-settings-target="staff" aria-controls="settings-staff" aria-selected="false">Staff Access</button>
-              <button type="button" id="tab-smtp" role="tab" class="settings-nav-link" data-settings-target="smtp" aria-controls="settings-smtp" aria-selected="false">Email / SMTP</button>
-              <button type="button" id="tab-workflow" role="tab" class="settings-nav-link" data-settings-target="workflow" aria-controls="settings-workflow" aria-selected="false">Workflow</button>
-              <button type="button" id="tab-patron" role="tab" class="settings-nav-link" data-settings-target="patron" aria-controls="settings-patron" aria-selected="false">Patron Experience</button>
-              <button type="button" id="tab-templates" role="tab" class="settings-nav-link" data-settings-target="templates" aria-controls="settings-templates" aria-selected="false">Email Settings</button>
+              <button type="button" id="tab-start" role="tab" class="settings-nav-link active"
+                data-settings-target="start" aria-controls="settings-start" aria-selected="true">Getting
+                Started</button>
+              <button type="button" id="tab-polaris" role="tab" class="settings-nav-link" data-settings-target="polaris"
+                aria-controls="settings-polaris" aria-selected="false">Polaris</button>
+              <button type="button" id="tab-staff" role="tab" class="settings-nav-link" data-settings-target="staff"
+                aria-controls="settings-staff" aria-selected="false">Staff Access</button>
+              <button type="button" id="tab-smtp" role="tab" class="settings-nav-link" data-settings-target="smtp"
+                aria-controls="settings-smtp" aria-selected="false">Email / SMTP</button>
+              <button type="button" id="tab-workflow" role="tab" class="settings-nav-link"
+                data-settings-target="workflow" aria-controls="settings-workflow"
+                aria-selected="false">Workflow</button>
+              <button type="button" id="tab-patron" role="tab" class="settings-nav-link" data-settings-target="patron"
+                aria-controls="settings-patron" aria-selected="false">Patron Experience</button>
+              <button type="button" id="tab-templates" role="tab" class="settings-nav-link"
+                data-settings-target="templates" aria-controls="settings-templates" aria-selected="false">Email
+                Settings</button>
             </div>
           </aside>
 
           <div class="settings-main">
             <div id="library-context-wrapper" class="hidden">
-              <div id="library-context-bar" class="alert alert-info d-flex align-items-center justify-content-between mb-3">
+              <div id="library-context-bar"
+                class="alert alert-info d-flex align-items-center justify-content-between mb-3">
                 <div class="d-flex align-items-center">
                   <i class="fa fa-university fa-lg mr-3 text-primary"></i>
                   <div>
@@ -516,32 +572,40 @@
                 </div>
               </div>
 
-              <div id="library-override-status" class="alert alert-warning mb-3 hidden d-flex justify-content-between align-items-center">
+              <div id="library-override-status"
+                class="alert alert-warning mb-3 hidden d-flex justify-content-between align-items-center">
                 <div id="library-override-msg">
-                  <i class="fa fa-info-circle mr-1"></i> This library is currently using <strong>System Defaults</strong> for these settings. Saving changes will create a library-specific override.
+                  <i class="fa fa-info-circle mr-1"></i> This library is currently using <strong>System
+                    Defaults</strong> for these settings. Saving changes will create a library-specific override.
                 </div>
-                <button type="button" id="btn-reset-library-settings" class="btn btn-outline-danger btn-sm hidden ml-3 text-nowrap">
+                <button type="button" id="btn-reset-library-settings"
+                  class="btn btn-outline-danger btn-sm hidden ml-3 text-nowrap">
                   <i class="fa fa-refresh mr-1"></i> Reset to System Defaults
                 </button>
               </div>
             </div>
 
-            <section id="settings-start" class="settings-panel active" data-settings-section="start" role="tabpanel" aria-labelledby="tab-start" tabindex="-1">
+            <section id="settings-start" class="settings-panel active" data-settings-section="start" role="tabpanel"
+              aria-labelledby="tab-start" tabindex="-1">
               <div class="card settings-panel-card">
                 <div class="card-header">
                   <h2 class="h4 mb-1">Getting Started</h2>
-                  <p class="text-muted mb-0">Use the sections on the left to configure integrations, access, workflows, patron text, and email templates.</p>
+                  <p class="text-muted mb-0">Use the sections on the left to configure integrations, access, workflows,
+                    patron text, and email templates.</p>
                 </div>
                 <div class="card-body">
                   <div class="alert alert-info mb-4">
-                    <strong>Tip:</strong> Changes from any section are saved together. Use the sticky save bar below after editing, or use the save-and-test buttons in Polaris and SMTP when you want to validate those integrations immediately.
+                    <strong>Tip:</strong> Changes from any section are saved together. Use the sticky save bar below
+                    after editing, or use the save-and-test buttons in Polaris and SMTP when you want to validate those
+                    integrations immediately.
                   </div>
                   <div class="row">
                     <div class="col-md-6 mb-3">
                       <div class="card h-100">
                         <div class="card-body">
                           <h5 class="card-title">First-time setup path</h5>
-                          <p class="card-text text-muted">Confirm Polaris credentials, sync organizations, then review staff access so users are scoped to the correct parent library.</p>
+                          <p class="card-text text-muted">Confirm Polaris credentials, sync organizations, then review
+                            staff access so users are scoped to the correct parent library.</p>
                         </div>
                       </div>
                     </div>
@@ -549,7 +613,8 @@
                       <div class="card h-100">
                         <div class="card-body">
                           <h5 class="card-title">Daily operations</h5>
-                          <p class="card-text text-muted">Most day-to-day work happens in the request tabs. Settings is for super admins managing system-wide behavior.</p>
+                          <p class="card-text text-muted">Most day-to-day work happens in the request tabs. Settings is
+                            for super admins managing system-wide behavior.</p>
                         </div>
                       </div>
                     </div>
@@ -558,8 +623,10 @@
                   <div id="system-enabled-libraries-group" class="hidden mt-4">
                     <hr>
                     <h3 class="h5">Library Participation</h3>
-                    <p class="small text-muted mb-3">Select the libraries that are allowed to use this service. If none are selected, all libraries are enabled by default.</p>
-                    <div id="enabled-libraries-checkbox-container" class="border rounded bg-light" style="max-height: 500px; overflow-y: auto;">
+                    <p class="small text-muted mb-3">Select the libraries that are allowed to use this service. If none
+                      are selected, all libraries are enabled by default.</p>
+                    <div id="enabled-libraries-checkbox-container" class="border rounded bg-light"
+                      style="max-height: 500px; overflow-y: auto;">
                       <div class="p-3 text-muted italic">Loading libraries...</div>
                     </div>
                   </div>
@@ -567,28 +634,31 @@
               </div>
             </section>
 
-            <section id="settings-polaris" class="settings-panel" data-settings-section="polaris" role="tabpanel" aria-labelledby="tab-polaris" tabindex="-1">
+            <section id="settings-polaris" class="settings-panel" data-settings-section="polaris" role="tabpanel"
+              aria-labelledby="tab-polaris" tabindex="-1">
               <div class="card settings-panel-card">
                 <div class="card-header">
                   <h2 class="h4 mb-1">Polaris API Keys</h2>
-                  <p class="text-muted mb-0">These credentials allow automated catalog lookups and hold placement. Use a Polaris staff account with PAPI search and hold permissions.</p>
+                  <p class="text-muted mb-0">These credentials allow automated catalog lookups and hold placement. Use a
+                    Polaris staff account with PAPI search and hold permissions.</p>
                 </div>
                 <div class="card-body">
                   <div class="form-row">
-                    <div class="form-group col-md-6"><label for="polaris-host">Host</label><input type="text" id="polaris-host" class="form-control">
+                    <div class="form-group col-md-6"><label for="polaris-host">Host</label><input type="text"
+                        id="polaris-host" class="form-control">
                     </div>
-                    <div class="form-group col-md-6"><label for="polaris-api-key">API Key</label><input type="password" id="polaris-api-key"
-                        class="form-control"></div>
-                    <div class="form-group col-md-6"><label for="polaris-access-id">Access ID</label><input type="text" id="polaris-access-id"
-                        class="form-control"></div>
-                    <div class="form-group col-md-6"><label for="polaris-domain">Staff Domain</label><input type="text" id="polaris-domain"
-                        class="form-control"></div>
-                    <div class="form-group col-md-6"><label for="polaris-admin-user">System Staff Username</label><input type="text"
-                        id="polaris-admin-user" class="form-control"></div>
-                    <div class="form-group col-md-6"><label for="polaris-admin-pass">System Staff Password</label><input type="password"
-                        id="polaris-admin-pass" class="form-control"></div>
-                    <div class="form-group col-md-6"><label for="polaris-override-pass">Override Password (Bypass Polaris)</label><input type="password"
-                        id="polaris-override-pass" class="form-control"></div>
+                    <div class="form-group col-md-6"><label for="polaris-api-key">API Key</label><input type="password"
+                        id="polaris-api-key" class="form-control"></div>
+                    <div class="form-group col-md-6"><label for="polaris-access-id">Access ID</label><input type="text"
+                        id="polaris-access-id" class="form-control"></div>
+                    <div class="form-group col-md-6"><label for="polaris-domain">Staff Domain</label><input type="text"
+                        id="polaris-domain" class="form-control"></div>
+                    <div class="form-group col-md-6"><label for="polaris-admin-user">System Staff Username</label><input
+                        type="text" id="polaris-admin-user" class="form-control"></div>
+                    <div class="form-group col-md-6"><label for="polaris-admin-pass">System Staff Password</label><input
+                        type="password" id="polaris-admin-pass" class="form-control"></div>
+                    <div class="form-group col-md-6"><label for="polaris-override-pass">Override Password (Bypass
+                        Polaris)</label><input type="password" id="polaris-override-pass" class="form-control"></div>
                   </div>
                   <div>
                     <button type="button" id="btn-test-polaris" class="btn btn-info btn-sm">Save & Test Polaris</button>
@@ -596,30 +666,37 @@
                   </div>
                   <div class="settings-maintenance mt-4">
                     <div class="font-weight-bold mb-1">Organization sync</div>
-                    <p class="small text-muted mb-2">Polaris organizations sync automatically once a day at 2 AM server time. Use this manual sync after changing Polaris organizations or updating these credentials.</p>
-                    <button type="button" id="btn-sync-organizations" class="btn btn-outline-info btn-sm">Sync Polaris Organizations Now</button>
+                    <p class="small text-muted mb-2">Polaris organizations sync automatically once a day at 2 AM server
+                      time. Use this manual sync after changing Polaris organizations or updating these credentials.</p>
+                    <button type="button" id="btn-sync-organizations" class="btn btn-outline-info btn-sm">Sync Polaris
+                      Organizations Now</button>
                     <span id="organizations-sync-result" class="ml-2"></span>
                   </div>
                 </div>
               </div>
             </section>
 
-            <section id="settings-staff" class="settings-panel" data-settings-section="staff" role="tabpanel" aria-labelledby="tab-staff" tabindex="-1">
+            <section id="settings-staff" class="settings-panel" data-settings-section="staff" role="tabpanel"
+              aria-labelledby="tab-staff" tabindex="-1">
               <div class="card settings-panel-card">
                 <div class="card-header">
                   <h2 class="h4 mb-1">Staff Access</h2>
-                  <p class="text-muted mb-0">Control who can log in, which role they receive, and how staff are scoped to Polaris library organizations.</p>
+                  <p class="text-muted mb-0">Control who can log in, which role they receive, and how staff are scoped
+                    to Polaris library organizations.</p>
                 </div>
                 <div class="card-body">
                   <div class="form-group">
                     <label>Allowed Staff Usernames</label>
                     <textarea id="allowed-staff-users" class="form-control" rows="2"></textarea>
-                    <small class="form-text text-muted">Comma-separated staff identities that may log into the staff service, such as DOMAIN\username or username@domain. Leave blank to allow any Polaris-authenticated staff account.</small>
+                    <small class="form-text text-muted">Comma-separated staff identities that may log into the staff
+                      service, such as DOMAIN\username or username@domain. Leave blank to allow any
+                      Polaris-authenticated staff account.</small>
                   </div>
                   <div class="card mb-0">
                     <div class="card-header d-flex justify-content-between align-items-center">
                       <strong>Staff Roles</strong>
-                      <button type="button" id="btn-refresh-staff-users" class="btn btn-outline-secondary btn-sm">Refresh</button>
+                      <button type="button" id="btn-refresh-staff-users"
+                        class="btn btn-outline-secondary btn-sm">Refresh</button>
                     </div>
                     <div class="card-body">
                       <div id="staff-users-msg" class="mb-2 font-weight-bold"></div>
@@ -638,46 +715,54 @@
                           <tbody id="staff-users-table-body"></tbody>
                         </table>
                       </div>
-                      <small class="form-text text-muted mt-2">At least one super admin must remain. Library admins can manage staff in their own library; super admins can manage all users.</small>
+                      <small class="form-text text-muted mt-2">At least one super admin must remain. Library admins can
+                        manage staff in their own library; super admins can manage all users.</small>
                     </div>
                   </div>
                 </div>
               </div>
             </section>
 
-            <section id="settings-smtp" class="settings-panel" data-settings-section="smtp" role="tabpanel" aria-labelledby="tab-smtp" tabindex="-1">
+            <section id="settings-smtp" class="settings-panel" data-settings-section="smtp" role="tabpanel"
+              aria-labelledby="tab-smtp" tabindex="-1">
               <div class="card settings-panel-card">
                 <div class="card-header">
                   <h2 class="h4 mb-1">Email / SMTP</h2>
-                  <p class="text-muted mb-0">Configure the mail server used for patron confirmations and status updates.</p>
+                  <p class="text-muted mb-0">Configure the mail server used for patron confirmations and status updates.
+                  </p>
                 </div>
                 <div class="card-body">
                   <div class="form-row">
-                    <div class="form-group col-md-6"><label for="smtp-host">Host</label><input type="text" id="smtp-host" class="form-control">
+                    <div class="form-group col-md-6"><label for="smtp-host">Host</label><input type="text"
+                        id="smtp-host" class="form-control">
                     </div>
-                    <div class="form-group col-md-6"><label for="smtp-port">Port</label><input type="number" id="smtp-port" class="form-control">
+                    <div class="form-group col-md-6"><label for="smtp-port">Port</label><input type="number"
+                        id="smtp-port" class="form-control">
                     </div>
-                    <div class="form-group col-md-6"><label for="smtp-username">Username</label><input type="text" id="smtp-username"
-                        class="form-control"></div>
-                    <div class="form-group col-md-6"><label for="smtp-password">Password</label><input type="password" id="smtp-password"
-                        class="form-control"></div>
-                    <div class="form-group col-md-6"><label for="smtp-from">System Default From Email</label><input type="email" id="smtp-from"
-                        class="form-control"></div>
-                    <div class="form-group col-md-6"><label for="smtp-from-name">System Default From Name</label><input type="text" id="smtp-from-name"
-                        class="form-control"></div>
+                    <div class="form-group col-md-6"><label for="smtp-username">Username</label><input type="text"
+                        id="smtp-username" class="form-control"></div>
+                    <div class="form-group col-md-6"><label for="smtp-password">Password</label><input type="password"
+                        id="smtp-password" class="form-control"></div>
+                    <div class="form-group col-md-6"><label for="smtp-from">System Default From Email</label><input
+                        type="email" id="smtp-from" class="form-control"></div>
+                    <div class="form-group col-md-6"><label for="smtp-from-name">System Default From Name</label><input
+                        type="text" id="smtp-from-name" class="form-control"></div>
                     <div class="form-group col-md-12">
                       <div class="custom-control custom-checkbox">
                         <input type="checkbox" class="custom-control-input" id="smtp-tls">
                         <label class="custom-control-label" for="smtp-tls">Use TLS (For port 465)</label>
                       </div>
-                      <small class="form-text text-muted">Uncheck this if you are using port 587 (STARTTLS). Most modern mail servers use port 587.</small>
+                      <small class="form-text text-muted">Uncheck this if you are using port 587 (STARTTLS). Most modern
+                        mail servers use port 587.</small>
                     </div>
                   </div>
                   <div class="mt-4 pt-3 border-top">
                     <div class="form-group mb-0">
-                      <label for="smtp-test-email" class="small font-weight-bold text-muted uppercase">Test SMTP Connection</label>
+                      <label for="smtp-test-email" class="small font-weight-bold text-muted uppercase">Test SMTP
+                        Connection</label>
                       <div class="input-group input-group-sm" style="max-width: 450px;">
-                        <input type="email" id="smtp-test-email" class="form-control" placeholder="Enter recipient email address">
+                        <input type="email" id="smtp-test-email" class="form-control"
+                          placeholder="Enter recipient email address">
                         <div class="input-group-append">
                           <button type="button" id="btn-test-smtp" class="btn btn-info">Save & Send Test</button>
                         </div>
@@ -689,7 +774,8 @@
               </div>
             </section>
 
-            <section id="settings-workflow" class="settings-panel" data-settings-section="workflow" role="tabpanel" aria-labelledby="tab-workflow" tabindex="-1">
+            <section id="settings-workflow" class="settings-panel" data-settings-section="workflow" role="tabpanel"
+              aria-labelledby="tab-workflow" tabindex="-1">
               <div class="card settings-panel-card">
                 <div class="card-header">
                   <h2 class="h4 mb-1">Workflow</h2>
@@ -698,25 +784,28 @@
                 <div class="card-body">
                   <h3 class="h5">Suggestion Limits</h3>
                   <div class="form-row mb-4">
-                    <div class="form-group col-md-4"><label for="suggestion-limit">Weekly Limit</label><input type="number" id="suggestion-limit"
-                        class="form-control"></div>
+                    <div class="form-group col-md-4"><label for="suggestion-limit">Weekly Limit</label><input
+                        type="number" id="suggestion-limit" class="form-control"></div>
                     <div class="form-group col-md-8">
                       <label for="suggestion-limit-msg">Limit Reached Message</label>
                       <input type="text" id="suggestion-limit-msg" class="form-control">
-                      <small class="form-text text-muted">Use <code>{{next_available_date}}</code> as a placeholder for when the patron can submit again.</small>
+                      <small class="form-text text-muted">Use <code>{{next_available_date}}</code> as a placeholder for
+                        when the patron can submit again.</small>
                     </div>
                   </div>
 
                   <hr>
                   <h3 class="h5">Workflow Automation</h3>
-                  <p class="text-muted small mb-3">Automated rules that process requests through the pipeline stages.</p>
+                  <p class="text-muted small mb-3">Automated rules that process requests through the pipeline stages.
+                  </p>
 
                   <!-- Stage 1: Suggestions -->
                   <div class="form-row align-items-center mb-2">
                     <div class="col-auto">
                       <div class="custom-control custom-checkbox">
                         <input type="checkbox" class="custom-control-input" id="outstanding-timeout-enabled">
-                        <label class="custom-control-label font-weight-bold" for="outstanding-timeout-enabled">Auto-reject stalled <strong>Suggestions</strong></label>
+                        <label class="custom-control-label font-weight-bold"
+                          for="outstanding-timeout-enabled">Auto-reject stalled <strong>Suggestions</strong></label>
                       </div>
                     </div>
                   </div>
@@ -727,7 +816,8 @@
                       </div>
                       <div class="col">
                         <label for="outstanding-timeout-days" class="mb-0 mr-2">Timeout Days</label>
-                        <small class="text-muted">Days a suggestion can stay in "Suggestions" before auto-rejection.</small>
+                        <small class="text-muted">Days a suggestion can stay in "Suggestions" before
+                          auto-rejection.</small>
                       </div>
                     </div>
                   </div>
@@ -737,9 +827,11 @@
                     <div class="col-auto">
                       <div class="custom-control custom-checkbox">
                         <input type="checkbox" class="custom-control-input" id="polaris-auto-promote">
-                        <label class="custom-control-label font-weight-bold" for="polaris-auto-promote">Enable Auto-Promoter</label>
+                        <label class="custom-control-label font-weight-bold" for="polaris-auto-promote">Enable
+                          Auto-Promoter</label>
                       </div>
-                      <small class="form-text text-muted">Automatically search Polaris for ISBNs and promote to hold phase if found.</small>
+                      <small class="form-text text-muted">Automatically search Polaris for ISBNs and promote to hold
+                        phase if found.</small>
                     </div>
                   </div>
 
@@ -748,7 +840,8 @@
                     <div class="col-auto">
                       <div class="custom-control custom-checkbox">
                         <input type="checkbox" class="custom-control-input" id="pending-hold-timeout-enabled">
-                        <label class="custom-control-label font-weight-bold" for="pending-hold-timeout-enabled">Auto-close skipped <strong>Pending Holds</strong></label>
+                        <label class="custom-control-label font-weight-bold"
+                          for="pending-hold-timeout-enabled">Auto-close skipped <strong>Pending Holds</strong></label>
                       </div>
                     </div>
                   </div>
@@ -769,7 +862,8 @@
                     <div class="col-auto">
                       <div class="custom-control custom-checkbox">
                         <input type="checkbox" class="custom-control-input" id="hold-pickup-timeout-enabled">
-                        <label class="custom-control-label font-weight-bold" for="hold-pickup-timeout-enabled">Auto-close unclaimed <strong>Holds</strong></label>
+                        <label class="custom-control-label font-weight-bold"
+                          for="hold-pickup-timeout-enabled">Auto-close unclaimed <strong>Holds</strong></label>
                       </div>
                     </div>
                   </div>
@@ -780,235 +874,259 @@
                       </div>
                       <div class="col">
                         <label for="hold-pickup-timeout-days" class="mb-0 mr-2">Days Before Expiry</label>
-                        <small class="text-muted">Days a hold can stay in "Hold Placed" before auto-closing as "Not Picked Up".</small>
+                        <small class="text-muted">Days a hold can stay in "Hold Placed" before auto-closing as "Not
+                          Picked Up".</small>
                       </div>
                     </div>
                   </div>
 
-                  </div>
                 </div>
               </div>
             </section>
 
-            <section id="settings-patron" class="settings-panel" data-settings-section="patron" role="tabpanel" aria-labelledby="tab-patron" tabindex="-1">
-              <div class="card settings-panel-card">
-                <div class="card-header">
-                  <h2 class="h4 mb-1">Patron Experience</h2>
-                  <p class="text-muted mb-0">Customize the public patron form, messaging, logo, and publication timing options.</p>
+          <section id="settings-patron" class="settings-panel" data-settings-section="patron" role="tabpanel"
+            aria-labelledby="tab-patron" tabindex="-1">
+            <div class="card settings-panel-card">
+              <div class="card-header">
+                <h2 class="h4 mb-1">Patron Experience</h2>
+                <p class="text-muted mb-0">Customize the public patron form, messaging, logo, and publication timing
+                  options.</p>
+              </div>
+              <div class="card-body">
+                <div class="form-group">
+                  <label for="ui-logo-file">Custom Logo (Replaces /jpl.png)</label>
+                  <input type="file" id="ui-logo-file" class="form-control-file"
+                    accept="image/png, image/jpeg, image/svg+xml, image/gif">
+                  <small class="form-text text-muted">Leave blank to keep the current logo.</small>
                 </div>
-                <div class="card-body">
-                  <div class="form-group">
-                    <label for="ui-logo-file">Custom Logo (Replaces /jpl.png)</label>
-                    <input type="file" id="ui-logo-file" class="form-control-file"
-                      accept="image/png, image/jpeg, image/svg+xml, image/gif">
-                    <small class="form-text text-muted">Leave blank to keep the current logo.</small>
-                  </div>
-                  <div class="form-group">
-                    <label for="ui-logo-alt">Logo Alt Text (for Screen Readers)</label>
-                    <input type="text" id="ui-logo-alt" class="form-control">
-                  </div>
-                  <div class="form-group">
-                    <label for="ui-patron-page-title">Main Page Title (Patron Portal)</label>
-                    <input type="text" id="ui-patron-page-title" class="form-control" placeholder="Material Suggestion">
-                    <small class="form-text text-muted">The main heading displayed at the top of the patron portal.</small>
-                  </div>
-                  <div class="row">
-                    <div class="col-md-6">
-                      <div class="form-group">
-                        <label for="ui-barcode-label">Barcode Label</label>
-                        <input type="text" id="ui-barcode-label" class="form-control" placeholder="Library Card">
-                      </div>
-                    </div>
-                    <div class="col-md-6">
-                      <div class="form-group">
-                        <label for="ui-pin-label">Pin Label</label>
-                        <input type="text" id="ui-pin-label" class="form-control" placeholder="Pin">
-                      </div>
+                <div class="form-group">
+                  <label for="ui-logo-alt">Logo Alt Text (for Screen Readers)</label>
+                  <input type="text" id="ui-logo-alt" class="form-control">
+                </div>
+                <div class="form-group">
+                  <label for="ui-patron-page-title">Main Page Title (Patron Portal)</label>
+                  <input type="text" id="ui-patron-page-title" class="form-control" placeholder="Material Suggestion">
+                  <small class="form-text text-muted">The main heading displayed at the top of the patron
+                    portal.</small>
+                </div>
+                <div class="row">
+                  <div class="col-md-6">
+                    <div class="form-group">
+                      <label for="ui-barcode-label">Barcode Label</label>
+                      <input type="text" id="ui-barcode-label" class="form-control" placeholder="Library Card">
                     </div>
                   </div>
-                  <div class="form-group">
-                    <label for="ui-login-prompt">Login Prompt (Supports HTML)</label>
-                    <textarea id="ui-login-prompt" class="form-control" rows="2"></textarea>
-                  </div>
-                  <div class="form-group">
-                    <label for="ui-login-note">Login Requirement Note (Supports HTML)</label>
-                    <textarea id="ui-login-note" class="form-control" rows="3"></textarea>
-                  </div>
-                  <div class="form-group">
-                    <label for="ui-suggestion-note">Suggestion Form Note (Supports HTML)</label>
-                    <textarea id="ui-suggestion-note" class="form-control" rows="3"></textarea>
-                  </div>
-                  <div class="form-group">
-                    <label for="ui-no-email-msg">No Email Warning Message (Supports HTML)</label>
-                    <textarea id="ui-no-email-msg" class="form-control" rows="3"></textarea>
-                    <small class="form-text text-muted">Shown to patrons who do not have an email address on file in Polaris.</small>
-                  </div>
-                  <div class="form-row">
-                    <div class="form-group col-md-4">
-                      <label for="ui-success-title">Success Title</label>
-                      <input type="text" id="ui-success-title" class="form-control">
-                    </div>
-                    <div class="form-group col-md-8">
-                      <label for="ui-success-msg">Success Message (Supports HTML)</label>
-                      <textarea id="ui-success-msg" class="form-control" rows="3"></textarea>
-                    </div>
-                  </div>
-                  <div class="form-group">
-                    <label for="ui-already-submitted-msg">Already Submitted Message (Supports HTML)</label>
-                    <textarea id="ui-already-submitted-msg" class="form-control" rows="3"></textarea>
-                    <small class="form-text text-muted">Shown when a patron tries to submit a title they have already requested.</small>
-                  </div>
-                  <div class="form-group">
-                    <label for="ui-ebook-msg">eBook Message (Supports HTML)</label>
-                    <textarea id="ui-ebook-msg" class="form-control" rows="3"></textarea>
-                    <small class="form-text text-muted">Shown to patrons when they select "eBook" as their format.</small>
-                  </div>
-                  <div class="form-group">
-                    <label for="ui-eaudiobook-msg">eAudiobook Message (Supports HTML)</label>
-                    <textarea id="ui-eaudiobook-msg" class="form-control" rows="3"></textarea>
-                    <small class="form-text text-muted">Shown to patrons when they select "eAudiobook" as their format.</small>
-                  </div>
-                  <div class="row">
-                    <div class="form-group col-md-6">
-                      <label for="ui-publication-options">Publication Timing Options</label>
-                      <textarea id="ui-publication-options" class="form-control" rows="3"></textarea>
-                      <small class="form-text text-muted">Enter options one per line.</small>
-                    </div>
-                    <div class="form-group col-md-6">
-                      <label for="ui-age-groups">Age Groups</label>
-                      <textarea id="ui-age-groups" class="form-control" rows="3"></textarea>
-                      <small class="form-text text-muted">Enter options one per line.</small>
-                    </div>
-                  </div>
-                  <small class="form-text text-muted">One option per line. These appear on the patron form and staff new suggestion form.</small>
-                  <div class="card mt-4">
-                    <div class="card-header">
-                      <strong>Format Display Names</strong>
-                    </div>
-                    <div class="card-body">
-                      <p class="text-muted small">Manage material formats shown to patrons. Enabled formats appear in the patron portal dropdown. You can also add custom formats here.</p>
-                      <div id="format-settings-container"></div>
-                      <div class="mt-3">
-                        <button type="button" id="btn-add-format" class="btn btn-sm btn-outline-primary">Add New Format</button>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="card mt-4">
-                    <div class="card-header">
-                      <strong>Patron Format Rules</strong>
-                    </div>
-                    <div class="card-body">
-                      <p class="text-muted small">Choose which patron fields are shown for each format. Labels are display-only; values always save to the existing database fields.</p>
-                      <div id="format-rules-editor"></div>
+                  <div class="col-md-6">
+                    <div class="form-group">
+                      <label for="ui-pin-label">Pin Label</label>
+                      <input type="text" id="ui-pin-label" class="form-control" placeholder="Pin">
                     </div>
                   </div>
                 </div>
-              </div>
-            </section>
-
-            <section id="settings-templates" class="settings-panel" data-settings-section="templates" role="tabpanel" aria-labelledby="tab-templates" tabindex="-1">
-              <div class="card settings-panel-card">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                  <div>
-                    <h2 class="h4 mb-1">Email Settings</h2>
-                    <p class="text-muted mb-0">Configure sender details and customize email templates. Use <code>{{name}}</code>, <code>{{title}}</code>, <code>{{author}}</code>,
-                      <code>{{format}}</code>, and <code>{{barcode}}</code> as placeholders.</p>
+                <div class="form-group">
+                  <label for="ui-login-prompt">Login Prompt (Supports HTML)</label>
+                  <textarea id="ui-login-prompt" class="form-control" rows="2"></textarea>
+                </div>
+                <div class="form-group">
+                  <label for="ui-login-note">Login Requirement Note (Supports HTML)</label>
+                  <textarea id="ui-login-note" class="form-control" rows="3"></textarea>
+                </div>
+                <div class="form-group">
+                  <label for="ui-suggestion-note">Suggestion Form Note (Supports HTML)</label>
+                  <textarea id="ui-suggestion-note" class="form-control" rows="3"></textarea>
+                </div>
+                <div class="form-group">
+                  <label for="ui-no-email-msg">No Email Warning Message (Supports HTML)</label>
+                  <textarea id="ui-no-email-msg" class="form-control" rows="3"></textarea>
+                  <small class="form-text text-muted">Shown to patrons who do not have an email address on file in
+                    Polaris.</small>
+                </div>
+                <div class="form-row">
+                  <div class="form-group col-md-4">
+                    <label for="ui-success-title">Success Title</label>
+                    <input type="text" id="ui-success-title" class="form-control">
+                  </div>
+                  <div class="form-group col-md-8">
+                    <label for="ui-success-msg">Success Message (Supports HTML)</label>
+                    <textarea id="ui-success-msg" class="form-control" rows="3"></textarea>
                   </div>
                 </div>
-                <div class="card-body">
-
-                  <div class="card mb-4">
-                    <div class="card-header"><strong>Sender Details</strong></div>
-                    <div class="card-body pb-0">
-                      <div class="form-row">
-                        <div class="form-group col-md-6"><label for="email-from-address">From Email Address</label><input type="email" id="email-from-address" class="form-control"></div>
-                        <div class="form-group col-md-6"><label for="email-from-name">From Name</label><input type="text" id="email-from-name" class="form-control"></div>
-                      </div>
-                      <small class="form-text text-muted mb-3">If left blank, the system will use the System Defaults.</small>
-                    </div>
+                <div class="form-group">
+                  <label for="ui-already-submitted-msg">Already Submitted Message (Supports HTML)</label>
+                  <textarea id="ui-already-submitted-msg" class="form-control" rows="3"></textarea>
+                  <small class="form-text text-muted">Shown when a patron tries to submit a title they have already
+                    requested.</small>
+                </div>
+                <div class="form-group">
+                  <label for="ui-ebook-msg">eBook Message (Supports HTML)</label>
+                  <textarea id="ui-ebook-msg" class="form-control" rows="3"></textarea>
+                  <small class="form-text text-muted">Shown to patrons when they select "eBook" as their format.</small>
+                </div>
+                <div class="form-group">
+                  <label for="ui-eaudiobook-msg">eAudiobook Message (Supports HTML)</label>
+                  <textarea id="ui-eaudiobook-msg" class="form-control" rows="3"></textarea>
+                  <small class="form-text text-muted">Shown to patrons when they select "eAudiobook" as their
+                    format.</small>
+                </div>
+                <div class="row">
+                  <div class="form-group col-md-6">
+                    <label for="ui-publication-options">Publication Timing Options</label>
+                    <textarea id="ui-publication-options" class="form-control" rows="3"></textarea>
+                    <small class="form-text text-muted">Enter options one per line.</small>
                   </div>
-
-                  <div class="card mb-3">
-                    <div class="card-header"><strong>Submission Confirmation</strong></div>
-                    <div class="card-body">
-                      <div class="form-group"><label for="email-submit-subject">Subject</label><input type="text" id="email-submit-subject"
-                          class="form-control"></div>
-                      <div class="form-group"><label for="email-submit-body">Body</label><textarea id="email-submit-body" class="form-control"
-                          rows="5"></textarea></div>
-                    </div>
+                  <div class="form-group col-md-6">
+                    <label for="ui-age-groups">Age Groups</label>
+                    <textarea id="ui-age-groups" class="form-control" rows="3"></textarea>
+                    <small class="form-text text-muted">Enter options one per line.</small>
                   </div>
-
-                  <div class="card mb-3">
-                    <div class="card-header"><strong>Already Owned</strong></div>
-                    <div class="card-body">
-                      <div class="form-group"><label for="email-owned-subject">Subject</label><input type="text" id="email-owned-subject"
-                          class="form-control"></div>
-                      <div class="form-group"><label for="email-owned-body">Body</label><textarea id="email-owned-body" class="form-control"
-                          rows="5"></textarea></div>
-                    </div>
+                </div>
+                <small class="form-text text-muted">One option per line. These appear on the patron form and staff new
+                  suggestion form.</small>
+                <div class="card mt-4">
+                  <div class="card-header">
+                    <strong>Format Display Names</strong>
                   </div>
-
-                  <div class="card mb-3">
-                    <div class="card-header"><strong>Rejected (Default)</strong></div>
-                    <div class="card-body">
-                      <div class="form-group"><label for="email-rejected-subject">Subject</label><input type="text" id="email-rejected-subject"
-                          class="form-control"></div>
-                      <div class="form-group"><label for="email-rejected-body">Body</label><textarea id="email-rejected-body" class="form-control"
-                          rows="5"></textarea></div>
-                    </div>
-                  </div>
-
-                  <div class="card mb-3">
-                    <div class="card-header d-flex justify-content-between align-items-center">
-                      <strong>Additional Rejection Templates</strong>
-                      <button type="button" id="btn-add-rejection-template" class="btn btn-sm btn-outline-primary">Add Template</button>
-                    </div>
-                    <div class="card-body">
-                      <div id="rejection-templates-container"></div>
-                    </div>
-                  </div>
-
-                  <div class="card mb-0">
-                    <div class="card-header"><strong>Hold Placed</strong></div>
-                    <div class="card-body">
-                      <div class="form-group"><label for="email-hold-subject">Subject</label><input type="text" id="email-hold-subject"
-                          class="form-control"></div>
-                      <div class="form-group"><label for="email-hold-body">Body</label><textarea id="email-hold-body" class="form-control"
-                          rows="5"></textarea></div>
+                  <div class="card-body">
+                    <p class="text-muted small">Manage material formats shown to patrons. Enabled formats appear in the
+                      patron portal dropdown. You can also add custom formats here.</p>
+                    <div id="format-settings-container"></div>
+                    <div class="mt-3">
+                      <button type="button" id="btn-add-format" class="btn btn-sm btn-outline-primary">Add New
+                        Format</button>
                     </div>
                   </div>
                 </div>
+                <div class="card mt-4">
+                  <div class="card-header">
+                    <strong>Patron Format Rules</strong>
+                  </div>
+                  <div class="card-body">
+                    <p class="text-muted small">Choose which patron fields are shown for each format. Labels are
+                      display-only; values always save to the existing database fields.</p>
+                    <div id="format-rules-editor"></div>
+                  </div>
+                </div>
               </div>
-            </section>
+            </div>
+          </section>
 
-            <div class="settings-save-bar">
-              <div>
-                <div class="font-weight-bold">Ready to apply changes?</div>
-                <div class="small text-muted">This saves every section, including hidden sections.</div>
+          <section id="settings-templates" class="settings-panel" data-settings-section="templates" role="tabpanel"
+            aria-labelledby="tab-templates" tabindex="-1">
+            <div class="card settings-panel-card">
+              <div class="card-header d-flex justify-content-between align-items-center">
+                <div>
+                  <h2 class="h4 mb-1">Email Settings</h2>
+                  <p class="text-muted mb-0">Configure sender details and customize email templates. Use
+                    <code>{{name}}</code>, <code>{{title}}</code>, <code>{{author}}</code>,
+                    <code>{{format}}</code>, and <code>{{barcode}}</code> as placeholders.
+                  </p>
+                </div>
               </div>
-              <div class="text-md-right">
-                <button type="submit" class="btn btn-lg btn-success">Save Settings</button>
-                <div id="settings-msg" class="mt-2 font-weight-bold"></div>
+              <div class="card-body">
+
+                <div class="card mb-4">
+                  <div class="card-header"><strong>Sender Details</strong></div>
+                  <div class="card-body pb-0">
+                    <div class="form-row">
+                      <div class="form-group col-md-6"><label for="email-from-address">From Email Address</label><input
+                          type="email" id="email-from-address" class="form-control"></div>
+                      <div class="form-group col-md-6"><label for="email-from-name">From Name</label><input type="text"
+                          id="email-from-name" class="form-control"></div>
+                    </div>
+                    <small class="form-text text-muted mb-3">If left blank, the system will use the System
+                      Defaults.</small>
+                  </div>
+                </div>
+
+                <div class="card mb-3">
+                  <div class="card-header"><strong>Submission Confirmation</strong></div>
+                  <div class="card-body">
+                    <div class="form-group"><label for="email-submit-subject">Subject</label><input type="text"
+                        id="email-submit-subject" class="form-control"></div>
+                    <div class="form-group"><label for="email-submit-body">Body</label><textarea id="email-submit-body"
+                        class="form-control" rows="5"></textarea></div>
+                  </div>
+                </div>
+
+                <div class="card mb-3">
+                  <div class="card-header"><strong>Already Owned</strong></div>
+                  <div class="card-body">
+                    <div class="form-group"><label for="email-owned-subject">Subject</label><input type="text"
+                        id="email-owned-subject" class="form-control"></div>
+                    <div class="form-group"><label for="email-owned-body">Body</label><textarea id="email-owned-body"
+                        class="form-control" rows="5"></textarea></div>
+                  </div>
+                </div>
+
+                <div class="card mb-3">
+                  <div class="card-header"><strong>Rejected (Default)</strong></div>
+                  <div class="card-body">
+                    <div class="form-group"><label for="email-rejected-subject">Subject</label><input type="text"
+                        id="email-rejected-subject" class="form-control"></div>
+                    <div class="form-group"><label for="email-rejected-body">Body</label><textarea
+                        id="email-rejected-body" class="form-control" rows="5"></textarea></div>
+                  </div>
+                </div>
+
+                <div class="card mb-3">
+                  <div class="card-header d-flex justify-content-between align-items-center">
+                    <strong>Additional Rejection Templates</strong>
+                    <button type="button" id="btn-add-rejection-template" class="btn btn-sm btn-outline-primary">Add
+                      Template</button>
+                  </div>
+                  <div class="card-body">
+                    <div id="rejection-templates-container"></div>
+                  </div>
+                </div>
+
+                <div class="card mb-0">
+                  <div class="card-header"><strong>Hold Placed</strong></div>
+                  <div class="card-body">
+                    <div class="form-group"><label for="email-hold-subject">Subject</label><input type="text"
+                        id="email-hold-subject" class="form-control"></div>
+                    <div class="form-group"><label for="email-hold-body">Body</label><textarea id="email-hold-body"
+                        class="form-control" rows="5"></textarea></div>
+                  </div>
+                </div>
               </div>
+            </div>
+          </section>
+
+          <div class="settings-save-bar">
+            <div>
+              <div class="font-weight-bold">Ready to apply changes?</div>
+              <div class="small text-muted">This saves every section, including hidden sections.</div>
+            </div>
+            <div class="text-md-right">
+              <button type="submit" class="btn btn-lg btn-success">Save Settings</button>
+              <div id="settings-msg" class="mt-2 font-weight-bold"></div>
             </div>
           </div>
         </div>
-      </form>
     </div>
+    </form>
+  </div>
   </div>
 </main>
 <div id="status-announcer" class="sr-only" aria-live="polite"></div>
 <div id="toast-container" aria-live="polite" aria-atomic="true"></div>
 
 <!-- Note Dialog -->
-<dialog id="noteDialog" style="padding: 0; border: none; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); max-width: 500px; width: 90%;">
-  <div style="padding: 15px; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center; background: #f8f9fa; border-top-left-radius: 8px; border-top-right-radius: 8px;">
+<dialog id="noteDialog"
+  style="padding: 0; border: none; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); max-width: 500px; width: 90%;">
+  <div
+    style="padding: 15px; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center; background: #f8f9fa; border-top-left-radius: 8px; border-top-right-radius: 8px;">
     <h5 style="margin: 0;">Full Note</h5>
-    <button type="button" onclick="document.getElementById('noteDialog').close()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; line-height: 1; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 4px;" aria-label="Close dialog">&times;</button>
+    <button type="button" onclick="document.getElementById('noteDialog').close()"
+      style="background: none; border: none; font-size: 1.5rem; cursor: pointer; line-height: 1; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 4px;"
+      aria-label="Close dialog">&times;</button>
   </div>
-  <div id="noteDialogContent" style="padding: 20px; white-space: pre-wrap; font-size: 14px; max-height: 400px; overflow-y: auto;"></div>
-  <div style="padding: 10px 15px; border-top: 1px solid #ddd; text-align: right; background: #f8f9fa; border-bottom-left-radius: 8px; border-bottom-right-radius: 8px;">
-    <button id="noteDialogCloseBtn" type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('noteDialog').close()">Close</button>
+  <div id="noteDialogContent"
+    style="padding: 20px; white-space: pre-wrap; font-size: 14px; max-height: 400px; overflow-y: auto;"></div>
+  <div
+    style="padding: 10px 15px; border-top: 1px solid #ddd; text-align: right; background: #f8f9fa; border-bottom-left-radius: 8px; border-bottom-right-radius: 8px;">
+    <button id="noteDialogCloseBtn" type="button" class="btn btn-secondary btn-sm"
+      onclick="document.getElementById('noteDialog').close()">Close</button>
   </div>
 </dialog>
 
@@ -1020,7 +1138,8 @@
       style="padding: 12px 15px; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center; background: #f8f9fa; border-radius: 8px 8px 0 0;">
       <h5 id="editModalLabel" style="margin: 0; font-size: 1.1rem;">Edit Suggestion</h5>
       <button type="button" id="close-modal-x"
-        style="border: none; background: transparent; font-size: 1.5rem; line-height: 1; cursor: pointer; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 4px;" aria-label="Close dialog">&times;</button>
+        style="border: none; background: transparent; font-size: 1.5rem; line-height: 1; cursor: pointer; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 4px;"
+        aria-label="Close dialog">&times;</button>
     </div>
 
     <div style="padding: 15px 20px; overflow-y: auto; flex: 1;">
@@ -1124,7 +1243,8 @@
       style="padding: 15px; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center;">
       <h5 style="margin: 0;">New Suggestion</h5>
       <button type="button" id="close-new-modal-x"
-        style="border: none; background: transparent; font-size: 1.5rem; line-height: 1; cursor: pointer; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 4px;" aria-label="Close dialog">&times;</button>
+        style="border: none; background: transparent; font-size: 1.5rem; line-height: 1; cursor: pointer; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 4px;"
+        aria-label="Close dialog">&times;</button>
     </div>
     <div style="padding: 20px;">
       <p>Submit a suggestion on behalf of a patron.</p>
@@ -1189,7 +1309,8 @@
 </dialog>
 
 <!-- Confirm Dialog -->
-<dialog id="confirm-dialog" style="padding: 0; border: none; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); max-width: 420px; width: 90%;">
+<dialog id="confirm-dialog"
+  style="padding: 0; border: none; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); max-width: 420px; width: 90%;">
   <div style="padding: 24px 24px 20px;">
     <p id="confirm-dialog-message" style="margin: 0 0 20px; font-size: 15px; line-height: 1.5;"></p>
     <div style="display: flex; justify-content: flex-end; gap: 8px;">
@@ -1200,7 +1321,8 @@
 </dialog>
 
 <!-- Alert Dialog -->
-<dialog id="alert-dialog" style="padding: 0; border: none; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); max-width: 420px; width: 90%;">
+<dialog id="alert-dialog"
+  style="padding: 0; border: none; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); max-width: 420px; width: 90%;">
   <div style="padding: 24px 24px 20px;">
     <p id="alert-dialog-message" style="margin: 0 0 20px; font-size: 15px; line-height: 1.5;"></p>
     <div style="text-align: right;">
