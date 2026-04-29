@@ -642,7 +642,20 @@
                   <label for="ui-already-submitted-msg">Already submitted message (supports HTML)</label>
                   <textarea id="ui-already-submitted-msg" class="form-control" rows="3"></textarea>
                   <small class="form-text text-muted">Shown when a patron tries to submit a title they have already
-                    requested.</small>
+                    requested. Available placeholders: <code>{{duplicate_date}}</code>,
+                    <code>{{duplicate_status}}</code>, <code>{{duplicate_title}}</code>,
+                    <code>{{duplicate_author}}</code>, <code>{{duplicate_format}}</code>, and
+                    <code>{{duplicate_match_type}}</code>.</small>
+                </div>
+                <div class="card mb-3">
+                  <div class="card-header">
+                    <strong>Duplicate request status labels</strong>
+                  </div>
+                  <div class="card-body">
+                    <p class="text-muted small">These labels are shown through the
+                      <code>{{duplicate_status}}</code> placeholder in the already submitted message.</p>
+                    <div id="duplicate-status-labels-container" class="form-row"></div>
+                  </div>
                 </div>
                 <div class="form-group">
                   <label for="ui-ebook-msg">eBook Message (Supports HTML)</label>

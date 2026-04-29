@@ -496,11 +496,12 @@ function enforceDuplicate(app, barcode, data) {
     if (isbnExisting.length) {
       var isbnErr = new Error("You have already submitted a suggestion for this ISBN.");
       isbnErr.code = 409;
+      isbnErr.duplicate = duplicateContext(isbnExisting[0], "identifier");
       throw isbnErr;
     }
   }
 
-  var filter = "barcode = {:barcode} && (title = {:title} && format = {:format})";
+  var filter = "barcode = {:barcode} && ((title = {:title} && format = {:format})";
   params.title = title || "";
   params.format = normalizeFormat(data.format);
 
@@ -509,13 +510,38 @@ function enforceDuplicate(app, barcode, data) {
     filter += " || (bibid = {:bibid})";
     params.bibid = bibid;
   }
+  filter += ")";
 
   var existing = app.findRecordsByFilter("title_requests", filter, "-created", 1, 0, params);
   if (existing.length) {
     var err = new Error("You have already submitted this suggestion.");
     err.code = 409;
+    err.duplicate = duplicateContext(existing[0], duplicateMatchType(existing[0], title, normalizeFormat(data.format), bibid));
     throw err;
   }
+}
+
+function duplicateMatchType(record, title, format, bibid) {
+  if (bibid && String(record.get("bibid") || "").trim() === bibid) {
+    return "bibid";
+  }
+  if (title && String(record.get("title") || "").trim() === title && String(record.get("format") || "").trim() === format) {
+    return "title_format";
+  }
+  return "title_format";
+}
+
+function duplicateContext(record, matchType) {
+  return {
+    id: record.id || "",
+    created: record.get("created") || record.created || "",
+    status: record.get("status") || "",
+    closeReason: record.get("closeReason") || "",
+    title: record.get("title") || "",
+    author: record.get("author") || "",
+    format: record.get("format") || "",
+    matchType: matchType || "title_format"
+  };
 }
 
 function titleCase(value) {
@@ -548,6 +574,7 @@ module.exports = {
   normalizeCloseReason: normalizeCloseReason,
   normalizeFormat: normalizeFormat,
   normalizeStatus: normalizeStatus,
+  duplicateContext: duplicateContext,
   listStaffUsers: listStaffUsers,
   setStatusWithNote: setStatusWithNote,
   addWorkflowTag: addWorkflowTag,

@@ -26,6 +26,31 @@ const closeReasonMap = {
 };
 const defaultPublicationOptions = ['Already published', 'Coming soon', 'Published a while back'];
 const defaultAgeGroups = ['Adult', 'Young Adult / Teen', 'Children'];
+const duplicateStatusLabelDefaults = {
+  suggestion: 'Received',
+  outstanding_purchase: 'Under review',
+  pending_hold: 'Being prepared',
+  hold_placed: 'Hold placed',
+  closed: 'Completed',
+  rejected: 'Not selected for purchase',
+  hold_completed: 'Completed',
+  hold_not_picked_up: 'Closed',
+  manual: 'Closed',
+  silent: 'Closed',
+  'Silently Closed': 'Closed'
+};
+const duplicateStatusLabelFields = [
+  ['suggestion', 'Received suggestion'],
+  ['outstanding_purchase', 'Pending purchase'],
+  ['pending_hold', 'Pending hold'],
+  ['hold_placed', 'Hold placed'],
+  ['closed', 'Closed'],
+  ['rejected', 'Rejected outcome'],
+  ['hold_completed', 'Fulfilled outcome'],
+  ['hold_not_picked_up', 'Hold not picked up'],
+  ['manual', 'Manual close'],
+  ['silent', 'Silent close']
+];
 const patronFormatKeys = ['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'];
 const patronFormatFields = [
   { key: 'title', label: 'Title (original)', storage: 'title' },
@@ -2582,7 +2607,8 @@ function populatePatronUiForms(uiText) {
   setFieldValue('ui-no-email-msg', uiText.noEmailMessage || 'No email is specified on your library account, which means we won\'t be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.');
   setFieldValue('ui-success-title', uiText.successTitle || 'Suggestion Submitted');
   setFieldValue('ui-success-msg', uiText.successMessage || 'You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>');
-  setFieldValue('ui-already-submitted-msg', uiText.alreadySubmittedMessage || 'This suggestion has already been submitted. We only accept one suggestion per title. Check the catalog to see if the material was acquired and place a hold.<div>Thank you for using this library\'s suggestion service.</div>');
+  setFieldValue('ui-already-submitted-msg', uiText.alreadySubmittedMessage || 'This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.<div>Thank you for using this library\'s suggestion service.</div>');
+  renderDuplicateStatusLabelSettings(uiText.duplicateStatusLabels || {});
   setFieldValue('ui-ebook-msg', uiText.ebookMessage || '<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>');
   setFieldValue('ui-eaudiobook-msg', uiText.eaudiobookMessage || '<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>');
 
@@ -2608,6 +2634,33 @@ function populatePatronUiForms(uiText) {
   renderPatronFormatRulesEditor(uiText.formatRules);
   setPublicationOptions(uiText.publicationOptions);
   setAgeGroups(uiText.ageGroups);
+}
+
+function normalizeDuplicateStatusLabels(labels = {}) {
+  return { ...duplicateStatusLabelDefaults, ...(labels && typeof labels === 'object' ? labels : {}) };
+}
+
+function renderDuplicateStatusLabelSettings(labels = {}) {
+  const container = document.getElementById('duplicate-status-labels-container');
+  if (!container) return;
+  const normalized = normalizeDuplicateStatusLabels(labels);
+  container.innerHTML = duplicateStatusLabelFields.map(([key, label]) => `
+    <div class="form-group col-md-6">
+      <label for="duplicate-status-${escapeAttr(key)}" class="small font-weight-bold">${escapeAttr(label)}</label>
+      <input type="text" id="duplicate-status-${escapeAttr(key)}" class="form-control form-control-sm duplicate-status-label-input" data-key="${escapeAttr(key)}" value="${escapeAttr(normalized[key] || '')}">
+    </div>
+  `).join('');
+}
+
+function collectDuplicateStatusLabels() {
+  const labels = {};
+  duplicateStatusLabelFields.forEach(([key]) => {
+    const el = document.getElementById(`duplicate-status-${key}`);
+    const value = el ? el.value.trim() : '';
+    labels[key] = value || duplicateStatusLabelDefaults[key] || '';
+  });
+  labels['Silently Closed'] = labels.silent || duplicateStatusLabelDefaults.silent;
+  return labels;
 }
 
 document.getElementById('btn-reset-library-settings').addEventListener('click', async () => {
@@ -2883,6 +2936,7 @@ function buildSettingsPayload() {
     successTitle: getFieldValue('ui-success-title'),
     successMessage: getFieldValue('ui-success-msg'),
     alreadySubmittedMessage: getFieldValue('ui-already-submitted-msg'),
+    duplicateStatusLabels: collectDuplicateStatusLabels(),
     ebookMessage: getFieldValue('ui-ebook-msg'),
     eaudiobookMessage: getFieldValue('ui-eaudiobook-msg'),
     formatLabels: collectFormatLabels(),

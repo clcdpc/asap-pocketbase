@@ -200,6 +200,87 @@ function applyIsbnCheckStatusForCreate(data, uiText) {
   data.isbnCheckStatus = "skipped_no_isbn";
 }
 
+function escapeHtml(value) {
+  return String(value === undefined || value === null ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function formatDuplicateDate(value) {
+  var text = String(value || "").trim();
+  if (!text) {
+    return "";
+  }
+  var date = new Date(text.replace(" ", "T"));
+  if (isNaN(date.getTime())) {
+    return text;
+  }
+  return date.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric"
+  });
+}
+
+function duplicateStatusKey(duplicate) {
+  duplicate = duplicate || {};
+  var status = String(duplicate.status || "").trim();
+  var closeReason = String(duplicate.closeReason || "").trim();
+  if (status === records.STATUS.CLOSED && closeReason) {
+    return closeReason;
+  }
+  return status || records.STATUS.SUGGESTION;
+}
+
+function formatLabelForDuplicate(format, uiText) {
+  var labels = (uiText && uiText.formatLabels) || {};
+  return labels[format] || String(format || "");
+}
+
+function duplicateMatchLabel(matchType) {
+  var labels = {
+    identifier: "ISBN",
+    title_format: "title and format",
+    bibid: "catalog record"
+  };
+  return labels[matchType] || "suggestion";
+}
+
+function renderDuplicateMessage(uiText, duplicate) {
+  uiText = uiText || {};
+  duplicate = duplicate || {};
+  var labels = config.defaultDuplicateStatusLabels ? config.defaultDuplicateStatusLabels() : {};
+  labels = Object.assign({}, labels, uiText.duplicateStatusLabels || {});
+  var statusKey = duplicateStatusKey(duplicate);
+  var statusLabel = labels[statusKey] || labels[duplicate.status] || labels.closed || "Submitted";
+  var template = uiText.alreadySubmittedMessage || "This suggestion has already been submitted from your account.";
+  var data = {
+    duplicate_date: formatDuplicateDate(duplicate.created),
+    duplicate_status: statusLabel,
+    duplicate_title: duplicate.title || "",
+    duplicate_author: duplicate.author || "",
+    duplicate_format: formatLabelForDuplicate(duplicate.format, uiText),
+    duplicate_match_type: duplicateMatchLabel(duplicate.matchType)
+  };
+  return template.replace(/{{(\w+)}}/g, function (match, key) {
+    return Object.prototype.hasOwnProperty.call(data, key) ? escapeHtml(data[key]) : match;
+  });
+}
+
+function duplicateConflictResponse(e, err, uiText) {
+  var duplicate = err.duplicate || null;
+  var message = duplicate ? renderDuplicateMessage(uiText, duplicate) : (uiText.alreadySubmittedMessage || err.message);
+  return e.json(409, {
+    message: err.message,
+    conflictTitle: "Already Submitted",
+    conflictMessage: message,
+    duplicate: duplicate
+  });
+}
+
 function noteSkippedEmail(app, record) {
   mail.noteSkipped(app, record);
 }
@@ -621,11 +702,11 @@ function patronLogin(e) {
 
 function createSuggestion(e) {
   var patron = requireAuth(e, "patron_users");
+  var uiText = config.uiText(e.app, patron.get("libraryOrgId"));
   try {
     if (!String(patron.get("libraryOrgId") || "").trim()) {
       return e.json(403, { message: "Your library could not be determined. Please log out and log back in before submitting a suggestion." });
     }
-    var uiText = config.uiText();
     var data = formatRules.sanitizePatronSuggestion(body(e), uiText);
     applyIsbnCheckStatusForCreate(data, uiText);
     var record = records.createSuggestion(e.app, patron, data);
@@ -646,6 +727,9 @@ function createSuggestion(e) {
     });
   } catch (err) {
     if (err.code) {
+      if (err.code === 409) {
+        return duplicateConflictResponse(e, err, uiText);
+      }
       return e.json(err.code, { message: err.message });
     }
     throw err;
@@ -1290,5 +1374,6 @@ module.exports = {
   staffTestSmtp: staffTestSmtp,
   getLibrarySettings: getLibrarySettings,
   updateLibrarySettings: updateLibrarySettings,
+  renderDuplicateMessage: renderDuplicateMessage,
   staffRunPromoterCheck: staffRunPromoterCheck,
 };

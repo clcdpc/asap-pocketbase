@@ -71,8 +71,38 @@ const DEFAULT_EMAILS = {
 const EMAIL_TEMPLATE_KEYS = ["suggestion_submitted", "already_owned", "rejected", "hold_placed"];
 const EMAIL_TEMPLATE_FIELDS = ["subject", "body"];
 
+const DEFAULT_DUPLICATE_STATUS_LABELS = {
+  suggestion: "Received",
+  outstanding_purchase: "Under review",
+  pending_hold: "Being prepared",
+  hold_placed: "Hold placed",
+  closed: "Completed",
+  rejected: "Not selected for purchase",
+  hold_completed: "Completed",
+  hold_not_picked_up: "Closed",
+  manual: "Closed",
+  silent: "Closed",
+  "Silently Closed": "Closed"
+};
+
 function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function defaultDuplicateStatusLabels() {
+  return cloneJson(DEFAULT_DUPLICATE_STATUS_LABELS);
+}
+
+function mergeDuplicateStatusLabels(labels) {
+  var merged = defaultDuplicateStatusLabels();
+  var incoming = parseJsonObject(labels, {});
+  Object.keys(merged).forEach(function (key) {
+    var value = incoming[key];
+    if (String(value || "").trim()) {
+      merged[key] = String(value);
+    }
+  });
+  return merged;
 }
 
 function defaultEmailTemplates() {
@@ -191,7 +221,8 @@ function getSettings() {
     loginNote: "Use of this service requires a valid library card. Contact your library if you need assistance with your card or PIN.",
     successTitle: "Suggestion Submitted",
     successMessage: "You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>",
-    alreadySubmittedMessage: "This suggestion has already been submitted from your account. You may submit an ISBN that other patrons have suggested, but you cannot submit the same ISBN twice from the same account. Check the catalog to see if the material was acquired and place a hold.<div>Thank you for using this library's suggestion service.</div>",
+    alreadySubmittedMessage: "This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.<div>Thank you for using this library's suggestion service.</div>",
+    duplicateStatusLabels: defaultDuplicateStatusLabels(),
     noEmailMessage: "No email is specified on your library account, which means we won't be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.",
     systemNotEnabledMessage: "Your library does not currently participate in this suggestion service.",
     ebookMessage: "<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
@@ -226,6 +257,7 @@ function getSettings() {
     var dbEmails = parseRecordJsonObject(record, "emails", {});
 
     var mergedUiText = Object.assign({}, defaultUiText, dbUiText, { logoUrl: logoUrl });
+    mergedUiText.duplicateStatusLabels = mergeDuplicateStatusLabels(mergedUiText.duplicateStatusLabels);
     mergedUiText.formatRules = formatRules.normalizeFormatRules(mergedUiText.formatRules);
 
     return {
@@ -291,6 +323,7 @@ function librarySettings(app, libraryOrgId) {
 
     const formatRules = require(`${__hooks}/lib/format_rules.js`);
     var mergedUiText = Object.assign({}, systemDefaults.ui_text, dbUiText);
+    mergedUiText.duplicateStatusLabels = mergeDuplicateStatusLabels(mergedUiText.duplicateStatusLabels);
     mergedUiText.formatRules = formatRules.normalizeFormatRules(mergedUiText.formatRules);
 
     return {
@@ -439,6 +472,10 @@ function uiText(app, orgId) {
   return librarySettings(app, orgId).ui_text;
 }
 
+function duplicateStatusLabels(app, orgId) {
+  return mergeDuplicateStatusLabels(uiText(app, orgId).duplicateStatusLabels);
+}
+
 function allowedStaffUsers() {
   const identity = require(`${__hooks}/lib/identity.js`);
   const value = String(getSettings().allowedStaffUsers || "").trim();
@@ -481,7 +518,9 @@ module.exports = {
   allowedStaffUsers: allowedStaffUsers,
   applyMailSettings: applyMailSettings,
   defaultEmailTemplates: defaultEmailTemplates,
+  defaultDuplicateStatusLabels: defaultDuplicateStatusLabels,
   diffEmailTemplates: diffEmailTemplates,
+  duplicateStatusLabels: duplicateStatusLabels,
   emailStatus: emailStatus,
   emails: emails,
   hasEmailTemplateOverrides: hasEmailTemplateOverrides,

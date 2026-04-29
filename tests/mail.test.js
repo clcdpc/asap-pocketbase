@@ -42,6 +42,15 @@ const mockConfig = {
         book: "Book"
       }
     };
+  },
+  mail: function() {
+    return {
+      host: "smtp.test",
+      port: 587,
+      username: "",
+      password: "",
+      tls: true
+    };
   }
 };
 
