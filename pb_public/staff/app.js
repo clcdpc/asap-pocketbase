@@ -739,11 +739,67 @@ function getGridColumns(status) {
   ];
 }
 
+
+function getDuplicateBadgesHtml(row) {
+  if (!allSuggestions || !allSuggestions.length) return '';
+
+  const duplicates = allSuggestions.filter(r => {
+    if (r.id === row.id) return false;
+
+    // Check identifier match if both have one
+    if (r.identifier && row.identifier && r.identifier.trim().toLowerCase() === row.identifier.trim().toLowerCase()) {
+      return true;
+    }
+
+    // Check title match
+    if (r.title && row.title && r.title.trim().toLowerCase() === row.title.trim().toLowerCase()) {
+      return true;
+    }
+
+    return false;
+  });
+
+  if (!duplicates.length) return '';
+
+  // Group by status
+  const statusCounts = {};
+  duplicates.forEach(d => {
+    const s = normalizeStatus(d.status);
+    statusCounts[s] = (statusCounts[s] || 0) + 1;
+  });
+
+  const statusNames = {
+    'suggestion': 'Suggestion',
+    'outstanding_purchase': 'Outstanding Purchase',
+    'pending_hold': 'Pending Hold',
+    'hold_placed': 'Hold Placed',
+    'closed': 'Closed'
+  };
+
+  const statusColors = {
+    'suggestion': 'badge-secondary',
+    'outstanding_purchase': 'badge-info',
+    'pending_hold': 'badge-warning',
+    'hold_placed': 'badge-success',
+    'closed': 'badge-dark'
+  };
+
+  let badges = '';
+  for (const [status, count] of Object.entries(statusCounts)) {
+    const displayName = statusNames[status] || status;
+    const colorClass = statusColors[status] || 'badge-secondary';
+    const text = count > 1 ? `Dup (${displayName} x${count})` : `Dup (${displayName})`;
+    badges += ` <span class="badge ${colorClass}" title="${count} duplicate(s) in ${displayName} stage">${text}</span>`;
+  }
+
+  return badges;
+}
+
 function getGridRow(row, status) {
   if (status === 'suggestion') {
     return [
       row.barcode,
-      row.title,
+      gridjs.html(escapeAttr(row.title) + getDuplicateBadgesHtml(row)),
       row.author,
       formatMap[row.format] || row.format,
       formatPublication(row.publication),
@@ -757,7 +813,7 @@ function getGridRow(row, status) {
   if (status === 'closed') {
     return [
       row.barcode,
-      row.title,
+      gridjs.html(escapeAttr(row.title) + getDuplicateBadgesHtml(row)),
       row.author,
       formatMap[row.format] || row.format,
       formatStandardDate(row.created),
@@ -770,7 +826,7 @@ function getGridRow(row, status) {
 
   return [
     row.barcode,
-    row.title,
+    gridjs.html(escapeAttr(row.title) + getDuplicateBadgesHtml(row)),
     row.author,
     row.identifier,
     row.bibid,
