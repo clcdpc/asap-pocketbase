@@ -2124,13 +2124,13 @@ async function loadSettings(options = {}) {
     setFieldValue('polaris-admin-pass', polaris.adminPassword || '');
     setFieldValue('polaris-override-pass', polaris.overridePassword || '');
     setFieldChecked('polaris-auto-promote', polaris.autoPromote !== false);
-    setFieldValue('allowed-staff-users', normalizeAllowedStaffUsers(record.allowedStaffUsers || ''));
 
     // UI Text and Formats are handled by populatePatronUiForms called via loadLibrarySettings
     // but we can set them here if needed. Since loadLibrarySettings is called right before this, 
     // it will be populated. Wait, loadLibrarySettings is called AT THE TOP of loadSettings asynchronously!
     // So if it completes before loadSettings finishes, loadSettings might overwrite it?
     // Actually, loadLibrarySettings is awaited at the top. So we should just remove the uiText Population from loadSettings and let loadLibrarySettings handle it.
+    await populateStaffLibraryOptions();
     await loadStaffUsers();
 
 
@@ -2539,9 +2539,14 @@ function renderStaffUsers(users) {
     const tdSave = document.createElement('td');
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'btn btn-sm btn-primary staff-role-save';
+    btn.className = 'btn btn-sm btn-primary staff-role-save mr-1';
     btn.textContent = 'Save Role';
     tdSave.appendChild(btn);
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'btn btn-sm btn-outline-danger staff-user-delete';
+    del.textContent = 'Remove';
+    tdSave.appendChild(del);
     tr.appendChild(tdSave);
 
     bodyEl.appendChild(tr);
@@ -2551,10 +2556,29 @@ function renderStaffUsers(users) {
 const staffUsersTableBody = document.getElementById('staff-users-table-body');
 if (staffUsersTableBody) {
   staffUsersTableBody.addEventListener('click', async (e) => {
+    const row = e.target.closest('tr[data-staff-id]');
+    if (!row) return;
+    const delBtn = e.target.closest('.staff-user-delete');
+    if (delBtn) {
+      const id = row.getAttribute('data-staff-id');
+      const ok = await showConfirm('Remove staff member', 'Are you sure you want to remove this staff user from access?');
+      if (!ok) return;
+      delBtn.disabled = true;
+      try {
+        await authorizedJson(`/api/asap/staff/users/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        await populateStaffLibraryOptions();
+    await loadStaffUsers();
+      } catch (err) {
+        const msgEl = document.getElementById('staff-users-msg');
+        if (msgEl) { msgEl.textContent = err.message || 'Failed to remove staff user.'; msgEl.className = 'mb-2 text-danger font-weight-bold'; }
+      } finally { delBtn.disabled = false; }
+      return;
+    }
+
     const btn = e.target.closest('.staff-role-save');
     if (!btn) return;
 
-    const row = btn.closest('tr[data-staff-id]');
+
     if (!row) return;
 
     const id = row.getAttribute('data-staff-id');
@@ -2577,7 +2601,8 @@ if (staffUsersTableBody) {
         msgEl.textContent = 'Staff role updated successfully.';
         msgEl.className = 'mb-2 text-success font-weight-bold';
       }
-      await loadStaffUsers();
+      await populateStaffLibraryOptions();
+    await loadStaffUsers();
     } catch (err) {
       console.error('Failed to update staff role', err);
       if (msgEl) {
@@ -2595,6 +2620,43 @@ if (refreshStaffUsersBtn) {
   refreshStaffUsersBtn.addEventListener('click', (e) => {
     e.preventDefault();
     loadStaffUsers();
+  });
+}
+
+async function populateStaffLibraryOptions() {
+  const select = document.getElementById('staff-add-library');
+  if (!select) return;
+  select.innerHTML = '<option value="">Select library</option>';
+  const me = pb.authStore.model || {};
+  if (isSuperAdminStaff()) {
+    const orgs = await pb.collection('polaris_organizations').getFullList({ filter: 'organizationCodeId = "2"', sort: 'displayName' });
+    orgs.forEach(org => select.appendChild(new Option(`${org.displayName || org.name} (ID ${org.organizationId})`, org.organizationId)));
+  } else if (me.libraryOrgId) {
+    select.appendChild(new Option(`${me.libraryOrgName || me.libraryOrgId} (ID ${me.libraryOrgId})`, me.libraryOrgId));
+    select.value = me.libraryOrgId;
+  }
+}
+
+const addStaffBtn = document.getElementById('btn-add-staff-user');
+if (addStaffBtn) {
+  addStaffBtn.addEventListener('click', async () => {
+    const identity = getFieldValue('staff-add-identity').trim();
+    const libraryOrgId = getFieldValue('staff-add-library').trim();
+    const role = getFieldValue('staff-add-role').trim() || 'staff';
+    const msgEl = document.getElementById('staff-users-msg');
+    if (!identity) return showAlert('Enter a staff username or identity.');
+    if (role !== 'super_admin' && !libraryOrgId) return showAlert('Select a library for this staff member.');
+    try {
+      const libSelect = document.getElementById('staff-add-library');
+      const opt = libSelect && libSelect.selectedIndex >= 0 ? libSelect.options[libSelect.selectedIndex] : null;
+      await authorizedJson('/api/asap/staff/users', { method: 'POST', body: JSON.stringify({ username: identity, libraryOrgId, libraryOrgName: opt ? opt.text : '', role }) });
+      setFieldValue('staff-add-identity', '');
+      if (msgEl) { msgEl.textContent = 'Staff member added.'; msgEl.className = 'mb-2 text-success font-weight-bold'; }
+      await populateStaffLibraryOptions();
+    await loadStaffUsers();
+    } catch (err) {
+      if (msgEl) { msgEl.textContent = err.message || 'Failed to add staff member.'; msgEl.className = 'mb-2 text-danger font-weight-bold'; }
+    }
   });
 }
 
@@ -2675,7 +2737,6 @@ function buildSettingsPayload() {
 
   const payload = {
     smtp, polaris, ui_text: uiText, emails,
-    allowedStaffUsers: normalizeAllowedStaffUsers(getFieldValue('allowed-staff-users')),
     suggestionLimit: positiveInt('suggestion-limit', 5, 'Suggestion limit'),
     suggestionLimitMessage: getFieldValue('suggestion-limit-msg'),
     outstandingTimeoutEnabled: getFieldChecked('outstanding-timeout-enabled'),

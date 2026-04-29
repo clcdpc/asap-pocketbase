@@ -63,9 +63,19 @@ routerAdd("GET", "/api/asap/staff/users", (e) => {
   return routes.staffUsersList(e);
 });
 
+routerAdd("POST", "/api/asap/staff/users", (e) => {
+  const routes = require(`${__hooks}/lib/routes.js`);
+  return routes.staffUserCreate(e);
+});
+
 routerAdd("POST", "/api/asap/staff/users/{id}/role", (e) => {
   const routes = require(`${__hooks}/lib/routes.js`);
   return routes.staffUserRoleUpdate(e);
+});
+
+routerAdd("DELETE", "/api/asap/staff/users/{id}", (e) => {
+  const routes = require(`${__hooks}/lib/routes.js`);
+  return routes.staffUserDelete(e);
 });
 
 routerAdd("GET", "/api/asap/staff/settings/library", (e) => {

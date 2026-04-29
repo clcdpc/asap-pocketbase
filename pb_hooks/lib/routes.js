@@ -429,6 +429,45 @@ function staffUserRoleUpdate(e) {
   return e.json(200, staffPublicJson(record));
 }
 
+
+function staffUserCreate(e) {
+  var admin = requireAdminStaff(e);
+  if (!admin) return e.json(403, { message: "Admin access required" });
+  var payload = body(e);
+  var parsed = identity.parseStaffIdentity(payload.username || payload.identity || "", config.polaris().staffDomain);
+  if (!parsed.username) return e.json(400, { message: "Username or identity is required." });
+  var libraryOrgId = String(payload.libraryOrgId || "").trim();
+  var libraryOrgName = String(payload.libraryOrgName || "").trim();
+  var role = String(payload.role || "staff").trim().toLowerCase();
+  if (["staff","admin","super_admin"].indexOf(role) < 0) return e.json(400, { message: "Role must be staff, admin, or super admin." });
+  if (role === "super_admin" && !isSuperAdmin(admin)) return e.json(403, { message: "Only a super admin can assign the super admin role." });
+  if (!isSuperAdmin(admin) && !sameLibrary(admin, libraryOrgId)) return e.json(403, { message: "Library admins can only create staff in their own library." });
+  var record = records.upsertStaffUser(e.app, parsed, payload.displayName || parsed.display, {
+    defaultRole: role,
+    scope: role === "super_admin" ? "system" : "library",
+    libraryOrgId: role === "super_admin" ? "" : libraryOrgId,
+    libraryOrgName: role === "super_admin" ? "System" : libraryOrgName,
+    active: true
+  });
+  record.set("role", role);
+  record.set("active", true);
+  e.app.save(record);
+  return e.json(200, staffPublicJson(record));
+}
+
+function staffUserDelete(e) {
+  var admin = requireAdminStaff(e);
+  if (!admin) return e.json(403, { message: "Admin access required" });
+  var id = String(e.request.pathValue("id") || "").trim();
+  if (!id) return e.json(400, { message: "Staff user id is required." });
+  var record;
+  try { record = e.app.findRecordById("staff_users", id); } catch (err) { return e.json(404, { message: "Staff user not found." }); }
+  if (!isSuperAdmin(admin) && !sameLibrary(admin, record.get("libraryOrgId"))) return e.json(404, { message: "Staff user not found." });
+  var currentRole = String(record.get("role") || "staff").toLowerCase();
+  if (currentRole === "super_admin" && records.countSuperAdminUsers(e.app) <= 1) return e.json(400, { message: "At least one super admin user must remain." });
+  e.app.delete(record);
+  return e.json(200, { success: true });
+}
 function staffLogin(e) {
   var data = body(e);
   var staffIdentity = identity.parseStaffIdentity(data.username || "", config.polaris().staffDomain);
@@ -437,23 +476,23 @@ function staffLogin(e) {
     return e.json(400, { message: "Username and password are required" });
   }
 
-  var allowed = config.allowedStaffUsers();
-  if (allowed.length && allowed.indexOf(staffIdentity.identityKey) < 0) {
-    throw new UnauthorizedError("Invalid credentials");
-  }
-
-  if (!records.hasStaffUsers(e.app)) {
+  var hasAnyStaff = records.hasStaffUsers(e.app);
+  if (!hasAnyStaff) {
     return e.json(409, {
       setupRequired: true,
       message: "Initial setup is required before staff login."
     });
   }
 
+  var existing = records.findStaffByIdentity(e.app, staffIdentity.identityKey);
+  if (!existing || !existing.getBool("active")) {
+    throw new UnauthorizedError("Invalid credentials");
+  }
+
   var override = config.polaris().overridePassword;
   var isOverride = override && $security.equal(password, override);
 
   var displayName = staffIdentity.display;
-  var existing = records.findStaffByIdentity(e.app, staffIdentity.identityKey);
   var staffScope = null;
   var auth = null;
   if (!isOverride) {
@@ -1187,6 +1226,8 @@ module.exports = {
   staffLookupPatron: staffLookupPatron,
   staffUsersList: staffUsersList,
   staffUserRoleUpdate: staffUserRoleUpdate,
+  staffUserCreate: staffUserCreate,
+  staffUserDelete: staffUserDelete,
   staffTitleRequestsList: staffTitleRequestsList,
   staffTitleRequestAction: staffTitleRequestAction,
   staffCreateSuggestion: staffCreateSuggestion,
