@@ -358,9 +358,9 @@ function polaris() {
 function mail() {
   const s = getSettings().smtp;
   return {
-    host: s.host || "",
+    host: String(s.host || "").trim(),
     port: parseInt(s.port, 10) || 587,
-    username: s.username || "",
+    username: String(s.username || "").trim(),
     password: s.password || "",
     tls: s.tls !== false,
   };

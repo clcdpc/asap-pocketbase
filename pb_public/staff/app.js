@@ -170,6 +170,35 @@ function getFieldChecked(id, fallback = false) {
   return el ? el.checked : fallback;
 }
 
+function isValidSmtpHost(host) {
+  const value = String(host || '').trim();
+  if (!value) return false;
+  if (value.toLowerCase() === 'localhost') return true;
+  if (value.includes('://') || value.includes('/') || value.includes(':') || /\s/.test(value)) return false;
+  const ipv4Pattern = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+  if (ipv4Pattern.test(value)) return true;
+  const labels = value.split('.');
+  if (labels.length < 2) return false;
+  return labels.every(label => /^[a-z0-9-]{1,63}$/i.test(label) && !label.startsWith('-') && !label.endsWith('-'));
+}
+
+function validateSmtpHostField(showMessage = false) {
+  const host = getFieldValue('smtp-host').trim();
+  const resultEl = document.getElementById('smtp-test-result');
+  if (!host || isValidSmtpHost(host)) {
+    if (showMessage && resultEl) {
+      resultEl.textContent = '';
+      resultEl.className = 'd-block mt-2';
+    }
+    return true;
+  }
+  if (showMessage && resultEl) {
+    resultEl.textContent = 'Enter a valid SMTP host (DNS name or IP only, no protocol or port).';
+    resultEl.className = 'mt-2 text-danger font-weight-bold small';
+  }
+  return false;
+}
+
 function setVisible(id, visible) {
   const el = document.getElementById(id);
   if (el) el.classList.toggle('hidden', !visible);
@@ -1962,6 +1991,9 @@ document.getElementById('btn-test-smtp').addEventListener('click', async (e) => 
     resSpan.className = 'mt-2 text-danger font-weight-bold small';
     return;
   }
+  if (!validateSmtpHostField(true)) {
+    return;
+  }
 
   resSpan.textContent = "Saving and testing...";
   resSpan.className = "mt-2 text-muted small";
@@ -2578,9 +2610,9 @@ function buildSettingsPayload() {
   }
 
   const smtp = {
-    host: getFieldValue('smtp-host'),
+    host: getFieldValue('smtp-host').trim(),
     port: positiveInt('smtp-port', 587, 'SMTP port'),
-    username: getFieldValue('smtp-username'),
+    username: getFieldValue('smtp-username').trim(),
     password: getFieldValue('smtp-password'),
     tls: getFieldChecked('smtp-tls', true)
   };
@@ -2685,6 +2717,9 @@ async function saveSettings(options = {}) {
   msg.className = 'mt-2 font-weight-bold text-info';
 
   try {
+    if (!validateSmtpHostField(true)) {
+      throw new Error('SMTP host is invalid.');
+    }
     const isSuper = isSuperAdminStaff();
     const payload = buildSettingsPayload();
 
@@ -3080,6 +3115,19 @@ function syncInputPair(idA, idB) {
 }
 syncInputPair('email-from-address', 'smtp-from');
 syncInputPair('email-from-name', 'smtp-from-name');
+const smtpHostInput = document.getElementById('smtp-host');
+if (smtpHostInput) {
+  smtpHostInput.addEventListener('blur', () => validateSmtpHostField(true));
+  smtpHostInput.addEventListener('input', () => {
+    if (isValidSmtpHost(smtpHostInput.value) || !smtpHostInput.value.trim()) {
+      const resultEl = document.getElementById('smtp-test-result');
+      if (resultEl && resultEl.className.includes('text-danger') && resultEl.textContent.includes('SMTP host')) {
+        resultEl.textContent = '';
+        resultEl.className = 'd-block mt-2';
+      }
+    }
+  });
+}
 
 function renderRejectionTemplates() {
   const container = document.getElementById('rejection-templates-container');
