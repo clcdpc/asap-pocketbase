@@ -503,7 +503,61 @@ function applyUiConfig() {
   formatRules = normalizeFormatRules(uiConfig.formatRules);
   updateFormatUI();
   updateFormatLabels();
+  applyCommonAuthors();
 }
+
+function applyCommonAuthors() {
+  const container = document.getElementById('common-author-container');
+  const select = document.getElementById('common-author');
+  if (!container || !select) return;
+
+  if (!uiConfig.commonAuthorsEnabled) {
+    container.classList.add('hidden');
+    document.getElementById('common-author-msg-container').classList.add('hidden');
+    physicalFields.classList.remove('hidden');
+    document.getElementById('submit-btn').classList.remove('hidden');
+    return;
+  }
+
+  const authors = (uiConfig.commonAuthorsList || '').split('\n').map(s => s.trim()).filter(Boolean);
+  if (authors.length === 0) {
+    container.classList.add('hidden');
+    return;
+  }
+
+  const currentValue = select.value;
+  select.innerHTML = '<option value="">-- Select an Author --</option>';
+  authors.forEach(author => {
+    const opt = document.createElement('option');
+    opt.value = author;
+    opt.textContent = author;
+    select.appendChild(opt);
+  });
+  select.value = authors.includes(currentValue) ? currentValue : '';
+
+  container.classList.remove('hidden');
+  handleCommonAuthorSelection();
+}
+
+function handleCommonAuthorSelection() {
+  const select = document.getElementById('common-author');
+  const msgContainer = document.getElementById('common-author-msg-container');
+  const msgText = document.getElementById('common-author-msg');
+  const submitBtn = document.getElementById('submit-btn');
+
+  if (select.value) {
+    msgText.innerHTML = uiConfig.commonAuthorsMessage || "We automatically purchase all upcoming titles by this author. Please check the catalog to place a hold on 'On Order' items.";
+    msgContainer.classList.remove('hidden');
+    physicalFields.classList.add('hidden');
+    submitBtn.classList.add('hidden');
+  } else {
+    msgContainer.classList.add('hidden');
+    updateFormatUI(); // This will show physical-fields if it's not econtent
+    submitBtn.classList.remove('hidden');
+  }
+}
+
+document.getElementById('common-author').addEventListener('change', handleCommonAuthorSelection);
 
 function updateFormatLabels() {
   const labels = uiConfig.formatLabels || {};

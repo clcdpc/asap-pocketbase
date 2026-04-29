@@ -242,10 +242,13 @@ function getSettings() {
       holdPickupTimeoutDays: record.getInt("holdPickupTimeoutDays") || 14,
       pendingHoldTimeoutEnabled: record.getBool("pendingHoldTimeoutEnabled"),
       pendingHoldTimeoutDays: record.getInt("pendingHoldTimeoutDays") || 14,
+      commonAuthorsEnabled: record.getBool("commonAuthorsEnabled"),
+      commonAuthorsList: record.getString("commonAuthorsList") || "",
+      commonAuthorsMessage: record.getString("commonAuthorsMessage") || "We automatically purchase all upcoming titles by this author. Please check the catalog to place a hold on 'On Order' items.",
       ui_text: mergedUiText
     };
   } catch (err) {
-    return { polaris: {}, smtp: {}, emails: defaultEmailTemplates(), allowedStaffUsers: "", suggestionLimit: 5, suggestionLimitMessage: "Weekly suggestion limit reached", outstandingTimeoutEnabled: false, outstandingTimeoutDays: 30, holdPickupTimeoutEnabled: false, holdPickupTimeoutDays: 14, pendingHoldTimeoutEnabled: false, pendingHoldTimeoutDays: 14, enabledLibraryOrgIds: "", ui_text: defaultUiText };
+    return { polaris: {}, smtp: {}, emails: defaultEmailTemplates(), allowedStaffUsers: "", suggestionLimit: 5, suggestionLimitMessage: "Weekly suggestion limit reached", outstandingTimeoutEnabled: false, outstandingTimeoutDays: 30, holdPickupTimeoutEnabled: false, holdPickupTimeoutDays: 14, pendingHoldTimeoutEnabled: false, pendingHoldTimeoutDays: 14, enabledLibraryOrgIds: "", commonAuthorsEnabled: false, commonAuthorsList: "", commonAuthorsMessage: "We automatically purchase all upcoming titles by this author. Please check the catalog to place a hold on 'On Order' items.", ui_text: defaultUiText };
   }
 }
 
@@ -268,7 +271,10 @@ function librarySettings(app, libraryOrgId) {
         holdPickupTimeoutEnabled: systemDefaults.holdPickupTimeoutEnabled,
         holdPickupTimeoutDays: systemDefaults.holdPickupTimeoutDays,
         pendingHoldTimeoutEnabled: systemDefaults.pendingHoldTimeoutEnabled,
-        pendingHoldTimeoutDays: systemDefaults.pendingHoldTimeoutDays
+        pendingHoldTimeoutDays: systemDefaults.pendingHoldTimeoutDays,
+        commonAuthorsEnabled: systemDefaults.commonAuthorsEnabled,
+        commonAuthorsList: systemDefaults.commonAuthorsList,
+        commonAuthorsMessage: systemDefaults.commonAuthorsMessage
       }
     };
   }
@@ -294,7 +300,10 @@ function librarySettings(app, libraryOrgId) {
         holdPickupTimeoutEnabled: typeof dbWorkflow.holdPickupTimeoutEnabled === "boolean" ? dbWorkflow.holdPickupTimeoutEnabled : systemDefaults.holdPickupTimeoutEnabled,
         holdPickupTimeoutDays: typeof dbWorkflow.holdPickupTimeoutDays === "number" ? dbWorkflow.holdPickupTimeoutDays : systemDefaults.holdPickupTimeoutDays,
         pendingHoldTimeoutEnabled: typeof dbWorkflow.pendingHoldTimeoutEnabled === "boolean" ? dbWorkflow.pendingHoldTimeoutEnabled : systemDefaults.pendingHoldTimeoutEnabled,
-        pendingHoldTimeoutDays: typeof dbWorkflow.pendingHoldTimeoutDays === "number" ? dbWorkflow.pendingHoldTimeoutDays : systemDefaults.pendingHoldTimeoutDays
+        pendingHoldTimeoutDays: typeof dbWorkflow.pendingHoldTimeoutDays === "number" ? dbWorkflow.pendingHoldTimeoutDays : systemDefaults.pendingHoldTimeoutDays,
+        commonAuthorsEnabled: typeof dbWorkflow.commonAuthorsEnabled === "boolean" ? dbWorkflow.commonAuthorsEnabled : systemDefaults.commonAuthorsEnabled,
+        commonAuthorsList: dbWorkflow.commonAuthorsList || systemDefaults.commonAuthorsList,
+        commonAuthorsMessage: dbWorkflow.commonAuthorsMessage || systemDefaults.commonAuthorsMessage
       }
     };
   } catch (err) {
@@ -309,7 +318,10 @@ function librarySettings(app, libraryOrgId) {
         holdPickupTimeoutEnabled: systemDefaults.holdPickupTimeoutEnabled,
         holdPickupTimeoutDays: systemDefaults.holdPickupTimeoutDays,
         pendingHoldTimeoutEnabled: systemDefaults.pendingHoldTimeoutEnabled,
-        pendingHoldTimeoutDays: systemDefaults.pendingHoldTimeoutDays
+        pendingHoldTimeoutDays: systemDefaults.pendingHoldTimeoutDays,
+        commonAuthorsEnabled: systemDefaults.commonAuthorsEnabled,
+        commonAuthorsList: systemDefaults.commonAuthorsList,
+        commonAuthorsMessage: systemDefaults.commonAuthorsMessage
       }
     };
   }

@@ -880,6 +880,34 @@
                     </div>
                   </div>
 
+                  <hr class="my-4">
+
+                  <!-- Common Author Notification -->
+                  <h5 class="mb-3">Common Author Notifications</h5>
+                  <p class="text-muted small">Prevent redundant suggestions for popular authors that your library already acquires automatically.</p>
+
+                  <div class="form-row align-items-center mb-3">
+                    <div class="col-auto">
+                      <div class="custom-control custom-checkbox">
+                        <input type="checkbox" class="custom-control-input" id="wf-common-authors-enabled">
+                        <label class="custom-control-label font-weight-bold" for="wf-common-authors-enabled">Enable Common Author Workflow</label>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div id="common-authors-config-group" class="hidden">
+                    <div class="form-group">
+                      <label for="wf-common-authors-list" class="font-weight-bold mb-1">Common Authors</label>
+                      <textarea id="wf-common-authors-list" class="form-control" rows="5" placeholder="Patterson, James&#10;Grisham, John&#10;Steel, Danielle"></textarea>
+                      <small class="form-text text-muted">Enter one author per line. The list will be automatically sorted by last name when saved.</small>
+                    </div>
+                    <div class="form-group">
+                      <label for="wf-common-authors-message" class="font-weight-bold mb-1">Patron Notification Message (Supports HTML)</label>
+                      <textarea id="wf-common-authors-message" class="form-control" rows="3"></textarea>
+                      <small class="form-text text-muted">This message is shown to patrons when they select a common author from the list.</small>
+                    </div>
+                  </div>
+
                 </div>
               </div>
             </section>

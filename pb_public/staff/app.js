@@ -2049,6 +2049,11 @@ function populateWorkflowForms(wf) {
   toggleTimeoutGroup();
   toggleHoldPickupTimeoutGroup();
   togglePendingHoldTimeoutGroup();
+
+  setFieldValue('wf-common-authors-list', wf.commonAuthorsList || '');
+  setFieldValue('wf-common-authors-message', wf.commonAuthorsMessage || '');
+  document.getElementById('wf-common-authors-enabled').checked = !!wf.commonAuthorsEnabled;
+  toggleCommonAuthorsGroup();
 }
 
 function populatePatronUiForms(uiText) {
@@ -2332,7 +2337,10 @@ function buildSettingsPayload() {
     holdPickupTimeoutDays: parseInt(getFieldValue('hold-pickup-timeout-days', '14'), 10) || 14,
     pendingHoldTimeoutEnabled: getFieldChecked('pending-hold-timeout-enabled'),
     pendingHoldTimeoutDays: parseInt(getFieldValue('pending-hold-timeout-days', '14'), 10) || 14,
-    enabledLibraryOrgIds: collectEnabledLibraryIds()
+    enabledLibraryOrgIds: collectEnabledLibraryIds(),
+    commonAuthorsEnabled: getFieldChecked('wf-common-authors-enabled'),
+    commonAuthorsList: sortAuthorsByLastName(getFieldValue('wf-common-authors-list')),
+    commonAuthorsMessage: getFieldValue('wf-common-authors-message')
   };
 
   const fileInput = document.getElementById('ui-logo-file');
@@ -2490,8 +2498,36 @@ function togglePendingHoldTimeoutGroup() {
   }
 }
 
+function toggleCommonAuthorsGroup() {
+  const group = document.getElementById('common-authors-config-group');
+  const enabled = document.getElementById('wf-common-authors-enabled').checked;
+  if (enabled) {
+    group.classList.remove('hidden');
+  } else {
+    group.classList.add('hidden');
+  }
+}
+
+function sortAuthorsByLastName(authorsListStr) {
+  if (!authorsListStr) return '';
+  const authors = authorsListStr.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+  authors.sort((a, b) => {
+    // Basic last name detection (everything after the first comma, or the last word)
+    const getLastName = (name) => {
+      if (name.includes(',')) return name.split(',')[0].trim();
+      const parts = name.split(' ');
+      return parts[parts.length - 1].trim();
+    };
+    const lastA = getLastName(a).toLowerCase();
+    const lastB = getLastName(b).toLowerCase();
+    return lastA.localeCompare(lastB);
+  });
+  return authors.join('\n');
+}
+
 document.getElementById('hold-pickup-timeout-enabled').addEventListener('change', toggleHoldPickupTimeoutGroup);
 document.getElementById('pending-hold-timeout-enabled').addEventListener('change', togglePendingHoldTimeoutGroup);
+document.getElementById('wf-common-authors-enabled').addEventListener('change', toggleCommonAuthorsGroup);
 
 document.getElementById('edit-bibid').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {

@@ -237,6 +237,9 @@ function getOrCreateSettingsRecord(app) {
     record.set("suggestionLimitMessage", "You have submitted 5 suggestions this week. Please try again next week.");
     record.set("outstandingTimeoutEnabled", false);
     record.set("outstandingTimeoutDays", 30);
+    record.set("commonAuthorsEnabled", false);
+    record.set("commonAuthorsList", "");
+    record.set("commonAuthorsMessage", "We automatically purchase all upcoming titles by this author. Please check the catalog to place a hold on 'On Order' items.");
     return record;
   }
 }
@@ -534,7 +537,18 @@ function patronLogin(e) {
     });
   } catch (err) {
     e.app.logger().error("Patron login failed", "error", String(err));
-    return e.json(401, { message: "Incorrect Login - Please try again" });
+    var status = 401;
+    var message = "Incorrect Login - Please try again";
+    
+    var errStr = String(err);
+    if (errStr.indexOf("Polaris configuration") >= 0 || errStr.indexOf("Admin staff authentication") >= 0) {
+      status = 500;
+      message = "The library suggestion system is currently misconfigured. Please contact staff. (" + errStr + ")";
+    } else {
+      message = "Incorrect Login - Please try again (" + errStr + ")";
+    }
+
+    return e.json(status, { message: message });
   }
 }
 
@@ -988,7 +1002,10 @@ function getLibrarySettings(e) {
         holdPickupTimeoutEnabled: s.holdPickupTimeoutEnabled,
         holdPickupTimeoutDays: s.holdPickupTimeoutDays,
         pendingHoldTimeoutEnabled: s.pendingHoldTimeoutEnabled,
-        pendingHoldTimeoutDays: s.pendingHoldTimeoutDays
+        pendingHoldTimeoutDays: s.pendingHoldTimeoutDays,
+        commonAuthorsEnabled: s.commonAuthorsEnabled,
+        commonAuthorsList: s.commonAuthorsList,
+        commonAuthorsMessage: s.commonAuthorsMessage
       };
     } else {
       try {
@@ -1055,6 +1072,9 @@ function updateLibrarySettings(e) {
       if (wf.holdPickupTimeoutDays !== undefined) record.set("holdPickupTimeoutDays", wf.holdPickupTimeoutDays);
       if (wf.pendingHoldTimeoutEnabled !== undefined) record.set("pendingHoldTimeoutEnabled", wf.pendingHoldTimeoutEnabled);
       if (wf.pendingHoldTimeoutDays !== undefined) record.set("pendingHoldTimeoutDays", wf.pendingHoldTimeoutDays);
+      if (wf.commonAuthorsEnabled !== undefined) record.set("commonAuthorsEnabled", wf.commonAuthorsEnabled);
+      if (wf.commonAuthorsList !== undefined) record.set("commonAuthorsList", wf.commonAuthorsList);
+      if (wf.commonAuthorsMessage !== undefined) record.set("commonAuthorsMessage", wf.commonAuthorsMessage);
     }
     e.app.save(record);
   } else {
