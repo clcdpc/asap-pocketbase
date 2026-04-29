@@ -278,6 +278,7 @@ loginForm.addEventListener('submit', async (e) => {
     btn.textContent = 'Next';
     errorDiv.textContent = err.message || 'Incorrect Login - Please try again';
     errorDiv.classList.remove('hidden');
+    errorDiv.focus();
   }
 });
 
@@ -303,12 +304,14 @@ suggestionForm.addEventListener('submit', async (e) => {
       // Session expired — already handled by request()
     } else if (err.status === 409) {
       showStep(stepConflict);
-    } else if (err.status === 406) {
-      errorDiv.textContent = err.message || 'You have reached your weekly suggestion limit.';
-      errorDiv.classList.remove('hidden');
     } else {
-      errorDiv.textContent = err.message || 'Error. Please try again';
+      if (err.status === 406) {
+        errorDiv.textContent = err.message || 'You have reached your weekly suggestion limit.';
+      } else {
+        errorDiv.textContent = err.message || 'Error. Please try again';
+      }
       errorDiv.classList.remove('hidden');
+      errorDiv.focus();
     }
   } finally {
     btn.disabled = false;
