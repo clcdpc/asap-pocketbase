@@ -1083,8 +1083,24 @@ function getWorkflowTagBadgesHtml(row) {
   }).join('');
 }
 
+function getIsbnCheckBadgesHtml(row) {
+  const status = typeof row?.isbnCheckStatus === 'string' ? row.isbnCheckStatus : '';
+  const isbnStatusLabels = {
+    pending: 'New / ISBN check in progress',
+    found: 'ISBN found',
+    not_found: 'ISBN not found',
+    error_max_retries: 'ISBN check retry limit reached'
+  };
+  const label = isbnStatusLabels[status];
+  if (!label) return '';
+  const tooltip = status === 'pending'
+    ? 'Background ISBN processing is still running. This suggestion is already submitted.'
+    : 'ISBN background processing result.';
+  return ` <span class="badge badge-info asap-isbn-check-badge" title="${escapeAttr(tooltip)}">${escapeAttr(label)}</span>`;
+}
+
 function getTitleBadgesHtml(row) {
-  return getDuplicateBadgesHtml(row) + getWorkflowTagBadgesHtml(row);
+  return getDuplicateBadgesHtml(row) + getWorkflowTagBadgesHtml(row) + getIsbnCheckBadgesHtml(row);
 }
 
 function getGridRow(row, status) {

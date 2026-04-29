@@ -673,3 +673,9 @@ code {
   border: 1px dashed rgba(255, 255, 255, 0.75);
   color: #fff;
 }
+
+.asap-isbn-check-badge {
+  background-color: #17a2b8;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  color: #fff;
+}
