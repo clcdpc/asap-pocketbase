@@ -2468,7 +2468,10 @@ function renderFormatSettings() {
             <tr class="format-setting-row" data-key="${escapeAttr(key)}" draggable="true" style="cursor: grab;">
               <td class="align-middle text-muted" style="font-size: 1.1rem; cursor: grab; user-select: none;">&#8597;</td>
               <td class="text-center align-middle">
-                <input type="checkbox" class="format-enabled-check" ${availableFormats.includes(key) ? 'checked' : ''}>
+                <div class="custom-control custom-checkbox ml-2">
+                  <input type="checkbox" class="custom-control-input format-enabled-check" id="fmt-chk-${key}" ${availableFormats.includes(key) ? 'checked' : ''}>
+                  <label class="custom-control-label" for="fmt-chk-${key}"></label>
+                </div>
               </td>
               <td class="align-middle"><code>${escapeAttr(key)}</code></td>
               <td>

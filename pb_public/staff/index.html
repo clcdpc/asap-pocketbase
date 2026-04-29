@@ -44,6 +44,29 @@
       margin-left: 4px;
     }
 
+    /* Standardize Checkboxes to show an actual check mark */
+    .custom-checkbox .custom-control-label {
+      padding-top: 2px;
+      cursor: pointer;
+    }
+    
+    .custom-checkbox .custom-control-input:checked~.custom-control-label::before {
+      background-color: #007bff;
+      border-color: #007bff;
+    }
+    
+    .custom-checkbox .custom-control-label::before {
+      border-radius: 4px;
+      border: 2px solid #adb5bd;
+      width: 1.25rem;
+      height: 1.25rem;
+    }
+    
+    .custom-checkbox .custom-control-label::after {
+      width: 1.25rem;
+      height: 1.25rem;
+    }
+
     .tab-desc {
       margin-bottom: 20px;
       color: #555;
@@ -624,9 +647,9 @@
                     <div class="form-group col-md-6"><label for="smtp-from-name">System Default From Name</label><input type="text" id="smtp-from-name"
                         class="form-control"></div>
                     <div class="form-group col-md-12">
-                      <div class="form-check">
-                        <input class="form-check-input" type="checkbox" id="smtp-tls">
-                        <label class="form-check-label" for="smtp-tls">Use TLS (For port 465)</label>
+                      <div class="custom-control custom-checkbox">
+                        <input type="checkbox" class="custom-control-input" id="smtp-tls">
+                        <label class="custom-control-label" for="smtp-tls">Use TLS (For port 465)</label>
                       </div>
                       <small class="form-text text-muted">Uncheck this if you are using port 587 (STARTTLS). Most modern mail servers use port 587.</small>
                     </div>
@@ -657,7 +680,7 @@
                   <h3 class="h5">Workflow Automation</h3>
                   <div class="form-row align-items-center mb-3">
                     <div class="col-auto">
-                      <div class="custom-control custom-switch">
+                      <div class="custom-control custom-checkbox">
                         <input type="checkbox" class="custom-control-input" id="polaris-auto-promote">
                         <label class="custom-control-label font-weight-bold" for="polaris-auto-promote">Enable Auto-Promoter</label>
                       </div>
@@ -667,7 +690,7 @@
 
                   <div class="form-row align-items-center mb-3">
                     <div class="col-auto">
-                      <div class="custom-control custom-switch">
+                      <div class="custom-control custom-checkbox">
                         <input type="checkbox" class="custom-control-input" id="outstanding-timeout-enabled">
                         <label class="custom-control-label" for="outstanding-timeout-enabled">Auto-reject stalled
                           <strong>Suggestions</strong></label>
@@ -689,7 +712,7 @@
 
                   <div class="form-row align-items-center mb-3">
                     <div class="col-auto">
-                      <div class="custom-control custom-switch">
+                      <div class="custom-control custom-checkbox">
                         <input type="checkbox" class="custom-control-input" id="hold-pickup-timeout-enabled">
                         <label class="custom-control-label" for="hold-pickup-timeout-enabled">Auto-close unclaimed
                           <strong>Holds</strong></label>
@@ -711,7 +734,7 @@
 
                   <div class="form-row align-items-center mb-3">
                     <div class="col-auto">
-                      <div class="custom-control custom-switch">
+                      <div class="custom-control custom-checkbox">
                         <input type="checkbox" class="custom-control-input" id="pending-hold-timeout-enabled">
                         <label class="custom-control-label" for="pending-hold-timeout-enabled">Auto-close skipped
                           <strong>Pending Holds</strong></label>
