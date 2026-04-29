@@ -39,13 +39,13 @@ migrate((app) => {
 
   collection.fields.add(new Field({
     "system": false,
-    "id": "autodate_last_checked",
+    "id": "date_last_checked",
     "name": "lastChecked",
-    "type": "autodate",
+    "type": "date",
     "required": false,
     "presentable": false,
-    "onCreate": false,
-    "onUpdate": false
+    "min": "",
+    "max": ""
   }));
 
   app.save(collection);
