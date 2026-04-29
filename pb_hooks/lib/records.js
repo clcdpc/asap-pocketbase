@@ -337,15 +337,53 @@ function formatDate(d) {
 
 function appendSystemNote(record, note) {
   var today = formatDate(new Date());
-  var existing = String(record.get("notes") || "").trim();
-  var newNote = today + " " + note.trim();
-  if (!newNote.endsWith(".") && !newNote.endsWith("!") && !newNote.endsWith("?")) {
-    newNote += ".";
+  var notesStr = String(record.get("notes") || "").trim();
+  var lines = notesStr ? notesStr.split("\n") : [];
+  var firstLine = lines.length > 0 ? lines[0] : "";
+  
+  var cleanNote = note.trim();
+  if (!cleanNote.endsWith(".") && !cleanNote.endsWith("!") && !cleanNote.endsWith("?")) {
+    cleanNote += ".";
   }
-  if (existing) {
-    record.set("notes", newNote + "\n" + existing);
+
+  // Regex to match our range format: [Date] to [Date] (Count: [X]) [Message]
+  var rangeRegex = /^(\d{1,2}\/\d{1,2}\/\d{4}) to (\d{1,2}\/\d{1,2}\/\d{4}) \(Count: (\d+)\) (.*)$/;
+  var match = firstLine.match(rangeRegex);
+  
+  if (match) {
+    var startDate = match[1];
+    var count = parseInt(match[3], 10);
+    var existingMsg = match[4].replace(/^\*\*\*ALERT\*\*\* /, "");
+    
+    if (existingMsg === cleanNote) {
+      count++;
+      var alertPrefix = count >= 50 ? "***ALERT*** " : "";
+      lines[0] = startDate + " to " + today + " (Count: " + count + ") " + alertPrefix + cleanNote;
+      record.set("notes", lines.join("\n"));
+      return;
+    }
   } else {
-    record.set("notes", newNote);
+    // Check for old format match: [Date] [Message]
+    var oldRegex = /^(\d{1,2}\/\d{1,2}\/\d{4}) (.*)$/;
+    var oldMatch = firstLine.match(oldRegex);
+    if (oldMatch) {
+      var existingMsg = oldMatch[2].replace(/^\*\*\*ALERT\*\*\* /, "");
+      if (existingMsg === cleanNote) {
+        var count = 2;
+        var alertPrefix = count >= 50 ? "***ALERT*** " : "";
+        lines[0] = oldMatch[1] + " to " + today + " (Count: " + count + ") " + alertPrefix + cleanNote;
+        record.set("notes", lines.join("\n"));
+        return;
+      }
+    }
+  }
+  
+  // No match or different message, prepend new entry in range format
+  var newEntry = today + " to " + today + " (Count: 1) " + cleanNote;
+  if (notesStr) {
+    record.set("notes", newEntry + "\n" + notesStr);
+  } else {
+    record.set("notes", newEntry);
   }
 }
 
