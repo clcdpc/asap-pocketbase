@@ -19,6 +19,7 @@ function runScheduledHoldCheck(app) {
   processOutstandingTimeout(app, result);
   processHoldPickupTimeout(app, result);
   processPendingHoldTimeout(app, result);
+  processPendingIsbnChecks(app, staff, result);
   processOutstandingPurchases(app, staff, result);
   processPendingHolds(app, staff, result);
   processCheckedOut(app, staff, result);
@@ -40,6 +41,65 @@ function runScheduledOrganizationSync(app) {
     };
     app.logger().error("ASAP Polaris organization sync failed", "error", String(err));
     return failed;
+  }
+}
+
+
+function mapIsbnCheckSuggestion(status) {
+  if (status === "found") {
+    return "dupe found in Polaris";
+  }
+  if (status === "not_found") {
+    return "ISBN not found in system";
+  }
+  return "";
+}
+
+function processPendingIsbnChecks(app, staff, result) {
+  var pending = app.findRecordsByFilter(
+    "title_requests",
+    "status = {:status} && isbnCheckStatus = {:isbnCheckStatus}",
+    "created",
+    200,
+    0,
+    { status: records.STATUS.SUGGESTION, isbnCheckStatus: "pending" }
+  );
+
+  for (var i = 0; i < pending.length; i++) {
+    var record = pending[i];
+    var identifier = String(record.get("identifier") || "").trim();
+    var retryCount = parseInt(record.get("isbnCheckRetryCount") || 0, 10) || 0;
+    var maxRetries = 5;
+
+    if (!identifier) {
+      record.set("isbnCheckStatus", "error");
+      records.appendSystemNote(record, "ISBN check skipped: missing identifier.");
+      app.save(record);
+      continue;
+    }
+
+    records.appendSystemNote(record, "ISBN check attempt #" + (retryCount + 1) + " for identifier " + identifier + ".");
+    var bibResult = polaris.searchBib(staff, identifier);
+
+    if (bibResult.status === "found" || bibResult.status === "not_found") {
+      record.set("isbnCheckStatus", bibResult.status);
+      record.set("isbnCheckResult", mapIsbnCheckSuggestion(bibResult.status));
+      record.set("isbnCheckRetryCount", 0);
+      records.appendSystemNote(record, "ISBN check result: " + bibResult.status + (bibResult.bibId ? " (BIB " + bibResult.bibId + ")" : "") + ".");
+      app.save(record);
+      continue;
+    }
+
+    retryCount += 1;
+    record.set("isbnCheckRetryCount", retryCount);
+    record.set("isbnCheckStatus", retryCount >= maxRetries ? "error_max_retries" : "pending");
+    records.appendSystemNote(record, "ISBN check transient error" + (bibResult.error ? ": " + bibResult.error : "") + ".");
+
+    if (retryCount >= maxRetries) {
+      records.appendSystemNote(record, "ISBN check reached max retries; admin follow-up required.");
+    }
+    app.save(record);
+    if (result) result.errors++;
   }
 }
 
@@ -71,7 +131,8 @@ function evaluatePurchase(app, staff, record, bibCache, result) {
     if (bibCache[identifier] === undefined) {
       bibCache[identifier] = polaris.searchBib(staff, identifier);
     }
-    var bibId = bibCache[identifier];
+    var bibResult = bibCache[identifier];
+    var bibId = bibResult && bibResult.status === "found" ? bibResult.bibId : "";
 
     if (bibId) {
       record.set("bibid", bibId);
@@ -275,7 +336,8 @@ function processPendingHolds(app, staff, result) {
         if (bibCache[identifier] === undefined) {
           bibCache[identifier] = polaris.searchBib(staff, identifier);
         }
-        bibId = bibCache[identifier];
+        var bibResult = bibCache[identifier];
+        bibId = bibResult && bibResult.status === "found" ? bibResult.bibId : "";
       }
       if (!bibId) {
         records.appendSystemNote(record, "SKIP: Could not find BIB ID in Polaris for hold placement.");
