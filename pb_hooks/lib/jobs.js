@@ -4,6 +4,9 @@ const orgs = require(`${__hooks}/lib/orgs.js`);
 const polaris = require(`${__hooks}/lib/polaris.js`);
 const records = require(`${__hooks}/lib/records.js`);
 
+const POLARIS_TAG_FOUND = "dupe found in Polaris";
+const POLARIS_TAG_NOT_FOUND = "ISBN not found in system";
+
 function runScheduledHoldCheck(app) {
   var result = {
     holdsPlaced: 0,
@@ -74,6 +77,7 @@ function evaluatePurchase(app, staff, record, bibCache, result) {
     var bibId = bibCache[identifier];
 
     if (bibId) {
+      records.addWorkflowTag(record, POLARIS_TAG_FOUND);
       record.set("bibid", bibId);
       polaris.reconcileRecord(app, staff, record, bibId);
       record.set("status", records.STATUS.PENDING_HOLD);
@@ -82,6 +86,8 @@ function evaluatePurchase(app, staff, record, bibCache, result) {
       records.appendSystemNote(record, "Automated promoter found BIB ID: " + bibId);
       app.save(record);
       result.promoted++;
+    } else if (records.addWorkflowTag(record, POLARIS_TAG_NOT_FOUND)) {
+      app.save(record);
     }
   } catch (err) {
     app.logger().error("Outstanding purchase promoter failed", "recordId", record.id, "error", String(err));

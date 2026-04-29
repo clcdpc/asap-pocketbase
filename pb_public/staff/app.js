@@ -1068,17 +1068,30 @@ function getDuplicateBadgesHtml(row) {
     const displayName = statusNames[status] || status;
     const colorClass = statusColors[status] || 'badge-secondary';
     const text = count > 1 ? `Dup (${displayName} x${count})` : `Dup (${displayName})`;
-    badges += ` <span class="badge ${colorClass}" title="${count} duplicate(s) in ${displayName} stage">${text}</span>`;
+    badges += ` <span class="badge ${colorClass} asap-duplicate-badge" title="${count} duplicate(s) in ${displayName} stage">${text}</span>`;
   }
 
   return badges;
+}
+
+function getWorkflowTagBadgesHtml(row) {
+  const tags = Array.isArray(row.workflowTags) ? row.workflowTags : [];
+  if (!tags.length) return '';
+  return tags.map(tag => {
+    const label = escapeAttr(tag);
+    return ` <span class="badge badge-primary asap-polaris-tag" title="Polaris check tag">${label}</span>`;
+  }).join('');
+}
+
+function getTitleBadgesHtml(row) {
+  return getDuplicateBadgesHtml(row) + getWorkflowTagBadgesHtml(row);
 }
 
 function getGridRow(row, status) {
   if (status === 'suggestion') {
     return [
       row.barcode,
-      gridjs.html(escapeAttr(row.title) + getDuplicateBadgesHtml(row)),
+      gridjs.html(escapeAttr(row.title) + getTitleBadgesHtml(row)),
       row.author,
       formatMap[row.format] || row.format,
       formatPublication(row.publication),
@@ -1092,7 +1105,7 @@ function getGridRow(row, status) {
   if (status === 'closed') {
     return [
       row.barcode,
-      gridjs.html(escapeAttr(row.title) + getDuplicateBadgesHtml(row)),
+      gridjs.html(escapeAttr(row.title) + getTitleBadgesHtml(row)),
       row.author,
       formatMap[row.format] || row.format,
       formatStandardDate(row.created),
@@ -1105,7 +1118,7 @@ function getGridRow(row, status) {
 
   return [
     row.barcode,
-    gridjs.html(escapeAttr(row.title) + getDuplicateBadgesHtml(row)),
+    gridjs.html(escapeAttr(row.title) + getTitleBadgesHtml(row)),
     row.author,
     row.identifier,
     row.bibid,

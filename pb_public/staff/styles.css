@@ -662,3 +662,14 @@ code {
 .library-id-col {
   width: 80px;
 }
+
+/* Differentiate ASAP duplicate badges from Polaris workflow tags */
+.asap-duplicate-badge {
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.asap-polaris-tag {
+  background-color: #0b5ed7;
+  border: 1px dashed rgba(255, 255, 255, 0.75);
+  color: #fff;
+}
