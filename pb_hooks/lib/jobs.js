@@ -352,15 +352,23 @@ function processPendingSuggestionIsbnChecks(app, staff, result) {
     }
 
     try {
-      var bibId = polaris.searchBib(staff, identifier);
-      record.set("isbnCheckStatus", bibId ? "found_in_polaris" : "not_found");
+      var bibResult = polaris.searchBib(staff, identifier);
+      var bibId = bibResult && bibResult.status === "found" ? String(bibResult.bibId || "").trim() : "";
+      var found = bibResult && bibResult.status === "found" && !!bibId;
+
+      record.set("isbnCheckStatus", found ? "found" : "not_found");
+      record.set("isbnCheckResult", mapIsbnCheckSuggestion(found ? "found" : "not_found"));
       record.set("lastChecked", now);
       record.set("updated", now);
       record.set("editedBy", "system");
-      if (bibId) {
-        records.appendSystemNote(record, "ISBN verification found a Polaris bibliographic match.");
+
+      if (found) {
+        record.set("bibid", bibId);
+        records.addWorkflowTag(record, POLARIS_TAG_FOUND);
+        records.appendSystemNote(record, "ISBN verification found a Polaris bibliographic match (BIB ID " + bibId + ").");
         result.isbnChecksFound++;
       } else {
+        records.addWorkflowTag(record, POLARIS_TAG_NOT_FOUND);
         records.appendSystemNote(record, "ISBN verification completed: no Polaris bibliographic match found.");
         result.isbnChecksNotFound++;
       }
