@@ -112,6 +112,8 @@ You can manually trigger these jobs or adjust their settings from the **Settings
 
 ## 🔒 Network & Security
 
+Review the pocketbase documentation for moving into production: https://pocketbase.io/docs/going-to-production/
+
 ### 1. Internet Accessibility
 To make ASAP internet-accessible, you can use **NAT (Network Address Translation)** or, more ideally, a **Reverse Proxy** (e.g., Nginx, Caddy, or Apache).
 - **Reverse Proxy Recommended**: Using a reverse proxy is the gold standard for production. It allows you to easily manage SSL/TLS certificates (e.g., via Let's Encrypt), handle load balancing, and add extra security headers.
