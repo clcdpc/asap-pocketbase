@@ -820,6 +820,25 @@
                           auto-rejection.</small>
                       </div>
                     </div>
+                    
+                    <div id="auto-reject-email-wrapper" class="border rounded p-3 mt-3 bg-light">
+                      <div class="custom-control custom-checkbox">
+                        <input type="checkbox"
+                          class="custom-control-input"
+                          id="outstanding-timeout-send-email">
+                        <label class="custom-control-label" for="outstanding-timeout-send-email">
+                          Send rejection email when stalled suggestions are auto-rejected
+                        </label>
+                      </div>
+                      <div id="auto-reject-template-wrapper" class="form-group mt-3 hidden">
+                        <label for="outstanding-timeout-rejection-template-id" class="font-weight-bold mb-1">
+                          Rejection email template
+                        </label>
+                        <select id="outstanding-timeout-rejection-template-id" class="form-control"></select>
+                        <small id="auto-reject-template-help" class="form-text text-muted"></small>
+                      </div>
+                      <div id="auto-reject-template-warning" class="alert alert-warning mt-3 hidden"></div>
+                    </div>
                   </div>
 
                   <!-- Automation: Promotion -->

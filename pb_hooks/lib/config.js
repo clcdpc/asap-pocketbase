@@ -245,10 +245,12 @@ function getSettings() {
       commonAuthorsEnabled: record.getBool("commonAuthorsEnabled"),
       commonAuthorsList: record.getString("commonAuthorsList") || "",
       commonAuthorsMessage: record.getString("commonAuthorsMessage") || "We automatically purchase all upcoming titles by this author. Please check the catalog to place a hold on 'On Order' items.",
+      outstandingTimeoutSendEmail: record.getBool("outstandingTimeoutSendEmail"),
+      outstandingTimeoutRejectionTemplateId: record.getString("outstandingTimeoutRejectionTemplateId") || "",
       ui_text: mergedUiText
     };
   } catch (err) {
-    return { polaris: {}, smtp: {}, emails: defaultEmailTemplates(), allowedStaffUsers: "", suggestionLimit: 5, suggestionLimitMessage: "Weekly suggestion limit reached", outstandingTimeoutEnabled: false, outstandingTimeoutDays: 30, holdPickupTimeoutEnabled: false, holdPickupTimeoutDays: 14, pendingHoldTimeoutEnabled: false, pendingHoldTimeoutDays: 14, enabledLibraryOrgIds: "", commonAuthorsEnabled: false, commonAuthorsList: "", commonAuthorsMessage: "We automatically purchase all upcoming titles by this author. Please check the catalog to place a hold on 'On Order' items.", ui_text: defaultUiText };
+    return { polaris: {}, smtp: {}, emails: defaultEmailTemplates(), allowedStaffUsers: "", suggestionLimit: 5, suggestionLimitMessage: "Weekly suggestion limit reached", outstandingTimeoutEnabled: false, outstandingTimeoutDays: 30, holdPickupTimeoutEnabled: false, holdPickupTimeoutDays: 14, pendingHoldTimeoutEnabled: false, pendingHoldTimeoutDays: 14, enabledLibraryOrgIds: "", commonAuthorsEnabled: false, commonAuthorsList: "", commonAuthorsMessage: "We automatically purchase all upcoming titles by this author. Please check the catalog to place a hold on 'On Order' items.", outstandingTimeoutSendEmail: false, outstandingTimeoutRejectionTemplateId: "", ui_text: defaultUiText };
   }
 }
 
@@ -274,7 +276,9 @@ function librarySettings(app, libraryOrgId) {
         pendingHoldTimeoutDays: systemDefaults.pendingHoldTimeoutDays,
         commonAuthorsEnabled: systemDefaults.commonAuthorsEnabled,
         commonAuthorsList: systemDefaults.commonAuthorsList,
-        commonAuthorsMessage: systemDefaults.commonAuthorsMessage
+        commonAuthorsMessage: systemDefaults.commonAuthorsMessage,
+        outstandingTimeoutSendEmail: systemDefaults.outstandingTimeoutSendEmail,
+        outstandingTimeoutRejectionTemplateId: systemDefaults.outstandingTimeoutRejectionTemplateId
       }
     };
   }
@@ -303,7 +307,9 @@ function librarySettings(app, libraryOrgId) {
         pendingHoldTimeoutDays: typeof dbWorkflow.pendingHoldTimeoutDays === "number" ? dbWorkflow.pendingHoldTimeoutDays : systemDefaults.pendingHoldTimeoutDays,
         commonAuthorsEnabled: typeof dbWorkflow.commonAuthorsEnabled === "boolean" ? dbWorkflow.commonAuthorsEnabled : systemDefaults.commonAuthorsEnabled,
         commonAuthorsList: dbWorkflow.commonAuthorsList || systemDefaults.commonAuthorsList,
-        commonAuthorsMessage: dbWorkflow.commonAuthorsMessage || systemDefaults.commonAuthorsMessage
+        commonAuthorsMessage: dbWorkflow.commonAuthorsMessage || systemDefaults.commonAuthorsMessage,
+        outstandingTimeoutSendEmail: typeof dbWorkflow.outstandingTimeoutSendEmail === "boolean" ? dbWorkflow.outstandingTimeoutSendEmail : systemDefaults.outstandingTimeoutSendEmail,
+        outstandingTimeoutRejectionTemplateId: dbWorkflow.outstandingTimeoutRejectionTemplateId || systemDefaults.outstandingTimeoutRejectionTemplateId
       }
     };
   } catch (err) {
@@ -321,7 +327,9 @@ function librarySettings(app, libraryOrgId) {
         pendingHoldTimeoutDays: systemDefaults.pendingHoldTimeoutDays,
         commonAuthorsEnabled: systemDefaults.commonAuthorsEnabled,
         commonAuthorsList: systemDefaults.commonAuthorsList,
-        commonAuthorsMessage: systemDefaults.commonAuthorsMessage
+        commonAuthorsMessage: systemDefaults.commonAuthorsMessage,
+        outstandingTimeoutSendEmail: systemDefaults.outstandingTimeoutSendEmail,
+        outstandingTimeoutRejectionTemplateId: systemDefaults.outstandingTimeoutRejectionTemplateId
       }
     };
   }
@@ -370,6 +378,26 @@ function outstandingTimeout(app, orgId) {
   }
   const wf = librarySettings(app, orgId).workflow;
   return { enabled: wf.outstandingTimeoutEnabled, days: wf.outstandingTimeoutDays };
+}
+
+function outstandingTimeoutEmail(app, orgId) {
+  const settings = librarySettings(app, orgId);
+  const wf = settings.workflow;
+  const templates = settings.emails.rejection_templates || [];
+  let templateId = String(wf.outstandingTimeoutRejectionTemplateId || "").trim();
+  
+  if (!wf.outstandingTimeoutSendEmail) {
+    return { enabled: false, templateId: "" };
+  }
+  
+  if (templates.length === 1 && !templateId) {
+    templateId = templates[0].id;
+  }
+  
+  return {
+    enabled: true,
+    templateId: templateId
+  };
 }
 
 function holdPickupTimeout(app, orgId) {
@@ -449,6 +477,7 @@ module.exports = {
   mergeEmailTemplates: mergeEmailTemplates,
   normalizeEmailTemplates: normalizeEmailTemplates,
   outstandingTimeout: outstandingTimeout,
+  outstandingTimeoutEmail: outstandingTimeoutEmail,
   polaris: polaris,
   suggestionLimit: suggestionLimit,
   uiText: uiText,

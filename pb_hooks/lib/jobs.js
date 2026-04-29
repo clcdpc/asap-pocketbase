@@ -141,14 +141,20 @@ function processOutstandingTimeout(app, result) {
     var created = new Date(record.get("created"));
 
     if (created < cutoff) {
+      var emailCfg = config.outstandingTimeoutEmail(app, orgId);
       record.set("status", records.STATUS.CLOSED);
       record.set("closeReason", records.CLOSE_REASON.REJECTED);
       record.set("editedBy", "system");
       record.set("updated", new Date().toISOString());
-      records.appendSystemNote(record, "Auto-rejected due to " + cfg.days + " day timeout in Suggestions.");
+      records.appendSystemNote(
+        record, 
+        "Auto-rejected due to " + cfg.days + " day timeout in Suggestions." + (emailCfg.enabled ? " Rejection email queued." : " No rejection email sent.")
+      );
       app.save(record);
       try {
-        mail.autoRejected(app, record);
+        if (emailCfg.enabled) {
+          mail.autoRejected(app, record, emailCfg.templateId);
+        }
       } catch (mailErr) {
         app.logger().error("Auto-reject email failed", "recordId", record.id, "error", String(mailErr));
       }

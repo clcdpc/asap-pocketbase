@@ -1005,7 +1005,9 @@ function getLibrarySettings(e) {
         pendingHoldTimeoutDays: s.pendingHoldTimeoutDays,
         commonAuthorsEnabled: s.commonAuthorsEnabled,
         commonAuthorsList: s.commonAuthorsList,
-        commonAuthorsMessage: s.commonAuthorsMessage
+        commonAuthorsMessage: s.commonAuthorsMessage,
+        outstandingTimeoutSendEmail: s.outstandingTimeoutSendEmail,
+        outstandingTimeoutRejectionTemplateId: s.outstandingTimeoutRejectionTemplateId
       };
     } else {
       try {
@@ -1075,6 +1077,8 @@ function updateLibrarySettings(e) {
       if (wf.commonAuthorsEnabled !== undefined) record.set("commonAuthorsEnabled", wf.commonAuthorsEnabled);
       if (wf.commonAuthorsList !== undefined) record.set("commonAuthorsList", wf.commonAuthorsList);
       if (wf.commonAuthorsMessage !== undefined) record.set("commonAuthorsMessage", wf.commonAuthorsMessage);
+      if (wf.outstandingTimeoutSendEmail !== undefined) record.set("outstandingTimeoutSendEmail", wf.outstandingTimeoutSendEmail);
+      if (wf.outstandingTimeoutRejectionTemplateId !== undefined) record.set("outstandingTimeoutRejectionTemplateId", wf.outstandingTimeoutRejectionTemplateId);
     }
     e.app.save(record);
   } else {
@@ -1092,9 +1096,35 @@ function updateLibrarySettings(e) {
         record = new Record(collection);
         record.set("libraryOrgId", orgId);
       }
-      if (payload.emails) record.set("emails", config.normalizeEmailTemplates(parseJsonObject(payload.emails, {})));
+
+      var emails = config.normalizeEmailTemplates(parseJsonObject(payload.emails, {}));
+      var workflow = parseJsonObject(payload.workflow, {});
+
+      // Validation
+      if (!workflow.outstandingTimeoutEnabled) {
+        workflow.outstandingTimeoutSendEmail = false;
+        workflow.outstandingTimeoutRejectionTemplateId = "";
+      }
+      if (!workflow.outstandingTimeoutSendEmail) {
+        workflow.outstandingTimeoutRejectionTemplateId = "";
+      }
+
+      if (workflow.outstandingTimeoutSendEmail) {
+        var templates = emails.rejection_templates || [];
+        // Empty string means "Standard Rejection Email"
+        if (workflow.outstandingTimeoutRejectionTemplateId !== "") {
+          var selected = templates.find(function(t) { return t.id === workflow.outstandingTimeoutRejectionTemplateId; });
+          if (!selected) {
+            return e.json(400, {
+              message: "Selected rejection email template was not found."
+            });
+          }
+        }
+      }
+
+      if (payload.emails) record.set("emails", emails);
       if (payload.ui_text) record.set("ui_text", parseJsonObject(payload.ui_text, {}));
-      if (payload.workflow) record.set("workflow", parseJsonObject(payload.workflow, {}));
+      if (payload.workflow) record.set("workflow", workflow);
       e.app.save(record);
     }
   }

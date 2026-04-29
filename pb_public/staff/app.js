@@ -118,6 +118,8 @@ let workflowSettings = {
   autoPromote: false,
   outstandingTimeoutEnabled: false,
   outstandingTimeoutDays: 30,
+  outstandingTimeoutSendEmail: false,
+  outstandingTimeoutRejectionTemplateId: '',
   holdPickupTimeoutEnabled: false,
   holdPickupTimeoutDays: 14,
   pendingHoldTimeoutEnabled: false,
@@ -441,6 +443,63 @@ function normalizeAllowedStaffUsers(value) {
     .map(item => String(item || '').trim().toLowerCase())
     .filter(Boolean)))
     .join(', ');
+}
+
+function updateAutoRejectEmailControls() {
+  const enabled = getFieldChecked('outstanding-timeout-enabled');
+  const sendEmail = getFieldChecked('outstanding-timeout-send-email');
+  const additionalTemplates = currentRejectionTemplates || [];
+  const wrapper = document.getElementById('auto-reject-email-wrapper');
+  const templateWrapper = document.getElementById('auto-reject-template-wrapper');
+  const select = document.getElementById('outstanding-timeout-rejection-template-id');
+  const warning = document.getElementById('auto-reject-template-warning');
+  const help = document.getElementById('auto-reject-template-help');
+  if (!wrapper || !select) return;
+
+  wrapper.classList.toggle('hidden', !enabled);
+  if (!enabled) {
+    setFieldChecked('outstanding-timeout-send-email', false);
+    setFieldValue('outstanding-timeout-rejection-template-id', '');
+    return;
+  }
+
+  warning.classList.add('hidden');
+  templateWrapper.classList.toggle('hidden', !sendEmail);
+  select.innerHTML = '';
+  select.disabled = false;
+
+  if (!sendEmail) return;
+
+  // The "Standard" template is the one in emails.rejected (no ID)
+  const standardOption = { id: '', name: 'Standard Rejection Email' };
+  const allTemplates = [standardOption, ...additionalTemplates];
+
+  if (allTemplates.length === 1) {
+    // Only standard exists
+    select.innerHTML = `<option value="">${escapeAttr(standardOption.name)}</option>`;
+    select.value = '';
+    select.disabled = true;
+    help.textContent = 'The system will use the default rejection template for this library.';
+    return;
+  }
+
+  select.innerHTML = allTemplates.map(tpl =>
+    `<option value="${escapeAttr(tpl.id)}">${escapeAttr(tpl.name || tpl.subject || 'Rejection template')}</option>`
+  ).join('');
+  
+  // Restore previous selection if valid, otherwise default to Standard (empty)
+  if (workflowSettings.outstandingTimeoutRejectionTemplateId) {
+    const stillExists = allTemplates.some(t => t.id === workflowSettings.outstandingTimeoutRejectionTemplateId);
+    if (stillExists) {
+      select.value = workflowSettings.outstandingTimeoutRejectionTemplateId;
+    } else {
+      select.value = '';
+    }
+  } else {
+    select.value = '';
+  }
+  
+  help.textContent = 'Select the template to use for auto-rejected suggestions. "Standard Rejection Email" is the default.';
 }
 
 loginForm.addEventListener('submit', async (e) => {
@@ -2030,6 +2089,11 @@ function populateWorkflowForms(wf) {
   setFieldValue('suggestion-limit-msg', wf.suggestionLimitMessage || 'Weekly suggestion limit reached');
   document.getElementById('outstanding-timeout-enabled').checked = !!wf.outstandingTimeoutEnabled;
   setFieldValue('outstanding-timeout-days', wf.outstandingTimeoutDays !== undefined ? wf.outstandingTimeoutDays : '30');
+  
+  setFieldChecked('outstanding-timeout-send-email', !!wf.outstandingTimeoutSendEmail);
+  workflowSettings.outstandingTimeoutSendEmail = !!wf.outstandingTimeoutSendEmail;
+  workflowSettings.outstandingTimeoutRejectionTemplateId = wf.outstandingTimeoutRejectionTemplateId || '';
+  
   document.getElementById('hold-pickup-timeout-enabled').checked = !!wf.holdPickupTimeoutEnabled;
   setFieldValue('hold-pickup-timeout-days', wf.holdPickupTimeoutDays !== undefined ? wf.holdPickupTimeoutDays : '14');
   document.getElementById('pending-hold-timeout-enabled').checked = !!wf.pendingHoldTimeoutEnabled;
@@ -2047,6 +2111,7 @@ function populateWorkflowForms(wf) {
   }
 
   toggleTimeoutGroup();
+  updateAutoRejectEmailControls();
   toggleHoldPickupTimeoutGroup();
   togglePendingHoldTimeoutGroup();
 
@@ -2326,6 +2391,17 @@ function buildSettingsPayload() {
     }
   };
 
+  const sendAutoRejectEmail = getFieldChecked('outstanding-timeout-send-email');
+  const selectedTemplateId = getFieldValue('outstanding-timeout-rejection-template-id');
+  if (getFieldChecked('outstanding-timeout-enabled') && sendAutoRejectEmail) {
+    if (!currentRejectionTemplates.length) {
+      throw new Error('Create at least one rejection template before enabling auto-reject email.');
+    }
+    if (currentRejectionTemplates.length > 1 && !selectedTemplateId) {
+      throw new Error('Select a rejection template for auto-reject emails.');
+    }
+  }
+
   const payload = {
     smtp, polaris, ui_text: uiText, emails,
     allowedStaffUsers: normalizeAllowedStaffUsers(getFieldValue('allowed-staff-users')),
@@ -2333,6 +2409,8 @@ function buildSettingsPayload() {
     suggestionLimitMessage: getFieldValue('suggestion-limit-msg'),
     outstandingTimeoutEnabled: getFieldChecked('outstanding-timeout-enabled'),
     outstandingTimeoutDays: parseInt(getFieldValue('outstanding-timeout-days', '30'), 10) || 30,
+    outstandingTimeoutSendEmail: sendAutoRejectEmail,
+    outstandingTimeoutRejectionTemplateId: currentRejectionTemplates.length === 1 ? currentRejectionTemplates[0].id : selectedTemplateId,
     holdPickupTimeoutEnabled: getFieldChecked('hold-pickup-timeout-enabled'),
     holdPickupTimeoutDays: parseInt(getFieldValue('hold-pickup-timeout-days', '14'), 10) || 14,
     pendingHoldTimeoutEnabled: getFieldChecked('pending-hold-timeout-enabled'),
@@ -2377,11 +2455,16 @@ async function saveSettings(options = {}) {
         suggestionLimitMessage: payload.suggestionLimitMessage,
         outstandingTimeoutEnabled: payload.outstandingTimeoutEnabled,
         outstandingTimeoutDays: payload.outstandingTimeoutDays,
+        outstandingTimeoutSendEmail: payload.outstandingTimeoutSendEmail,
+        outstandingTimeoutRejectionTemplateId: payload.outstandingTimeoutRejectionTemplateId,
         holdPickupTimeoutEnabled: payload.holdPickupTimeoutEnabled,
         holdPickupTimeoutDays: payload.holdPickupTimeoutDays,
         pendingHoldTimeoutEnabled: payload.pendingHoldTimeoutEnabled,
         pendingHoldTimeoutDays: payload.pendingHoldTimeoutDays,
-        enabledLibraryOrgIds: payload.enabledLibraryOrgIds
+        enabledLibraryOrgIds: payload.enabledLibraryOrgIds,
+        commonAuthorsEnabled: payload.commonAuthorsEnabled,
+        commonAuthorsList: payload.commonAuthorsList,
+        commonAuthorsMessage: payload.commonAuthorsMessage
       }
     };
 
@@ -2399,10 +2482,15 @@ async function saveSettings(options = {}) {
         delete payload.suggestionLimitMessage;
         delete payload.outstandingTimeoutEnabled;
         delete payload.outstandingTimeoutDays;
+        delete payload.outstandingTimeoutSendEmail;
+        delete payload.outstandingTimeoutRejectionTemplateId;
         delete payload.holdPickupTimeoutEnabled;
         delete payload.holdPickupTimeoutDays;
         delete payload.pendingHoldTimeoutEnabled;
         delete payload.pendingHoldTimeoutDays;
+        delete payload.commonAuthorsEnabled;
+        delete payload.commonAuthorsList;
+        delete payload.commonAuthorsMessage;
       }
       globalPromise = pb.collection('app_settings').update(SETTINGS_RECORD_ID, payload);
     }
@@ -2466,7 +2554,11 @@ async function initStaffApp() {
 
 initStaffApp();
 
-document.getElementById('outstanding-timeout-enabled').addEventListener('change', toggleTimeoutGroup);
+document.getElementById('outstanding-timeout-enabled').addEventListener('change', () => {
+  toggleTimeoutGroup();
+  updateAutoRejectEmailControls();
+});
+document.getElementById('outstanding-timeout-send-email').addEventListener('change', updateAutoRejectEmailControls);
 
 function toggleTimeoutGroup() {
   const group = document.getElementById('timeout-config-group');

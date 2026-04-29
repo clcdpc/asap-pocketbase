@@ -101,8 +101,8 @@ function holdPlaced(app, record, patron) {
   return dispatch(app, record, patron, "hold_placed", "Hold Placed for the Material You Suggested");
 }
 
-function autoRejected(app, record) {
-  return dispatch(app, record, null, "rejected", "Your Material Purchase Suggestion");
+function autoRejected(app, record, templateId) {
+  return dispatch(app, record, null, "rejected", "Your Material Purchase Suggestion", templateId);
 }
 
 function emailFor(record, patron) {
