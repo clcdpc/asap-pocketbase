@@ -18,6 +18,7 @@ let formatMap = {
 };
 let availableFormats = ['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'];
 const ageMap = { adult: 'Adult', teen: 'Teen', children: 'Children' };
+let currentRejectionTemplates = [];
 const closeReasonMap = {
   rejected: 'Rejected by staff',
   hold_completed: 'Hold placed / completed',
@@ -538,7 +539,7 @@ document.querySelectorAll('#status-tabs .nav-link').forEach(link => {
 async function loadTab(status) {
   const tabDesc = document.getElementById('tab-desc');
   let desc = descriptions[status] || '';
-  
+
   // Add auto-rejection info for Suggestions
   if (status === 'suggestion') {
     desc += ` The Auto-Rejector (${workflowSettings.outstandingTimeoutEnabled ? 'enabled' : 'currently disabled'} in Settings) will automatically reject suggestions older than ${workflowSettings.outstandingTimeoutDays} days.`;
@@ -561,7 +562,7 @@ async function loadTab(status) {
     }
   }
   tabDesc.textContent = desc;
-  
+
   // Update job message
   const jobMsg = document.getElementById('job-msg');
   if (jobMsg) jobMsg.textContent = '';
@@ -570,7 +571,7 @@ async function loadTab(status) {
   const adminBar = document.getElementById('admin-actions-bar');
   const promoterBtn = document.getElementById('btn-run-promoter-check');
   const holdBtn = document.getElementById('btn-run-hold-check');
-  
+
   adminBar.classList.add('hidden');
   promoterBtn.classList.add('hidden');
   holdBtn.classList.add('hidden');
@@ -872,7 +873,7 @@ function openEdit(id, nextStatus, dialogTitle, actionStr) {
   document.getElementById('edit-author').value = row.author || '';
   document.getElementById('edit-identifier').value = row.identifier || '';
   document.getElementById('edit-bibid').value = row.bibid || '';
-  
+
   const editFormat = document.getElementById('edit-format');
   const fmt = row.format || 'book';
   if (fmt && !availableFormats.includes(fmt)) {
@@ -902,6 +903,22 @@ function openEdit(id, nextStatus, dialogTitle, actionStr) {
   document.getElementById('bib-info-text').textContent = '';
   verifiedBibId = row.bibid || '';
 
+  const rejectionContainer = document.getElementById('edit-rejection-template-container');
+  if (actionStr === 'reject' && currentRejectionTemplates.length > 0) {
+    rejectionContainer.classList.remove('hidden');
+    const select = document.getElementById('edit-rejection-template');
+    select.innerHTML = '<option value="">Default Rejection Template</option>';
+    currentRejectionTemplates.forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t.id;
+      opt.textContent = t.name || t.subject;
+      select.appendChild(opt);
+    });
+  } else {
+    rejectionContainer.classList.add('hidden');
+    document.getElementById('edit-rejection-template').value = '';
+  }
+
   document.getElementById('editModal').showModal();
   document.getElementById('close-modal-btn').focus();
 }
@@ -923,8 +940,9 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
       return;
     }
   }
+  const actionValue = document.getElementById('edit-action').value || undefined;
   const payload = {
-    action: document.getElementById('edit-action').value || undefined,
+    action: actionValue,
     status: nextStatus,
     title: document.getElementById('edit-title').value,
     author: document.getElementById('edit-author').value,
@@ -937,6 +955,10 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
     notes: document.getElementById('edit-notes').value,
     editedBy: pb.authStore.model.username
   };
+
+  if (actionValue === 'reject') {
+    payload.rejectionTemplateId = document.getElementById('edit-rejection-template').value;
+  }
 
   try {
     const res = await fetch(`/api/asap/staff/title-requests/${id}/action`, {
@@ -953,7 +975,7 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
     }
     const updatedRecord = await res.json().catch(() => ({}));
     document.getElementById('editModal').close();
-    
+
     if (updatedRecord && updatedRecord.status && updatedRecord.status !== nextStatus) {
       const statusNames = {
         'outstanding_purchase': 'Pending Purchase',
@@ -1419,7 +1441,7 @@ document.getElementById('btn-bib-lookup').addEventListener('click', async () => 
 
     display.classList.remove('hidden', 'alert-danger', 'alert-warning');
     display.classList.add('alert-info');
-    
+
     let infoText = (data.title || 'No title') + (data.author ? ' by ' + data.author : '');
 
     // Update title and author fields if they don't match the bib data
@@ -1441,7 +1463,7 @@ document.getElementById('btn-bib-lookup').addEventListener('click', async () => 
         authorInput.value = pAuthor + " (" + oldAuthor + ")";
       }
     }
-    
+
     // Check for duplicate hold in Polaris
     if (data.patronHoldCheck && data.patronHoldCheck.statusValue === 29) {
       display.classList.remove('alert-info');
@@ -1535,7 +1557,7 @@ if (syncOrganizationsBtn) {
 document.getElementById('btn-run-hold-check').addEventListener('click', async () => {
   const btn = document.getElementById('btn-run-hold-check');
   const msg = document.getElementById('job-msg');
-  
+
   btn.disabled = true;
   msg.textContent = 'Running hold check...';
   msg.className = 'mb-3 font-weight-bold text-info';
@@ -1564,7 +1586,7 @@ document.getElementById('btn-run-hold-check').addEventListener('click', async ()
 document.getElementById('btn-run-promoter-check').addEventListener('click', async () => {
   const btn = document.getElementById('btn-run-promoter-check');
   const msg = document.getElementById('job-msg');
-  
+
   btn.disabled = true;
   msg.textContent = 'Running auto promoter...';
   msg.className = 'mb-3 font-weight-bold text-info';
@@ -1595,7 +1617,7 @@ document.getElementById('btn-test-smtp').addEventListener('click', async (e) => 
   const resSpan = document.getElementById('smtp-test-result');
   const testInput = document.getElementById('smtp-test-email');
   const btn = e.target.closest('button');
-  
+
   const testEmail = testInput ? testInput.value.trim() : '';
 
   resSpan.textContent = "Saving and testing...";
@@ -1616,7 +1638,7 @@ document.getElementById('btn-test-smtp').addEventListener('click', async (e) => 
   try {
     const res = await fetch('/api/asap/staff/test-smtp', {
       method: 'POST',
-      headers: { 
+      headers: {
         'Authorization': pb.authStore.token,
         'Content-Type': 'application/json'
       },
@@ -1715,7 +1737,7 @@ async function loadSettings(options = {}) {
     setFieldValue('smtp-username', smtp.username || '');
     setFieldValue('smtp-password', smtp.password || '');
     setFieldChecked('smtp-tls', smtp.tls !== false);
-    
+
     // Also populate the duplicate SMTP fields with the emails value
     setFieldValue('smtp-from', emails.fromAddress || '');
     setFieldValue('smtp-from-name', emails.fromName || '');
@@ -1808,7 +1830,7 @@ function setTemplateStatus(message, className, hidden = false) {
 
 function populateEmailTemplateForms(emails) {
   emails = emails || {};
-  
+
   if (document.getElementById('email-from-address')) document.getElementById('email-from-address').value = emails.fromAddress || '';
   if (document.getElementById('email-from-name')) document.getElementById('email-from-name').value = emails.fromName || '';
 
@@ -1829,6 +1851,9 @@ function populateEmailTemplateForms(emails) {
   const emailRejected = emails.rejected || {};
   if (document.getElementById('email-rejected-subject')) document.getElementById('email-rejected-subject').value = emailRejected.subject || emailTemplateDefaults.rejected.subject;
   if (document.getElementById('email-rejected-body')) document.getElementById('email-rejected-body').value = emailRejected.body || emailTemplateDefaults.rejected.body;
+
+  currentRejectionTemplates = Array.isArray(emails.rejection_templates) ? JSON.parse(JSON.stringify(emails.rejection_templates)) : [];
+  renderRejectionTemplates();
 
   const emailHold = emails.hold_placed || {};
   if (document.getElementById('email-hold-subject')) document.getElementById('email-hold-subject').value = emailHold.subject || emailTemplateDefaults.hold_placed.subject;
@@ -1899,7 +1924,7 @@ async function loadLibrarySettings(orgId) {
     const resetBtn = document.getElementById('btn-reset-library-settings');
     const statusAlert = document.getElementById('library-override-status');
     const overrideMsg = document.getElementById('library-override-msg');
-    
+
     if (requestedOrgId === 'system') {
       resetBtn.classList.add('hidden');
       statusAlert.classList.add('hidden');
@@ -1942,10 +1967,10 @@ function populateWorkflowForms(wf) {
   setFieldValue('hold-pickup-timeout-days', wf.holdPickupTimeoutDays !== undefined ? wf.holdPickupTimeoutDays : '14');
   document.getElementById('pending-hold-timeout-enabled').checked = !!wf.pendingHoldTimeoutEnabled;
   setFieldValue('pending-hold-timeout-days', wf.pendingHoldTimeoutDays !== undefined ? wf.pendingHoldTimeoutDays : '14');
-  
+
   // Cache for checkbox renderer
   window.lastWorkflowEnabledList = (wf.enabledLibraryOrgIds || '').split(',').map(s => s.trim()).filter(s => s.length > 0);
-  
+
   const container = document.getElementById('enabled-libraries-checkbox-container');
   if (container) {
     const checkboxes = container.querySelectorAll('input[type="checkbox"]');
@@ -1973,11 +1998,11 @@ function populatePatronUiForms(uiText) {
   setFieldValue('ui-already-submitted-msg', uiText.alreadySubmittedMessage || 'This suggestion has already been submitted. We only accept one suggestion per title. Check the catalog to see if the material was acquired and place a hold.<div>Thank you for using this library\'s suggestion service.</div>');
   setFieldValue('ui-ebook-msg', uiText.ebookMessage || '<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>');
   setFieldValue('ui-eaudiobook-msg', uiText.eaudiobookMessage || '<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>');
-  
+
   // Format Labels & Available Formats
   const labels = uiText.formatLabels || {};
   const available = uiText.availableFormats || ['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'];
-  
+
   // Merge into formatMap for the rest of the app
   Object.keys(labels).forEach(k => formatMap[k] = labels[k]);
   availableFormats = available;
@@ -2222,6 +2247,7 @@ function buildSettingsPayload() {
       subject: getFieldValue('email-rejected-subject'),
       body: getFieldValue('email-rejected-body')
     },
+    rejection_templates: currentRejectionTemplates,
     hold_placed: {
       subject: getFieldValue('email-hold-subject'),
       body: getFieldValue('email-hold-body')
@@ -2265,7 +2291,7 @@ async function saveSettings(options = {}) {
   try {
     const isSuper = isSuperAdminStaff();
     const payload = buildSettingsPayload();
-    
+
     // Save templates via the new library-scoped API
     const libraryPayload = {
       orgId: currentLibraryContextOrgId,
@@ -2528,15 +2554,15 @@ function updateModalFormatDropdowns() {
   ['edit-format', 'new-format'].forEach(id => {
     const select = document.getElementById(id);
     if (!select) return;
-    
+
     // Keep current value
     const val = select.value;
-    
+
     // Only include availableFormats
     select.innerHTML = availableFormats.map(k => `
       <option value="${escapeAttr(k)}">${escapeAttr(formatMap[k] || k)}</option>
     `).join('');
-    
+
     // Try to restore value, or fallback to first
     select.value = availableFormats.includes(val) ? val : (availableFormats[0] || '');
   });
@@ -2587,6 +2613,63 @@ function syncInputPair(idA, idB) {
 }
 syncInputPair('email-from-address', 'smtp-from');
 syncInputPair('email-from-name', 'smtp-from-name');
+
+function renderRejectionTemplates() {
+  const container = document.getElementById('rejection-templates-container');
+  if (!container) return;
+
+  if (currentRejectionTemplates.length === 0) {
+    container.innerHTML = '<div class="text-muted small">No additional rejection templates configured.</div>';
+    return;
+  }
+
+  container.innerHTML = '';
+  currentRejectionTemplates.forEach((template, index) => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'border rounded p-3 mb-3 bg-light position-relative';
+
+    wrapper.innerHTML = `
+      <button type="button" class="btn btn-sm btn-outline-danger position-absolute" style="top: 10px; right: 10px;" onclick="removeRejectionTemplate(${index})" title="Remove Template">&times;</button>
+      <div class="form-group">
+        <label>Template Name</label>
+        <input type="text" class="form-control form-control-sm" value="${escapeAttr(template.name || '')}" onchange="updateRejectionTemplate(${index}, 'name', this.value)">
+      </div>
+      <div class="form-group">
+        <label>Subject</label>
+        <input type="text" class="form-control form-control-sm" value="${escapeAttr(template.subject || '')}" onchange="updateRejectionTemplate(${index}, 'subject', this.value)">
+      </div>
+      <div class="form-group mb-0">
+        <label>Body</label>
+        <textarea class="form-control form-control-sm" rows="3" onchange="updateRejectionTemplate(${index}, 'body', this.value)">${escapeAttr(template.body || '')}</textarea>
+      </div>
+    `;
+    container.appendChild(wrapper);
+  });
+}
+
+function updateRejectionTemplate(index, field, value) {
+  if (currentRejectionTemplates[index]) {
+    currentRejectionTemplates[index][field] = value;
+  }
+}
+
+function removeRejectionTemplate(index) {
+  currentRejectionTemplates.splice(index, 1);
+  renderRejectionTemplates();
+}
+
+const btnAddRejectionTemplate = document.getElementById('btn-add-rejection-template');
+if (btnAddRejectionTemplate) {
+  btnAddRejectionTemplate.addEventListener('click', () => {
+    currentRejectionTemplates.push({
+      id: pb.authStore.model ? pb.authStore.model.id + '_' + Date.now() : 'tpl_' + Date.now(),
+      name: 'New Rejection Reason',
+      subject: emailTemplateDefaults.rejected.subject,
+      body: emailTemplateDefaults.rejected.body
+    });
+    renderRejectionTemplates();
+  });
+}
 
 async function renderLibraryParticipationCheckboxes() {
   const container = document.getElementById('enabled-libraries-checkbox-container');
