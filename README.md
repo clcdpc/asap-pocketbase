@@ -8,11 +8,12 @@ Credit to Somalia Jamall for the intial concept and for developing a fine PHP ba
 
 ### 1. Installation
 1. **PocketBase**: Download the [PocketBase binary](https://pocketbase.io/docs/) for your OS and place it in the project root. This project is currently tested with PocketBase `0.36.9`.
-2. **Files**: Ensure the following directories are in your project folder:
+2. Click on the code button in Github and download the zip of this repo or sync with your favorite coding tool.
+3. **Files**: Ensure the following directories are in your project folder:
    - `pb_hooks/`: The backend logic and Polaris integration.
    - `pb_public/`: The frontend application files (Staff & Patron).
    - `pb_migrations/`: Database schema and initial configuration.
-3. **PocketBase Superuser**: Create one PocketBase superuser account before you manage the database from the PocketBase admin dashboard. You can do this either by launching PocketBase once and following the install prompt in `/_/`, or by running the `superuser upsert EMAIL PASSWORD` command using the PocketBase executable.
+4. **PocketBase Superuser**: Create one PocketBase superuser account before you manage the database from the PocketBase admin dashboard. You can do this either by launching PocketBase once and following the install prompt in `/_/`, or by running the `superuser upsert EMAIL PASSWORD` command using the PocketBase executable.
 
    The superuser is for PocketBase itself, not for the ASAP staff login flow. Use it to open the PocketBase dashboard, inspect collections and records, review migrations, and manage the app’s stored data and settings.
 
