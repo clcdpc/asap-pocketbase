@@ -45,24 +45,25 @@
     }
 
     /* Standardize Checkboxes to show an actual check mark */
-    .custom-checkbox {
-      padding-left: 2rem;
-      min-height: 1.5rem;
+    .custom-control.custom-checkbox {
+      padding-left: 2.25rem;
+      margin-bottom: 0;
     }
 
-    .custom-checkbox .custom-control-label {
-      padding-top: 0;
-      line-height: 1.5rem;
+    .custom-control.custom-checkbox .custom-control-label {
       cursor: pointer;
       user-select: none;
+      line-height: 1.25rem;
+      vertical-align: top;
+      margin-bottom: 0;
     }
     
-    .custom-checkbox .custom-control-label::before,
-    .custom-checkbox .custom-control-label::after {
+    .custom-control.custom-checkbox .custom-control-label::before,
+    .custom-control.custom-checkbox .custom-control-label::after {
       width: 1.25rem;
       height: 1.25rem;
-      top: 0.125rem;
-      left: -2rem;
+      top: 0;
+      left: -2.25rem;
     }
 
     .custom-checkbox .custom-control-input:checked~.custom-control-label::before {

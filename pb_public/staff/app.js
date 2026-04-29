@@ -2453,22 +2453,22 @@ function renderFormatSettings() {
 
   container.innerHTML = `
     <div class="table-responsive">
-      <table class="table table-sm table-borderless mb-0">
+      <table class="table table-sm mb-0">
         <thead>
           <tr>
-            <th style="width: 28px;"></th>
-            <th style="width: 40px;">Show</th>
-            <th>Format Key</th>
+            <th style="width: 30px;"></th>
+            <th style="width: 50px;">Show</th>
+            <th style="width: 20%;">Format Key</th>
             <th>Display Label</th>
-            <th style="width: 40px;"></th>
+            <th style="width: 50px;"></th>
           </tr>
         </thead>
         <tbody id="format-settings-body">
           ${allKeys.map(key => `
             <tr class="format-setting-row" data-key="${escapeAttr(key)}" draggable="true" style="cursor: grab;">
               <td class="align-middle text-muted" style="font-size: 1.1rem; cursor: grab; user-select: none;">&#8597;</td>
-              <td class="text-center align-middle">
-                <div class="custom-control custom-checkbox ml-2">
+              <td class="align-middle">
+                <div class="custom-control custom-checkbox">
                   <input type="checkbox" class="custom-control-input format-enabled-check" id="fmt-chk-${key}" ${availableFormats.includes(key) ? 'checked' : ''}>
                   <label class="custom-control-label" for="fmt-chk-${key}"></label>
                 </div>
@@ -2689,14 +2689,31 @@ async function renderLibraryParticipationCheckboxes() {
       return;
     }
 
-    container.innerHTML = orgs.map(org => `
-      <div class="col-md-6 mb-1">
-        <div class="custom-control custom-checkbox">
-          <input type="checkbox" class="custom-control-input lib-participation-cb" id="lib-p-${org.organizationId}" value="${org.organizationId}">
-          <label class="custom-control-label small" for="lib-p-${org.organizationId}">${org.displayName || org.name} (${org.organizationId})</label>
-        </div>
-      </div>
-    `).join('');
+    container.innerHTML = `
+      <table class="table table-sm table-hover mb-0">
+        <thead class="bg-white" style="position: sticky; top: 0; z-index: 1;">
+          <tr>
+            <th style="width: 50px;">Enable</th>
+            <th>Library Name</th>
+            <th style="width: 80px;">ID</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${orgs.map(org => `
+            <tr>
+              <td class="align-middle">
+                <div class="custom-control custom-checkbox">
+                  <input type="checkbox" class="custom-control-input lib-participation-cb" id="lib-p-${org.organizationId}" value="${org.organizationId}">
+                  <label class="custom-control-label" for="lib-p-${org.organizationId}"></label>
+                </div>
+              </td>
+              <td class="align-middle font-weight-bold">${escapeAttr(org.displayName || org.name)}</td>
+              <td class="align-middle text-muted small">${org.organizationId}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
 
     container.setAttribute('data-loaded', 'true');
 
