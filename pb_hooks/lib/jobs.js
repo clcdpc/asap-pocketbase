@@ -12,6 +12,8 @@ function runScheduledHoldCheck(app) {
     promoted: 0,
     timedOut: 0,
     skipped: 0,
+    isbnChecksFound: 0,
+    isbnChecksNotFound: 0,
     errors: 0,
   };
 
@@ -21,6 +23,7 @@ function runScheduledHoldCheck(app) {
   processPendingHoldTimeout(app, result);
   processPendingIsbnChecks(app, staff, result);
   processOutstandingPurchases(app, staff, result);
+  processPendingSuggestionIsbnChecks(app, staff, result);
   processPendingHolds(app, staff, result);
   processCheckedOut(app, staff, result);
   app.logger().info("ASAP hold check completed", "result", JSON.stringify(result));
@@ -314,6 +317,54 @@ function processHoldPickupTimeout(app, result) {
   }
 }
 
+
+function processPendingSuggestionIsbnChecks(app, staff, result) {
+  var pending = app.findRecordsByFilter(
+    "title_requests",
+    "status = {:status} && isbnCheckStatus = {:isbnCheckStatus}",
+    "created",
+    200,
+    0,
+    { status: records.STATUS.SUGGESTION, isbnCheckStatus: "pending" }
+  );
+
+  for (var i = 0; i < pending.length; i++) {
+    var record = pending[i];
+    var identifier = String(record.get("identifier") || "").trim();
+    var now = new Date().toISOString();
+
+    if (!identifier) {
+      record.set("isbnCheckStatus", "skipped_no_isbn");
+      record.set("lastChecked", now);
+      record.set("updated", now);
+      record.set("editedBy", "system");
+      records.appendSystemNote(record, "ISBN verification skipped: no identifier provided.");
+      app.save(record);
+      result.skipped++;
+      continue;
+    }
+
+    try {
+      var bibId = polaris.searchBib(staff, identifier);
+      record.set("isbnCheckStatus", bibId ? "found_in_polaris" : "not_found");
+      record.set("lastChecked", now);
+      record.set("updated", now);
+      record.set("editedBy", "system");
+      if (bibId) {
+        records.appendSystemNote(record, "ISBN verification found a Polaris bibliographic match.");
+        result.isbnChecksFound++;
+      } else {
+        records.appendSystemNote(record, "ISBN verification completed: no Polaris bibliographic match found.");
+        result.isbnChecksNotFound++;
+      }
+      app.save(record);
+    } catch (err) {
+      result.errors++;
+      app.logger().error("Pending suggestion ISBN check failed", "recordId", record.id, "error", String(err));
+    }
+  }
+}
+
 function processPendingHolds(app, staff, result) {
   var pending = app.findRecordsByFilter(
     "title_requests",
@@ -445,4 +496,5 @@ module.exports = {
   runScheduledHoldCheck: runScheduledHoldCheck,
   runScheduledOrganizationSync: runScheduledOrganizationSync,
   processOutstandingPurchases: processOutstandingPurchases,
+  processPendingSuggestionIsbnChecks: processPendingSuggestionIsbnChecks,
 };

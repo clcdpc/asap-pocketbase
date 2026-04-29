@@ -245,11 +245,14 @@ function createSuggestion(app, patronRecord, data) {
   record.set("staffLibraryOrgIdCreatedBy", String(data.staffLibraryOrgIdCreatedBy || ""));
   record.set("title", titleCase(data.title));
   record.set("author", String(data.author || "").trim());
-  record.set("identifier", String(data.identifier || data.isbn || "").trim());
+  var identifier = String(data.identifier || data.isbn || "").trim();
+  record.set("identifier", identifier);
   record.set("publication", String(data.publication || "").trim());
   record.set("exactPublicationDate", normalizeDateOnly(data.exactPublicationDate));
   record.set("autohold", true);
   record.set("status", STATUS.SUGGESTION);
+  record.set("isbnCheckStatus", String(data.isbnCheckStatus || "skipped_no_isbn"));
+  record.set("lastChecked", String(data.lastChecked || ""));
   record.set("agegroup", String(data.agegroup || "").trim() ? normalizeAgegroup(data.agegroup) : "");
   record.set("format", normalizeFormat(data.format));
   record.set("editedBy", "system");
@@ -276,6 +279,8 @@ function titleRequestToJson(record) {
     exactPublicationDate: record.get("exactPublicationDate") || "",
     autohold: !!record.getBool("autohold"),
     status: record.get("status") || "",
+    isbnCheckStatus: record.get("isbnCheckStatus") || "",
+    lastChecked: record.get("lastChecked") || "",
     agegroup: record.get("agegroup") || "",
     format: record.get("format") || "",
     editedBy: record.get("editedBy") || "",
