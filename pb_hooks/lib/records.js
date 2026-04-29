@@ -338,7 +338,10 @@ function formatDate(d) {
 function appendSystemNote(record, note) {
   var today = formatDate(new Date());
   var existing = String(record.get("notes") || "").trim();
-  var newNote = today + " " + note + ".";
+  var newNote = today + " " + note.trim();
+  if (!newNote.endsWith(".") && !newNote.endsWith("!") && !newNote.endsWith("?")) {
+    newNote += ".";
+  }
   if (existing) {
     record.set("notes", newNote + "\n" + existing);
   } else {
