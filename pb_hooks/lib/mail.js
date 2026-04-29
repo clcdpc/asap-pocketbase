@@ -49,29 +49,7 @@ function replacePlaceholders(template, data) {
   });
 }
 
-function suggestionSubmitted(app, record) {
-  var firstName = clean(record.get("nameFirst"));
-  var lastName = clean(record.get("nameLast"));
-  var title = getRealValue(clean(record.get("title")));
-  var author = getRealValue(clean(record.get("author")));
-  var format = formatLabel(record.get("format"));
-  var name = (firstName + " " + lastName).trim() || "Library Patron";
-  var libraryOrgId = record.get("libraryOrgId");
-  var emailsConfig = config.librarySettings(app, libraryOrgId).emails;
-  var tpl = emailsConfig.suggestion_submitted;
-  var data = { 
-    name: name, firstName: firstName, lastName: lastName, 
-    title: title, author: author, format: format 
-  };
-  
-  var subject = replacePlaceholders(tpl.subject || "Your Material Purchase Suggestion Has Been Submitted", data);
-  var text = replacePlaceholders(tpl.body || "", data);
-  var html = text.replace(/\n/g, "<br>");
-
-  return send(app, record.get("email"), subject, text, html, { fromAddress: emailsConfig.fromAddress, fromName: emailsConfig.fromName });
-}
-
-function alreadyOwned(app, record, patron) {
+function dispatch(app, record, patron, templateKey, defaultSubject, templateId) {
   var title = getRealValue(clean(record.get("title")));
   var author = getRealValue(clean(record.get("author")));
   var format = formatLabel(record.get("format"));
@@ -81,31 +59,9 @@ function alreadyOwned(app, record, patron) {
   var lastName = clean((patron && patron.NameLast) || record.get("nameLast"));
   var libraryOrgId = record.get("libraryOrgId");
   var emailsConfig = config.librarySettings(app, libraryOrgId).emails;
-  var tpl = emailsConfig.already_owned;
-  var data = { 
-    name: name, firstName: firstName, lastName: lastName,
-    title: title, author: author, format: format, barcode: barcode 
-  };
 
-  var subject = replacePlaceholders(tpl.subject || "Your Material Purchase Suggestion", data);
-  var text = replacePlaceholders(tpl.body || "", data);
-  var html = text.replace(/\n/g, "<br>");
-
-  return send(app, emailFor(record, patron), subject, text, html, { fromAddress: emailsConfig.fromAddress, fromName: emailsConfig.fromName });
-}
-
-function rejected(app, record, patron, templateId) {
-  var title = getRealValue(clean(record.get("title")));
-  var author = getRealValue(clean(record.get("author")));
-  var format = formatLabel(record.get("format"));
-  var name = patronName(record, patron);
-  var firstName = clean((patron && patron.NameFirst) || record.get("nameFirst"));
-  var lastName = clean((patron && patron.NameLast) || record.get("nameLast"));
-  var libraryOrgId = record.get("libraryOrgId");
-  var emailsConfig = config.librarySettings(app, libraryOrgId).emails;
-
-  var tpl = emailsConfig.rejected;
-  if (templateId && emailsConfig.rejection_templates && Array.isArray(emailsConfig.rejection_templates)) {
+  var tpl = emailsConfig[templateKey] || {};
+  if (templateId && templateKey === "rejected" && emailsConfig.rejection_templates && Array.isArray(emailsConfig.rejection_templates)) {
     for (var i = 0; i < emailsConfig.rejection_templates.length; i++) {
       if (emailsConfig.rejection_templates[i].id === templateId) {
         tpl = emailsConfig.rejection_templates[i];
@@ -118,57 +74,35 @@ function rejected(app, record, patron, templateId) {
     name: name, firstName: firstName, lastName: lastName,
     title: title, author: author, format: format 
   };
+  if (barcode) {
+    data.barcode = barcode;
+  }
 
-  var subject = replacePlaceholders(tpl.subject || "Your Material Purchase Suggestion", data);
+  var subject = replacePlaceholders(tpl.subject || defaultSubject, data);
   var text = replacePlaceholders(tpl.body || "", data);
   var html = text.replace(/\n/g, "<br>");
 
   return send(app, emailFor(record, patron), subject, text, html, { fromAddress: emailsConfig.fromAddress, fromName: emailsConfig.fromName });
+}
+
+function suggestionSubmitted(app, record) {
+  return dispatch(app, record, null, "suggestion_submitted", "Your Material Purchase Suggestion Has Been Submitted");
+}
+
+function alreadyOwned(app, record, patron) {
+  return dispatch(app, record, patron, "already_owned", "Your Material Purchase Suggestion");
+}
+
+function rejected(app, record, patron, templateId) {
+  return dispatch(app, record, patron, "rejected", "Your Material Purchase Suggestion", templateId);
 }
 
 function holdPlaced(app, record, patron) {
-  var title = getRealValue(clean(record.get("title")));
-  var author = getRealValue(clean(record.get("author")));
-  var format = formatLabel(record.get("format"));
-  var barcode = clean(record.get("barcode"));
-  var name = patronName(record, patron);
-  var firstName = clean((patron && patron.NameFirst) || record.get("nameFirst"));
-  var lastName = clean((patron && patron.NameLast) || record.get("nameLast"));
-  var libraryOrgId = record.get("libraryOrgId");
-  var emailsConfig = config.librarySettings(app, libraryOrgId).emails;
-  var tpl = emailsConfig.hold_placed;
-  var data = { 
-    name: name, firstName: firstName, lastName: lastName,
-    title: title, author: author, format: format, barcode: barcode 
-  };
-
-  var subject = replacePlaceholders(tpl.subject || "Hold Placed for the Material You Suggested", data);
-  var text = replacePlaceholders(tpl.body || "", data);
-  var html = text.replace(/\n/g, "<br>");
-
-  return send(app, emailFor(record, patron), subject, text, html, { fromAddress: emailsConfig.fromAddress, fromName: emailsConfig.fromName });
+  return dispatch(app, record, patron, "hold_placed", "Hold Placed for the Material You Suggested");
 }
 
 function autoRejected(app, record) {
-  var title = getRealValue(clean(record.get("title")));
-  var author = getRealValue(clean(record.get("author")));
-  var format = formatLabel(record.get("format"));
-  var firstName = clean(record.get("nameFirst"));
-  var lastName = clean(record.get("nameLast"));
-  var name = (firstName + " " + lastName).trim() || "Library Patron";
-  var libraryOrgId = record.get("libraryOrgId");
-  var emailsConfig = config.librarySettings(app, libraryOrgId).emails;
-  var tpl = emailsConfig.rejected;
-  var data = { 
-    name: name, firstName: firstName, lastName: lastName,
-    title: title, author: author, format: format 
-  };
-
-  var subject = replacePlaceholders(tpl.subject || "Your Material Purchase Suggestion", data);
-  var text = replacePlaceholders(tpl.body || "", data);
-  var html = text.replace(/\n/g, "<br>");
-
-  return send(app, record.get("email"), subject, text, html, { fromAddress: emailsConfig.fromAddress, fromName: emailsConfig.fromName });
+  return dispatch(app, record, null, "rejected", "Your Material Purchase Suggestion");
 }
 
 function emailFor(record, patron) {
