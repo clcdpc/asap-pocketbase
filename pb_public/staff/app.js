@@ -763,7 +763,7 @@ function getGridColumns(status) {
       'Submitted',
       { name: 'Notes', width: '200px' },
       'Edited By',
-      { name: 'Actions', width: '280px', sort: false },
+      { name: 'Actions', width: '145px', sort: false },
     ];
   }
 
@@ -777,7 +777,7 @@ function getGridColumns(status) {
       'Closed Reason',
       { name: 'Notes', width: '200px' },
       'Edited By',
-      { name: 'Actions', width: '130px', sort: false },
+      { name: 'Actions', width: '145px', sort: false },
     ];
   }
 
@@ -794,7 +794,7 @@ function getGridColumns(status) {
     'Last Checked',
     { name: 'Notes', width: '200px' },
     'Edited By',
-    { name: 'Actions', width: '210px', sort: false },
+    { name: 'Actions', width: '145px', sort: false },
   ];
 }
 
@@ -912,35 +912,68 @@ function formatCloseReason(row) {
   return closeReasonMap[row.closeReason] || 'Closed';
 }
 
+function renderRowActions(primaryAction, secondaryActions) {
+  if (!secondaryActions || secondaryActions.trim() === '') {
+    return `<div class="row-action-group">${primaryAction}</div>`;
+  }
+
+  return `
+    <div class="row-action-group">
+      ${primaryAction}
+      <button type="button" class="btn btn-sm btn-outline-secondary row-action-menu-trigger" data-secondary-actions="${escapeAttr(secondaryActions)}">
+        ⋯
+      </button>
+    </div>
+  `;
+}
+
 function getActionButtons(row) {
   const id = escapeAttr(row.id);
   const status = normalizeStatus(row.status);
 
   if (status === 'suggestion') {
-    return `<button type="button" class="btn btn-sm btn-primary" data-row-action="edit" data-row-id="${id}" data-next-status="outstanding_purchase" data-dialog-title="Approve for Purchase" data-action-value="purchase">Purchase</button>
-            <button type="button" class="btn btn-sm btn-warning" data-row-action="edit" data-row-id="${id}" data-next-status="pending_hold" data-dialog-title="Already Own" data-action-value="alreadyOwn">Already Own</button>
-            <button type="button" class="btn btn-sm btn-danger" data-row-action="edit" data-row-id="${id}" data-next-status="closed" data-dialog-title="Reject" data-action-value="reject">Reject</button>
-            <button type="button" class="btn btn-sm btn-outline-danger" data-row-action="edit" data-row-id="${id}" data-next-status="closed" data-dialog-title="Silent Close" data-action-value="silentClose">Silent Close</button>
-            <button type="button" class="btn btn-sm btn-secondary" data-row-action="edit" data-row-id="${id}" data-next-status="suggestion" data-dialog-title="Edit Suggestion" data-action-value="">Edit</button>`;
+    const primary = `<button type="button" class="btn btn-sm btn-primary" data-row-action="edit" data-row-id="${id}" data-next-status="outstanding_purchase" data-dialog-title="Approve for Purchase" data-action-value="purchase">Purchase</button>`;
+    const secondary = `
+      <button type="button" role="menuitem" data-row-action="edit" data-row-id="${id}" data-next-status="pending_hold" data-dialog-title="Already Own" data-action-value="alreadyOwn">Already Own</button>
+      <button type="button" role="menuitem" data-row-action="edit" data-row-id="${id}" data-next-status="suggestion" data-dialog-title="Edit Suggestion" data-action-value="">Edit</button>
+      <hr>
+      <button type="button" role="menuitem" class="danger" data-row-action="edit" data-row-id="${id}" data-next-status="closed" data-dialog-title="Reject" data-action-value="reject">Reject</button>
+      <button type="button" role="menuitem" class="danger" data-row-action="edit" data-row-id="${id}" data-next-status="closed" data-dialog-title="Silent Close" data-action-value="silentClose">Silent Close</button>
+    `;
+    return renderRowActions(primary, secondary);
   }
 
   if (status === 'outstanding_purchase') {
-    return `<button type="button" class="btn btn-sm btn-success" data-row-action="edit" data-row-id="${id}" data-next-status="pending_hold" data-dialog-title="Move to Pending Hold" data-action-value="">Ready for Hold</button>
-            <button type="button" class="btn btn-sm btn-outline-danger" data-row-action="edit" data-row-id="${id}" data-next-status="closed" data-dialog-title="Silent Close" data-action-value="silentClose">Silent Close</button>
-            <button type="button" class="btn btn-sm btn-outline-secondary" data-row-action="undo" data-row-id="${id}">Undo</button>
-            <button type="button" class="btn btn-sm btn-secondary" data-row-action="edit" data-row-id="${id}" data-next-status="outstanding_purchase" data-dialog-title="Edit" data-action-value="">Edit</button>`;
+    const primary = `<button type="button" class="btn btn-sm btn-success" data-row-action="edit" data-row-id="${id}" data-next-status="pending_hold" data-dialog-title="Move to Pending Hold" data-action-value="">Ready for Hold</button>`;
+    const secondary = `
+      <button type="button" role="menuitem" data-row-action="edit" data-row-id="${id}" data-next-status="outstanding_purchase" data-dialog-title="Edit" data-action-value="">Edit</button>
+      <button type="button" role="menuitem" data-row-action="undo" data-row-id="${id}">Undo</button>
+      <hr>
+      <button type="button" role="menuitem" class="danger" data-row-action="edit" data-row-id="${id}" data-next-status="closed" data-dialog-title="Silent Close" data-action-value="silentClose">Silent Close</button>
+    `;
+    return renderRowActions(primary, secondary);
   }
 
-  if (status === 'pending_hold' || status === 'hold_placed' || status === 'closed') {
-    let buttons = `<button type="button" class="btn btn-sm btn-outline-secondary" data-row-action="undo" data-row-id="${id}">Undo</button>`;
-    if (status !== 'closed') {
-      buttons += `<button type="button" class="btn btn-sm btn-outline-danger" data-row-action="edit" data-row-id="${id}" data-next-status="closed" data-dialog-title="Silent Close" data-action-value="silentClose">Silent Close</button>`;
-    }
-    buttons += `<button type="button" class="btn btn-sm btn-secondary" data-row-action="edit" data-row-id="${id}" data-next-status="${escapeAttr(row.status)}" data-dialog-title="Edit" data-action-value="">Edit</button>`;
-    return buttons;
+  if (status === 'pending_hold' || status === 'hold_placed') {
+    const primary = `<button type="button" class="btn btn-sm btn-secondary" data-row-action="edit" data-row-id="${id}" data-next-status="${escapeAttr(row.status)}" data-dialog-title="Edit" data-action-value="">Edit</button>`;
+    const secondary = `
+      <button type="button" role="menuitem" data-row-action="undo" data-row-id="${id}">Undo</button>
+      <hr>
+      <button type="button" role="menuitem" class="danger" data-row-action="edit" data-row-id="${id}" data-next-status="closed" data-dialog-title="Silent Close" data-action-value="silentClose">Silent Close</button>
+    `;
+    return renderRowActions(primary, secondary);
   }
 
-  return `<button type="button" class="btn btn-sm btn-secondary" data-row-action="edit" data-row-id="${id}" data-next-status="${escapeAttr(row.status)}" data-dialog-title="Edit" data-action-value="">Edit</button>`;
+  if (status === 'closed') {
+    const primary = `<button type="button" class="btn btn-sm btn-secondary" data-row-action="edit" data-row-id="${id}" data-next-status="${escapeAttr(row.status)}" data-dialog-title="Edit" data-action-value="">Edit</button>`;
+    const secondary = `
+      <button type="button" role="menuitem" data-row-action="undo" data-row-id="${id}">Undo</button>
+    `;
+    return renderRowActions(primary, secondary);
+  }
+
+  const primary = `<button type="button" class="btn btn-sm btn-secondary" data-row-action="edit" data-row-id="${id}" data-next-status="${escapeAttr(row.status)}" data-dialog-title="Edit" data-action-value="">Edit</button>`;
+  return renderRowActions(primary, "");
 }
 
 function escapeAttr(value) {
@@ -952,7 +985,75 @@ function escapeAttr(value) {
     .replace(/>/g, "&gt;");
 }
 
-gridContainer.addEventListener('click', (e) => {
+let activeActionMenuTrigger = null;
+
+function closeActionMenu() {
+  const layer = document.getElementById('action-menu-layer');
+  if (layer) {
+    layer.innerHTML = '';
+  }
+  if (activeActionMenuTrigger) {
+    activeActionMenuTrigger.setAttribute('aria-expanded', 'false');
+    activeActionMenuTrigger = null;
+  }
+}
+
+document.addEventListener('click', (e) => {
+  const trigger = e.target.closest('.row-action-menu-trigger');
+
+  if (trigger) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (activeActionMenuTrigger === trigger) {
+      closeActionMenu();
+      return;
+    }
+
+    closeActionMenu();
+    activeActionMenuTrigger = trigger;
+    trigger.setAttribute('aria-expanded', 'true');
+
+    const layer = document.getElementById('action-menu-layer');
+    const secondaryHtml = trigger.getAttribute('data-secondary-actions');
+
+    if (layer && secondaryHtml) {
+      layer.innerHTML = `<div class="row-action-menu" role="menu">${secondaryHtml}</div>`;
+
+      const menu = layer.querySelector('.row-action-menu');
+      const rect = trigger.getBoundingClientRect();
+
+      // Initially set display block to get dimensions
+      menu.style.visibility = 'hidden';
+
+      const menuRect = menu.getBoundingClientRect();
+      menu.style.visibility = 'visible';
+
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const spaceAbove = rect.top;
+
+      let topPosition;
+
+      if (spaceBelow >= menuRect.height || spaceBelow > spaceAbove) {
+        topPosition = rect.bottom + 4;
+      } else {
+        topPosition = rect.top - menuRect.height - 4;
+      }
+
+      menu.style.top = `${topPosition}px`;
+
+      let leftPosition = rect.right - menuRect.width;
+      if (leftPosition < 0) leftPosition = 0;
+
+      menu.style.left = `${leftPosition}px`;
+    }
+    return;
+  }
+
+  if (activeActionMenuTrigger) {
+    closeActionMenu();
+  }
+
   const truncateBtn = e.target.closest('.truncate-note');
   if (truncateBtn && gridContainer.contains(truncateBtn)) {
     const fullNote = truncateBtn.getAttribute('data-full-note');
@@ -963,20 +1064,32 @@ gridContainer.addEventListener('click', (e) => {
   }
 
   const button = e.target.closest('[data-row-action]');
-  if (!button || !gridContainer.contains(button)) return;
+  const inGrid = gridContainer.contains(e.target);
+  const layer = document.getElementById('action-menu-layer');
+  const inActionLayer = layer && layer.contains(e.target);
 
-  const id = button.getAttribute('data-row-id');
-  if (button.getAttribute('data-row-action') === 'undo') {
-    undoRow(id);
-    return;
+  if (button && (inGrid || inActionLayer)) {
+    const id = button.getAttribute('data-row-id');
+    if (button.getAttribute('data-row-action') === 'undo') {
+      undoRow(id);
+      return;
+    }
+
+    openEdit(
+      id,
+      button.getAttribute('data-next-status') || '',
+      button.getAttribute('data-dialog-title') || 'Edit',
+      button.getAttribute('data-action-value') || ''
+    );
   }
+});
 
-  openEdit(
-    id,
-    button.getAttribute('data-next-status') || '',
-    button.getAttribute('data-dialog-title') || 'Edit',
-    button.getAttribute('data-action-value') || ''
-  );
+window.addEventListener('resize', closeActionMenu);
+document.addEventListener('scroll', closeActionMenu, { passive: true, capture: true });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && activeActionMenuTrigger) {
+    closeActionMenu();
+  }
 });
 
 function openEdit(id, nextStatus, dialogTitle, actionStr) {

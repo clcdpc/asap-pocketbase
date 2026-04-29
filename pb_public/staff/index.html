@@ -384,6 +384,57 @@
       border-left: 4px solid #004a9b;
       color: #004a9b;
     }
+
+    .row-action-group {
+      display: inline-flex;
+      align-items: stretch;
+      white-space: nowrap;
+    }
+    .row-action-group .btn:first-child {
+      border-top-right-radius: 0;
+      border-bottom-right-radius: 0;
+    }
+    .row-action-group .btn:last-child {
+      border-top-left-radius: 0;
+      border-bottom-left-radius: 0;
+      border-left: 0;
+    }
+    .action-menu-layer {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 2000;
+    }
+    .row-action-menu {
+      position: fixed;
+      min-width: 190px;
+      background: #fff;
+      border: 1px solid rgba(0,0,0,.15);
+      border-radius: .5rem;
+      box-shadow: 0 .75rem 2rem rgba(0,0,0,.16);
+      padding: .35rem;
+      pointer-events: auto;
+    }
+    .row-action-menu button {
+      display: block;
+      width: 100%;
+      text-align: left;
+      border: 0;
+      background: transparent;
+      padding: .45rem .65rem;
+      border-radius: .35rem;
+    }
+    .row-action-menu button:hover,
+    .row-action-menu button:focus {
+      background: rgba(0,0,0,.06);
+    }
+
+    .row-action-menu hr {
+      margin: .35rem 0;
+    }
+    .row-action-menu button.danger {
+      color: #dc3545;
+    }
   </style>
 </head>
 <main>
@@ -1155,8 +1206,11 @@
   </div>
   </div>
 </main>
+
 <div id="status-announcer" class="sr-only" aria-live="polite"></div>
 <div id="toast-container" aria-live="polite" aria-atomic="true"></div>
+<div id="action-menu-layer" class="action-menu-layer"></div>
+
 
 <!-- Note Dialog -->
 <dialog id="noteDialog"
