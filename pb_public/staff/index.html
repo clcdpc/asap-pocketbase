@@ -45,11 +45,26 @@
     }
 
     /* Standardize Checkboxes to show an actual check mark */
+    .custom-checkbox {
+      padding-left: 2rem;
+      min-height: 1.5rem;
+    }
+
     .custom-checkbox .custom-control-label {
-      padding-top: 2px;
+      padding-top: 0;
+      line-height: 1.5rem;
       cursor: pointer;
+      user-select: none;
     }
     
+    .custom-checkbox .custom-control-label::before,
+    .custom-checkbox .custom-control-label::after {
+      width: 1.25rem;
+      height: 1.25rem;
+      top: 0.125rem;
+      left: -2rem;
+    }
+
     .custom-checkbox .custom-control-input:checked~.custom-control-label::before {
       background-color: #007bff;
       border-color: #007bff;
@@ -58,13 +73,7 @@
     .custom-checkbox .custom-control-label::before {
       border-radius: 4px;
       border: 2px solid #adb5bd;
-      width: 1.25rem;
-      height: 1.25rem;
-    }
-    
-    .custom-checkbox .custom-control-label::after {
-      width: 1.25rem;
-      height: 1.25rem;
+      background-color: #fff;
     }
 
     .tab-desc {
@@ -770,7 +779,7 @@
                     <hr>
                     <h3 class="h5">Library Participation</h3>
                     <p class="small text-muted mb-3">Select the libraries that are allowed to use this service. If none are selected, all libraries are enabled by default.</p>
-                    <div id="enabled-libraries-checkbox-container" class="row no-gutters border rounded p-3 bg-light" style="max-height: 300px; overflow-y: auto;">
+                    <div id="enabled-libraries-checkbox-container" class="row no-gutters border rounded p-3 bg-light" style="max-height: 500px; overflow-y: auto;">
                       <div class="col-12 text-muted italic">Loading libraries...</div>
                     </div>
                   </div>
