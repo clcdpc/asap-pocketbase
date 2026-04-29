@@ -1076,8 +1076,12 @@ function getDuplicateBadgesHtml(row) {
 
 function getWorkflowTagBadgesHtml(row) {
   const tags = Array.isArray(row.workflowTags) ? row.workflowTags : [];
-  if (!tags.length) return '';
-  return tags.map(tag => {
+  const visibleTags = tags.filter(tag => {
+    const cleanTag = String(tag || '').trim();
+    return cleanTag && !/^\d+$/.test(cleanTag);
+  });
+  if (!visibleTags.length) return '';
+  return visibleTags.map(tag => {
     const label = escapeAttr(tag);
     return ` <span class="badge badge-primary asap-polaris-tag" title="Polaris check tag">${label}</span>`;
   }).join('');
