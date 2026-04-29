@@ -726,6 +726,7 @@ function staffLookupPatron(e) {
 function staffTitleRequestsList(e) {
   var staff = requireAuth(e, "staff_users");
   var result = [];
+  var patronCache = {};
   var limit = 200;
   var offset = 0;
   var filter = "id != ''";
@@ -746,7 +747,35 @@ function staffTitleRequestsList(e) {
       break;
     }
     for (var i = 0; i < page.length; i++) {
-      result.push(records.titleRequestToJson(page[i]));
+      var row = records.titleRequestToJson(page[i]);
+      var patronId = String(page[i].get("patron") || "").trim();
+      var patronRecord = null;
+
+      if (patronId) {
+        if (patronCache[patronId] !== undefined) {
+          patronRecord = patronCache[patronId];
+        } else {
+          try {
+            patronRecord = e.app.findRecordById("patron_users", patronId);
+          } catch (err) {
+            patronRecord = null;
+          }
+          patronCache[patronId] = patronRecord;
+        }
+      }
+
+      var patronFirst = row.nameFirst || (patronRecord ? patronRecord.get("nameFirst") || "" : "");
+      var patronLast = row.nameLast || (patronRecord ? patronRecord.get("nameLast") || "" : "");
+      var patronName = (String(patronFirst).trim() + " " + String(patronLast).trim()).trim();
+      var patronEmail = row.email || (patronRecord ? patronRecord.email() || "" : "");
+      var libraryOrgName = row.libraryOrgName || (patronRecord ? patronRecord.get("libraryOrgName") || "" : "");
+
+      row.patronName = patronName;
+      row.patronEmail = patronEmail;
+      row.libraryOrgName = libraryOrgName;
+      row.preferredPickupBranchName = row.preferredPickupBranchName || "";
+
+      result.push(row);
     }
     if (page.length < limit) {
       break;

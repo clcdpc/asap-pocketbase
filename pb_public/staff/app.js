@@ -1336,6 +1336,7 @@ function openEdit(id, nextStatus, dialogTitle, actionStr) {
   document.getElementById('edit-age').value = row.agegroup || 'adult';
   setSelectValue(document.getElementById('edit-publication'), row.publication || publicationOptions[0]);
   document.getElementById('edit-exact-publication-date').value = dateOnly(row.exactPublicationDate);
+  renderEditPatronContext(row);
 
   const username = (pb.authStore.model && pb.authStore.model.username) ? pb.authStore.model.username : 'staff';
   const today = formatStandardDate(new Date());
@@ -1375,6 +1376,38 @@ function openEdit(id, nextStatus, dialogTitle, actionStr) {
 
   document.getElementById('editModal').showModal();
   document.getElementById('close-modal-btn').focus();
+}
+
+function renderEditPatronContext(row) {
+  const editBody = document.querySelector('#editModal .asap-dialog-edit-body');
+  if (!editBody) return;
+
+  let block = document.getElementById('edit-patron-context');
+  if (!block) {
+    block = document.createElement('div');
+    block.id = 'edit-patron-context';
+    block.className = 'alert alert-light border py-2 px-3 mb-2 small';
+    const anchor = document.getElementById('edit-rejection-template-container');
+    if (anchor && anchor.parentNode === editBody) {
+      editBody.insertBefore(block, anchor.nextSibling);
+    } else {
+      editBody.insertBefore(block, editBody.firstChild);
+    }
+  }
+
+  const patronName = row.patronName || `${row.nameFirst || ''} ${row.nameLast || ''}`.trim() || '—';
+  const patronEmail = row.patronEmail || row.email || '—';
+  const libraryOrgName = row.libraryOrgName || row.libraryOrgId || '—';
+  const preferredPickupBranchName = row.preferredPickupBranchName || '—';
+  const barcode = row.barcode || '—';
+
+  block.innerHTML = `
+    <div><strong>Patron:</strong> ${escapeAttr(patronName)}</div>
+    <div><strong>Email:</strong> ${escapeAttr(patronEmail)}</div>
+    <div><strong>Barcode:</strong> ${escapeAttr(barcode)}</div>
+    <div><strong>Library:</strong> ${escapeAttr(libraryOrgName)}</div>
+    <div><strong>Preferred pickup branch:</strong> ${escapeAttr(preferredPickupBranchName)}</div>
+  `;
 }
 
 document.getElementById('edit-form').addEventListener('submit', async (e) => {
