@@ -800,12 +800,25 @@ function staffCreateSuggestion(e) {
     e.app.save(record);
 
     // Trigger confirmation email
-    try {
-      if (!mail.suggestionSubmitted(e.app, record)) {
-        noteSkippedEmail(e.app, record);
+    var emailPatronConfirmation = data.emailPatronConfirmation === true;
+    if (emailPatronConfirmation) {
+      try {
+        if (record.get("email")) {
+          var sent = mail.suggestionSubmitted(e.app, record);
+          if (sent) {
+            records.appendSystemNote(record, "Submission confirmation email sent to patron.");
+          } else {
+            records.appendSystemNote(record, "Submission confirmation email could not be sent.");
+          }
+        } else {
+          records.appendSystemNote(record, "Submission confirmation email skipped because the patron has no email address.");
+        }
+        e.app.save(record);
+      } catch (err) {
+        records.appendSystemNote(record, "Submission confirmation email could not be sent.");
+        e.app.save(record);
+        e.app.logger().error("Staff-created suggestion confirmation email failed", "recordId", record.id, "error", String(err));
       }
-    } catch (mailErr) {
-      e.app.logger().error("Confirmation email failed (staff submission)", "recordId", record.id, "error", String(mailErr));
     }
 
     return e.json(201, record);

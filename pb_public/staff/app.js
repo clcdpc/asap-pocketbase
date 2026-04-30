@@ -1932,6 +1932,7 @@ document.getElementById('close-modal-btn').addEventListener('click', () => {
 
 document.getElementById('btn-new-suggestion').addEventListener('click', () => {
   document.getElementById('new-suggestion-form').reset();
+  setFieldChecked('staff-new-suggestion-email-patron', false);
   document.getElementById('new-error').classList.add('hidden');
   resetStaffPatronLookup();
   document.getElementById('newSuggestionModal').showModal();
@@ -2023,7 +2024,8 @@ document.getElementById('new-suggestion-form').addEventListener('submit', async 
     format: document.getElementById('new-format').value,
     agegroup: document.getElementById('new-age').value,
     publication: document.getElementById('new-publication').value,
-    notes: document.getElementById('new-notes').value
+    notes: document.getElementById('new-notes').value,
+    emailPatronConfirmation: getFieldChecked('staff-new-suggestion-email-patron')
   };
 
   const errDiv = document.getElementById('new-error');
