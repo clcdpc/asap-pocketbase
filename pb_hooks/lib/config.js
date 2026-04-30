@@ -111,9 +111,108 @@ function getSystemSettings(app) {
   return systemRecord(app || $app, "system_settings", "settings0000001", {
     settingsKey: "system",
     allowedStaffUsers: "",
+    staffUrl: defaultStaffUrl(),
     organizationsSyncStatus: "not_loaded",
     organizationsSyncMessage: "Polaris organizations have not been loaded yet."
   });
+}
+
+function envValue(name) {
+  try {
+    return String($os.getenv(name) || "").trim();
+  } catch (err) {
+    return "";
+  }
+}
+
+function stripUrlHash(value) {
+  var text = String(value || "").trim();
+  var hashIndex = text.indexOf("#");
+  return hashIndex >= 0 ? text.slice(0, hashIndex) : text;
+}
+
+function normalizeStaffUrl(value) {
+  var text = stripUrlHash(value);
+  if (!text) throw new Error("Staff URL is required.");
+  if (!/^https?:\/\//i.test(text)) {
+    throw new Error("Staff URL must start with http:// or https://.");
+  }
+  if (/\s/.test(text)) {
+    throw new Error("Enter a valid Staff URL beginning with http:// or https://.");
+  }
+  var match = text.match(/^(https?):\/\/([^/?#]+)(.*)$/i);
+  if (!match || !match[2]) {
+    throw new Error("Enter a valid Staff URL beginning with http:// or https://.");
+  }
+  var normalized = match[1].toLowerCase() + "://" + match[2] + (match[3] || "");
+  var queryIndex = normalized.indexOf("?");
+  var beforeQuery = queryIndex >= 0 ? normalized.slice(0, queryIndex) : normalized;
+  var afterQuery = queryIndex >= 0 ? normalized.slice(queryIndex) : "";
+  if (/\/staff$/i.test(beforeQuery)) {
+    normalized = beforeQuery + "/" + afterQuery;
+  }
+  return normalized;
+}
+
+function staffUrlFromEnv(value) {
+  var normalized = normalizeStaffUrl(value);
+  var queryIndex = normalized.indexOf("?");
+  var beforeQuery = queryIndex >= 0 ? normalized.slice(0, queryIndex) : normalized;
+  var afterQuery = queryIndex >= 0 ? normalized.slice(queryIndex) : "";
+  beforeQuery = beforeQuery.replace(/\/+$/, "");
+  if (!/\/staff$/i.test(beforeQuery)) {
+    beforeQuery += "/staff";
+  }
+  return beforeQuery + "/" + afterQuery;
+}
+
+function defaultStaffUrl() {
+  var envStaffUrl = envValue("ASAP_STAFF_URL");
+  if (envStaffUrl) {
+    try {
+      return staffUrlFromEnv(envStaffUrl);
+    } catch (err) {
+      return envStaffUrl;
+    }
+  }
+  var envPublicUrl = envValue("ASAP_PUBLIC_URL");
+  if (envPublicUrl) {
+    try {
+      return staffUrlFromEnv(envPublicUrl);
+    } catch (err2) {
+      return envPublicUrl;
+    }
+  }
+  return "";
+}
+
+function staffUrl(app) {
+  var sys = null;
+  try {
+    sys = getSystemSettings(app || $app);
+  } catch (err) {}
+  var configured = "";
+  try {
+    configured = sys ? String(sys.get("staffUrl") || "").trim() : "";
+  } catch (err) {}
+  if (configured) return normalizeStaffUrl(configured);
+
+  var envStaffUrl = envValue("ASAP_STAFF_URL");
+  if (envStaffUrl) return staffUrlFromEnv(envStaffUrl);
+
+  var envPublicUrl = envValue("ASAP_PUBLIC_URL");
+  if (envPublicUrl) return staffUrlFromEnv(envPublicUrl);
+
+  return "http://localhost:8090/staff/";
+}
+
+function saveSystemSettings(app, data) {
+  var record = getSystemSettings(app);
+  if (data && Object.prototype.hasOwnProperty.call(data, "staffUrl")) {
+    record.set("staffUrl", normalizeStaffUrl(data.staffUrl));
+  }
+  app.save(record);
+  return record;
 }
 
 function getPolarisSettings(app) {
@@ -366,6 +465,7 @@ function getSettings() {
     smtp: smtpFromRecord(getSmtpSettings(app)),
     emails: emailsFor(app, ""),
     allowedStaffUsers: sys ? sys.get("allowedStaffUsers") || "" : "",
+    staffUrl: staffUrl(app),
     enabledLibraryOrgIds: enabledLibraryOrgIds(app),
     ui_text: uiText(app, "")
   }, wf);
@@ -522,12 +622,15 @@ module.exports = {
   importToken: importToken,
   mail: mail,
   mergeDuplicateStatusLabels: mergeDuplicateStatusLabels,
+  normalizeStaffUrl: normalizeStaffUrl,
   outstandingTimeout: outstandingTimeout,
   outstandingTimeoutEmail: outstandingTimeoutEmail,
   parseJsonObject: parseJsonObject,
   polaris: polaris,
   rejectionTemplates: rejectionTemplates,
+  saveSystemSettings: saveSystemSettings,
   savePolarisSettings: savePolarisSettings,
+  staffUrl: staffUrl,
   suggestionLimit: suggestionLimit,
   uiText: uiText,
 };

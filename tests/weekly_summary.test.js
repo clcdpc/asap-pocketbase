@@ -13,8 +13,18 @@ class MockRecord {
   }
 }
 
-function makeApp(rows) {
+function makeApp(rows, options = {}) {
   return {
+    findCollectionByNameOrId(collection) {
+      if (collection === "system_settings" && options.staffUrl !== undefined) return { name: collection };
+      throw new Error("not found");
+    },
+    findRecordById(collection, id) {
+      if (collection === "system_settings" && id === "settings0000001" && options.staffUrl !== undefined) {
+        return new MockRecord({ staffUrl: options.staffUrl });
+      }
+      throw new Error("not found");
+    },
     findRecordsByFilter(collection, filter, sort, limit, offset, params) {
       assert.strictEqual(collection, "title_requests");
       const status = params.status;
@@ -46,5 +56,12 @@ assert.strictEqual(summary.purchasesWithoutBibsCount, 1);
 assert.deepStrictEqual(summary.purchasesWithoutBibsSample.map(item => item.title), ["Needs Bib"]);
 assert.ok(summary.newSubmissionsUrl.endsWith("/staff/?stage=submitted"));
 assert.ok(summary.purchasesWithoutBibsUrl.endsWith("/staff/?stage=purchased_waiting_for_bib"));
+
+const configuredSummary = jobs.buildWeeklyStaffActionSummary(makeApp(rows, { staffUrl: "https://asap.example.org/staff/" }));
+assert.strictEqual(configuredSummary.newSubmissionsUrl, "https://asap.example.org/staff/?stage=submitted");
+assert.strictEqual(configuredSummary.purchasesWithoutBibsUrl, "https://asap.example.org/staff/?stage=purchased_waiting_for_bib");
+
+const noTrailingSlashSummary = jobs.buildWeeklyStaffActionSummary(makeApp(rows, { staffUrl: "http://localhost:8090/staff" }));
+assert.strictEqual(noTrailingSlashSummary.newSubmissionsUrl, "http://localhost:8090/staff/?stage=submitted");
 
 console.log("Weekly staff action summary tests passed.");

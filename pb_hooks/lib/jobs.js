@@ -106,22 +106,10 @@ function weeklySummaryPeriod(now) {
   };
 }
 
-function staffBaseUrl() {
-  var value = "";
-  try {
-    value = String($os.getenv("ASAP_STAFF_URL") || "").trim();
-  } catch (err) {}
-  if (!value) {
-    try {
-      value = String($os.getenv("ASAP_PUBLIC_URL") || "").trim();
-    } catch (err2) {}
-  }
-  value = value || "http://localhost:8090";
-  return value.replace(/\/+$/, "");
-}
-
-function staffViewUrl(stage) {
-  return staffBaseUrl() + "/staff/?stage=" + encodeURIComponent(stage);
+function staffViewUrl(app, stage) {
+  var url = config.staffUrl(app);
+  var separator = url.indexOf("?") >= 0 ? "&" : "?";
+  return url + separator + "stage=" + encodeURIComponent(stage);
 }
 
 function cleanSummaryValue(value) {
@@ -168,8 +156,8 @@ function buildWeeklyStaffActionSummary(app, options) {
     newSubmissionSample: newSubmissions.slice(0, 5).map(summaryItem),
     purchasesWithoutBibsCount: purchasesWithoutBibs.length,
     purchasesWithoutBibsSample: purchasesWithoutBibs.slice(0, 5).map(summaryItem),
-    newSubmissionsUrl: staffViewUrl("submitted"),
-    purchasesWithoutBibsUrl: staffViewUrl("purchased_waiting_for_bib"),
+    newSubmissionsUrl: staffViewUrl(app, "submitted"),
+    purchasesWithoutBibsUrl: staffViewUrl(app, "purchased_waiting_for_bib"),
   };
 }
 

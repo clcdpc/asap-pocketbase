@@ -114,7 +114,7 @@ The system runs request workflow background tasks every hour (configurable with 
 
 The system also runs a Polaris organization sync once a day at 2 AM server time. Override that schedule with `ASAP_ORG_SYNC_CRON_SCHEDULE` if needed.
 
-Staff users can opt into a weekly action summary email from their profile menu and enter the email address where they want the report delivered. The summary runs on Sunday at 8 PM server time by default and includes new suggestions plus approved purchases still missing BIB IDs. Override the schedule with `ASAP_WEEKLY_STAFF_ACTION_SUMMARY_CRON_SCHEDULE`, and set `ASAP_STAFF_URL` to the public base URL used in staff-dashboard links. A protected manual trigger is available at `POST /api/asap/jobs/weekly-staff-action-summary`; authenticate with a super admin session or `Authorization: Bearer {ASAP_CRON_SECRET}`.
+Staff users can opt into a weekly action summary email from their profile menu and enter the email address where they want the report delivered. The summary runs on Sunday at 8 PM server time by default and includes new suggestions plus approved purchases still missing BIB IDs. Override the schedule with `ASAP_WEEKLY_STAFF_ACTION_SUMMARY_CRON_SCHEDULE`. Set the Staff URL in **Settings > Getting Started** so email links point to the public staff interface; `ASAP_STAFF_URL` remains supported as a first-run/fallback value for existing deployments. A protected manual trigger is available at `POST /api/asap/jobs/weekly-staff-action-summary`; authenticate with a super admin session or `Authorization: Bearer {ASAP_CRON_SECRET}`.
 
 You can manually trigger these jobs or adjust their settings from the **Settings** tab in the Staff Dashboard.
 

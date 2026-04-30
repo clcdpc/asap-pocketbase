@@ -1244,6 +1244,7 @@ function getLibrarySettings(e) {
         workflow: workflowWithEnabled(e.app, wf),
         polaris: s.polaris,
         smtp: s.smtp,
+        staffUrl: s.staffUrl,
         emailStatus: config.emailStatus(e.app, ""),
         organizationSync: organizationSyncStatus(e.app),
         isOverride: false
@@ -1318,7 +1319,11 @@ function updateLibrarySettings(e) {
     if (!isSuperAdmin(staff)) {
       return e.json(403, { message: "Only super admins can update system settings." });
     }
-    saveSystemSettingsPayload(e.app, payload);
+    try {
+      saveSystemSettingsPayload(e.app, payload);
+    } catch (err) {
+      return e.json(400, { message: err.message || String(err) });
+    }
   } else {
     if (action === "reset") {
       resetLibrarySettings(e.app, orgId);
@@ -1354,6 +1359,11 @@ function recordForScope(app, collectionName, scope, orgId) {
 }
 
 function saveSystemSettingsPayload(app, payload) {
+  if (Object.prototype.hasOwnProperty.call(payload, "staffUrl")) {
+    config.saveSystemSettings(app, {
+      staffUrl: payload.staffUrl
+    });
+  }
   if (payload.polaris) {
     var polarisData = buildPolarisData({ polaris: payload.polaris });
     config.savePolarisSettings(app, polarisData);

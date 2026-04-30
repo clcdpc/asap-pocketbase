@@ -209,6 +209,30 @@ function getFieldChecked(id, fallback = false) {
   return el ? el.checked : fallback;
 }
 
+function validateStaffUrl(value) {
+  const text = String(value || '').trim();
+  if (!text) return 'Staff URL is required.';
+  let parsed;
+  try {
+    parsed = new URL(text);
+  } catch (err) {
+    return 'Enter a valid Staff URL beginning with http:// or https://.';
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    return 'Staff URL must start with http:// or https://.';
+  }
+  return null;
+}
+
+function normalizeStaffUrl(value) {
+  const url = new URL(String(value || '').trim());
+  url.hash = '';
+  if (url.pathname.replace(/\/+$/, '').toLowerCase() === '/staff') {
+    url.pathname = '/staff/';
+  }
+  return url.toString();
+}
+
 function requestedStatusFromUrl() {
   try {
     const params = new URLSearchParams(window.location.search || '');
@@ -2698,12 +2722,19 @@ async function loadLibrarySettings(orgId) {
     if (requestedOrgId === 'system') {
       resetBtn.classList.add('hidden');
       statusAlert.classList.add('hidden');
+      if (document.getElementById('system-staff-url-group')) {
+        document.getElementById('system-staff-url-group').classList.remove('hidden');
+      }
+      setFieldValue('system-staff-url', settings.staffUrl || '');
       if (document.getElementById('system-enabled-libraries-group')) {
         document.getElementById('system-enabled-libraries-group').classList.remove('hidden');
         renderLibraryParticipationCheckboxes();
       }
     } else {
       statusAlert.classList.remove('hidden');
+      if (document.getElementById('system-staff-url-group')) {
+        document.getElementById('system-staff-url-group').classList.add('hidden');
+      }
       if (document.getElementById('system-enabled-libraries-group')) {
         document.getElementById('system-enabled-libraries-group').classList.add('hidden');
       }
@@ -3094,6 +3125,17 @@ function buildSettingsPayload() {
     return value;
   }
 
+  let staffUrl = '';
+  if (isSuperAdminStaff() && currentLibraryContextOrgId === 'system') {
+    staffUrl = getFieldValue('system-staff-url').trim();
+    const staffUrlError = validateStaffUrl(staffUrl);
+    if (staffUrlError) {
+      throw new Error(staffUrlError);
+    }
+    staffUrl = normalizeStaffUrl(staffUrl);
+    setFieldValue('system-staff-url', staffUrl);
+  }
+
   const smtp = {
     host: getFieldValue('smtp-host').trim(),
     port: positiveInt('smtp-port', 587, 'SMTP port'),
@@ -3177,6 +3219,10 @@ function buildSettingsPayload() {
     commonAuthorsMessage: getFieldValue('wf-common-authors-message')
   };
 
+  if (isSuperAdminStaff() && currentLibraryContextOrgId === 'system') {
+    payload.staffUrl = staffUrl;
+  }
+
   const fileInput = document.getElementById('ui-logo-file');
   if (fileInput && fileInput.files.length > 0) {
     payload.logo = fileInput.files[0];
@@ -3211,6 +3257,7 @@ async function saveSettings(options = {}) {
     // Save templates via the new library-scoped API
     const libraryPayload = {
       orgId: currentLibraryContextOrgId,
+      staffUrl: payload.staffUrl,
       smtp: payload.smtp,
       polaris: payload.polaris,
       emails: payload.emails,

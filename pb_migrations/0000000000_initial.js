@@ -315,6 +315,7 @@ migrate((app) => {
     fields: [
       field("settingsKey", "text", { required: true, max: 64 }),
       field("allowedStaffUsers", "text"),
+      field("staffUrl", "text", { max: 2048 }),
       rel("enabledLibraries", organizations, { maxSelect: 999 }),
       field("organizationsSyncStatus", "select", { maxSelect: 1, values: ["not_loaded", "loading", "loaded", "error"] }),
       field("organizationsLastSynced", "date"),
@@ -564,6 +565,7 @@ migrate((app) => {
   saveRecord(app, systemSettings, "settings0000001", {
     settingsKey: "system",
     allowedStaffUsers: "",
+    staffUrl: "",
     enabledLibraries: [],
     organizationsSyncStatus: "not_loaded",
     organizationsSyncMessage: "Polaris organizations have not been loaded yet.",
