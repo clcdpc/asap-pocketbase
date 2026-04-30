@@ -124,6 +124,10 @@ body {
   width: 100%;
 }
 
+#grid-container .gridjs-tbody tr:has([data-suggestion-id]) > td {
+  cursor: pointer;
+}
+
 .truncate-note {
   display: inline-block;
   max-width: 100%;

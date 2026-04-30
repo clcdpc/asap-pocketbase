@@ -1084,7 +1084,11 @@ function formatNote(note) {
   if (!text) return '';
   if (text.length <= 50) return text;
   const visibleText = text.substring(0, 50) + '...';
-  return gridjs.html(`<button type="button" class="truncate-note" data-full-note="${escapeAttr(text)}" title="Click to view full note" aria-label="Truncated note, click to view full text">${escapeAttr(visibleText)}</button>`);
+  return gridjs.html(`<button type="button" class="truncate-note" data-full-note="${escapeAttr(text)}" data-notes-action="true" data-no-row-edit="true" title="Click to view full note" aria-label="Truncated note, click to view full text">${escapeAttr(visibleText)}</button>`);
+}
+
+function rowMarker(row) {
+  return `<span class="asap-row-marker" data-suggestion-id="${escapeAttr(row.id)}" hidden></span>`;
 }
 
 function getActionsColumnWidth(status) {
@@ -1243,7 +1247,7 @@ function getGridRow(row, status) {
   if (status === 'suggestion') {
     return [
       row.barcode,
-      gridjs.html(escapeAttr(row.title) + getTitleBadgesHtml(row)),
+      gridjs.html(rowMarker(row) + escapeAttr(row.title) + getTitleBadgesHtml(row)),
       row.author,
       formatMap[row.format] || row.format,
       formatPublication(row.publication),
@@ -1257,7 +1261,7 @@ function getGridRow(row, status) {
   if (status === 'closed') {
     return [
       row.barcode,
-      gridjs.html(escapeAttr(row.title) + getTitleBadgesHtml(row)),
+      gridjs.html(rowMarker(row) + escapeAttr(row.title) + getTitleBadgesHtml(row)),
       row.author,
       formatMap[row.format] || row.format,
       formatStandardDate(row.created),
@@ -1270,7 +1274,7 @@ function getGridRow(row, status) {
 
   return [
     row.barcode,
-    gridjs.html(escapeAttr(row.title) + getTitleBadgesHtml(row)),
+    gridjs.html(rowMarker(row) + escapeAttr(row.title) + getTitleBadgesHtml(row)),
     row.author,
     row.identifier,
     row.bibid,
@@ -1357,11 +1361,11 @@ function getRegisteredRowAction(actionId) {
 function renderRowActions(row) {
   const actions = getRowActions(row);
   const primaryActionId = registerRowAction(actions.primary);
-  let markup = `<div class="row-action-group">`;
-  markup += `<button type="button" class="btn btn-sm row-action-primary ${escapeAttr(actions.primary.className || 'btn-primary')}" data-row-action-id="${primaryActionId}">${escapeAttr(actions.primary.label)}</button>`;
+  let markup = `<div class="row-action-group" data-no-row-edit="true">`;
+  markup += `<button type="button" class="btn btn-sm row-action-primary ${escapeAttr(actions.primary.className || 'btn-primary')}" data-row-action-id="${primaryActionId}" data-no-row-edit="true">${escapeAttr(actions.primary.label)}</button>`;
   if (actions.secondary?.length) {
     const menuActionIds = actions.secondary.map(action => registerRowAction(action)).join(',');
-    markup += `<button type="button" class="btn btn-sm btn-outline-secondary row-action-menu-trigger" aria-haspopup="menu" aria-expanded="false" data-row-menu-action-ids="${menuActionIds}">⋯</button>`;
+    markup += `<button type="button" class="btn btn-sm btn-outline-secondary row-action-menu-trigger" aria-haspopup="menu" aria-expanded="false" data-row-menu-action-ids="${menuActionIds}" data-no-row-edit="true">⋯</button>`;
   }
   markup += `</div>`;
   return markup;
@@ -1383,6 +1387,7 @@ function openActionMenu(triggerButton, actionIds) {
     item.className = `row-action-menu-item ${action.className || ''}`.trim();
     item.setAttribute('role', 'menuitem');
     item.setAttribute('data-row-action-id', actionId);
+    item.setAttribute('data-no-row-edit', 'true');
     item.textContent = action.label;
     menu.appendChild(item);
   });
@@ -1422,7 +1427,48 @@ function escapeAttr(value) {
     .replace(/>/g, "&gt;");
 }
 
+function shouldIgnoreRowEditClick(target, event) {
+  if (event.defaultPrevented) return true;
+  if (event.button !== 0) return true;
+  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return true;
+
+  return !!target.closest([
+    'button',
+    'a',
+    'input',
+    'select',
+    'textarea',
+    'label',
+    'summary',
+    '[role="button"]',
+    '[role="menu"]',
+    '[role="menuitem"]',
+    '[data-row-action-id]',
+    '[data-row-menu-action-ids]',
+    '[data-no-row-edit]',
+    '[data-notes-action]',
+    '.row-action-group',
+    '.row-action-menu',
+    '.gridjs-search',
+    '.gridjs-pagination'
+  ].join(','));
+}
+
+function openSuggestionEditFromRow(recordId) {
+  const row = currentSuggestions.find(item => item.id === recordId) || allSuggestions.find(item => item.id === recordId);
+  if (!row) {
+    showToast('Could not find that suggestion. Refresh and try again.', 'error');
+    return;
+  }
+
+  const status = normalizeStatus(row.status);
+  openEdit(row.id, status || currentStatus, status === 'suggestion' ? 'Edit suggestion' : 'Edit', '');
+}
+
 gridContainer.addEventListener('click', (e) => {
+  const target = e.target;
+  if (!(target instanceof Element)) return;
+
   const actionButton = e.target.closest('[data-row-action-id]');
   if (actionButton) {
     e.preventDefault();
@@ -1443,6 +1489,8 @@ gridContainer.addEventListener('click', (e) => {
 
   const truncateBtn = e.target.closest('.truncate-note');
   if (truncateBtn && gridContainer.contains(truncateBtn)) {
+    e.preventDefault();
+    e.stopPropagation();
     const fullNote = truncateBtn.getAttribute('data-full-note');
     document.getElementById('noteDialogContent').textContent = fullNote;
     document.getElementById('noteDialog').showModal();
@@ -1450,6 +1498,16 @@ gridContainer.addEventListener('click', (e) => {
     return;
   }
 
+  if (shouldIgnoreRowEditClick(target, e)) return;
+
+  const tableRow = target.closest('tr');
+  if (!tableRow || !gridContainer.contains(tableRow)) return;
+
+  const marker = tableRow.querySelector('[data-suggestion-id]');
+  const recordId = marker ? marker.getAttribute('data-suggestion-id') : '';
+  if (!recordId) return;
+
+  openSuggestionEditFromRow(recordId);
 });
 
 document.addEventListener('click', (event) => {
@@ -1473,7 +1531,7 @@ window.addEventListener('resize', closeActionMenu);
 window.addEventListener('scroll', closeActionMenu, true);
 
 function openEdit(id, nextStatus, dialogTitle, actionStr) {
-  const row = currentSuggestions.find(r => r.id === id);
+  const row = currentSuggestions.find(r => r.id === id) || allSuggestions.find(r => r.id === id);
   if (!row) return;
 
   document.getElementById('editModalLabel').textContent = dialogTitle;
