@@ -29,18 +29,38 @@ function send(app, to, subject, text, html, options) {
   
   if (!String(smtp.host || "").trim() || !fromAddress) {
     app.logger().warn("Email skipped because notifications are not configured", "to", to, "subject", subject);
+    recordEmailEvent(app, options.record, options.templateKey, to, subject, "skipped", "Email notifications are not configured.");
     return false;
   }
 
-  var message = new MailerMessage({
-    from: { address: fromAddress, name: fromName },
-    to: [{ address: to, name: "Library Patron" }],
-    subject: subject,
-    text: text,
-    html: html,
-  });
-  app.newMailClient().send(message);
-  return true;
+  try {
+    var message = new MailerMessage({
+      from: { address: fromAddress, name: fromName },
+      to: [{ address: to, name: "Library Patron" }],
+      subject: subject,
+      text: text,
+      html: html,
+    });
+    app.newMailClient().send(message);
+    recordEmailEvent(app, options.record, options.templateKey, to, subject, "sent", "");
+    return true;
+  } catch (err) {
+    recordEmailEvent(app, options.record, options.templateKey, to, subject, "failed", err.message || String(err));
+    throw err;
+  }
+}
+
+function recordEmailEvent(app, record, templateKey, to, subject, status, error) {
+  try {
+    var event = new Record(app.findCollectionByNameOrId("email_delivery_events"));
+    if (record && record.id) event.set("titleRequest", record.id);
+    event.set("templateKey", templateKey || "");
+    event.set("recipient", String(to || ""));
+    event.set("subject", String(subject || ""));
+    event.set("status", status || "sent");
+    event.set("error", error || "");
+    app.save(event);
+  } catch (err) {}
 }
 
 function replacePlaceholders(template, data) {
@@ -83,7 +103,7 @@ function dispatch(app, record, patron, templateKey, defaultSubject, templateId) 
   var text = replacePlaceholders(tpl.body || "", data);
   var html = text.replace(/\n/g, "<br>");
 
-  return send(app, emailFor(record, patron), subject, text, html, { fromAddress: emailsConfig.fromAddress, fromName: emailsConfig.fromName });
+  return send(app, emailFor(record, patron), subject, text, html, { fromAddress: emailsConfig.fromAddress, fromName: emailsConfig.fromName, record: record, templateKey: templateKey });
 }
 
 function noteSkipped(app, record) {
@@ -93,6 +113,7 @@ function noteSkipped(app, record) {
   const records = require(`${__hooks}/lib/records.js`);
   records.appendSystemNote(record, "Email not sent: email notifications are not configured.");
   app.save(record);
+  recordEmailEvent(app, record, "", record.get("email"), "", "skipped", "Email notifications are not configured.");
 }
 
 function suggestionSubmitted(app, record) {
@@ -144,6 +165,7 @@ module.exports = {
   holdPlaced: holdPlaced,
   noteSkipped: noteSkipped,
   rejected: rejected,
+  recordEmailEvent: recordEmailEvent,
   send: send,
   suggestionSubmitted: suggestionSubmitted,
 };

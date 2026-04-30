@@ -1,1909 +1,537 @@
 /// <reference path="../pb_data/types.d.ts" />
+
+function field(name, type, options) {
+  options = options || {};
+  options.name = name;
+  options.type = type;
+  return options;
+}
+
+function rel(name, collection, options) {
+  options = options || {};
+  options.collectionId = collection.id;
+  options.maxSelect = options.maxSelect || 1;
+  return field(name, "relation", options);
+}
+
+function saveCollection(app, data) {
+  var collection = new Collection(data);
+  app.save(collection);
+  return collection;
+}
+
+function saveRecord(app, collection, id, values) {
+  var record = new Record(collection);
+  if (id) record.set("id", id);
+  Object.keys(values || {}).forEach(function (key) {
+    record.set(key, values[key]);
+  });
+  app.save(record);
+  return record;
+}
+
+function seedLookup(app, collection, rows) {
+  for (var i = 0; i < rows.length; i++) {
+    saveRecord(app, collection, rows[i].id, rows[i]);
+  }
+}
+
 migrate((app) => {
-  const snapshot = [
-    {
-      "createRule": null,
-      "deleteRule": null,
-      "fields": [
-        {
-          "autogeneratePattern": "[a-z0-9]{15}",
-          "hidden": false,
-          "id": "text3208210256",
-          "max": 15,
-          "min": 15,
-          "name": "id",
-          "pattern": "^[a-z0-9]+$",
-          "presentable": false,
-          "primaryKey": true,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text455797646",
-          "max": 0,
-          "min": 0,
-          "name": "collectionRef",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text127846527",
-          "max": 0,
-          "min": 0,
-          "name": "recordRef",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text1582905952",
-          "max": 0,
-          "min": 0,
-          "name": "method",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "hidden": false,
-          "id": "autodate2990389176",
-          "name": "created",
-          "onCreate": true,
-          "onUpdate": false,
-          "presentable": false,
-          "system": true,
-          "type": "autodate"
-        },
-        {
-          "hidden": false,
-          "id": "autodate3332085495",
-          "name": "updated",
-          "onCreate": true,
-          "onUpdate": true,
-          "presentable": false,
-          "system": true,
-          "type": "autodate"
-        }
-      ],
-      "id": "pbc_2279338944",
-      "indexes": [
-        "CREATE INDEX `idx_mfas_collectionRef_recordRef` ON `_mfas` (collectionRef,recordRef)"
-      ],
-      "listRule": "@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId",
-      "name": "_mfas",
-      "system": true,
-      "type": "base",
-      "updateRule": null,
-      "viewRule": "@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId"
-    },
-    {
-      "createRule": null,
-      "deleteRule": null,
-      "fields": [
-        {
-          "autogeneratePattern": "[a-z0-9]{15}",
-          "hidden": false,
-          "id": "text3208210256",
-          "max": 15,
-          "min": 15,
-          "name": "id",
-          "pattern": "^[a-z0-9]+$",
-          "presentable": false,
-          "primaryKey": true,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text455797646",
-          "max": 0,
-          "min": 0,
-          "name": "collectionRef",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text127846527",
-          "max": 0,
-          "min": 0,
-          "name": "recordRef",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "cost": 8,
-          "hidden": true,
-          "id": "password901924565",
-          "max": 0,
-          "min": 0,
-          "name": "password",
-          "pattern": "",
-          "presentable": false,
-          "required": true,
-          "system": true,
-          "type": "password"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": true,
-          "id": "text3866985172",
-          "max": 0,
-          "min": 0,
-          "name": "sentTo",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "hidden": false,
-          "id": "autodate2990389176",
-          "name": "created",
-          "onCreate": true,
-          "onUpdate": false,
-          "presentable": false,
-          "system": true,
-          "type": "autodate"
-        },
-        {
-          "hidden": false,
-          "id": "autodate3332085495",
-          "name": "updated",
-          "onCreate": true,
-          "onUpdate": true,
-          "presentable": false,
-          "system": true,
-          "type": "autodate"
-        }
-      ],
-      "id": "pbc_1638494021",
-      "indexes": [
-        "CREATE INDEX `idx_otps_collectionRef_recordRef` ON `_otps` (collectionRef, recordRef)"
-      ],
-      "listRule": "@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId",
-      "name": "_otps",
-      "system": true,
-      "type": "base",
-      "updateRule": null,
-      "viewRule": "@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId"
-    },
-    {
-      "createRule": null,
-      "deleteRule": "@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId",
-      "fields": [
-        {
-          "autogeneratePattern": "[a-z0-9]{15}",
-          "hidden": false,
-          "id": "text3208210256",
-          "max": 15,
-          "min": 15,
-          "name": "id",
-          "pattern": "^[a-z0-9]+$",
-          "presentable": false,
-          "primaryKey": true,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text455797646",
-          "max": 0,
-          "min": 0,
-          "name": "collectionRef",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text127846527",
-          "max": 0,
-          "min": 0,
-          "name": "recordRef",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text2462348188",
-          "max": 0,
-          "min": 0,
-          "name": "provider",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text1044722854",
-          "max": 0,
-          "min": 0,
-          "name": "providerId",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "hidden": false,
-          "id": "autodate2990389176",
-          "name": "created",
-          "onCreate": true,
-          "onUpdate": false,
-          "presentable": false,
-          "system": true,
-          "type": "autodate"
-        },
-        {
-          "hidden": false,
-          "id": "autodate3332085495",
-          "name": "updated",
-          "onCreate": true,
-          "onUpdate": true,
-          "presentable": false,
-          "system": true,
-          "type": "autodate"
-        }
-      ],
-      "id": "pbc_2281828961",
-      "indexes": [
-        "CREATE UNIQUE INDEX `idx_externalAuths_record_provider` ON `_externalAuths` (collectionRef, recordRef, provider)",
-        "CREATE UNIQUE INDEX `idx_externalAuths_collection_provider` ON `_externalAuths` (collectionRef, provider, providerId)"
-      ],
-      "listRule": "@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId",
-      "name": "_externalAuths",
-      "system": true,
-      "type": "base",
-      "updateRule": null,
-      "viewRule": "@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId"
-    },
-    {
-      "createRule": null,
-      "deleteRule": "@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId",
-      "fields": [
-        {
-          "autogeneratePattern": "[a-z0-9]{15}",
-          "hidden": false,
-          "id": "text3208210256",
-          "max": 15,
-          "min": 15,
-          "name": "id",
-          "pattern": "^[a-z0-9]+$",
-          "presentable": false,
-          "primaryKey": true,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text455797646",
-          "max": 0,
-          "min": 0,
-          "name": "collectionRef",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text127846527",
-          "max": 0,
-          "min": 0,
-          "name": "recordRef",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text4228609354",
-          "max": 0,
-          "min": 0,
-          "name": "fingerprint",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "hidden": false,
-          "id": "autodate2990389176",
-          "name": "created",
-          "onCreate": true,
-          "onUpdate": false,
-          "presentable": false,
-          "system": true,
-          "type": "autodate"
-        },
-        {
-          "hidden": false,
-          "id": "autodate3332085495",
-          "name": "updated",
-          "onCreate": true,
-          "onUpdate": true,
-          "presentable": false,
-          "system": true,
-          "type": "autodate"
-        }
-      ],
-      "id": "pbc_4275539003",
-      "indexes": [
-        "CREATE UNIQUE INDEX `idx_authOrigins_unique_pairs` ON `_authOrigins` (collectionRef, recordRef, fingerprint)"
-      ],
-      "listRule": "@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId",
-      "name": "_authOrigins",
-      "system": true,
-      "type": "base",
-      "updateRule": null,
-      "viewRule": "@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId"
-    },
-    {
-      "authAlert": {
-        "emailTemplate": {
-          "body": "<p>Hello,</p>\n<p>We noticed a login to your {APP_NAME} account from a new location:</p>\n<p><em>{ALERT_INFO}</em></p>\n<p><strong>If this wasn't you, you should immediately change your {APP_NAME} account password to revoke access from all other locations.</strong></p>\n<p>If this was you, you may disregard this email.</p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>",
-          "subject": "Login from a new location"
-        },
-        "enabled": true
-      },
-      "authRule": "",
-      "authToken": {
-        "duration": 86400
-      },
-      "confirmEmailChangeTemplate": {
-        "body": "<p>Hello,</p>\n<p>Click on the button below to confirm your new email address.</p>\n<p>\n  <a class=\"btn\" href=\"{APP_URL}/_/#/auth/confirm-email-change/{TOKEN}\" target=\"_blank\" rel=\"noopener\">Confirm new email</a>\n</p>\n<p><i>If you didn't ask to change your email address, you can ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>",
-        "subject": "Confirm your {APP_NAME} new email address"
-      },
-      "createRule": null,
-      "deleteRule": null,
-      "emailChangeToken": {
-        "duration": 1800
-      },
-      "fields": [
-        {
-          "autogeneratePattern": "[a-z0-9]{15}",
-          "hidden": false,
-          "id": "text3208210256",
-          "max": 15,
-          "min": 15,
-          "name": "id",
-          "pattern": "^[a-z0-9]+$",
-          "presentable": false,
-          "primaryKey": true,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "cost": 0,
-          "hidden": true,
-          "id": "password901924565",
-          "max": 0,
-          "min": 8,
-          "name": "password",
-          "pattern": "",
-          "presentable": false,
-          "required": true,
-          "system": true,
-          "type": "password"
-        },
-        {
-          "autogeneratePattern": "[a-zA-Z0-9]{50}",
-          "hidden": true,
-          "id": "text2504183744",
-          "max": 60,
-          "min": 30,
-          "name": "tokenKey",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "exceptDomains": null,
-          "hidden": false,
-          "id": "email3885137012",
-          "name": "email",
-          "onlyDomains": null,
-          "presentable": false,
-          "required": true,
-          "system": true,
-          "type": "email"
-        },
-        {
-          "hidden": false,
-          "id": "bool1547992806",
-          "name": "emailVisibility",
-          "presentable": false,
-          "required": false,
-          "system": true,
-          "type": "bool"
-        },
-        {
-          "hidden": false,
-          "id": "bool256245529",
-          "name": "verified",
-          "presentable": false,
-          "required": false,
-          "system": true,
-          "type": "bool"
-        },
-        {
-          "hidden": false,
-          "id": "autodate2990389176",
-          "name": "created",
-          "onCreate": true,
-          "onUpdate": false,
-          "presentable": false,
-          "system": true,
-          "type": "autodate"
-        },
-        {
-          "hidden": false,
-          "id": "autodate3332085495",
-          "name": "updated",
-          "onCreate": true,
-          "onUpdate": true,
-          "presentable": false,
-          "system": true,
-          "type": "autodate"
-        }
-      ],
-      "fileToken": {
-        "duration": 180
-      },
-      "id": "pbc_3142635823",
-      "indexes": [
-        "CREATE UNIQUE INDEX `idx_tokenKey_pbc_3142635823` ON `_superusers` (`tokenKey`)",
-        "CREATE UNIQUE INDEX `idx_email_pbc_3142635823` ON `_superusers` (`email`) WHERE `email` != ''"
-      ],
-      "listRule": null,
-      "manageRule": null,
-      "mfa": {
-        "duration": 1800,
-        "enabled": false,
-        "rule": ""
-      },
-      "name": "_superusers",
-      "oauth2": {
-        "enabled": false,
-        "mappedFields": {
-          "avatarURL": "",
-          "id": "",
-          "name": "",
-          "username": ""
-        }
-      },
-      "otp": {
-        "duration": 180,
-        "emailTemplate": {
-          "body": "<p>Hello,</p>\n<p>Your one-time password is: <strong>{OTP}</strong></p>\n<p><i>If you didn't ask for the one-time password, you can ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>",
-          "subject": "OTP for {APP_NAME}"
-        },
-        "enabled": false,
-        "length": 8
-      },
-      "passwordAuth": {
-        "enabled": true,
-        "identityFields": [
-          "email"
-        ]
-      },
-      "passwordResetToken": {
-        "duration": 1800
-      },
-      "resetPasswordTemplate": {
-        "body": "<p>Hello,</p>\n<p>Click on the button below to reset your password.</p>\n<p>\n  <a class=\"btn\" href=\"{APP_URL}/_/#/auth/confirm-password-reset/{TOKEN}\" target=\"_blank\" rel=\"noopener\">Reset password</a>\n</p>\n<p><i>If you didn't ask to reset your password, you can ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>",
-        "subject": "Reset your {APP_NAME} password"
-      },
-      "system": true,
-      "type": "auth",
-      "updateRule": null,
-      "verificationTemplate": {
-        "body": "<p>Hello,</p>\n<p>Thank you for joining us at {APP_NAME}.</p>\n<p>Click on the button below to verify your email address.</p>\n<p>\n  <a class=\"btn\" href=\"{APP_URL}/_/#/auth/confirm-verification/{TOKEN}\" target=\"_blank\" rel=\"noopener\">Verify</a>\n</p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>",
-        "subject": "Verify your {APP_NAME} email"
-      },
-      "verificationToken": {
-        "duration": 259200
-      },
-      "viewRule": null
-    },
-    {
-      "authAlert": {
-        "emailTemplate": {
-          "body": "<p>Hello,</p>\n<p>We noticed a login to your {APP_NAME} account from a new location:</p>\n<p><em>{ALERT_INFO}</em></p>\n<p><strong>If this wasn't you, you should immediately change your {APP_NAME} account password to revoke access from all other locations.</strong></p>\n<p>If this was you, you may disregard this email.</p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>",
-          "subject": "Login from a new location"
-        },
-        "enabled": true
-      },
-      "authRule": "",
-      "authToken": {
-        "duration": 604800
-      },
-      "confirmEmailChangeTemplate": {
-        "body": "<p>Hello,</p>\n<p>Click on the button below to confirm your new email address.</p>\n<p>\n  <a class=\"btn\" href=\"{APP_URL}/_/#/auth/confirm-email-change/{TOKEN}\" target=\"_blank\" rel=\"noopener\">Confirm new email</a>\n</p>\n<p><i>If you didn't ask to change your email address, you can ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>",
-        "subject": "Confirm your {APP_NAME} new email address"
-      },
-      "createRule": null,
-      "deleteRule": null,
-      "emailChangeToken": {
-        "duration": 1800
-      },
-      "fields": [
-        {
-          "autogeneratePattern": "[a-z0-9]{15}",
-          "hidden": false,
-          "id": "text3208210256",
-          "max": 15,
-          "min": 15,
-          "name": "id",
-          "pattern": "^[a-z0-9]+$",
-          "presentable": false,
-          "primaryKey": true,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text4166911607",
-          "max": 128,
-          "min": 0,
-          "name": "username",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": true,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text1731158936",
-          "max": 256,
-          "min": 0,
-          "name": "displayName",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "hidden": false,
-          "id": "select1466534506",
-          "maxSelect": 1,
-          "name": "role",
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "select",
-          "values": [
-            "staff",
-            "admin",
-            "super_admin"
-          ]
-        },
-        {
-          "hidden": false,
-          "id": "bool1260321794",
-          "name": "active",
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "bool"
-        },
-        {
-          "hidden": false,
-          "id": "date3402412491",
-          "max": "",
-          "min": "",
-          "name": "lastPolarisLogin",
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "date"
-        },
-        {
-          "cost": 0,
-          "hidden": true,
-          "id": "password901924565",
-          "max": 0,
-          "min": 8,
-          "name": "password",
-          "pattern": "",
-          "presentable": false,
-          "required": true,
-          "system": true,
-          "type": "password"
-        },
-        {
-          "autogeneratePattern": "[a-zA-Z0-9]{50}",
-          "hidden": true,
-          "id": "text2504183744",
-          "max": 60,
-          "min": 30,
-          "name": "tokenKey",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "exceptDomains": null,
-          "hidden": false,
-          "id": "email3885137012",
-          "name": "email",
-          "onlyDomains": null,
-          "presentable": false,
-          "required": true,
-          "system": true,
-          "type": "email"
-        },
-        {
-          "hidden": false,
-          "id": "bool1547992806",
-          "name": "emailVisibility",
-          "presentable": false,
-          "required": false,
-          "system": true,
-          "type": "bool"
-        },
-        {
-          "hidden": false,
-          "id": "bool256245529",
-          "name": "verified",
-          "presentable": false,
-          "required": false,
-          "system": true,
-          "type": "bool"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text2812878347",
-          "max": 128,
-          "min": 0,
-          "name": "domain",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text732101841",
-          "max": 260,
-          "min": 0,
-          "name": "identityKey",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text2500121058",
-          "max": 64,
-          "min": 0,
-          "name": "polarisUserId",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text2087328950",
-          "max": 32,
-          "min": 0,
-          "name": "branchOrgId",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text10577484",
-          "max": 32,
-          "min": 0,
-          "name": "libraryOrgId",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text3478367317",
-          "max": 256,
-          "min": 0,
-          "name": "libraryOrgName",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "hidden": false,
-          "id": "select11490771",
-          "maxSelect": 1,
-          "name": "scope",
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "select",
-          "values": [
-            "library",
-            "system"
-          ]
-        },
-        {
-          "hidden": false,
-          "id": "date2629713272",
-          "max": "",
-          "min": "",
-          "name": "lastOrgSync",
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "date"
-        }
-      ],
-      "fileToken": {
-        "duration": 180
-      },
-      "id": "pbc_338227426",
-      "indexes": [
-        "CREATE UNIQUE INDEX `idx_tokenKey_pbc_338227426` ON `staff_users` (`tokenKey`)",
-        "CREATE UNIQUE INDEX `idx_email_pbc_338227426` ON `staff_users` (`email`) WHERE `email` != ''",
-        "CREATE UNIQUE INDEX idx_staff_users_identity_key ON staff_users (identityKey)",
-        "CREATE INDEX idx_staff_users_library_org ON staff_users (libraryOrgId)"
-      ],
-      "listRule": "id = @request.auth.id",
-      "manageRule": null,
-      "mfa": {
-        "duration": 1800,
-        "enabled": false,
-        "rule": ""
-      },
-      "name": "staff_users",
-      "oauth2": {
-        "enabled": false,
-        "mappedFields": {
-          "avatarURL": "",
-          "id": "",
-          "name": "",
-          "username": ""
-        }
-      },
-      "otp": {
-        "duration": 180,
-        "emailTemplate": {
-          "body": "<p>Hello,</p>\n<p>Your one-time password is: <strong>{OTP}</strong></p>\n<p><i>If you didn't ask for the one-time password, you can ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>",
-          "subject": "OTP for {APP_NAME}"
-        },
-        "enabled": false,
-        "length": 8
-      },
-      "passwordAuth": {
-        "enabled": false,
-        "identityFields": [
-          "email"
-        ]
-      },
-      "passwordResetToken": {
-        "duration": 1800
-      },
-      "resetPasswordTemplate": {
-        "body": "<p>Hello,</p>\n<p>Click on the button below to reset your password.</p>\n<p>\n  <a class=\"btn\" href=\"{APP_URL}/_/#/auth/confirm-password-reset/{TOKEN}\" target=\"_blank\" rel=\"noopener\">Reset password</a>\n</p>\n<p><i>If you didn't ask to reset your password, you can ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>",
-        "subject": "Reset your {APP_NAME} password"
-      },
-      "system": false,
-      "type": "auth",
-      "updateRule": null,
-      "verificationTemplate": {
-        "body": "<p>Hello,</p>\n<p>Thank you for joining us at {APP_NAME}.</p>\n<p>Click on the button below to verify your email address.</p>\n<p>\n  <a class=\"btn\" href=\"{APP_URL}/_/#/auth/confirm-verification/{TOKEN}\" target=\"_blank\" rel=\"noopener\">Verify</a>\n</p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>",
-        "subject": "Verify your {APP_NAME} email"
-      },
-      "verificationToken": {
-        "duration": 259200
-      },
-      "viewRule": "id = @request.auth.id"
-    },
-    {
-      "authAlert": {
-        "emailTemplate": {
-          "body": "<p>Hello,</p>\n<p>We noticed a login to your {APP_NAME} account from a new location:</p>\n<p><em>{ALERT_INFO}</em></p>\n<p><strong>If this wasn't you, you should immediately change your {APP_NAME} account password to revoke access from all other locations.</strong></p>\n<p>If this was you, you may disregard this email.</p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>",
-          "subject": "Login from a new location"
-        },
-        "enabled": true
-      },
-      "authRule": "",
-      "authToken": {
-        "duration": 604800
-      },
-      "confirmEmailChangeTemplate": {
-        "body": "<p>Hello,</p>\n<p>Click on the button below to confirm your new email address.</p>\n<p>\n  <a class=\"btn\" href=\"{APP_URL}/_/#/auth/confirm-email-change/{TOKEN}\" target=\"_blank\" rel=\"noopener\">Confirm new email</a>\n</p>\n<p><i>If you didn't ask to change your email address, you can ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>",
-        "subject": "Confirm your {APP_NAME} new email address"
-      },
-      "createRule": null,
-      "deleteRule": null,
-      "emailChangeToken": {
-        "duration": 1800
-      },
-      "fields": [
-        {
-          "autogeneratePattern": "[a-z0-9]{15}",
-          "hidden": false,
-          "id": "text3208210256",
-          "max": 15,
-          "min": 15,
-          "name": "id",
-          "pattern": "^[a-z0-9]+$",
-          "presentable": false,
-          "primaryKey": true,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text2544763494",
-          "max": 64,
-          "min": 0,
-          "name": "barcode",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": true,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text1227057983",
-          "max": 128,
-          "min": 0,
-          "name": "nameFirst",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text2744588170",
-          "max": 128,
-          "min": 0,
-          "name": "nameLast",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "hidden": false,
-          "id": "date3402412491",
-          "max": "",
-          "min": "",
-          "name": "lastPolarisLogin",
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "date"
-        },
-        {
-          "cost": 0,
-          "hidden": true,
-          "id": "password901924565",
-          "max": 0,
-          "min": 8,
-          "name": "password",
-          "pattern": "",
-          "presentable": false,
-          "required": true,
-          "system": true,
-          "type": "password"
-        },
-        {
-          "autogeneratePattern": "[a-zA-Z0-9]{50}",
-          "hidden": true,
-          "id": "text2504183744",
-          "max": 60,
-          "min": 30,
-          "name": "tokenKey",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "exceptDomains": null,
-          "hidden": false,
-          "id": "email3885137012",
-          "name": "email",
-          "onlyDomains": null,
-          "presentable": false,
-          "required": true,
-          "system": true,
-          "type": "email"
-        },
-        {
-          "hidden": false,
-          "id": "bool1547992806",
-          "name": "emailVisibility",
-          "presentable": false,
-          "required": false,
-          "system": true,
-          "type": "bool"
-        },
-        {
-          "hidden": false,
-          "id": "bool256245529",
-          "name": "verified",
-          "presentable": false,
-          "required": false,
-          "system": true,
-          "type": "bool"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text2597581156",
-          "max": 32,
-          "min": 0,
-          "name": "patronOrgId",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text10577484",
-          "max": 32,
-          "min": 0,
-          "name": "libraryOrgId",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text3478367317",
-          "max": 256,
-          "min": 0,
-          "name": "libraryOrgName",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "hidden": false,
-          "id": "date2629713272",
-          "max": "",
-          "min": "",
-          "name": "lastOrgSync",
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "date"
-        }
-      ],
-      "fileToken": {
-        "duration": 180
-      },
-      "id": "pbc_2158390733",
-      "indexes": [
-        "CREATE UNIQUE INDEX idx_patron_users_barcode ON patron_users (barcode)",
-        "CREATE UNIQUE INDEX `idx_tokenKey_pbc_2158390733` ON `patron_users` (`tokenKey`)",
-        "CREATE UNIQUE INDEX `idx_email_pbc_2158390733` ON `patron_users` (`email`) WHERE `email` != ''",
-        "CREATE INDEX idx_patron_users_library_org ON patron_users (libraryOrgId)"
-      ],
-      "listRule": "id = @request.auth.id",
-      "manageRule": null,
-      "mfa": {
-        "duration": 1800,
-        "enabled": false,
-        "rule": ""
-      },
-      "name": "patron_users",
-      "oauth2": {
-        "enabled": false,
-        "mappedFields": {
-          "avatarURL": "",
-          "id": "",
-          "name": "",
-          "username": ""
-        }
-      },
-      "otp": {
-        "duration": 180,
-        "emailTemplate": {
-          "body": "<p>Hello,</p>\n<p>Your one-time password is: <strong>{OTP}</strong></p>\n<p><i>If you didn't ask for the one-time password, you can ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>",
-          "subject": "OTP for {APP_NAME}"
-        },
-        "enabled": false,
-        "length": 8
-      },
-      "passwordAuth": {
-        "enabled": false,
-        "identityFields": [
-          "email"
-        ]
-      },
-      "passwordResetToken": {
-        "duration": 1800
-      },
-      "resetPasswordTemplate": {
-        "body": "<p>Hello,</p>\n<p>Click on the button below to reset your password.</p>\n<p>\n  <a class=\"btn\" href=\"{APP_URL}/_/#/auth/confirm-password-reset/{TOKEN}\" target=\"_blank\" rel=\"noopener\">Reset password</a>\n</p>\n<p><i>If you didn't ask to reset your password, you can ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>",
-        "subject": "Reset your {APP_NAME} password"
-      },
-      "system": false,
-      "type": "auth",
-      "updateRule": null,
-      "verificationTemplate": {
-        "body": "<p>Hello,</p>\n<p>Thank you for joining us at {APP_NAME}.</p>\n<p>Click on the button below to verify your email address.</p>\n<p>\n  <a class=\"btn\" href=\"{APP_URL}/_/#/auth/confirm-verification/{TOKEN}\" target=\"_blank\" rel=\"noopener\">Verify</a>\n</p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>",
-        "subject": "Verify your {APP_NAME} email"
-      },
-      "verificationToken": {
-        "duration": 259200
-      },
-      "viewRule": "id = @request.auth.id"
-    },
-    {
-      "createRule": null,
-      "deleteRule": null,
-      "fields": [
-        {
-          "autogeneratePattern": "[a-z0-9]{15}",
-          "hidden": false,
-          "id": "text3208210256",
-          "max": 15,
-          "min": 15,
-          "name": "id",
-          "pattern": "^[a-z0-9]+$",
-          "presentable": false,
-          "primaryKey": true,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "cascadeDelete": false,
-          "collectionId": "pbc_2158390733",
-          "hidden": false,
-          "id": "relation3858055773",
-          "maxSelect": 1,
-          "minSelect": 0,
-          "name": "patron",
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "relation"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text2544763494",
-          "max": 64,
-          "min": 0,
-          "name": "barcode",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": true,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "exceptDomains": null,
-          "hidden": false,
-          "id": "email3885137012",
-          "name": "email",
-          "onlyDomains": null,
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "email"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text1227057983",
-          "max": 128,
-          "min": 0,
-          "name": "nameFirst",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text2744588170",
-          "max": 128,
-          "min": 0,
-          "name": "nameLast",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text724990059",
-          "max": 256,
-          "min": 0,
-          "name": "title",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": true,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text3182418120",
-          "max": 256,
-          "min": 0,
-          "name": "author",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text1999537002",
-          "max": 64,
-          "min": 0,
-          "name": "identifier",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text2939971449",
-          "max": 128,
-          "min": 0,
-          "name": "publication",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "hidden": false,
-          "id": "bool1919745424",
-          "name": "autohold",
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "bool"
-        },
-        {
-          "hidden": false,
-          "id": "select2063623452",
-          "maxSelect": 1,
-          "name": "status",
-          "presentable": false,
-          "required": true,
-          "system": false,
-          "type": "select",
-          "values": [
-            "suggestion",
-            "pending_hold",
-            "hold_placed",
-            "outstanding_purchase",
-            "closed"
-          ]
-        },
-        {
-          "hidden": false,
-          "id": "select3299418134",
-          "maxSelect": 1,
-          "name": "agegroup",
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "select",
-          "values": [
-            "adult",
-            "teen",
-            "children"
-          ]
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text164200719",
-          "max": 256,
-          "min": 0,
-          "name": "editedBy",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "convertURLs": false,
-          "hidden": false,
-          "id": "editor18589324",
-          "maxSize": 5000,
-          "name": "notes",
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "editor"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text3595370840",
-          "max": 128,
-          "min": 0,
-          "name": "bibid",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "hidden": false,
-          "id": "number2476487423",
-          "max": null,
-          "min": null,
-          "name": "legacyId",
-          "onlyInt": false,
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "number"
-        },
-        {
-          "hidden": false,
-          "id": "date2990389176",
-          "max": "",
-          "min": "",
-          "name": "created",
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "date"
-        },
-        {
-          "hidden": false,
-          "id": "date3332085495",
-          "max": "",
-          "min": "",
-          "name": "updated",
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "date"
-        },
-        {
-          "hidden": false,
-          "id": "select2620863222",
-          "maxSelect": 1,
-          "name": "closeReason",
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "select",
-          "values": [
-            "rejected",
-            "hold_completed",
-            "manual",
-            "silent"
-          ]
-        },
-        {
-          "hidden": false,
-          "id": "date1644878481",
-          "max": "",
-          "min": "",
-          "name": "exactPublicationDate",
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "date"
-        },
-        {
-          "hidden": false,
-          "id": "date1977545158",
-          "max": "",
-          "min": "",
-          "name": "lastPromoterCheck",
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "date"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text2597581156",
-          "max": 32,
-          "min": 0,
-          "name": "patronOrgId",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text10577484",
-          "max": 32,
-          "min": 0,
-          "name": "libraryOrgId",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text3478367317",
-          "max": 256,
-          "min": 0,
-          "name": "libraryOrgName",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text3744477033",
-          "max": 32,
-          "min": 0,
-          "name": "staffLibraryOrgIdCreatedBy",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text3736761055",
-          "max": 64,
-          "min": 0,
-          "name": "format",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        }
-      ],
-      "id": "pbc_1978996327",
-      "indexes": [
-        "CREATE INDEX idx_title_requests_status ON title_requests (status)",
-        "CREATE INDEX idx_title_requests_barcode ON title_requests (barcode)",
-        "CREATE INDEX idx_title_requests_identifier ON title_requests (identifier)",
-        "CREATE INDEX idx_title_requests_legacy_id ON title_requests (legacyId)",
-        "CREATE INDEX idx_title_requests_created ON title_requests (created)",
-        "CREATE INDEX idx_title_requests_close_reason ON title_requests (closeReason)",
-        "CREATE INDEX idx_title_requests_exact_publication_date ON title_requests (exactPublicationDate)",
-        "CREATE INDEX idx_title_requests_library_org_status ON title_requests (libraryOrgId, status)",
-        "CREATE INDEX idx_title_requests_library_org_created ON title_requests (libraryOrgId, created)"
-      ],
-      "listRule": "@request.auth.collectionName = 'staff_users' && (@request.auth.role = 'super_admin' || (libraryOrgId != '' && libraryOrgId = @request.auth.libraryOrgId))",
-      "name": "title_requests",
-      "system": false,
-      "type": "base",
-      "updateRule": null,
-      "viewRule": "(@request.auth.collectionName = 'staff_users' && (@request.auth.role = 'super_admin' || (libraryOrgId != '' && libraryOrgId = @request.auth.libraryOrgId))) || patron = @request.auth.id"
-    },
-    {
-      "createRule": null,
-      "deleteRule": null,
-      "fields": [
-        {
-          "autogeneratePattern": "[a-z0-9]{15}",
-          "hidden": false,
-          "id": "text3208210256",
-          "max": 15,
-          "min": 15,
-          "name": "id",
-          "pattern": "^[a-z0-9]+$",
-          "presentable": false,
-          "primaryKey": true,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "hidden": false,
-          "id": "json2109273254",
-          "maxSize": 0,
-          "name": "polaris",
-          "presentable": false,
-          "required": true,
-          "system": false,
-          "type": "json"
-        },
-        {
-          "hidden": false,
-          "id": "json60245459",
-          "maxSize": 0,
-          "name": "smtp",
-          "presentable": false,
-          "required": true,
-          "system": false,
-          "type": "json"
-        },
-        {
-          "hidden": false,
-          "id": "json2890620577",
-          "maxSize": 0,
-          "name": "ui_text",
-          "presentable": false,
-          "required": true,
-          "system": false,
-          "type": "json"
-        },
-        {
-          "hidden": false,
-          "id": "file3834550803",
-          "maxSelect": 1,
-          "maxSize": 5242880,
-          "mimeTypes": [
-            "image/jpeg",
-            "image/png",
-            "image/svg+xml",
-            "image/gif"
-          ],
-          "name": "logo",
-          "presentable": false,
-          "protected": false,
-          "required": false,
-          "system": false,
-          "thumbs": null,
-          "type": "file"
-        },
-        {
-          "hidden": false,
-          "id": "json1283582034",
-          "maxSize": 0,
-          "name": "emails",
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "json"
-        },
-        {
-          "hidden": false,
-          "id": "number3893852268",
-          "max": null,
-          "min": null,
-          "name": "suggestionLimit",
-          "onlyInt": false,
-          "presentable": false,
-          "required": true,
-          "system": false,
-          "type": "number"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text325878427",
-          "max": 0,
-          "min": 0,
-          "name": "suggestionLimitMessage",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": true,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "hidden": false,
-          "id": "bool3132443733",
-          "name": "outstandingTimeoutEnabled",
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "bool"
-        },
-        {
-          "hidden": false,
-          "id": "number873395728",
-          "max": null,
-          "min": null,
-          "name": "outstandingTimeoutDays",
-          "onlyInt": false,
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "number"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text800098246",
-          "max": 0,
-          "min": 0,
-          "name": "allowedStaffUsers",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "hidden": false,
-          "id": "bool2532270711",
-          "name": "holdPickupTimeoutEnabled",
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "bool"
-        },
-        {
-          "hidden": false,
-          "id": "number505100301",
-          "max": null,
-          "min": null,
-          "name": "holdPickupTimeoutDays",
-          "onlyInt": false,
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "number"
-        }
-      ],
-      "id": "pbc_3126690926",
-      "indexes": [],
-      "listRule": "@request.auth.collectionName = 'staff_users' && @request.auth.role = 'super_admin'",
-      "name": "app_settings",
-      "system": false,
-      "type": "base",
-      "updateRule": "@request.auth.collectionName = 'staff_users' && @request.auth.role = 'super_admin'",
-      "viewRule": "@request.auth.collectionName = 'staff_users' && @request.auth.role = 'super_admin'"
-    },
-    {
-      "createRule": null,
-      "deleteRule": null,
-      "fields": [
-        {
-          "autogeneratePattern": "[a-z0-9]{15}",
-          "hidden": false,
-          "id": "text3208210256",
-          "max": 15,
-          "min": 15,
-          "name": "id",
-          "pattern": "^[a-z0-9]+$",
-          "presentable": false,
-          "primaryKey": true,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text2106360836",
-          "max": 32,
-          "min": 0,
-          "name": "organizationId",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": true,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text3069119284",
-          "max": 8,
-          "min": 0,
-          "name": "organizationCodeId",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text1579384326",
-          "max": 256,
-          "min": 0,
-          "name": "name",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text3170058525",
-          "max": 64,
-          "min": 0,
-          "name": "abbreviation",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text1731158936",
-          "max": 256,
-          "min": 0,
-          "name": "displayName",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text3275677536",
-          "max": 32,
-          "min": 0,
-          "name": "parentOrganizationId",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": false,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "hidden": false,
-          "id": "json447994709",
-          "maxSize": 0,
-          "name": "raw",
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "json"
-        },
-        {
-          "hidden": false,
-          "id": "date3830729769",
-          "max": "",
-          "min": "",
-          "name": "lastSynced",
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "date"
-        }
-      ],
-      "id": "pbc_3588961983",
-      "indexes": [
-        "CREATE UNIQUE INDEX idx_polaris_organizations_org_id ON polaris_organizations (organizationId)",
-        "CREATE INDEX idx_polaris_organizations_parent ON polaris_organizations (parentOrganizationId)"
-      ],
-      "listRule": "@request.auth.collectionName = 'staff_users' && (@request.auth.role = 'super_admin' || @request.auth.role = 'admin')",
-      "name": "polaris_organizations",
-      "system": false,
-      "type": "base",
-      "updateRule": null,
-      "viewRule": "@request.auth.collectionName = 'staff_users' && (@request.auth.role = 'super_admin' || @request.auth.role = 'admin')"
-    },
-    {
-      "createRule": null,
-      "deleteRule": null,
-      "fields": [
-        {
-          "autogeneratePattern": "[a-z0-9]{15}",
-          "hidden": false,
-          "id": "text3208210256",
-          "max": 15,
-          "min": 15,
-          "name": "id",
-          "pattern": "^[a-z0-9]+$",
-          "presentable": false,
-          "primaryKey": true,
-          "required": true,
-          "system": true,
-          "type": "text"
-        },
-        {
-          "autogeneratePattern": "",
-          "hidden": false,
-          "id": "text10577484",
-          "max": 100,
-          "min": 1,
-          "name": "libraryOrgId",
-          "pattern": "",
-          "presentable": false,
-          "primaryKey": false,
-          "required": true,
-          "system": false,
-          "type": "text"
-        },
-        {
-          "hidden": false,
-          "id": "json1283582034",
-          "maxSize": 0,
-          "name": "emails",
-          "presentable": false,
-          "required": false,
-          "system": false,
-          "type": "json"
-        }
-      ],
-      "id": "pbc_4099493988",
-      "indexes": [
-        "CREATE UNIQUE INDEX idx_library_email_settings_org ON library_email_settings (libraryOrgId)"
-      ],
-      "listRule": null,
-      "name": "library_email_settings",
-      "system": false,
-      "type": "base",
-      "updateRule": null,
-      "viewRule": null
-    }
-  ];
+  const requestStatuses = saveCollection(app, {
+    type: "base",
+    name: "request_statuses",
+    listRule: "",
+    viewRule: "",
+    fields: [
+      field("code", "text", { required: true, max: 64 }),
+      field("label", "text", { required: true, max: 128 }),
+      field("sortOrder", "number", { required: true, onlyInt: true }),
+      field("isOpen", "bool"),
+    ],
+    indexes: ["CREATE UNIQUE INDEX idx_request_statuses_code ON request_statuses (code)"]
+  });
 
-  app.importCollections(snapshot, false);
+  const closeReasons = saveCollection(app, {
+    type: "base",
+    name: "request_close_reasons",
+    listRule: "",
+    viewRule: "",
+    fields: [
+      field("code", "text", { required: true, max: 64 }),
+      field("label", "text", { required: true, max: 128 }),
+      field("sortOrder", "number", { required: true, onlyInt: true }),
+    ],
+    indexes: ["CREATE UNIQUE INDEX idx_request_close_reasons_code ON request_close_reasons (code)"]
+  });
 
-  const appSettings = app.findCollectionByNameOrId("app_settings");
-  const record = new Record(appSettings);
-  record.set("id", "settings0000001");
-  record.set("polaris", {
+  const materialFormats = saveCollection(app, {
+    type: "base",
+    name: "material_formats",
+    listRule: "",
+    viewRule: "",
+    fields: [
+      field("code", "text", { required: true, max: 64 }),
+      field("label", "text", { required: true, max: 128 }),
+      field("enabled", "bool"),
+      field("sortOrder", "number", { required: true, onlyInt: true }),
+      field("messageBehavior", "select", { maxSelect: 1, values: ["none", "ebookMessage", "eaudiobookMessage"] }),
+      field("titleMode", "select", { maxSelect: 1, values: ["required", "optional", "hidden"] }),
+      field("titleLabel", "text", { max: 128 }),
+      field("authorMode", "select", { maxSelect: 1, values: ["required", "optional", "hidden"] }),
+      field("authorLabel", "text", { max: 128 }),
+      field("identifierMode", "select", { maxSelect: 1, values: ["required", "optional", "hidden"] }),
+      field("identifierLabel", "text", { max: 128 }),
+      field("audienceMode", "select", { maxSelect: 1, values: ["required", "optional", "hidden"] }),
+      field("audienceLabel", "text", { max: 128 }),
+      field("publicationMode", "select", { maxSelect: 1, values: ["required", "optional", "hidden"] }),
+      field("publicationLabel", "text", { max: 128 }),
+    ],
+    indexes: ["CREATE UNIQUE INDEX idx_material_formats_code ON material_formats (code)"]
+  });
+
+  const audienceGroups = saveCollection(app, {
+    type: "base",
+    name: "audience_groups",
+    listRule: "",
+    viewRule: "",
+    fields: [
+      field("code", "text", { required: true, max: 64 }),
+      field("label", "text", { required: true, max: 128 }),
+      field("sortOrder", "number", { required: true, onlyInt: true }),
+    ],
+    indexes: ["CREATE UNIQUE INDEX idx_audience_groups_code ON audience_groups (code)"]
+  });
+
+  const organizations = saveCollection(app, {
+    type: "base",
+    name: "polaris_organizations",
+    listRule: "@request.auth.collectionName = 'staff_users' && (@request.auth.role = 'super_admin' || @request.auth.role = 'admin')",
+    viewRule: "@request.auth.collectionName = 'staff_users' && (@request.auth.role = 'super_admin' || @request.auth.role = 'admin')",
+    fields: [
+      field("organizationId", "text", { required: true, max: 32 }),
+      field("organizationCodeId", "text", { max: 8 }),
+      field("name", "text", { max: 256 }),
+      field("abbreviation", "text", { max: 64 }),
+      field("displayName", "text", { max: 256 }),
+      field("parentOrganizationId", "text", { max: 32 }),
+      field("enabledForPatrons", "bool"),
+      field("raw", "json"),
+      field("lastSynced", "date"),
+    ],
+    indexes: [
+      "CREATE UNIQUE INDEX idx_polaris_organizations_org_id ON polaris_organizations (organizationId)",
+      "CREATE INDEX idx_polaris_organizations_parent_id ON polaris_organizations (parentOrganizationId)",
+      "CREATE INDEX idx_polaris_organizations_enabled ON polaris_organizations (enabledForPatrons)"
+    ]
+  });
+  organizations.fields.add(new Field({
+    name: "parentOrganization",
+    type: "relation",
+    collectionId: organizations.id,
+    maxSelect: 1
+  }));
+  app.save(organizations);
+
+  const staffUsers = saveCollection(app, {
+    type: "auth",
+    name: "staff_users",
+    listRule: "id = @request.auth.id",
+    viewRule: "id = @request.auth.id",
+    passwordAuth: { enabled: false, identityFields: ["email"] },
+    fields: [
+      field("username", "text", { required: true, max: 128 }),
+      field("displayName", "text", { max: 256 }),
+      field("role", "select", { maxSelect: 1, values: ["staff", "admin", "super_admin"] }),
+      field("active", "bool"),
+      field("lastPolarisLogin", "date"),
+      field("domain", "text", { max: 128 }),
+      field("identityKey", "text", { max: 260 }),
+      field("polarisUserId", "text", { max: 64 }),
+      field("branchOrgId", "text", { max: 32 }),
+      field("libraryOrgId", "text", { max: 32 }),
+      field("libraryOrgName", "text", { max: 256 }),
+      rel("branchOrganization", organizations),
+      rel("libraryOrganization", organizations),
+      field("scope", "select", { maxSelect: 1, values: ["library", "system"] }),
+      field("lastOrgSync", "date"),
+    ],
+    indexes: [
+      "CREATE UNIQUE INDEX idx_staff_users_identity_key ON staff_users (identityKey)",
+      "CREATE INDEX idx_staff_users_library_org ON staff_users (libraryOrgId)"
+    ]
+  });
+
+  const patronUsers = saveCollection(app, {
+    type: "auth",
+    name: "patron_users",
+    listRule: "id = @request.auth.id",
+    viewRule: "id = @request.auth.id",
+    passwordAuth: { enabled: false, identityFields: ["email"] },
+    fields: [
+      field("barcode", "text", { required: true, max: 64 }),
+      field("nameFirst", "text", { max: 128 }),
+      field("nameLast", "text", { max: 128 }),
+      field("lastPolarisLogin", "date"),
+      field("patronOrgId", "text", { max: 32 }),
+      field("libraryOrgId", "text", { max: 32 }),
+      field("libraryOrgName", "text", { max: 256 }),
+      rel("patronOrganization", organizations),
+      rel("libraryOrganization", organizations),
+      field("lastOrgSync", "date"),
+    ],
+    indexes: [
+      "CREATE UNIQUE INDEX idx_patron_users_barcode ON patron_users (barcode)",
+      "CREATE INDEX idx_patron_users_library_org ON patron_users (libraryOrgId)"
+    ]
+  });
+
+  const titleRequests = saveCollection(app, {
+    type: "base",
+    name: "title_requests",
+    listRule: "@request.auth.collectionName = 'staff_users' && (@request.auth.role = 'super_admin' || (libraryOrgId != '' && libraryOrgId = @request.auth.libraryOrgId))",
+    viewRule: "(@request.auth.collectionName = 'staff_users' && (@request.auth.role = 'super_admin' || (libraryOrgId != '' && libraryOrgId = @request.auth.libraryOrgId))) || patron = @request.auth.id",
+    fields: [
+      rel("patron", patronUsers),
+      rel("patronOrganization", organizations),
+      rel("libraryOrganization", organizations),
+      rel("staffLibraryOrganizationCreatedBy", organizations),
+      rel("statusRef", requestStatuses, { required: true }),
+      rel("formatRef", materialFormats),
+      rel("audienceGroup", audienceGroups),
+      rel("closeReasonRef", closeReasons),
+      field("barcode", "text", { required: true, max: 64 }),
+      field("email", "email"),
+      field("nameFirst", "text", { max: 128 }),
+      field("nameLast", "text", { max: 128 }),
+      field("patronOrgId", "text", { max: 32 }),
+      field("libraryOrgId", "text", { max: 32 }),
+      field("libraryOrgName", "text", { max: 256 }),
+      field("staffLibraryOrgIdCreatedBy", "text", { max: 32 }),
+      field("title", "text", { required: true, max: 256 }),
+      field("author", "text", { max: 256 }),
+      field("identifier", "text", { max: 64 }),
+      field("publication", "text", { max: 128 }),
+      field("exactPublicationDate", "date"),
+      field("autohold", "bool"),
+      field("status", "text", { required: true, max: 64 }),
+      field("agegroup", "text", { max: 64 }),
+      field("format", "text", { max: 64 }),
+      field("closeReason", "text", { max: 64 }),
+      field("editedBy", "text", { max: 256 }),
+      field("notes", "editor", { maxSize: 5000, convertURLs: false }),
+      field("bibid", "text", { max: 128 }),
+      field("legacyId", "number"),
+      field("lastPromoterCheck", "date"),
+      field("isbnCheckStatus", "select", { maxSelect: 1, values: ["pending", "found", "not_found", "error", "error_max_retries", "skipped_no_isbn", "found_in_polaris"] }),
+      field("isbnCheckResult", "text"),
+      field("isbnCheckRetryCount", "number", { onlyInt: true }),
+      field("lastChecked", "date"),
+      field("created", "date"),
+      field("updated", "date"),
+    ],
+    indexes: [
+      "CREATE INDEX idx_title_requests_status ON title_requests (status)",
+      "CREATE INDEX idx_title_requests_status_ref ON title_requests (statusRef)",
+      "CREATE INDEX idx_title_requests_barcode ON title_requests (barcode)",
+      "CREATE INDEX idx_title_requests_identifier ON title_requests (identifier)",
+      "CREATE INDEX idx_title_requests_legacy_id ON title_requests (legacyId)",
+      "CREATE INDEX idx_title_requests_created ON title_requests (created)",
+      "CREATE INDEX idx_title_requests_close_reason ON title_requests (closeReason)",
+      "CREATE INDEX idx_title_requests_library_org_status ON title_requests (libraryOrgId, status)",
+      "CREATE INDEX idx_title_requests_library_org_created ON title_requests (libraryOrgId, created)"
+    ]
+  });
+
+  const workflowTags = saveCollection(app, {
+    type: "base",
+    name: "workflow_tags",
+    listRule: "@request.auth.collectionName = 'staff_users'",
+    viewRule: "@request.auth.collectionName = 'staff_users'",
+    fields: [
+      field("code", "text", { required: true, max: 128 }),
+      field("label", "text", { required: true, max: 128 }),
+      field("description", "text"),
+    ],
+    indexes: ["CREATE UNIQUE INDEX idx_workflow_tags_code ON workflow_tags (code)"]
+  });
+
+  saveCollection(app, {
+    type: "base",
+    name: "title_request_tags",
+    listRule: "@request.auth.collectionName = 'staff_users'",
+    viewRule: "@request.auth.collectionName = 'staff_users'",
+    fields: [
+      rel("titleRequest", titleRequests, { required: true }),
+      rel("tag", workflowTags, { required: true }),
+    ],
+    indexes: ["CREATE UNIQUE INDEX idx_title_request_tags_pair ON title_request_tags (titleRequest, tag)"]
+  });
+
+  const emailTemplates = saveCollection(app, {
+    type: "base",
+    name: "email_templates",
+    listRule: "@request.auth.collectionName = 'staff_users' && (@request.auth.role = 'super_admin' || @request.auth.role = 'admin')",
+    viewRule: "@request.auth.collectionName = 'staff_users' && (@request.auth.role = 'super_admin' || @request.auth.role = 'admin')",
+    fields: [
+      field("scope", "select", { maxSelect: 1, values: ["system", "library"] }),
+      rel("libraryOrganization", organizations),
+      field("templateKey", "text", { required: true, max: 64 }),
+      field("name", "text", { max: 128 }),
+      field("subject", "text"),
+      field("body", "editor", { maxSize: 20000, convertURLs: false }),
+      field("fromAddress", "email"),
+      field("fromName", "text", { max: 128 }),
+      field("enabled", "bool"),
+    ],
+    indexes: [
+      "CREATE UNIQUE INDEX idx_email_templates_scope_key ON email_templates (scope, libraryOrganization, templateKey)"
+    ]
+  });
+
+  const rejectionTemplates = saveCollection(app, {
+    type: "base",
+    name: "rejection_templates",
+    listRule: "@request.auth.collectionName = 'staff_users' && (@request.auth.role = 'super_admin' || @request.auth.role = 'admin')",
+    viewRule: "@request.auth.collectionName = 'staff_users' && (@request.auth.role = 'super_admin' || @request.auth.role = 'admin')",
+    fields: [
+      field("scope", "select", { maxSelect: 1, values: ["system", "library"] }),
+      rel("libraryOrganization", organizations),
+      field("name", "text", { required: true, max: 128 }),
+      field("subject", "text"),
+      field("body", "editor", { maxSize: 20000, convertURLs: false }),
+      field("enabled", "bool"),
+      field("sortOrder", "number", { onlyInt: true }),
+    ]
+  });
+
+  const systemSettings = saveCollection(app, {
+    type: "base",
+    name: "system_settings",
+    listRule: "@request.auth.collectionName = 'staff_users' && @request.auth.role = 'super_admin'",
+    viewRule: "@request.auth.collectionName = 'staff_users' && @request.auth.role = 'super_admin'",
+    updateRule: "@request.auth.collectionName = 'staff_users' && @request.auth.role = 'super_admin'",
+    fields: [
+      field("settingsKey", "text", { required: true, max: 64 }),
+      field("allowedStaffUsers", "text"),
+      rel("enabledLibraries", organizations, { maxSelect: 999 }),
+      field("organizationsSyncStatus", "select", { maxSelect: 1, values: ["not_loaded", "loading", "loaded", "error"] }),
+      field("organizationsLastSynced", "date"),
+      field("organizationsSyncMessage", "text"),
+      field("organizationsSyncError", "text"),
+    ],
+    indexes: ["CREATE UNIQUE INDEX idx_system_settings_key ON system_settings (settingsKey)"]
+  });
+
+  const polarisSettings = saveCollection(app, {
+    type: "base",
+    name: "polaris_settings",
+    listRule: "@request.auth.collectionName = 'staff_users' && @request.auth.role = 'super_admin'",
+    viewRule: "@request.auth.collectionName = 'staff_users' && @request.auth.role = 'super_admin'",
+    updateRule: "@request.auth.collectionName = 'staff_users' && @request.auth.role = 'super_admin'",
+    fields: [
+      field("settingsKey", "text", { required: true, max: 64 }),
+      field("host", "text"),
+      field("accessId", "text"),
+      field("apiKey", "text"),
+      field("staffDomain", "text"),
+      field("adminUser", "text"),
+      field("adminPassword", "text"),
+      field("overridePassword", "text"),
+      field("langId", "text"),
+      field("appId", "text"),
+      field("orgId", "text"),
+      field("pickupOrgId", "text"),
+      field("requestingOrgId", "text"),
+      field("workstationId", "text"),
+      field("userId", "text"),
+      field("autoPromote", "bool"),
+      field("firstSuccessfulSaveAt", "date"),
+    ],
+    indexes: ["CREATE UNIQUE INDEX idx_polaris_settings_key ON polaris_settings (settingsKey)"]
+  });
+
+  const smtpSettings = saveCollection(app, {
+    type: "base",
+    name: "smtp_settings",
+    listRule: "@request.auth.collectionName = 'staff_users' && @request.auth.role = 'super_admin'",
+    viewRule: "@request.auth.collectionName = 'staff_users' && @request.auth.role = 'super_admin'",
+    updateRule: "@request.auth.collectionName = 'staff_users' && @request.auth.role = 'super_admin'",
+    fields: [
+      field("settingsKey", "text", { required: true, max: 64 }),
+      field("host", "text"),
+      field("port", "number", { onlyInt: true }),
+      field("username", "text"),
+      field("password", "text"),
+      field("tls", "bool"),
+      field("fromAddress", "email"),
+      field("fromName", "text"),
+    ],
+    indexes: ["CREATE UNIQUE INDEX idx_smtp_settings_key ON smtp_settings (settingsKey)"]
+  });
+
+  const workflowSettings = saveCollection(app, {
+    type: "base",
+    name: "workflow_settings",
+    listRule: "@request.auth.collectionName = 'staff_users' && (@request.auth.role = 'super_admin' || @request.auth.role = 'admin')",
+    viewRule: "@request.auth.collectionName = 'staff_users' && (@request.auth.role = 'super_admin' || @request.auth.role = 'admin')",
+    fields: [
+      field("scope", "select", { maxSelect: 1, values: ["system", "library"] }),
+      rel("libraryOrganization", organizations),
+      field("suggestionLimit", "number", { onlyInt: true }),
+      field("suggestionLimitMessage", "text"),
+      field("outstandingTimeoutEnabled", "bool"),
+      field("outstandingTimeoutDays", "number", { onlyInt: true }),
+      field("outstandingTimeoutSendEmail", "bool"),
+      rel("outstandingTimeoutRejectionTemplate", rejectionTemplates),
+      field("holdPickupTimeoutEnabled", "bool"),
+      field("holdPickupTimeoutDays", "number", { onlyInt: true }),
+      field("pendingHoldTimeoutEnabled", "bool"),
+      field("pendingHoldTimeoutDays", "number", { onlyInt: true }),
+      field("commonAuthorsEnabled", "bool"),
+      field("commonAuthorsList", "text"),
+      field("commonAuthorsMessage", "text"),
+    ],
+    indexes: ["CREATE UNIQUE INDEX idx_workflow_settings_scope ON workflow_settings (scope, libraryOrganization)"]
+  });
+
+  const uiSettings = saveCollection(app, {
+    type: "base",
+    name: "ui_settings",
+    listRule: "@request.auth.collectionName = 'staff_users' && (@request.auth.role = 'super_admin' || @request.auth.role = 'admin')",
+    viewRule: "@request.auth.collectionName = 'staff_users' && (@request.auth.role = 'super_admin' || @request.auth.role = 'admin')",
+    fields: [
+      field("scope", "select", { maxSelect: 1, values: ["system", "library"] }),
+      rel("libraryOrganization", organizations),
+      field("logo", "file", { maxSelect: 1, maxSize: 5242880, mimeTypes: ["image/jpeg", "image/png", "image/svg+xml", "image/gif"] }),
+      field("logoAlt", "text"),
+      field("pageTitle", "text"),
+      field("barcodeLabel", "text"),
+      field("pinLabel", "text"),
+      field("loginPrompt", "editor", { maxSize: 10000, convertURLs: false }),
+      field("loginNote", "editor", { maxSize: 10000, convertURLs: false }),
+      field("suggestionFormNote", "editor", { maxSize: 10000, convertURLs: false }),
+      field("successTitle", "text"),
+      field("successMessage", "editor", { maxSize: 10000, convertURLs: false }),
+      field("alreadySubmittedMessage", "editor", { maxSize: 10000, convertURLs: false }),
+      field("duplicateLabelSuggestion", "text"),
+      field("duplicateLabelOutstandingPurchase", "text"),
+      field("duplicateLabelPendingHold", "text"),
+      field("duplicateLabelHoldPlaced", "text"),
+      field("duplicateLabelClosed", "text"),
+      field("duplicateLabelRejected", "text"),
+      field("duplicateLabelHoldCompleted", "text"),
+      field("duplicateLabelHoldNotPickedUp", "text"),
+      field("duplicateLabelManual", "text"),
+      field("duplicateLabelSilent", "text"),
+      field("noEmailMessage", "editor", { maxSize: 10000, convertURLs: false }),
+      field("systemNotEnabledMessage", "editor", { maxSize: 10000, convertURLs: false }),
+      field("ebookMessage", "editor", { maxSize: 10000, convertURLs: false }),
+      field("eaudiobookMessage", "editor", { maxSize: 10000, convertURLs: false }),
+      field("publicationOptions", "text"),
+      field("ageGroups", "text"),
+    ],
+    indexes: ["CREATE UNIQUE INDEX idx_ui_settings_scope ON ui_settings (scope, libraryOrganization)"]
+  });
+
+  saveCollection(app, {
+    type: "base",
+    name: "title_request_events",
+    listRule: "@request.auth.collectionName = 'staff_users'",
+    viewRule: "@request.auth.collectionName = 'staff_users'",
+    fields: [
+      rel("titleRequest", titleRequests, { required: true }),
+      field("eventType", "text", { required: true, max: 64 }),
+      rel("fromStatus", requestStatuses),
+      rel("toStatus", requestStatuses),
+      rel("closeReason", closeReasons),
+      field("actorType", "text", { max: 64 }),
+      field("actorName", "text", { max: 256 }),
+      field("message", "text"),
+      field("metadata", "json"),
+    ],
+    indexes: ["CREATE INDEX idx_title_request_events_request ON title_request_events (titleRequest)"]
+  });
+
+  saveCollection(app, {
+    type: "base",
+    name: "email_delivery_events",
+    listRule: "@request.auth.collectionName = 'staff_users'",
+    viewRule: "@request.auth.collectionName = 'staff_users'",
+    fields: [
+      rel("titleRequest", titleRequests),
+      rel("emailTemplate", emailTemplates),
+      field("templateKey", "text", { max: 64 }),
+      field("recipient", "email"),
+      field("subject", "text"),
+      field("status", "select", { maxSelect: 1, values: ["sent", "skipped", "failed"] }),
+      field("error", "text"),
+      field("metadata", "json"),
+    ],
+    indexes: ["CREATE INDEX idx_email_delivery_events_request ON email_delivery_events (titleRequest)"]
+  });
+
+  saveCollection(app, {
+    type: "base",
+    name: "job_runs",
+    listRule: "@request.auth.collectionName = 'staff_users' && @request.auth.role = 'super_admin'",
+    viewRule: "@request.auth.collectionName = 'staff_users' && @request.auth.role = 'super_admin'",
+    fields: [
+      field("jobName", "text", { required: true, max: 128 }),
+      field("status", "select", { maxSelect: 1, values: ["running", "success", "failed"] }),
+      field("startedAt", "date"),
+      field("finishedAt", "date"),
+      field("summary", "json"),
+      field("error", "text"),
+    ],
+    indexes: ["CREATE INDEX idx_job_runs_name ON job_runs (jobName)"]
+  });
+
+  seedLookup(app, requestStatuses, [
+    { id: "rqstsuggest0001", code: "suggestion", label: "Suggestions", sortOrder: 10, isOpen: true },
+    { id: "rqstoutpur00020", code: "outstanding_purchase", label: "Pending Purchase", sortOrder: 20, isOpen: true },
+    { id: "rqstpendhold030", code: "pending_hold", label: "Pending Hold", sortOrder: 30, isOpen: true },
+    { id: "rqstholdplc0400", code: "hold_placed", label: "Hold Placed", sortOrder: 40, isOpen: true },
+    { id: "rqstclosed00050", code: "closed", label: "Closed", sortOrder: 50, isOpen: false },
+  ]);
+
+  seedLookup(app, closeReasons, [
+    { id: "closereject0010", code: "rejected", label: "Rejected by staff", sortOrder: 10 },
+    { id: "closeheldone020", code: "hold_completed", label: "Hold placed / completed", sortOrder: 20 },
+    { id: "closemanual0030", code: "manual", label: "Manually closed", sortOrder: 30 },
+    { id: "closesilent0040", code: "Silently Closed", label: "Silently closed", sortOrder: 40 },
+    { id: "closenotpick050", code: "hold_not_picked_up", label: "Hold not picked up", sortOrder: 50 },
+  ]);
+
+  seedLookup(app, materialFormats, [
+    { id: "fmtbook00000010", code: "book", label: "Book", enabled: true, sortOrder: 10, messageBehavior: "none", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Author", identifierMode: "optional", identifierLabel: "ISBN", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
+    { id: "fmtaudiocd00200", code: "audiobook_cd", label: "Audiobook (Physical CD)", enabled: true, sortOrder: 20, messageBehavior: "none", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Author", identifierMode: "optional", identifierLabel: "ISBN", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
+    { id: "fmtdvd000000300", code: "dvd", label: "DVD", enabled: true, sortOrder: 30, messageBehavior: "none", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Director/Actors/Producer", identifierMode: "hidden", identifierLabel: "UPC", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
+    { id: "fmtmusiccd00400", code: "music_cd", label: "Music CD", enabled: true, sortOrder: 40, messageBehavior: "none", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Artist", identifierMode: "hidden", identifierLabel: "UPC", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
+    { id: "fmtebook0000500", code: "ebook", label: "eBook", enabled: true, sortOrder: 50, messageBehavior: "ebookMessage", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Author", identifierMode: "optional", identifierLabel: "ISBN", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
+    { id: "fmteaudio006000", code: "eaudiobook", label: "eAudiobook", enabled: true, sortOrder: 60, messageBehavior: "eaudiobookMessage", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Author", identifierMode: "optional", identifierLabel: "ISBN", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
+  ]);
+
+  seedLookup(app, audienceGroups, [
+    { id: "audadult0000100", code: "adult", label: "Adult", sortOrder: 10 },
+    { id: "audteen00000200", code: "teen", label: "Young Adult / Teen", sortOrder: 20 },
+    { id: "audchild0000300", code: "children", label: "Children", sortOrder: 30 },
+  ]);
+
+  seedLookup(app, workflowTags, [
+    { id: "tagpolarfound10", code: "dupe found in Polaris", label: "Dupe found in Polaris", description: "ISBN/BIB lookup found a Polaris bibliographic record." },
+    { id: "tagpolarnot0200", code: "ISBN not found in system", label: "ISBN not found in system", description: "ISBN/BIB lookup did not find a Polaris bibliographic record." },
+  ]);
+
+  saveRecord(app, systemSettings, "settings0000001", {
+    settingsKey: "system",
+    allowedStaffUsers: "",
+    enabledLibraries: [],
+    organizationsSyncStatus: "not_loaded",
+    organizationsSyncMessage: "Polaris organizations have not been loaded yet.",
+  });
+
+  saveRecord(app, polarisSettings, "polaris00000010", {
+    settingsKey: "system",
     host: "",
     accessId: "SuggestAPI",
     apiKey: "",
@@ -1918,71 +546,70 @@ migrate((app) => {
     requestingOrgId: "3",
     workstationId: "1",
     userId: "1",
-    autoPromote: true
+    autoPromote: true,
   });
-  record.set("smtp", {
+
+  saveRecord(app, smtpSettings, "smtp00000000100", {
+    settingsKey: "system",
     host: "",
     port: 587,
     username: "",
     password: "",
-    from: "",
+    tls: true,
+    fromAddress: "",
     fromName: "Library Collection Development",
-    tls: true
   });
-  record.set("ui_text", {
-    logoUrl: "/jpl.png",
+
+  saveRecord(app, workflowSettings, "workflow0000010", {
+    scope: "system",
+    suggestionLimit: 5,
+    suggestionLimitMessage: "Weekly suggestion limit reached. You can try again after {{next_available_date}}.",
+    outstandingTimeoutEnabled: false,
+    outstandingTimeoutDays: 30,
+    outstandingTimeoutSendEmail: false,
+    holdPickupTimeoutEnabled: false,
+    holdPickupTimeoutDays: 14,
+    pendingHoldTimeoutEnabled: false,
+    pendingHoldTimeoutDays: 14,
+    commonAuthorsEnabled: false,
+    commonAuthorsList: "",
+    commonAuthorsMessage: "We automatically purchase all upcoming titles by this author. Please check the catalog to place a hold on 'On Order' items.",
+  });
+
+  saveRecord(app, uiSettings, "uisettings00010", {
+    scope: "system",
     logoAlt: "Library Logo",
+    pageTitle: "Material Suggestion",
+    barcodeLabel: "Library Card",
+    pinLabel: "Pin",
     loginPrompt: "Please enter your information below to start the suggestion process.",
     suggestionFormNote: "If the library decides to purchase your suggestion, we will automatically place a hold on it and send a confirmation email. Make sure to check your spam folder if you don't see the email.",
     loginNote: "Use of this service requires a valid library card. Contact your library if you need assistance with your card or PIN.",
     successTitle: "Suggestion Submitted",
     successMessage: "You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>",
-    alreadySubmittedMessage: "This suggestion has already been submitted from your account. You may submit an ISBN that other patrons have suggested, but you cannot submit the same ISBN twice from the same account. Check the catalog to see if the material was acquired and place a hold.<div>Thank you for using this library's suggestion service.</div>",
-    publicationOptions: ["Already published", "Coming soon", "Published a while back"],
-    formatLabels: {
-      book: "Book",
-      audiobook_cd: "Audiobook (Physical CD)",
-      dvd: "DVD",
-      music_cd: "Music CD",
-      ebook: "eBook",
-      eaudiobook: "eAudiobook"
-    },
-    availableFormats: ["book", "audiobook_cd", "dvd", "music_cd", "ebook", "eaudiobook"],
-    formatRules: {
-      book: { messageBehavior: "none", fields: { title: { mode: "required", label: "Title" }, author: { mode: "required", label: "Author" }, identifier: { mode: "optional", label: "ISBN" }, agegroup: { mode: "required", label: "Age Group" }, publication: { mode: "required", label: "Publication Timing" } } },
-      audiobook_cd: { messageBehavior: "none", fields: { title: { mode: "required", label: "Title" }, author: { mode: "required", label: "Author" }, identifier: { mode: "optional", label: "ISBN" }, agegroup: { mode: "required", label: "Age Group" }, publication: { mode: "required", label: "Publication Timing" } } },
-      dvd: { messageBehavior: "none", fields: { title: { mode: "required", label: "Title" }, author: { mode: "required", label: "Director/Actors/Producer" }, identifier: { mode: "hidden", label: "UPC" }, agegroup: { mode: "required", label: "Age Group" }, publication: { mode: "required", label: "Publication Timing" } } },
-      music_cd: { messageBehavior: "none", fields: { title: { mode: "required", label: "Title" }, author: { mode: "required", label: "Artist" }, identifier: { mode: "hidden", label: "UPC" }, agegroup: { mode: "required", label: "Age Group" }, publication: { mode: "required", label: "Publication Timing" } } },
-      ebook: { messageBehavior: "ebookMessage", fields: { title: { mode: "required", label: "Title" }, author: { mode: "required", label: "Author" }, identifier: { mode: "optional", label: "ISBN" }, agegroup: { mode: "required", label: "Age Group" }, publication: { mode: "hidden", label: "Publication Timing" } } },
-      eaudiobook: { messageBehavior: "eaudiobookMessage", fields: { title: { mode: "required", label: "Title" }, author: { mode: "required", label: "Author" }, identifier: { mode: "optional", label: "ISBN" }, agegroup: { mode: "required", label: "Age Group" }, publication: { mode: "hidden", label: "Publication Timing" } } }
-    }
+    alreadySubmittedMessage: "This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.<div>Thank you for using this library's suggestion service.</div>",
+    duplicateLabelSuggestion: "Received",
+    duplicateLabelOutstandingPurchase: "Under review",
+    duplicateLabelPendingHold: "Being prepared",
+    duplicateLabelHoldPlaced: "Hold placed",
+    duplicateLabelClosed: "Completed",
+    duplicateLabelRejected: "Not selected for purchase",
+    duplicateLabelHoldCompleted: "Completed",
+    duplicateLabelHoldNotPickedUp: "Closed",
+    duplicateLabelManual: "Closed",
+    duplicateLabelSilent: "Closed",
+    noEmailMessage: "No email is specified on your library account, which means we won't be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.",
+    systemNotEnabledMessage: "Your library does not currently participate in this suggestion service.",
+    ebookMessage: "<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
+    eaudiobookMessage: "<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
+    publicationOptions: "Already published\nComing soon\nPublished a while back",
+    ageGroups: "Adult\nYoung Adult / Teen\nChildren",
   });
-  record.set("emails", {
-    suggestion_submitted: {
-      subject: "Suggestion received: {{title}}",
-      body: "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format. Our collection development team has received your request and will review it.\n\nIf we add this item, we will place a hold for you automatically and send another update.\n\nThank you for helping us shape the library collection."
-    },
-    already_owned: {
-      subject: "{{title}} is already available",
-      body: "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format.\n\nThe library already owns this title or has it on order. We have placed a hold on card {{barcode}} so you will be notified when it is ready.\n\nThank you for using the library's suggestion service."
-    },
-    rejected: {
-      subject: "Update on your suggestion: {{title}}",
-      body: "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format.\n\nAfter review, we are not able to add this item to the collection at this time. We appreciate you taking the time to share your suggestion with us.\n\nThank you for helping us build a collection that reflects our community."
-    },
-    hold_placed: {
-      subject: "Hold placed for {{title}}",
-      body: "Hello {{name}},\n\nGood news. The library plans to add {{title}} by {{author}} in {{format}} format.\n\nWe have placed a hold on card {{barcode}}. You will receive the usual pickup notice when the item is ready.\n\nThank you for your suggestion."
-    }
-  });
-  record.set("suggestionLimit", 5);
-  record.set("suggestionLimitMessage", "Weekly suggestion limit reached. You can try again after {{next_available_date}}.");
-  record.set("outstandingTimeoutEnabled", false);
-  record.set("outstandingTimeoutDays", 30);
-  record.set("holdPickupTimeoutEnabled", false);
-  record.set("holdPickupTimeoutDays", 14);
-  record.set("allowedStaffUsers", "");
-  app.save(record);
+
+  saveRecord(app, emailTemplates, "emailsubmit0010", { scope: "system", templateKey: "suggestion_submitted", name: "Submission confirmation", subject: "Suggestion received: {{title}}", body: "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format. Our collection development team has received your request and will review it.\n\nIf we add this item, we will place a hold for you automatically and send another update.\n\nThank you for helping us shape the library collection.", enabled: true });
+  saveRecord(app, emailTemplates, "emailowned00020", { scope: "system", templateKey: "already_owned", name: "Already owned", subject: "{{title}} is already available", body: "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format.\n\nThe library already owns this title or has it on order. We have placed a hold on card {{barcode}} so you will be notified when it is ready.\n\nThank you for using the library's suggestion service.", enabled: true });
+  saveRecord(app, emailTemplates, "emailreject0030", { scope: "system", templateKey: "rejected", name: "Rejected", subject: "Update on your suggestion: {{title}}", body: "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format.\n\nAfter review, we are not able to add this item to the collection at this time. We appreciate you taking the time to share your suggestion with us.\n\nThank you for helping us build a collection that reflects our community.", enabled: true });
+  saveRecord(app, emailTemplates, "emailhold000040", { scope: "system", templateKey: "hold_placed", name: "Hold placed", subject: "Hold placed for {{title}}", body: "Hello {{name}},\n\nGood news. The library plans to add {{title}} by {{author}} in {{format}} format.\n\nWe have placed a hold on card {{barcode}}. You will receive the usual pickup notice when the item is ready.\n\nThank you for your suggestion.", enabled: true });
 }, (app) => {
   return null;
-})
+});

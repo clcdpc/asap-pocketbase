@@ -2296,25 +2296,22 @@ async function loadSettings(options = {}) {
         : `${libraryName} (ID ${currentLibraryContextOrgId})`;
     }
 
-    await loadLibrarySettings(currentLibraryContextOrgId);
+    const loadedLibrarySettings = await loadLibrarySettings(currentLibraryContextOrgId);
 
     if (!isSuper) {
-      // Hide error, show form for library admins even if they can't load app_settings
+      // Hide error, show form for library admins even if they can't load system-scoped settings.
       hideSettingsAccessDenied();
       const formEl = document.getElementById('settings-form');
       if (formEl) formEl.classList.remove('hidden');
       return;
     }
 
-    const record = await pb.collection('app_settings').getOne(SETTINGS_RECORD_ID);
+    const smtp = (loadedLibrarySettings && loadedLibrarySettings.smtp) || {};
+    const polaris = (loadedLibrarySettings && loadedLibrarySettings.polaris) || {};
+    const emails = (loadedLibrarySettings && loadedLibrarySettings.emails) || {};
 
-    const smtp = record.smtp || {};
-    const polaris = record.polaris || {};
-    const uiText = record.ui_text || {};
-    const emails = record.emails || {};
-
-    workflowSettings.outstandingTimeoutEnabled = !!record.outstandingTimeoutEnabled;
-    workflowSettings.outstandingTimeoutDays = parseInt(record.outstandingTimeoutDays || '30', 10) || 30;
+    workflowSettings.outstandingTimeoutEnabled = !!((loadedLibrarySettings && loadedLibrarySettings.workflow || {}).outstandingTimeoutEnabled);
+    workflowSettings.outstandingTimeoutDays = parseInt(((loadedLibrarySettings && loadedLibrarySettings.workflow || {}).outstandingTimeoutDays) || '30', 10) || 30;
     workflowSettings.autoPromote = polaris.autoPromote !== false;
 
     // Workflow form population is handled by loadLibrarySettings
@@ -2552,6 +2549,12 @@ async function loadLibrarySettings(orgId) {
     populatePatronUiForms(settings.ui_text || {});
     populateWorkflowForms(settings.workflow || {});
     updateEmailStatusBanner(settings.emailStatus);
+    if (settings.organizationSync) {
+      const state = settings.organizationSync.status || 'not_loaded';
+      const message = settings.organizationSync.error || settings.organizationSync.message || organizationsStatusMessage;
+      setOrganizationsStatus(state, message);
+    }
+    return settings;
 
   } catch (err) {
     console.error('Error loading library settings:', err);
@@ -3031,6 +3034,8 @@ async function saveSettings(options = {}) {
     // Save templates via the new library-scoped API
     const libraryPayload = {
       orgId: currentLibraryContextOrgId,
+      smtp: payload.smtp,
+      polaris: payload.polaris,
       emails: payload.emails,
       ui_text: payload.ui_text,
       workflow: {
@@ -3056,29 +3061,7 @@ async function saveSettings(options = {}) {
       body: JSON.stringify(libraryPayload)
     });
 
-    let globalPromise = Promise.resolve();
-    if (isSuper) {
-      if (currentLibraryContextOrgId !== 'system') {
-        delete payload.emails;
-        delete payload.ui_text;
-        delete payload.suggestionLimit;
-        delete payload.suggestionLimitMessage;
-        delete payload.outstandingTimeoutEnabled;
-        delete payload.outstandingTimeoutDays;
-        delete payload.outstandingTimeoutSendEmail;
-        delete payload.outstandingTimeoutRejectionTemplateId;
-        delete payload.holdPickupTimeoutEnabled;
-        delete payload.holdPickupTimeoutDays;
-        delete payload.pendingHoldTimeoutEnabled;
-        delete payload.pendingHoldTimeoutDays;
-        delete payload.commonAuthorsEnabled;
-        delete payload.commonAuthorsList;
-        delete payload.commonAuthorsMessage;
-      }
-      globalPromise = pb.collection('app_settings').update(SETTINGS_RECORD_ID, payload);
-    }
-
-    await Promise.all([globalPromise, libraryPromise]);
+    await libraryPromise;
     msg.textContent = options.successText || 'Settings saved.';
     msg.className = 'mt-2 font-weight-bold text-success';
     if (options.clearDelay !== 0) {

@@ -115,6 +115,7 @@ function upsertLegacyRow(app, row) {
   record.set("notes", String(row.notes || ""));
   record.set("bibid", String(row.bibid || ""));
   record.set("closeReason", records.normalizeCloseReason(row.closeReason || inferCloseReason(row)));
+  records.setCanonicalRefs(app, record);
   var created = normalizeDate(row.created || row.createdAt || row.submittedAt || row.dateSubmitted);
   var updated = normalizeDate(row.updated || row.updatedAt || "") || created;
   record.set("created", created || new Date().toISOString());
@@ -123,6 +124,7 @@ function upsertLegacyRow(app, row) {
     record.set("legacyId", legacyId);
   }
   app.save(record);
+  records.recordEvent(app, record, "legacy_import", "Imported legacy suggestion.", { actorType: "system", actorName: "legacy-import" });
 }
 
 function inferCloseReason(row) {
@@ -183,6 +185,14 @@ function upsertImportPatron(app, barcode, email, firstName, lastName, scope) {
   patron.set("patronOrgId", String(scope.patronOrgId || ""));
   patron.set("libraryOrgId", String(scope.libraryOrgId || ""));
   patron.set("libraryOrgName", String(scope.libraryOrgName || ""));
+  try {
+    var patronOrg = app.findFirstRecordByData("polaris_organizations", "organizationId", String(scope.patronOrgId || ""));
+    patron.set("patronOrganization", patronOrg.id);
+  } catch (err) {}
+  try {
+    var libraryOrg = app.findFirstRecordByData("polaris_organizations", "organizationId", String(scope.libraryOrgId || ""));
+    patron.set("libraryOrganization", libraryOrg.id);
+  } catch (err) {}
   if (email && email.indexOf("@") > 0) {
     patron.setEmail(email);
   }

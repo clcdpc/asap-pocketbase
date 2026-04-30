@@ -317,40 +317,7 @@ function setupStatus(e) {
 }
 
 function getOrCreateSettingsRecord(app) {
-  try {
-    return app.findRecordById("app_settings", "settings0000001");
-  } catch (err) {
-    var collection = app.findCollectionByNameOrId("app_settings");
-    var record = new Record(collection);
-    record.set("id", "settings0000001");
-    record.set("polaris", {});
-    record.set("smtp", {
-      host: "",
-      port: 587,
-      username: "",
-      password: "",
-      from: "",
-      fromName: "Library Collection Development",
-      tls: true
-    });
-    record.set("ui_text", {
-      noEmailMessage: "No email is specified on your library account, which means we won't be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.",
-      ebookMessage: "<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
-      eaudiobookMessage: "<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
-      publicationOptions: ["Already published", "Coming soon", "Published a while back"],
-      ageGroups: ["Adult", "Young Adult / Teen", "Children"]
-    });
-    record.set("emails", {});
-    record.set("allowedStaffUsers", "");
-    record.set("suggestionLimit", 5);
-    record.set("suggestionLimitMessage", "You have submitted 5 suggestions this week. Please try again next week.");
-    record.set("outstandingTimeoutEnabled", false);
-    record.set("outstandingTimeoutDays", 30);
-    record.set("commonAuthorsEnabled", false);
-    record.set("commonAuthorsList", "");
-    record.set("commonAuthorsMessage", "We automatically purchase all upcoming titles by this author. Please check the catalog to place a hold on 'On Order' items.");
-    return record;
-  }
+  return config.getSystemSettings(app);
 }
 
 function firstValue(source, names, defaultValue) {
@@ -397,7 +364,7 @@ function buildPolarisData(data) {
     requestingOrgId: String(firstValue(source, ["requestingOrgId"], "3") || "3"),
     workstationId: String(firstValue(source, ["workstationId"], "1") || "1"),
     userId: String(firstValue(source, ["userId"], "1") || "1"),
-    autoPromote: boolValue(firstValue(source, ["autoPromote"], false), false)
+    autoPromote: boolValue(firstValue(source, ["autoPromote"], true), true)
   };
 }
 
@@ -447,9 +414,17 @@ function initialSetup(e) {
     return e.json(400, { message: "Polaris host, access ID, and API key are required." });
   }
 
-  var settings = getOrCreateSettingsRecord(e.app);
-  settings.set("polaris", polarisData);
-  e.app.save(settings);
+  config.savePolarisSettings(e.app, polarisData);
+
+  var orgSync = { success: false, synced: 0, message: "Organization sync has not run." };
+  try {
+    orgSync = orgs.syncOrganizations(e.app, polaris.adminStaffAuth(polarisData));
+    orgSync.success = true;
+    orgSync.message = "Organization hierarchy synced.";
+  } catch (syncErr) {
+    orgSync = { success: false, synced: 0, message: syncErr.message || String(syncErr) };
+    orgs.setSyncStatus(e.app, "error", "Polaris connected, but organizations could not be loaded.", orgSync.message);
+  }
 
   var record = records.upsertStaffUser(e.app, staffIdentity, staffIdentity.display, {
     defaultRole: "super_admin",
@@ -463,7 +438,8 @@ function initialSetup(e) {
     token: record.newAuthToken(),
     record: record,
     bootstrapAdmin: true,
-    bootstrapMessage: "Initial setup is complete. Your account is the consortium super admin; future staff logins will be created with non-admin staff roles."
+    bootstrapMessage: "Initial setup is complete. Your account is the consortium super admin; future staff logins will be created with non-admin staff roles.",
+    organizationSync: orgSync
   });
 }
 
@@ -856,7 +832,7 @@ function staffTitleRequestsList(e) {
       break;
     }
     for (var i = 0; i < page.length; i++) {
-      var row = records.titleRequestToJson(page[i]);
+      var row = records.titleRequestToJson(page[i], e.app);
       var patronId = String(page[i].get("patron") || "").trim();
       var patronRecord = null;
 
@@ -1035,7 +1011,7 @@ function staffTitleRequestAction(e) {
       }
     }
 
-    return e.json(200, records.titleRequestToJson(record));
+    return e.json(200, records.titleRequestToJson(record, e.app));
   } catch (err) {
     e.app.logger().error("Staff action failed", "error", String(err));
     return e.json(400, { message: "System error: " + err.message });
@@ -1182,66 +1158,73 @@ function getLibrarySettings(e) {
       return e.json(403, { message: "Access denied to these library settings." });
     }
 
-    var emails = {};
-    var ui_text = {};
-    var workflow = {};
-    var isOverride = false;
-
     if (orgId === "system") {
       if (!isSuperAdmin(staff)) {
         return e.json(403, { message: "Only super admins can view system settings." });
       }
       var s = config.getSettings();
-      emails = s.emails;
-      ui_text = s.ui_text;
-      workflow = {
-        enabledLibraryOrgIds: s.enabledLibraryOrgIds,
-        suggestionLimit: s.suggestionLimit,
-        suggestionLimitMessage: s.suggestionLimitMessage,
-        outstandingTimeoutEnabled: s.outstandingTimeoutEnabled,
-        outstandingTimeoutDays: s.outstandingTimeoutDays,
-        holdPickupTimeoutEnabled: s.holdPickupTimeoutEnabled,
-        holdPickupTimeoutDays: s.holdPickupTimeoutDays,
-        pendingHoldTimeoutEnabled: s.pendingHoldTimeoutEnabled,
-        pendingHoldTimeoutDays: s.pendingHoldTimeoutDays,
-        commonAuthorsEnabled: s.commonAuthorsEnabled,
-        commonAuthorsList: s.commonAuthorsList,
-        commonAuthorsMessage: s.commonAuthorsMessage,
-        outstandingTimeoutSendEmail: s.outstandingTimeoutSendEmail,
-        outstandingTimeoutRejectionTemplateId: s.outstandingTimeoutRejectionTemplateId
-      };
-    } else {
-      try {
-        var record = e.app.findFirstRecordByData("library_settings", "libraryOrgId", orgId);
-        var dbEmails = parseRecordJsonObject(record, "emails", {});
-        var dbUiText = parseRecordJsonObject(record, "ui_text", {});
-        var dbWorkflow = parseRecordJsonObject(record, "workflow", {});
-        isOverride = true;
-        
-        var ls = config.librarySettings(e.app, orgId);
-        emails = ls.emails;
-        ui_text = ls.ui_text;
-        workflow = ls.workflow;
-      } catch (err) {
-        var ls = config.librarySettings(e.app, orgId);
-        emails = ls.emails;
-        ui_text = ls.ui_text;
-        workflow = ls.workflow;
-      }
+      var wf = config.suggestionLimit(e.app, "");
+      return e.json(200, {
+        orgId: orgId,
+        emails: s.emails,
+        ui_text: s.ui_text,
+        workflow: workflowWithEnabled(e.app, wf),
+        polaris: s.polaris,
+        smtp: s.smtp,
+        emailStatus: config.emailStatus(e.app, ""),
+        organizationSync: organizationSyncStatus(e.app),
+        isOverride: false
+      });
     }
 
+    var ls = config.librarySettings(e.app, orgId);
     return e.json(200, {
       orgId: orgId,
-      emails: emails,
-      ui_text: ui_text,
-      workflow: workflow,
+      emails: ls.emails,
+      ui_text: ls.ui_text,
+      workflow: workflowWithEnabled(e.app, ls.workflow),
       emailStatus: config.emailStatus(e.app, orgId === "system" ? "" : orgId),
-      isOverride: isOverride
+      organizationSync: organizationSyncStatus(e.app),
+      isOverride: hasLibraryOverride(e.app, orgId)
     });
   } catch (err) {
     e.app.logger().error("Failed to load library settings", "error", String(err));
     return e.json(500, { message: err.message || String(err) });
   }
+}
+
+function workflowWithEnabled(app, workflow) {
+  var copy = Object.assign({}, workflow || {});
+  copy.enabledLibraryOrgIds = config.enabledLibraryOrgIds(app);
+  return copy;
+}
+
+function organizationSyncStatus(app) {
+  var sys = config.getSystemSettings(app);
+  return {
+    status: sys ? sys.get("organizationsSyncStatus") || "not_loaded" : "not_loaded",
+    message: sys ? sys.get("organizationsSyncMessage") || "" : "",
+    error: sys ? sys.get("organizationsSyncError") || "" : "",
+    lastSynced: sys ? sys.get("organizationsLastSynced") || "" : ""
+  };
+}
+
+function hasLibraryOverride(app, orgId) {
+  var org = config.findOrganization(app, orgId);
+  if (!org) return false;
+  var filters = [
+    ["workflow_settings", "scope = 'library' && libraryOrganization = {:org}"],
+    ["ui_settings", "scope = 'library' && libraryOrganization = {:org}"],
+    ["email_templates", "scope = 'library' && libraryOrganization = {:org}"],
+    ["rejection_templates", "scope = 'library' && libraryOrganization = {:org}"]
+  ];
+  for (var i = 0; i < filters.length; i++) {
+    try {
+      app.findFirstRecordByFilter(filters[i][0], filters[i][1], { org: org.id });
+      return true;
+    } catch (err) {}
+  }
+  return false;
 }
 
 function updateLibrarySettings(e) {
@@ -1262,76 +1245,233 @@ function updateLibrarySettings(e) {
     if (!isSuperAdmin(staff)) {
       return e.json(403, { message: "Only super admins can update system settings." });
     }
-    var record = getOrCreateSettingsRecord(e.app);
-    if (payload.emails) record.set("emails", config.normalizeEmailTemplates(parseJsonObject(payload.emails, {})));
-    if (payload.ui_text) record.set("ui_text", parseJsonObject(payload.ui_text, {}));
-    if (payload.workflow) {
-      var wf = parseJsonObject(payload.workflow, {});
-      if (wf.enabledLibraryOrgIds !== undefined) record.set("enabledLibraryOrgIds", wf.enabledLibraryOrgIds);
-      if (wf.suggestionLimit !== undefined) record.set("suggestionLimit", wf.suggestionLimit);
-      if (wf.suggestionLimitMessage !== undefined) record.set("suggestionLimitMessage", wf.suggestionLimitMessage);
-      if (wf.outstandingTimeoutEnabled !== undefined) record.set("outstandingTimeoutEnabled", wf.outstandingTimeoutEnabled);
-      if (wf.outstandingTimeoutDays !== undefined) record.set("outstandingTimeoutDays", wf.outstandingTimeoutDays);
-      if (wf.holdPickupTimeoutEnabled !== undefined) record.set("holdPickupTimeoutEnabled", wf.holdPickupTimeoutEnabled);
-      if (wf.holdPickupTimeoutDays !== undefined) record.set("holdPickupTimeoutDays", wf.holdPickupTimeoutDays);
-      if (wf.pendingHoldTimeoutEnabled !== undefined) record.set("pendingHoldTimeoutEnabled", wf.pendingHoldTimeoutEnabled);
-      if (wf.pendingHoldTimeoutDays !== undefined) record.set("pendingHoldTimeoutDays", wf.pendingHoldTimeoutDays);
-      if (wf.commonAuthorsEnabled !== undefined) record.set("commonAuthorsEnabled", wf.commonAuthorsEnabled);
-      if (wf.commonAuthorsList !== undefined) record.set("commonAuthorsList", wf.commonAuthorsList);
-      if (wf.commonAuthorsMessage !== undefined) record.set("commonAuthorsMessage", wf.commonAuthorsMessage);
-      if (wf.outstandingTimeoutSendEmail !== undefined) record.set("outstandingTimeoutSendEmail", wf.outstandingTimeoutSendEmail);
-      if (wf.outstandingTimeoutRejectionTemplateId !== undefined) record.set("outstandingTimeoutRejectionTemplateId", wf.outstandingTimeoutRejectionTemplateId);
-    }
-    e.app.save(record);
+    saveSystemSettingsPayload(e.app, payload);
   } else {
     if (action === "reset") {
-      try {
-        var record = e.app.findFirstRecordByData("library_settings", "libraryOrgId", orgId);
-        e.app.delete(record);
-      } catch (err) {}
+      resetLibrarySettings(e.app, orgId);
     } else {
-      var record;
-      try {
-        record = e.app.findFirstRecordByData("library_settings", "libraryOrgId", orgId);
-      } catch (err) {
-        var collection = e.app.findCollectionByNameOrId("library_settings");
-        record = new Record(collection);
-        record.set("libraryOrgId", orgId);
-      }
-
-      var emails = config.normalizeEmailTemplates(parseJsonObject(payload.emails, {}));
-      var workflow = parseJsonObject(payload.workflow, {});
-
-      // Validation
-      if (!workflow.outstandingTimeoutEnabled) {
-        workflow.outstandingTimeoutSendEmail = false;
-        workflow.outstandingTimeoutRejectionTemplateId = "";
-      }
-      if (!workflow.outstandingTimeoutSendEmail) {
-        workflow.outstandingTimeoutRejectionTemplateId = "";
-      }
-
-      if (workflow.outstandingTimeoutSendEmail) {
-        var templates = emails.rejection_templates || [];
-        // Empty string means "Standard Rejection Email"
-        if (workflow.outstandingTimeoutRejectionTemplateId !== "") {
-          var selected = templates.find(function(t) { return t.id === workflow.outstandingTimeoutRejectionTemplateId; });
-          if (!selected) {
-            return e.json(400, {
-              message: "Selected rejection email template was not found."
-            });
-          }
-        }
-      }
-
-      if (payload.emails) record.set("emails", emails);
-      if (payload.ui_text) record.set("ui_text", parseJsonObject(payload.ui_text, {}));
-      if (payload.workflow) record.set("workflow", workflow);
-      e.app.save(record);
+      saveLibraryScopedSettings(e.app, orgId, payload);
     }
   }
 
   return e.json(200, { success: true });
+}
+
+function recordForScope(app, collectionName, scope, orgId) {
+  var collection = app.findCollectionByNameOrId(collectionName);
+  if (scope === "system") {
+    try {
+      return app.findFirstRecordByFilter(collectionName, "scope = 'system'");
+    } catch (err) {
+      var sys = new Record(collection);
+      sys.set("scope", "system");
+      return sys;
+    }
+  }
+  var org = config.findOrganization(app, orgId);
+  if (!org) throw new Error("Library organization must be synced before saving library-specific settings.");
+  try {
+    return app.findFirstRecordByFilter(collectionName, "scope = 'library' && libraryOrganization = {:org}", { org: org.id });
+  } catch (err) {
+    var rec = new Record(collection);
+    rec.set("scope", "library");
+    rec.set("libraryOrganization", org.id);
+    return rec;
+  }
+}
+
+function saveSystemSettingsPayload(app, payload) {
+  if (payload.polaris) {
+    var polarisData = buildPolarisData({ polaris: payload.polaris });
+    config.savePolarisSettings(app, polarisData);
+    if (polarisData.host && polarisData.accessId && polarisData.apiKey) {
+      try {
+        orgs.syncOrganizations(app, polaris.adminStaffAuth(polarisData));
+      } catch (syncErr) {
+        app.logger().warn("Polaris organization sync failed after settings save", "error", String(syncErr));
+      }
+    }
+  }
+  if (payload.smtp) saveSmtpSettings(app, payload.smtp);
+  saveWorkflowSettings(app, "system", "", payload.workflow || {});
+  saveUiSettings(app, "system", "", payload.ui_text || {});
+  saveEmailSettings(app, "system", "", payload.emails || {});
+  if (payload.workflow && payload.workflow.enabledLibraryOrgIds !== undefined) {
+    saveEnabledLibraries(app, payload.workflow.enabledLibraryOrgIds);
+  }
+}
+
+function saveLibraryScopedSettings(app, orgId, payload) {
+  saveWorkflowSettings(app, "library", orgId, payload.workflow || {});
+  saveUiSettings(app, "library", orgId, payload.ui_text || {});
+  saveEmailSettings(app, "library", orgId, payload.emails || {});
+}
+
+function saveSmtpSettings(app, smtp) {
+  var record = config.getSmtpSettings(app);
+  ["host", "port", "username", "password", "tls"].forEach(function (key) {
+    if (smtp[key] !== undefined) record.set(key, smtp[key]);
+  });
+  if (smtp.fromAddress !== undefined) record.set("fromAddress", smtp.fromAddress);
+  if (smtp.fromName !== undefined) record.set("fromName", smtp.fromName);
+  app.save(record);
+}
+
+function saveEnabledLibraries(app, csv) {
+  var sys = config.getSystemSettings(app);
+  var ids = String(csv || "").split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+  var rels = [];
+  var all = app.findRecordsByFilter("polaris_organizations", "organizationCodeId = '2'", "", 1000, 0);
+  for (var i = 0; i < all.length; i++) {
+    var enabled = ids.length === 0 || ids.indexOf(String(all[i].get("organizationId"))) >= 0;
+    all[i].set("enabledForPatrons", enabled);
+    app.save(all[i]);
+    if (ids.indexOf(String(all[i].get("organizationId"))) >= 0) rels.push(all[i].id);
+  }
+  sys.set("enabledLibraries", rels);
+  app.save(sys);
+}
+
+function saveWorkflowSettings(app, scope, orgId, wf) {
+  var record = recordForScope(app, "workflow_settings", scope, orgId);
+  ["suggestionLimit", "suggestionLimitMessage", "outstandingTimeoutEnabled", "outstandingTimeoutDays", "outstandingTimeoutSendEmail", "holdPickupTimeoutEnabled", "holdPickupTimeoutDays", "pendingHoldTimeoutEnabled", "pendingHoldTimeoutDays", "commonAuthorsEnabled", "commonAuthorsList", "commonAuthorsMessage"].forEach(function (key) {
+    if (wf[key] !== undefined) record.set(key, wf[key]);
+  });
+  if (!wf.outstandingTimeoutEnabled || !wf.outstandingTimeoutSendEmail) {
+    record.set("outstandingTimeoutRejectionTemplate", "");
+  } else if (wf.outstandingTimeoutRejectionTemplateId) {
+    record.set("outstandingTimeoutRejectionTemplate", wf.outstandingTimeoutRejectionTemplateId);
+  }
+  app.save(record);
+}
+
+function saveUiSettings(app, scope, orgId, ui) {
+  var record = recordForScope(app, "ui_settings", scope, orgId);
+  var fieldMap = {
+    logoAlt: "logoAlt", pageTitle: "pageTitle", barcodeLabel: "barcodeLabel", pinLabel: "pinLabel",
+    loginPrompt: "loginPrompt", loginNote: "loginNote", suggestionFormNote: "suggestionFormNote",
+    noEmailMessage: "noEmailMessage", successTitle: "successTitle", successMessage: "successMessage",
+    alreadySubmittedMessage: "alreadySubmittedMessage", ebookMessage: "ebookMessage",
+    eaudiobookMessage: "eaudiobookMessage"
+  };
+  Object.keys(fieldMap).forEach(function (key) {
+    if (ui[key] !== undefined) record.set(fieldMap[key], ui[key]);
+  });
+  if (ui.duplicateStatusLabels) {
+    var d = ui.duplicateStatusLabels;
+    record.set("duplicateLabelSuggestion", d.suggestion || "");
+    record.set("duplicateLabelOutstandingPurchase", d.outstanding_purchase || "");
+    record.set("duplicateLabelPendingHold", d.pending_hold || "");
+    record.set("duplicateLabelHoldPlaced", d.hold_placed || "");
+    record.set("duplicateLabelClosed", d.closed || "");
+    record.set("duplicateLabelRejected", d.rejected || "");
+    record.set("duplicateLabelHoldCompleted", d.hold_completed || "");
+    record.set("duplicateLabelHoldNotPickedUp", d.hold_not_picked_up || "");
+    record.set("duplicateLabelManual", d.manual || "");
+    record.set("duplicateLabelSilent", d.silent || d["Silently Closed"] || "");
+  }
+  if (ui.systemNotEnabledMessage !== undefined) record.set("systemNotEnabledMessage", ui.systemNotEnabledMessage);
+  if (ui.publicationOptions !== undefined) record.set("publicationOptions", Array.isArray(ui.publicationOptions) ? ui.publicationOptions.join("\n") : String(ui.publicationOptions || ""));
+  if (ui.ageGroups !== undefined) record.set("ageGroups", Array.isArray(ui.ageGroups) ? ui.ageGroups.join("\n") : String(ui.ageGroups || ""));
+  app.save(record);
+  if (scope === "system") saveMaterialFormats(app, ui);
+}
+
+function saveMaterialFormats(app, ui) {
+  var labels = ui.formatLabels || {};
+  var available = Array.isArray(ui.availableFormats) ? ui.availableFormats : [];
+  var rules = ui.formatRules || {};
+  Object.keys(labels).forEach(function (code, index) {
+    var record;
+    try {
+      record = app.findFirstRecordByData("material_formats", "code", code);
+    } catch (err) {
+      record = new Record(app.findCollectionByNameOrId("material_formats"));
+      record.set("code", code);
+      record.set("sortOrder", (index + 1) * 10);
+    }
+    var rule = rules[code] || {};
+    var fields = rule.fields || {};
+    record.set("label", labels[code] || code);
+    record.set("enabled", available.length ? available.indexOf(code) >= 0 : true);
+    record.set("messageBehavior", rule.messageBehavior || "none");
+    setFormatFieldRule(record, "title", fields.title, "Title");
+    setFormatFieldRule(record, "author", fields.author, "Author");
+    setFormatFieldRule(record, "identifier", fields.identifier, "ISBN");
+    setFormatFieldRule(record, "audience", fields.agegroup, "Age Group");
+    setFormatFieldRule(record, "publication", fields.publication, "Publication Timing");
+    app.save(record);
+  });
+}
+
+function setFormatFieldRule(record, prefix, rule, fallback) {
+  rule = rule || {};
+  record.set(prefix + "Mode", rule.mode || (prefix === "identifier" ? "optional" : "required"));
+  record.set(prefix + "Label", rule.label || fallback);
+}
+
+function saveEmailSettings(app, scope, orgId, emails) {
+  EMAIL_TEMPLATE_KEYS.forEach(function (key) {
+    var tpl = emails[key] || {};
+    if (!tpl.subject && !tpl.body && scope === "library") return;
+    var record = emailTemplateRecord(app, scope, orgId, key);
+    record.set("templateKey", key);
+    record.set("name", key);
+    if (tpl.subject !== undefined) record.set("subject", tpl.subject);
+    if (tpl.body !== undefined) record.set("body", tpl.body);
+    if (emails.fromAddress !== undefined) record.set("fromAddress", emails.fromAddress);
+    if (emails.fromName !== undefined) record.set("fromName", emails.fromName);
+    record.set("enabled", true);
+    app.save(record);
+  });
+  saveRejectionTemplates(app, scope, orgId, emails.rejection_templates || []);
+}
+
+const EMAIL_TEMPLATE_KEYS = ["suggestion_submitted", "already_owned", "rejected", "hold_placed"];
+
+function emailTemplateRecord(app, scope, orgId, key) {
+  var org = scope === "library" ? config.findOrganization(app, orgId) : null;
+  var filter = scope === "system" ? "scope = 'system' && templateKey = {:key}" : "scope = 'library' && libraryOrganization = {:org} && templateKey = {:key}";
+  var params = scope === "system" ? { key: key } : { org: org.id, key: key };
+  try {
+    return app.findFirstRecordByFilter("email_templates", filter, params);
+  } catch (err) {
+    var rec = new Record(app.findCollectionByNameOrId("email_templates"));
+    rec.set("scope", scope);
+    if (org) rec.set("libraryOrganization", org.id);
+    return rec;
+  }
+}
+
+function saveRejectionTemplates(app, scope, orgId, templates) {
+  var org = scope === "library" ? config.findOrganization(app, orgId) : null;
+  for (var i = 0; i < templates.length; i++) {
+    var t = templates[i] || {};
+    var record = null;
+    if (t.id) {
+      try { record = app.findRecordById("rejection_templates", t.id); } catch (err) {}
+    }
+    if (!record) {
+      record = new Record(app.findCollectionByNameOrId("rejection_templates"));
+      record.set("scope", scope);
+      if (org) record.set("libraryOrganization", org.id);
+    }
+    record.set("name", t.name || "Rejection template");
+    record.set("subject", t.subject || "");
+    record.set("body", t.body || "");
+    record.set("enabled", true);
+    record.set("sortOrder", i + 1);
+    app.save(record);
+  }
+}
+
+function resetLibrarySettings(app, orgId) {
+  var org = config.findOrganization(app, orgId);
+  if (!org) return;
+  ["workflow_settings", "ui_settings", "email_templates", "rejection_templates"].forEach(function (collection) {
+    var rows = app.findRecordsByFilter(collection, "scope = 'library' && libraryOrganization = {:org}", "", 200, 0, { org: org.id });
+    rows.forEach(function (row) { app.delete(row); });
+  });
 }
 
 function staffRunPromoterCheck(e) {

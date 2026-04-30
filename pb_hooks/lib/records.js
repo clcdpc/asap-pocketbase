@@ -103,6 +103,62 @@ function findFirstByData(app, collection, field, value) {
   }
 }
 
+function lookupByCode(app, collection, code) {
+  code = String(code || "").trim();
+  if (!code) return null;
+  try {
+    return app.findFirstRecordByData(collection, "code", code);
+  } catch (err) {
+    return null;
+  }
+}
+
+function organizationByPolarisId(app, orgId) {
+  orgId = String(orgId || "").trim();
+  if (!orgId) return null;
+  try {
+    return app.findFirstRecordByData("polaris_organizations", "organizationId", orgId);
+  } catch (err) {
+    return null;
+  }
+}
+
+function setRelation(record, fieldName, relatedRecord) {
+  record.set(fieldName, relatedRecord ? relatedRecord.id : "");
+}
+
+function setCanonicalRefs(app, record) {
+  setRelation(record, "statusRef", lookupByCode(app, "request_statuses", normalizeStatus(record.get("status"))));
+  setRelation(record, "formatRef", lookupByCode(app, "material_formats", normalizeFormat(record.get("format"))));
+  var age = String(record.get("agegroup") || "").trim();
+  setRelation(record, "audienceGroup", age ? lookupByCode(app, "audience_groups", normalizeAgegroup(age)) : null);
+  var reason = normalizeCloseReason(record.get("closeReason"));
+  setRelation(record, "closeReasonRef", reason ? lookupByCode(app, "request_close_reasons", reason) : null);
+  setRelation(record, "patronOrganization", organizationByPolarisId(app, record.get("patronOrgId")));
+  setRelation(record, "libraryOrganization", organizationByPolarisId(app, record.get("libraryOrgId")));
+  setRelation(record, "staffLibraryOrganizationCreatedBy", organizationByPolarisId(app, record.get("staffLibraryOrgIdCreatedBy")));
+}
+
+function recordEvent(app, record, type, message, options) {
+  options = options || {};
+  try {
+    var collection = app.findCollectionByNameOrId("title_request_events");
+    var event = new Record(collection);
+    event.set("titleRequest", record.id);
+    event.set("eventType", type || "system_note");
+    event.set("actorType", options.actorType || (options.actorName ? "staff" : "system"));
+    event.set("actorName", options.actorName || options.editedBy || "system");
+    event.set("message", String(message || ""));
+    event.set("metadata", options.metadata || {});
+    if (options.fromStatus) setRelation(event, "fromStatus", lookupByCode(app, "request_statuses", normalizeStatus(options.fromStatus)));
+    if (options.toStatus) setRelation(event, "toStatus", lookupByCode(app, "request_statuses", normalizeStatus(options.toStatus)));
+    if (options.closeReason) setRelation(event, "closeReason", lookupByCode(app, "request_close_reasons", normalizeCloseReason(options.closeReason)));
+    app.save(event);
+  } catch (err) {
+    try { app.logger().warn("Failed to record title request event", "recordId", record && record.id, "error", String(err)); } catch (logErr) {}
+  }
+}
+
 function hasStaffUsers(app) {
   try {
     return app.countRecords("staff_users") > 0;
@@ -177,9 +233,11 @@ function upsertStaffUser(app, staffIdentity, displayName, options) {
   }
   if (options.branchOrgId !== undefined) {
     record.set("branchOrgId", String(options.branchOrgId || ""));
+    setRelation(record, "branchOrganization", organizationByPolarisId(app, options.branchOrgId));
   }
   if (options.libraryOrgId !== undefined) {
     record.set("libraryOrgId", String(options.libraryOrgId || ""));
+    setRelation(record, "libraryOrganization", organizationByPolarisId(app, options.libraryOrgId));
   }
   if (options.libraryOrgName !== undefined) {
     record.set("libraryOrgName", String(options.libraryOrgName || ""));
@@ -212,6 +270,8 @@ function upsertPatronUser(app, patron) {
   record.set("patronOrgId", String(patron.PatronOrgID || patron.patronOrgId || ""));
   record.set("libraryOrgId", String(patron.LibraryOrgID || patron.libraryOrgId || ""));
   record.set("libraryOrgName", String(patron.LibraryOrgName || patron.libraryOrgName || ""));
+  setRelation(record, "patronOrganization", organizationByPolarisId(app, patron.PatronOrgID || patron.patronOrgId));
+  setRelation(record, "libraryOrganization", organizationByPolarisId(app, patron.LibraryOrgID || patron.libraryOrgId));
   if (safeEmail(patron.EmailAddress)) {
     record.setEmail(safeEmail(patron.EmailAddress));
   }
@@ -229,7 +289,7 @@ function safeEmail(value) {
 
 function createSuggestion(app, patronRecord, data) {
   var barcode = patronRecord.get("barcode");
-  enforceWeeklyLimit(app, barcode);
+  enforceWeeklyLimit(app, barcode, patronRecord.get("libraryOrgId"));
   enforceDuplicate(app, barcode, data);
 
   var now = new Date().toISOString();
@@ -261,11 +321,13 @@ function createSuggestion(app, patronRecord, data) {
   record.set("closeReason", "");
   record.set("created", now);
   record.set("updated", now);
+  setCanonicalRefs(app, record);
   app.save(record);
+  recordEvent(app, record, "created", "Suggestion submitted.", { actorType: data.staffLibraryOrgIdCreatedBy ? "staff" : "patron" });
   return record;
 }
 
-function titleRequestToJson(record) {
+function titleRequestToJson(record, app) {
   return {
     id: record.id,
     barcode: record.get("barcode") || "",
@@ -285,7 +347,7 @@ function titleRequestToJson(record) {
     format: record.get("format") || "",
     editedBy: record.get("editedBy") || "",
     notes: record.get("notes") || "",
-    workflowTags: normalizeWorkflowTags(record.get("workflowTags")),
+    workflowTags: app ? workflowTagsForRequest(app, record) : [],
     bibid: record.get("bibid") || "",
     legacyId: record.get("legacyId") || "",
     closeReason: record.get("closeReason") || "",
@@ -316,18 +378,40 @@ function normalizeWorkflowTags(tags) {
   return normalized;
 }
 
-function addWorkflowTag(record, tag) {
+function addWorkflowTagForRequest(app, record, tag) {
   var cleanTag = String(tag || "").trim();
-  if (!cleanTag) {
-    return false;
+  if (!cleanTag) return false;
+  var tagRecord = lookupByCode(app, "workflow_tags", cleanTag);
+  if (!tagRecord) {
+    tagRecord = new Record(app.findCollectionByNameOrId("workflow_tags"));
+    tagRecord.set("code", cleanTag);
+    tagRecord.set("label", cleanTag);
+    app.save(tagRecord);
   }
-  var tags = normalizeWorkflowTags(record.get("workflowTags"));
-  if (tags.indexOf(cleanTag) !== -1) {
+  try {
+    app.findFirstRecordByFilter("title_request_tags", "titleRequest = {:request} && tag = {:tag}", { request: record.id, tag: tagRecord.id });
     return false;
+  } catch (err) {
+    var join = new Record(app.findCollectionByNameOrId("title_request_tags"));
+    join.set("titleRequest", record.id);
+    join.set("tag", tagRecord.id);
+    app.save(join);
+    return true;
   }
-  tags.push(cleanTag);
-  record.set("workflowTags", tags);
-  return true;
+}
+
+function workflowTagsForRequest(app, record) {
+  var tags = [];
+  try {
+    var rows = app.findRecordsByFilter("title_request_tags", "titleRequest = {:request}", "", 100, 0, { request: record.id });
+    for (var i = 0; i < rows.length; i++) {
+      try {
+        var tag = app.findRecordById("workflow_tags", rows[i].get("tag"));
+        tags.push(tag.get("code") || tag.get("label") || "");
+      } catch (err) {}
+    }
+  } catch (err) {}
+  return normalizeWorkflowTags(tags);
 }
 
 function updateTitleRequest(app, id, data, editedBy) {
@@ -351,6 +435,7 @@ function updateTitleRequest(app, id, data, editedBy) {
         record.set("closeReason", "");
       }
       appendSystemNote(record, "Moved from " + getStatusLabel(oldStatus) + " to " + getStatusLabel(nextStatus) + " by " + (editedBy || "system"));
+      recordEvent(app, record, "status_changed", "Moved from " + getStatusLabel(oldStatus) + " to " + getStatusLabel(nextStatus) + ".", { fromStatus: oldStatus, toStatus: nextStatus, actorName: editedBy || "system" });
     }
   }
   if (data.closeReason !== undefined) {
@@ -364,6 +449,7 @@ function updateTitleRequest(app, id, data, editedBy) {
   }
   record.set("editedBy", editedBy || "system");
   record.set("updated", new Date().toISOString());
+  setCanonicalRefs(app, record);
   app.save(record);
   return record;
 }
@@ -425,21 +511,24 @@ function appendSystemNote(record, note) {
 }
 
 function setStatusWithNote(app, record, status, note, editedBy) {
+  var oldStatus = record.get("status");
   record.set("status", status);
   record.set("editedBy", editedBy || "system");
   record.set("updated", new Date().toISOString());
   if (note) {
     appendSystemNote(record, note);
   }
+  setCanonicalRefs(app, record);
   app.save(record);
+  recordEvent(app, record, "status_changed", note || "Status changed.", { fromStatus: oldStatus, toStatus: status, actorName: editedBy || "system" });
   return record;
 }
 
-function enforceWeeklyLimit(app, barcode) {
+function enforceWeeklyLimit(app, barcode, libraryOrgId) {
   var since = new Date();
   since.setDate(since.getDate() - 7);
-  var cfg = config.suggestionLimit();
-  var limit = cfg.limit || 5;
+  var cfg = config.suggestionLimit(app, libraryOrgId);
+  var limit = cfg.suggestionLimit || cfg.limit || 5;
   var recent = app.findRecordsByFilter(
     "title_requests",
     "barcode = {:barcode} && created >= {:since}",
@@ -456,7 +545,7 @@ function enforceWeeklyLimit(app, barcode) {
     var oldestDate = new Date(createdStr.replace(" ", "T")); 
     var nextAvailable = new Date(oldestDate.getTime() + (7 * 24 * 60 * 60 * 1000));
     
-    var msg = cfg.message || "Weekly suggestion limit reached. You can try again after {{next_available_date}}.";
+    var msg = cfg.suggestionLimitMessage || cfg.message || "Weekly suggestion limit reached. You can try again after {{next_available_date}}.";
     var dateStr = nextAvailable.toLocaleDateString("en-US", { 
       weekday: 'long', 
       year: 'numeric', 
@@ -577,7 +666,9 @@ module.exports = {
   duplicateContext: duplicateContext,
   listStaffUsers: listStaffUsers,
   setStatusWithNote: setStatusWithNote,
-  addWorkflowTag: addWorkflowTag,
+  addWorkflowTagForRequest: addWorkflowTagForRequest,
+  recordEvent: recordEvent,
+  setCanonicalRefs: setCanonicalRefs,
   titleRequestToJson: titleRequestToJson,
   updateTitleRequest: updateTitleRequest,
   upsertPatronUser: upsertPatronUser,

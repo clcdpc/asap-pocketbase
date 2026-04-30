@@ -8,6 +8,7 @@ const POLARIS_TAG_FOUND = "dupe found in Polaris";
 const POLARIS_TAG_NOT_FOUND = "ISBN not found in system";
 
 function runScheduledHoldCheck(app) {
+  var jobRun = startJobRun(app, "asap-hold-check");
   var result = {
     holdsPlaced: 0,
     checkoutClosures: 0,
@@ -20,24 +21,33 @@ function runScheduledHoldCheck(app) {
     errors: 0,
   };
 
-  var staff = polaris.adminStaffAuth();
-  processOutstandingTimeout(app, result);
-  processHoldPickupTimeout(app, result);
-  processPendingHoldTimeout(app, result);
-  processPendingIsbnChecks(app, staff, result);
-  processOutstandingPurchases(app, staff, result);
-  processPendingSuggestionIsbnChecks(app, staff, result);
-  processPendingHolds(app, staff, result);
-  processCheckedOut(app, staff, result);
-  app.logger().info("ASAP hold check completed", "result", JSON.stringify(result));
-  return result;
+  try {
+    var staff = polaris.adminStaffAuth();
+    processOutstandingTimeout(app, result);
+    processHoldPickupTimeout(app, result);
+    processPendingHoldTimeout(app, result);
+    processPendingIsbnChecks(app, staff, result);
+    processOutstandingPurchases(app, staff, result);
+    processPendingSuggestionIsbnChecks(app, staff, result);
+    processPendingHolds(app, staff, result);
+    processCheckedOut(app, staff, result);
+    app.logger().info("ASAP hold check completed", "result", JSON.stringify(result));
+    finishJobRun(app, jobRun, "success", result, "");
+    return result;
+  } catch (err) {
+    result.errors++;
+    finishJobRun(app, jobRun, "failed", result, err.message || String(err));
+    throw err;
+  }
 }
 
 function runScheduledOrganizationSync(app) {
+  var jobRun = startJobRun(app, "asap-organization-sync");
   try {
     var result = orgs.syncOrganizations(app, polaris.adminStaffAuth());
     result.success = true;
     app.logger().info("ASAP Polaris organization sync completed", "result", JSON.stringify(result));
+    finishJobRun(app, jobRun, "success", result, "");
     return result;
   } catch (err) {
     var failed = {
@@ -46,11 +56,34 @@ function runScheduledOrganizationSync(app) {
       error: err.message || String(err),
     };
     app.logger().error("ASAP Polaris organization sync failed", "error", String(err));
+    finishJobRun(app, jobRun, "failed", failed, failed.error);
     return failed;
   }
 }
 
+function startJobRun(app, name) {
+  try {
+    var record = new Record(app.findCollectionByNameOrId("job_runs"));
+    record.set("jobName", name);
+    record.set("status", "running");
+    record.set("startedAt", new Date().toISOString());
+    app.save(record);
+    return record;
+  } catch (err) {
+    return null;
+  }
+}
 
+function finishJobRun(app, record, status, summary, error) {
+  if (!record) return;
+  try {
+    record.set("status", status);
+    record.set("finishedAt", new Date().toISOString());
+    record.set("summary", summary || {});
+    record.set("error", error || "");
+    app.save(record);
+  } catch (err) {}
+}
 
 function mapIsbnCheckSuggestion(status) {
   if (status === "found") {
@@ -124,7 +157,9 @@ function evaluatePurchase(app, staff, record, bibCache, result) {
     record.set("editedBy", "system");
     record.set("updated", new Date().toISOString());
     records.appendSystemNote(record, "Moved to Pending hold because a manual BIB ID was found.");
+    records.setCanonicalRefs(app, record);
     app.save(record);
+    records.recordEvent(app, record, "status_changed", "Moved to Pending hold because a manual BIB ID was found.", { toStatus: records.STATUS.PENDING_HOLD });
     result.promoted++;
     return;
   }
@@ -142,16 +177,18 @@ function evaluatePurchase(app, staff, record, bibCache, result) {
     var bibId = bibResult && bibResult.status === "found" ? bibResult.bibId : "";
 
     if (bibId) {
-      records.addWorkflowTag(record, POLARIS_TAG_FOUND);
+      records.addWorkflowTagForRequest(app, record, POLARIS_TAG_FOUND);
       record.set("bibid", bibId);
       polaris.reconcileRecord(app, staff, record, bibId);
       record.set("status", records.STATUS.PENDING_HOLD);
       record.set("editedBy", "system");
       record.set("updated", new Date().toISOString());
       records.appendSystemNote(record, "Automated promoter found BIB ID: " + bibId);
+      records.setCanonicalRefs(app, record);
       app.save(record);
+      records.recordEvent(app, record, "promoted", "Automated promoter found BIB ID: " + bibId, { toStatus: records.STATUS.PENDING_HOLD });
       result.promoted++;
-    } else if (records.addWorkflowTag(record, POLARIS_TAG_NOT_FOUND)) {
+    } else if (records.addWorkflowTagForRequest(app, record, POLARIS_TAG_NOT_FOUND)) {
       app.save(record);
     }
   } catch (err) {
@@ -160,8 +197,7 @@ function evaluatePurchase(app, staff, record, bibCache, result) {
 }
 
 function processOutstandingPurchases(app, staff, result) {
-  const settings = app.findFirstRecordByFilter("app_settings", "id = 'settings0000001'");
-  const autoPromote = settings.get("polaris").autoPromote !== false;
+  const autoPromote = config.polaris().autoPromote !== false;
 
   if (!autoPromote) {
     app.logger().info("ASAP auto-promoter is disabled in settings. Skipping.");
@@ -221,7 +257,9 @@ function processOutstandingTimeout(app, result) {
         record, 
         "Auto-rejected because it remained in Suggestions for more than " + cfg.days + " days." + (emailCfg.enabled ? " Rejection email queued." : " No rejection email sent.")
       );
+      records.setCanonicalRefs(app, record);
       app.save(record);
+      records.recordEvent(app, record, "timeout_closed", "Auto-rejected after " + cfg.days + " days in Suggestions.", { toStatus: records.STATUS.CLOSED, closeReason: records.CLOSE_REASON.REJECTED });
       try {
         if (emailCfg.enabled) {
           if (!mail.autoRejected(app, record, emailCfg.templateId)) {
@@ -270,7 +308,9 @@ function processPendingHoldTimeout(app, result) {
         record.set("editedBy", "system");
         record.set("updated", new Date().toISOString());
         records.appendSystemNote(record, "Auto-closed because it remained in Pending hold for more than " + cfg.days + " days.");
+        records.setCanonicalRefs(app, record);
         app.save(record);
+        records.recordEvent(app, record, "timeout_closed", "Auto-closed after " + cfg.days + " days in Pending hold.", { toStatus: records.STATUS.CLOSED, closeReason: records.CLOSE_REASON.REJECTED });
         result.timedOut++;
       } catch (err) {
         result.errors++;
@@ -314,7 +354,9 @@ function processHoldPickupTimeout(app, result) {
         record.set("editedBy", "system");
         record.set("updated", new Date().toISOString());
         records.appendSystemNote(record, "Auto-closed because the hold was not picked up within " + cfg.days + " days.");
+        records.setCanonicalRefs(app, record);
         app.save(record);
+        records.recordEvent(app, record, "timeout_closed", "Auto-closed because the hold was not picked up within " + cfg.days + " days.", { toStatus: records.STATUS.CLOSED, closeReason: records.CLOSE_REASON.HOLD_NOT_PICKED_UP });
         result.holdPickupTimeouts++;
       } catch (err) {
         result.errors++;
@@ -364,11 +406,11 @@ function processPendingSuggestionIsbnChecks(app, staff, result) {
 
       if (found) {
         record.set("bibid", bibId);
-        records.addWorkflowTag(record, POLARIS_TAG_FOUND);
+        records.addWorkflowTagForRequest(app, record, POLARIS_TAG_FOUND);
         records.appendSystemNote(record, "ISBN verification found a Polaris bibliographic match (BIB ID " + bibId + ").");
         result.isbnChecksFound++;
       } else {
-        records.addWorkflowTag(record, POLARIS_TAG_NOT_FOUND);
+        records.addWorkflowTagForRequest(app, record, POLARIS_TAG_NOT_FOUND);
         records.appendSystemNote(record, "ISBN verification completed: no Polaris bibliographic match found.");
         result.isbnChecksNotFound++;
       }
@@ -449,7 +491,9 @@ function processPendingHolds(app, staff, result) {
       record.set("editedBy", "system");
       record.set("updated", new Date().toISOString());
       records.appendSystemNote(record, note);
+      records.setCanonicalRefs(app, record);
       app.save(record);
+      records.recordEvent(app, record, "hold_placed", note, { toStatus: records.STATUS.HOLD_PLACED });
       try {
         if (!mail.holdPlaced(app, record, patron)) {
           mail.noteSkipped(app, record);
@@ -495,7 +539,9 @@ function processCheckedOut(app, staff, result) {
           record.set("editedBy", "system");
           record.set("updated", new Date().toISOString());
           records.appendSystemNote(record, "ITEM CHECKED OUT BY PATRON");
+          records.setCanonicalRefs(app, record);
           app.save(record);
+          records.recordEvent(app, record, "fulfilled", "Item checked out by patron.", { toStatus: records.STATUS.CLOSED, closeReason: records.CLOSE_REASON.HOLD_COMPLETED });
           result.checkoutClosures++;
           break;
         }

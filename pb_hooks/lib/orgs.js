@@ -42,10 +42,24 @@ function upsertOrganization(app, row) {
   record.set("abbreviation", org.abbreviation);
   record.set("displayName", org.displayName);
   record.set("parentOrganizationId", org.parentOrganizationId);
+  var parent = org.parentOrganizationId ? findOrganization(app, org.parentOrganizationId) : null;
+  record.set("parentOrganization", parent ? parent.id : "");
+  record.set("enabledForPatrons", !!record.getBool("enabledForPatrons"));
   record.set("raw", org.raw);
   record.set("lastSynced", new Date().toISOString());
   app.save(record);
   return record;
+}
+
+function setSyncStatus(app, status, message, error) {
+  try {
+    var settings = app.findRecordById("system_settings", "settings0000001");
+    settings.set("organizationsSyncStatus", status);
+    settings.set("organizationsSyncMessage", message || "");
+    settings.set("organizationsSyncError", error || "");
+    if (status === "loaded") settings.set("organizationsLastSynced", new Date().toISOString());
+    app.save(settings);
+  } catch (err) {}
 }
 
 function findOrganization(app, organizationId) {
@@ -62,17 +76,40 @@ function findOrganization(app, organizationId) {
 
 function syncOrganizations(app, staffAuth) {
   staffAuth = staffAuth || polaris.adminStaffAuth();
+  setSyncStatus(app, "loading", "Organizations loading from Polaris.", "");
   var kinds = ["system", "library", "branch"];
   var count = 0;
-  for (var i = 0; i < kinds.length; i++) {
-    var rows = polaris.organizations(kinds[i], staffAuth);
-    for (var j = 0; j < rows.length; j++) {
-      if (upsertOrganization(app, rows[j])) {
-        count++;
+  try {
+    for (var i = 0; i < kinds.length; i++) {
+      var rows = polaris.organizations(kinds[i], staffAuth);
+      for (var j = 0; j < rows.length; j++) {
+        if (upsertOrganization(app, rows[j])) {
+          count++;
+        }
       }
     }
+    relinkParents(app);
+    setSyncStatus(app, "loaded", "Polaris organizations loaded successfully.", "");
+    return { synced: count };
+  } catch (err) {
+    setSyncStatus(app, "error", "Polaris connected, but organizations could not be loaded.", err.message || String(err));
+    throw err;
   }
-  return { synced: count };
+}
+
+function relinkParents(app) {
+  var offset = 0;
+  while (true) {
+    var rows = app.findRecordsByFilter("polaris_organizations", "parentOrganizationId != ''", "", 200, offset);
+    if (!rows.length) break;
+    for (var i = 0; i < rows.length; i++) {
+      var parent = findOrganization(app, rows[i].get("parentOrganizationId"));
+      rows[i].set("parentOrganization", parent ? parent.id : "");
+      app.save(rows[i]);
+    }
+    if (rows.length < 200) break;
+    offset += 200;
+  }
 }
 
 function resolveParentLibrary(app, organizationId, options) {
@@ -171,5 +208,6 @@ module.exports = {
   attachPatronScope: attachPatronScope,
   normalizeOrgId: normalizeOrgId,
   resolveParentLibrary: resolveParentLibrary,
+  setSyncStatus: setSyncStatus,
   syncOrganizations: syncOrganizations,
 };
