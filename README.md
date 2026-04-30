@@ -63,10 +63,13 @@ In a consortia environment, ASAP allows each member library to maintain its own 
 
 - **Polaris Integration**: Real-time patron authentication, BIB/Hold lookups, and automated hold placement via Polaris API (PAPI).
 - **Automated Workflow**:
-  - **Auto-Promoter**: Periodically searches the catalog for items in "Pending Purchase" and promotes them to "Pending Hold" once a matching BIB ID is found.
-  - **Auto-Hold Placement**: Automatically places holds in Polaris for items ready in the "Pending Hold" queue.
-  - **Fulfillment Tracking**: Monitors "Hold Placed" items and automatically closes them once the patron has checked out the material.
-  - **Auto-Reject**: Configurable background job to reject old, unprocessed suggestions.
+  - **Auto-Promoter**: Periodically searches Polaris for items in **Outstanding Purchase** and promotes them to **Pending Hold** once a matching BIB ID is found.
+  - **Auto-Hold Placement**: Automatically places holds in Polaris for items in **Pending Hold**.
+  - **Fulfillment Tracking**: Monitors **Hold Placed** items and automatically closes them once the patron checks out the material.
+  - **Auto-Reject (Suggestions Timeout)**: Configurable background job to reject old, unprocessed suggestions.
+  - **Hold Pickup Timeout**: Optionally auto-closes stale **Hold Placed** requests when a hold is never checked out.
+  - **Pending Hold Timeout**: Optionally auto-closes requests that remain in **Pending Hold** too long.
+  - **Automated ISBN Checks**: Runs background ISBN/identifier checks and tags suggestions with "found in Polaris" or "not found" signals for faster staff triage.
 - **Staff Dashboard**: A high-density management interface with real-time updates, status tracking, and "Silent Close" capabilities for administrative cleanups.
 - **Customizable Experience**: 
   - Upload your library logo.
@@ -90,7 +93,8 @@ Staff evaluate new requests with one-click actions:
 
 ### 3. Catalog Monitoring (Outstanding Purchase Tab)
 Items wait here for their BIB ID to appear in the library catalog.
-- **Automated Promoter**: The system periodically searches Polaris for these titles. Once a match is found, it automatically moves the record toward fulfillment.
+- **Automated Promoter**: The system periodically searches Polaris for these titles/identifiers. Once a match is found, it assigns the BIB ID and automatically moves the record toward fulfillment.
+- **Manual BIB Assist**: Staff can enter a BIB ID manually; the next automation cycle detects it and promotes the request to **Pending Hold**.
 
 ### 4. Fulfillment (Pending Hold & Hold Placed)
 The system ensures that as soon as an item is available in the catalog, a hold is placed for the requesting patron. Once the patron checks out the item, the system detects the transaction and moves the record to **Closed**.
@@ -100,9 +104,13 @@ The system ensures that as soon as an item is available in the catalog, a hold i
 ## ⚙️ Automation Jobs
 The system runs request workflow background tasks every hour (configurable with `ASAP_CRON_SCHEDULE`):
 - `outstanding_timeout`: Rejects old unprocessed suggestions.
+- `hold_pickup_timeout`: Closes stale `hold_placed` requests when pickup/checkouts never happen within configured days.
+- `pending_hold_timeout`: Closes stale `pending_hold` requests that cannot complete in time.
+- `process_pending_isbn_checks`: Performs queued ISBN/identifier checks for suggestions.
+- `process_outstanding_purchases`: Searches for newly added catalog matches and promotes qualifying requests.
+- `process_pending_suggestion_isbn_checks`: Adds suggestion-level Polaris duplicate/not-found tags based on identifier lookups.
 - `process_pending_holds`: Places holds in Polaris for ready items.
 - `process_checked_out`: Closes fulfilled requests.
-- `process_outstanding_purchases`: Searches for items newly added to the catalog.
 
 The system also runs a Polaris organization sync once a day at 2 AM server time. Override that schedule with `ASAP_ORG_SYNC_CRON_SCHEDULE` if needed.
 
