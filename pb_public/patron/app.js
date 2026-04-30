@@ -113,20 +113,36 @@ function sanitizeHtml(html) {
   if (!html) return "";
   try {
     const doc = new DOMParser().parseFromString(html, "text/html");
-    const scripts = doc.querySelectorAll("script");
-    scripts.forEach(s => s.remove());
-    const elements = doc.body.querySelectorAll("*");
-    elements.forEach(el => {
-      const attrs = el.attributes;
-      for (let i = attrs.length - 1; i >= 0; i--) {
-        const name = attrs[i].name.toLowerCase();
-        if (name.startsWith("on") || name === "style" || name.startsWith("form") || name === "action") {
-          el.removeAttribute(name);
-        } else if ((name === "href" || name === "src") && attrs[i].value.trim().toLowerCase().startsWith("javascript:")) {
-          el.removeAttribute(name);
+    const safeTags = ["P", "BR", "B", "I", "STRONG", "EM", "DIV", "SPAN", "A", "UL", "OL", "LI", "H1", "H2", "H3", "H4", "H5", "H6", "BLOCKQUOTE", "TABLE", "THEAD", "TBODY", "TR", "TH", "TD", "U", "S", "HR"];
+    const safeAttrs = ["href", "target", "rel", "title", "class", "id", "aria-label", "aria-hidden"];
+    
+    // Recursive walker to remove unsafe tags and attributes
+    function walk(parent) {
+      const children = Array.from(parent.childNodes);
+      children.forEach(node => {
+        if (node.nodeType === 1) { // Element
+          if (!safeTags.includes(node.tagName)) {
+            // Unsafe tag: replace with its text content
+            const text = document.createTextNode(node.textContent);
+            parent.replaceChild(text, node);
+          } else {
+            // Safe tag: check attributes
+            const attrs = node.attributes;
+            for (let i = attrs.length - 1; i >= 0; i--) {
+              const name = attrs[i].name.toLowerCase();
+              const value = attrs[i].value.trim().toLowerCase();
+              
+              if (!safeAttrs.includes(name) || (name === "href" && value.startsWith("javascript:"))) {
+                node.removeAttribute(name);
+              }
+            }
+            walk(node);
+          }
         }
-      }
-    });
+      });
+    }
+    
+    walk(doc.body);
     return doc.body.innerHTML;
   } catch (err) {
     return escapeHtml(html);

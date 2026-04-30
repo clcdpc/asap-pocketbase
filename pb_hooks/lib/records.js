@@ -428,7 +428,8 @@ function createSuggestion(app, patronRecord, data) {
   return record;
 }
 
-function titleRequestToJson(record, app) {
+function titleRequestToJson(record, app, options) {
+  options = options || {};
   return {
     id: record.id,
     barcode: record.get("barcode") || "",
@@ -447,7 +448,7 @@ function titleRequestToJson(record, app) {
     agegroup: record.get("agegroup") || "",
     format: record.get("format") || "",
     editedBy: record.get("editedBy") || "",
-    notes: record.get("notes") || "",
+    notes: options.redactNotes ? "" : (record.get("notes") || ""),
     workflowTags: app ? workflowTagsForRequest(app, record) : [],
     bibid: record.get("bibid") || "",
     legacyId: record.get("legacyId") || "",

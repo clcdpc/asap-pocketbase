@@ -1,5 +1,24 @@
 const config = require(`${__hooks}/lib/config.js`);
 const crypto = require(`${__hooks}/lib/crypto.js`);
+
+function redactPayload(payload) {
+  if (!payload || typeof payload !== "object") return payload;
+  const redacted = JSON.parse(JSON.stringify(payload));
+  const sensitiveKeys = ["Barcode", "Password", "EmailAddress", "NameFirst", "NameLast", "PhoneNumber"];
+  
+  function walk(obj) {
+    for (let key in obj) {
+      if (sensitiveKeys.indexOf(key) >= 0) {
+        obj[key] = "[REDACTED]";
+      } else if (typeof obj[key] === "object" && obj[key] !== null) {
+        walk(obj[key]);
+      }
+    }
+  }
+  
+  walk(redacted);
+  return redacted;
+}
 function normalizeConfig(source) {
   source = source || {};
   return {
@@ -91,9 +110,9 @@ function send(method, ep, body, staffAuth, contentType, c) {
   if (result.statusCode < 200 || result.statusCode > 299) {
     var msg = "Polaris request failed with HTTP " + result.statusCode;
     if (payload && payload.ErrorMessage) msg += ": " + payload.ErrorMessage;
-    // Log full payload for debugging if it's an error
+    // Log redacted payload for debugging if it's an error
     if ($app.logger) {
-      $app.logger().error("Polaris API Error Details", "url", ep.full, "status", result.statusCode, "payload", JSON.stringify(payload));
+      $app.logger().error("Polaris API Error Details", "url", ep.full, "status", result.statusCode, "payload", JSON.stringify(redactPayload(payload)));
     }
     throw new Error(msg);
   }

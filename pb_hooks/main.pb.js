@@ -182,3 +182,11 @@ cronAdd("asap-isbn-check", $os.getenv("ASAP_ISBN_CHECK_CRON_SCHEDULE") || "*/5 *
   };
   jobs.processPendingSuggestionIsbnChecks($app, require(`${__hooks}/lib/polaris.js`).adminStaffAuth(), result);
 });
+
+onRecordViewRequest((e) => {
+  const authRecord = e.httpContext.get("authRecord");
+  if (authRecord && authRecord.collection().name === "patron_users") {
+    // Redact internal notes for patrons
+    e.record.set("notes", "");
+  }
+}, "title_requests");
