@@ -271,6 +271,24 @@ body {
   box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.1);
 }
 
+.settings-save-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.settings-save-warning-badge {
+  align-items: center;
+  background: #7a4f00;
+  border-radius: 999px;
+  color: #fff;
+  display: inline-flex;
+  font-size: 0.75rem;
+  height: 1.5rem;
+  justify-content: center;
+  width: 1.5rem;
+}
+
 .row-action-group {
   display: inline-flex;
   align-items: stretch;

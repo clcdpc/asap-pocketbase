@@ -428,6 +428,7 @@ function activateStatusTab(status) {
 function updateSaveBarState(state) {
   const title = document.getElementById('settings-save-title');
   const detail = document.getElementById('settings-save-detail');
+  const warningBadge = document.getElementById('settings-save-warning-badge');
   const msg = document.getElementById('settings-msg');
   const effectiveState = state || (settingsDirty ? 'dirty' : 'clean');
   const states = {
@@ -439,6 +440,9 @@ function updateSaveBarState(state) {
   };
   const next = states[effectiveState] || states.clean;
   if (title) title.textContent = next[0];
+  if (warningBadge) {
+    warningBadge.classList.toggle('hidden', effectiveState !== 'dirty');
+  }
   if (detail) {
     detail.textContent = next[1];
     detail.className = 'small ' + next[2];
