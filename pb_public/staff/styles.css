@@ -396,6 +396,10 @@ body {
   color: #5a6268 !important;
 }
 
+.text-warning {
+  color: #7a4f00 !important;
+}
+
 .settings-sidebar-card .text-muted {
   color: #495057 !important;
 }
