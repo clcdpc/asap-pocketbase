@@ -298,7 +298,7 @@ function renderDuplicateMessage(uiText, duplicate) {
 
 function duplicateConflictResponse(e, err, uiText) {
   var duplicate = err.duplicate || null;
-  var message = duplicate ? renderDuplicateMessage(uiText, duplicate) : (uiText.alreadySubmittedMessage || err.message);
+  var message = duplicate ? renderDuplicateMessage(uiText, duplicate) : (uiText.alreadySubmittedMessage || (err.message ? escapeHtml(err.message) : ""));
   return e.json(409, {
     message: err.message,
     conflictTitle: "Already Submitted",
