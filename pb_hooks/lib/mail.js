@@ -10,9 +10,13 @@ function getRealValue(combinedStr) {
   return combinedStr.trim();
 }
 
-function clean(value) {
-
-  return String(value === undefined || value === null ? "" : value).replace(/[<>]/g, "");
+function escapeHtml(str) {
+  return String(str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 function send(app, to, subject, text, html, options) {
@@ -63,21 +67,23 @@ function recordEmailEvent(app, record, templateKey, to, subject, status, error) 
   } catch (err) {}
 }
 
-function replacePlaceholders(template, data) {
+function replacePlaceholders(template, data, escape) {
   if (!template) return "";
   return template.replace(/{{(\w+)}}/g, (match, key) => {
-    return data[key] !== undefined ? data[key] : match;
+    var val = data[key] !== undefined ? data[key] : match;
+    return escape ? escapeHtml(val) : val;
   });
 }
 
 function dispatch(app, record, patron, templateKey, defaultSubject, templateId) {
-  var title = getRealValue(clean(record.get("title")));
-  var author = getRealValue(clean(record.get("author")));
+  var rawTitle = getRealValue(record.get("title"));
+  var rawAuthor = getRealValue(record.get("author"));
   var format = formatLabel(record.get("format"));
-  var barcode = clean(record.get("barcode"));
-  var name = patronName(record, patron);
-  var firstName = clean((patron && patron.NameFirst) || record.get("nameFirst"));
-  var lastName = clean((patron && patron.NameLast) || record.get("nameLast"));
+  var barcode = record.get("barcode");
+  var firstName = (patron && patron.NameFirst) || record.get("nameFirst");
+  var lastName = (patron && patron.NameLast) || record.get("nameLast");
+  var name = (String(firstName || "") + " " + String(lastName || "")).trim() || "Library Patron";
+  
   var libraryOrgId = record.get("libraryOrgId");
   var emailsConfig = config.librarySettings(app, libraryOrgId).emails;
 
@@ -93,15 +99,17 @@ function dispatch(app, record, patron, templateKey, defaultSubject, templateId) 
 
   var data = { 
     name: name, firstName: firstName, lastName: lastName,
-    title: title, author: author, format: format 
+    title: rawTitle, author: rawAuthor, format: format,
+    barcode: barcode || ""
   };
-  if (barcode) {
-    data.barcode = barcode;
-  }
 
-  var subject = replacePlaceholders(tpl.subject || defaultSubject, data);
-  var text = replacePlaceholders(tpl.body || "", data);
-  var html = text.replace(/\n/g, "<br>");
+  var subject = replacePlaceholders(tpl.subject || defaultSubject, data, false);
+  var text = replacePlaceholders(tpl.body || "", data, false);
+  
+  // For HTML, we escape the values but NOT the template (since templates may contain safe HTML like <br> or <div>)
+  // Wait, if templates contain HTML, we can't just escape the whole thing.
+  // The current implementation of replacePlaceholders with escape: true is correct for placeholders.
+  var html = replacePlaceholders(tpl.body || "", data, true).replace(/\n/g, "<br>");
 
   return send(app, emailFor(record, patron), subject, text, html, { fromAddress: emailsConfig.fromAddress, fromName: emailsConfig.fromName, record: record, templateKey: templateKey });
 }
@@ -137,14 +145,15 @@ function autoRejected(app, record, templateId) {
 }
 
 function emailFor(record, patron) {
-  return clean((patron && patron.EmailAddress) || record.get("email"));
+  return (patron && patron.EmailAddress) || record.get("email");
 }
 
 function patronName(record, patron) {
-  var first = clean((patron && patron.NameFirst) || record.get("nameFirst"));
-  var last = clean((patron && patron.NameLast) || record.get("nameLast"));
-  return (first + " " + last).trim() || "Library Patron";
+  var first = (patron && patron.NameFirst) || record.get("nameFirst");
+  var last = (patron && patron.NameLast) || record.get("nameLast");
+  return (String(first || "") + " " + String(last || "")).trim() || "Library Patron";
 }
+
 
 function formatLabel(value) {
   var ui = config.uiText();

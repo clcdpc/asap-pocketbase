@@ -109,6 +109,30 @@ function escapeHtml(str) {
     .replace(/>/g, "&gt;");
 }
 
+function sanitizeHtml(html) {
+  if (!html) return "";
+  try {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const scripts = doc.querySelectorAll("script");
+    scripts.forEach(s => s.remove());
+    const elements = doc.body.querySelectorAll("*");
+    elements.forEach(el => {
+      const attrs = el.attributes;
+      for (let i = attrs.length - 1; i >= 0; i--) {
+        const name = attrs[i].name.toLowerCase();
+        if (name.startsWith("on") || name === "style" || name.startsWith("form") || name === "action") {
+          el.removeAttribute(name);
+        } else if ((name === "href" || name === "src") && attrs[i].value.trim().toLowerCase().startsWith("javascript:")) {
+          el.removeAttribute(name);
+        }
+      }
+    });
+    return doc.body.innerHTML;
+  } catch (err) {
+    return escapeHtml(html);
+  }
+}
+
 async function request(path, options = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (authToken) headers['Authorization'] = authToken;
@@ -309,7 +333,7 @@ suggestionForm.addEventListener('submit', async (e) => {
       const conflictTitle = document.getElementById('conflict-title');
       const conflictBody = document.getElementById('conflict-body');
       if (conflictTitle) conflictTitle.textContent = data.conflictTitle || 'Already Submitted';
-      if (conflictBody) conflictBody.innerHTML = data.conflictMessage || (err.message ? escapeHtml(err.message) : (uiConfig.alreadySubmittedMessage || defaultUiText.alreadySubmittedMessage));
+      if (conflictBody) conflictBody.innerHTML = sanitizeHtml(data.conflictMessage || (err.message ? escapeHtml(err.message) : (uiConfig.alreadySubmittedMessage || defaultUiText.alreadySubmittedMessage)));
       showStep(stepConflict);
     } else {
       if (err.status === 406) {
@@ -406,7 +430,7 @@ function updateFormatUI() {
     document.getElementById('submit-error').classList.add('hidden');
 
     const msgContainer = document.getElementById('econtent-msg-container');
-    msgContainer.innerHTML = messageHtmlForBehavior(messageBehavior);
+    msgContainer.innerHTML = sanitizeHtml(messageHtmlForBehavior(messageBehavior));
 
     fieldKeys.forEach(field => {
       const els = fieldElements(field);
@@ -598,12 +622,12 @@ function renderSuccessMessage() {
   const title = document.getElementById('success-title');
   const body = document.getElementById('success-body');
   if (title) title.textContent = uiConfig.successTitle || defaultUiText.successTitle;
-  if (body) body.innerHTML = uiConfig.successMessage || defaultUiText.successMessage;
+  if (body) body.innerHTML = sanitizeHtml(uiConfig.successMessage || defaultUiText.successMessage);
 }
 
 function renderConflictMessage() {
   const body = document.getElementById('conflict-body');
-  if (body) body.innerHTML = uiConfig.alreadySubmittedMessage || defaultUiText.alreadySubmittedMessage;
+  if (body) body.innerHTML = sanitizeHtml(uiConfig.alreadySubmittedMessage || defaultUiText.alreadySubmittedMessage);
 }
 
 function normalizePublicationOptions(options) {

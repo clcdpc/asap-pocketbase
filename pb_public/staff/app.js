@@ -1567,6 +1567,30 @@ function escapeAttr(value) {
     .replace(/>/g, "&gt;");
 }
 
+function sanitizeHtml(html) {
+  if (!html) return "";
+  try {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const scripts = doc.querySelectorAll("script");
+    scripts.forEach(s => s.remove());
+    const elements = doc.body.querySelectorAll("*");
+    elements.forEach(el => {
+      const attrs = el.attributes;
+      for (let i = attrs.length - 1; i >= 0; i--) {
+        const name = attrs[i].name.toLowerCase();
+        if (name.startsWith("on") || name === "style" || name.startsWith("form") || name === "action") {
+          el.removeAttribute(name);
+        } else if ((name === "href" || name === "src") && attrs[i].value.trim().toLowerCase().startsWith("javascript:")) {
+          el.removeAttribute(name);
+        }
+      }
+    });
+    return doc.body.innerHTML;
+  } catch (err) {
+    return escapeAttr(html);
+  }
+}
+
 function shouldIgnoreRowEditClick(target, event) {
   if (event.defaultPrevented) return true;
   if (event.button !== 0) return true;
