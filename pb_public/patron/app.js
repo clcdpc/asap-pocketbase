@@ -260,9 +260,9 @@ loginForm.addEventListener('submit', async (e) => {
       document.getElementById('display-email').textContent = '';
       const noEmailMsg = document.getElementById('no-email-msg');
       if (uiConfig.noEmailMessage) {
-        noEmailMsg.innerHTML = uiConfig.noEmailMessage;
+        noEmailMsg.textContent = uiConfig.noEmailMessage;
       } else {
-        noEmailMsg.innerHTML = 'No email is specified on your library account, which means we won\'t be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.';
+        noEmailMsg.textContent = 'No email is specified on your library account, which means we won\'t be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.';
       }
       noEmailMsg.classList.remove('hidden');
     }
@@ -309,7 +309,7 @@ suggestionForm.addEventListener('submit', async (e) => {
       const conflictTitle = document.getElementById('conflict-title');
       const conflictBody = document.getElementById('conflict-body');
       if (conflictTitle) conflictTitle.textContent = data.conflictTitle || 'Already Submitted';
-      if (conflictBody) conflictBody.innerHTML = data.conflictMessage || err.message || uiConfig.alreadySubmittedMessage || defaultUiText.alreadySubmittedMessage;
+      if (conflictBody) conflictBody.innerHTML = data.conflictMessage || (err.message ? escapeHtml(err.message) : (uiConfig.alreadySubmittedMessage || defaultUiText.alreadySubmittedMessage));
       showStep(stepConflict);
     } else {
       if (err.status === 406) {
@@ -491,12 +491,12 @@ function applyUiConfig() {
     pinLoginLabel.textContent = uiConfig.pinLabel;
   }
 
-  if (uiConfig.suggestionFormNote && noteText) noteText.innerHTML = uiConfig.suggestionFormNote;
-  if (uiConfig.loginNote && loginNote) loginNote.innerHTML = uiConfig.loginNote;
-  if (uiConfig.loginPrompt && loginPrompt) loginPrompt.innerHTML = uiConfig.loginPrompt;
+  if (uiConfig.suggestionFormNote && noteText) noteText.textContent = uiConfig.suggestionFormNote;
+  if (uiConfig.loginNote && loginNote) loginNote.textContent = uiConfig.loginNote;
+  if (uiConfig.loginPrompt && loginPrompt) loginPrompt.textContent = uiConfig.loginPrompt;
   if (uiConfig.noEmailMessage) {
     const noEmailEl = document.getElementById('no-email-msg');
-    if (noEmailEl) noEmailEl.innerHTML = uiConfig.noEmailMessage;
+    if (noEmailEl) noEmailEl.textContent = uiConfig.noEmailMessage;
   }
   if (uiConfig.logoUrl) {
     if (navLogo) {
@@ -556,7 +556,7 @@ function handleCommonAuthorSelection() {
   const submitBtn = document.getElementById('submit-btn');
 
   if (select.value) {
-    msgText.innerHTML = uiConfig.commonAuthorsMessage || "We automatically purchase all upcoming titles by this author. Please check the catalog to place a hold on 'On Order' items.";
+    msgText.textContent = uiConfig.commonAuthorsMessage || "We automatically purchase all upcoming titles by this author. Please check the catalog to place a hold on 'On Order' items.";
     msgContainer.classList.remove('hidden');
     physicalFields.classList.add('hidden');
     submitBtn.classList.add('hidden');
