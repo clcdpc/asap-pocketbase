@@ -2310,6 +2310,13 @@ async function loadSettings(options = {}) {
     const polaris = (loadedLibrarySettings && loadedLibrarySettings.polaris) || {};
     const emails = (loadedLibrarySettings && loadedLibrarySettings.emails) || {};
 
+    const hasPolarisCredentials = !!(polaris.host && polaris.apiKey && polaris.accessId && polaris.staffDomain && polaris.adminUser && polaris.adminPassword);
+    if (hasPolarisCredentials && (organizationsStatus === 'not_loaded' || organizationsStatus === 'error')) {
+      syncPolarisOrganizations().catch(() => {
+        // syncPolarisOrganizations updates the visible warning state.
+      });
+    }
+
     workflowSettings.outstandingTimeoutEnabled = !!((loadedLibrarySettings && loadedLibrarySettings.workflow || {}).outstandingTimeoutEnabled);
     workflowSettings.outstandingTimeoutDays = parseInt(((loadedLibrarySettings && loadedLibrarySettings.workflow || {}).outstandingTimeoutDays) || '30', 10) || 30;
     workflowSettings.autoPromote = polaris.autoPromote !== false;
