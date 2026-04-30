@@ -70,6 +70,7 @@ migrate((app) => {
     listRule: "",
     viewRule: "",
     fields: [
+      field("scope", "select", { maxSelect: 1, values: ["system", "library"] }),
       field("code", "text", { required: true, max: 64 }),
       field("label", "text", { required: true, max: 128 }),
       field("enabled", "bool"),
@@ -86,7 +87,7 @@ migrate((app) => {
       field("publicationMode", "select", { maxSelect: 1, values: ["required", "optional", "hidden"] }),
       field("publicationLabel", "text", { max: 128 }),
     ],
-    indexes: ["CREATE UNIQUE INDEX idx_material_formats_code ON material_formats (code)"]
+    indexes: []
   });
 
   const audienceGroups = saveCollection(app, {
@@ -95,11 +96,12 @@ migrate((app) => {
     listRule: "",
     viewRule: "",
     fields: [
+      field("scope", "select", { maxSelect: 1, values: ["system", "library"] }),
       field("code", "text", { required: true, max: 64 }),
       field("label", "text", { required: true, max: 128 }),
       field("sortOrder", "number", { required: true, onlyInt: true }),
     ],
-    indexes: ["CREATE UNIQUE INDEX idx_audience_groups_code ON audience_groups (code)"]
+    indexes: []
   });
 
   const organizations = saveCollection(app, {
@@ -131,6 +133,14 @@ migrate((app) => {
     maxSelect: 1
   }));
   app.save(organizations);
+
+  materialFormats.fields.add(new Field(rel("libraryOrganization", organizations)));
+  materialFormats.indexes = ["CREATE UNIQUE INDEX idx_material_formats_scope_org_code ON material_formats (scope, libraryOrganization, code)"];
+  app.save(materialFormats);
+
+  audienceGroups.fields.add(new Field(rel("libraryOrganization", organizations)));
+  audienceGroups.indexes = ["CREATE UNIQUE INDEX idx_audience_groups_scope_org_code ON audience_groups (scope, libraryOrganization, code)"];
+  app.save(audienceGroups);
 
   const staffUsers = saveCollection(app, {
     type: "auth",
@@ -543,18 +553,18 @@ migrate((app) => {
   ]);
 
   seedLookup(app, materialFormats, [
-    { id: "fmtbook00000010", code: "book", label: "Book", enabled: true, sortOrder: 10, messageBehavior: "none", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Author", identifierMode: "optional", identifierLabel: "ISBN", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
-    { id: "fmtaudiocd00200", code: "audiobook_cd", label: "Audiobook (Physical CD)", enabled: true, sortOrder: 20, messageBehavior: "none", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Author", identifierMode: "optional", identifierLabel: "ISBN", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
-    { id: "fmtdvd000000300", code: "dvd", label: "DVD", enabled: true, sortOrder: 30, messageBehavior: "none", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Director/Actors/Producer", identifierMode: "hidden", identifierLabel: "UPC", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
-    { id: "fmtmusiccd00400", code: "music_cd", label: "Music CD", enabled: true, sortOrder: 40, messageBehavior: "none", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Artist", identifierMode: "hidden", identifierLabel: "UPC", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
-    { id: "fmtebook0000500", code: "ebook", label: "eBook", enabled: true, sortOrder: 50, messageBehavior: "ebookMessage", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Author", identifierMode: "optional", identifierLabel: "ISBN", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
-    { id: "fmteaudio006000", code: "eaudiobook", label: "eAudiobook", enabled: true, sortOrder: 60, messageBehavior: "eaudiobookMessage", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Author", identifierMode: "optional", identifierLabel: "ISBN", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
+    { id: "fmtbook00000010", scope: "system", code: "book", label: "Book", enabled: true, sortOrder: 10, messageBehavior: "none", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Author", identifierMode: "optional", identifierLabel: "Identifier number", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
+    { id: "fmtaudiocd00200", scope: "system", code: "audiobook_cd", label: "Audiobook (Physical CD)", enabled: true, sortOrder: 20, messageBehavior: "none", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Author", identifierMode: "optional", identifierLabel: "Identifier number", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
+    { id: "fmtdvd000000300", scope: "system", code: "dvd", label: "DVD", enabled: true, sortOrder: 30, messageBehavior: "none", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Director/Actors/Producer", identifierMode: "hidden", identifierLabel: "UPC", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
+    { id: "fmtmusiccd00400", scope: "system", code: "music_cd", label: "Music CD", enabled: true, sortOrder: 40, messageBehavior: "none", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Artist", identifierMode: "hidden", identifierLabel: "UPC", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
+    { id: "fmtebook0000500", scope: "system", code: "ebook", label: "eBook", enabled: true, sortOrder: 50, messageBehavior: "ebookMessage", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Author", identifierMode: "optional", identifierLabel: "Identifier number", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
+    { id: "fmteaudio006000", scope: "system", code: "eaudiobook", label: "eAudiobook", enabled: true, sortOrder: 60, messageBehavior: "eaudiobookMessage", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Author", identifierMode: "optional", identifierLabel: "Identifier number", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
   ]);
 
   seedLookup(app, audienceGroups, [
-    { id: "audadult0000100", code: "adult", label: "Adult", sortOrder: 10 },
-    { id: "audteen00000200", code: "teen", label: "Young Adult / Teen", sortOrder: 20 },
-    { id: "audchild0000300", code: "children", label: "Children", sortOrder: 30 },
+    { id: "audadult0000100", scope: "system", code: "adult", label: "Adult", sortOrder: 10 },
+    { id: "audteen00000200", scope: "system", code: "teen", label: "Young Adult / Teen", sortOrder: 20 },
+    { id: "audchild0000300", scope: "system", code: "children", label: "Children", sortOrder: 30 },
   ]);
 
   seedLookup(app, workflowTags, [

@@ -113,6 +113,40 @@ function lookupByCode(app, collection, code) {
   }
 }
 
+function lookupScopedByCode(app, collection, code, libraryOrgId) {
+  code = String(code || "").trim();
+  if (!code) return null;
+  var org = organizationByPolarisId(app, libraryOrgId);
+  if (org) {
+    try {
+      return app.findFirstRecordByFilter(collection, "scope = 'library' && libraryOrganization = {:org} && code = {:code}", { org: org.id, code: code });
+    } catch (err) {}
+  }
+  try {
+    return app.findFirstRecordByFilter(collection, "scope = 'system' && code = {:code}", { code: code });
+  } catch (err2) {}
+  return lookupByCode(app, collection, code);
+}
+
+function lookupScopedByLabel(app, collection, label, libraryOrgId) {
+  label = String(label || "").trim();
+  if (!label) return null;
+  var org = organizationByPolarisId(app, libraryOrgId);
+  if (org) {
+    try {
+      return app.findFirstRecordByFilter(collection, "scope = 'library' && libraryOrganization = {:org} && label = {:label}", { org: org.id, label: label });
+    } catch (err) {}
+  }
+  try {
+    return app.findFirstRecordByFilter(collection, "scope = 'system' && label = {:label}", { label: label });
+  } catch (err2) {}
+  try {
+    return app.findFirstRecordByData(collection, "label", label);
+  } catch (err3) {
+    return null;
+  }
+}
+
 function organizationByPolarisId(app, orgId) {
   orgId = String(orgId || "").trim();
   if (!orgId) return null;
@@ -129,9 +163,9 @@ function setRelation(record, fieldName, relatedRecord) {
 
 function setCanonicalRefs(app, record) {
   setRelation(record, "statusRef", lookupByCode(app, "request_statuses", normalizeStatus(record.get("status"))));
-  setRelation(record, "formatRef", lookupByCode(app, "material_formats", normalizeFormat(record.get("format"))));
+  setRelation(record, "formatRef", lookupScopedByCode(app, "material_formats", normalizeFormat(record.get("format")), record.get("libraryOrgId")));
   var age = String(record.get("agegroup") || "").trim();
-  setRelation(record, "audienceGroup", age ? lookupByCode(app, "audience_groups", normalizeAgegroup(age)) : null);
+  setRelation(record, "audienceGroup", age ? (lookupScopedByLabel(app, "audience_groups", age, record.get("libraryOrgId")) || lookupScopedByCode(app, "audience_groups", normalizeAgegroup(age), record.get("libraryOrgId"))) : null);
   var reason = normalizeCloseReason(record.get("closeReason"));
   setRelation(record, "closeReasonRef", reason ? lookupByCode(app, "request_close_reasons", reason) : null);
   setRelation(record, "patronOrganization", organizationByPolarisId(app, record.get("patronOrgId")));
@@ -639,7 +673,7 @@ function enforceDuplicate(app, barcode, data) {
 
   var params = { barcode: barcode };
 
-  // Check for Identifier (ISBN) duplicate for the same patron only.
+  // Check for identifier number duplicate for the same patron only.
   if (identifier) {
     var isbnExisting = app.findRecordsByFilter(
       "title_requests",
@@ -650,7 +684,7 @@ function enforceDuplicate(app, barcode, data) {
       { barcode: barcode, identifier: identifier }
     );
     if (isbnExisting.length) {
-      var isbnErr = new Error("You have already submitted a suggestion for this ISBN.");
+      var isbnErr = new Error("You have already submitted a suggestion for this identifier number.");
       isbnErr.code = 409;
       isbnErr.duplicate = duplicateContext(isbnExisting[0], "identifier");
       throw isbnErr;

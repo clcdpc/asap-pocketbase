@@ -315,7 +315,29 @@ function mergeDuplicateStatusLabels(labels) {
   return Object.assign(defaultDuplicateStatusLabels(), parseJsonObject(labels, labels || {}));
 }
 
-function uiTextFromRecord(app, record) {
+function scopedRows(app, collectionName, orgId) {
+  app = app || $app;
+  var rows = [];
+  function read(scope, orgRecordId) {
+    try {
+      var filter = scope === "system" ? "scope = 'system'" : "scope = 'library' && libraryOrganization = {:org}";
+      var params = scope === "system" ? {} : { org: orgRecordId };
+      rows = rows.concat(app.findRecordsByFilter(collectionName, filter, "sortOrder", 200, 0, params));
+    } catch (err) {
+      if (scope === "system") {
+        try {
+          rows = rows.concat(app.findRecordsByFilter(collectionName, "id != ''", "sortOrder", 200, 0));
+        } catch (err2) {}
+      }
+    }
+  }
+  read("system", "");
+  var orgRecordId = orgIdForSettings(app, orgId);
+  if (orgRecordId) read("library", orgRecordId);
+  return rows;
+}
+
+function uiTextFromRecord(app, record, orgId) {
   const formatRules = require(`${__hooks}/lib/format_rules.js`);
   var logoUrl = "/jpl.png";
   try {
@@ -324,8 +346,8 @@ function uiTextFromRecord(app, record) {
   } catch (err) {}
 
   var publicationOptions = lines(record.get("publicationOptions"), ["Already published", "Coming soon", "Published a while back"]);
-  var ageGroups = lines(record.get("ageGroups"), ["Adult", "Young Adult / Teen", "Children"]);
-  var formats = materialFormats(app);
+  var ageGroups = audienceGroups(app, orgId, lines(record.get("ageGroups"), ["Adult", "Young Adult / Teen", "Children"]));
+  var formats = materialFormats(app, orgId);
 
   return {
     logoUrl: logoUrl,
@@ -364,24 +386,32 @@ function uiTextFromRecord(app, record) {
   };
 }
 
-function materialFormats(app) {
+function materialFormats(app, orgId) {
   app = app || $app;
   var labels = {};
   var rules = {};
   var available = [];
+  var seenAvailable = {};
   try {
-    var rows = app.findRecordsByFilter("material_formats", "id != ''", "sortOrder", 200, 0);
+    var rows = scopedRows(app, "material_formats", orgId);
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i];
       var code = r.get("code");
+      if (!code) continue;
       labels[code] = r.get("label") || code;
-      if (r.getBool("enabled")) available.push(code);
+      if (r.getBool("enabled")) {
+        if (!seenAvailable[code]) available.push(code);
+        seenAvailable[code] = true;
+      } else if (seenAvailable[code]) {
+        available = available.filter(function (value) { return value !== code; });
+        seenAvailable[code] = false;
+      }
       rules[code] = {
         messageBehavior: r.get("messageBehavior") || "none",
         fields: {
           title: { mode: r.get("titleMode") || "required", label: r.get("titleLabel") || "Title" },
           author: { mode: r.get("authorMode") || "required", label: r.get("authorLabel") || "Author" },
-          identifier: { mode: r.get("identifierMode") || "optional", label: r.get("identifierLabel") || "ISBN" },
+          identifier: { mode: r.get("identifierMode") || "optional", label: r.get("identifierLabel") || "Identifier number" },
           agegroup: { mode: r.get("audienceMode") || "required", label: r.get("audienceLabel") || "Age Group" },
           publication: { mode: r.get("publicationMode") || "required", label: r.get("publicationLabel") || "Publication Timing" }
         }
@@ -389,6 +419,23 @@ function materialFormats(app) {
     }
   } catch (err) {}
   return { labels: labels, rules: rules, available: available };
+}
+
+function audienceGroups(app, orgId, fallback) {
+  app = app || $app;
+  var labelsByCode = {};
+  var order = [];
+  try {
+    var rows = scopedRows(app, "audience_groups", orgId);
+    for (var i = 0; i < rows.length; i++) {
+      var code = String(rows[i].get("code") || "").trim();
+      if (!code) continue;
+      if (order.indexOf(code) < 0) order.push(code);
+      labelsByCode[code] = rows[i].get("label") || code;
+    }
+  } catch (err) {}
+  var labels = order.map(function (code) { return labelsByCode[code]; }).filter(Boolean);
+  return labels.length ? labels : (fallback || ["Adult", "Young Adult / Teen", "Children"]).slice();
 }
 
 function workflowFromRecord(record) {
@@ -546,7 +593,7 @@ function pendingHoldTimeout(app, orgId) {
 
 function uiText(app, orgId) {
   app = app || $app;
-  return uiTextFromRecord(app, uiRecord(app, orgId));
+  return uiTextFromRecord(app, uiRecord(app, orgId), orgId);
 }
 
 function duplicateStatusLabels(app, orgId) {

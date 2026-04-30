@@ -5,7 +5,9 @@ const polaris = require(`${__hooks}/lib/polaris.js`);
 const records = require(`${__hooks}/lib/records.js`);
 
 const POLARIS_TAG_FOUND = "dupe found in Polaris";
-const POLARIS_TAG_NOT_FOUND = "ISBN not found in system";
+const POLARIS_TAG_NOT_FOUND = "Identifier number not found in system";
+const POLARIS_TAG_MULTIPLE_MATCHES = "Multiple Polaris matches";
+const POLARIS_MULTIPLE_MATCH_NOTE = "Identifier search found multiple Polaris matches; ASAP used the first result from the Polaris publication date sort.";
 
 function runScheduledHoldCheck(app) {
   var jobRun = startJobRun(app, "asap-hold-check");
@@ -384,9 +386,17 @@ function mapIsbnCheckSuggestion(status) {
     return "dupe found in Polaris";
   }
   if (status === "not_found") {
-    return "ISBN not found in system";
+    return "Identifier number not found in system";
   }
   return "";
+}
+
+function flagMultiplePolarisMatches(app, record, bibResult) {
+  if (!bibResult || !bibResult.multipleMatches) {
+    return;
+  }
+  records.addWorkflowTagForRequest(app, record, POLARIS_TAG_MULTIPLE_MATCHES);
+  records.appendSystemNote(record, POLARIS_MULTIPLE_MATCH_NOTE);
 }
 
 function processPendingIsbnChecks(app, staff, result) {
@@ -407,19 +417,22 @@ function processPendingIsbnChecks(app, staff, result) {
 
     if (!identifier) {
       record.set("isbnCheckStatus", "error");
-      records.appendSystemNote(record, "ISBN check skipped: missing identifier.");
+      records.appendSystemNote(record, "Identifier number check skipped: missing identifier.");
       app.save(record);
       continue;
     }
 
-    records.appendSystemNote(record, "ISBN check attempt #" + (retryCount + 1) + " for identifier " + identifier + ".");
+    records.appendSystemNote(record, "Identifier number check attempt #" + (retryCount + 1) + " for identifier " + identifier + ".");
     var bibResult = polaris.searchBib(staff, identifier);
 
     if (bibResult.status === "found" || bibResult.status === "not_found") {
       record.set("isbnCheckStatus", bibResult.status);
       record.set("isbnCheckResult", mapIsbnCheckSuggestion(bibResult.status));
       record.set("isbnCheckRetryCount", 0);
-      records.appendSystemNote(record, "ISBN check result: " + bibResult.status + (bibResult.bibId ? " (BIB " + bibResult.bibId + ")" : "") + ".");
+      if (bibResult.status === "found") {
+        flagMultiplePolarisMatches(app, record, bibResult);
+      }
+      records.appendSystemNote(record, "Identifier number check result: " + bibResult.status + (bibResult.bibId ? " (BIB " + bibResult.bibId + ")" : "") + ".");
       app.save(record);
       continue;
     }
@@ -427,10 +440,10 @@ function processPendingIsbnChecks(app, staff, result) {
     retryCount += 1;
     record.set("isbnCheckRetryCount", retryCount);
     record.set("isbnCheckStatus", retryCount >= maxRetries ? "error_max_retries" : "pending");
-    records.appendSystemNote(record, "ISBN check transient error" + (bibResult.error ? ": " + bibResult.error : "") + ".");
+    records.appendSystemNote(record, "Identifier number check transient error" + (bibResult.error ? ": " + bibResult.error : "") + ".");
 
     if (retryCount >= maxRetries) {
-      records.appendSystemNote(record, "ISBN check reached max retries; admin follow-up required.");
+      records.appendSystemNote(record, "Identifier number check reached max retries; admin follow-up required.");
     }
     app.save(record);
     if (result) result.errors++;
@@ -458,7 +471,7 @@ function evaluatePurchase(app, staff, record, bibCache, result) {
     return;
   }
 
-  // Only attempt auto-promotion search if an ISBN/Identifier is present
+  // Only attempt auto-promotion search if an identifier number is present
   if (!identifier) {
     return;
   }
@@ -472,6 +485,7 @@ function evaluatePurchase(app, staff, record, bibCache, result) {
 
     if (bibId) {
       records.addWorkflowTagForRequest(app, record, POLARIS_TAG_FOUND);
+      flagMultiplePolarisMatches(app, record, bibResult);
       record.set("bibid", bibId);
       polaris.reconcileRecord(app, staff, record, bibId);
       record.set("status", records.STATUS.PENDING_HOLD);
@@ -681,7 +695,7 @@ function processPendingSuggestionIsbnChecks(app, staff, result) {
       record.set("lastChecked", now);
       record.set("updated", now);
       record.set("editedBy", "system");
-      records.appendSystemNote(record, "ISBN verification skipped: no identifier provided.");
+      records.appendSystemNote(record, "Identifier number verification skipped: no identifier provided.");
       app.save(record);
       result.skipped++;
       continue;
@@ -700,18 +714,20 @@ function processPendingSuggestionIsbnChecks(app, staff, result) {
 
       if (found) {
         record.set("bibid", bibId);
+        polaris.reconcileRecord(app, staff, record, bibId);
         records.addWorkflowTagForRequest(app, record, POLARIS_TAG_FOUND);
-        records.appendSystemNote(record, "ISBN verification found a Polaris bibliographic match (BIB ID " + bibId + ").");
+        flagMultiplePolarisMatches(app, record, bibResult);
+        records.appendSystemNote(record, "Identifier number verification found a Polaris bibliographic match (BIB ID " + bibId + ").");
         result.isbnChecksFound++;
       } else {
         records.addWorkflowTagForRequest(app, record, POLARIS_TAG_NOT_FOUND);
-        records.appendSystemNote(record, "ISBN verification completed: no Polaris bibliographic match found.");
+        records.appendSystemNote(record, "Identifier number verification completed: no Polaris bibliographic match found.");
         result.isbnChecksNotFound++;
       }
       app.save(record);
     } catch (err) {
       result.errors++;
-      app.logger().error("Pending suggestion ISBN check failed", "recordId", record.id, "error", String(err));
+      app.logger().error("Pending suggestion identifier number check failed", "recordId", record.id, "error", String(err));
     }
   }
 }
@@ -740,6 +756,9 @@ function processPendingHolds(app, staff, result) {
         }
         var bibResult = bibCache[identifier];
         bibId = bibResult && bibResult.status === "found" ? bibResult.bibId : "";
+        if (bibId) {
+          flagMultiplePolarisMatches(app, record, bibResult);
+        }
       }
       if (!bibId) {
         records.appendSystemNote(record, "SKIP: Could not find BIB ID in Polaris for hold placement.");

@@ -152,8 +152,8 @@ function authenticatePatron(barcode, password, staffAuth) {
   return getPatronBasic(staff, barcode);
 }
 
-function normalizeIsbnIdentifier(isbn) {
-  var raw = String(isbn || "").trim();
+function normalizeIdentifier(identifier) {
+  var raw = String(identifier || "").trim();
   if (!raw) {
     return { ok: false, error: "missing_identifier", normalized: "" };
   }
@@ -163,44 +163,50 @@ function normalizeIsbnIdentifier(isbn) {
     return { ok: false, error: "missing_identifier", normalized: "" };
   }
 
-  var validChars = /^[0-9X]+$/;
+  var validChars = /^[A-Z0-9]+$/;
   if (!validChars.test(normalized)) {
     return { ok: false, error: "invalid_characters", normalized: normalized };
-  }
-
-  if (normalized.length !== 10 && normalized.length !== 13) {
-    return { ok: false, error: "invalid_length", normalized: normalized };
-  }
-
-  if (normalized.length === 10 && normalized.slice(0, 9).indexOf("X") >= 0) {
-    return { ok: false, error: "invalid_isbn10_format", normalized: normalized };
-  }
-
-  if (normalized.length === 13 && normalized.indexOf("X") >= 0) {
-    return { ok: false, error: "invalid_isbn13_format", normalized: normalized };
   }
 
   return { ok: true, normalized: normalized };
 }
 
-function searchBib(staff, isbn) {
-  var check = normalizeIsbnIdentifier(isbn);
+function bibSearchRows(payload) {
+  var rows = payload && payload.BibSearchRows ? payload.BibSearchRows : [];
+  if (rows.BibSearchRow) {
+    rows = rows.BibSearchRow;
+  }
+  if (!Array.isArray(rows)) {
+    rows = rows ? [rows] : [];
+  }
+  return rows;
+}
+
+function searchBib(staff, identifier) {
+  var check = normalizeIdentifier(identifier);
   if (!check.ok) {
-    return { status: "error", bibId: "", error: check.error };
+    return { status: "error", bibId: "", multipleMatches: false, totalMatches: 0, error: check.error };
   }
 
   try {
-    var ep = endpoint("public", "search/bibs/keyword/ISBN");
-    appendQuery(ep, "q=" + encodeURIComponent(check.normalized));
+    var ep = endpoint("public", "search/bibs/keyword/KW");
+    appendQuery(ep, "q=" + encodeURIComponent(check.normalized) + "&sortby=PD");
 
     var payload = send("GET", ep, "", staff);
-    var rows = payload.BibSearchRows || [];
+    var rows = bibSearchRows(payload);
+    var totalMatches = Number(payload.TotalRecordsFound || rows.length || 0) || 0;
     if (!rows.length) {
-      return { status: "not_found", bibId: "", error: "" };
+      return { status: "not_found", bibId: "", multipleMatches: false, totalMatches: totalMatches, error: "" };
     }
-    return { status: "found", bibId: String(rows[0].ControlNumber || ""), error: "" };
+    return {
+      status: "found",
+      bibId: String(rows[0].ControlNumber || ""),
+      multipleMatches: totalMatches > 1 || rows.length > 1,
+      totalMatches: totalMatches,
+      error: ""
+    };
   } catch (err) {
-    return { status: "error", bibId: "", error: err && err.message ? err.message : String(err) };
+    return { status: "error", bibId: "", multipleMatches: false, totalMatches: 0, error: err && err.message ? err.message : String(err) };
   }
 }
 

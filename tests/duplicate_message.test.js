@@ -31,7 +31,7 @@ function runTests() {
   assert.ok(rejectedMessage.includes('A &amp; B'));
   assert.ok(rejectedMessage.includes('April 29, 2026'));
   assert.ok(rejectedMessage.includes('Status: Not selected for purchase.'));
-  assert.ok(rejectedMessage.includes('Match: ISBN.'));
+  assert.ok(rejectedMessage.includes('Match: identifier number.'));
   assert.ok(rejectedMessage.includes('Format: Book.'));
 
   const openMessage = routes.renderDuplicateMessage(uiText, {

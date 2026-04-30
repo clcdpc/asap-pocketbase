@@ -268,7 +268,7 @@ function formatLabelForDuplicate(format, uiText) {
 
 function duplicateMatchLabel(matchType) {
   var labels = {
-    identifier: "ISBN",
+    identifier: "identifier number",
     title_format: "title and format",
     bibid: "catalog record"
   };
@@ -1290,7 +1290,9 @@ function hasLibraryOverride(app, orgId) {
     ["workflow_settings", "scope = 'library' && libraryOrganization = {:org}"],
     ["ui_settings", "scope = 'library' && libraryOrganization = {:org}"],
     ["email_templates", "scope = 'library' && libraryOrganization = {:org}"],
-    ["rejection_templates", "scope = 'library' && libraryOrganization = {:org}"]
+    ["rejection_templates", "scope = 'library' && libraryOrganization = {:org}"],
+    ["material_formats", "scope = 'library' && libraryOrganization = {:org}"],
+    ["audience_groups", "scope = 'library' && libraryOrganization = {:org}"]
   ];
   for (var i = 0; i < filters.length; i++) {
     try {
@@ -1457,22 +1459,40 @@ function saveUiSettings(app, scope, orgId, ui) {
   if (ui.publicationOptions !== undefined) record.set("publicationOptions", Array.isArray(ui.publicationOptions) ? ui.publicationOptions.join("\n") : String(ui.publicationOptions || ""));
   if (ui.ageGroups !== undefined) record.set("ageGroups", Array.isArray(ui.ageGroups) ? ui.ageGroups.join("\n") : String(ui.ageGroups || ""));
   app.save(record);
-  if (scope === "system") saveMaterialFormats(app, ui);
+  saveMaterialFormats(app, scope, orgId, ui);
+  saveAudienceGroups(app, scope, orgId, ui);
 }
 
-function saveMaterialFormats(app, ui) {
+function scopedLookupRecord(app, collectionName, scope, orgId, code) {
+  var collection = app.findCollectionByNameOrId(collectionName);
+  var org = scope === "library" ? config.findOrganization(app, orgId) : null;
+  if (scope === "library" && !org) {
+    throw new Error("Library organization must be synced before saving library-specific settings.");
+  }
+  var filter = scope === "system" ? "scope = 'system' && code = {:code}" : "scope = 'library' && libraryOrganization = {:org} && code = {:code}";
+  var params = scope === "system" ? { code: code } : { org: org.id, code: code };
+  try {
+    return app.findFirstRecordByFilter(collectionName, filter, params);
+  } catch (err) {
+    try {
+      if (scope === "system") {
+        return app.findFirstRecordByData(collectionName, "code", code);
+      }
+    } catch (err2) {}
+    var record = new Record(collection);
+    record.set("scope", scope);
+    if (org) record.set("libraryOrganization", org.id);
+    record.set("code", code);
+    return record;
+  }
+}
+
+function saveMaterialFormats(app, scope, orgId, ui) {
   var labels = ui.formatLabels || {};
   var available = Array.isArray(ui.availableFormats) ? ui.availableFormats : [];
   var rules = ui.formatRules || {};
   Object.keys(labels).forEach(function (code, index) {
-    var record;
-    try {
-      record = app.findFirstRecordByData("material_formats", "code", code);
-    } catch (err) {
-      record = new Record(app.findCollectionByNameOrId("material_formats"));
-      record.set("code", code);
-      record.set("sortOrder", (index + 1) * 10);
-    }
+    var record = scopedLookupRecord(app, "material_formats", scope, orgId, code);
     var rule = rules[code] || {};
     var fields = rule.fields || {};
     record.set("label", labels[code] || code);
@@ -1480,11 +1500,55 @@ function saveMaterialFormats(app, ui) {
     record.set("messageBehavior", rule.messageBehavior || "none");
     setFormatFieldRule(record, "title", fields.title, "Title");
     setFormatFieldRule(record, "author", fields.author, "Author");
-    setFormatFieldRule(record, "identifier", fields.identifier, "ISBN");
+    setFormatFieldRule(record, "identifier", fields.identifier, "Identifier number");
     setFormatFieldRule(record, "audience", fields.agegroup, "Age Group");
     setFormatFieldRule(record, "publication", fields.publication, "Publication Timing");
     app.save(record);
   });
+}
+
+function codeFromLabel(label, fallback) {
+  var text = String(label || "").trim();
+  var known = {
+    adult: "adult",
+    "young adult / teen": "teen",
+    "young adult": "teen",
+    teen: "teen",
+    children: "children",
+    child: "children",
+    kids: "children"
+  };
+  var lower = text.toLowerCase();
+  if (known[lower]) return known[lower];
+  var code = lower.replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return code || fallback;
+}
+
+function saveAudienceGroups(app, scope, orgId, ui) {
+  if (ui.ageGroups === undefined) return;
+  var labels = Array.isArray(ui.ageGroups) ? ui.ageGroups : String(ui.ageGroups || "").split(/\r?\n/);
+  labels = labels.map(function (label) { return String(label || "").trim(); }).filter(Boolean);
+  var org = scope === "library" ? config.findOrganization(app, orgId) : null;
+  if (scope === "library" && !org) {
+    throw new Error("Library organization must be synced before saving library-specific settings.");
+  }
+  var keep = {};
+  labels.forEach(function (label, index) {
+    var code = codeFromLabel(label, "group_" + (index + 1));
+    keep[code] = true;
+    var record = scopedLookupRecord(app, "audience_groups", scope, orgId, code);
+    record.set("label", label);
+    record.set("sortOrder", (index + 1) * 10);
+    app.save(record);
+  });
+  var filter = scope === "system" ? "scope = 'system'" : "scope = 'library' && libraryOrganization = {:org}";
+  var params = scope === "system" ? {} : { org: org.id };
+  try {
+    var rows = app.findRecordsByFilter("audience_groups", filter, "", 200, 0, params);
+    rows.forEach(function (row) {
+      if (!keep[String(row.get("code") || "")]) app.delete(row);
+    });
+  } catch (err) {}
 }
 
 function setFormatFieldRule(record, prefix, rule, fallback) {
@@ -1551,7 +1615,7 @@ function saveRejectionTemplates(app, scope, orgId, templates) {
 function resetLibrarySettings(app, orgId) {
   var org = config.findOrganization(app, orgId);
   if (!org) return;
-  ["workflow_settings", "ui_settings", "email_templates", "rejection_templates"].forEach(function (collection) {
+  ["workflow_settings", "ui_settings", "email_templates", "rejection_templates", "material_formats", "audience_groups"].forEach(function (collection) {
     var rows = app.findRecordsByFilter(collection, "scope = 'library' && libraryOrganization = {:org}", "", 200, 0, { org: org.id });
     rows.forEach(function (row) { app.delete(row); });
   });

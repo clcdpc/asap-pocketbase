@@ -9,7 +9,7 @@ const DEFAULT_RULES = {
     fields: {
       title: { mode: FIELD_MODES.REQUIRED, label: "Title" },
       author: { mode: FIELD_MODES.REQUIRED, label: "Author" },
-      identifier: { mode: FIELD_MODES.OPTIONAL, label: "ISBN" },
+      identifier: { mode: FIELD_MODES.OPTIONAL, label: "Identifier number" },
       agegroup: { mode: FIELD_MODES.REQUIRED, label: "Age Group" },
       publication: { mode: FIELD_MODES.REQUIRED, label: "Publication Timing" },
     },
@@ -19,7 +19,7 @@ const DEFAULT_RULES = {
     fields: {
       title: { mode: FIELD_MODES.REQUIRED, label: "Title" },
       author: { mode: FIELD_MODES.REQUIRED, label: "Author" },
-      identifier: { mode: FIELD_MODES.OPTIONAL, label: "ISBN" },
+      identifier: { mode: FIELD_MODES.OPTIONAL, label: "Identifier number" },
       agegroup: { mode: FIELD_MODES.REQUIRED, label: "Age Group" },
       publication: { mode: FIELD_MODES.REQUIRED, label: "Publication Timing" },
     },
@@ -49,7 +49,7 @@ const DEFAULT_RULES = {
     fields: {
       title: { mode: FIELD_MODES.REQUIRED, label: "Title" },
       author: { mode: FIELD_MODES.REQUIRED, label: "Author" },
-      identifier: { mode: FIELD_MODES.OPTIONAL, label: "ISBN" },
+      identifier: { mode: FIELD_MODES.OPTIONAL, label: "Identifier number" },
       agegroup: { mode: FIELD_MODES.REQUIRED, label: "Age Group" },
       publication: { mode: FIELD_MODES.REQUIRED, label: "Publication Timing" },
     },
@@ -59,7 +59,7 @@ const DEFAULT_RULES = {
     fields: {
       title: { mode: FIELD_MODES.REQUIRED, label: "Title" },
       author: { mode: FIELD_MODES.REQUIRED, label: "Author" },
-      identifier: { mode: FIELD_MODES.OPTIONAL, label: "ISBN" },
+      identifier: { mode: FIELD_MODES.OPTIONAL, label: "Identifier number" },
       agegroup: { mode: FIELD_MODES.REQUIRED, label: "Age Group" },
       publication: { mode: FIELD_MODES.REQUIRED, label: "Publication Timing" },
     },

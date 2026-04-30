@@ -22,7 +22,7 @@ const defaultFormatRules = {
     fields: {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Author' },
-      identifier: { mode: 'optional', label: 'ISBN' },
+      identifier: { mode: 'optional', label: 'Identifier number' },
       agegroup: { mode: 'required', label: 'Age Group' },
       publication: { mode: 'required', label: 'Publication Timing' }
     }
@@ -32,7 +32,7 @@ const defaultFormatRules = {
     fields: {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Author' },
-      identifier: { mode: 'optional', label: 'ISBN' },
+      identifier: { mode: 'optional', label: 'Identifier number' },
       agegroup: { mode: 'required', label: 'Age Group' },
       publication: { mode: 'required', label: 'Publication Timing' }
     }
@@ -62,7 +62,7 @@ const defaultFormatRules = {
     fields: {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Author' },
-      identifier: { mode: 'optional', label: 'ISBN' },
+      identifier: { mode: 'optional', label: 'Identifier number' },
       agegroup: { mode: 'required', label: 'Age Group' },
       publication: { mode: 'required', label: 'Publication Timing' }
     }
@@ -72,7 +72,7 @@ const defaultFormatRules = {
     fields: {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Author' },
-      identifier: { mode: 'optional', label: 'ISBN' },
+      identifier: { mode: 'optional', label: 'Identifier number' },
       agegroup: { mode: 'required', label: 'Age Group' },
       publication: { mode: 'required', label: 'Publication Timing' }
     }

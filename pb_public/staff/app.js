@@ -66,7 +66,7 @@ const defaultPatronFormatRules = {
     fields: {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Author' },
-      identifier: { mode: 'optional', label: 'ISBN' },
+      identifier: { mode: 'optional', label: 'Identifier number' },
       agegroup: { mode: 'required', label: 'Age group' },
       publication: { mode: 'required', label: 'Publication timing' }
     }
@@ -76,7 +76,7 @@ const defaultPatronFormatRules = {
     fields: {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Author' },
-      identifier: { mode: 'optional', label: 'ISBN' },
+      identifier: { mode: 'optional', label: 'Identifier number' },
       agegroup: { mode: 'required', label: 'Age group' },
       publication: { mode: 'required', label: 'Publication timing' }
     }
@@ -106,7 +106,7 @@ const defaultPatronFormatRules = {
     fields: {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Author' },
-      identifier: { mode: 'optional', label: 'ISBN' },
+      identifier: { mode: 'optional', label: 'Identifier number' },
       agegroup: { mode: 'required', label: 'Age group' },
       publication: { mode: 'required', label: 'Publication timing' }
     }
@@ -116,7 +116,7 @@ const defaultPatronFormatRules = {
     fields: {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Author' },
-      identifier: { mode: 'optional', label: 'ISBN' },
+      identifier: { mode: 'optional', label: 'Identifier number' },
       agegroup: { mode: 'required', label: 'Age group' },
       publication: { mode: 'required', label: 'Publication timing' }
     }
@@ -1164,7 +1164,7 @@ function getGridColumns(status) {
     'Barcode',
     'Title (original)',
     'Author (original)',
-    'ISBN',
+    'Identifier number',
     'BIBID',
     'Age group',
     'Format',
@@ -1254,16 +1254,16 @@ function getWorkflowTagBadgesHtml(row) {
 function getIsbnCheckBadgesHtml(row) {
   const status = typeof row?.isbnCheckStatus === 'string' ? row.isbnCheckStatus : '';
   const isbnStatusLabels = {
-    pending: 'New / ISBN check in progress',
-    found: 'ISBN found',
-    not_found: 'ISBN not found',
-    error_max_retries: 'ISBN check retry limit reached'
+    pending: 'New / identifier number check in progress',
+    found: 'Identifier number found',
+    not_found: 'Identifier number not found',
+    error_max_retries: 'Identifier number check retry limit reached'
   };
   const label = isbnStatusLabels[status];
   if (!label) return '';
   const tooltip = status === 'pending'
-    ? 'Background ISBN processing is still running. This suggestion is already submitted.'
-    : 'ISBN background processing result.';
+    ? 'Background identifier number processing is still running. This suggestion is already submitted.'
+    : 'Identifier number background processing result.';
   return ` <span class="badge badge-info asap-isbn-check-badge" title="${escapeAttr(tooltip)}">${escapeAttr(label)}</span>`;
 }
 
