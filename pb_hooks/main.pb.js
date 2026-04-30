@@ -53,6 +53,11 @@ routerAdd("POST", "/api/asap/staff/test-smtp", (e) => {
   return routes.staffTestSmtp(e);
 });
 
+routerAdd("POST", "/api/asap/staff/profile", (e) => {
+  const routes = require(`${__hooks}/lib/routes.js`);
+  return routes.staffProfileUpdate(e);
+});
+
 routerAdd("GET", "/api/asap/staff/email-status", (e) => {
   const routes = require(`${__hooks}/lib/routes.js`);
   return routes.staffEmailStatus(e);
@@ -113,6 +118,11 @@ routerAdd("POST", "/api/asap/jobs/promoter-check", (e) => {
   return routes.staffRunPromoterCheck(e);
 });
 
+routerAdd("POST", "/api/asap/jobs/weekly-staff-action-summary", (e) => {
+  const routes = require(`${__hooks}/lib/routes.js`);
+  return routes.runWeeklyStaffActionSummary(e);
+});
+
 routerAdd("POST", "/api/asap/import/title-requests", (e) => {
   const routes = require(`${__hooks}/lib/routes.js`);
   return routes.importTitleRequests(e);
@@ -149,6 +159,11 @@ cronAdd("asap-hold-check", $os.getenv("ASAP_CRON_SCHEDULE") || "0 * * * *", () =
 cronAdd("asap-organization-sync", $os.getenv("ASAP_ORG_SYNC_CRON_SCHEDULE") || "0 2 * * *", () => {
   const jobs = require(`${__hooks}/lib/jobs.js`);
   jobs.runScheduledOrganizationSync($app);
+});
+
+cronAdd("asap-weekly-staff-action-summary", $os.getenv("ASAP_WEEKLY_STAFF_ACTION_SUMMARY_CRON_SCHEDULE") || "0 20 * * 0", () => {
+  const jobs = require(`${__hooks}/lib/jobs.js`);
+  jobs.runWeeklyStaffActionSummary($app);
 });
 
 

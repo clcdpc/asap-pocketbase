@@ -108,7 +108,9 @@
         <h1 class="h5 mb-0">Auto Suggest a Purchase</h1>
       </div>
       <div class="text-right">
-        <strong id="display-user"></strong> | <a href="#" id="logout-btn">Logout</a>
+        <strong id="display-user"></strong> |
+        <button type="button" id="profile-btn" class="btn btn-link btn-sm p-0 align-baseline">Profile</button> |
+        <a href="#" id="logout-btn">Logout</a>
       </div>
     </div>
     <div id="bootstrap-admin-alert" class="alert alert-info hidden" role="status"></div>
@@ -1023,6 +1025,27 @@
       <button type="button" id="confirm-dialog-ok" class="btn btn-sm btn-primary">OK</button>
     </div>
   </div>
+</dialog>
+
+<!-- Profile Dialog -->
+<dialog id="profile-dialog" class="asap-dialog asap-dialog-small">
+  <form id="profile-form" class="asap-dialog-small-body">
+    <h2 class="h5 mb-3">Profile</h2>
+    <div class="custom-control custom-checkbox mb-2">
+      <input type="checkbox" class="custom-control-input" id="profile-weekly-action-summary">
+      <label class="custom-control-label font-weight-bold" for="profile-weekly-action-summary">Receive weekly Sunday night action summary email</label>
+    </div>
+    <div class="form-group mb-2">
+      <label for="profile-weekly-action-summary-email" class="font-weight-bold">Report email address</label>
+      <input type="email" id="profile-weekly-action-summary-email" class="form-control" autocomplete="email">
+    </div>
+    <p class="text-muted small mb-3">Sends a weekly summary of new submissions and approved purchases that still need a bib.</p>
+    <div id="profile-msg" class="mb-3 font-weight-bold" aria-live="polite"></div>
+    <div class="asap-dialog-actions">
+      <button type="button" id="profile-cancel" class="btn btn-sm btn-secondary">Cancel</button>
+      <button type="submit" id="profile-save" class="btn btn-sm btn-primary">Save</button>
+    </div>
+  </form>
 </dialog>
 
 <!-- Alert Dialog -->

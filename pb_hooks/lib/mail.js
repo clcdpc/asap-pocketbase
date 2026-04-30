@@ -36,7 +36,7 @@ function send(app, to, subject, text, html, options) {
   try {
     var message = new MailerMessage({
       from: { address: fromAddress, name: fromName },
-      to: [{ address: to, name: "Library Patron" }],
+      to: [{ address: to, name: options.recipientName || "Library Patron" }],
       subject: subject,
       text: text,
       html: html,

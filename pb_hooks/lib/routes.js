@@ -12,6 +12,32 @@ function body(e) {
   return e.requestInfo().body || {};
 }
 
+function requestHeader(e, name) {
+  var lower = String(name || "").toLowerCase();
+  var info = {};
+  try {
+    info = e.requestInfo() || {};
+  } catch (err) {}
+  var headers = info.headers || {};
+  if (headers) {
+    if (typeof headers.get === "function") {
+      return headers.get(name) || headers.get(lower) || "";
+    }
+    return headers[name] || headers[lower] || "";
+  }
+  try {
+    if (e.request && e.request.header && typeof e.request.header.get === "function") {
+      return e.request.header.get(name) || e.request.header.get(lower) || "";
+    }
+  } catch (err2) {}
+  try {
+    if (e.request && e.request.headers && typeof e.request.headers.get === "function") {
+      return e.request.headers.get(name) || e.request.headers.get(lower) || "";
+    }
+  } catch (err3) {}
+  return "";
+}
+
 function queryValue(e, name) {
   var info = {};
   try {
@@ -299,7 +325,19 @@ function staffPublicJson(record) {
     libraryOrgName: record.get("libraryOrgName") || "",
     scope: record.get("scope") || "",
     lastPolarisLogin: record.getString("lastPolarisLogin") || "",
+    weekly_action_summary_enabled: !!record.getBool("weekly_action_summary_enabled"),
+    weekly_action_summary_email: record.get("weekly_action_summary_email") || "",
   };
+}
+
+function staffProfileUpdate(e) {
+  var staff = requireAuth(e, "staff_users");
+  var payload = body(e);
+  var summaryEmail = String(payload.weekly_action_summary_email || "").trim();
+  staff.set("weekly_action_summary_enabled", boolValue(payload.weekly_action_summary_enabled, false));
+  staff.set("weekly_action_summary_email", summaryEmail);
+  e.app.save(staff);
+  return e.json(200, staffPublicJson(staff));
 }
 
 function polarisConfigured() {
@@ -1025,6 +1063,33 @@ function runHoldCheck(e) {
   return e.json(200, jobs.runScheduledHoldCheck(e.app));
 }
 
+function runWeeklyStaffActionSummary(e) {
+  var secret = "";
+  try {
+    secret = String($os.getenv("ASAP_CRON_SECRET") || "").trim();
+  } catch (err) {}
+  var authorized = false;
+  var authHeader = String(requestHeader(e, "Authorization") || "").trim();
+  if (secret && authHeader === "Bearer " + secret) {
+    authorized = true;
+  } else {
+    var auth = e.requestInfo().auth;
+    authorized = !!(auth && auth.isSuperuser && auth.isSuperuser());
+    if (!authorized && auth && auth.collection && auth.collection().name === "staff_users") {
+      authorized = isSuperAdmin(auth);
+    }
+  }
+  if (!authorized) {
+    return e.json(401, { message: "Unauthorized" });
+  }
+  try {
+    return e.json(200, jobs.runWeeklyStaffActionSummary(e.app, { force: boolValue(body(e).force, false) }));
+  } catch (err) {
+    e.app.logger().error("Weekly staff action summary job failed", "error", String(err));
+    return e.json(400, { message: err.message || String(err) });
+  }
+}
+
 function importTitleRequests(e) {
   if (!hasImportAccess(e)) {
     throw new UnauthorizedError("Unauthorized");
@@ -1501,6 +1566,7 @@ module.exports = {
   staffBibLookup: staffBibLookup,
   staffEmailStatus: staffEmailStatus,
   staffLogin: staffLogin,
+  staffProfileUpdate: staffProfileUpdate,
   staffLookupPatron: staffLookupPatron,
   staffUsersList: staffUsersList,
   staffUserRoleUpdate: staffUserRoleUpdate,
@@ -1516,4 +1582,5 @@ module.exports = {
   updateLibrarySettings: updateLibrarySettings,
   renderDuplicateMessage: renderDuplicateMessage,
   staffRunPromoterCheck: staffRunPromoterCheck,
+  runWeeklyStaffActionSummary: runWeeklyStaffActionSummary,
 };

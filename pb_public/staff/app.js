@@ -7,6 +7,7 @@ const appContainer = document.getElementById('app-container');
 const loginForm = document.getElementById('login-form');
 const setupForm = document.getElementById('setup-form');
 const logoutBtn = document.getElementById('logout-btn');
+const profileBtn = document.getElementById('profile-btn');
 const gridContainer = document.getElementById('grid-container');
 const settingsContainer = document.getElementById('settings-container');
 const settingsForm = document.getElementById('settings-form');
@@ -139,8 +140,18 @@ const emptyStateMessages = {
 };
 
 const statusStages = ['suggestion', 'outstanding_purchase', 'pending_hold', 'hold_placed', 'closed'];
+const stageQueryMap = {
+  submitted: 'suggestion',
+  suggestion: 'suggestion',
+  new: 'suggestion',
+  purchased_waiting_for_bib: 'outstanding_purchase',
+  outstanding_purchase: 'outstanding_purchase',
+  pending_hold: 'pending_hold',
+  hold_placed: 'hold_placed',
+  closed: 'closed'
+};
 
-let currentStatus = 'suggestion';
+let currentStatus = requestedStatusFromUrl() || 'suggestion';
 let currentSuggestions = [];
 let allSuggestions = [];
 let verifiedNewSuggestionBarcode = '';
@@ -196,6 +207,25 @@ function getFieldValue(id, fallback = '') {
 function getFieldChecked(id, fallback = false) {
   const el = document.getElementById(id);
   return el ? el.checked : fallback;
+}
+
+function requestedStatusFromUrl() {
+  try {
+    const params = new URLSearchParams(window.location.search || '');
+    const raw = String(params.get('stage') || params.get('status') || '').trim();
+    return stageQueryMap[raw] || '';
+  } catch (err) {
+    return '';
+  }
+}
+
+function updateStageQuery(status) {
+  if (!statusStages.includes(status)) return;
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set('stage', status === 'suggestion' ? 'submitted' : status);
+    window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+  } catch (err) {}
 }
 
 function isValidSmtpHost(host) {
@@ -814,9 +844,86 @@ logoutBtn.addEventListener('click', (e) => {
   checkAuth();
 });
 
+function openProfileDialog() {
+  const dialog = document.getElementById('profile-dialog');
+  if (!dialog) return;
+  const msg = document.getElementById('profile-msg');
+  if (msg) {
+    msg.textContent = '';
+    msg.className = 'mb-3 font-weight-bold';
+  }
+  setFieldChecked('profile-weekly-action-summary', !!(pb.authStore.model && pb.authStore.model.weekly_action_summary_enabled));
+  setFieldValue('profile-weekly-action-summary-email', (pb.authStore.model && pb.authStore.model.weekly_action_summary_email) || '');
+  dialog.showModal();
+}
+
+if (profileBtn) {
+  profileBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    openProfileDialog();
+  });
+}
+
+const profileCancelBtn = document.getElementById('profile-cancel');
+if (profileCancelBtn) {
+  profileCancelBtn.addEventListener('click', () => {
+    const dialog = document.getElementById('profile-dialog');
+    if (dialog && dialog.open) dialog.close();
+  });
+}
+
+const profileForm = document.getElementById('profile-form');
+if (profileForm) {
+  profileForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const msg = document.getElementById('profile-msg');
+    const saveBtn = document.getElementById('profile-save');
+    if (saveBtn) saveBtn.disabled = true;
+    if (msg) {
+      msg.textContent = 'Saving...';
+      msg.className = 'mb-3 font-weight-bold text-info';
+    }
+    try {
+      const enabled = getFieldChecked('profile-weekly-action-summary');
+      const email = getFieldValue('profile-weekly-action-summary-email').trim();
+      if (enabled && !email) {
+        throw new Error('Enter a report email address before enabling the weekly summary.');
+      }
+      const updated = await authorizedJson('/api/asap/staff/profile', {
+        method: 'POST',
+        body: JSON.stringify({
+          weekly_action_summary_enabled: enabled,
+          weekly_action_summary_email: email
+        })
+      });
+      pb.authStore.save(pb.authStore.token, Object.assign({}, pb.authStore.model || {}, updated));
+      if (msg) {
+        msg.textContent = 'Weekly report preference saved.';
+        msg.className = 'mb-3 font-weight-bold text-success';
+      }
+      showToast('Weekly report preference saved.', 'success');
+      setTimeout(() => {
+        const dialog = document.getElementById('profile-dialog');
+        if (dialog && dialog.open) dialog.close();
+      }, 700);
+    } catch (err) {
+      if (msg) {
+        msg.textContent = err.message || 'Could not save your weekly report preference. Please try again.';
+        msg.className = 'mb-3 font-weight-bold text-danger';
+      }
+    } finally {
+      if (saveBtn) saveBtn.disabled = false;
+    }
+  });
+}
+
 document.querySelectorAll('#status-tabs .nav-link').forEach(link => {
   link.addEventListener('click', () => {
-    activateStatusTab(link.getAttribute('data-status'));
+    const nextStatus = link.getAttribute('data-status');
+    activateStatusTab(nextStatus);
+    if (nextStatus !== 'settings') {
+      updateStageQuery(nextStatus);
+    }
     loadTab(currentStatus);
   });
 });

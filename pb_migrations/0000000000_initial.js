@@ -154,6 +154,8 @@ migrate((app) => {
       rel("libraryOrganization", organizations),
       field("scope", "select", { maxSelect: 1, values: ["library", "system"] }),
       field("lastOrgSync", "date"),
+      field("weekly_action_summary_enabled", "bool"),
+      field("weekly_action_summary_email", "email"),
     ],
     indexes: [
       "CREATE UNIQUE INDEX idx_staff_users_identity_key ON staff_users (identityKey)",
@@ -484,6 +486,43 @@ migrate((app) => {
       field("error", "text"),
     ],
     indexes: ["CREATE INDEX idx_job_runs_name ON job_runs (jobName)"]
+  });
+
+  const scheduledEmailRuns = saveCollection(app, {
+    type: "base",
+    name: "scheduled_email_runs",
+    listRule: "@request.auth.collectionName = 'staff_users' && @request.auth.role = 'super_admin'",
+    viewRule: "@request.auth.collectionName = 'staff_users' && @request.auth.role = 'super_admin'",
+    fields: [
+      field("job_key", "text", { required: true, max: 128 }),
+      field("period_start", "date"),
+      field("period_end", "date"),
+      field("started_at", "date"),
+      field("completed_at", "date"),
+      field("status", "select", { maxSelect: 1, values: ["running", "success", "partial_failure", "failed", "skipped"] }),
+      field("error", "text"),
+      field("recipient_count", "number", { onlyInt: true }),
+    ],
+    indexes: ["CREATE UNIQUE INDEX idx_scheduled_email_runs_job_key ON scheduled_email_runs (job_key)"]
+  });
+
+  saveCollection(app, {
+    type: "base",
+    name: "scheduled_email_deliveries",
+    listRule: "@request.auth.collectionName = 'staff_users' && @request.auth.role = 'super_admin'",
+    viewRule: "@request.auth.collectionName = 'staff_users' && @request.auth.role = 'super_admin'",
+    fields: [
+      rel("run", scheduledEmailRuns, { required: true }),
+      rel("staff_user", staffUsers),
+      field("email", "email"),
+      field("status", "select", { maxSelect: 1, values: ["sent", "failed", "skipped"] }),
+      field("error", "text"),
+      field("sent_at", "date"),
+    ],
+    indexes: [
+      "CREATE INDEX idx_scheduled_email_deliveries_run ON scheduled_email_deliveries (run)",
+      "CREATE INDEX idx_scheduled_email_deliveries_staff ON scheduled_email_deliveries (staff_user)"
+    ]
   });
 
   seedLookup(app, requestStatuses, [
