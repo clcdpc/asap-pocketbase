@@ -255,6 +255,11 @@ function updateStageQuery(status) {
   } catch (err) {}
 }
 
+function isPocketBaseAutoCancelError(err) {
+  const message = String((err && err.message) || err || '');
+  return !!(err && err.status === 0 && /aborted|auto.?cancel/i.test(message));
+}
+
 function isValidSmtpHost(host) {
   const value = String(host || '').trim();
   if (!value) return false;
@@ -627,7 +632,7 @@ function checkAuth() {
       activateStatusTab('settings');
     }
 
-    if (isSuperAdminStaff()) {
+    if (isSuperAdminStaff() && currentStatus !== 'settings') {
       loadSettings({ showErrors: false });
     }
 
@@ -1073,14 +1078,35 @@ function resetGrid() {
   gridContainer.innerHTML = '';
 }
 
+function normalizeWorkflowTagLabel(tag) {
+  const clean = String(tag || '').trim();
+  if (clean === 'dupe found in Polaris' || clean === 'Dupe found in Polaris') {
+    return 'Identifier found';
+  }
+  if (clean === 'ISBN not found in system') {
+    return 'Identifier number not found in system';
+  }
+  return clean;
+}
+
+function cleanWorkflowTags(tags) {
+  if (!Array.isArray(tags)) return [];
+  const seen = new Set();
+  const clean = [];
+  tags.forEach(tag => {
+    const label = normalizeWorkflowTagLabel(tag);
+    if (!label || /^\d+$/.test(label) || seen.has(label)) return;
+    seen.add(label);
+    clean.push(label);
+  });
+  return clean;
+}
+
 function tagCountsForRecords(records) {
   const counts = new Map();
   (records || []).forEach(record => {
-    const tags = Array.isArray(record.workflowTags) ? record.workflowTags : [];
-    tags.forEach(tag => {
-      const clean = String(tag || '').trim();
-      if (!clean || /^\d+$/.test(clean)) return;
-      counts.set(clean, (counts.get(clean) || 0) + 1);
+    cleanWorkflowTags(record.workflowTags).forEach(tag => {
+      counts.set(tag, (counts.get(tag) || 0) + 1);
     });
   });
   return Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
@@ -1121,8 +1147,7 @@ function updateTagFilter(records) {
 function applyTagFilter(records) {
   if (!activeTagFilter) return records || [];
   return (records || []).filter(record => {
-    const tags = Array.isArray(record.workflowTags) ? record.workflowTags : [];
-    return tags.some(tag => String(tag || '').trim() === activeTagFilter);
+    return cleanWorkflowTags(record.workflowTags).includes(activeTagFilter);
   });
 }
 
@@ -1316,11 +1341,7 @@ function getDuplicateBadgesHtml(row) {
 }
 
 function getWorkflowTagBadgesHtml(row) {
-  const tags = Array.isArray(row.workflowTags) ? row.workflowTags : [];
-  const visibleTags = tags.filter(tag => {
-    const cleanTag = String(tag || '').trim();
-    return cleanTag && !/^\d+$/.test(cleanTag);
-  });
+  const visibleTags = cleanWorkflowTags(row.workflowTags);
   if (!visibleTags.length) return '';
   return visibleTags.map(tag => {
     const label = escapeAttr(tag);
@@ -1329,14 +1350,11 @@ function getWorkflowTagBadgesHtml(row) {
 }
 
 function hasWorkflowTag(row, label) {
-  const tags = Array.isArray(row?.workflowTags) ? row.workflowTags : [];
-  return tags.some(tag => String(tag || '').trim() === label);
+  return cleanWorkflowTags(row?.workflowTags).includes(label);
 }
 
 function renderWorkflowTags(tags) {
-  const clean = Array.isArray(tags)
-    ? tags.map(tag => String(tag || '').trim()).filter(tag => tag && !/^\d+$/.test(tag))
-    : [];
+  const clean = cleanWorkflowTags(tags);
   if (!clean.length) {
     return '<div class="text-muted small">No workflow tags</div>';
   }
@@ -2657,6 +2675,9 @@ async function loadSettings(options = {}) {
     if (formEl) formEl.classList.remove('hidden');
 
   } catch (err) {
+    if (isPocketBaseAutoCancelError(err)) {
+      return;
+    }
     console.error('Failed to load settings', err);
     if (showErrors) {
       showSettingsAccessDenied();
@@ -2800,7 +2821,9 @@ async function populateLibrarySelector() {
       librarySelectorBound = true;
     }
   } catch (err) {
-    console.error('Failed to populate library selector', err);
+    if (!isPocketBaseAutoCancelError(err)) {
+      console.error('Failed to populate library selector', err);
+    }
   } finally {
     select.disabled = false;
   }
@@ -2869,6 +2892,9 @@ async function loadLibrarySettings(orgId) {
     return settings;
 
   } catch (err) {
+    if (isPocketBaseAutoCancelError(err)) {
+      return;
+    }
     console.error('Error loading library settings:', err);
     showToast('Failed to load library settings', 'error');
   }

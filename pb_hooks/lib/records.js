@@ -469,7 +469,7 @@ function normalizeWorkflowTags(tags) {
   var seen = {};
   var normalized = [];
   for (var i = 0; i < tags.length; i++) {
-    var tag = String(tags[i] || "").trim();
+    var tag = normalizeWorkflowTagName(tags[i]);
     if (!tag || seen[tag]) {
       continue;
     }
@@ -479,8 +479,19 @@ function normalizeWorkflowTags(tags) {
   return normalized;
 }
 
+function normalizeWorkflowTagName(tag) {
+  var clean = String(tag || "").trim();
+  if (clean === "dupe found in Polaris" || clean === "Dupe found in Polaris") {
+    return "Identifier found";
+  }
+  if (clean === "ISBN not found in system") {
+    return "Identifier number not found in system";
+  }
+  return clean;
+}
+
 function addWorkflowTagForRequest(app, record, tag) {
-  var cleanTag = String(tag || "").trim();
+  var cleanTag = normalizeWorkflowTagName(tag);
   if (!cleanTag) return false;
   var tagRecord = lookupByCode(app, "workflow_tags", cleanTag);
   if (!tagRecord) {
