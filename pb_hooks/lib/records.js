@@ -205,29 +205,40 @@ function findStaffByIdentity(app, identityKey) {
   return findFirstByData(app, "staff_users", "identityKey", identityKey);
 }
 
-function upsertStaffUser(app, staffIdentity, displayName, options) {
+function staffAuthEmailForIdentity(identityKey) {
+  return String(identityKey || "").replace(/[^a-z0-9._-]+/g, ".") + "@staff.asap.local";
+}
+
+function duplicateStaffUserError() {
+  var err = new Error("Staff user already exists.");
+  err.code = 409;
+  err.duplicate = true;
+  return err;
+}
+
+function isDuplicateSaveError(err) {
+  var text = String(err && (err.message || err)).toLowerCase();
+  return text.indexOf("unique") >= 0 || text.indexOf("already exists") >= 0 || text.indexOf("validation_not_unique") >= 0;
+}
+
+function findStaffByEmail(app, email) {
+  email = String(email || "").trim().toLowerCase();
+  if (!email) return null;
+  return findFirstByData(app, "staff_users", "email", email);
+}
+
+function applyStaffUserFields(app, record, staffIdentity, displayName, options) {
   options = options || {};
-  if (typeof staffIdentity === "string") {
-    staffIdentity = identity.parseStaffIdentity(staffIdentity, options.defaultDomain || "");
-  }
   var username = identity.normalizeUsername(staffIdentity.username || "");
   var domain = identity.normalizeDomain(staffIdentity.domain || "");
   var identityKey = staffIdentity.identityKey || identity.buildIdentityKey(domain, username);
-  var record = findStaffByIdentity(app, identityKey);
-  var existingRole = "";
-  if (!record) {
-    record = new Record(app.findCollectionByNameOrId("staff_users"));
-    record.setEmail(identityKey.replace(/[^a-z0-9._-]+/g, ".") + "@staff.asap.local");
-    record.setRandomPassword();
-  } else {
-    existingRole = String(record.get("role") || "").trim();
-  }
+
   record.set("username", username);
   record.set("domain", domain);
   record.set("identityKey", identityKey);
   record.set("displayName", displayName || username);
-  record.set("role", existingRole || options.defaultRole || "staff");
-  record.set("active", true);
+  record.set("role", options.role || options.defaultRole || "staff");
+  record.set("active", options.active !== false);
   if (options.polarisUserId !== undefined) {
     record.set("polarisUserId", String(options.polarisUserId || ""));
   }
@@ -245,13 +256,69 @@ function upsertStaffUser(app, staffIdentity, displayName, options) {
   if (options.scope !== undefined) {
     record.set("scope", String(options.scope || "library"));
   } else if (!record.get("scope")) {
-    record.set("scope", options.defaultRole === "super_admin" ? "system" : "library");
+    record.set("scope", options.defaultRole === "super_admin" || options.role === "super_admin" ? "system" : "library");
   }
   if (options.lastOrgSync !== false) {
     record.set("lastOrgSync", new Date().toISOString());
   }
   record.set("lastPolarisLogin", new Date().toISOString());
   record.setVerified(true);
+}
+
+function createStaffUser(app, staffIdentity, displayName, options) {
+  options = options || {};
+  if (typeof staffIdentity === "string") {
+    staffIdentity = identity.parseStaffIdentity(staffIdentity, options.defaultDomain || "");
+  }
+  var username = identity.normalizeUsername(staffIdentity.username || "");
+  var domain = identity.normalizeDomain(staffIdentity.domain || "");
+  var identityKey = staffIdentity.identityKey || identity.buildIdentityKey(domain, username);
+  var authEmail = String(options.email || "").trim().toLowerCase() || staffAuthEmailForIdentity(identityKey);
+
+  if (findStaffByIdentity(app, identityKey) || findStaffByEmail(app, authEmail)) {
+    throw duplicateStaffUserError();
+  }
+
+  var record = new Record(app.findCollectionByNameOrId("staff_users"));
+  record.setEmail(authEmail);
+  record.setRandomPassword();
+  applyStaffUserFields(app, record, {
+    username: username,
+    domain: domain,
+    identityKey: identityKey,
+  }, displayName, options);
+
+  try {
+    app.save(record);
+  } catch (err) {
+    if (isDuplicateSaveError(err)) {
+      throw duplicateStaffUserError();
+    }
+    throw err;
+  }
+  return record;
+}
+
+function upsertStaffUser(app, staffIdentity, displayName, options) {
+  options = options || {};
+  if (typeof staffIdentity === "string") {
+    staffIdentity = identity.parseStaffIdentity(staffIdentity, options.defaultDomain || "");
+  }
+  var username = identity.normalizeUsername(staffIdentity.username || "");
+  var domain = identity.normalizeDomain(staffIdentity.domain || "");
+  var identityKey = staffIdentity.identityKey || identity.buildIdentityKey(domain, username);
+  var record = findStaffByIdentity(app, identityKey);
+  var existingRole = "";
+  if (!record) {
+    record = new Record(app.findCollectionByNameOrId("staff_users"));
+    record.setEmail(staffAuthEmailForIdentity(identityKey));
+    record.setRandomPassword();
+  } else {
+    existingRole = String(record.get("role") || "").trim();
+  }
+  options.role = existingRole || options.defaultRole || "staff";
+  options.active = true;
+  applyStaffUserFields(app, record, staffIdentity, displayName, options);
   app.save(record);
   return record;
 }
@@ -658,7 +725,9 @@ module.exports = {
   hasStaffUsers: hasStaffUsers,
   countAdminUsers: countAdminUsers,
   countSuperAdminUsers: countSuperAdminUsers,
+  createStaffUser: createStaffUser,
   findStaffByIdentity: findStaffByIdentity,
+  findStaffByEmail: findStaffByEmail,
   normalizeAgegroup: normalizeAgegroup,
   normalizeCloseReason: normalizeCloseReason,
   normalizeFormat: normalizeFormat,

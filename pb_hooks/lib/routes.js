@@ -561,17 +561,25 @@ function staffUserCreate(e) {
   if (["staff","admin","super_admin"].indexOf(role) < 0) return e.json(400, { message: "Role must be staff, admin, or super admin." });
   if (role === "super_admin" && !isSuperAdmin(admin)) return e.json(403, { message: "Only a super admin can assign the super admin role." });
   if (!isSuperAdmin(admin) && !sameLibrary(admin, libraryOrgId)) return e.json(403, { message: "Library admins can only create staff in their own library." });
-  var record = records.upsertStaffUser(e.app, parsed, payload.displayName || parsed.display, {
-    defaultRole: role,
-    scope: role === "super_admin" ? "system" : "library",
-    libraryOrgId: role === "super_admin" ? "" : libraryOrgId,
-    libraryOrgName: role === "super_admin" ? "System" : libraryOrgName,
-    active: true
-  });
-  record.set("role", role);
-  record.set("active", true);
-  e.app.save(record);
-  return e.json(200, staffPublicJson(record));
+  try {
+    var record = records.createStaffUser(e.app, parsed, payload.displayName || parsed.display, {
+      role: role,
+      scope: role === "super_admin" ? "system" : "library",
+      libraryOrgId: role === "super_admin" ? "" : libraryOrgId,
+      libraryOrgName: role === "super_admin" ? "System" : libraryOrgName,
+      active: true
+    });
+    return e.json(201, staffPublicJson(record));
+  } catch (err) {
+    if (err && err.code === 409) {
+      var message = isSuperAdmin(admin)
+        ? "This user already exists. Existing accounts cannot be added again from this form. Use the existing user record to change roles or permissions."
+        : "This user already exists and cannot be added again.";
+      return e.json(409, { message: message });
+    }
+    e.app.logger().error("Staff user create failed", "identityKey", parsed.identityKey, "error", String(err));
+    return e.json(400, { message: err.message || "Could not create staff user." });
+  }
 }
 
 function staffUserDelete(e) {
