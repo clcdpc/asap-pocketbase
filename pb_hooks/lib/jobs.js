@@ -4,10 +4,10 @@ const orgs = require(`${__hooks}/lib/orgs.js`);
 const polaris = require(`${__hooks}/lib/polaris.js`);
 const records = require(`${__hooks}/lib/records.js`);
 
-const POLARIS_TAG_FOUND = "dupe found in Polaris";
+const POLARIS_TAG_FOUND = "Identifier found";
 const POLARIS_TAG_NOT_FOUND = "Identifier number not found in system";
 const POLARIS_TAG_MULTIPLE_MATCHES = "Multiple Polaris matches";
-const POLARIS_MULTIPLE_MATCH_NOTE = "Identifier search found multiple Polaris matches; ASAP used the first result from the Polaris publication date sort.";
+const POLARIS_MULTIPLE_MATCH_NOTE = "Identifier number search found multiple Polaris matches; ASAP used the first result by publication date descending.";
 
 function runScheduledHoldCheck(app) {
   var jobRun = startJobRun(app, "asap-hold-check");
@@ -383,12 +383,56 @@ function runWeeklyStaffActionSummary(app, options) {
 
 function mapIsbnCheckSuggestion(status) {
   if (status === "found") {
-    return "dupe found in Polaris";
+    return POLARIS_TAG_FOUND;
   }
   if (status === "not_found") {
     return "Identifier number not found in system";
   }
   return "";
+}
+
+function classifyPolarisHoldResult(hold) {
+  var statusValue = String(hold && hold.statusValue || "");
+  var message = String(hold && hold.payload && (hold.payload.Message || hold.payload.ErrorMessage) || "");
+  var map = {
+    "6": {
+      ok: true,
+      tag: "Hold exists (same patron)",
+      note: "Polaris reported an existing duplicate hold request for this patron."
+    },
+    "29": {
+      ok: true,
+      tag: "Hold exists (same patron)",
+      note: "Polaris reported an existing duplicate hold request for this patron."
+    },
+    "-4001": { ok: false, tag: "Hold failed: patron", note: "Invalid patron ID supplied." },
+    "-4002": { ok: false, tag: "Hold failed: workstation", note: "Invalid workstation ID supplied." },
+    "-4004": { ok: false, tag: "Hold failed: org", note: "Invalid requesting org ID supplied." },
+    "-4006": { ok: false, tag: "Hold failed: bib", note: "Invalid bibliographic record ID supplied." },
+    "-4007": { ok: false, tag: "Hold failed: pickup", note: "Invalid pickup org ID supplied." },
+    "-4020": { ok: false, tag: "Hold failed: pickup", note: "Hold pickup area invalid for pickup branch." },
+    "-4021": { ok: false, tag: "Hold failed: pickup", note: "Hold pickup area ID invalid." },
+    "-4022": { ok: false, tag: "Hold failed: pickup", note: "Hold pickup area not enabled for pickup branch." }
+  };
+  if (map[statusValue]) {
+    return Object.assign({ statusValue: statusValue, message: message }, map[statusValue]);
+  }
+  if (hold && hold.ok) {
+    return {
+      ok: true,
+      statusValue: statusValue,
+      tag: "Hold placed",
+      note: "Polaris hold placement succeeded.",
+      message: message
+    };
+  }
+  return {
+    ok: false,
+    statusValue: statusValue,
+    tag: "Hold failed",
+    note: message || ("Polaris hold placement failed with status " + statusValue + "."),
+    message: message
+  };
 }
 
 function flagMultiplePolarisMatches(app, record, bibResult) {
@@ -780,29 +824,25 @@ function processPendingHolds(app, staff, result) {
       }
 
       var hold = polaris.placeHold(staff, bibId, patron.PatronID);
-      // Status 29 or 6 means "Duplicate hold request" - i.e., the hold already exists in Polaris.
-      var isDuplicate = String(hold.statusValue) === "29" || String(hold.statusValue) === "6";
+      var holdClassification = classifyPolarisHoldResult(hold);
 
-      if (!hold.ok && !isDuplicate) {
-        var errMsg = "";
-        if (hold.payload) {
-          errMsg = hold.payload.Message || hold.payload.ErrorMessage || "";
-        }
-        errMsg = errMsg || ("Polaris Error " + hold.statusValue);
-        records.appendSystemNote(record, "SKIP: Hold placement failed. " + errMsg);
+      if (!holdClassification.ok) {
+        records.addWorkflowTagForRequest(app, record, holdClassification.tag);
+        records.appendSystemNote(record, "SKIP: " + holdClassification.note);
         app.save(record);
-        app.logger().warn("ASAP hold placement skipped", "recordId", record.id, "statusValue", hold.statusValue, "payload", JSON.stringify(hold.payload));
+        app.logger().warn("ASAP hold placement skipped", "recordId", record.id, "statusValue", holdClassification.statusValue, "payload", JSON.stringify(hold && hold.payload));
         result.skipped++;
         continue;
       }
 
-      var note = isDuplicate ? "HOLD ALREADY EXISTS IN POLARIS" : "HOLD PLACED FOR PATRON";
+      var note = holdClassification.note;
       
       record.set("bibid", bibId);
       polaris.reconcileRecord(app, staff, record, bibId);
       record.set("status", records.STATUS.HOLD_PLACED);
       record.set("editedBy", "system");
       record.set("updated", new Date().toISOString());
+      records.addWorkflowTagForRequest(app, record, holdClassification.tag);
       records.appendSystemNote(record, note);
       records.setCanonicalRefs(app, record);
       app.save(record);
@@ -868,6 +908,7 @@ function processCheckedOut(app, staff, result) {
 
 module.exports = {
   buildWeeklyStaffActionSummary: buildWeeklyStaffActionSummary,
+  classifyPolarisHoldResult: classifyPolarisHoldResult,
   runScheduledHoldCheck: runScheduledHoldCheck,
   runScheduledOrganizationSync: runScheduledOrganizationSync,
   runWeeklyStaffActionSummary: runWeeklyStaffActionSummary,

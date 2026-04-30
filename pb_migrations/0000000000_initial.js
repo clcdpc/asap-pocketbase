@@ -568,8 +568,17 @@ migrate((app) => {
   ]);
 
   seedLookup(app, workflowTags, [
-    { id: "tagpolarfound10", code: "dupe found in Polaris", label: "Dupe found in Polaris", description: "ISBN/BIB lookup found a Polaris bibliographic record." },
-    { id: "tagpolarnot0200", code: "ISBN not found in system", label: "ISBN not found in system", description: "ISBN/BIB lookup did not find a Polaris bibliographic record." },
+    { id: "tagidentfound01", code: "Identifier found", label: "Identifier found", description: "Identifier lookup found a Polaris bibliographic record." },
+    { id: "tagmultmatch001", code: "Multiple Polaris matches", label: "Multiple Polaris matches", description: "Identifier lookup found more than one Polaris bibliographic record." },
+    { id: "tagholdplaced01", code: "Hold placed", label: "Hold placed", description: "Polaris hold placement succeeded." },
+    { id: "tagexistshold01", code: "Hold exists (same patron)", label: "Hold exists (same patron)", description: "Polaris reported an existing duplicate hold request for this patron." },
+    { id: "tagfailpatron01", code: "Hold failed: patron", label: "Hold failed: patron", description: "Polaris hold placement failed because of patron data." },
+    { id: "tagfailbib00001", code: "Hold failed: bib", label: "Hold failed: bib", description: "Polaris hold placement failed because of bibliographic record data." },
+    { id: "tagfailpickup01", code: "Hold failed: pickup", label: "Hold failed: pickup", description: "Polaris hold placement failed because of pickup settings." },
+    { id: "tagfailworkst01", code: "Hold failed: workstation", label: "Hold failed: workstation", description: "Polaris hold placement failed because of workstation settings." },
+    { id: "tagfailorg00001", code: "Hold failed: org", label: "Hold failed: org", description: "Polaris hold placement failed because of organization settings." },
+    { id: "tagholdfailed01", code: "Hold failed", label: "Hold failed", description: "Polaris hold placement failed." },
+    { id: "tagpolarnot0200", code: "Identifier number not found in system", label: "Identifier number not found in system", description: "Identifier lookup did not find a Polaris bibliographic record." },
   ]);
 
   saveRecord(app, systemSettings, "settings0000001", {

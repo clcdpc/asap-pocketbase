@@ -37,6 +37,18 @@ body {
   font-size: 0.9rem;
 }
 
+.staff-grid-filter-bar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+#tag-filter {
+  max-width: 260px;
+}
+
 .org-checkbox-scroll {
   max-height: 500px;
   overflow-y: auto;
@@ -689,15 +701,40 @@ code {
   width: 80px;
 }
 
-/* Differentiate ASAP duplicate badges from Polaris workflow tags */
 .asap-duplicate-badge {
   border: 1px solid rgba(0, 0, 0, 0.12);
 }
 
-.asap-polaris-tag {
-  background-color: #0b5ed7;
-  border: 1px dashed rgba(255, 255, 255, 0.75);
+.edit-modal-tags {
+  margin: 0 0 1rem;
+}
+
+.workflow-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  max-width: 100%;
+}
+
+.workflow-tag {
+  align-items: center;
+  background: #0b5ed7;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  border-radius: 0.35rem;
   color: #fff;
+  display: inline-flex;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  padding: 0.15rem 0.45rem;
+  white-space: normal;
+}
+
+.asap-polaris-tag {
+  border-color: rgba(255, 255, 255, 0.75);
+  border-style: dashed;
 }
 
 .asap-isbn-check-badge {

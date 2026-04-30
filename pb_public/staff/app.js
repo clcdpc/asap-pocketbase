@@ -9,6 +9,8 @@ const setupForm = document.getElementById('setup-form');
 const logoutBtn = document.getElementById('logout-btn');
 const profileBtn = document.getElementById('profile-btn');
 const gridContainer = document.getElementById('grid-container');
+const staffGridFilterBar = document.getElementById('staff-grid-filter-bar');
+const tagFilterSelect = document.getElementById('tag-filter');
 const settingsContainer = document.getElementById('settings-container');
 const settingsForm = document.getElementById('settings-form');
 let grid;
@@ -153,6 +155,7 @@ const stageQueryMap = {
 
 let currentStatus = requestedStatusFromUrl() || 'suggestion';
 let currentSuggestions = [];
+let activeTagFilter = '';
 let allSuggestions = [];
 let verifiedNewSuggestionBarcode = '';
 let verifiedBibId = '';
@@ -952,9 +955,17 @@ document.querySelectorAll('#status-tabs .nav-link').forEach(link => {
     if (nextStatus !== 'settings') {
       updateStageQuery(nextStatus);
     }
+    activeTagFilter = '';
     loadTab(currentStatus);
   });
 });
+
+if (tagFilterSelect) {
+  tagFilterSelect.addEventListener('change', event => {
+    activeTagFilter = event.target.value || '';
+    renderCurrentGrid(status);
+  });
+}
 
 async function loadTab(status) {
   const tabDesc = document.getElementById('tab-desc');
@@ -1012,6 +1023,7 @@ async function loadTab(status) {
 
   if (status === 'settings') {
     gridContainer.classList.add('hidden');
+    hideTagFilter();
     settingsContainer.classList.remove('hidden');
     activateSettingsSection(getSettingsSectionFromHash() || currentSettingsSection, { updateHash: false });
     if (!isAdminStaff()) {
@@ -1033,20 +1045,14 @@ async function loadTab(status) {
     updateTabCounts(allSuggestions);
 
     currentSuggestions = allSuggestions.filter(row => normalizeStatus(row.status) === status);
+    updateTagFilter(currentSuggestions);
 
     if (!currentSuggestions.length) {
       gridContainer.innerHTML = `<div class="alert alert-light border">${escapeAttr(emptyStateMessages[status] || 'No suggestions found.')}</div>`;
       return;
     }
 
-    grid = new gridjs.Grid({
-      columns: getGridColumns(status),
-      data: currentSuggestions.map(row => getGridRow(row, status)),
-      search: true,
-      pagination: { limit: 25 },
-      sort: true,
-      width: '100%'
-    }).render(gridContainer);
+    renderCurrentGrid();
   } catch (err) {
     console.error('Failed to load data', err);
   }
@@ -1065,6 +1071,77 @@ function resetGrid() {
   }
   grid = null;
   gridContainer.innerHTML = '';
+}
+
+function tagCountsForRecords(records) {
+  const counts = new Map();
+  (records || []).forEach(record => {
+    const tags = Array.isArray(record.workflowTags) ? record.workflowTags : [];
+    tags.forEach(tag => {
+      const clean = String(tag || '').trim();
+      if (!clean || /^\d+$/.test(clean)) return;
+      counts.set(clean, (counts.get(clean) || 0) + 1);
+    });
+  });
+  return Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+function hideTagFilter() {
+  activeTagFilter = '';
+  if (tagFilterSelect) {
+    tagFilterSelect.classList.add('hidden');
+    tagFilterSelect.innerHTML = '';
+  }
+  if (staffGridFilterBar) {
+    staffGridFilterBar.classList.add('hidden');
+  }
+}
+
+function updateTagFilter(records) {
+  if (!tagFilterSelect || !staffGridFilterBar) return;
+  const counts = tagCountsForRecords(records);
+  if (!counts.length) {
+    hideTagFilter();
+    return;
+  }
+
+  const previous = activeTagFilter;
+  tagFilterSelect.innerHTML = [
+    '<option value="">All tags</option>',
+    ...counts.map(([tag, count]) => `<option value="${escapeAttr(tag)}">${escapeAttr(tag)} (${count})</option>`)
+  ].join('');
+
+  const stillExists = counts.some(([tag]) => tag === previous);
+  tagFilterSelect.value = stillExists ? previous : '';
+  activeTagFilter = tagFilterSelect.value;
+  tagFilterSelect.classList.remove('hidden');
+  staffGridFilterBar.classList.remove('hidden');
+}
+
+function applyTagFilter(records) {
+  if (!activeTagFilter) return records || [];
+  return (records || []).filter(record => {
+    const tags = Array.isArray(record.workflowTags) ? record.workflowTags : [];
+    return tags.some(tag => String(tag || '').trim() === activeTagFilter);
+  });
+}
+
+function renderCurrentGrid(status = currentStatus) {
+  resetGrid();
+  const visibleRecords = applyTagFilter(currentSuggestions);
+  if (!visibleRecords.length) {
+    gridContainer.innerHTML = '<div class="alert alert-light border">No suggestions match this workflow tag.</div>';
+    return;
+  }
+
+  grid = new gridjs.Grid({
+    columns: getGridColumns(status),
+    data: visibleRecords.map(row => getGridRow(row, status)),
+    search: true,
+    pagination: { limit: 25 },
+    sort: true,
+    width: '100%'
+  }).render(gridContainer);
 }
 
 function updateTabCounts(records) {
@@ -1247,8 +1324,23 @@ function getWorkflowTagBadgesHtml(row) {
   if (!visibleTags.length) return '';
   return visibleTags.map(tag => {
     const label = escapeAttr(tag);
-    return ` <span class="badge badge-primary asap-polaris-tag" title="Polaris check tag">${label}</span>`;
+    return ` <span class="badge workflow-tag asap-polaris-tag" title="Polaris check tag">${label}</span>`;
   }).join('');
+}
+
+function hasWorkflowTag(row, label) {
+  const tags = Array.isArray(row?.workflowTags) ? row.workflowTags : [];
+  return tags.some(tag => String(tag || '').trim() === label);
+}
+
+function renderWorkflowTags(tags) {
+  const clean = Array.isArray(tags)
+    ? tags.map(tag => String(tag || '').trim()).filter(tag => tag && !/^\d+$/.test(tag))
+    : [];
+  if (!clean.length) {
+    return '<div class="text-muted small">No workflow tags</div>';
+  }
+  return `<div class="workflow-tag-list">${clean.map(tag => `<span class="workflow-tag">${escapeAttr(tag)}</span>`).join('')}</div>`;
 }
 
 function getIsbnCheckBadgesHtml(row) {
@@ -1261,6 +1353,8 @@ function getIsbnCheckBadgesHtml(row) {
   };
   const label = isbnStatusLabels[status];
   if (!label) return '';
+  if (status === 'found' && hasWorkflowTag(row, 'Identifier found')) return '';
+  if (status === 'not_found' && hasWorkflowTag(row, 'Identifier number not found in system')) return '';
   const tooltip = status === 'pending'
     ? 'Background identifier number processing is still running. This suggestion is already submitted.'
     : 'Identifier number background processing result.';
@@ -1588,6 +1682,7 @@ function openEdit(id, nextStatus, dialogTitle, actionStr) {
   setSelectValue(document.getElementById('edit-publication'), row.publication || publicationOptions[0]);
   document.getElementById('edit-exact-publication-date').value = dateOnly(row.exactPublicationDate);
   renderEditPatronContext(row);
+  renderEditWorkflowTags(row.workflowTags);
 
   const username = (pb.authStore.model && pb.authStore.model.username) ? pb.authStore.model.username : 'staff';
   const today = formatStandardDate(new Date());
@@ -1658,6 +1753,15 @@ function renderEditPatronContext(row) {
     <div><strong>Barcode:</strong> ${escapeAttr(barcode)}</div>
     <div><strong>Library:</strong> ${escapeAttr(libraryOrgName)}</div>
     <div><strong>Preferred pickup branch:</strong> ${escapeAttr(preferredPickupBranchName)}</div>
+  `;
+}
+
+function renderEditWorkflowTags(tags) {
+  const container = document.getElementById('edit-workflow-tags');
+  if (!container) return;
+  container.innerHTML = `
+    <div class="small font-weight-bold mb-1">Workflow tags</div>
+    ${renderWorkflowTags(tags)}
   `;
 }
 

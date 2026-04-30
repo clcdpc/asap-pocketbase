@@ -155,6 +155,10 @@
     </div>
     <div id="job-msg" class="mb-3 font-weight-bold job-message"></div>
 
+    <div id="staff-grid-filter-bar" class="staff-grid-filter-bar hidden">
+      <label for="tag-filter" class="sr-only">Filter by workflow tag</label>
+      <select id="tag-filter" class="form-control form-control-sm hidden" aria-label="Filter by workflow tag"></select>
+    </div>
     <div id="grid-container"></div>
 
     <div id="settings-container" class="hidden">
@@ -879,6 +883,11 @@
         <select id="edit-rejection-template" class="form-control form-control-sm">
           <option value="">Default rejection template</option>
         </select>
+      </div>
+
+      <div id="edit-workflow-tags" class="edit-modal-tags">
+        <div class="small font-weight-bold mb-1">Workflow tags</div>
+        <div class="text-muted small">No workflow tags</div>
       </div>
 
       <div class="form-group mb-2">
