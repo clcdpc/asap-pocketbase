@@ -2465,7 +2465,8 @@ async function populateLibrarySelector() {
 
     const orgs = await pb.collection('polaris_organizations').getFullList({
       filter: 'organizationCodeId = "2"',
-      sort: 'displayName'
+      sort: 'displayName',
+      requestKey: 'polaris-orgs-library-selector'
     });
 
     orgs.forEach(org => {
@@ -2882,7 +2883,11 @@ async function populateStaffLibraryOptions() {
   select.innerHTML = '<option value="">Select library</option>';
   const me = pb.authStore.model || {};
   if (isSuperAdminStaff()) {
-    const orgs = await pb.collection('polaris_organizations').getFullList({ filter: 'organizationCodeId = "2"', sort: 'displayName' });
+    const orgs = await pb.collection('polaris_organizations').getFullList({
+      filter: 'organizationCodeId = "2"',
+      sort: 'displayName',
+      requestKey: 'polaris-orgs-staff-options'
+    });
     orgs.forEach(org => select.appendChild(new Option(`${org.displayName || org.name} (ID ${org.organizationId})`, org.organizationId)));
   } else if (me.libraryOrgId) {
     select.appendChild(new Option(`${me.libraryOrgName || me.libraryOrgId} (ID ${me.libraryOrgId})`, me.libraryOrgId));
@@ -3501,7 +3506,8 @@ async function renderLibraryParticipationCheckboxes() {
   try {
     const orgs = await pb.collection('polaris_organizations').getFullList({
       filter: 'organizationCodeId = "2"',
-      sort: 'displayName'
+      sort: 'displayName',
+      requestKey: 'polaris-orgs-participation'
     });
 
     if (!orgs.length) {
