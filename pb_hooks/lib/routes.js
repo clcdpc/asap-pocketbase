@@ -1397,7 +1397,8 @@ function hasLibraryOverride(app, orgId) {
     ["email_templates", "scope = 'library' && libraryOrganization = {:org}"],
     ["rejection_templates", "scope = 'library' && libraryOrganization = {:org}"],
     ["material_formats", "scope = 'library' && libraryOrganization = {:org}"],
-    ["audience_groups", "scope = 'library' && libraryOrganization = {:org}"]
+    ["audience_groups", "scope = 'library' && libraryOrganization = {:org}"],
+    ["patron_library_settings", "libraryOrganization = {:org}"]
   ];
   for (var i = 0; i < filters.length; i++) {
     try {
@@ -1505,6 +1506,22 @@ function saveLibraryScopedSettings(app, orgId, payload) {
   saveEmailSettings(app, "library", orgId, payload.emails || {});
 }
 
+function savePatronLibrarySettings(app, orgId, ui) {
+  if (!ui || !ui.duplicateStatusLabels) return;
+  var org = config.findOrganization(app, orgId);
+  if (!org) throw new Error("Library organization must be synced before saving library-specific settings.");
+  var collection = app.findCollectionByNameOrId("patron_library_settings");
+  var record;
+  try {
+    record = app.findFirstRecordByFilter("patron_library_settings", "libraryOrganization = {:org}", { org: org.id });
+  } catch (err) {
+    record = new Record(collection);
+    record.set("libraryOrganization", org.id);
+  }
+  record.set("duplicateRequestStatusLabels", config.mergeDuplicateStatusLabels(ui.duplicateStatusLabels));
+  app.save(record);
+}
+
 function saveSmtpSettings(app, smtp) {
   var record = config.getSmtpSettings(app);
   ["host", "port", "username", "password", "tls"].forEach(function (key) {
@@ -1555,7 +1572,7 @@ function saveUiSettings(app, scope, orgId, ui) {
   Object.keys(fieldMap).forEach(function (key) {
     if (ui[key] !== undefined) record.set(fieldMap[key], ui[key]);
   });
-  if (ui.duplicateStatusLabels) {
+  if (ui.duplicateStatusLabels && scope === "system") {
     var d = ui.duplicateStatusLabels;
     record.set("duplicateLabelSuggestion", d.suggestion || "");
     record.set("duplicateLabelOutstandingPurchase", d.outstanding_purchase || "");
@@ -1567,6 +1584,9 @@ function saveUiSettings(app, scope, orgId, ui) {
     record.set("duplicateLabelHoldNotPickedUp", d.hold_not_picked_up || "");
     record.set("duplicateLabelManual", d.manual || "");
     record.set("duplicateLabelSilent", d.silent || d["Silently Closed"] || "");
+  }
+  if (scope === "library") {
+    savePatronLibrarySettings(app, orgId, ui);
   }
   if (ui.systemNotEnabledMessage !== undefined) record.set("systemNotEnabledMessage", ui.systemNotEnabledMessage);
   if (ui.publicationOptions !== undefined) record.set("publicationOptions", Array.isArray(ui.publicationOptions) ? ui.publicationOptions.join("\n") : String(ui.publicationOptions || ""));
@@ -1729,9 +1749,15 @@ function resetLibrarySettings(app, orgId) {
   var org = config.findOrganization(app, orgId);
   if (!org) return;
   ["workflow_settings", "ui_settings", "email_templates", "rejection_templates", "material_formats", "audience_groups"].forEach(function (collection) {
-    var rows = app.findRecordsByFilter(collection, "scope = 'library' && libraryOrganization = {:org}", "", 200, 0, { org: org.id });
-    rows.forEach(function (row) { app.delete(row); });
+    try {
+      var rows = app.findRecordsByFilter(collection, "scope = 'library' && libraryOrganization = {:org}", "", 200, 0, { org: org.id });
+      rows.forEach(function (row) { app.delete(row); });
+    } catch (err) {}
   });
+  try {
+    var patronRows = app.findRecordsByFilter("patron_library_settings", "libraryOrganization = {:org}", "", 200, 0, { org: org.id });
+    patronRows.forEach(function (row) { app.delete(row); });
+  } catch (err2) {}
 }
 
 function staffRunPromoterCheck(e) {

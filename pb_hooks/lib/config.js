@@ -331,6 +331,80 @@ function mergeDuplicateStatusLabels(labels) {
   return Object.assign(defaultDuplicateStatusLabels(), parseJsonObject(labels, labels || {}));
 }
 
+function duplicateStatusLabelsFromUiRecord(record) {
+  record = record || {};
+  function get(name) {
+    try {
+      return record.get ? record.get(name) : "";
+    } catch (err) {
+      return "";
+    }
+  }
+  return {
+    suggestion: get("duplicateLabelSuggestion"),
+    outstanding_purchase: get("duplicateLabelOutstandingPurchase"),
+    pending_hold: get("duplicateLabelPendingHold"),
+    hold_placed: get("duplicateLabelHoldPlaced"),
+    closed: get("duplicateLabelClosed"),
+    rejected: get("duplicateLabelRejected"),
+    hold_completed: get("duplicateLabelHoldCompleted"),
+    hold_not_picked_up: get("duplicateLabelHoldNotPickedUp"),
+    manual: get("duplicateLabelManual"),
+    silent: get("duplicateLabelSilent"),
+    "Silently Closed": get("duplicateLabelSilent")
+  };
+}
+
+function hasAnyDuplicateStatusLabel(labels) {
+  labels = labels || {};
+  var keys = Object.keys(labels);
+  for (var i = 0; i < keys.length; i++) {
+    if (String(labels[keys[i]] || "").trim()) return true;
+  }
+  return false;
+}
+
+function patronLibrarySettingsRecord(app, orgId) {
+  app = app || $app;
+  var orgRecordId = orgIdForSettings(app, orgId);
+  if (!orgRecordId || !safeCollection(app, "patron_library_settings")) return null;
+  try {
+    return app.findFirstRecordByFilter("patron_library_settings", "libraryOrganization = {:org}", { org: orgRecordId });
+  } catch (err) {
+    return null;
+  }
+}
+
+function duplicateStatusLabelResolution(app, orgId, systemUiRecord) {
+  app = app || $app;
+  var defaults = defaultDuplicateStatusLabels();
+  var systemRecord = systemUiRecord || uiRecord(app, "");
+  var globalLabels = mergeDuplicateStatusLabels(duplicateStatusLabelsFromUiRecord(systemRecord));
+  var requestedOrgId = String(orgId || "").trim();
+  if (!requestedOrgId) {
+    return {
+      labels: mergeDuplicateStatusLabels(globalLabels),
+      source: hasAnyDuplicateStatusLabel(duplicateStatusLabelsFromUiRecord(systemRecord)) ? "global" : "default",
+      inherited: false
+    };
+  }
+
+  var libraryRecord = patronLibrarySettingsRecord(app, requestedOrgId);
+  if (libraryRecord) {
+    return {
+      labels: Object.assign({}, defaults, globalLabels, parseJsonObject(libraryRecord.get("duplicateRequestStatusLabels"), {})),
+      source: "library",
+      inherited: false
+    };
+  }
+
+  return {
+    labels: Object.assign({}, defaults, globalLabels),
+    source: "global",
+    inherited: true
+  };
+}
+
 function scopedRows(app, collectionName, orgId) {
   app = app || $app;
   var rows = [];
@@ -365,6 +439,8 @@ function uiTextFromRecord(app, record, orgId) {
   var ageGroups = audienceGroups(app, orgId, lines(record.get("ageGroups"), ["Adult", "Young Adult / Teen", "Children"]));
   var formats = materialFormats(app, orgId);
 
+  var duplicateResolution = duplicateStatusLabelResolution(app, orgId, orgId ? null : record);
+
   return {
     logoUrl: logoUrl,
     logoAlt: record.get("logoAlt") || "Library Logo",
@@ -377,19 +453,9 @@ function uiTextFromRecord(app, record, orgId) {
     successTitle: record.get("successTitle") || "Suggestion Submitted",
     successMessage: record.get("successMessage") || "You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>",
     alreadySubmittedMessage: record.get("alreadySubmittedMessage") || "This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.<div>Thank you for using this library's suggestion service.</div>",
-    duplicateStatusLabels: {
-      suggestion: record.get("duplicateLabelSuggestion") || "Received",
-      outstanding_purchase: record.get("duplicateLabelOutstandingPurchase") || "Under review",
-      pending_hold: record.get("duplicateLabelPendingHold") || "Being prepared",
-      hold_placed: record.get("duplicateLabelHoldPlaced") || "Hold placed",
-      closed: record.get("duplicateLabelClosed") || "Completed",
-      rejected: record.get("duplicateLabelRejected") || "Not selected for purchase",
-      hold_completed: record.get("duplicateLabelHoldCompleted") || "Completed",
-      hold_not_picked_up: record.get("duplicateLabelHoldNotPickedUp") || "Closed",
-      manual: record.get("duplicateLabelManual") || "Closed",
-      silent: record.get("duplicateLabelSilent") || "Closed",
-      "Silently Closed": record.get("duplicateLabelSilent") || "Closed"
-    },
+    duplicateStatusLabels: duplicateResolution.labels,
+    duplicateStatusLabelsSource: duplicateResolution.source,
+    duplicateStatusLabelsInherited: duplicateResolution.inherited,
     noEmailMessage: record.get("noEmailMessage") || "No email is specified on your library account, which means we won't be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.",
     systemNotEnabledMessage: record.get("systemNotEnabledMessage") || "Your library does not currently participate in this suggestion service.",
     ebookMessage: record.get("ebookMessage") || "<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
@@ -615,7 +681,7 @@ function uiText(app, orgId) {
 }
 
 function duplicateStatusLabels(app, orgId) {
-  return mergeDuplicateStatusLabels(uiText(app, orgId).duplicateStatusLabels);
+  return mergeDuplicateStatusLabels(duplicateStatusLabelResolution(app || $app, orgId).labels);
 }
 
 function allowedStaffUsers() {
