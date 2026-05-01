@@ -11,6 +11,19 @@ function parseJsonObject(value, fallback) {
   return fallback;
 }
 
+function parseJsonArray(value, fallback) {
+  fallback = Array.isArray(fallback) ? fallback : [];
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return fallback;
+  var text = value.trim();
+  if (!text) return fallback;
+  try {
+    var parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) return parsed;
+  } catch (err) {}
+  return fallback;
+}
+
 function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -105,6 +118,56 @@ function orgIdForSettings(app, orgId) {
 function lines(value, fallback) {
   var raw = String(value || "").split(/\r?\n/).map(function (line) { return line.trim(); }).filter(Boolean);
   return raw.length ? raw : fallback.slice();
+}
+
+function optionIdFromLabel(label, fallback) {
+  var code = String(label || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return code || fallback || "option";
+}
+
+function normalizeOptionList(value, fallbackLabels) {
+  var fallback = (fallbackLabels || []).map(function (label, index) {
+    return { id: optionIdFromLabel(label, "option_" + (index + 1)), label: label, enabled: true, sortOrder: (index + 1) * 10 };
+  });
+  var raw;
+  if (Array.isArray(value)) {
+    raw = value;
+  } else if (typeof value === "string" && value.trim().charAt(0) === "[") {
+    raw = parseJsonArray(value, []);
+  } else {
+    raw = lines(value, []).map(function (label) { return { label: label }; });
+  }
+  if (!raw.length) return fallback;
+  var seenLabels = {};
+  var seenIds = {};
+  var out = [];
+  raw.forEach(function (item, index) {
+    var obj = item && typeof item === "object" ? item : { label: item };
+    var label = String(obj.label || obj.name || obj.value || "").trim();
+    if (!label) return;
+    var labelKey = label.toLowerCase();
+    if (seenLabels[labelKey]) return;
+    seenLabels[labelKey] = true;
+    var id = String(obj.id || "").trim() || optionIdFromLabel(label, "option_" + (index + 1));
+    var baseId = id;
+    var suffix = 2;
+    while (seenIds[id]) {
+      id = baseId + "_" + suffix++;
+    }
+    seenIds[id] = true;
+    out.push({
+      id: id,
+      label: label,
+      enabled: obj.enabled !== false,
+      sortOrder: Number(obj.sortOrder || ((index + 1) * 10))
+    });
+  });
+  out.sort(function (a, b) { return (a.sortOrder || 0) - (b.sortOrder || 0); });
+  return out.length ? out : fallback;
+}
+
+function enabledOptionLabels(options) {
+  return normalizeOptionList(options, []).filter(function (opt) { return opt.enabled !== false; }).map(function (opt) { return opt.label; });
 }
 
 function getSystemSettings(app) {
@@ -364,7 +427,18 @@ function hasAnyDuplicateStatusLabel(labels) {
   return false;
 }
 
-function patronLibrarySettingsRecord(app, orgId) {
+function patronSettingsOverrideRecord(app, orgId) {
+  app = app || $app;
+  var requestedOrgId = String(orgId || "").trim();
+  if (!requestedOrgId || !safeCollection(app, "patron_settings_overrides")) return null;
+  try {
+    return app.findFirstRecordByFilter("patron_settings_overrides", "orgId = {:orgId}", { orgId: requestedOrgId });
+  } catch (err) {
+    return null;
+  }
+}
+
+function legacyPatronLibrarySettingsRecord(app, orgId) {
   app = app || $app;
   var orgRecordId = orgIdForSettings(app, orgId);
   if (!orgRecordId || !safeCollection(app, "patron_library_settings")) return null;
@@ -389,7 +463,24 @@ function duplicateStatusLabelResolution(app, orgId, systemUiRecord) {
     };
   }
 
-  var libraryRecord = patronLibrarySettingsRecord(app, requestedOrgId);
+  var overrideRecord = patronSettingsOverrideRecord(app, requestedOrgId);
+  if (overrideRecord) {
+    var overrideLabels = parseJsonObject(overrideRecord.get("duplicateStatusLabels"), {});
+    if (!hasAnyDuplicateStatusLabel(overrideLabels)) {
+      return {
+        labels: Object.assign({}, defaults, globalLabels),
+        source: "global",
+        inherited: true
+      };
+    }
+    return {
+      labels: Object.assign({}, defaults, globalLabels, overrideLabels),
+      source: "library",
+      inherited: false
+    };
+  }
+
+  var libraryRecord = legacyPatronLibrarySettingsRecord(app, requestedOrgId);
   if (libraryRecord) {
     return {
       labels: Object.assign({}, defaults, globalLabels, parseJsonObject(libraryRecord.get("duplicateRequestStatusLabels"), {})),
@@ -429,15 +520,26 @@ function scopedRows(app, collectionName, orgId) {
 
 function uiTextFromRecord(app, record, orgId) {
   const formatRules = require(`${__hooks}/lib/format_rules.js`);
+  var overrideRecord = orgId ? patronSettingsOverrideRecord(app, orgId) : null;
   var logoUrl = "/jpl.png";
   try {
     var logoFile = record.get("logo");
     if (logoFile) logoUrl = "/api/files/ui_settings/" + record.id + "/" + logoFile;
   } catch (err) {}
 
-  var publicationOptions = lines(record.get("publicationOptions"), ["Already published", "Coming soon", "Published a while back"]);
-  var ageGroups = audienceGroups(app, orgId, lines(record.get("ageGroups"), ["Adult", "Young Adult / Teen", "Children"]));
+  var globalPublicationOptions = normalizeOptionList(record.get("publicationOptions"), ["Already published", "Coming soon", "Published a while back"]);
+  var globalAgeGroups = normalizeOptionList(record.get("ageGroups"), ["Adult", "Young Adult / Teen", "Children"]);
+  var publicationOptions = overrideRecord && overrideRecord.get("publicationOptions")
+    ? normalizeOptionList(overrideRecord.get("publicationOptions"), enabledOptionLabels(globalPublicationOptions))
+    : globalPublicationOptions;
+  var ageGroups = overrideRecord && overrideRecord.get("ageGroups")
+    ? normalizeOptionList(overrideRecord.get("ageGroups"), enabledOptionLabels(globalAgeGroups))
+    : normalizeOptionList(audienceGroups(app, orgId, enabledOptionLabels(globalAgeGroups)), enabledOptionLabels(globalAgeGroups));
   var formats = materialFormats(app, orgId);
+  var overrideFormatRules = null;
+  if (overrideRecord && overrideRecord.get("patronFormatRules")) {
+    overrideFormatRules = parseJsonObject(overrideRecord.get("patronFormatRules"), {});
+  }
 
   var duplicateResolution = duplicateStatusLabelResolution(app, orgId, orgId ? null : record);
 
@@ -458,13 +560,15 @@ function uiTextFromRecord(app, record, orgId) {
     duplicateStatusLabelsInherited: duplicateResolution.inherited,
     noEmailMessage: record.get("noEmailMessage") || "No email is specified on your library account, which means we won't be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.",
     systemNotEnabledMessage: record.get("systemNotEnabledMessage") || "Your library does not currently participate in this suggestion service.",
-    ebookMessage: record.get("ebookMessage") || "<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
-    eaudiobookMessage: record.get("eaudiobookMessage") || "<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
+    ebookMessage: overrideRecord && overrideRecord.get("ebookMessage") ? overrideRecord.get("ebookMessage") : (record.get("ebookMessage") || "<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>"),
+    eaudiobookMessage: overrideRecord && overrideRecord.get("eaudiobookMessage") ? overrideRecord.get("eaudiobookMessage") : (record.get("eaudiobookMessage") || "<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>"),
     publicationOptions: publicationOptions,
     ageGroups: ageGroups,
     formatLabels: formats.labels,
     availableFormats: formats.available,
-    formatRules: formatRules.normalizeFormatRules(formats.rules)
+    formatRules: formatRules.normalizeFormatRules(overrideFormatRules || formats.rules),
+    patronSettingsSource: overrideRecord ? "library" : "global",
+    patronSettingsInherited: !!orgId && !overrideRecord
   };
 }
 

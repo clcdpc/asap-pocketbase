@@ -816,3 +816,23 @@ code {
 .staff-title-cell .workflow-tag-list {
   margin-top: 0.35rem;
 }
+
+.option-list-editor {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.option-list-row {
+  align-items: center;
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+}
+
+.option-list-row .form-control {
+  min-width: 0;
+}
+
+.option-list-row .btn {
+  min-width: 2rem;
+}

@@ -1398,11 +1398,12 @@ function hasLibraryOverride(app, orgId) {
     ["rejection_templates", "scope = 'library' && libraryOrganization = {:org}"],
     ["material_formats", "scope = 'library' && libraryOrganization = {:org}"],
     ["audience_groups", "scope = 'library' && libraryOrganization = {:org}"],
+    ["patron_settings_overrides", "orgId = {:orgId}"],
     ["patron_library_settings", "libraryOrganization = {:org}"]
   ];
   for (var i = 0; i < filters.length; i++) {
     try {
-      app.findFirstRecordByFilter(filters[i][0], filters[i][1], { org: org.id });
+      app.findFirstRecordByFilter(filters[i][0], filters[i][1], { org: org.id, orgId: String(orgId || "").trim() });
       return true;
     } catch (err) {}
   }
@@ -1507,18 +1508,22 @@ function saveLibraryScopedSettings(app, orgId, payload) {
 }
 
 function savePatronLibrarySettings(app, orgId, ui) {
-  if (!ui || !ui.duplicateStatusLabels) return;
-  var org = config.findOrganization(app, orgId);
-  if (!org) throw new Error("Library organization must be synced before saving library-specific settings.");
-  var collection = app.findCollectionByNameOrId("patron_library_settings");
+  if (!ui) return;
+  if (!config.findOrganization(app, orgId)) throw new Error("Library organization must be synced before saving library-specific settings.");
+  var collection = app.findCollectionByNameOrId("patron_settings_overrides");
   var record;
   try {
-    record = app.findFirstRecordByFilter("patron_library_settings", "libraryOrganization = {:org}", { org: org.id });
+    record = app.findFirstRecordByFilter("patron_settings_overrides", "orgId = {:orgId}", { orgId: String(orgId || "").trim() });
   } catch (err) {
     record = new Record(collection);
-    record.set("libraryOrganization", org.id);
+    record.set("orgId", String(orgId || "").trim());
   }
-  record.set("duplicateRequestStatusLabels", config.mergeDuplicateStatusLabels(ui.duplicateStatusLabels));
+  if (ui.duplicateStatusLabels !== undefined) record.set("duplicateStatusLabels", config.mergeDuplicateStatusLabels(ui.duplicateStatusLabels));
+  if (ui.publicationOptions !== undefined) record.set("publicationOptions", ui.publicationOptions);
+  if (ui.ageGroups !== undefined) record.set("ageGroups", ui.ageGroups);
+  if (ui.formatRules !== undefined) record.set("patronFormatRules", ui.formatRules);
+  if (ui.ebookMessage !== undefined) record.set("ebookMessage", ui.ebookMessage);
+  if (ui.eaudiobookMessage !== undefined) record.set("eaudiobookMessage", ui.eaudiobookMessage);
   app.save(record);
 }
 
@@ -1570,6 +1575,7 @@ function saveUiSettings(app, scope, orgId, ui) {
     eaudiobookMessage: "eaudiobookMessage"
   };
   Object.keys(fieldMap).forEach(function (key) {
+    if (scope === "library" && (key === "ebookMessage" || key === "eaudiobookMessage")) return;
     if (ui[key] !== undefined) record.set(fieldMap[key], ui[key]);
   });
   if (ui.duplicateStatusLabels && scope === "system") {
@@ -1589,11 +1595,20 @@ function saveUiSettings(app, scope, orgId, ui) {
     savePatronLibrarySettings(app, orgId, ui);
   }
   if (ui.systemNotEnabledMessage !== undefined) record.set("systemNotEnabledMessage", ui.systemNotEnabledMessage);
-  if (ui.publicationOptions !== undefined) record.set("publicationOptions", Array.isArray(ui.publicationOptions) ? ui.publicationOptions.join("\n") : String(ui.publicationOptions || ""));
-  if (ui.ageGroups !== undefined) record.set("ageGroups", Array.isArray(ui.ageGroups) ? ui.ageGroups.join("\n") : String(ui.ageGroups || ""));
+  if (scope === "system" && ui.publicationOptions !== undefined) record.set("publicationOptions", optionsToLines(ui.publicationOptions));
+  if (scope === "system" && ui.ageGroups !== undefined) record.set("ageGroups", optionsToLines(ui.ageGroups));
   app.save(record);
-  saveMaterialFormats(app, scope, orgId, ui);
-  saveAudienceGroups(app, scope, orgId, ui);
+  if (scope === "system") {
+    saveMaterialFormats(app, scope, orgId, ui);
+    saveAudienceGroups(app, scope, orgId, ui);
+  }
+}
+
+function optionsToLines(options) {
+  if (!Array.isArray(options)) return String(options || "");
+  return options.map(function (item) {
+    return String(item && typeof item === "object" ? item.label || "" : item || "").trim();
+  }).filter(Boolean).join("\n");
 }
 
 function scopedLookupRecord(app, collectionName, scope, orgId, code) {
@@ -1660,7 +1675,9 @@ function codeFromLabel(label, fallback) {
 function saveAudienceGroups(app, scope, orgId, ui) {
   if (ui.ageGroups === undefined) return;
   var labels = Array.isArray(ui.ageGroups) ? ui.ageGroups : String(ui.ageGroups || "").split(/\r?\n/);
-  labels = labels.map(function (label) { return String(label || "").trim(); }).filter(Boolean);
+  labels = labels.map(function (label) {
+    return String(label && typeof label === "object" ? label.label || "" : label || "").trim();
+  }).filter(Boolean);
   var org = scope === "library" ? config.findOrganization(app, orgId) : null;
   if (scope === "library" && !org) {
     throw new Error("Library organization must be synced before saving library-specific settings.");
@@ -1754,6 +1771,10 @@ function resetLibrarySettings(app, orgId) {
       rows.forEach(function (row) { app.delete(row); });
     } catch (err) {}
   });
+  try {
+    var overrideRows = app.findRecordsByFilter("patron_settings_overrides", "orgId = {:orgId}", "", 200, 0, { orgId: String(orgId || "").trim() });
+    overrideRows.forEach(function (row) { app.delete(row); });
+  } catch (errOverride) {}
   try {
     var patronRows = app.findRecordsByFilter("patron_library_settings", "libraryOrganization = {:org}", "", 200, 0, { org: org.id });
     patronRows.forEach(function (row) { app.delete(row); });

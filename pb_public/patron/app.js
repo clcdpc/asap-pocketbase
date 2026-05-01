@@ -648,7 +648,10 @@ function renderConflictMessage() {
 
 function normalizePublicationOptions(options) {
   const raw = Array.isArray(options) ? options : String(options || '').split(/\r?\n/);
-  const cleaned = raw.map(option => String(option || '').trim()).filter(Boolean);
+  const cleaned = raw
+    .filter(option => !(option && typeof option === 'object') || option.enabled !== false)
+    .map(option => String(option && typeof option === 'object' ? option.label : option || '').trim())
+    .filter(Boolean);
   return cleaned.length ? Array.from(new Set(cleaned)) : defaultPublicationOptions.slice();
 }
 
@@ -656,7 +659,10 @@ function setPublicationOptions(options) {
   publicationOptions = normalizePublicationOptions(options);
   let ageGroups = defaultAgeGroups;
   if (uiConfig.ageGroups && Array.isArray(uiConfig.ageGroups)) {
-    ageGroups = uiConfig.ageGroups;
+    ageGroups = uiConfig.ageGroups
+      .filter(option => !(option && typeof option === 'object') || option.enabled !== false)
+      .map(option => String(option && typeof option === 'object' ? option.label : option || '').trim())
+      .filter(Boolean);
   }
   
   const pubSelect = document.getElementById('publication');
