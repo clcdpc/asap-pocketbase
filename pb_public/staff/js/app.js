@@ -7,6 +7,10 @@ import { install as installActions } from './actions.js';
 import { install as installPatron } from './patron.js';
 import { install as installUiHelpers } from './ui-helpers.js';
 
+try {
+  localStorage.removeItem("pbSettings");
+} catch (err) {}
+
 installUiHelpers(env);
 installCore(env);
 installGrid(env);

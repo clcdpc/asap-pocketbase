@@ -410,9 +410,15 @@
                         id="smtp-port" class="form-control">
                     </div>
                     <div class="form-group col-md-6"><label for="smtp-username">Username <span class="text-muted small">(if required by SMTP)</span></label><input type="text"
-                        id="smtp-username" class="form-control"></div>
+                        id="smtp-username" class="form-control">
+                      <small class="form-text text-muted">Stored value will be kept unless replaced.</small>
+                      <div id="smtp-username-status" class="small text-success hidden mt-1"><i class="fa fa-check"></i> SMTP username is currently saved.</div>
+                    </div>
                     <div class="form-group col-md-6"><label for="smtp-password">Password <span class="text-muted small">(if required by SMTP)</span></label><input type="password"
-                        id="smtp-password" class="form-control"></div>
+                        id="smtp-password" class="form-control">
+                      <small class="form-text text-muted">Stored value will be kept unless replaced.</small>
+                      <div id="smtp-password-status" class="small text-success hidden mt-1"><i class="fa fa-check"></i> SMTP password is currently saved.</div>
+                    </div>
                     <div class="form-group col-md-6"><label for="smtp-from">System Default From Email <span class="text-muted small">(required for emails)</span></label><input
                         type="email" id="smtp-from" class="form-control"></div>
                     <div class="form-group col-md-6"><label for="smtp-from-name">System Default From Name <span class="text-muted small">(optional)</span></label><input

@@ -390,6 +390,19 @@ function smtpFromRecord(record) {
   };
 }
 
+function smtpPublicFromRecord(record) {
+  return {
+    enabled: !!String(record && record.get ? record.get("host") || "" : "").trim(),
+    host: String(record && record.get ? record.get("host") || "" : "").trim(),
+    port: parseInt(record && record.get ? record.get("port") : 587, 10) || 587,
+    tls: record && record.getBool ? record.getBool("tls") !== false : true,
+    fromAddress: String(record && record.get ? record.get("fromAddress") || "" : "").trim(),
+    fromName: String(record && record.get ? record.get("fromName") || "" : "").trim(),
+    usernameSet: !!String(record && record.get ? record.get("username") || "" : "").trim(),
+    passwordSet: !!String(record && record.get ? record.get("password") || "" : "").trim()
+  };
+}
+
 function mergeDuplicateStatusLabels(labels) {
   return Object.assign(defaultDuplicateStatusLabels(), parseJsonObject(labels, labels || {}));
 }
@@ -695,7 +708,7 @@ function getSettings() {
   var wf = workflowFromRecord(workflowRecord(app, ""));
   return Object.assign({
     polaris: polaris(),
-    smtp: smtpFromRecord(getSmtpSettings(app)),
+    smtp: smtpPublicFromRecord(getSmtpSettings(app)),
     emails: emailsFor(app, ""),
     allowedStaffUsers: sys ? sys.get("allowedStaffUsers") || "" : "",
     staffUrl: staffUrl(app),

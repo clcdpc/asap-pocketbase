@@ -1605,9 +1605,15 @@ function savePatronLibrarySettings(app, orgId, ui) {
 
 function saveSmtpSettings(app, smtp) {
   var record = config.getSmtpSettings(app);
-  ["host", "port", "username", "password", "tls"].forEach(function (key) {
+  ["host", "port", "tls"].forEach(function (key) {
     if (smtp[key] !== undefined) record.set(key, smtp[key]);
   });
+  if (Object.prototype.hasOwnProperty.call(smtp, "username") && String(smtp.username || "").trim()) {
+    record.set("username", String(smtp.username).trim());
+  }
+  if (Object.prototype.hasOwnProperty.call(smtp, "password") && String(smtp.password || "").trim()) {
+    record.set("password", String(smtp.password));
+  }
   if (smtp.fromAddress !== undefined) record.set("fromAddress", smtp.fromAddress);
   if (smtp.fromName !== undefined) record.set("fromName", smtp.fromName);
   app.save(record);
