@@ -297,6 +297,9 @@ function applyStaffUserFields(app, record, staffIdentity, displayName, options) 
   if (options.lastOrgSync !== false) {
     record.set("lastOrgSync", new Date().toISOString());
   }
+  if (options.updateLastLogin) {
+    record.set("lastLogin", new Date().toISOString());
+  }
   record.set("lastPolarisLogin", new Date().toISOString());
   record.setVerified(true);
 }

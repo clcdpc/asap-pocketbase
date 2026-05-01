@@ -305,6 +305,7 @@ function staffPublicJson(record) {
     libraryOrgId: record.get("libraryOrgId") || "",
     libraryOrgName: record.get("libraryOrgName") || "",
     scope: record.get("scope") || "",
+    lastLogin: record.getString("lastLogin") || "",
     lastPolarisLogin: record.getString("lastPolarisLogin") || "",
     weekly_action_summary_enabled: !!record.getBool("weekly_action_summary_enabled"),
     weekly_action_summary_email: record.get("weekly_action_summary_email") || "",
@@ -629,7 +630,8 @@ function staffLogin(e) {
     libraryOrgId: staffScope ? staffScope.libraryOrgId : undefined,
     libraryOrgName: staffScope ? staffScope.libraryOrgName : undefined,
     scope: staffScope ? (staffScope.scope || "library") : undefined,
-    lastOrgSync: !!staffScope
+    lastOrgSync: !!staffScope,
+    updateLastLogin: true
   });
   
   return e.json(200, {

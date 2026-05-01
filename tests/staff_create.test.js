@@ -128,6 +128,7 @@ console.log("Running staff create-only tests...");
   assert.strictEqual(created.get("identityKey"), "library\\newuser");
   assert.strictEqual(created.get("role"), "staff");
   assert.strictEqual(created.get("libraryOrgId"), "2");
+  assert.strictEqual(created.get("lastLogin"), undefined);
 }
 
 {
@@ -138,6 +139,28 @@ console.log("Running staff create-only tests...");
     "Race User",
     { role: "staff" }
   ));
+}
+
+{
+  const existing = staff({
+    username: "loginuser",
+    domain: "library",
+    identityKey: "library\\loginuser",
+    role: "staff",
+    active: true,
+    email: "library.loginuser@staff.asap.local",
+  });
+  const app = appWithRows([existing]);
+
+  const updated = records.upsertStaffUser(
+    app,
+    identity.parseStaffIdentity("LIBRARY\\loginuser", "DEFAULT"),
+    "Login User",
+    { updateLastLogin: true }
+  );
+
+  assert.ok(updated.get("lastLogin"));
+  assert.ok(new Date(updated.get("lastLogin")).toISOString());
 }
 
 console.log("Staff create-only tests passed.");

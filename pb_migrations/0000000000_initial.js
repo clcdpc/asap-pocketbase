@@ -153,6 +153,7 @@ migrate((app) => {
       field("displayName", "text", { max: 256 }),
       field("role", "select", { maxSelect: 1, values: ["staff", "admin", "super_admin"] }),
       field("active", "bool"),
+      field("lastLogin", "date"),
       field("lastPolarisLogin", "date"),
       field("domain", "text", { max: 128 }),
       field("identityKey", "text", { max: 260 }),

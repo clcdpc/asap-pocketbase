@@ -58,6 +58,51 @@ body {
   width: 100px;
 }
 
+.staff-access-table th,
+.staff-access-table td {
+  vertical-align: middle;
+}
+
+.staff-access-table th:nth-child(3),
+.staff-access-table td:nth-child(3) {
+  min-width: 260px;
+}
+
+.staff-access-table th:nth-child(5),
+.staff-access-table .staff-role-cell {
+  width: 220px;
+}
+
+.staff-access-table th:nth-child(6),
+.staff-access-table .staff-last-login-cell {
+  min-width: 190px;
+  white-space: nowrap;
+}
+
+.staff-access-table th:nth-child(7),
+.staff-access-table .staff-actions-cell {
+  width: 240px;
+}
+
+.staff-access-table .staff-role-select {
+  max-width: 190px;
+  min-width: 170px;
+}
+
+.staff-access-table .staff-actions-cell {
+  white-space: nowrap;
+}
+
+.staff-access-table .staff-actions-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.staff-access-table .staff-actions-wrap .btn {
+  margin-right: 0 !important;
+}
+
 .smtp-test-group {
   max-width: 450px;
 }
