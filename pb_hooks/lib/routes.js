@@ -127,28 +127,6 @@ function parseJsonObject(value, fallback) {
   return fallback;
 }
 
-function parseRecordJsonObject(record, fieldName, fallback) {
-  fallback = fallback || {};
-  if (!record) {
-    return fallback;
-  }
-  var fromString = "";
-  try {
-    fromString = record.getString(fieldName);
-  } catch (err) {
-    fromString = "";
-  }
-  var parsedString = parseJsonObject(fromString, null);
-  if (parsedString) {
-    return parsedString;
-  }
-  var direct = parseJsonObject(record.get(fieldName), null);
-  if (direct) {
-    return direct;
-  }
-  return fallback;
-}
-
 function requireAuth(e, collectionName) {
   var auth = e.requestInfo().auth;
   if (!auth || !auth.collection || auth.collection().name !== collectionName) {
