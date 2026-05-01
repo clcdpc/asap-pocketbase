@@ -63,12 +63,25 @@ const mockConfig = {
   }
 };
 
+let mockPolarisEmail = "";
+const mockPolaris = {
+  adminStaffAuth: function() {
+    return { AccessToken: "staff-token" };
+  },
+  lookupPatron: function() {
+    return { EmailAddress: mockPolarisEmail };
+  }
+};
+
 // Override require to intercept config.js
 const Module = require('module');
 const originalRequire = Module.prototype.require;
 Module.prototype.require = function(moduleName) {
   if (moduleName.includes("lib/config.js")) {
     return mockConfig;
+  }
+  if (moduleName.includes("lib/polaris.js")) {
+    return mockPolaris;
   }
   return originalRequire.apply(this, arguments);
 };
@@ -77,12 +90,16 @@ const mail = require("../pb_hooks/lib/mail.js");
 
 // Mock PocketBase app
 let sentMessages = [];
+let savedRecords = [];
 const mockApp = {
   settings: function() {
     return { meta: { senderAddress: "default@library.org", senderName: "Default Library" } };
   },
   logger: function() {
     return { warn: function() {} };
+  },
+  save: function(record) {
+    savedRecords.push(record);
   },
   newMailClient: function() {
     return {
@@ -107,6 +124,9 @@ class MockRecord {
   }
   get(key) {
     return this.data[key];
+  }
+  set(key, value) {
+    this.data[key] = value;
   }
 }
 
@@ -138,7 +158,7 @@ function runTests() {
   mail.alreadyOwned(mockApp, record, patron);
   assert.strictEqual(sentMessages.length, 1);
   assert.strictEqual(sentMessages[0].subject, "Already Owned: The Great Gatsby");
-  assert.strictEqual(sentMessages[0].to[0].address, "jane.smith@example.com");
+  assert.strictEqual(sentMessages[0].to[0].address, "john.doe@example.com");
 
   // Test rejected with default template
   sentMessages = [];
@@ -164,6 +184,17 @@ function runTests() {
   assert.strictEqual(sentMessages.length, 1);
   assert.strictEqual(sentMessages[0].subject, "Hold Placed: 1984");
   assert.strictEqual(sentMessages[0].text, "A hold was placed on 1984. Barcode: 123456789");
+
+  // Test Polaris email refresh before workflow email
+  sentMessages = [];
+  savedRecords = [];
+  mockPolarisEmail = "current@example.com";
+  mail.holdPlaced(mockApp, recordWithBarcode, null);
+  assert.strictEqual(sentMessages.length, 1);
+  assert.strictEqual(sentMessages[0].to[0].address, "current@example.com");
+  assert.strictEqual(recordWithBarcode.get("email"), "current@example.com");
+  assert.strictEqual(savedRecords.length, 1);
+  mockPolarisEmail = "";
 
   // Test autoRejected
   sentMessages = [];

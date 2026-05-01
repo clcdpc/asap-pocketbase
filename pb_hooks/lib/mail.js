@@ -76,6 +76,7 @@ function replacePlaceholders(template, data, escape) {
 }
 
 function dispatch(app, record, patron, templateKey, defaultSubject, templateId) {
+  var refreshedPatronEmail = refreshPatronEmailBeforeSending(app, record);
   var rawTitle = getRealValue(record.get("title"));
   var rawAuthor = getRealValue(record.get("author"));
   var format = formatLabel(record.get("format"));
@@ -111,7 +112,46 @@ function dispatch(app, record, patron, templateKey, defaultSubject, templateId) 
   // The current implementation of replacePlaceholders with escape: true is correct for placeholders.
   var html = replacePlaceholders(tpl.body || "", data, true).replace(/\n/g, "<br>");
 
-  return send(app, emailFor(record, patron), subject, text, html, { fromAddress: emailsConfig.fromAddress, fromName: emailsConfig.fromName, record: record, templateKey: templateKey });
+  return send(app, refreshedPatronEmail || record.get("email"), subject, text, html, { fromAddress: emailsConfig.fromAddress, fromName: emailsConfig.fromName, record: record, templateKey: templateKey });
+}
+
+function refreshPatronEmailBeforeSending(app, record) {
+  if (!app || !record) {
+    return "";
+  }
+  var barcode = String(record.get("barcode") || "").trim();
+  if (!barcode) {
+    return "";
+  }
+
+  try {
+    var polaris = require(`${__hooks}/lib/polaris.js`);
+    var patron = polaris.lookupPatron(polaris.adminStaffAuth(), barcode);
+    var currentEmail = String(patron && patron.EmailAddress || "").trim();
+    if (!isValidEmail(currentEmail)) {
+      return "";
+    }
+
+    var storedEmail = String(record.get("email") || "").trim();
+    if (storedEmail !== currentEmail) {
+      record.set("email", currentEmail);
+      try {
+        var records = require(`${__hooks}/lib/records.js`);
+        records.appendSystemNote(record, "Patron email updated from Polaris before sending notification.");
+      } catch (noteErr) {}
+      app.save(record);
+    }
+    return currentEmail;
+  } catch (err) {
+    try {
+      app.logger().warn("Could not refresh patron email from Polaris before sending notification", "recordId", record.id || "", "barcode", barcode, "error", String(err));
+    } catch (logErr) {}
+    return "";
+  }
+}
+
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
 }
 
 function noteSkipped(app, record) {
@@ -175,6 +215,7 @@ module.exports = {
   noteSkipped: noteSkipped,
   rejected: rejected,
   recordEmailEvent: recordEmailEvent,
+  refreshPatronEmailBeforeSending: refreshPatronEmailBeforeSending,
   send: send,
   suggestionSubmitted: suggestionSubmitted,
 };
