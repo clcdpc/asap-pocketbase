@@ -24,6 +24,8 @@ const FORMAT = {
   music_cd: "music_cd",
 };
 
+const WORKFLOW_TAG_DUPLICATE_SUGGESTION = "Duplicate suggestion";
+
 const AGEGROUP = {
   "0": "adult",
   "1": "teen",
@@ -450,6 +452,7 @@ function createSuggestion(app, patronRecord, data, options) {
   record.set("updated", now);
   setCanonicalRefs(app, record);
   app.save(record);
+  flagCrossPatronDuplicateSuggestion(app, record);
   recordEvent(app, record, "created", "Suggestion submitted.", { actorType: data.staffLibraryOrgIdCreatedBy ? "staff" : "patron" });
   return record;
 }
@@ -741,7 +744,7 @@ function enforceDuplicate(app, barcode, data) {
       { barcode: barcode, identifier: identifier }
     );
     if (isbnExisting.length) {
-      var isbnErr = new Error("You have already submitted a suggestion for this identifier number.");
+      var isbnErr = new Error("This patron already has a suggestion for this identifier number.");
       isbnErr.code = 409;
       isbnErr.duplicate = duplicateContext(isbnExisting[0], "identifier");
       throw isbnErr;
@@ -761,10 +764,37 @@ function enforceDuplicate(app, barcode, data) {
 
   var existing = app.findRecordsByFilter("title_requests", filter, "-created", 1, 0, params);
   if (existing.length) {
-    var err = new Error("You have already submitted this suggestion.");
+    var err = new Error("This patron already has this suggestion.");
     err.code = 409;
     err.duplicate = duplicateContext(existing[0], duplicateMatchType(existing[0], title, normalizeFormat(data.format), bibid));
     throw err;
+  }
+}
+
+function flagCrossPatronDuplicateSuggestion(app, record) {
+  var identifier = String(record.get("identifier") || "").trim();
+  if (!identifier) {
+    return false;
+  }
+  try {
+    var existing = app.findRecordsByFilter(
+      "title_requests",
+      "identifier = {:identifier} && barcode != {:barcode} && id != {:id}",
+      "-created",
+      1,
+      0,
+      { identifier: identifier, barcode: record.get("barcode") || "", id: record.id }
+    );
+    if (!existing.length) {
+      return false;
+    }
+    var added = addWorkflowTagForRequest(app, record, WORKFLOW_TAG_DUPLICATE_SUGGESTION);
+    appendSystemNote(record, "Tagged as a duplicate suggestion because another patron has a suggestion with the same identifier number.");
+    app.save(record);
+    return added;
+  } catch (err) {
+    try { app.logger().warn("Cross-patron duplicate tagging failed", "recordId", record && record.id, "error", String(err)); } catch (logErr) {}
+    return false;
   }
 }
 

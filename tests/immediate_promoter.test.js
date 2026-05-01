@@ -65,6 +65,7 @@ function loadPromote(env) {
   const record = makeRecord({ status: 'suggestion', identifier: '978', bibid: '' });
   const result = promote(env.app, {}, record);
   assert.strictEqual(result.status, 'found');
+  assert.strictEqual(record.get('status'), 'suggestion');
   assert.strictEqual(record.get('isbnCheckStatus'), 'found');
   assert.strictEqual(record.get('bibid'), '123');
 }

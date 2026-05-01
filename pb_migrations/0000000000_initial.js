@@ -609,6 +609,7 @@ migrate((app) => {
 
   seedLookup(app, workflowTags, [
     { id: "tagidentfound01", code: "Identifier found", label: "Identifier found", description: "Identifier lookup found a Polaris bibliographic record." },
+    { id: "tagdupesuggest", code: "Duplicate suggestion", label: "Duplicate suggestion", description: "Another patron has a suggestion with the same identifier number." },
     { id: "tagmultmatch001", code: "Multiple Polaris matches", label: "Multiple Polaris matches", description: "Identifier lookup found more than one Polaris bibliographic record." },
     { id: "tagholdplaced01", code: "Hold placed", label: "Hold placed", description: "Polaris hold placement succeeded." },
     { id: "tagexistshold01", code: "Hold exists (same patron)", label: "Hold exists (same patron)", description: "Polaris reported an existing duplicate hold request for this patron." },

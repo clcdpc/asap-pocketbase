@@ -207,6 +207,19 @@ function applyIsbnCheckStatusForCreate(data, uiText) {
   data.isbnCheckStatus = "skipped_no_isbn";
 }
 
+function runImmediateSubmissionIdentifierLookup(e, record) {
+  if (!record || !String(record.get("identifier") || "").trim()) {
+    return record;
+  }
+  try {
+    jobs.promoteRequestNow(e.app, polaris.adminStaffAuth(), record);
+    return e.app.findRecordById("title_requests", record.id);
+  } catch (err) {
+    e.app.logger().error("Immediate submission identifier lookup failed", "recordId", record.id, "error", String(err));
+    return record;
+  }
+}
+
 function escapeHtml(value) {
   return String(value === undefined || value === null ? "" : value)
     .replace(/&/g, "&amp;")
@@ -739,6 +752,7 @@ function createSuggestion(e) {
     var data = formatRules.sanitizePatronSuggestion(body(e), uiText);
     applyIsbnCheckStatusForCreate(data, uiText);
     var record = records.createSuggestion(e.app, patron, data);
+    record = runImmediateSubmissionIdentifierLookup(e, record);
 
     // Trigger confirmation email
     try {
@@ -805,6 +819,7 @@ function staffCreateSuggestion(e) {
     record.set("editedBy", staff.get("username"));
     record.set("updated", new Date().toISOString());
     e.app.save(record);
+    record = runImmediateSubmissionIdentifierLookup(e, record);
 
     // Trigger confirmation email
     var emailPatronConfirmation = data.emailPatronConfirmation === true;
@@ -1119,8 +1134,8 @@ function staffTitleRequestAction(e) {
 
     if (shouldRunImmediatePromoter) {
       try {
-        var autoPromoteEnabled = config.polaris().autoPromote !== false;
-        if (autoPromoteEnabled) {
+        var updatedStatus = records.normalizeStatus(record.get("status"));
+        if (updatedStatus === records.STATUS.SUGGESTION || config.polaris().autoPromote !== false) {
           jobs.promoteRequestNow(e.app, polaris.adminStaffAuth(), record);
           record = e.app.findRecordById("title_requests", record.id);
         }

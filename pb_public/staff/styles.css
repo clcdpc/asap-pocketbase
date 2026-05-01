@@ -728,8 +728,26 @@ code {
 .asap-dialog-new-footer {
   padding: 15px;
   border-top: 1px solid #ddd;
-  text-align: right;
+  align-items: center;
+  background: #f8f9fa;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: flex-end;
   flex-shrink: 0;
+}
+
+.asap-dialog-footer-error {
+  background: #f8d7da;
+  border: 1px solid #f5c2c7;
+  border-radius: 6px;
+  color: #842029;
+  flex: 1 0 100%;
+  font-weight: 700;
+  line-height: 1.35;
+  min-width: 0;
+  padding: 8px 10px;
+  text-align: left;
 }
 
 .asap-dialog-actions {
