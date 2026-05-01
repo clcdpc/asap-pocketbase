@@ -20,7 +20,7 @@ function requestHeader(e, name) {
   var info = {};
   try {
     info = e.requestInfo() || {};
-  } catch (err) {}
+  } catch (err) { }
   var headers = info.headers || {};
   if (headers) {
     if (typeof headers.get === "function") {
@@ -32,12 +32,12 @@ function requestHeader(e, name) {
     if (e.request && e.request.header && typeof e.request.header.get === "function") {
       return e.request.header.get(name) || e.request.header.get(lower) || "";
     }
-  } catch (err2) {}
+  } catch (err2) { }
   try {
     if (e.request && e.request.headers && typeof e.request.headers.get === "function") {
       return e.request.headers.get(name) || e.request.headers.get(lower) || "";
     }
-  } catch (err3) {}
+  } catch (err3) { }
   return "";
 }
 
@@ -45,7 +45,7 @@ function queryValue(e, name) {
   var info = {};
   try {
     info = e.requestInfo() || {};
-  } catch (err) {}
+  } catch (err) { }
 
   if (info.query) {
     if (typeof info.query.get === "function") {
@@ -67,12 +67,12 @@ function queryValue(e, name) {
     if (e.request && e.request.url) {
       urls.push(String(e.request.url));
     }
-  } catch (err) {}
+  } catch (err) { }
   try {
     if (e.request && e.request.URL) {
       urls.push(String(e.request.URL));
     }
-  } catch (err) {}
+  } catch (err) { }
 
   for (var i = 0; i < urls.length; i++) {
     var value = queryValueFromUrl(urls[i], name);
@@ -564,7 +564,7 @@ function staffUserCreate(e) {
   var libraryOrgId = String(payload.libraryOrgId || "").trim();
   var libraryOrgName = String(payload.libraryOrgName || "").trim();
   var role = String(payload.role || "staff").trim().toLowerCase();
-  if (["staff","admin","super_admin"].indexOf(role) < 0) return e.json(400, { message: "Role must be staff, admin, or super admin." });
+  if (["staff", "admin", "super_admin"].indexOf(role) < 0) return e.json(400, { message: "Role must be staff, admin, or super admin." });
   if (role === "super_admin" && !isSuperAdmin(admin)) return e.json(403, { message: "Only a super admin can assign the super admin role." });
   if (!isSuperAdmin(admin) && !sameLibrary(admin, libraryOrgId)) return e.json(403, { message: "Library admins can only create staff in their own library." });
   try {
@@ -649,7 +649,7 @@ function staffLogin(e) {
       scope: existing.get("scope") || "",
     };
   }
-  
+
   var bootstrapsAdmin = !records.hasStaffUsers(e.app);
   var record = records.upsertStaffUser(e.app, staffIdentity, displayName, {
     defaultRole: bootstrapsAdmin ? "super_admin" : "staff",
@@ -661,7 +661,7 @@ function staffLogin(e) {
     lastOrgSync: !!staffScope,
     updateLastLogin: true
   });
-  
+
   return e.json(200, {
     token: record.newAuthToken(),
     record: record,
@@ -677,7 +677,7 @@ function patronLogin(e) {
     var data = body(e);
     var barcode = String(data.username || data.barcode || "").trim();
     var password = String(data.password || data.pin || "");
-    
+
     if (!barcode || !password) {
       return e.json(400, { message: "Barcode and PIN are required" });
     }
@@ -685,7 +685,7 @@ function patronLogin(e) {
     var staffAuth = polaris.adminStaffAuth();
     var patron = polaris.authenticatePatron(barcode, password, staffAuth);
     patron = orgs.attachPatronScope(e.app, patron, staffAuth, e.app.logger());
-    
+
     if (!patron.LibraryOrgID) {
       return e.json(403, { message: "Your library could not be determined from Polaris." });
     }
@@ -695,13 +695,13 @@ function patronLogin(e) {
     var librarySettings = config.librarySettings(e.app, patron.LibraryOrgID);
 
     if (enabledLibraries) {
-      var enabledList = enabledLibraries.split(",").map(function(id) { return id.trim(); }).filter(function(id) { return id.length > 0; });
+      var enabledList = enabledLibraries.split(",").map(function (id) { return id.trim(); }).filter(function (id) { return id.length > 0; });
       if (enabledList.length > 0 && enabledList.indexOf(String(patron.LibraryOrgID)) < 0) {
         var msg = librarySettings.ui_text.systemNotEnabledMessage || "Your library does not currently participate in this suggestion service.";
         return e.json(403, { message: msg });
       }
     }
-    
+
     var record = records.upsertPatronUser(e.app, patron);
 
     return e.json(200, {
@@ -716,7 +716,7 @@ function patronLogin(e) {
     e.app.logger().error("Patron login failed", "error", String(err));
     var status = 401;
     var message = "Incorrect Login - Please try again";
-    
+
     var errStr = String(err);
     if (errStr.indexOf("Polaris configuration") >= 0 || errStr.indexOf("Admin staff authentication") >= 0) {
       status = 500;
@@ -739,7 +739,7 @@ function createSuggestion(e) {
     var data = formatRules.sanitizePatronSuggestion(body(e), uiText);
     applyIsbnCheckStatusForCreate(data, uiText);
     var record = records.createSuggestion(e.app, patron, data);
-    
+
     // Trigger confirmation email
     try {
       if (!mail.suggestionSubmitted(e.app, record)) {
@@ -798,7 +798,7 @@ function staffCreateSuggestion(e) {
     data.staffLibraryOrgIdCreatedBy = staff.get("libraryOrgId") || "";
     applyIsbnCheckStatusForCreate(data, config.uiText());
     var record = records.createSuggestion(e.app, patronRecord, data);
-    
+
     var today = records.formatDate(new Date());
     var existing = String(record.get("notes") || "");
     record.set("notes", today + " Created on behalf of patron by " + staff.get("username") + ". " + existing);
@@ -1017,7 +1017,7 @@ function staffTitleRequestAction(e) {
     var isActiveHoldTarget = nextStatus === records.STATUS.PENDING_HOLD || nextStatus === records.STATUS.HOLD_PLACED || action === "alreadyOwn";
     var oldStatus = "";
     var duplicateCloseNoteAdded = false;
-    
+
     var record;
     try {
       record = e.app.findRecordById("title_requests", id);
@@ -1033,7 +1033,7 @@ function staffTitleRequestAction(e) {
     if (nextStatus === records.STATUS.PENDING_HOLD && !String(data.bibid || "").trim()) {
       return e.json(400, { message: "BIB ID is required before moving this suggestion to Pending hold." });
     }
-    
+
     // Check for duplicate open requests for this patron with same BIB ID
     if (data.bibid) {
       var bibid = String(data.bibid).trim();
@@ -1044,7 +1044,7 @@ function staffTitleRequestAction(e) {
       } catch (err) {
         e.app.logger().warn("Polaris auth failed", "error", String(err));
       }
-      var existing = e.app.findRecordsByFilter("title_requests", 
+      var existing = e.app.findRecordsByFilter("title_requests",
         "barcode = {:barcode} && bibid = {:bibid} && id != {:id} && status != 'closed'",
         "", 1, 0, { barcode: barcode, bibid: bibid, id: id });
       if (existing && existing.length > 0) {
@@ -1109,7 +1109,7 @@ function staffTitleRequestAction(e) {
     if (nextStatus !== records.STATUS.CLOSED) {
       data.closeReason = "";
     }
-    
+
     record = records.updateTitleRequest(e.app, id, data, staff.get("username"));
     var purchaseReminderEmail = {
       requested: action === "purchase" && data.emailPurchaseReminder === true,
@@ -1131,7 +1131,7 @@ function staffTitleRequestAction(e) {
           var localStaffAuth;
           try {
             localStaffAuth = polaris.adminStaffAuth();
-          } catch(e) {}
+          } catch (e) { }
           polaris.reconcileRecord(e.app, localStaffAuth, record, bibid);
           try {
             polaris.placeHold(localStaffAuth, bibid, patron.PatronID, false); // testMode = false
@@ -1246,7 +1246,7 @@ function runWeeklyStaffActionSummary(e) {
   var secret = "";
   try {
     secret = String($os.getenv("ASAP_CRON_SECRET") || "").trim();
-  } catch (err) {}
+  } catch (err) { }
   var authorized = false;
   var authHeader = String(requestHeader(e, "Authorization") || "").trim();
   if (secret && authHeader === "Bearer " + secret) {
@@ -1324,7 +1324,7 @@ function staffTestSmtp(e) {
     var text = "This is a test email from Auto Suggest a Purchase to confirm SMTP settings are working.";
     var html = "<p>This is a test email from Auto Suggest a Purchase to confirm SMTP settings are working.</p>";
     var ok = mail.send(e.app, email, subject, text, html);
-    
+
     if (ok) {
       return e.json(200, { success: true, message: "Test email sent to " + email + "!" });
     }
@@ -1361,7 +1361,7 @@ function staffBibLookup(e) {
   try {
     var staffAuth = polaris.adminStaffAuth();
     var info = polaris.getBib(staffAuth, bibId);
-    
+
     var barcode = String(d.barcode || "").trim();
     if (barcode && info) {
       try {
@@ -1380,7 +1380,7 @@ function staffBibLookup(e) {
         e.app.logger().warn("Patron hold check failed during bib lookup", "barcode", barcode, "error", String(patronErr));
       }
     }
-    
+
     return e.json(200, info);
   } catch (err) {
     return e.json(400, { message: err.message || String(err) });
@@ -1473,7 +1473,7 @@ function hasLibraryOverride(app, orgId) {
     try {
       app.findFirstRecordByFilter(filters[i][0], filters[i][1], { org: org.id, orgId: String(orgId || "").trim() });
       return true;
-    } catch (err) {}
+    } catch (err) { }
   }
   return false;
 }
@@ -1483,7 +1483,7 @@ function updateLibrarySettings(e) {
   var payload = body(e);
   var orgId = String(payload.orgId || "").trim();
   var action = String(payload.action || "save").toLowerCase();
-  
+
   if (!orgId) {
     return e.json(400, { message: "orgId is required." });
   }
@@ -1653,17 +1653,17 @@ function validateAudienceGroupsDeletion(app, scope, orgId, ui) {
   labels = labels.map(function (label) {
     return String(label && typeof label === "object" ? label.label || "" : label || "").trim();
   }).filter(Boolean);
-  
+
   var keep = {};
   labels.forEach(function (label, index) {
     var code = codeFromLabel(label, "group_" + (index + 1));
     keep[code] = true;
   });
-  
+
   var org = scope === "library" ? config.findOrganization(app, orgId) : null;
   var filter = scope === "system" ? "scope = 'system'" : "scope = 'library' && libraryOrganization = {:org}";
   var params = scope === "system" ? {} : { org: org ? org.id : "" };
-  
+
   try {
     var rows = app.findRecordsByFilter("audience_groups", filter, "", 200, 0, params);
     for (var i = 0; i < rows.length; i++) {
@@ -1688,9 +1688,51 @@ function validateAudienceGroupsDeletion(app, scope, orgId, ui) {
   }
 }
 
+function validatePublicationOptionsDeletion(app, scope, orgId, ui) {
+  if (ui.publicationOptions === undefined) return;
+  var labels = Array.isArray(ui.publicationOptions) ? ui.publicationOptions : String(ui.publicationOptions || "").split(/\r?\n/);
+  labels = labels.map(function (label) {
+    return String(label && typeof label === "object" ? label.label || "" : label || "").trim();
+  }).filter(Boolean);
+
+  var keep = {};
+  labels.forEach(function (label) {
+    keep[label.toLowerCase()] = true;
+  });
+
+  var record = recordForScope(app, "ui_settings", "system", "");
+  var oldOptionsRaw = record.get("publicationOptions");
+  var oldOptions = [];
+  if (typeof oldOptionsRaw === "string" && oldOptionsRaw.trim().charAt(0) === "[") {
+    try { oldOptions = JSON.parse(oldOptionsRaw); } catch (e) { }
+  } else {
+    oldOptions = String(oldOptionsRaw || "").split(/\r?\n/).map(function (opt) {
+      return { label: opt.trim() };
+    });
+  }
+
+  oldOptions.forEach(function (opt) {
+    var optLabel = String(opt && typeof opt === "object" ? opt.label || "" : opt || "").trim();
+    if (!optLabel) return;
+    if (!keep[optLabel.toLowerCase()]) {
+      try {
+        app.findFirstRecordByFilter("title_requests", "publication = {:label}", { label: optLabel });
+        var err = new Error("Publication timing '" + optLabel + "' is currently in use by existing requests and cannot be deleted. You can disable it instead.");
+        err.code = 400;
+        throw err;
+      } catch (findErr) {
+        if (findErr.message && findErr.message.indexOf("in use") >= 0) {
+          throw findErr;
+        }
+      }
+    }
+  });
+}
+
 function saveUiSettings(app, scope, orgId, ui) {
   if (scope === "system") {
     validateAudienceGroupsDeletion(app, scope, orgId, ui);
+    validatePublicationOptionsDeletion(app, scope, orgId, ui);
   }
   var record = recordForScope(app, "ui_settings", scope, orgId);
   var fieldMap = {
@@ -1721,7 +1763,7 @@ function saveUiSettings(app, scope, orgId, ui) {
     savePatronLibrarySettings(app, orgId, ui);
   }
   if (ui.systemNotEnabledMessage !== undefined) record.set("systemNotEnabledMessage", ui.systemNotEnabledMessage);
-  if (scope === "system" && ui.publicationOptions !== undefined) record.set("publicationOptions", optionsToLines(ui.publicationOptions));
+  if (scope === "system" && ui.publicationOptions !== undefined) record.set("publicationOptions", optionsToJson(ui.publicationOptions));
   if (scope === "system" && ui.ageGroups !== undefined) record.set("ageGroups", optionsToLines(ui.ageGroups));
   app.save(record);
   if (scope === "system") {
@@ -1735,6 +1777,11 @@ function optionsToLines(options) {
   return options.map(function (item) {
     return String(item && typeof item === "object" ? item.label || "" : item || "").trim();
   }).filter(Boolean).join("\n");
+}
+
+function optionsToJson(options) {
+  if (!Array.isArray(options)) return "[]";
+  return JSON.stringify(options);
 }
 
 function scopedLookupRecord(app, collectionName, scope, orgId, code) {
@@ -1752,7 +1799,7 @@ function scopedLookupRecord(app, collectionName, scope, orgId, code) {
       if (scope === "system") {
         return app.findFirstRecordByData(collectionName, "code", code);
       }
-    } catch (err2) {}
+    } catch (err2) { }
     var record = new Record(collection);
     record.set("scope", scope);
     if (org) record.set("libraryOrganization", org.id);
@@ -1824,7 +1871,7 @@ function saveAudienceGroups(app, scope, orgId, ui) {
     rows.forEach(function (row) {
       if (!keep[String(row.get("code") || "")]) app.delete(row);
     });
-  } catch (err) {}
+  } catch (err) { }
 }
 
 function setFormatFieldRule(record, prefix, rule, fallback) {
@@ -1874,7 +1921,7 @@ function saveRejectionTemplates(app, scope, orgId, templates) {
     if (t.id) keep[String(t.id)] = true;
     var record = null;
     if (t.id) {
-      try { record = app.findRecordById("rejection_templates", t.id); } catch (err) {}
+      try { record = app.findRecordById("rejection_templates", t.id); } catch (err) { }
     }
     if (!record) {
       record = new Record(app.findCollectionByNameOrId("rejection_templates"));
@@ -1921,16 +1968,16 @@ function resetLibrarySettings(app, orgId) {
     try {
       var rows = app.findRecordsByFilter(collection, "scope = 'library' && libraryOrganization = {:org}", "", 200, 0, { org: org.id });
       rows.forEach(function (row) { app.delete(row); });
-    } catch (err) {}
+    } catch (err) { }
   });
   try {
     var overrideRows = app.findRecordsByFilter("patron_settings_overrides", "orgId = {:orgId}", "", 200, 0, { orgId: String(orgId || "").trim() });
     overrideRows.forEach(function (row) { app.delete(row); });
-  } catch (errOverride) {}
+  } catch (errOverride) { }
   try {
     var patronRows = app.findRecordsByFilter("patron_library_settings", "libraryOrganization = {:org}", "", 200, 0, { org: org.id });
     patronRows.forEach(function (row) { app.delete(row); });
-  } catch (err2) {}
+  } catch (err2) { }
 }
 
 function staffRunPromoterCheck(e) {
