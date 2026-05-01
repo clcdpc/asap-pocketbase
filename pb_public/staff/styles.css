@@ -570,6 +570,11 @@ code {
   color: #004a9b;
 }
 
+.asap-toast-warning {
+  border-left: 4px solid #9a6700;
+  color: #664d03;
+}
+
 .asap-dialog {
   padding: 0;
   border: none;

@@ -979,6 +979,12 @@
         <textarea id="edit-notes" class="form-control form-control-sm" rows="2"></textarea>
       </div>
 
+      <div id="edit-purchase-reminder-container" class="custom-control custom-checkbox mt-3 hidden">
+        <input type="checkbox" class="custom-control-input" id="edit-email-purchase-reminder">
+        <label class="custom-control-label" for="edit-email-purchase-reminder">Email me a purchase reminder</label>
+        <small id="edit-purchase-reminder-help" class="form-text text-muted"></small>
+      </div>
+
     </div>
 
     <div class="asap-dialog-edit-footer">
@@ -1101,10 +1107,10 @@
       <label class="custom-control-label font-weight-bold" for="profile-weekly-action-summary">Receive weekly Sunday night action summary email</label>
     </div>
     <div class="form-group mb-2">
-      <label for="profile-weekly-action-summary-email" class="font-weight-bold">Report email address</label>
+      <label for="profile-weekly-action-summary-email" class="font-weight-bold">Staff email address</label>
       <input type="email" id="profile-weekly-action-summary-email" class="form-control" autocomplete="email">
     </div>
-    <p class="text-muted small mb-3">Sends a weekly summary of new submissions and approved purchases that still need a bib.</p>
+    <p class="text-muted small mb-3">Used for weekly summaries and purchase reminder emails.</p>
     <div id="profile-msg" class="mb-3 font-weight-bold" aria-live="polite"></div>
     <div class="asap-dialog-actions">
       <button type="button" id="profile-cancel" class="btn btn-sm btn-secondary">Cancel</button>

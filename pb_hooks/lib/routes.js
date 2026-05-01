@@ -247,6 +247,32 @@ function formatLabelForDuplicate(format, uiText) {
   return labels[format] || String(format || "");
 }
 
+function appendQuery(url, params) {
+  url = String(url || "").trim();
+  if (!url) return "";
+  var hash = "";
+  var hashIndex = url.indexOf("#");
+  if (hashIndex >= 0) {
+    hash = url.slice(hashIndex);
+    url = url.slice(0, hashIndex);
+  }
+  var separator = url.indexOf("?") >= 0 ? "&" : "?";
+  var parts = [];
+  Object.keys(params || {}).forEach(function (key) {
+    var value = params[key];
+    if (value !== undefined && value !== null && String(value) !== "") {
+      parts.push(encodeURIComponent(key) + "=" + encodeURIComponent(String(value)));
+    }
+  });
+  return parts.length ? url + separator + parts.join("&") + hash : url + hash;
+}
+
+function staffRequestUrl(app, record) {
+  var base = config.staffUrl(app);
+  var stage = records.normalizeStatus(record.get("status"));
+  return appendQuery(base, { stage: stage, request: record.id });
+}
+
 function duplicateMatchLabel(matchType) {
   var labels = {
     identifier: "identifier number",
@@ -1083,6 +1109,11 @@ function staffTitleRequestAction(e) {
     }
     
     record = records.updateTitleRequest(e.app, id, data, staff.get("username"));
+    var purchaseReminderEmail = {
+      requested: action === "purchase" && data.emailPurchaseReminder === true,
+      sent: false,
+      message: ""
+    };
 
     if (action === "alreadyOwn" || action === "reject") {
       var patron = null;
@@ -1126,7 +1157,26 @@ function staffTitleRequestAction(e) {
       }
     }
 
-    return e.json(200, records.titleRequestToJson(record, e.app));
+    if (purchaseReminderEmail.requested) {
+      var staffEmail = String(staff.get("weekly_action_summary_email") || "").trim();
+      if (!staffEmail) {
+        purchaseReminderEmail.message = "Purchase saved. Add an email address to your staff profile to email yourself purchase reminders.";
+      } else {
+        try {
+          purchaseReminderEmail.sent = !!mail.purchaseReminder(e.app, record, staff, staffEmail, staffRequestUrl(e.app, record));
+          purchaseReminderEmail.message = purchaseReminderEmail.sent
+            ? "Purchase saved and reminder email sent."
+            : "Purchase saved, but email notifications are not configured.";
+        } catch (mailErr) {
+          e.app.logger().error("Purchase reminder email failed", "recordId", record.id, "staffUserId", staff.id, "error", String(mailErr));
+          purchaseReminderEmail.message = "Purchase saved, but the reminder email could not be sent.";
+        }
+      }
+    }
+
+    var response = records.titleRequestToJson(record, e.app);
+    response.purchaseReminderEmail = purchaseReminderEmail;
+    return e.json(200, response);
   } catch (err) {
     e.app.logger().error("Staff action failed", "error", String(err));
     return e.json(400, { message: "System error: " + err.message });

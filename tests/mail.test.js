@@ -203,6 +203,31 @@ function runTests() {
   assert.strictEqual(sentMessages[0].subject, "Rejected: The Great Gatsby");
   assert.strictEqual(sentMessages[0].to[0].address, "john.doe@example.com");
 
+  // Test staff purchase reminder
+  sentMessages = [];
+  let staff = new MockRecord({
+    username: "selector",
+    displayName: "Collection Selector"
+  });
+  let purchaseRecord = new MockRecord({
+    title: "Future Classic",
+    author: "A. Writer",
+    identifier: "9781234567890",
+    format: "book",
+    agegroup: "Adult",
+    publication: "Coming soon",
+    exactPublicationDate: "2026-06-01",
+    bibid: "456789",
+    notes: "Order for downtown branch."
+  });
+  mail.purchaseReminder(mockApp, purchaseRecord, staff, "selector@example.com", "https://asap.example.org/staff/?stage=outstanding_purchase&request=abc");
+  assert.strictEqual(sentMessages.length, 1);
+  assert.strictEqual(sentMessages[0].subject, "Purchase reminder: Future Classic");
+  assert.strictEqual(sentMessages[0].to[0].address, "selector@example.com");
+  assert.ok(sentMessages[0].text.includes("Title: Future Classic"));
+  assert.ok(sentMessages[0].text.includes("Staff member: Collection Selector"));
+  assert.ok(sentMessages[0].text.includes("Open in ASAP: https://asap.example.org/staff/?stage=outstanding_purchase&request=abc"));
+
   console.log("All mail.js tests passed!");
 }
 

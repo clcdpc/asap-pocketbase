@@ -90,7 +90,15 @@ export const env = new Proxy(values, {
 });
 
 export function exposeLegacyGlobals() {
-  ['updateRejectionTemplate', 'removeRejectionTemplate'].forEach(name => {
+  [
+    'updateRejectionTemplate',
+    'removeRejectionTemplate',
+    'openProfileDialog',
+    'closeOpenDialogs',
+    'setFieldChecked',
+    'setFieldValue'
+  ].forEach(name => {
     if (typeof values[name] === 'function') window[name] = values[name];
   });
+  window.pb = values.pb;
 }

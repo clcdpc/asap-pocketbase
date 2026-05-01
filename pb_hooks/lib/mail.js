@@ -19,6 +19,10 @@ function escapeHtml(str) {
     .replace(/>/g, "&gt;");
 }
 
+function clean(value) {
+  return String(value || "").trim();
+}
+
 function send(app, to, subject, text, html, options) {
   to = String(to || "").trim();
   if (!to) {
@@ -188,6 +192,97 @@ function emailFor(record, patron) {
   return (patron && patron.EmailAddress) || record.get("email");
 }
 
+function formatDateTime(value) {
+  var date = value ? new Date(value) : new Date();
+  if (isNaN(date.getTime())) {
+    date = new Date();
+  }
+  return date.toLocaleString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short"
+  });
+}
+
+function reminderValue(value) {
+  var text = clean(value);
+  return text || "Not provided";
+}
+
+function reminderLine(label, value) {
+  return label + ": " + reminderValue(value);
+}
+
+function htmlReminderLine(label, value) {
+  return "<p><strong>" + escapeHtml(label) + ":</strong> " + escapeHtml(reminderValue(value)) + "</p>";
+}
+
+function purchaseReminder(app, record, staff, toEmail, itemUrl) {
+  toEmail = clean(toEmail);
+  if (!toEmail) {
+    return false;
+  }
+
+  var title = getRealValue(record.get("title"));
+  var author = getRealValue(record.get("author"));
+  var format = formatLabel(record.get("format"));
+  var publicationDate = clean(record.get("exactPublicationDate")) || clean(record.get("publication"));
+  var publisher = clean(record.get("publisher"));
+  var staffName = clean(staff && (staff.get("displayName") || staff.get("username"))) || "Library Staff";
+  var generatedAt = formatDateTime(new Date());
+  var bibId = clean(record.get("bibid"));
+  var controlNumber = clean(record.get("controlNumber"));
+  var bibLine = bibId || controlNumber || record.id || "";
+  var publisherDate = [publisher, publicationDate].filter(Boolean).join(" / ");
+  var notes = clean(record.get("notes"));
+
+  var lines = [
+    "You marked this item for purchase in ASAP.",
+    "",
+    reminderLine("Title", title),
+    reminderLine("Author", author),
+    reminderLine("ISBN", record.get("identifier")),
+    reminderLine("Format", format),
+    reminderLine("Age group", record.get("agegroup")),
+    reminderLine("Publisher/date", publisherDate),
+    reminderLine("Bib ID", bibLine),
+    reminderLine("Notes", notes),
+    "",
+    reminderLine("Staff member", staffName),
+    reminderLine("Reminder generated", generatedAt)
+  ];
+  if (itemUrl) {
+    lines.push("", "Open in ASAP: " + itemUrl);
+  }
+
+  var html = [
+    "<p>You marked this item for purchase in ASAP.</p>",
+    htmlReminderLine("Title", title),
+    htmlReminderLine("Author", author),
+    htmlReminderLine("ISBN", record.get("identifier")),
+    htmlReminderLine("Format", format),
+    htmlReminderLine("Age group", record.get("agegroup")),
+    htmlReminderLine("Publisher/date", publisherDate),
+    htmlReminderLine("Bib ID", bibLine),
+    htmlReminderLine("Notes", notes),
+    "<hr>",
+    htmlReminderLine("Staff member", staffName),
+    htmlReminderLine("Reminder generated", generatedAt)
+  ];
+  if (itemUrl) {
+    html.push('<p><strong>Open in ASAP:</strong> <a href="' + escapeHtml(itemUrl) + '">' + escapeHtml(itemUrl) + "</a></p>");
+  }
+
+  return send(app, toEmail, "Purchase reminder: " + reminderValue(title), lines.join("\n"), html.join("\n"), {
+    recipientName: staffName,
+    record: record,
+    templateKey: "staff_purchase_reminder"
+  });
+}
+
 
 function formatLabel(value) {
   var ui = config.uiText();
@@ -207,6 +302,7 @@ module.exports = {
   autoRejected: autoRejected,
   holdPlaced: holdPlaced,
   noteSkipped: noteSkipped,
+  purchaseReminder: purchaseReminder,
   rejected: rejected,
   recordEmailEvent: recordEmailEvent,
   refreshPatronEmailBeforeSending: refreshPatronEmailBeforeSending,
