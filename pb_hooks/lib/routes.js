@@ -846,6 +846,7 @@ function staffTitleRequestsList(e) {
   var staff = requireAuth(e, "staff_users");
   var result = [];
   var patronCache = {};
+  var pickupBranchNameCache = {};
   var limit = 200;
   var offset = 0;
   var filter = "id != ''";
@@ -929,7 +930,17 @@ function staffTitleRequestsList(e) {
       row.patronName = patronName;
       row.patronEmail = patronEmail;
       row.libraryOrgName = libraryOrgName;
-      row.preferredPickupBranchName = row.preferredPickupBranchName || "";
+      row.preferredPickupBranchId = row.preferredPickupBranchId || (patronRecord ? patronRecord.get("preferredPickupBranchId") || "" : "");
+      row.preferredPickupBranchName = row.preferredPickupBranchName || (patronRecord ? patronRecord.get("preferredPickupBranchName") || "" : "");
+      if (!row.preferredPickupBranchId) {
+        row.preferredPickupBranchId = row.patronOrgId || (patronRecord ? patronRecord.get("patronOrgId") || "" : "") || "0";
+      }
+      if (!row.preferredPickupBranchName) {
+        if (pickupBranchNameCache[row.preferredPickupBranchId] === undefined) {
+          pickupBranchNameCache[row.preferredPickupBranchId] = orgs.pickupBranchDisplayName(e.app, row.preferredPickupBranchId);
+        }
+        row.preferredPickupBranchName = pickupBranchNameCache[row.preferredPickupBranchId];
+      }
 
       result.push(row);
     }

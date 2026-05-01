@@ -373,6 +373,8 @@ function upsertPatronUser(app, patron) {
   record.set("patronOrgId", String(patron.PatronOrgID || patron.patronOrgId || ""));
   record.set("libraryOrgId", String(patron.LibraryOrgID || patron.libraryOrgId || ""));
   record.set("libraryOrgName", String(patron.LibraryOrgName || patron.libraryOrgName || ""));
+  record.set("preferredPickupBranchId", String(patron.PreferredPickupBranchID || patron.preferredPickupBranchId || ""));
+  record.set("preferredPickupBranchName", String(patron.PreferredPickupBranchName || patron.preferredPickupBranchName || ""));
   setRelation(record, "patronOrganization", organizationByPolarisId(app, patron.PatronOrgID || patron.patronOrgId));
   setRelation(record, "libraryOrganization", organizationByPolarisId(app, patron.LibraryOrgID || patron.libraryOrgId));
   if (safeEmail(patron.EmailAddress)) {
@@ -405,6 +407,8 @@ function createSuggestion(app, patronRecord, data) {
   record.set("patronOrgId", patronRecord.get("patronOrgId") || "");
   record.set("libraryOrgId", patronRecord.get("libraryOrgId") || "");
   record.set("libraryOrgName", patronRecord.get("libraryOrgName") || "");
+  record.set("preferredPickupBranchId", patronRecord.get("preferredPickupBranchId") || "");
+  record.set("preferredPickupBranchName", patronRecord.get("preferredPickupBranchName") || "");
   record.set("staffLibraryOrgIdCreatedBy", String(data.staffLibraryOrgIdCreatedBy || ""));
   record.set("title", titleCase(data.title));
   record.set("author", String(data.author || "").trim());
@@ -459,6 +463,8 @@ function titleRequestToJson(record, app, options) {
     patronOrgId: record.get("patronOrgId") || "",
     libraryOrgId: record.get("libraryOrgId") || "",
     libraryOrgName: record.get("libraryOrgName") || "",
+    preferredPickupBranchId: record.get("preferredPickupBranchId") || "",
+    preferredPickupBranchName: record.get("preferredPickupBranchName") || "",
     staffLibraryOrgIdCreatedBy: record.get("staffLibraryOrgIdCreatedBy") || "",
     created: record.get("created") || record.created || "",
     updated: record.get("updated") || record.updated || "",

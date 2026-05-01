@@ -180,8 +180,21 @@ function attachPatronScope(app, patron, staffAuth, logger) {
     if (logger) logger.warn("Patron scope NOT resolved", "patronOrgId", patronOrgId);
   }
 
-  var pickupBranchId = normalizeOrgId(patron.RequestPickupBranchID || patron.preferredPickupBranchId);
+  var pickupBranchId = normalizeOrgId(
+    patron.PreferredPickupBranchID ||
+    patron.preferredPickupBranchId ||
+    patron.RequestPickupBranchID ||
+    patron.PatronOrgID ||
+    patron.patronOrgId ||
+    "0"
+  );
   if (pickupBranchId) {
+    patron.PreferredPickupBranchID = pickupBranchId;
+    if (pickupBranchId === "0") {
+      patron.PreferredPickupBranchName = "Patron registered branch";
+      return patron;
+    }
+
     var pickupOrg = findOrganization(app, pickupBranchId);
     if (!pickupOrg && staffAuth) {
       try {
@@ -193,10 +206,8 @@ function attachPatronScope(app, patron, staffAuth, logger) {
     }
 
     if (pickupOrg) {
-      patron.PreferredPickupBranchID = pickupBranchId;
       patron.PreferredPickupBranchName = String(pickupOrg.get("displayName") || pickupOrg.get("name") || pickupBranchId);
     } else {
-      patron.PreferredPickupBranchID = pickupBranchId;
       patron.PreferredPickupBranchName = "Branch ID: " + pickupBranchId;
     }
   }
@@ -204,9 +215,32 @@ function attachPatronScope(app, patron, staffAuth, logger) {
   return patron;
 }
 
+function pickupBranchDisplayName(app, pickupBranchId, staffAuth, logger) {
+  pickupBranchId = normalizeOrgId(pickupBranchId || "0");
+  if (!pickupBranchId || pickupBranchId === "0") {
+    return "Patron registered branch";
+  }
+
+  var pickupOrg = findOrganization(app, pickupBranchId);
+  if (!pickupOrg && staffAuth) {
+    try {
+      syncOrganizations(app, staffAuth);
+      pickupOrg = findOrganization(app, pickupBranchId);
+    } catch (err) {
+      if (logger) logger.warn("Failed to sync organizations for pickup branch", "id", pickupBranchId, "error", String(err));
+    }
+  }
+
+  if (pickupOrg) {
+    return String(pickupOrg.get("displayName") || pickupOrg.get("name") || pickupBranchId);
+  }
+  return "Branch ID: " + pickupBranchId;
+}
+
 module.exports = {
   attachPatronScope: attachPatronScope,
   normalizeOrgId: normalizeOrgId,
+  pickupBranchDisplayName: pickupBranchDisplayName,
   resolveParentLibrary: resolveParentLibrary,
   setSyncStatus: setSyncStatus,
   syncOrganizations: syncOrganizations,

@@ -19,6 +19,11 @@ function redactPayload(payload) {
   walk(redacted);
   return redacted;
 }
+
+function normalizePolarisId(value) {
+  return String(value === undefined || value === null ? "" : value).trim();
+}
+
 function normalizeConfig(source) {
   source = source || {};
   return {
@@ -141,14 +146,17 @@ function getPatronBasic(staff, barcode) {
   var ep = endpoint("public", "patron/" + encodeURIComponent(barcode) + "/basicdata");
   var payload = send("GET", ep, "", staff);
   var data = payload.PatronBasicData || {};
+  var patronOrgId = normalizePolarisId(data.PatronOrgID);
+  var requestPickupBranchId = normalizePolarisId(data.RequestPickupBranchID);
   return {
     PatronID: data.PatronID || "",
     Barcode: data.Barcode || barcode,
     EmailAddress: data.EmailAddress || "",
     NameFirst: data.NameFirst || "",
     NameLast: data.NameLast || "",
-    PatronOrgID: data.PatronOrgID || "",
-    RequestPickupBranchID: data.RequestPickupBranchID || "",
+    PatronOrgID: patronOrgId,
+    RequestPickupBranchID: requestPickupBranchId,
+    PreferredPickupBranchID: requestPickupBranchId || patronOrgId || "0",
   };
 }
 
