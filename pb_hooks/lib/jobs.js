@@ -548,6 +548,61 @@ function evaluatePurchase(app, staff, record, bibCache, result) {
   }
 }
 
+
+function promoteRequestNow(app, staff, record) {
+  var target = record;
+  if (!target || !target.get) {
+    return { promoted: false, status: "skipped", reason: "invalid_record" };
+  }
+
+  var status = records.normalizeStatus(target.get("status"));
+  if (status === records.STATUS.OUTSTANDING_PURCHASE) {
+    var purchaseResult = { promoted: 0 };
+    evaluatePurchase(app, staff, target, {}, purchaseResult);
+    return { promoted: purchaseResult.promoted > 0, status: purchaseResult.promoted > 0 ? "promoted" : "checked" };
+  }
+
+  if (status === records.STATUS.SUGGESTION) {
+    var now = new Date().toISOString();
+    var identifier = String(target.get("identifier") || "").trim();
+    if (!identifier) {
+      target.set("isbnCheckStatus", "skipped_no_isbn");
+      target.set("lastChecked", now);
+      target.set("updated", now);
+      target.set("editedBy", "system");
+      records.appendSystemNote(target, "Identifier number verification skipped: no identifier provided.");
+      app.save(target);
+      return { promoted: false, status: "skipped", reason: "missing_identifier" };
+    }
+
+    var bibResult = polaris.searchBib(staff, identifier);
+    var bibId = bibResult && bibResult.status === "found" ? String(bibResult.bibId || "").trim() : "";
+    var found = bibResult && bibResult.status === "found" && !!bibId;
+
+    target.set("isbnCheckStatus", found ? "found" : "not_found");
+    target.set("isbnCheckResult", mapIsbnCheckSuggestion(found ? "found" : "not_found"));
+    target.set("lastChecked", now);
+    target.set("updated", now);
+    target.set("editedBy", "system");
+
+    if (found) {
+      target.set("bibid", bibId);
+      polaris.reconcileRecord(app, staff, target, bibId);
+      records.addWorkflowTagForRequest(app, target, POLARIS_TAG_FOUND);
+      flagMultiplePolarisMatches(app, target, bibResult);
+      records.appendSystemNote(target, "Identifier number verification found a Polaris bibliographic match (BIB ID " + bibId + ").");
+      app.save(target);
+      return { promoted: true, status: "found", bibId: bibId };
+    }
+
+    records.addWorkflowTagForRequest(app, target, POLARIS_TAG_NOT_FOUND);
+    records.appendSystemNote(target, "Identifier number verification completed: no Polaris bibliographic match found.");
+    app.save(target);
+    return { promoted: false, status: "not_found" };
+  }
+
+  return { promoted: false, status: "skipped", reason: "status_not_supported" };
+}
 function processOutstandingPurchases(app, staff, result) {
   const autoPromote = config.polaris().autoPromote !== false;
 
@@ -914,4 +969,5 @@ module.exports = {
   runWeeklyStaffActionSummary: runWeeklyStaffActionSummary,
   processOutstandingPurchases: processOutstandingPurchases,
   processPendingSuggestionIsbnChecks: processPendingSuggestionIsbnChecks,
+  promoteRequestNow: promoteRequestNow,
 };

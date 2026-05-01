@@ -1029,6 +1029,11 @@ function staffTitleRequestAction(e) {
       return accessError;
     }
     oldStatus = records.normalizeStatus(record.get("status"));
+    var originalIdentifier = String(record.get("identifier") || "").trim();
+    var nextIdentifier = data.identifier !== undefined && data.identifier !== null
+      ? String(data.identifier).trim()
+      : originalIdentifier;
+    var shouldRunImmediatePromoter = !!nextIdentifier && nextIdentifier !== originalIdentifier;
 
     if (nextStatus === records.STATUS.PENDING_HOLD && !String(data.bibid || "").trim()) {
       return e.json(400, { message: "BIB ID is required before moving this suggestion to Pending hold." });
@@ -1111,6 +1116,19 @@ function staffTitleRequestAction(e) {
     }
 
     record = records.updateTitleRequest(e.app, id, data, staff.get("username"));
+
+    if (shouldRunImmediatePromoter) {
+      try {
+        var autoPromoteEnabled = config.polaris().autoPromote !== false;
+        if (autoPromoteEnabled) {
+          jobs.promoteRequestNow(e.app, polaris.adminStaffAuth(), record);
+          record = e.app.findRecordById("title_requests", record.id);
+        }
+      } catch (promoteErr) {
+        e.app.logger().error("Immediate identifier promotion failed", "recordId", record.id, "error", String(promoteErr));
+      }
+    }
+
     var purchaseReminderEmail = {
       requested: action === "purchase" && data.emailPurchaseReminder === true,
       sent: false,
