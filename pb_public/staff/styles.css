@@ -136,6 +136,10 @@ body {
   white-space: nowrap;
 }
 
+#grid-container .gridjs-td:has(.truncate-note) {
+  text-align: center !important;
+}
+
 #grid-container .gridjs-td:has(.staff-title-cell),
 #grid-container .gridjs-td:has(.workflow-tag-list) {
   white-space: normal;

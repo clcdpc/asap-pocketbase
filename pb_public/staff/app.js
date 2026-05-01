@@ -1235,7 +1235,7 @@ function formatPublication(value) {
 function formatNote(note) {
   const text = String(note || '').trim();
   if (!text) return '';
-  return gridjs.html(`<button type="button" class="truncate-note btn btn-link btn-sm p-0" style="text-decoration:none; font-size: 1.1rem;" data-full-note="${escapeAttr(text)}" data-notes-action="true" data-no-row-edit="true" title="View full note" aria-label="View full note">📝</button>`);
+  return gridjs.html(`<button type="button" class="truncate-note btn btn-link btn-sm p-0" style="text-decoration:none; font-size: 1.2rem;" data-full-note="${escapeAttr(text)}" data-notes-action="true" data-no-row-edit="true" title="View full note" aria-label="View full note"><i class="fa fa-commenting-o" aria-hidden="true"></i></button>`);
 }
 
 function rowMarker(row) {
