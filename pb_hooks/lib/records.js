@@ -519,11 +519,28 @@ function workflowTagsForRequest(app, record) {
   var tags = [];
   try {
     var rows = app.findRecordsByFilter("title_request_tags", "titleRequest = {:request}", "", 100, 0, { request: record.id });
-    for (var i = 0; i < rows.length; i++) {
-      try {
-        var tag = app.findRecordById("workflow_tags", rows[i].get("tag"));
-        tags.push(tag.get("code") || tag.get("label") || "");
-      } catch (err) {}
+    if (rows && rows.length > 0) {
+      var params = {};
+      var conditions = [];
+      for (var i = 0; i < rows.length; i++) {
+        var tagId = rows[i].get("tag");
+        if (tagId) {
+          var pKey = "p" + i;
+          conditions.push("id = {:" + pKey + "}");
+          params[pKey] = tagId;
+        }
+      }
+
+      if (conditions.length > 0) {
+        var batchFilter = conditions.join(" || ");
+        // Ensure we don't exceed the query limits by keeping the maximum tags to query 100 (which is the limit of title_request_tags fetched anyway)
+        var tagRecords = app.findRecordsByFilter("workflow_tags", batchFilter, "", conditions.length, 0, params);
+        if (tagRecords) {
+          for (var j = 0; j < tagRecords.length; j++) {
+            tags.push(tagRecords[j].get("code") || tagRecords[j].get("label") || "");
+          }
+        }
+      }
     }
   } catch (err) {}
   return normalizeWorkflowTags(tags);
@@ -894,4 +911,5 @@ module.exports = {
   upsertPatronUser: upsertPatronUser,
   upsertStaffUser: upsertStaffUser,
   safeEmail: safeEmail,
+  workflowTagsForRequest: workflowTagsForRequest,
 };
