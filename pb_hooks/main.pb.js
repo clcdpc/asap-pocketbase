@@ -103,6 +103,16 @@ routerAdd("POST", "/api/asap/staff/title-requests/{id}/action", (e) => {
   return routes.staffTitleRequestAction(e);
 });
 
+routerAdd("DELETE", "/api/asap/staff/requests/{id}", (e) => {
+  const routes = require(`${__hooks}/lib/routes.js`);
+  return routes.staffDeleteClosedRequest(e);
+});
+
+routerAdd("POST", "/api/asap/staff/requests/delete-closed", (e) => {
+  const routes = require(`${__hooks}/lib/routes.js`);
+  return routes.staffDeleteClosedRequestsBulk(e);
+});
+
 routerAdd("POST", "/api/asap/staff/organizations/sync", (e) => {
   const routes = require(`${__hooks}/lib/routes.js`);
   return routes.staffSyncOrganizations(e);

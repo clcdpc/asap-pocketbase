@@ -1077,6 +1077,56 @@ function staffTitleRequestAction(e) {
   }
 }
 
+function staffDeleteClosedRequest(e) {
+  var staff = requireAdminStaff(e);
+  if (!staff) {
+    return e.json(403, { message: "Admin access required." });
+  }
+
+  var id = e.request.pathValue("id");
+  var record;
+  try {
+    record = e.app.findRecordById("title_requests", id);
+  } catch (err) {
+    return e.json(404, { message: "Closed request not found." });
+  }
+
+  var accessError = requireTitleRequestAccess(e, staff, record);
+  if (accessError) {
+    return accessError;
+  }
+
+  if (records.normalizeStatus(record.get("status")) !== records.STATUS.CLOSED) {
+    return e.json(400, { message: "Only closed requests can be deleted." });
+  }
+
+  try {
+    records.deleteTitleRequestWithAudit(e.app, record, staff, "single");
+    return e.json(200, { success: true });
+  } catch (err2) {
+    return e.json(400, { message: err2.message || "Could not delete closed request." });
+  }
+}
+
+function staffDeleteClosedRequestsBulk(e) {
+  var staff = requireAdminStaff(e);
+  if (!staff) {
+    return e.json(403, { message: "Admin access required." });
+  }
+
+  var data = body(e);
+  if (String(data.confirm || "") !== "DELETE") {
+    return e.json(400, { message: "Type DELETE to confirm bulk deletion." });
+  }
+
+  try {
+    var deleted = records.deleteClosedRequestsBulk(e.app, staff, data.confirm);
+    return e.json(200, { success: true, deleted: deleted });
+  } catch (err) {
+    return e.json(400, { message: err.message || "Could not delete closed requests." });
+  }
+}
+
 function runHoldCheck(e) {
   if (!requireSuperAdminStaff(e)) {
     return e.json(403, { message: "Super admin access required" });
@@ -1667,6 +1717,8 @@ module.exports = {
   staffUserRoleUpdate: staffUserRoleUpdate,
   staffUserCreate: staffUserCreate,
   staffUserDelete: staffUserDelete,
+  staffDeleteClosedRequest: staffDeleteClosedRequest,
+  staffDeleteClosedRequestsBulk: staffDeleteClosedRequestsBulk,
   staffTitleRequestsList: staffTitleRequestsList,
   staffTitleRequestAction: staffTitleRequestAction,
   staffCreateSuggestion: staffCreateSuggestion,

@@ -151,6 +151,8 @@
             class="fa fa-search"></i> Run auto-promoter now</button>
         <button type="button" id="btn-run-hold-check" class="btn btn-danger btn-sm hidden"><i
             class="fa fa-hand-paper"></i> Run hold check now</button>
+        <button type="button" id="btn-delete-closed-requests" class="btn btn-outline-danger btn-sm hidden"><i
+            class="fa fa-trash"></i> Delete all closed</button>
       </div>
     </div>
     <div id="job-msg" class="mb-3 font-weight-bold job-message"></div>
@@ -1055,6 +1057,23 @@
       <button type="button" id="confirm-dialog-ok" class="btn btn-sm btn-primary">OK</button>
     </div>
   </div>
+</dialog>
+
+<!-- Bulk Delete Closed Dialog -->
+<dialog id="bulk-delete-closed-dialog" class="asap-dialog asap-dialog-small">
+  <form id="bulk-delete-closed-form" class="asap-dialog-small-body">
+    <h2 class="h5 mb-3">Delete all closed requests?</h2>
+    <p class="dialog-message">This will permanently delete all closed requests you are allowed to manage.</p>
+    <div class="form-group">
+      <label for="bulk-delete-closed-confirm" class="font-weight-bold">Type DELETE to confirm.</label>
+      <input type="text" id="bulk-delete-closed-confirm" class="form-control" autocomplete="off">
+    </div>
+    <div id="bulk-delete-closed-msg" class="mb-3 font-weight-bold"></div>
+    <div class="asap-dialog-actions">
+      <button type="button" id="bulk-delete-closed-cancel" class="btn btn-sm btn-secondary">Cancel</button>
+      <button type="submit" id="bulk-delete-closed-submit" class="btn btn-sm btn-danger" disabled>Delete</button>
+    </div>
+  </form>
 </dialog>
 
 <!-- Profile Dialog -->

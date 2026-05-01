@@ -760,6 +760,105 @@ function normalizeDateOnly(value) {
   return value.length === 10 ? value : value.split("T")[0];
 }
 
+function auditDeletedRequest(app, record, staffUser, mode) {
+  var audit = new Record(app.findCollectionByNameOrId("deleted_request_audit"));
+  var snapshot = {
+    id: record.id,
+    title: record.get("title") || "",
+    author: record.get("author") || "",
+    identifier: record.get("identifier") || "",
+    bibid: record.get("bibid") || "",
+    barcode: record.get("barcode") || "",
+    email: record.get("email") || "",
+    nameFirst: record.get("nameFirst") || "",
+    nameLast: record.get("nameLast") || "",
+    libraryOrgId: record.get("libraryOrgId") || "",
+    libraryOrgName: record.get("libraryOrgName") || "",
+    status: record.get("status") || "",
+    closeReason: record.get("closeReason") || "",
+    notes: record.get("notes") || "",
+    created: record.get("created") || record.created || "",
+    updated: record.get("updated") || record.updated || ""
+  };
+
+  audit.set("titleRequestId", record.id);
+  audit.set("title", snapshot.title);
+  audit.set("author", snapshot.author);
+  audit.set("identifier", snapshot.identifier);
+  audit.set("bibid", snapshot.bibid);
+  audit.set("barcode", snapshot.barcode);
+  audit.set("libraryOrgId", snapshot.libraryOrgId);
+  audit.set("libraryOrgName", snapshot.libraryOrgName);
+  audit.set("status", snapshot.status);
+  audit.set("closeReason", snapshot.closeReason);
+  audit.set("deletedByStaff", staffUser.id);
+  audit.set("deletedByUsername", staffUser.get("username") || "");
+  audit.set("deletedByRole", staffUser.get("role") || "");
+  audit.set("deletedAt", new Date().toISOString());
+  audit.set("deleteMode", mode || "single");
+  audit.set("snapshot", snapshot);
+  app.save(audit);
+}
+
+function deleteRelatedRows(app, collectionName, fieldName, value) {
+  var params = { value: value };
+  while (true) {
+    var rows = app.findRecordsByFilter(collectionName, fieldName + " = {:value}", "", 200, 0, params);
+    if (!rows.length) {
+      break;
+    }
+    rows.forEach(function (row) {
+      app.delete(row);
+    });
+  }
+}
+
+function deleteTitleRequestWithAudit(app, record, staffUser, mode) {
+  auditDeletedRequest(app, record, staffUser, mode || "single");
+  deleteRelatedRows(app, "title_request_tags", "titleRequest", record.id);
+  deleteRelatedRows(app, "title_request_events", "titleRequest", record.id);
+  deleteRelatedRows(app, "email_delivery_events", "titleRequest", record.id);
+  app.delete(record);
+}
+
+function deleteClosedRequestsBulk(app, staffUser, confirm) {
+  if (confirm !== "DELETE") {
+    throw new Error("Type DELETE to confirm bulk deletion.");
+  }
+
+  var role = String(staffUser.get("role") || "").toLowerCase();
+  var staffLibrary = String(staffUser.get("libraryOrgId") || "").trim();
+  if (role !== "admin" && role !== "super_admin") {
+    throw new Error("Admin access required.");
+  }
+
+  var filter = "status = 'closed'";
+  var params = {};
+  if (role === "admin") {
+    if (!staffLibrary) {
+      return 0;
+    }
+    filter += " && libraryOrgId = {:libraryOrgId}";
+    params.libraryOrgId = staffLibrary;
+  }
+
+  var recordsToDelete = [];
+  var offset = 0;
+  var limit = 200;
+  while (true) {
+    var page = app.findRecordsByFilter("title_requests", filter, "created", limit, offset, params);
+    if (!page.length) break;
+    recordsToDelete = recordsToDelete.concat(page);
+    if (page.length < limit) break;
+    offset += limit;
+  }
+
+  recordsToDelete.forEach(function (record) {
+    deleteTitleRequestWithAudit(app, record, staffUser, "bulk");
+  });
+  return recordsToDelete.length;
+}
+
 module.exports = {
   AGEGROUP: AGEGROUP,
   CLOSE_REASON: CLOSE_REASON,
@@ -782,6 +881,10 @@ module.exports = {
   listStaffUsers: listStaffUsers,
   setStatusWithNote: setStatusWithNote,
   addWorkflowTagForRequest: addWorkflowTagForRequest,
+  auditDeletedRequest: auditDeletedRequest,
+  deleteClosedRequestsBulk: deleteClosedRequestsBulk,
+  deleteRelatedRows: deleteRelatedRows,
+  deleteTitleRequestWithAudit: deleteTitleRequestWithAudit,
   recordEvent: recordEvent,
   setCanonicalRefs: setCanonicalRefs,
   titleRequestToJson: titleRequestToJson,

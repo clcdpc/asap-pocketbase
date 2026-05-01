@@ -1029,14 +1029,16 @@ async function loadTab(status) {
   const adminBar = document.getElementById('admin-actions-bar');
   const promoterBtn = document.getElementById('btn-run-promoter-check');
   const holdBtn = document.getElementById('btn-run-hold-check');
+  const deleteClosedBtn = document.getElementById('btn-delete-closed-requests');
 
   adminBar.classList.add('hidden');
   promoterBtn.classList.add('hidden');
   holdBtn.classList.add('hidden');
+  if (deleteClosedBtn) deleteClosedBtn.classList.add('hidden');
 
-  const isCurrentlyAdmin = isSuperAdminStaff();
+  const isCurrentlySuperAdmin = isSuperAdminStaff();
 
-  if (isCurrentlyAdmin) {
+  if (isCurrentlySuperAdmin) {
     if (status === 'outstanding_purchase' && workflowSettings.autoPromote) {
       adminBar.classList.remove('hidden');
       promoterBtn.classList.remove('hidden');
@@ -1044,6 +1046,10 @@ async function loadTab(status) {
       adminBar.classList.remove('hidden');
       holdBtn.classList.remove('hidden');
     }
+  }
+  if (status === 'closed' && isAdminStaff() && deleteClosedBtn) {
+    adminBar.classList.remove('hidden');
+    deleteClosedBtn.classList.remove('hidden');
   }
 
   if (status === 'settings') {
@@ -1498,6 +1504,9 @@ function getRowActions(row) {
     const secondary = [];
     if (status !== 'closed') secondary.push({ label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose') });
     secondary.push({ label: 'Edit', onClick: () => openEdit(row.id, row.status, 'Edit', '') });
+    if (status === 'closed' && isAdminStaff()) {
+      secondary.push({ label: 'Delete', className: 'danger', onClick: () => deleteClosedRequest(row.id) });
+    }
     return {
       primary: { label: 'Undo', className: 'btn-outline-secondary', onClick: () => undoRow(row.id) },
       secondary
@@ -1968,6 +1977,19 @@ async function undoRow(id) {
     loadTab(currentStatus);
   } catch (err) {
     await showAlert(err.message || 'Error undoing suggestion');
+  }
+}
+
+async function deleteClosedRequest(id) {
+  if (!isAdminStaff()) return;
+  const confirmed = await showConfirm('Delete this closed request?', 'This cannot be undone.');
+  if (!confirmed) return;
+  try {
+    await authorizedJson(`/api/asap/staff/requests/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    showToast('Closed request deleted.', 'success');
+    loadTab(currentStatus);
+  } catch (err) {
+    await showAlert(err.message || 'Could not delete closed request.');
   }
 }
 
@@ -2575,6 +2597,64 @@ document.getElementById('btn-run-promoter-check').addEventListener('click', asyn
     btn.disabled = false;
   }
 });
+
+const deleteClosedRequestsBtn = document.getElementById('btn-delete-closed-requests');
+const bulkDeleteClosedDialog = document.getElementById('bulk-delete-closed-dialog');
+const bulkDeleteClosedForm = document.getElementById('bulk-delete-closed-form');
+const bulkDeleteClosedInput = document.getElementById('bulk-delete-closed-confirm');
+const bulkDeleteClosedSubmit = document.getElementById('bulk-delete-closed-submit');
+const bulkDeleteClosedCancel = document.getElementById('bulk-delete-closed-cancel');
+const bulkDeleteClosedMsg = document.getElementById('bulk-delete-closed-msg');
+
+if (deleteClosedRequestsBtn && bulkDeleteClosedDialog) {
+  deleteClosedRequestsBtn.addEventListener('click', () => {
+    if (!isAdminStaff()) return;
+    if (bulkDeleteClosedInput) bulkDeleteClosedInput.value = '';
+    if (bulkDeleteClosedSubmit) bulkDeleteClosedSubmit.disabled = true;
+    if (bulkDeleteClosedMsg) bulkDeleteClosedMsg.textContent = '';
+    bulkDeleteClosedDialog.showModal();
+    if (bulkDeleteClosedInput) bulkDeleteClosedInput.focus();
+  });
+}
+
+if (bulkDeleteClosedInput && bulkDeleteClosedSubmit) {
+  bulkDeleteClosedInput.addEventListener('input', () => {
+    bulkDeleteClosedSubmit.disabled = bulkDeleteClosedInput.value !== 'DELETE';
+  });
+}
+
+if (bulkDeleteClosedCancel && bulkDeleteClosedDialog) {
+  bulkDeleteClosedCancel.addEventListener('click', () => {
+    if (bulkDeleteClosedDialog.open) bulkDeleteClosedDialog.close();
+  });
+}
+
+if (bulkDeleteClosedForm) {
+  bulkDeleteClosedForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!isAdminStaff() || !bulkDeleteClosedSubmit || !bulkDeleteClosedInput) return;
+    bulkDeleteClosedSubmit.disabled = true;
+    if (bulkDeleteClosedMsg) {
+      bulkDeleteClosedMsg.textContent = 'Deleting closed requests...';
+      bulkDeleteClosedMsg.className = 'mb-3 font-weight-bold text-info';
+    }
+    try {
+      const result = await authorizedJson('/api/asap/staff/requests/delete-closed', {
+        method: 'POST',
+        body: JSON.stringify({ confirm: bulkDeleteClosedInput.value })
+      });
+      if (bulkDeleteClosedDialog && bulkDeleteClosedDialog.open) bulkDeleteClosedDialog.close();
+      showToast(`Deleted ${result.deleted || 0} closed request${result.deleted === 1 ? '' : 's'}.`, 'success');
+      loadTab('closed');
+    } catch (err) {
+      if (bulkDeleteClosedMsg) {
+        bulkDeleteClosedMsg.textContent = err.message || 'Could not delete closed requests.';
+        bulkDeleteClosedMsg.className = 'mb-3 font-weight-bold text-danger';
+      }
+      bulkDeleteClosedSubmit.disabled = bulkDeleteClosedInput.value !== 'DELETE';
+    }
+  });
+}
 
 document.getElementById('btn-test-smtp').addEventListener('click', async (e) => {
   e.preventDefault();
