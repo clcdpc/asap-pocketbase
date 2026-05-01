@@ -184,10 +184,6 @@ function autoRejected(app, record, templateId) {
   return dispatch(app, record, null, "rejected", "Your Material Purchase Suggestion", templateId);
 }
 
-function emailFor(record, patron) {
-  return (patron && patron.EmailAddress) || record.get("email");
-}
-
 function patronName(record, patron) {
   var first = (patron && patron.NameFirst) || record.get("nameFirst");
   var last = (patron && patron.NameLast) || record.get("nameLast");
