@@ -365,6 +365,12 @@ body {
   width: 1.5rem;
 }
 
+.settings-save-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+}
+
 .row-action-group {
   display: inline-flex;
   align-items: stretch;
@@ -460,6 +466,12 @@ body {
 
   .settings-save-bar button {
     width: 100%;
+  }
+
+  .settings-save-actions {
+    display: grid;
+    gap: 0.5rem;
+    margin-top: 1rem;
   }
 
   #settings-msg {

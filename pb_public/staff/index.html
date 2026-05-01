@@ -848,7 +848,10 @@
               <div id="settings-save-detail" class="small text-muted">Everything in the current settings context is saved.</div>
             </div>
             <div class="text-md-right">
-              <button type="submit" id="settings-save-btn" class="btn btn-lg btn-success">Save settings</button>
+              <div class="settings-save-actions">
+                <button type="button" id="settings-discard-btn" class="btn btn-lg btn-outline-secondary hidden">Discard changes</button>
+                <button type="submit" id="settings-save-btn" class="btn btn-lg btn-success">Save settings</button>
+              </div>
               <div id="settings-msg" class="mt-2 font-weight-bold"></div>
             </div>
           </div>

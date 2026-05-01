@@ -42,6 +42,8 @@ const values = {
   publicationOptions: defaultPublicationOptions.slice(),
   workflowSettings: { autoPromote: false, outstandingTimeoutEnabled: false, outstandingTimeoutDays: 30, outstandingTimeoutSendEmail: false, outstandingTimeoutRejectionTemplateId: '', holdPickupTimeoutEnabled: false, holdPickupTimeoutDays: 14, pendingHoldTimeoutEnabled: false, pendingHoldTimeoutDays: 14 },
   currentLibraryContextOrgId: 'system',
+  lastSavedLibrarySettingsSnapshot: null,
+  lastSavedLibrarySettingsOrgId: 'system',
   libraryTemplateOverrides: {},
   libraryContextLoadSerial: 0,
   librarySelectorBound: false,
