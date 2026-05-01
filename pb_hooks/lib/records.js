@@ -38,6 +38,7 @@ const CLOSE_REASON = {
   SILENT: "Silently Closed",
   HOLD_COMPLETED: "hold_completed",
   HOLD_NOT_PICKED_UP: "hold_not_picked_up",
+  DUPLICATE_HOLD: "duplicate_hold",
   MANUAL: "manual",
 };
 
@@ -80,6 +81,7 @@ function normalizeCloseReason(value) {
     hold_placed: CLOSE_REASON.HOLD_COMPLETED,
     checkout: CLOSE_REASON.HOLD_COMPLETED,
     checked_out: CLOSE_REASON.HOLD_COMPLETED,
+    duplicate_hold: CLOSE_REASON.DUPLICATE_HOLD,
     manual: CLOSE_REASON.MANUAL,
     silent: CLOSE_REASON.SILENT,
     "Silently Closed": CLOSE_REASON.SILENT,

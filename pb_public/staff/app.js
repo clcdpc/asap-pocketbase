@@ -25,6 +25,7 @@ let currentRejectionTemplates = [];
 const closeReasonMap = {
   rejected: 'Rejected by staff',
   hold_completed: 'Hold placed / completed',
+  duplicate_hold: 'Duplicate hold / request',
   manual: 'Manually closed'
 };
 const defaultPublicationOptions = ['Already published', 'Coming soon', 'Published a while back'];
@@ -38,6 +39,7 @@ const duplicateStatusLabelDefaults = {
   rejected: 'Not selected for purchase',
   hold_completed: 'Completed',
   hold_not_picked_up: 'Closed',
+  duplicate_hold: 'Duplicate hold / request',
   manual: 'Closed',
   silent: 'Closed',
   'Silently Closed': 'Closed'
@@ -51,6 +53,7 @@ const duplicateStatusLabelFields = [
   ['rejected', 'Rejected outcome'],
   ['hold_completed', 'Fulfilled outcome'],
   ['hold_not_picked_up', 'Hold not picked up'],
+  ['duplicate_hold', 'Duplicate hold / request'],
   ['manual', 'Manual close'],
   ['silent', 'Silent close']
 ];
@@ -1537,6 +1540,9 @@ function getRowActions(row) {
 
   if (status === 'pending_hold' || status === 'hold_placed' || status === 'closed') {
     const secondary = [];
+    if ((status === 'pending_hold' || status === 'hold_placed') && hasWorkflowTag(row, 'Hold exists (same patron)')) {
+      secondary.push({ label: 'Close duplicate', className: 'danger', onClick: () => closeDuplicateRequest(row.id) });
+    }
     if (status !== 'closed') secondary.push({ label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose') });
     secondary.push({ label: 'Edit', onClick: () => openEdit(row.id, row.status, 'Edit', '') });
     if (status === 'closed' && isAdminStaff()) {
@@ -2039,6 +2045,36 @@ async function deleteClosedRequest(id) {
     loadTab(currentStatus);
   } catch (err) {
     await showAlert(err.message || 'Could not delete closed request.');
+  }
+}
+
+async function closeDuplicateRequest(id) {
+  const row = currentSuggestions.find(r => r.id === id) || allSuggestions.find(r => r.id === id);
+  if (!row) return;
+  const confirmed = await showConfirm('Close this duplicate request?', 'The patron already has an open request or hold for this BIB ID.');
+  if (!confirmed) return;
+  try {
+    await authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(id)}/action`, {
+      method: 'POST',
+      body: JSON.stringify({
+        action: 'closeDuplicate',
+        status: 'closed',
+        title: row.title || '',
+        author: row.author || '',
+        identifier: row.identifier || '',
+        bibid: row.bibid || '',
+        format: row.format || '',
+        agegroup: row.agegroup || '',
+        publication: row.publication || '',
+        exactPublicationDate: row.exactPublicationDate || '',
+        notes: row.notes || '',
+        editedBy: pb.authStore.model.username
+      })
+    });
+    showToast('Duplicate request closed.', 'success');
+    loadTab(currentStatus);
+  } catch (err) {
+    await showAlert(err.message || 'Could not close duplicate request.');
   }
 }
 

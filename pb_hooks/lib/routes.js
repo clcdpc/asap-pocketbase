@@ -956,6 +956,11 @@ function staffTitleRequestAction(e) {
     var data = body(e);
     var action = String(data.action || "");
     var nextStatus = records.normalizeStatus(data.status);
+    var isClosingRequest = nextStatus === records.STATUS.CLOSED;
+    var isDuplicateClose = action === "closeDuplicate";
+    var isActiveHoldTarget = nextStatus === records.STATUS.PENDING_HOLD || nextStatus === records.STATUS.HOLD_PLACED || action === "alreadyOwn";
+    var oldStatus = "";
+    var duplicateCloseNoteAdded = false;
     
     var record;
     try {
@@ -967,6 +972,7 @@ function staffTitleRequestAction(e) {
     if (accessError) {
       return accessError;
     }
+    oldStatus = records.normalizeStatus(record.get("status"));
 
     if (nextStatus === records.STATUS.PENDING_HOLD && !String(data.bibid || "").trim()) {
       return e.json(400, { message: "BIB ID is required before moving this suggestion to Pending hold." });
@@ -986,18 +992,33 @@ function staffTitleRequestAction(e) {
         "barcode = {:barcode} && bibid = {:bibid} && id != {:id} && status != 'closed'",
         "", 1, 0, { barcode: barcode, bibid: bibid, id: id });
       if (existing && existing.length > 0) {
-         return e.json(400, { message: "Duplicate detected: This patron already has an open request for BIB ID " + bibid + "." });
+        records.addWorkflowTagForRequest(e.app, record, "Hold exists (same patron)");
+        var oldIsActiveHold = oldStatus === records.STATUS.PENDING_HOLD || oldStatus === records.STATUS.HOLD_PLACED;
+        var bibidChanged = String(record.get("bibid") || "").trim() !== bibid;
+        var wouldCreateActiveDuplicate = isActiveHoldTarget && (!oldIsActiveHold || bibidChanged || action === "alreadyOwn");
+        if (isDuplicateClose) {
+          data.status = records.STATUS.CLOSED;
+          nextStatus = records.STATUS.CLOSED;
+          data.closeReason = records.CLOSE_REASON.DUPLICATE_HOLD;
+          records.appendSystemNote(record, "Closed as duplicate because this patron already has an open request or hold for the same BIB ID.");
+          duplicateCloseNoteAdded = true;
+        } else if (wouldCreateActiveDuplicate) {
+          e.app.save(record);
+          return e.json(400, { message: "Duplicate detected: This patron already has an open request for BIB ID " + bibid + "." });
+        }
       }
 
-      // Reconcile manual input with Polaris data
-      polaris.reconcileRecord(e.app, staffAuth, record, bibid);
+      if (!isDuplicateClose && !isClosingRequest) {
+        // Reconcile manual input with Polaris data
+        polaris.reconcileRecord(e.app, staffAuth, record, bibid);
 
-      // The reconcileRecord function updates the record with the title from Polaris
-      // and prepends it to the original title in parentheses.
-      // We must pass this updated title and author through the `data` variable
-      // so it is correctly saved by `records.updateTitleRequest`.
-      data.title = record.get("title");
-      data.author = record.get("author");
+        // The reconcileRecord function updates the record with the title from Polaris
+        // and prepends it to the original title in parentheses.
+        // We must pass this updated title and author through the `data` variable
+        // so it is correctly saved by `records.updateTitleRequest`.
+        data.title = record.get("title");
+        data.author = record.get("author");
+      }
 
       // If moving to Pending hold, check Polaris for an existing hold.
       if (nextStatus === records.STATUS.PENDING_HOLD) {
@@ -1021,6 +1042,13 @@ function staffTitleRequestAction(e) {
 
     if (nextStatus === records.STATUS.CLOSED && (action === "reject" || action === "silentClose")) {
       data.closeReason = (action === "silentClose") ? records.CLOSE_REASON.SILENT : records.CLOSE_REASON.REJECTED;
+    }
+    if (nextStatus === records.STATUS.CLOSED && isDuplicateClose) {
+      data.closeReason = records.CLOSE_REASON.DUPLICATE_HOLD;
+      records.addWorkflowTagForRequest(e.app, record, "Hold exists (same patron)");
+      if (!duplicateCloseNoteAdded) {
+        records.appendSystemNote(record, "Closed as duplicate because this patron already has an open request or hold for the same BIB ID.");
+      }
     }
     if (nextStatus !== records.STATUS.CLOSED) {
       data.closeReason = "";

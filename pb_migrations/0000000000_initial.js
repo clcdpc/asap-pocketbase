@@ -584,6 +584,7 @@ migrate((app) => {
     { id: "closemanual0030", code: "manual", label: "Manually closed", sortOrder: 30 },
     { id: "closesilent0040", code: "Silently Closed", label: "Silently closed", sortOrder: 40 },
     { id: "closenotpick050", code: "hold_not_picked_up", label: "Hold not picked up", sortOrder: 50 },
+    { id: "closedupehold60", code: "duplicate_hold", label: "Duplicate hold / request", sortOrder: 60 },
   ]);
 
   seedLookup(app, materialFormats, [
