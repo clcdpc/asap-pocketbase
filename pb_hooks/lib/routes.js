@@ -354,10 +354,6 @@ function setupStatus(e) {
   });
 }
 
-function getOrCreateSettingsRecord(app) {
-  return config.getSystemSettings(app);
-}
-
 function firstValue(source, names, defaultValue) {
   for (var i = 0; i < names.length; i++) {
     var value = source[names[i]];
