@@ -8,6 +8,9 @@ const orgs = require(`${__hooks}/lib/orgs.js`);
 const polaris = require(`${__hooks}/lib/polaris.js`);
 const records = require(`${__hooks}/lib/records.js`);
 
+const TEMPLATE_IN_USE_BY_AUTO_REJECT_MESSAGE = "This template can’t be deleted because it’s currently used by the auto-reject email. Assign a different template or disable auto-reject before deleting.";
+const TEMPLATE_IN_USE_BY_AUTO_REJECT_CODE = "TEMPLATE_IN_USE_BY_AUTO_REJECT";
+
 function body(e) {
   return e.requestInfo().body || {};
 }
@@ -1442,13 +1445,21 @@ function updateLibrarySettings(e) {
     try {
       saveSystemSettingsPayload(e.app, payload);
     } catch (err) {
-      return e.json(400, { message: err.message || String(err) });
+      var systemErrorPayload = { message: err.message || String(err) };
+      if (err.code) systemErrorPayload.code = err.code;
+      return e.json(400, systemErrorPayload);
     }
   } else {
-    if (action === "reset") {
-      resetLibrarySettings(e.app, orgId);
-    } else {
-      saveLibraryScopedSettings(e.app, orgId, payload);
+    try {
+      if (action === "reset") {
+        resetLibrarySettings(e.app, orgId);
+      } else {
+        saveLibraryScopedSettings(e.app, orgId, payload);
+      }
+    } catch (err) {
+      var errorPayload = { message: err.message || String(err) };
+      if (err.code) errorPayload.code = err.code;
+      return e.json(400, errorPayload);
     }
   }
 
@@ -1570,8 +1581,8 @@ function saveWorkflowSettings(app, scope, orgId, wf) {
   });
   if (!wf.outstandingTimeoutEnabled || !wf.outstandingTimeoutSendEmail) {
     record.set("outstandingTimeoutRejectionTemplate", "");
-  } else if (wf.outstandingTimeoutRejectionTemplateId) {
-    record.set("outstandingTimeoutRejectionTemplate", wf.outstandingTimeoutRejectionTemplateId);
+  } else if (Object.prototype.hasOwnProperty.call(wf, "outstandingTimeoutRejectionTemplateId")) {
+    record.set("outstandingTimeoutRejectionTemplate", wf.outstandingTimeoutRejectionTemplateId || "");
   }
   app.save(record);
 }
@@ -1753,8 +1764,10 @@ function emailTemplateRecord(app, scope, orgId, key) {
 
 function saveRejectionTemplates(app, scope, orgId, templates) {
   var org = scope === "library" ? config.findOrganization(app, orgId) : null;
+  var keep = {};
   for (var i = 0; i < templates.length; i++) {
     var t = templates[i] || {};
+    if (t.id) keep[String(t.id)] = true;
     var record = null;
     if (t.id) {
       try { record = app.findRecordById("rejection_templates", t.id); } catch (err) {}
@@ -1770,7 +1783,31 @@ function saveRejectionTemplates(app, scope, orgId, templates) {
     record.set("enabled", true);
     record.set("sortOrder", i + 1);
     app.save(record);
+    if (record.id) keep[String(record.id)] = true;
   }
+  var filter = scope === "system" ? "scope = 'system' && enabled = true" : "scope = 'library' && libraryOrganization = {:org} && enabled = true";
+  var params = scope === "system" ? {} : { org: org.id };
+  try {
+    var rows = app.findRecordsByFilter("rejection_templates", filter, "sortOrder", 200, 0, params);
+    rows.forEach(function (row) {
+      if (keep[row.id]) return;
+      assertRejectionTemplateNotUsedByAutoReject(app, row.id);
+      app.delete(row);
+    });
+  } catch (err2) {
+    throw err2;
+  }
+}
+
+function assertRejectionTemplateNotUsedByAutoReject(app, templateId) {
+  try {
+    app.findFirstRecordByFilter("workflow_settings", "outstandingTimeoutRejectionTemplate = {:template}", { template: templateId });
+  } catch (err) {
+    return;
+  }
+  var inUseErr = new Error(TEMPLATE_IN_USE_BY_AUTO_REJECT_MESSAGE);
+  inUseErr.code = TEMPLATE_IN_USE_BY_AUTO_REJECT_CODE;
+  throw inUseErr;
 }
 
 function resetLibrarySettings(app, orgId) {
@@ -1838,4 +1875,9 @@ module.exports = {
   renderDuplicateMessage: renderDuplicateMessage,
   staffRunPromoterCheck: staffRunPromoterCheck,
   runWeeklyStaffActionSummary: runWeeklyStaffActionSummary,
+  saveWorkflowSettings: saveWorkflowSettings,
+  saveRejectionTemplates: saveRejectionTemplates,
+  assertRejectionTemplateNotUsedByAutoReject: assertRejectionTemplateNotUsedByAutoReject,
+  TEMPLATE_IN_USE_BY_AUTO_REJECT_MESSAGE: TEMPLATE_IN_USE_BY_AUTO_REJECT_MESSAGE,
+  TEMPLATE_IN_USE_BY_AUTO_REJECT_CODE: TEMPLATE_IN_USE_BY_AUTO_REJECT_CODE,
 };
