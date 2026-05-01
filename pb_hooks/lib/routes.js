@@ -797,7 +797,7 @@ function staffCreateSuggestion(e) {
   try {
     data.staffLibraryOrgIdCreatedBy = staff.get("libraryOrgId") || "";
     applyIsbnCheckStatusForCreate(data, config.uiText());
-    var record = records.createSuggestion(e.app, patronRecord, data);
+    var record = records.createSuggestion(e.app, patronRecord, data, { skipLimits: true });
 
     var today = records.formatDate(new Date());
     var existing = String(record.get("notes") || "");

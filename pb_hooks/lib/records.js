@@ -409,9 +409,12 @@ function safeEmail(value) {
   return value.indexOf("@") > 0 ? value : "";
 }
 
-function createSuggestion(app, patronRecord, data) {
+function createSuggestion(app, patronRecord, data, options) {
+  options = options || {};
   var barcode = patronRecord.get("barcode");
-  enforceWeeklyLimit(app, barcode, patronRecord.get("libraryOrgId"));
+  if (!options.skipLimits) {
+    enforceWeeklyLimit(app, barcode, patronRecord.get("libraryOrgId"));
+  }
   enforceDuplicate(app, barcode, data);
 
   var now = new Date().toISOString();
