@@ -890,6 +890,44 @@ function staffTitleRequestsList(e) {
     if (!page.length) {
       break;
     }
+
+    var missingPatronIds = [];
+    var seenInPage = {};
+    for (var i = 0; i < page.length; i++) {
+      var pId = String(page[i].get("patron") || "").trim();
+      if (pId && patronCache[pId] === undefined && !seenInPage[pId]) {
+        missingPatronIds.push(pId);
+        seenInPage[pId] = true;
+      }
+    }
+
+    if (missingPatronIds.length > 0) {
+      var batchSize = 100;
+      for (var j = 0; j < missingPatronIds.length; j += batchSize) {
+        var chunk = missingPatronIds.slice(j, j + batchSize);
+        var filterParts = [];
+        var batchParams = {};
+        for (var k = 0; k < chunk.length; k++) {
+          filterParts.push("id = {:p" + k + "}");
+          batchParams["p" + k] = chunk[k];
+        }
+        var batchFilter = filterParts.join(" || ");
+        var results = e.app.findRecordsByFilter("patron_users", batchFilter, "", chunk.length, 0, batchParams);
+        var foundIds = {};
+        for (var k = 0; k < results.length; k++) {
+          var r = results[k];
+          patronCache[r.id] = r;
+          foundIds[r.id] = true;
+        }
+        for (var k = 0; k < chunk.length; k++) {
+          var id = chunk[k];
+          if (!foundIds[id]) {
+            patronCache[id] = null;
+          }
+        }
+      }
+    }
+
     for (var i = 0; i < page.length; i++) {
       var row = records.titleRequestToJson(page[i], e.app);
       var patronId = String(page[i].get("patron") || "").trim();
