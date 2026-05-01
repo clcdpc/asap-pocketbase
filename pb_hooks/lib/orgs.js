@@ -102,11 +102,43 @@ function relinkParents(app) {
   while (true) {
     var rows = app.findRecordsByFilter("polaris_organizations", "parentOrganizationId != ''", "", 200, offset);
     if (!rows.length) break;
+
+    var parentIdsMap = {};
     for (var i = 0; i < rows.length; i++) {
-      var parent = findOrganization(app, rows[i].get("parentOrganizationId"));
-      rows[i].set("parentOrganization", parent ? parent.id : "");
+      var pid = normalizeOrgId(rows[i].get("parentOrganizationId"));
+      if (pid) {
+        parentIdsMap[pid] = true;
+      }
+    }
+
+    var parentCache = {};
+    var uniqueParentIds = Object.keys(parentIdsMap);
+    if (uniqueParentIds.length > 0) {
+      var chunkSize = 100;
+      for (var i = 0; i < uniqueParentIds.length; i += chunkSize) {
+        var chunk = uniqueParentIds.slice(i, i + chunkSize);
+        var filterParts = [];
+        var params = {};
+        for (var j = 0; j < chunk.length; j++) {
+          filterParts.push("organizationId = {:p" + j + "}");
+          params["p" + j] = chunk[j];
+        }
+
+        try {
+          var parents = app.findRecordsByFilter("polaris_organizations", filterParts.join(" || "), "", chunk.length, 0, params);
+          for (var j = 0; j < parents.length; j++) {
+            parentCache[parents[j].get("organizationId")] = parents[j].id;
+          }
+        } catch (err) {}
+      }
+    }
+
+    for (var i = 0; i < rows.length; i++) {
+      var pid = normalizeOrgId(rows[i].get("parentOrganizationId"));
+      rows[i].set("parentOrganization", parentCache[pid] || "");
       app.save(rows[i]);
     }
+
     if (rows.length < 200) break;
     offset += 200;
   }
