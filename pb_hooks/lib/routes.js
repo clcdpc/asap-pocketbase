@@ -334,6 +334,7 @@ function staffPublicJson(record) {
     lastLogin: record.getString("lastLogin") || "",
     lastPolarisLogin: record.getString("lastPolarisLogin") || "",
     weekly_action_summary_enabled: !!record.getBool("weekly_action_summary_enabled"),
+    purchase_reminder_default: !!record.getBool("purchase_reminder_default"),
     weekly_action_summary_email: record.get("weekly_action_summary_email") || "",
   };
 }
@@ -343,6 +344,7 @@ function staffProfileUpdate(e) {
   var payload = body(e);
   var summaryEmail = String(payload.weekly_action_summary_email || "").trim();
   staff.set("weekly_action_summary_enabled", boolValue(payload.weekly_action_summary_enabled, false));
+  staff.set("purchase_reminder_default", boolValue(payload.purchase_reminder_default, false));
   staff.set("weekly_action_summary_email", summaryEmail);
   e.app.save(staff);
   return e.json(200, staffPublicJson(staff));

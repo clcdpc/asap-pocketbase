@@ -85,7 +85,7 @@ const source = [
   "  const checkbox = document.getElementById('edit-email-purchase-reminder');",
   "  const help = document.getElementById('edit-purchase-reminder-help');",
   "  if (!container || !checkbox || !help) return;",
-  "  checkbox.checked = false;",
+  "  checkbox.checked = !!(pb.authStore.model && pb.authStore.model.purchase_reminder_default);",
   "  const isPurchaseAction = actionStr === 'purchase';",
   "  const isStaff = !!(pb.authStore.isValid && pb.authStore.model && pb.authStore.model.collectionName === 'staff_users');",
   "  container.classList.toggle('hidden', !(isPurchaseAction && isStaff));",
