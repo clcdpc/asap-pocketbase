@@ -725,12 +725,28 @@ function enabledLibraryOrgIds(app) {
   var ids = [];
   var rels = sys.get("enabledLibraries") || [];
   if (!Array.isArray(rels)) rels = rels ? [rels] : [];
-  rels.forEach(function (id) {
+  if (rels.length === 0) return "";
+
+  var chunkLimit = 100;
+  for (var i = 0; i < rels.length; i += chunkLimit) {
+    var chunk = rels.slice(i, i + chunkLimit);
+    var filterParts = [];
+    var params = {};
+    for (var j = 0; j < chunk.length; j++) {
+      var key = "p" + j;
+      filterParts.push("id = {:" + key + "}");
+      params[key] = chunk[j];
+    }
+    var filter = filterParts.join(" || ");
     try {
-      var org = app.findRecordById("polaris_organizations", id);
-      if (org.get("organizationId")) ids.push(String(org.get("organizationId")));
+      var records = app.findRecordsByFilter("polaris_organizations", filter, "", chunk.length, 0, params);
+      for (var k = 0; k < records.length; k++) {
+        var org = records[k];
+        if (org.get("organizationId")) ids.push(String(org.get("organizationId")));
+      }
     } catch (err) {}
-  });
+  }
+
   return ids.join(",");
 }
 
