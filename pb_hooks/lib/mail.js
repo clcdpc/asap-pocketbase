@@ -235,7 +235,7 @@ function purchaseReminder(app, record, staff, toEmail, itemUrl) {
   var generatedAt = formatDateTime(new Date());
   var bibId = clean(record.get("bibid"));
   var controlNumber = clean(record.get("controlNumber"));
-  var bibLine = bibId || controlNumber || record.id || "";
+  var bibLine = bibId || controlNumber || "";
   var publisherDate = [publisher, publicationDate].filter(Boolean).join(" / ");
   var notes = clean(record.get("notes"));
 
