@@ -196,7 +196,21 @@ cronAdd("asap-isbn-check", $os.getenv("ASAP_ISBN_CHECK_CRON_SCHEDULE") || "*/5 *
 onRecordViewRequest((e) => {
   const authRecord = e.httpContext.get("authRecord");
   if (authRecord && authRecord.collection().name === "patron_users") {
-    // Redact internal notes for patrons
+    // Redact internal/staff fields for patrons
     e.record.set("notes", "");
+    e.record.set("editedBy", "");
+    e.record.set("staffLibraryOrgIdCreatedBy", "");
+  }
+}, "title_requests");
+
+onRecordsListRequest((e) => {
+  const authRecord = e.httpContext.get("authRecord");
+  if (authRecord && authRecord.collection().name === "patron_users") {
+    // Redact internal/staff fields for patrons in list view
+    e.records.forEach((record) => {
+      record.set("notes", "");
+      record.set("editedBy", "");
+      record.set("staffLibraryOrgIdCreatedBy", "");
+    });
   }
 }, "title_requests");

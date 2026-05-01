@@ -10,3 +10,7 @@
 **Vulnerability:** Several places in the patron web application (`pb_public/patron/app.js`) utilized `.innerHTML` to insert text that included dynamically sourced inputs like library setting names, messages from configs, and explicitly, API error responses (e.g., `conflictBody.innerHTML = err.message || ...`). This exposes the application to Reflected and Stored Cross-Site Scripting (XSS).
 **Learning:** Even internal configuration texts or error messages from APIs shouldn't be blindly trusted as safe HTML, particularly when using native DOM methods like `.innerHTML`.
 **Prevention:** Default to using `.textContent` instead of `.innerHTML` for DOM text replacement whenever HTML rendering is not strictly required. For areas that still need `.innerHTML` or similar behavior with dynamic input (like the 409 conflict error rendering), explicitly escape the content using `escapeHtml()` before insertion.
+## 2026-05-01 - Prevent Information Disclosure in Login Errors
+**Vulnerability:** The `patronLogin` and `staffLogin` routes bubbled up raw error strings from the Polaris API and internal configuration checks to the end-user. This could leak internal system details, IP addresses, or Polaris error specifics.
+**Learning:** Error messages returned to users should be generic to prevent information disclosure. Detailed error information should be logged on the server for staff troubleshooting.
+**Prevention:** Sanitize error responses by providing user-friendly, non-descriptive messages while ensuring the full error context is captured in the system logs.

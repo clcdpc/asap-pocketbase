@@ -713,9 +713,9 @@ function patronLogin(e) {
     var errStr = String(err);
     if (errStr.indexOf("Polaris configuration") >= 0 || errStr.indexOf("Admin staff authentication") >= 0) {
       status = 500;
-      message = "The library suggestion system is currently misconfigured. Please contact staff. (" + errStr + ")";
+      message = "The library suggestion system is currently misconfigured. Please contact staff.";
     } else {
-      message = "Incorrect Login - Please try again (" + errStr + ")";
+      message = "Incorrect Login - Please try again";
     }
 
     return e.json(status, { message: message });

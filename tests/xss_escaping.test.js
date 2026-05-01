@@ -2,14 +2,14 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-// Extract escapeAttr from staff app
-const staffAppContent = fs.readFileSync(path.join(__dirname, '../pb_public/staff/app.js'), 'utf8');
-const escapeAttrMatch = staffAppContent.match(/function escapeAttr\(value\) {[\s\S]*?}/);
+// Extract escapeAttr from staff helper module
+const staffHelperContent = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/ui-helpers.js'), 'utf8');
+const escapeAttrMatch = staffHelperContent.match(/export function escapeAttr\(value\) {[\s\S]*?^}/m);
 if (!escapeAttrMatch) {
-  throw new Error("Could not find escapeAttr in staff/app.js");
+  throw new Error("Could not find escapeAttr in staff/js/ui-helpers.js");
 }
 const escapeAttr = new Function('value', `
-  ${escapeAttrMatch[0]}
+  ${escapeAttrMatch[0].replace('export ', '')}
   return escapeAttr(value);
 `);
 
