@@ -1818,6 +1818,7 @@ function saveMaterialFormats(app, scope, orgId, ui) {
     var fields = rule.fields || {};
     record.set("label", labels[code] || code);
     record.set("enabled", available.length ? available.indexOf(code) >= 0 : true);
+    record.set("sortOrder", (index + 1) * 10);
     record.set("messageBehavior", rule.messageBehavior || "none");
     setFormatFieldRule(record, "title", fields.title, "Title");
     setFormatFieldRule(record, "author", fields.author, "Author");
