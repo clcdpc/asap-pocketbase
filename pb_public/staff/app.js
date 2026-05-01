@@ -141,7 +141,7 @@ const emptyStateMessages = {
   closed: 'No closed suggestions found.'
 };
 
-const statusStages = ['suggestion', 'outstanding_purchase', 'pending_hold', 'hold_placed', 'closed'];
+const statusStages = ['suggestion', 'outstanding_purchase', 'pending_hold', 'hold_placed', 'closed', 'settings'];
 const stageQueryMap = {
   submitted: 'suggestion',
   suggestion: 'suggestion',
@@ -150,7 +150,8 @@ const stageQueryMap = {
   outstanding_purchase: 'outstanding_purchase',
   pending_hold: 'pending_hold',
   hold_placed: 'hold_placed',
-  closed: 'closed'
+  closed: 'closed',
+  settings: 'settings'
 };
 
 let currentStatus = requestedStatusFromUrl() || 'suggestion';
@@ -247,10 +248,11 @@ function requestedStatusFromUrl() {
 }
 
 function updateStageQuery(status) {
-  if (!statusStages.includes(status)) return;
   try {
     const url = new URL(window.location.href);
-    url.searchParams.set('stage', status === 'suggestion' ? 'submitted' : status);
+    if (statusStages.includes(status)) {
+      url.searchParams.set('stage', status === 'suggestion' ? 'submitted' : status);
+    }
     window.history.replaceState(null, '', url.pathname + url.search + url.hash);
   } catch (err) {}
 }
@@ -422,6 +424,20 @@ function getSettingsSectionFromHash() {
   return settingsSectionIds.includes(section) ? section : '';
 }
 
+function updateSettingsSaveBarVisibility() {
+  const bar = document.querySelector('.settings-save-bar');
+  if (!bar) return;
+  bar.classList.toggle('hidden', currentStatus !== 'settings');
+}
+
+function closeOpenDialogs() {
+  document.querySelectorAll('dialog[open]').forEach(dialog => {
+    try {
+      dialog.close();
+    } catch (err) {}
+  });
+}
+
 function activateStatusTab(status) {
   currentStatus = status;
   document.querySelectorAll('#status-tabs .nav-link').forEach(link => {
@@ -431,6 +447,7 @@ function activateStatusTab(status) {
       link.setAttribute('aria-selected', isActive ? 'true' : 'false');
     }
   });
+  updateSettingsSaveBarVisibility();
 }
 
 function updateSaveBarState(state) {
@@ -630,6 +647,9 @@ function checkAuth() {
     const requestedSettingsSection = getSettingsSectionFromHash();
     if (requestedSettingsSection) {
       activateStatusTab('settings');
+      updateStageQuery('settings');
+    } else {
+      updateSettingsSaveBarVisibility();
     }
 
     if (isSuperAdminStaff() && currentStatus !== 'settings') {
@@ -638,6 +658,8 @@ function checkAuth() {
 
     loadTab(currentStatus);
   } else {
+    closeOpenDialogs();
+    closeActionMenu?.();
     setupContainer.classList.toggle('hidden', !setupRequired);
     loginContainer.classList.toggle('hidden', setupRequired);
     appContainer.classList.add('hidden');
@@ -957,9 +979,7 @@ document.querySelectorAll('#status-tabs .nav-link').forEach(link => {
   link.addEventListener('click', () => {
     const nextStatus = link.getAttribute('data-status');
     activateStatusTab(nextStatus);
-    if (nextStatus !== 'settings') {
-      updateStageQuery(nextStatus);
-    }
+    updateStageQuery(nextStatus);
     activeTagFilter = '';
     loadTab(currentStatus);
   });
@@ -1027,7 +1047,10 @@ async function loadTab(status) {
   }
 
   if (status === 'settings') {
+    closeOpenDialogs();
+    closeActionMenu?.();
     gridContainer.classList.add('hidden');
+    if (staffGridFilterBar) staffGridFilterBar.classList.add('hidden');
     hideTagFilter();
     settingsContainer.classList.remove('hidden');
     activateSettingsSection(getSettingsSectionFromHash() || currentSettingsSection, { updateHash: false });
@@ -3520,6 +3543,8 @@ async function loadStaffConfig() {
 }
 
 async function initStaffApp() {
+  closeOpenDialogs();
+  closeActionMenu?.();
   initSettingsNavigation();
   await loadStaffConfig();
   await loadSetupStatus();
