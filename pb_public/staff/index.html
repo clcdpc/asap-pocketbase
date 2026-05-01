@@ -262,13 +262,19 @@
 
                   <div id="system-staff-url-group" class="hidden mt-4">
                     <hr>
-                    <h3 class="h5">Staff access URL</h3>
+                    <h3 class="h5">System links</h3>
                     <div class="form-group">
                       <label for="system-staff-url">Staff URL</label>
                       <input type="url" id="system-staff-url" class="form-control"
                         placeholder="https://example.org/staff/" autocomplete="url">
                       <small class="form-text text-muted">The full URL staff users should use to access this staff
                         interface. Include http:// or https://.</small>
+                    </div>
+                    <div class="form-group">
+                      <label for="leap-bib-url-pattern">Leap bib record URL pattern</label>
+                      <input type="url" id="leap-bib-url-pattern" class="form-control"
+                        placeholder="https://leap-sso.example.org/LeapWebApp/staff/default#bibrecords/{{bibid}}">
+                      <small class="form-text text-muted">Optional. Use {{bibid}} where the Polaris Bib ID should be inserted.</small>
                     </div>
                   </div>
 
@@ -920,6 +926,7 @@
         <div id="bib-info-display" class="alert alert-info mt-1 py-1 px-2 mb-0 hidden bib-info-compact" role="status">
           <strong>BIB info:</strong> <span id="bib-info-text"></span>
         </div>
+        <div id="edit-leap-bib-link-container" class="mt-2 hidden"></div>
         <small id="edit-bibid-hint" class="form-text text-muted bib-hint">Required
           for Pending hold. Use Lookup to verify.</small>
       </div>

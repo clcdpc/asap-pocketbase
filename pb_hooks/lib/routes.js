@@ -1308,6 +1308,7 @@ function getLibrarySettings(e) {
         polaris: s.polaris,
         smtp: s.smtp,
         staffUrl: s.staffUrl,
+        leapBibUrlPattern: s.leapBibUrlPattern || "",
         emailStatus: config.emailStatus(e.app, ""),
         organizationSync: organizationSyncStatus(e.app),
         isOverride: false
@@ -1320,6 +1321,7 @@ function getLibrarySettings(e) {
       emails: ls.emails,
       ui_text: ls.ui_text,
       workflow: workflowWithEnabled(e.app, ls.workflow),
+      leapBibUrlPattern: ls.leapBibUrlPattern || "",
       emailStatus: config.emailStatus(e.app, orgId === "system" ? "" : orgId),
       organizationSync: organizationSyncStatus(e.app),
       isOverride: hasLibraryOverride(e.app, orgId)
@@ -1424,10 +1426,18 @@ function recordForScope(app, collectionName, scope, orgId) {
 }
 
 function saveSystemSettingsPayload(app, payload) {
+  var systemSettingsData = {};
+  var hasSystemSettingsData = false;
   if (Object.prototype.hasOwnProperty.call(payload, "staffUrl")) {
-    config.saveSystemSettings(app, {
-      staffUrl: payload.staffUrl
-    });
+    systemSettingsData.staffUrl = payload.staffUrl;
+    hasSystemSettingsData = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, "leapBibUrlPattern")) {
+    systemSettingsData.leapBibUrlPattern = payload.leapBibUrlPattern;
+    hasSystemSettingsData = true;
+  }
+  if (hasSystemSettingsData) {
+    config.saveSystemSettings(app, systemSettingsData);
   }
   if (payload.polaris) {
     var polarisData = buildPolarisData({ polaris: payload.polaris });

@@ -190,6 +190,7 @@ let settingsLoading = false;
 let activeActionMenu = null;
 let rowActionIdCounter = 0;
 const rowActionRegistry = new Map();
+let leapBibUrlPattern = "";
 
 // --- DOM Field Helpers ---
 
@@ -235,6 +236,30 @@ function normalizeStaffUrl(value) {
     url.pathname = '/staff/';
   }
   return url.toString();
+}
+
+function normalizeLeapBibUrlPattern(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (!/^https?:\/\//i.test(text)) {
+    throw new Error('Leap Bib URL pattern must begin with http:// or https://.');
+  }
+  if (!text.includes('{{bibid}}')) {
+    throw new Error('Leap Bib URL pattern must include {{bibid}}.');
+  }
+  return text;
+}
+
+function leapBibUrl(bibId) {
+  const pattern = String(leapBibUrlPattern || '').trim();
+  const cleanBibId = String(bibId || '').trim();
+  if (!pattern || !cleanBibId || !pattern.includes('{{bibid}}')) {
+    return '';
+  }
+  if (!/^https?:\/\//i.test(pattern)) {
+    return '';
+  }
+  return pattern.split('{{bibid}}').join(encodeURIComponent(cleanBibId));
 }
 
 function requestedStatusFromUrl() {
@@ -1244,6 +1269,14 @@ function formatNote(note) {
   return gridjs.html(`<button type="button" class="truncate-note btn btn-link btn-sm p-0" style="text-decoration:none; font-size: 1.2rem;" data-full-note="${escapeAttr(text)}" data-notes-action="true" data-no-row-edit="true" title="View full note" aria-label="View full note"><i class="fa fa-commenting-o" aria-hidden="true"></i></button>`);
 }
 
+function renderBibIdCell(row) {
+  const bibId = String(row?.bibid || '').trim();
+  if (!bibId) return '';
+  const url = leapBibUrl(bibId);
+  if (!url) return escapeAttr(bibId);
+  return gridjs.html(`<a href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer" data-no-row-edit="true">${escapeAttr(bibId)}</a>`);
+}
+
 function rowMarker(row) {
   return `<span class="asap-row-marker" data-suggestion-id="${escapeAttr(row.id)}" hidden></span>`;
 }
@@ -1292,6 +1325,7 @@ function getGridColumns(status) {
     { name: 'Title (original)', width: '320px' },
     { name: 'Author (original)', width: '150px' },
     { name: 'Identifier number', width: '140px' },
+    { name: 'BIB ID', width: '100px' },
     { name: 'Age group', width: '100px' },
     { name: 'Format', width: '100px' },
     { name: 'Timing', width: '100px' },
@@ -1457,6 +1491,7 @@ function getGridRow(row, status) {
     renderTitleCell(row),
     row.author,
     row.identifier,
+    renderBibIdCell(row),
     ageMap[row.agegroup] || row.agegroup,
     formatMap[row.format] || row.format,
     formatPublication(row.publication),
@@ -1782,6 +1817,7 @@ function openEdit(id, nextStatus, dialogTitle, actionStr) {
   document.getElementById('edit-exact-publication-date').value = dateOnly(row.exactPublicationDate);
   renderEditPatronContext(row);
   renderEditWorkflowTags(row.workflowTags);
+  renderEditLeapBibLink(row.bibid);
 
   const username = (pb.authStore.model && pb.authStore.model.username) ? pb.authStore.model.username : 'staff';
   const today = formatStandardDate(new Date());
@@ -1862,6 +1898,19 @@ function renderEditWorkflowTags(tags) {
     <div class="small font-weight-bold mb-1">Workflow tags</div>
     ${renderWorkflowTags(tags)}
   `;
+}
+
+function renderEditLeapBibLink(bibId) {
+  const container = document.getElementById('edit-leap-bib-link-container');
+  if (!container) return;
+  const url = leapBibUrl(bibId);
+  if (!url) {
+    container.classList.add('hidden');
+    container.innerHTML = '';
+    return;
+  }
+  container.classList.remove('hidden');
+  container.innerHTML = `<a class="btn btn-sm btn-outline-primary" href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">Open Bib in Leap</a>`;
 }
 
 document.getElementById('edit-form').addEventListener('submit', async (e) => {
@@ -2999,6 +3048,7 @@ async function loadLibrarySettings(orgId) {
 
     settings = result;
     isOverride = !!result.isOverride;
+    leapBibUrlPattern = settings.leapBibUrlPattern || '';
 
     const resetBtn = document.getElementById('btn-reset-library-settings');
     const statusAlert = document.getElementById('library-override-status');
@@ -3011,6 +3061,7 @@ async function loadLibrarySettings(orgId) {
         document.getElementById('system-staff-url-group').classList.remove('hidden');
       }
       setFieldValue('system-staff-url', settings.staffUrl || '');
+      setFieldValue('leap-bib-url-pattern', leapBibUrlPattern);
       if (document.getElementById('system-enabled-libraries-group')) {
         document.getElementById('system-enabled-libraries-group').classList.remove('hidden');
         renderLibraryParticipationCheckboxes();
@@ -3414,6 +3465,7 @@ function buildSettingsPayload() {
   }
 
   let staffUrl = '';
+  let nextLeapBibUrlPattern = leapBibUrlPattern || '';
   if (isSuperAdminStaff() && currentLibraryContextOrgId === 'system') {
     staffUrl = getFieldValue('system-staff-url').trim();
     const staffUrlError = validateStaffUrl(staffUrl);
@@ -3422,6 +3474,8 @@ function buildSettingsPayload() {
     }
     staffUrl = normalizeStaffUrl(staffUrl);
     setFieldValue('system-staff-url', staffUrl);
+    nextLeapBibUrlPattern = normalizeLeapBibUrlPattern(getFieldValue('leap-bib-url-pattern').trim());
+    setFieldValue('leap-bib-url-pattern', nextLeapBibUrlPattern);
   }
 
   const smtp = {
@@ -3509,6 +3563,7 @@ function buildSettingsPayload() {
 
   if (isSuperAdminStaff() && currentLibraryContextOrgId === 'system') {
     payload.staffUrl = staffUrl;
+    payload.leapBibUrlPattern = nextLeapBibUrlPattern;
   }
 
   const fileInput = document.getElementById('ui-logo-file');
@@ -3546,6 +3601,7 @@ async function saveSettings(options = {}) {
     const libraryPayload = {
       orgId: currentLibraryContextOrgId,
       staffUrl: payload.staffUrl,
+      leapBibUrlPattern: payload.leapBibUrlPattern,
       smtp: payload.smtp,
       polaris: payload.polaris,
       emails: payload.emails,
@@ -3718,6 +3774,7 @@ document.getElementById('edit-bibid').addEventListener('keydown', (e) => {
 
 document.getElementById('edit-bibid').addEventListener('input', () => {
   const bibId = document.getElementById('edit-bibid').value.trim();
+  renderEditLeapBibLink(bibId);
   if (verifiedBibId && bibId !== verifiedBibId) {
     verifiedBibId = '';
     document.getElementById('bib-info-display').classList.add('hidden');

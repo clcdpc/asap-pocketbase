@@ -112,6 +112,7 @@ function getSystemSettings(app) {
     settingsKey: "system",
     allowedStaffUsers: "",
     staffUrl: defaultStaffUrl(),
+    leapBibUrlPattern: "",
     organizationsSyncStatus: "not_loaded",
     organizationsSyncMessage: "Polaris organizations have not been loaded yet."
   });
@@ -152,6 +153,18 @@ function normalizeStaffUrl(value) {
     normalized = beforeQuery + "/" + afterQuery;
   }
   return normalized;
+}
+
+function normalizeLeapBibUrlPattern(value) {
+  var text = String(value || "").trim();
+  if (!text) return "";
+  if (!/^https?:\/\//i.test(text)) {
+    throw new Error("Leap Bib URL pattern must begin with http:// or https://.");
+  }
+  if (text.indexOf("{{bibid}}") < 0) {
+    throw new Error("Leap Bib URL pattern must include {{bibid}}.");
+  }
+  return text;
 }
 
 function staffUrlFromEnv(value) {
@@ -210,6 +223,9 @@ function saveSystemSettings(app, data) {
   var record = getSystemSettings(app);
   if (data && Object.prototype.hasOwnProperty.call(data, "staffUrl")) {
     record.set("staffUrl", normalizeStaffUrl(data.staffUrl));
+  }
+  if (data && Object.prototype.hasOwnProperty.call(data, "leapBibUrlPattern")) {
+    record.set("leapBibUrlPattern", normalizeLeapBibUrlPattern(data.leapBibUrlPattern));
   }
   app.save(record);
   return record;
@@ -513,6 +529,7 @@ function getSettings() {
     emails: emailsFor(app, ""),
     allowedStaffUsers: sys ? sys.get("allowedStaffUsers") || "" : "",
     staffUrl: staffUrl(app),
+    leapBibUrlPattern: sys ? sys.get("leapBibUrlPattern") || "" : "",
     enabledLibraryOrgIds: enabledLibraryOrgIds(app),
     ui_text: uiText(app, "")
   }, wf);
@@ -539,7 +556,8 @@ function librarySettings(app, libraryOrgId) {
   return {
     emails: emailsFor(app, libraryOrgId),
     ui_text: uiText(app, libraryOrgId),
-    workflow: workflowFromRecord(workflowRecord(app, libraryOrgId))
+    workflow: workflowFromRecord(workflowRecord(app, libraryOrgId)),
+    leapBibUrlPattern: getSystemSettings(app).get("leapBibUrlPattern") || ""
   };
 }
 
@@ -669,6 +687,7 @@ module.exports = {
   importToken: importToken,
   mail: mail,
   mergeDuplicateStatusLabels: mergeDuplicateStatusLabels,
+  normalizeLeapBibUrlPattern: normalizeLeapBibUrlPattern,
   normalizeStaffUrl: normalizeStaffUrl,
   outstandingTimeout: outstandingTimeout,
   outstandingTimeoutEmail: outstandingTimeoutEmail,
