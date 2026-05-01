@@ -94,7 +94,21 @@ function normalizeFormat(value) {
 }
 
 function normalizeAgegroup(value) {
-  return AGEGROUP[String(value)] || "adult";
+  var str = String(value || "").trim();
+  var lower = str.toLowerCase();
+  var known = {
+    "0": "adult",
+    "1": "teen",
+    "2": "children",
+    adult: "adult",
+    teen: "teen",
+    children: "children",
+    "young adult / teen": "teen",
+    "young adult": "teen",
+    child: "children",
+    kids: "children"
+  };
+  return known[lower] || known[str] || str || "adult";
 }
 
 function findFirstByData(app, collection, field, value) {

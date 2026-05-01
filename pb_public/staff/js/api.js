@@ -308,7 +308,7 @@ const source = [
   "    detail.className = 'small ' + next[2];",
   "  }",
   "  if (discardBtn) {",
-  "    discardBtn.classList.toggle('hidden', effectiveState !== 'dirty');",
+  "    discardBtn.classList.toggle('hidden', effectiveState !== 'dirty' && effectiveState !== 'error');",
   "    discardBtn.disabled = settingsSaving;",
   "  }",
   "  setDisabled('settings-save-btn', settingsSaving || effectiveState === 'clean');",

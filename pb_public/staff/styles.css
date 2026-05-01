@@ -888,7 +888,22 @@ code {
   align-items: center;
   display: grid;
   gap: 0.5rem;
-  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+
+.option-drag-handle {
+  cursor: grab;
+  font-size: 1.1rem;
+  user-select: none;
+  padding: 0 4px;
+}
+
+.option-row-dragging {
+  opacity: 0.4;
+}
+
+.option-row-drop-target {
+  border-top: 2px solid #007bff;
 }
 
 .option-list-row .form-control {

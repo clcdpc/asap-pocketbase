@@ -1647,7 +1647,51 @@ function saveWorkflowSettings(app, scope, orgId, wf) {
   app.save(record);
 }
 
+function validateAudienceGroupsDeletion(app, scope, orgId, ui) {
+  if (ui.ageGroups === undefined) return;
+  var labels = Array.isArray(ui.ageGroups) ? ui.ageGroups : String(ui.ageGroups || "").split(/\r?\n/);
+  labels = labels.map(function (label) {
+    return String(label && typeof label === "object" ? label.label || "" : label || "").trim();
+  }).filter(Boolean);
+  
+  var keep = {};
+  labels.forEach(function (label, index) {
+    var code = codeFromLabel(label, "group_" + (index + 1));
+    keep[code] = true;
+  });
+  
+  var org = scope === "library" ? config.findOrganization(app, orgId) : null;
+  var filter = scope === "system" ? "scope = 'system'" : "scope = 'library' && libraryOrganization = {:org}";
+  var params = scope === "system" ? {} : { org: org ? org.id : "" };
+  
+  try {
+    var rows = app.findRecordsByFilter("audience_groups", filter, "", 200, 0, params);
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      if (!keep[String(row.get("code") || "")]) {
+        try {
+          app.findFirstRecordByFilter("title_requests", "audienceGroup = {:id}", { id: row.id });
+          var err = new Error("Age group '" + row.get("label") + "' is currently in use by existing requests and cannot be deleted. You can disable it instead.");
+          err.code = 400;
+          throw err;
+        } catch (findErr) {
+          if (findErr.message && findErr.message.indexOf("in use") >= 0) {
+            throw findErr;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    if (err.message && err.message.indexOf("in use") >= 0) {
+      throw err;
+    }
+  }
+}
+
 function saveUiSettings(app, scope, orgId, ui) {
+  if (scope === "system") {
+    validateAudienceGroupsDeletion(app, scope, orgId, ui);
+  }
   var record = recordForScope(app, "ui_settings", scope, orgId);
   var fieldMap = {
     logoAlt: "logoAlt", pageTitle: "pageTitle", barcodeLabel: "barcodeLabel", pinLabel: "pinLabel",
