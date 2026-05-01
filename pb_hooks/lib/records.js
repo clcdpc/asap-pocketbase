@@ -893,4 +893,5 @@ module.exports = {
   updateTitleRequest: updateTitleRequest,
   upsertPatronUser: upsertPatronUser,
   upsertStaffUser: upsertStaffUser,
+  safeEmail: safeEmail,
 };
