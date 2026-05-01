@@ -1235,9 +1235,7 @@ function formatPublication(value) {
 function formatNote(note) {
   const text = String(note || '').trim();
   if (!text) return '';
-  if (text.length <= 50) return text;
-  const visibleText = text.substring(0, 50) + '...';
-  return gridjs.html(`<button type="button" class="truncate-note" data-full-note="${escapeAttr(text)}" data-notes-action="true" data-no-row-edit="true" title="Click to view full note" aria-label="Truncated note, click to view full text">${escapeAttr(visibleText)}</button>`);
+  return gridjs.html(`<button type="button" class="truncate-note btn btn-link btn-sm p-0" style="text-decoration:none; font-size: 1.1rem;" data-full-note="${escapeAttr(text)}" data-notes-action="true" data-no-row-edit="true" title="View full note" aria-label="View full note">📝</button>`);
 }
 
 function rowMarker(row) {
@@ -1259,45 +1257,41 @@ function getGridColumns(status) {
 
   if (status === 'suggestion') {
     return [
-      'Barcode',
-      'Title (original)',
-      'Author (original)',
-      'Format',
-      'Timing',
-      'Submitted',
-      { name: 'Notes', width: '200px' },
-      'Edited by',
+      { name: 'Barcode', width: '140px' },
+      { name: 'Title (original)', width: '320px' },
+      { name: 'Author (original)', width: '150px' },
+      { name: 'Format', width: '100px' },
+      { name: 'Timing', width: '100px' },
+      { name: 'Submitted', width: '100px' },
+      { name: 'Notes', width: '60px' },
       actionsColumn,
     ];
   }
 
   if (status === 'closed') {
     return [
-      'Barcode',
-      'Title (original)',
-      'Author (original)',
-      'Format',
-      'Submitted',
-      'Closed reason',
-      { name: 'Notes', width: '200px' },
-      'Edited by',
+      { name: 'Barcode', width: '140px' },
+      { name: 'Title (original)', width: '320px' },
+      { name: 'Author (original)', width: '150px' },
+      { name: 'Format', width: '100px' },
+      { name: 'Submitted', width: '100px' },
+      { name: 'Closed reason', width: '140px' },
+      { name: 'Notes', width: '60px' },
       actionsColumn,
     ];
   }
 
   return [
-    'Barcode',
-    'Title (original)',
-    'Author (original)',
-    'Identifier number',
-    'BIBID',
-    'Age group',
-    'Format',
-    'Timing',
-    'Submitted',
-    'Last checked',
-    { name: 'Notes', width: '200px' },
-    'Edited by',
+    { name: 'Barcode', width: '140px' },
+    { name: 'Title (original)', width: '320px' },
+    { name: 'Author (original)', width: '150px' },
+    { name: 'Identifier number', width: '140px' },
+    { name: 'Age group', width: '100px' },
+    { name: 'Format', width: '100px' },
+    { name: 'Timing', width: '100px' },
+    { name: 'Submitted', width: '100px' },
+    { name: 'Last checked', width: '120px' },
+    { name: 'Notes', width: '60px' },
     actionsColumn,
   ];
 }
@@ -1402,6 +1396,25 @@ function getIsbnCheckBadgesHtml(row) {
   return ` <span class="badge badge-info asap-isbn-check-badge" title="${escapeAttr(tooltip)}">${escapeAttr(label)}</span>`;
 }
 
+function renderTitleCell(row) {
+  const title = row.title || '';
+  const badges = getDuplicateBadgesHtml(row) + getIsbnCheckBadgesHtml(row);
+  return gridjs.html(`
+    <div class="staff-title-cell">
+      ${rowMarker(row)}
+      <div
+        class="staff-title-main"
+        tabindex="0"
+        title="${escapeAttr(title)}"
+        aria-label="Full title: ${escapeAttr(title)}"
+      >
+        ${escapeAttr(title)}${badges}
+      </div>
+      ${renderWorkflowTags(row.workflowTags)}
+    </div>
+  `);
+}
+
 function getTitleBadgesHtml(row) {
   return getDuplicateBadgesHtml(row) + getWorkflowTagBadgesHtml(row) + getIsbnCheckBadgesHtml(row);
 }
@@ -1410,13 +1423,12 @@ function getGridRow(row, status) {
   if (status === 'suggestion') {
     return [
       row.barcode,
-      gridjs.html(rowMarker(row) + escapeAttr(row.title) + getTitleBadgesHtml(row)),
+      renderTitleCell(row),
       row.author,
       formatMap[row.format] || row.format,
       formatPublication(row.publication),
       formatStandardDate(row.created),
       formatNote(row.notes),
-      row.editedBy,
       gridjs.html(renderRowActions(row)),
     ];
   }
@@ -1424,30 +1436,27 @@ function getGridRow(row, status) {
   if (status === 'closed') {
     return [
       row.barcode,
-      gridjs.html(rowMarker(row) + escapeAttr(row.title) + getTitleBadgesHtml(row)),
+      renderTitleCell(row),
       row.author,
       formatMap[row.format] || row.format,
       formatStandardDate(row.created),
       formatCloseReason(row),
       formatNote(row.notes),
-      row.editedBy,
       gridjs.html(renderRowActions(row)),
     ];
   }
 
   return [
     row.barcode,
-    gridjs.html(rowMarker(row) + escapeAttr(row.title) + getTitleBadgesHtml(row)),
+    renderTitleCell(row),
     row.author,
     row.identifier,
-    row.bibid,
     ageMap[row.agegroup] || row.agegroup,
     formatMap[row.format] || row.format,
     formatPublication(row.publication),
     formatStandardDate(row.created),
     formatDateTime(row.lastPromoterCheck),
     formatNote(row.notes),
-    row.editedBy,
     gridjs.html(renderRowActions(row)),
   ];
 }
