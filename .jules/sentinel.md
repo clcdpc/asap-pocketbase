@@ -14,3 +14,7 @@
 **Vulnerability:** The `patronLogin` and `staffLogin` routes bubbled up raw error strings from the Polaris API and internal configuration checks to the end-user. This could leak internal system details, IP addresses, or Polaris error specifics.
 **Learning:** Error messages returned to users should be generic to prevent information disclosure. Detailed error information should be logged on the server for staff troubleshooting.
 **Prevention:** Sanitize error responses by providing user-friendly, non-descriptive messages while ensuring the full error context is captured in the system logs.
+## 2024-05-18 - Prevent Information Disclosure in Staff Login
+**Vulnerability:** The `staffLogin` endpoint previously allowed raw API errors (such as HTTP status codes and stack trace specifics returned by `polaris.staffAuth`) to bubble up natively, potentially disclosing sensitive system details or database internals when an authentication request failed.
+**Learning:** Native PocketBase route handlers without structured `try...catch` blocks around external service requests will expose internal error strings directly to the API consumer via 500 error responses.
+**Prevention:** Wrap all calls to external authentication/data services (like `polaris.staffAuth`) within route handlers in a `try...catch` block. Manually intercept errors, log the detailed context securely on the server (`e.app.logger().error`), and return generic error responses (e.g., 401 "Incorrect Login") to the client.

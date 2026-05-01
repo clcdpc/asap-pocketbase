@@ -619,7 +619,19 @@ function staffLogin(e) {
   var staffScope = null;
   var auth = null;
   if (!isOverride) {
-    auth = polaris.staffAuth(staffIdentity.username, password, null, staffIdentity.authDomain || staffIdentity.domain);
+    try {
+      auth = polaris.staffAuth(staffIdentity.username, password, null, staffIdentity.authDomain || staffIdentity.domain);
+    } catch (err) {
+      e.app.logger().error("Staff login failed", "error", String(err));
+      var status = 401;
+      var message = "Incorrect Login - Please try again";
+      var errStr = String(err);
+      if (errStr.indexOf("Polaris configuration") >= 0 || errStr.indexOf("Admin staff authentication") >= 0) {
+        status = 500;
+        message = "The library suggestion system is currently misconfigured. Please contact staff.";
+      }
+      return e.json(status, { message: message });
+    }
     if (auth && auth.DisplayName) {
       displayName = auth.DisplayName;
     }
