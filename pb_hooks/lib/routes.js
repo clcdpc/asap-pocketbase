@@ -1699,14 +1699,40 @@ function validateAudienceGroupsDeletion(app, scope, orgId, ui) {
 
   try {
     var rows = app.findRecordsByFilter("audience_groups", filter, "", 200, 0, params);
+    var toCheck = [];
     for (var i = 0; i < rows.length; i++) {
       var row = rows[i];
       if (!keep[String(row.get("code") || "")]) {
+        toCheck.push(row);
+      }
+    }
+
+    if (toCheck.length > 0) {
+      var batchSize = 100;
+      for (var j = 0; j < toCheck.length; j += batchSize) {
+        var chunk = toCheck.slice(j, j + batchSize);
+        var filterParts = [];
+        var checkParams = {};
+        for (var k = 0; k < chunk.length; k++) {
+          filterParts.push("audienceGroup = {:p" + k + "}");
+          checkParams["p" + k] = chunk[k].id;
+        }
+        var batchFilter = filterParts.join(" || ");
         try {
-          app.findFirstRecordByFilter("title_requests", "audienceGroup = {:id}", { id: row.id });
-          var err = new Error("Age group '" + row.get("label") + "' is currently in use by existing requests and cannot be deleted. You can disable it instead.");
-          err.code = 400;
-          throw err;
+          var usedRequest = app.findFirstRecordByFilter("title_requests", batchFilter, checkParams);
+          if (usedRequest) {
+            var usedGroupId = usedRequest.get("audienceGroup");
+            var usedLabel = "";
+            for (var k = 0; k < chunk.length; k++) {
+              if (chunk[k].id === usedGroupId) {
+                usedLabel = chunk[k].get("label");
+                break;
+              }
+            }
+            var err = new Error("Age group '" + usedLabel + "' is currently in use by existing requests and cannot be deleted. You can disable it instead.");
+            err.code = 400;
+            throw err;
+          }
         } catch (findErr) {
           if (findErr.message && findErr.message.indexOf("in use") >= 0) {
             throw findErr;
@@ -1744,22 +1770,41 @@ function validatePublicationOptionsDeletion(app, scope, orgId, ui) {
     });
   }
 
+  var toCheck = [];
   oldOptions.forEach(function (opt) {
     var optLabel = String(opt && typeof opt === "object" ? opt.label || "" : opt || "").trim();
     if (!optLabel) return;
     if (!keep[optLabel.toLowerCase()]) {
+      toCheck.push(optLabel);
+    }
+  });
+
+  if (toCheck.length > 0) {
+    var batchSize = 100;
+    for (var j = 0; j < toCheck.length; j += batchSize) {
+      var chunk = toCheck.slice(j, j + batchSize);
+      var filterParts = [];
+      var checkParams = {};
+      for (var k = 0; k < chunk.length; k++) {
+        filterParts.push("publication = {:p" + k + "}");
+        checkParams["p" + k] = chunk[k];
+      }
+      var batchFilter = filterParts.join(" || ");
       try {
-        app.findFirstRecordByFilter("title_requests", "publication = {:label}", { label: optLabel });
-        var err = new Error("Publication timing '" + optLabel + "' is currently in use by existing requests and cannot be deleted. You can disable it instead.");
-        err.code = 400;
-        throw err;
+        var usedRequest = app.findFirstRecordByFilter("title_requests", batchFilter, checkParams);
+        if (usedRequest) {
+          var usedLabel = usedRequest.get("publication");
+          var err = new Error("Publication timing '" + usedLabel + "' is currently in use by existing requests and cannot be deleted. You can disable it instead.");
+          err.code = 400;
+          throw err;
+        }
       } catch (findErr) {
         if (findErr.message && findErr.message.indexOf("in use") >= 0) {
           throw findErr;
         }
       }
     }
-  });
+  }
 }
 
 function saveUiSettings(app, scope, orgId, ui) {
