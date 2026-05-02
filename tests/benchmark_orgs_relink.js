@@ -2,8 +2,8 @@ const assert = require('assert');
 const path = require('path');
 const { performance } = require('perf_hooks');
 
-global.__hooks = path.resolve(__dirname, 'pb_hooks');
-const orgs = require('./pb_hooks/lib/orgs.js');
+global.__hooks = path.resolve(__dirname, '../pb_hooks');
+const orgs = require('../pb_hooks/lib/orgs.js');
 
 // Mock data
 const mockParents = {};
