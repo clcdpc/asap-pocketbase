@@ -32,6 +32,20 @@ try {
   assert.strictEqual(escapeXml(null), '');
   assert.strictEqual(escapeXml(undefined), '');
   assert.strictEqual(escapeXml(123), '123');
+  assert.strictEqual(escapeXml(true), 'true');
+  assert.strictEqual(escapeXml(false), 'false');
+  assert.strictEqual(escapeXml(NaN), 'NaN');
+  assert.strictEqual(escapeXml(''), '');
+  assert.strictEqual(escapeXml({}), '[object Object]');
+  assert.strictEqual(escapeXml([1, 2, '<']), '1,2,&lt;');
+  assert.strictEqual(escapeXml({ toString: () => 'custom & object' }), 'custom &amp; object');
+
+  // Extremely large string test
+  const largeStringSize = 100000;
+  const largeInput = '<&>'.repeat(largeStringSize);
+  const largeExpected = '&lt;&amp;&gt;'.repeat(largeStringSize);
+  assert.strictEqual(escapeXml(largeInput), largeExpected);
+
   console.log('✅ escapeXml tests passed');
 } catch (err) {
   console.error('❌ escapeXml tests failed:', err.message);
