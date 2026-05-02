@@ -66,20 +66,42 @@ try {
   failed++;
 }
 
-// Test 5: Endpoint with existing path and parameters
+// Test 5: Endpoint with existing path and parameters (with &)
 try {
   const ep = { full: 'http://example.com/api?existing=1', signature: 'http://example.com/api?existing=1' };
-  // Note: the current implementation of appendQuery just appends "?" if it doesn't start with "?".
-  // So if we append "new=2", it will become "?new=2".
-  // If the URL already has "?", this logic might result in "http://example.com/api?existing=1?new=2",
-  // or the caller is expected to handle it. Let's just test its pure behavior.
   const result = polaris.appendQuery(ep, '&new=2');
-  assert.strictEqual(result.full, 'http://example.com/api?existing=1?&new=2');
-  assert.strictEqual(result.signature, 'http://example.com/api?existing=1?&new=2');
-  console.log('✅ Test case 5 (existing parameters pure behavior) passed');
+  assert.strictEqual(result.full, 'http://example.com/api?existing=1&new=2');
+  assert.strictEqual(result.signature, 'http://example.com/api?existing=1&new=2');
+  console.log('✅ Test case 5 (existing parameters with &) passed');
   passed++;
 } catch (err) {
   console.error('❌ Test case 5 failed:', err.message);
+  failed++;
+}
+
+// Test 6: Endpoint with existing path and parameters (without &)
+try {
+  const ep = { full: 'http://example.com/api?existing=1', signature: 'http://example.com/api?existing=1' };
+  const result = polaris.appendQuery(ep, 'new=2');
+  assert.strictEqual(result.full, 'http://example.com/api?existing=1&new=2');
+  assert.strictEqual(result.signature, 'http://example.com/api?existing=1&new=2');
+  console.log('✅ Test case 6 (existing parameters without &) passed');
+  passed++;
+} catch (err) {
+  console.error('❌ Test case 6 failed:', err.message);
+  failed++;
+}
+
+// Test 7: Endpoint with existing path and parameters (with ?)
+try {
+  const ep = { full: 'http://example.com/api?existing=1', signature: 'http://example.com/api?existing=1' };
+  const result = polaris.appendQuery(ep, '?new=2');
+  assert.strictEqual(result.full, 'http://example.com/api?existing=1&new=2');
+  assert.strictEqual(result.signature, 'http://example.com/api?existing=1&new=2');
+  console.log('✅ Test case 7 (existing parameters with ?) passed');
+  passed++;
+} catch (err) {
+  console.error('❌ Test case 7 failed:', err.message);
   failed++;
 }
 
