@@ -125,4 +125,39 @@ console.log("Running duplicate suggestion tests...");
   assert.strictEqual(app.rows.title_request_tags[0].get("titleRequest"), created.id);
 }
 
+{
+  const existing = new MockRecord({ name: "title_requests" }, {
+    barcode: "100",
+    identifier: "978",
+    title: "Existing",
+    format: "book",
+  });
+  const app = makeApp([existing]);
+  let warnCalled = false;
+  app.logger = () => ({
+    warn: (msg, key1, val1, key2, val2) => {
+      if (msg === "Cross-patron duplicate tagging failed") {
+        warnCalled = true;
+        assert.strictEqual(key1, "recordId");
+        assert.strictEqual(key2, "error");
+        assert(val2.includes("simulated save error"));
+      }
+    }
+  });
+
+  const originalSave = app.save;
+  app.save = (record) => {
+    if (record.collection && record.collection.name === "workflow_tags") {
+      throw new Error("simulated save error");
+    }
+    originalSave(record);
+  };
+
+  const created = records.createSuggestion(app, patron("200"), { title: "New", identifier: "978", format: "book" }, { skipLimits: true });
+
+  assert.strictEqual(warnCalled, true, "logger.warn should have been called");
+  assert.strictEqual(created.get("identifier"), "978");
+  assert.strictEqual(app.rows.workflow_tags.length, 0);
+}
+
 console.log("Duplicate suggestion tests passed.");
