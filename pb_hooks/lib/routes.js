@@ -1,5 +1,4 @@
 const config = require(`${__hooks}/lib/config.js`);
-const importer = require(`${__hooks}/lib/importer.js`);
 const jobs = require(`${__hooks}/lib/jobs.js`);
 const identity = require(`${__hooks}/lib/identity.js`);
 const formatRules = require(`${__hooks}/lib/format_rules.js`);
@@ -1302,33 +1301,6 @@ function runWeeklyStaffActionSummary(e) {
   }
 }
 
-function importTitleRequests(e) {
-  if (!hasImportAccess(e)) {
-    throw new UnauthorizedError("Unauthorized");
-  }
-
-  var info = e.requestInfo();
-  var rows = [];
-  if (info.body && info.body.records) {
-    rows = info.body.records;
-  } else if (info.body && info.body.csv) {
-    rows = importer.parseCsv(String(info.body.csv));
-  } else {
-    rows = importer.parseCsv(toString(e.request.body));
-  }
-  return e.json(200, importer.importRows(e.app, rows));
-}
-
-function hasImportAccess(e) {
-  var auth = e.requestInfo().auth;
-  if (auth && auth.isSuperuser && auth.isSuperuser()) {
-    return true;
-  }
-  var token = e.request.header.get("X-ASAP-Import-Token");
-  var expected = config.importToken();
-  return expected && token && $security.equal(token, expected);
-}
-
 function staffTestPolaris(e) {
   if (!requireSuperAdminStaff(e)) {
     return e.json(403, { message: "Super admin access required" });
@@ -2078,7 +2050,6 @@ function staffRunPromoterCheck(e) {
 module.exports = {
   createSuggestion: createSuggestion,
   initialSetup: initialSetup,
-  importTitleRequests: importTitleRequests,
   patronLogin: patronLogin,
   runHoldCheck: runHoldCheck,
   setupStatus: setupStatus,

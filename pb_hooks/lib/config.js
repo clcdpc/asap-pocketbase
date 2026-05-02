@@ -824,11 +824,6 @@ function allowedStaffUsers() {
   return value ? identity.parseAllowedStaffUsers(value, polaris().staffDomain) : [];
 }
 
-function importToken() {
-  var value = $os.getenv("ASAP_IMPORT_TOKEN");
-  return value ? String(value).trim() : "";
-}
-
 function applyMailSettings(app) {
   var cfg = smtpFromRecord(getSmtpSettings(app || $app));
   var e = emailsFor(app || $app, "");
@@ -883,7 +878,6 @@ module.exports = {
   librarySettings: librarySettings,
   holdPickupTimeout: holdPickupTimeout,
   pendingHoldTimeout: pendingHoldTimeout,
-  importToken: importToken,
   mail: mail,
   mergeDuplicateStatusLabels: mergeDuplicateStatusLabels,
   normalizeLeapBibUrlPattern: normalizeLeapBibUrlPattern,
