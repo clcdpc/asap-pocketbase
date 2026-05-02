@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 
 function loadSettingsSource() {
-  const file = fs.readFileSync(path.resolve(__dirname, "../pb_public/staff/js/settings.js"), "utf8");
+  const file = fs.readFileSync(path.resolve(__dirname, "../pb_public/staff/js/settings-users.js"), "utf8");
   const match = file.match(/const source = ([\s\S]*?\]\.join\('\\n'\));/);
   if (!match) throw new Error("Could not find settings source array.");
   return Function(`return ${match[1]}`)();
