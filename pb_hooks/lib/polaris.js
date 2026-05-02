@@ -306,9 +306,18 @@ function appendQuery(ep, query) {
   if (!query) {
     return ep;
   }
-  var suffix = query.charAt(0) === "?" ? query : "?" + query;
-  ep.full += suffix;
-  ep.signature += suffix;
+
+  // Clean up the input query by removing leading ? or &
+  var cleanQuery = query;
+  if (cleanQuery.charAt(0) === "?" || cleanQuery.charAt(0) === "&") {
+    cleanQuery = cleanQuery.substring(1);
+  }
+
+  // Determine separator based on existing URL
+  var separator = ep.full.indexOf("?") !== -1 ? "&" : "?";
+
+  ep.full += separator + cleanQuery;
+  ep.signature += separator + cleanQuery;
   return ep;
 }
 
