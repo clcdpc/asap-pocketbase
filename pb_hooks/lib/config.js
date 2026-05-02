@@ -893,6 +893,7 @@ module.exports = {
   parseJsonObject: parseJsonObject,
   polaris: polaris,
   rejectionTemplates: rejectionTemplates,
+  scopedRows: scopedRows,
   saveSystemSettings: saveSystemSettings,
   savePolarisSettings: savePolarisSettings,
   staffUrl: staffUrl,
