@@ -133,11 +133,6 @@ routerAdd("POST", "/api/asap/jobs/weekly-staff-action-summary", (e) => {
   return routes.runWeeklyStaffActionSummary(e);
 });
 
-routerAdd("POST", "/api/asap/import/title-requests", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.importTitleRequests(e);
-});
-
 routerAdd("GET", "/api/asap/config", (e) => {
   const config = require(`${__hooks}/lib/config.js`);
   const orgId = e.request.url.query().get("libraryOrgId") || "";
