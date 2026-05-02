@@ -968,4 +968,5 @@ module.exports = {
   upsertStaffUser: upsertStaffUser,
   safeEmail: safeEmail,
   workflowTagsForRequest: workflowTagsForRequest,
+  enforceWeeklyLimit: enforceWeeklyLimit,
 };
