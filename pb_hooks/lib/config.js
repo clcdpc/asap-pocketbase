@@ -466,44 +466,44 @@ function duplicateStatusLabelResolution(app, orgId, systemUiRecord) {
   app = app || $app;
   var defaults = defaultDuplicateStatusLabels();
   var systemRecord = systemUiRecord || uiRecord(app, "");
-  var globalLabels = mergeDuplicateStatusLabels(duplicateStatusLabelsFromUiRecord(systemRecord));
+
+  var rawGlobalLabels = duplicateStatusLabelsFromUiRecord(systemRecord);
+  var globalLabels = Object.assign({}, defaults, rawGlobalLabels);
   var requestedOrgId = String(orgId || "").trim();
+
   if (!requestedOrgId) {
     return {
-      labels: mergeDuplicateStatusLabels(globalLabels),
-      source: hasAnyDuplicateStatusLabel(duplicateStatusLabelsFromUiRecord(systemRecord)) ? "global" : "default",
+      labels: globalLabels,
+      source: hasAnyDuplicateStatusLabel(rawGlobalLabels) ? "global" : "default",
       inherited: false
     };
   }
 
+  var libraryLabels = null;
   var overrideRecord = patronSettingsOverrideRecord(app, requestedOrgId);
+
   if (overrideRecord) {
-    var overrideLabels = parseJsonObject(overrideRecord.get("duplicateStatusLabels"), {});
-    if (!hasAnyDuplicateStatusLabel(overrideLabels)) {
-      return {
-        labels: Object.assign({}, defaults, globalLabels),
-        source: "global",
-        inherited: true
-      };
+    var parsedOverride = parseJsonObject(overrideRecord.get("duplicateStatusLabels"), {});
+    if (hasAnyDuplicateStatusLabel(parsedOverride)) {
+      libraryLabels = parsedOverride;
     }
-    return {
-      labels: Object.assign({}, defaults, globalLabels, overrideLabels),
-      source: "library",
-      inherited: false
-    };
+  } else {
+    var libraryRecord = legacyPatronLibrarySettingsRecord(app, requestedOrgId);
+    if (libraryRecord) {
+      libraryLabels = parseJsonObject(libraryRecord.get("duplicateRequestStatusLabels"), {});
+    }
   }
 
-  var libraryRecord = legacyPatronLibrarySettingsRecord(app, requestedOrgId);
-  if (libraryRecord) {
+  if (libraryLabels) {
     return {
-      labels: Object.assign({}, defaults, globalLabels, parseJsonObject(libraryRecord.get("duplicateRequestStatusLabels"), {})),
+      labels: Object.assign({}, globalLabels, libraryLabels),
       source: "library",
       inherited: false
     };
   }
 
   return {
-    labels: Object.assign({}, defaults, globalLabels),
+    labels: globalLabels,
     source: "global",
     inherited: true
   };
