@@ -14,7 +14,11 @@ The backend logic is implemented as PocketBase JavaScript hooks.
 
 *   **`main.pb.js`**: The entry point for the backend. It defines custom API routes, cron jobs, and database hooks.
 *   **`lib/`**: A modular library system containing the core business logic.
-    *   **`routes.js`**: Handles custom API request logic for both patrons and staff.
+    *   **`patron_routes.js`**: Handles patron-facing custom API endpoints.
+    *   **`staff_routes.js`**: Handles staff-facing administrative and settings endpoints.
+    *   **`setup_routes.js`**: Handles initial system bootstrap and setup logic.
+    *   **`job_routes.js`**: Exposes endpoints to trigger manual cron/background task execution.
+    *   **`route_utils.js`**: Shared HTTP, parsing, and response utilities across route handlers.
     *   **`polaris.js`**: Low-level integration with the Polaris PAPI (REST API). Handles HMAC signing, authentication, searching, and hold placement.
     *   **`records.js`**: Abstraction layer for PocketBase collection operations (`title_requests`, `staff_users`, `patron_users`).
     *   **`jobs.js`**: Background tasks for automated processing (hold checks, organization sync, weekly summaries).
@@ -59,13 +63,17 @@ The typical lifecycle of a request follows this path:
 
 ```text
 pb_hooks/
-├── main.pb.js        # Entry point & Route definitions
-└── lib/              # Logic Modules
-    ├── config.js     # Settings management
-    ├── jobs.js       # Cron & background tasks
-    ├── polaris.js    # Polaris ILS integration
-    ├── records.js    # PocketBase CRUD wrappers
-    └── routes.js     # API Route handlers
+├── main.pb.js              # Entry point & Route definitions
+└── lib/                    # Logic Modules
+    ├── config.js           # Settings management
+    ├── jobs.js             # Cron & background tasks
+    ├── polaris.js          # Polaris ILS integration
+    ├── records.js          # PocketBase CRUD wrappers
+    ├── patron_routes.js    # Patron API Route handlers
+    ├── staff_routes.js     # Staff API Route handlers
+    ├── setup_routes.js     # Setup API Route handlers
+    ├── job_routes.js       # Background job manual triggers
+    └── route_utils.js      # Shared routing logic
 
 pb_public/
 ├── patron/           # Patron SPA

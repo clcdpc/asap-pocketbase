@@ -57,7 +57,7 @@ These scripts measure the efficiency of critical algorithms and data processing 
 | `crypto.test.js` | `lib/crypto.js` | Tests PAPI HMAC-SHA1 signature generation. |
 | `weekly_summary.test.js` | `lib/jobs.js` | Validates the aggregation logic for staff weekly action summaries. |
 | `orgs.test.js` | `lib/orgs.js` | Tests library hierarchy resolution and parent organization mapping. |
-| `xss_escaping.test.js` | `lib/routes.js` | Verifies HTML escaping for patron-supplied content. |
+| `xss_escaping.test.js` | `lib/route_utils.js` | Verifies HTML escaping for patron-supplied content. |
 | `config_scopedRows.test.js` | `lib/config.js` | Tests resolution of system vs. library-specific settings. |
 
 ## Mocking Environment
