@@ -30,15 +30,13 @@ The staff interface is a single-page application built with modern JavaScript.
 ## Technical Debt
 
 ### Identified Debt
-- **Route Complexity**: `pb_hooks/lib/routes.js` is a "god object" containing over 2,000 lines of code. It handles routing, authorization, and business logic for all endpoints.
 - **Manual Implementations**: Due to the limited environment of PocketBase hooks, several low-level utilities (HMAC-SHA1, UTF-8 byte counting, XML escaping) are manually implemented in `pb_hooks/lib/crypto.js` and `pb_hooks/lib/polaris.js`.
 - **Legacy Bridging**: The frontend uses a custom bridge to load legacy source strings as modules, which should eventually be refactored into standard modules.
 - **Sync Logic**: Organization synchronization and ISBN checking rely on multiple cron jobs and manual triggers, which may lead to race conditions if not carefully monitored.
 
 ### Refactoring Priorities
-1. **Split `routes.js`**: Decompose the large routes file into domain-specific modules (e.g., `patron_routes.js`, `staff_routes.js`, `setup_routes.js`).
-2. **Standardize Frontend**: Finish the transition of legacy modules to standard ES6 exports.
-3. **Centralized Testing**: Implement a unified test runner or CI integration for the Node.js-based unit tests.
+1. **Standardize Frontend**: Finish the transition of legacy modules to standard ES6 exports.
+2. **Centralized Testing**: Implement a unified test runner or CI integration for the Node.js-based unit tests.
 
 ## Quality Metrics
 
