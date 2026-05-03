@@ -1,188 +1,182 @@
-import { runLegacyModule } from './runtime.js';
+import { pb, verifiedNewSuggestionBarcode, setVerifiedNewSuggestionBarcode } from './state.js';
+import { setFieldChecked, getFieldChecked } from './api.js';
+import { loadTab, escapeAttr } from './grid.js';
 
-const source = [
-  "document.getElementById('btn-new-suggestion').addEventListener('click', () => {",
-  "  document.getElementById('new-suggestion-form').reset();",
-  "  setFieldChecked('staff-new-suggestion-email-patron', false);",
-  "  clearNewSuggestionError();",
-  "  resetStaffPatronLookup();",
-  "  document.getElementById('newSuggestionModal').showModal();",
-  "  document.getElementById('close-new-modal-btn').focus();",
-  "  document.getElementById('new-barcode').focus();",
-  "});",
-  "",
-  "document.getElementById('close-new-modal-x').addEventListener('click', () => {",
-  "  document.getElementById('newSuggestionModal').close();",
-  "});",
-  "document.getElementById('close-new-modal-btn').addEventListener('click', () => {",
-  "  document.getElementById('newSuggestionModal').close();",
-  "});",
-  "",
-  "document.getElementById('new-barcode').addEventListener('keydown', (e) => {",
-  "  if (e.key === 'Enter') {",
-  "    e.preventDefault();",
-  "    document.getElementById('btn-lookup-patron').click();",
-  "  }",
-  "});",
-  "",
-  "document.getElementById('new-barcode').addEventListener('input', () => {",
-  "  const barcode = document.getElementById('new-barcode').value.trim();",
-  "  if (verifiedNewSuggestionBarcode && barcode !== verifiedNewSuggestionBarcode) {",
-  "    resetStaffPatronLookup();",
-  "    showLookupResult('Barcode changed. Look up the patron again before entering suggestion details.', 'warning');",
-  "  }",
-  "});",
-  "",
-  "document.getElementById('btn-lookup-patron').addEventListener('click', async () => {",
-  "  const barcode = document.getElementById('new-barcode').value.trim();",
-  "  const btn = document.getElementById('btn-lookup-patron');",
-  "  clearNewSuggestionError();",
-  "  resetStaffPatronLookup();",
-  "",
-  "  if (!barcode) {",
-  "    showLookupResult('Enter a patron barcode before lookup.', 'danger');",
-  "    document.getElementById('new-barcode').focus();",
-  "    return;",
-  "  }",
-  "",
-  "  btn.disabled = true;",
-  "  btn.textContent = 'Looking up...';",
-  "  try {",
-  "    const res = await fetch('/api/asap/staff/patron-lookup', {",
-  "      method: 'POST',",
-  "      headers: {",
-  "        'Content-Type': 'application/json',",
-  "        'Authorization': pb.authStore.token",
-  "      },",
-  "      body: JSON.stringify({ barcode })",
-  "    });",
-  "    const data = await res.json().catch(() => ({}));",
-  "    if (!res.ok) {",
-  "      throw new Error(data.message || 'Invalid patron barcode');",
-  "    }",
-  "",
-  "    verifiedNewSuggestionBarcode = String(data.barcode || barcode).trim();",
-  "    setNewSuggestionDetailsEnabled(true);",
-  "    const emailStr = data.email ? ` | Email: ${data.email}` : ' | No email on file';",
-  "    const libraryStr = data.libraryOrgName ? ` | Library: ${data.libraryOrgName}` : '';",
-  "    showLookupResult('Patron verified: ' + patronLookupName(data) + ' (' + verifiedNewSuggestionBarcode + ')' + emailStr + libraryStr, 'success');",
-  "    document.getElementById('new-title').focus();",
-  "  } catch (err) {",
-  "    showLookupResult(err.message || 'Invalid patron barcode', 'danger');",
-  "    document.getElementById('new-barcode').focus();",
-  "  } finally {",
-  "    btn.disabled = false;",
-  "    btn.textContent = 'Lookup Patron';",
-  "  }",
-  "});",
-  "",
-  "document.getElementById('new-suggestion-form').addEventListener('submit', async (e) => {",
-  "  e.preventDefault();",
-  "  const barcode = document.getElementById('new-barcode').value.trim();",
-  "  if (!verifiedNewSuggestionBarcode || barcode !== verifiedNewSuggestionBarcode) {",
-  "    showNewSuggestionError('Look up and verify the patron barcode before submitting a suggestion.');",
-  "    document.getElementById('new-barcode').focus();",
-  "    return;",
-  "  }",
-  "",
-  "  const payload = {",
-  "    barcode: barcode,",
-  "    title: document.getElementById('new-title').value,",
-  "    author: document.getElementById('new-author').value,",
-  "    identifier: document.getElementById('new-identifier').value,",
-  "    format: document.getElementById('new-format').value,",
-  "    agegroup: document.getElementById('new-age').value,",
-  "    publication: document.getElementById('new-publication').value,",
-  "    notes: document.getElementById('new-notes').value,",
-  "    emailPatronConfirmation: getFieldChecked('staff-new-suggestion-email-patron')",
-  "  };",
-  "",
-  "  clearNewSuggestionError();",
-  "  const btn = document.getElementById('btn-submit-new');",
-  "  btn.disabled = true;",
-  "  btn.textContent = 'Submitting...';",
-  "",
-  "  try {",
-  "    const res = await fetch('/api/asap/staff/suggestions', {",
-  "      method: 'POST',",
-  "      headers: {",
-  "        'Content-Type': 'application/json',",
-  "        'Authorization': pb.authStore.token",
-  "      },",
-  "      body: JSON.stringify(payload)",
-  "    });",
-  "",
-  "    if (!res.ok) {",
-  "      const data = await res.json();",
-  "      throw new Error(data.message || 'Failed to create suggestion');",
-  "    }",
-  "",
-  "    document.getElementById('newSuggestionModal').close();",
-  "    loadTab('suggestion');",
-  "  } catch (err) {",
-  "    showNewSuggestionError(err.message || 'Failed to create suggestion');",
-  "  } finally {",
-  "    btn.disabled = false;",
-  "    btn.textContent = 'Submit';",
-  "  }",
-  "});",
-  "",
-  "resetStaffPatronLookup = function resetStaffPatronLookup() {",
-  "  verifiedNewSuggestionBarcode = '';",
-  "  clearNewSuggestionError();",
-  "  clearNewSuggestionDetails();",
-  "  setNewSuggestionDetailsEnabled(false);",
-  "  document.getElementById('new-lookup-result').className = 'mt-2 hidden';",
-  "  document.getElementById('new-lookup-result').textContent = '';",
-  "}",
-  "",
-  "clearNewSuggestionDetails = function clearNewSuggestionDetails() {",
-  "  document.getElementById('new-title').value = '';",
-  "  document.getElementById('new-author').value = '';",
-  "  document.getElementById('new-identifier').value = '';",
-  "  document.getElementById('new-format').selectedIndex = 0;",
-  "  document.getElementById('new-age').selectedIndex = 0;",
-  "  document.getElementById('new-publication').selectedIndex = 0;",
-  "  document.getElementById('new-notes').value = '';",
-  "}",
-  "",
-  "setNewSuggestionDetailsEnabled = function setNewSuggestionDetailsEnabled(enabled) {",
-  "  document.getElementById('new-suggestion-details').classList.toggle('hidden', !enabled);",
-  "  document.querySelectorAll('.new-detail-field').forEach(field => {",
-  "    field.disabled = !enabled;",
-  "  });",
-  "  document.getElementById('btn-submit-new').disabled = !enabled;",
-  "}",
-  "",
-  "showLookupResult = function showLookupResult(message, type) {",
-  "  const result = document.getElementById('new-lookup-result');",
-  "  result.className = 'mt-2 alert alert-' + type + ' py-2';",
-  "  result.textContent = message;",
-  "}",
-  "",
-  "clearNewSuggestionError = function clearNewSuggestionError() {",
-  "  const el = document.getElementById('new-error-summary');",
-  "  if (!el) return;",
-  "  el.textContent = '';",
-  "  el.classList.add('hidden');",
-  "}",
-  "",
-  "showNewSuggestionError = function showNewSuggestionError(message) {",
-  "  const text = String(message || 'Failed to create suggestion');",
-  "  const el = document.getElementById('new-error-summary');",
-  "  if (!el) return;",
-  "  el.textContent = text;",
-  "  el.classList.remove('hidden');",
-  "}",
-  "",
-  "patronLookupName = function patronLookupName(data) {",
-  "  const name = [data.nameFirst, data.nameLast].filter(Boolean).join(' ').trim();",
-  "  return name || 'barcode found';",
-  "}",
-  "",
-  ""
-].join('\n');
+document.getElementById('btn-new-suggestion').addEventListener('click', () => {
+  document.getElementById('new-suggestion-form').reset();
+  setFieldChecked('staff-new-suggestion-email-patron', false);
+  clearNewSuggestionError();
+  resetStaffPatronLookup();
+  document.getElementById('newSuggestionModal').showModal();
+  document.getElementById('close-new-modal-btn').focus();
+  document.getElementById('new-barcode').focus();
+});
 
-export function install(env) {
-  runLegacyModule(env, source);
+document.getElementById('close-new-modal-x').addEventListener('click', () => {
+  document.getElementById('newSuggestionModal').close();
+});
+document.getElementById('close-new-modal-btn').addEventListener('click', () => {
+  document.getElementById('newSuggestionModal').close();
+});
+
+document.getElementById('new-barcode').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    document.getElementById('btn-lookup-patron').click();
+  }
+});
+
+document.getElementById('new-barcode').addEventListener('input', () => {
+  const barcode = document.getElementById('new-barcode').value.trim();
+  if (verifiedNewSuggestionBarcode && barcode !== verifiedNewSuggestionBarcode) {
+    resetStaffPatronLookup();
+    showLookupResult('Barcode changed. Look up the patron again before entering suggestion details.', 'warning');
+  }
+});
+
+document.getElementById('btn-lookup-patron').addEventListener('click', async () => {
+  const barcode = document.getElementById('new-barcode').value.trim();
+  const btn = document.getElementById('btn-lookup-patron');
+  clearNewSuggestionError();
+  resetStaffPatronLookup();
+
+  if (!barcode) {
+    showLookupResult('Enter a patron barcode before lookup.', 'danger');
+    document.getElementById('new-barcode').focus();
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Looking up...';
+  try {
+    const res = await fetch('/api/asap/staff/patron-lookup', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': pb.authStore.token
+      },
+      body: JSON.stringify({ barcode })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.message || 'Invalid patron barcode');
+    }
+
+    setVerifiedNewSuggestionBarcode(String(data.barcode || barcode).trim());
+    setNewSuggestionDetailsEnabled(true);
+    const emailStr = data.email ? ` | Email: ${data.email}` : ' | No email on file';
+    const libraryStr = data.libraryOrgName ? ` | Library: ${data.libraryOrgName}` : '';
+    showLookupResult('Patron verified: ' + patronLookupName(data) + ' (' + verifiedNewSuggestionBarcode + ')' + emailStr + libraryStr, 'success');
+    document.getElementById('new-title').focus();
+  } catch (err) {
+    showLookupResult(err.message || 'Invalid patron barcode', 'danger');
+    document.getElementById('new-barcode').focus();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Lookup Patron';
+  }
+});
+
+document.getElementById('new-suggestion-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const barcode = document.getElementById('new-barcode').value.trim();
+  if (!verifiedNewSuggestionBarcode || barcode !== verifiedNewSuggestionBarcode) {
+    showNewSuggestionError('Look up and verify the patron barcode before submitting a suggestion.');
+    document.getElementById('new-barcode').focus();
+    return;
+  }
+
+  const payload = {
+    barcode: barcode,
+    title: document.getElementById('new-title').value,
+    author: document.getElementById('new-author').value,
+    identifier: document.getElementById('new-identifier').value,
+    format: document.getElementById('new-format').value,
+    agegroup: document.getElementById('new-age').value,
+    publication: document.getElementById('new-publication').value,
+    notes: document.getElementById('new-notes').value,
+    emailPatronConfirmation: getFieldChecked('staff-new-suggestion-email-patron')
+  };
+
+  clearNewSuggestionError();
+  const btn = document.getElementById('btn-submit-new');
+  btn.disabled = true;
+  btn.textContent = 'Submitting...';
+
+  try {
+    const res = await fetch('/api/asap/staff/suggestions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': pb.authStore.token
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+      const data = await res.json();
+      throw new Error(data.message || 'Failed to create suggestion');
+    }
+
+    document.getElementById('newSuggestionModal').close();
+    loadTab('suggestion');
+  } catch (err) {
+    showNewSuggestionError(err.message || 'Failed to create suggestion');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Submit';
+  }
+});
+
+export function resetStaffPatronLookup() {
+  setVerifiedNewSuggestionBarcode('');
+  clearNewSuggestionError();
+  clearNewSuggestionDetails();
+  setNewSuggestionDetailsEnabled(false);
+  document.getElementById('new-lookup-result').className = 'mt-2 hidden';
+  document.getElementById('new-lookup-result').textContent = '';
+}
+
+export function clearNewSuggestionDetails() {
+  document.getElementById('new-title').value = '';
+  document.getElementById('new-author').value = '';
+  document.getElementById('new-identifier').value = '';
+  document.getElementById('new-format').selectedIndex = 0;
+  document.getElementById('new-age').selectedIndex = 0;
+  document.getElementById('new-publication').selectedIndex = 0;
+  document.getElementById('new-notes').value = '';
+}
+
+export function setNewSuggestionDetailsEnabled(enabled) {
+  document.getElementById('new-suggestion-details').classList.toggle('hidden', !enabled);
+  document.querySelectorAll('.new-detail-field').forEach(field => {
+    field.disabled = !enabled;
+  });
+  document.getElementById('btn-submit-new').disabled = !enabled;
+}
+
+export function showLookupResult(message, type) {
+  const result = document.getElementById('new-lookup-result');
+  result.className = 'mt-2 alert alert-' + type + ' py-2';
+  result.textContent = message;
+}
+
+export function clearNewSuggestionError() {
+  const el = document.getElementById('new-error-summary');
+  if (!el) return;
+  el.textContent = '';
+  el.classList.add('hidden');
+}
+
+export function showNewSuggestionError(message) {
+  const text = String(message || 'Failed to create suggestion');
+  const el = document.getElementById('new-error-summary');
+  if (!el) return;
+  el.textContent = text;
+  el.classList.remove('hidden');
+}
+
+export function patronLookupName(data) {
+  const name = [data.nameFirst, data.nameLast].filter(Boolean).join(' ').trim();
+  return name || 'barcode found';
 }

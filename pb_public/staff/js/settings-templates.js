@@ -1,126 +1,121 @@
-import { runLegacyModule } from './runtime.js';
+import { pb, currentRejectionTemplates, currentLibraryContextOrgId, setCurrentLibraryContextOrgId } from './state.js';
+import { markSettingsDirty, updateAutoRejectEmailControls } from './api.js';
+import { escapeAttr } from './grid.js';
 
-const source = [
-  "setTemplateInputsDisabled = function setTemplateInputsDisabled(disabled) {",
-  "  templateFieldIds.forEach(id => {",
-  "    const field = document.getElementById(id);",
-  "    if (field) field.disabled = disabled;",
-  "  });",
-  "}",
-  "",
-  "clearTemplateInputs = function clearTemplateInputs() {",
-  "  templateFieldIds.forEach(id => {",
-  "    const field = document.getElementById(id);",
-  "    if (field) field.value = '';",
-  "  });",
-  "}",
-  "",
-  "setTemplateStatus = function setTemplateStatus(message, className, hidden = false) {",
-  "  const statusAlert = document.getElementById('library-override-status');",
-  "  if (!statusAlert) return;",
-  "  statusAlert.className = className || 'alert alert-warning mb-4';",
-  "  statusAlert.textContent = message || '';",
-  "  statusAlert.classList.toggle('hidden', hidden);",
-  "}",
-  "",
-  "populateEmailTemplateForms = function populateEmailTemplateForms(emails) {",
-  "  emails = emails || {};",
-  "",
-  "  if (document.getElementById('email-from-address')) document.getElementById('email-from-address').value = emails.fromAddress || '';",
-  "  if (document.getElementById('email-from-name')) document.getElementById('email-from-name').value = emails.fromName || '';",
-  "",
-  "  // Sync to SMTP tab if we are modifying the system context",
-  "  if (currentLibraryContextOrgId === 'system') {",
-  "    if (document.getElementById('smtp-from')) document.getElementById('smtp-from').value = emails.fromAddress || '';",
-  "    if (document.getElementById('smtp-from-name')) document.getElementById('smtp-from-name').value = emails.fromName || '';",
-  "  }",
-  "",
-  "  const emailSubmit = emails.suggestion_submitted || {};",
-  "  if (document.getElementById('email-submit-subject')) document.getElementById('email-submit-subject').value = emailSubmit.subject || emailTemplateDefaults.suggestion_submitted.subject;",
-  "  if (document.getElementById('email-submit-body')) document.getElementById('email-submit-body').value = emailSubmit.body || emailTemplateDefaults.suggestion_submitted.body;",
-  "",
-  "  const emailOwned = emails.already_owned || {};",
-  "  if (document.getElementById('email-owned-subject')) document.getElementById('email-owned-subject').value = emailOwned.subject || emailTemplateDefaults.already_owned.subject;",
-  "  if (document.getElementById('email-owned-body')) document.getElementById('email-owned-body').value = emailOwned.body || emailTemplateDefaults.already_owned.body;",
-  "",
-  "  const emailRejected = emails.rejected || {};",
-  "  if (document.getElementById('email-rejected-subject')) document.getElementById('email-rejected-subject').value = emailRejected.subject || emailTemplateDefaults.rejected.subject;",
-  "  if (document.getElementById('email-rejected-body')) document.getElementById('email-rejected-body').value = emailRejected.body || emailTemplateDefaults.rejected.body;",
-  "",
-  "  currentRejectionTemplates = Array.isArray(emails.rejection_templates) ? JSON.parse(JSON.stringify(emails.rejection_templates)) : [];",
-  "  renderRejectionTemplates();",
-  "",
-  "  const emailHold = emails.hold_placed || {};",
-  "  if (document.getElementById('email-hold-subject')) document.getElementById('email-hold-subject').value = emailHold.subject || emailTemplateDefaults.hold_placed.subject;",
-  "  if (document.getElementById('email-hold-body')) document.getElementById('email-hold-body').value = emailHold.body || emailTemplateDefaults.hold_placed.body;",
-  "}",
-  "",
-  "renderRejectionTemplates = function renderRejectionTemplates() {",
-  "  const container = document.getElementById('rejection-templates-container');",
-  "  if (!container) return;",
-  "",
-  "  if (currentRejectionTemplates.length === 0) {",
-  "    container.innerHTML = '<div class=\"text-muted small\">No additional rejection templates configured.</div>';",
-  "    return;",
-  "  }",
-  "",
-  "  container.innerHTML = '';",
-  "  currentRejectionTemplates.forEach((template, index) => {",
-  "    const wrapper = document.createElement('div');",
-  "    wrapper.className = 'border rounded p-3 mb-3 bg-light';",
-  "",
-  "    wrapper.innerHTML = `",
-  "      <div class=\"form-group\">",
-  "        <div class=\"d-flex justify-content-between align-items-center mb-1\">",
-  "          <label class=\"mb-0\">Template name</label>",
-  "          <button type=\"button\" class=\"btn btn-sm btn-outline-danger\" onclick=\"removeRejectionTemplate(${index})\">Remove Template</button>",
-  "        </div>",
-  "        <input type=\"text\" class=\"form-control form-control-sm\" value=\"${escapeAttr(template.name || '')}\" onchange=\"updateRejectionTemplate(${index}, 'name', this.value)\">",
-  "      </div>",
-  "      <div class=\"form-group\">",
-  "        <label>Subject</label>",
-  "        <input type=\"text\" class=\"form-control form-control-sm\" value=\"${escapeAttr(template.subject || '')}\" onchange=\"updateRejectionTemplate(${index}, 'subject', this.value)\">",
-  "      </div>",
-  "      <div class=\"form-group mb-0\">",
-  "        <label>Body</label>",
-  "        <textarea class=\"form-control form-control-sm\" rows=\"3\" onchange=\"updateRejectionTemplate(${index}, 'body', this.value)\">${escapeAttr(template.body || '')}</textarea>",
-  "      </div>",
-  "    `;",
-  "    container.appendChild(wrapper);",
-  "  });",
-  "}",
-  "",
-  "updateRejectionTemplate = function updateRejectionTemplate(index, field, value) {",
-  "  if (currentRejectionTemplates[index]) {",
-  "    currentRejectionTemplates[index][field] = value;",
-  "    markSettingsDirty();",
-  "  }",
-  "}",
-  "",
-  "removeRejectionTemplate = function removeRejectionTemplate(index) {",
-  "  currentRejectionTemplates.splice(index, 1);",
-  "  renderRejectionTemplates();",
-  "  updateAutoRejectEmailControls();",
-  "  markSettingsDirty();",
-  "}",
-  "",
-  "const btnAddRejectionTemplate = document.getElementById('btn-add-rejection-template');",
-  "if (btnAddRejectionTemplate) {",
-  "  btnAddRejectionTemplate.addEventListener('click', () => {",
-  "    currentRejectionTemplates.unshift({",
-  "      id: pb.authStore.model ? pb.authStore.model.id + '_' + Date.now() : 'tpl_' + Date.now(),",
-  "      name: 'New Rejection Reason',",
-  "      subject: emailTemplateDefaults.rejected.subject,",
-  "      body: emailTemplateDefaults.rejected.body",
-  "    });",
-  "    renderRejectionTemplates();",
-  "    updateAutoRejectEmailControls();",
-  "    markSettingsDirty();",
-  "  });",
-  "}",
-  "",
-].join('\n');
+export function setTemplateInputsDisabled(disabled) {
+  templateFieldIds.forEach(id => {
+    const field = document.getElementById(id);
+    if (field) field.disabled = disabled;
+  });
+}
 
-export function install(env) {
-  runLegacyModule(env, source);
+export function clearTemplateInputs() {
+  templateFieldIds.forEach(id => {
+    const field = document.getElementById(id);
+    if (field) field.value = '';
+  });
+}
+
+export function setTemplateStatus(message, className, hidden = false) {
+  const statusAlert = document.getElementById('library-override-status');
+  if (!statusAlert) return;
+  statusAlert.className = className || 'alert alert-warning mb-4';
+  statusAlert.textContent = message || '';
+  statusAlert.classList.toggle('hidden', hidden);
+}
+
+export function populateEmailTemplateForms(emails) {
+  emails = emails || {};
+
+  if (document.getElementById('email-from-address')) document.getElementById('email-from-address').value = emails.fromAddress || '';
+  if (document.getElementById('email-from-name')) document.getElementById('email-from-name').value = emails.fromName || '';
+
+  // Sync to SMTP tab if we are modifying the system context
+  if (setCurrentLibraryContextOrgId(== 'system') {
+    if (document.getElementById('smtp-from')) document.getElementById('smtp-from').value = emails.fromAddress || '');
+    if (document.getElementById('smtp-from-name')) document.getElementById('smtp-from-name').value = emails.fromName || '';
+  }
+
+  const emailSubmit = emails.suggestion_submitted || {};
+  if (document.getElementById('email-submit-subject')) document.getElementById('email-submit-subject').value = emailSubmit.subject || emailTemplateDefaults.suggestion_submitted.subject;
+  if (document.getElementById('email-submit-body')) document.getElementById('email-submit-body').value = emailSubmit.body || emailTemplateDefaults.suggestion_submitted.body;
+
+  const emailOwned = emails.already_owned || {};
+  if (document.getElementById('email-owned-subject')) document.getElementById('email-owned-subject').value = emailOwned.subject || emailTemplateDefaults.already_owned.subject;
+  if (document.getElementById('email-owned-body')) document.getElementById('email-owned-body').value = emailOwned.body || emailTemplateDefaults.already_owned.body;
+
+  const emailRejected = emails.rejected || {};
+  if (document.getElementById('email-rejected-subject')) document.getElementById('email-rejected-subject').value = emailRejected.subject || emailTemplateDefaults.rejected.subject;
+  if (document.getElementById('email-rejected-body')) document.getElementById('email-rejected-body').value = emailRejected.body || emailTemplateDefaults.rejected.body;
+
+  currentRejectionTemplates = Array.isArray(emails.rejection_templates) ? JSON.parse(JSON.stringify(emails.rejection_templates)) : [];
+  renderRejectionTemplates();
+
+  const emailHold = emails.hold_placed || {};
+  if (document.getElementById('email-hold-subject')) document.getElementById('email-hold-subject').value = emailHold.subject || emailTemplateDefaults.hold_placed.subject;
+  if (document.getElementById('email-hold-body')) document.getElementById('email-hold-body').value = emailHold.body || emailTemplateDefaults.hold_placed.body;
+}
+
+export function renderRejectionTemplates() {
+  const container = document.getElementById('rejection-templates-container');
+  if (!container) return;
+
+  if (currentRejectionTemplates.length === 0) {
+    container.innerHTML = '<div class="text-muted small">No additional rejection templates configured.</div>';
+    return;
+  }
+
+  container.innerHTML = '';
+  currentRejectionTemplates.forEach((template, index) => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'border rounded p-3 mb-3 bg-light';
+
+    wrapper.innerHTML = `
+      <div class="form-group">
+        <div class="d-flex justify-content-between align-items-center mb-1">
+          <label class="mb-0">Template name</label>
+          <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeRejectionTemplate(${index})">Remove Template</button>
+        </div>
+        <input type="text" class="form-control form-control-sm" value="${escapeAttr(template.name || '')}" onchange="updateRejectionTemplate(${index}, 'name', this.value)">
+      </div>
+      <div class="form-group">
+        <label>Subject</label>
+        <input type="text" class="form-control form-control-sm" value="${escapeAttr(template.subject || '')}" onchange="updateRejectionTemplate(${index}, 'subject', this.value)">
+      </div>
+      <div class="form-group mb-0">
+        <label>Body</label>
+        <textarea class="form-control form-control-sm" rows="3" onchange="updateRejectionTemplate(${index}, 'body', this.value)">${escapeAttr(template.body || '')}</textarea>
+      </div>
+    `;
+    container.appendChild(wrapper);
+  });
+}
+
+export function updateRejectionTemplate(index, field, value) {
+  if (currentRejectionTemplates[index]) {
+    currentRejectionTemplates[index][field] = value;
+    markSettingsDirty();
+  }
+}
+
+export function removeRejectionTemplate(index) {
+  currentRejectionTemplates.splice(index, 1);
+  renderRejectionTemplates();
+  updateAutoRejectEmailControls();
+  markSettingsDirty();
+}
+
+const btnAddRejectionTemplate = document.getElementById('btn-add-rejection-template');
+if (btnAddRejectionTemplate) {
+  btnAddRejectionTemplate.addEventListener('click', () => {
+    currentRejectionTemplates.unshift({
+      id: pb.authStore.model ? pb.authStore.model.id + '_' + Date.now() : 'tpl_' + Date.now(),
+      name: 'New Rejection Reason',
+      subject: emailTemplateDefaults.rejected.subject,
+      body: emailTemplateDefaults.rejected.body
+    });
+    renderRejectionTemplates();
+    updateAutoRejectEmailControls();
+    markSettingsDirty();
+  });
 }

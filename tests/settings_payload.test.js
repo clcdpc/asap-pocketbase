@@ -4,10 +4,11 @@ const path = require("path");
 const vm = require("vm");
 
 function loadSettingsSource() {
-  const file = fs.readFileSync(path.resolve(__dirname, "../pb_public/staff/js/settings.js"), "utf8");
-  const match = file.match(/const source = ([\s\S]*?\]\.join\('\\n'\));/);
-  if (!match) throw new Error("Could not find settings source array.");
-  return vm.runInNewContext(match[1], {});
+  const settingsUsers = fs.readFileSync(path.resolve(__dirname, "../pb_public/staff/js/settings-users.js"), "utf8");
+  const settingsTemplates = fs.readFileSync(path.resolve(__dirname, "../pb_public/staff/js/settings-templates.js"), "utf8");
+  const settingsApi = fs.readFileSync(path.resolve(__dirname, "../pb_public/staff/js/api.js"), "utf8");
+  const settingsSettings = fs.readFileSync(path.resolve(__dirname, "../pb_public/staff/js/settings.js"), "utf8");
+  return settingsUsers + '\n' + settingsTemplates + '\n' + settingsApi + '\n' + settingsSettings;
 }
 
 function extractFunction(source, name) {
@@ -91,7 +92,7 @@ test("auto-reject email can use standard template with no custom templates", fun
 
 test("auto-reject email can use standard template when custom templates exist", function () {
   const env = buildHarness({
-    templates: [{ id: "tpl_custom", name: "Custom" }],
+    templates: [{ id: "tpl_custom", name: "Custom" });],
     values: { "outstanding-timeout-rejection-template-id": "" },
   });
   const payload = env.buildSettingsPayload();
@@ -100,7 +101,7 @@ test("auto-reject email can use standard template when custom templates exist", 
 
 test("auto-reject email saves selected custom template id", function () {
   const env = buildHarness({
-    templates: [{ id: "tpl_custom", name: "Custom" }],
+    templates: [{ id: "tpl_custom", name: "Custom" });],
     values: { "outstanding-timeout-rejection-template-id": "tpl_custom" },
   });
   const payload = env.buildSettingsPayload();

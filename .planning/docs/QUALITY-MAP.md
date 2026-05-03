@@ -23,20 +23,17 @@ The staff interface is a single-page application built with modern JavaScript.
 
 - **Module System**: Uses ES6 `import/export`.
 - **JS Version**: Uses ES6+ features including `async/await`, template literals, and arrow functions.
-- **Modularity**: Logic is split into specialized modules (e.g., `api.js`, `grid.js`, `modals.js`).
-- **UI Architecture**: Uses a legacy module bridge (`runLegacyModule`) for transitioning older logic into a modular structure.
+- **Modularity**: Logic is split into specialized modules (e.g., `api.js`, `grid.js`, `modals.js`) using standard ES6 imports/exports.
 - **State Management**: Leverages PocketBase's `authStore` for authentication and user context.
 
 ## Technical Debt
 
 ### Identified Debt
 - **Manual Implementations**: Due to the limited environment of PocketBase hooks, several low-level utilities (HMAC-SHA1, UTF-8 byte counting, XML escaping) are manually implemented in `pb_hooks/lib/crypto.js` and `pb_hooks/lib/polaris.js`.
-- **Legacy Bridging**: The frontend uses a custom bridge to load legacy source strings as modules, which should eventually be refactored into standard modules.
 - **Sync Logic**: Organization synchronization and ISBN checking rely on multiple cron jobs and manual triggers, which may lead to race conditions if not carefully monitored.
 
 ### Refactoring Priorities
-1. **Standardize Frontend**: Finish the transition of legacy modules to standard ES6 exports.
-2. **Centralized Testing**: Implement a unified test runner or CI integration for the Node.js-based unit tests.
+1. **Centralized Testing**: Implement a unified test runner or CI integration for the Node.js-based unit tests.
 
 ## Quality Metrics
 

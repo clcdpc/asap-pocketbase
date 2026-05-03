@@ -1,62 +1,58 @@
-import { runLegacyModule } from './runtime.js';
+import { duplicateStatusLabelDefaults, duplicateStatusLabelFields, currentLibraryContextOrgId, setCurrentLibraryContextOrgId } from './state.js';
+import { showToast, showConfirm, markSettingsClean, authorizedJson } from './api.js';
+import { escapeAttr } from './grid.js';
+import { loadLibrarySettings } from './settings.js';
 
-const source = [
-  "normalizeDuplicateStatusLabels = function normalizeDuplicateStatusLabels(labels = {}) {",
-  "  return { ...duplicateStatusLabelDefaults, ...(labels && typeof labels === 'object' ? labels : {}) };",
-  "}",
-  "",
-  "renderDuplicateStatusLabelSettings = function renderDuplicateStatusLabelSettings(labels = {}, source = '', inherited = false) {",
-  "  const container = document.getElementById('duplicate-status-labels-container');",
-  "  if (!container) return;",
-  "  const normalized = normalizeDuplicateStatusLabels(labels);",
-  "  const scopeEl = document.getElementById('duplicate-status-labels-scope');",
-  "  if (scopeEl) {",
-  "    if (currentLibraryContextOrgId === 'system') {",
-  "      scopeEl.textContent = 'Editing global default labels.';",
-  "      scopeEl.className = 'small mb-3 text-muted';",
-  "    } else if (inherited || source === 'global' || source === 'default') {",
-  "      scopeEl.textContent = 'Showing inherited global labels. Saving will create labels for the selected library only.';",
-  "      scopeEl.className = 'small mb-3 text-warning';",
-  "    } else {",
-  "      scopeEl.textContent = 'Editing custom labels for the selected library.';",
-  "      scopeEl.className = 'small mb-3 text-info';",
-  "    }",
-  "  }",
-  "  container.innerHTML = duplicateStatusLabelFields.map(([key, label]) => `",
-  "    <div class=\"form-group col-md-6\">",
-  "      <label for=\"duplicate-status-${escapeAttr(key)}\" class=\"small font-weight-bold\">${escapeAttr(label)}</label>",
-  "      <input type=\"text\" id=\"duplicate-status-${escapeAttr(key)}\" class=\"form-control form-control-sm duplicate-status-label-input\" data-key=\"${escapeAttr(key)}\" value=\"${escapeAttr(normalized[key] || '')}\">",
-  "    </div>",
-  "  `).join('');",
-  "}",
-  "",
-  "collectDuplicateStatusLabels = function collectDuplicateStatusLabels() {",
-  "  const labels = {};",
-  "  duplicateStatusLabelFields.forEach(([key]) => {",
-  "    const el = document.getElementById(`duplicate-status-${key}`);",
-  "    const value = el ? el.value.trim() : '';",
-  "    labels[key] = value || duplicateStatusLabelDefaults[key] || '';",
-  "  });",
-  "  labels['Silently Closed'] = labels.silent || duplicateStatusLabelDefaults.silent;",
-  "  return labels;",
-  "}",
-  "",
-  "document.getElementById('btn-reset-library-settings').addEventListener('click', async () => {",
-  "  if (currentLibraryContextOrgId === 'system') return;",
-  "  const confirmed = await showConfirm('Reset library settings', 'Are you sure you want to delete this library\\'s overrides and revert to system defaults?');",
-  "  if (confirmed) {",
-  "    await authorizedJson('/api/asap/staff/settings/library', {",
-  "      method: 'POST',",
-  "      body: JSON.stringify({ orgId: currentLibraryContextOrgId, action: 'reset' })",
-  "    });",
-  "    showToast('Library settings reset to system defaults', 'success');",
-  "    await loadLibrarySettings(currentLibraryContextOrgId);",
-  "    markSettingsClean('clean');",
-  "  }",
-  "});",
-  "",
-].join('\n');
-
-export function install(env) {
-  runLegacyModule(env, source);
+export function normalizeDuplicateStatusLabels(labels = {}) {
+  return { ...duplicateStatusLabelDefaults, ...(labels && typeof labels === 'object' ? labels : {}) };
 }
+
+export function renderDuplicateStatusLabelSettings(labels = {}, source = '', inherited = false) {
+  const container = document.getElementById('duplicate-status-labels-container');
+  if (!container) return;
+  const normalized = normalizeDuplicateStatusLabels(labels);
+  const scopeEl = document.getElementById('duplicate-status-labels-scope');
+  if (scopeEl) {
+    if (setCurrentLibraryContextOrgId(== 'system') {
+      scopeEl.textContent = 'Editing global default labels.');
+      scopeEl.className = 'small mb-3 text-muted';
+    } else if (inherited || source === 'global' || source === 'default') {
+      scopeEl.textContent = 'Showing inherited global labels. Saving will create labels for the selected library only.';
+      scopeEl.className = 'small mb-3 text-warning';
+    } else {
+      scopeEl.textContent = 'Editing custom labels for the selected library.';
+      scopeEl.className = 'small mb-3 text-info';
+    }
+  }
+  container.innerHTML = duplicateStatusLabelFields.map(([key, label]) => `
+    <div class="form-group col-md-6">
+      <label for="duplicate-status-${escapeAttr(key)}" class="small font-weight-bold">${escapeAttr(label)}</label>
+      <input type="text" id="duplicate-status-${escapeAttr(key)}" class="form-control form-control-sm duplicate-status-label-input" data-key="${escapeAttr(key)}" value="${escapeAttr(normalized[key] || '')}">
+    </div>
+  `).join('');
+}
+
+export function collectDuplicateStatusLabels() {
+  const labels = {};
+  duplicateStatusLabelFields.forEach(([key]) => {
+    const el = document.getElementById(`duplicate-status-${key}`);
+    const value = el ? el.value.trim() : '';
+    labels[key] = value || duplicateStatusLabelDefaults[key] || '';
+  });
+  labels['Silently Closed'] = labels.silent || duplicateStatusLabelDefaults.silent;
+  return labels;
+}
+
+document.getElementById('btn-reset-library-settings').addEventListener('click', async () => {
+  if (setCurrentLibraryContextOrgId(== 'system') return);
+  const confirmed = await showConfirm('Reset library settings', 'Are you sure you want to delete this library\'s overrides and revert to system defaults?');
+  if (confirmed) {
+    await authorizedJson('/api/asap/staff/settings/library', {
+      method: 'POST',
+      body: JSON.stringify({ orgId: currentLibraryContextOrgId, action: 'reset' })
+    });
+    showToast('Library settings reset to system defaults', 'success');
+    await loadLibrarySettings(currentLibraryContextOrgId);
+    markSettingsClean('clean');
+  }
+});

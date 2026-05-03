@@ -1,843 +1,838 @@
-import { runLegacyModule } from './runtime.js';
+import { pb, loginContainer, setupContainer, appContainer, loginForm, setupForm, logoutBtn, profileBtn, tagFilterSelect, currentRejectionTemplates, statusStages, stageQueryMap, currentStatus, activeTagFilter, workflowSettings, bootstrapAdminMessage, setupRequired, currentEmailStatus, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, settingsSectionIds, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, setCurrentStatus, setActiveTagFilter, setBootstrapAdminMessage, setSetupRequired, setOrganizationsStatusMessage, setCurrentSettingsSection, setSettingsDirty } from './state.js';
+import { loadTab, renderCurrentGrid, closeActionMenu, escapeAttr } from './grid.js';
+import { syncPolarisOrganizations } from './settings-polaris.js';
+import { loadSettings } from './settings.js';
 
-const source = [
-  "// --- DOM Field Helpers ---",
-  "",
-  "setFieldValue = function setFieldValue(id, value) {",
-  "  const el = document.getElementById(id);",
-  "  if (el) el.value = value;",
-  "}",
-  "",
-  "setFieldChecked = function setFieldChecked(id, checked) {",
-  "  const el = document.getElementById(id);",
-  "  if (el) el.checked = checked;",
-  "}",
-  "",
-  "getFieldValue = function getFieldValue(id, fallback = '') {",
-  "  const el = document.getElementById(id);",
-  "  return el ? el.value : fallback;",
-  "}",
-  "",
-  "getFieldChecked = function getFieldChecked(id, fallback = false) {",
-  "  const el = document.getElementById(id);",
-  "  return el ? el.checked : fallback;",
-  "}",
-  "",
-  "validateStaffUrl = function validateStaffUrl(value) {",
-  "  const text = String(value || '').trim();",
-  "  if (!text) return 'Staff URL is required.';",
-  "  let parsed;",
-  "  try {",
-  "    parsed = new URL(text);",
-  "  } catch (err) {",
-  "    return 'Enter a valid Staff URL beginning with http:// or https://.';",
-  "  }",
-  "  if (!['http:', 'https:'].includes(parsed.protocol)) {",
-  "    return 'Staff URL must start with http:// or https://.';",
-  "  }",
-  "  return null;",
-  "}",
-  "",
-  "normalizeStaffUrl = function normalizeStaffUrl(value) {",
-  "  const url = new URL(String(value || '').trim());",
-  "  url.hash = '';",
-  "  if (url.pathname.replace(/\\/+$/, '').toLowerCase() === '/staff') {",
-  "    url.pathname = '/staff/';",
-  "  }",
-  "  return url.toString();",
-  "}",
-  "",
-  "normalizeLeapBibUrlPattern = function normalizeLeapBibUrlPattern(value) {",
-  "  const text = String(value || '').trim();",
-  "  if (!text) return '';",
-  "  if (!/^https?:\\/\\//i.test(text)) {",
-  "    throw new Error('Leap Bib URL pattern must begin with http:// or https://.');",
-  "  }",
-  "  if (!text.includes('{{bibid}}')) {",
-  "    throw new Error('Leap Bib URL pattern must include {{bibid}}.');",
-  "  }",
-  "  return text;",
-  "}",
-  "",
-  "leapBibUrl = function leapBibUrl(bibId) {",
-  "  const pattern = String(leapBibUrlPattern || '').trim();",
-  "  const cleanBibId = String(bibId || '').trim();",
-  "  if (!pattern || !cleanBibId || !pattern.includes('{{bibid}}')) {",
-  "    return '';",
-  "  }",
-  "  if (!/^https?:\\/\\//i.test(pattern)) {",
-  "    return '';",
-  "  }",
-  "  return pattern.split('{{bibid}}').join(encodeURIComponent(cleanBibId));",
-  "}",
-  "",
-  "requestedStatusFromUrl = function requestedStatusFromUrl() {",
-  "  try {",
-  "    const params = new URLSearchParams(window.location.search || '');",
-  "    const raw = String(params.get('stage') || params.get('status') || '').trim();",
-  "    return stageQueryMap[raw] || '';",
-  "  } catch (err) {",
-  "    return '';",
-  "  }",
-  "}",
-  "",
-  "updateStageQuery = function updateStageQuery(status) {",
-  "  try {",
-  "    const url = new URL(window.location.href);",
-  "    if (statusStages.includes(status)) {",
-  "      url.searchParams.set('stage', status === 'suggestion' ? 'submitted' : status);",
-  "    }",
-  "    window.history.replaceState(null, '', url.pathname + url.search + url.hash);",
-  "  } catch (err) {}",
-  "}",
-  "",
-  "isPocketBaseAutoCancelError = function isPocketBaseAutoCancelError(err) {",
-  "  const message = String((err && err.message) || err || '');",
-  "  return !!(err && err.status === 0 && /aborted|auto.?cancel/i.test(message));",
-  "}",
-  "",
-  "isValidSmtpHost = function isValidSmtpHost(host) {",
-  "  const value = String(host || '').trim();",
-  "  if (!value) return false;",
-  "  if (value.toLowerCase() === 'localhost') return true;",
-  "  if (value.includes('://') || value.includes('/') || value.includes(':') || /\\s/.test(value)) return false;",
-  "  const ipv4Pattern = /^(25[0-5]|2[0-4]\\d|1?\\d?\\d)(\\.(25[0-5]|2[0-4]\\d|1?\\d?\\d)){3}$/;",
-  "  if (ipv4Pattern.test(value)) return true;",
-  "  const labels = value.split('.');",
-  "  if (labels.length < 2) return false;",
-  "  return labels.every(label => /^[a-z0-9-]{1,63}$/i.test(label) && !label.startsWith('-') && !label.endsWith('-'));",
-  "}",
-  "",
-  "validateSmtpHostField = function validateSmtpHostField(showMessage = false) {",
-  "  const host = getFieldValue('smtp-host').trim();",
-  "  const resultEl = document.getElementById('smtp-test-result');",
-  "  if (!host || isValidSmtpHost(host)) {",
-  "    if (showMessage && resultEl) {",
-  "      resultEl.textContent = '';",
-  "      resultEl.className = 'd-block mt-2';",
-  "    }",
-  "    return true;",
-  "  }",
-  "  if (showMessage && resultEl) {",
-  "    resultEl.textContent = 'Enter a valid SMTP host (DNS name or IP only, no protocol or port).';",
-  "    resultEl.className = 'mt-2 text-danger font-weight-bold small';",
-  "  }",
-  "  return false;",
-  "}",
-  "",
-  "setVisible = function setVisible(id, visible) {",
-  "  const el = document.getElementById(id);",
-  "  if (el) el.classList.toggle('hidden', !visible);",
-  "}",
-  "",
-  "setText = function setText(id, value) {",
-  "  const el = document.getElementById(id);",
-  "  if (el) el.textContent = value || '';",
-  "}",
-  "",
-  "setDisabled = function setDisabled(id, disabled) {",
-  "  const el = document.getElementById(id);",
-  "  if (el) el.disabled = !!disabled;",
-  "}",
-  "",
-  "setInlineStatus = function setInlineStatus(id, message, type) {",
-  "  const el = document.getElementById(id);",
-  "  if (!el) return;",
-  "  el.textContent = message || '';",
-  "  el.className = type ? `text-${type} font-weight-bold` : '';",
-  "}",
-  "",
-  "// --- In-page Toast / Dialog Helpers ---",
-  "",
-  "showToast = function showToast(message, type = 'success') {",
-  "  const container = document.getElementById('toast-container');",
-  "  if (!container) return;",
-  "  const toast = document.createElement('div');",
-  "  toast.className = `asap-toast asap-toast-${type}`;",
-  "  toast.textContent = message;",
-  "  container.appendChild(toast);",
-  "  requestAnimationFrame(() => toast.classList.add('show'));",
-  "  setTimeout(() => {",
-  "    toast.classList.remove('show');",
-  "    setTimeout(() => toast.remove(), 300);",
-  "  }, 3500);",
-  "}",
-  "",
-  "showAlert = function showAlert(message) {",
-  "  return new Promise(resolve => {",
-  "    const dialog = document.getElementById('alert-dialog');",
-  "    if (!dialog) return resolve();",
-  "    const previousFocus = document.activeElement;",
-  "    document.getElementById('alert-dialog-message').textContent = message;",
-  "    const okBtn = document.getElementById('alert-dialog-ok');",
-  "    let settled = false;",
-  "    function cleanup() {",
-  "      if (settled) return;",
-  "      settled = true;",
-  "      if (dialog.open) dialog.close();",
-  "      okBtn.removeEventListener('click', onOk);",
-  "      dialog.removeEventListener('cancel', onCancel);",
-  "      if (previousFocus && typeof previousFocus.focus === 'function') {",
-  "        previousFocus.focus();",
-  "      }",
-  "      resolve();",
-  "    }",
-  "    function onOk() {",
-  "      cleanup();",
-  "    }",
-  "    function onCancel(event) {",
-  "      event.preventDefault();",
-  "      cleanup();",
-  "    }",
-  "    okBtn.addEventListener('click', onOk);",
-  "    dialog.addEventListener('cancel', onCancel);",
-  "    dialog.showModal();",
-  "    okBtn.focus();",
-  "  });",
-  "}",
-  "",
-  "showConfirm = function showConfirm(titleOrMessage, maybeMessage) {",
-  "  return new Promise(resolve => {",
-  "    const dialog = document.getElementById('confirm-dialog');",
-  "    if (!dialog) return resolve(false);",
-  "    const previousFocus = document.activeElement;",
-  "    const message = maybeMessage || titleOrMessage;",
-  "    const title = maybeMessage ? titleOrMessage : 'Confirm action';",
-  "    const titleEl = document.getElementById('confirm-dialog-title');",
-  "    if (titleEl) titleEl.textContent = title;",
-  "    document.getElementById('confirm-dialog-message').textContent = message;",
-  "    const okBtn = document.getElementById('confirm-dialog-ok');",
-  "    const cancelBtn = document.getElementById('confirm-dialog-cancel');",
-  "    let settled = false;",
-  "    function cleanup(result) {",
-  "      if (settled) return;",
-  "      settled = true;",
-  "      if (dialog.open) dialog.close();",
-  "      okBtn.removeEventListener('click', onOk);",
-  "      cancelBtn.removeEventListener('click', onCancel);",
-  "      dialog.removeEventListener('cancel', onDialogCancel);",
-  "      if (previousFocus && typeof previousFocus.focus === 'function') {",
-  "        previousFocus.focus();",
-  "      }",
-  "      resolve(result);",
-  "    }",
-  "    function onOk() { cleanup(true); }",
-  "    function onCancel() { cleanup(false); }",
-  "    function onDialogCancel(event) {",
-  "      event.preventDefault();",
-  "      cleanup(false);",
-  "    }",
-  "    okBtn.addEventListener('click', onOk);",
-  "    cancelBtn.addEventListener('click', onCancel);",
-  "    dialog.addEventListener('cancel', onDialogCancel);",
-  "    dialog.showModal();",
-  "    cancelBtn.focus();",
-  "  });",
-  "}",
-  "",
-  "staffRole = function staffRole() {",
-  "  return pb.authStore.model ? String(pb.authStore.model.role || '').toLowerCase() : '';",
-  "}",
-  "",
-  "isSuperAdminStaff = function isSuperAdminStaff() {",
-  "  return staffRole() === 'super_admin';",
-  "}",
-  "",
-  "isAdminStaff = function isAdminStaff() {",
-  "  return ['admin', 'super_admin'].includes(staffRole());",
-  "}",
-  "",
-  "getSettingsSectionFromHash = function getSettingsSectionFromHash() {",
-  "  const hash = window.location.hash || '';",
-  "  const prefix = '#settings-';",
-  "  if (!hash.startsWith(prefix)) {",
-  "    return '';",
-  "  }",
-  "",
-  "  const section = decodeURIComponent(hash.slice(prefix.length));",
-  "  return settingsSectionIds.includes(section) ? section : '';",
-  "}",
-  "",
-  "updateSettingsSaveBarVisibility = function updateSettingsSaveBarVisibility() {",
-  "  const bar = document.querySelector('.settings-save-bar');",
-  "  if (!bar) return;",
-  "  bar.classList.toggle('hidden', currentStatus !== 'settings');",
-  "}",
-  "",
-  "closeOpenDialogs = function closeOpenDialogs() {",
-  "  document.querySelectorAll('dialog[open]').forEach(dialog => {",
-  "    try {",
-  "      dialog.close();",
-  "    } catch (err) {}",
-  "  });",
-  "}",
-  "",
-  "activateStatusTab = function activateStatusTab(status) {",
-  "  currentStatus = status;",
-  "  document.querySelectorAll('#status-tabs .nav-link').forEach(link => {",
-  "    const isActive = link.getAttribute('data-status') === status;",
-  "    link.classList.toggle('active', isActive);",
-  "    if (link.hasAttribute('role')) {",
-  "      link.setAttribute('aria-selected', isActive ? 'true' : 'false');",
-  "    }",
-  "  });",
-  "  updateSettingsSaveBarVisibility();",
-  "}",
-  "",
-  "updateSaveBarState = function updateSaveBarState(state) {",
-  "  const title = document.getElementById('settings-save-title');",
-  "  const detail = document.getElementById('settings-save-detail');",
-  "  const warningBadge = document.getElementById('settings-save-warning-badge');",
-  "  const discardBtn = document.getElementById('settings-discard-btn');",
-  "  const msg = document.getElementById('settings-msg');",
-  "  const effectiveState = state || (settingsDirty ? 'dirty' : 'clean');",
-  "  const states = {",
-  "    clean: ['No changes', 'Everything in the current settings context is saved.', 'text-muted'],",
-  "    dirty: ['Unsaved changes', 'Save your edits or discard them to return to the last saved settings.', 'text-warning'],",
-  "    saving: ['Saving...', 'Please wait while ASAP applies these settings.', 'text-info'],",
-  "    saved: ['Saved', 'Your settings were saved successfully.', 'text-success'],",
-  "    error: ['Error saving', 'Review the message below and try again.', 'text-danger']",
-  "  };",
-  "  const next = states[effectiveState] || states.clean;",
-  "  if (title) title.textContent = next[0];",
-  "  if (warningBadge) {",
-  "    warningBadge.classList.toggle('hidden', effectiveState !== 'dirty');",
-  "  }",
-  "  if (detail) {",
-  "    detail.textContent = next[1];",
-  "    detail.className = 'small ' + next[2];",
-  "  }",
-  "  if (discardBtn) {",
-  "    discardBtn.classList.toggle('hidden', effectiveState !== 'dirty' && effectiveState !== 'error');",
-  "    discardBtn.disabled = settingsSaving;",
-  "  }",
-  "  setDisabled('settings-save-btn', settingsSaving || effectiveState === 'clean');",
-  "  if (msg && effectiveState === 'clean') {",
-  "    msg.textContent = '';",
-  "    msg.className = 'mt-2 font-weight-bold';",
-  "  }",
-  "}",
-  "",
-  "markSettingsDirty = function markSettingsDirty() {",
-  "  if (settingsLoading || settingsSaving) return;",
-  "  settingsDirty = true;",
-  "  updateSaveBarState('dirty');",
-  "}",
-  "",
-  "markSettingsClean = function markSettingsClean(state = 'clean') {",
-  "  settingsDirty = false;",
-  "  updateSaveBarState(state);",
-  "}",
-  "",
-  "activateSettingsSection = function activateSettingsSection(section, options = {}) {",
-  "  const targetSection = settingsSectionIds.includes(section) ? section : 'start';",
-  "  currentSettingsSection = targetSection;",
-  "",
-  "  document.querySelectorAll('[data-settings-section]').forEach(panel => {",
-  "    const isActive = panel.getAttribute('data-settings-section') === targetSection;",
-  "    panel.classList.toggle('active', isActive);",
-  "    panel.setAttribute('aria-hidden', isActive ? 'false' : 'true');",
-  "  });",
-  "",
-  "  const overridableSections = ['workflow', 'patron', 'templates'];",
-  "  const wrapper = document.getElementById('library-context-wrapper');",
-  "  if (wrapper) {",
-  "    if (overridableSections.includes(targetSection)) {",
-  "      wrapper.classList.remove('hidden');",
-  "    } else {",
-  "      wrapper.classList.add('hidden');",
-  "    }",
-  "  }",
-  "",
-  "  document.querySelectorAll('[data-settings-target]').forEach(button => {",
-  "    const isActive = button.getAttribute('data-settings-target') === targetSection;",
-  "    button.classList.toggle('active', isActive);",
-  "    button.setAttribute('aria-selected', isActive ? 'true' : 'false');",
-  "  });",
-  "",
-  "  if (options.updateHash) {",
-  "    const nextHash = '#settings-' + encodeURIComponent(targetSection);",
-  "    if (window.location.hash !== nextHash) {",
-  "      window.history.replaceState(null, '', nextHash);",
-  "    }",
-  "  }",
-  "",
-  "  if (options.focus) {",
-  "    const panel = document.getElementById('settings-' + targetSection);",
-  "    if (panel) {",
-  "      try {",
-  "        panel.focus({ preventScroll: true });",
-  "      } catch (err) {",
-  "        // Older browsers may not support preventScroll; skip focus instead of causing a jump.",
-  "      }",
-  "    }",
-  "  }",
-  "}",
-  "",
-  "initSettingsNavigation = function initSettingsNavigation() {",
-  "  document.querySelectorAll('.settings-nav-link[data-settings-target]').forEach(button => {",
-  "    const section = button.getAttribute('data-settings-target');",
-  "    button.setAttribute('aria-controls', 'settings-' + section);",
-  "    button.setAttribute('aria-selected', section === currentSettingsSection ? 'true' : 'false');",
-  "    button.addEventListener('click', () => {",
-  "      activateSettingsSection(section, { updateHash: true, focus: true });",
-  "    });",
-  "  });",
-  "",
-  "  window.addEventListener('hashchange', () => {",
-  "    const section = getSettingsSectionFromHash();",
-  "    if (!section) {",
-  "      return;",
-  "    }",
-  "",
-  "    if (pb.authStore.isValid && currentStatus !== 'settings') {",
-  "      activateStatusTab('settings');",
-  "      loadTab('settings');",
-  "      return;",
-  "    }",
-  "",
-  "    activateSettingsSection(section, { updateHash: false, focus: true });",
-  "  });",
-  "",
-  "  activateSettingsSection(getSettingsSectionFromHash() || currentSettingsSection, { updateHash: false });",
-  "}",
-  "",
-  "showBootstrapAdminMessage = function showBootstrapAdminMessage() {",
-  "  const alert = document.getElementById('bootstrap-admin-alert');",
-  "  if (!alert) return;",
-  "  if (bootstrapAdminMessage) {",
-  "    setText('bootstrap-admin-alert', bootstrapAdminMessage);",
-  "    setVisible('bootstrap-admin-alert', true);",
-  "  } else {",
-  "    setText('bootstrap-admin-alert', '');",
-  "    setVisible('bootstrap-admin-alert', false);",
-  "  }",
-  "}",
-  "",
-  "updateEmailStatusBanner = function updateEmailStatusBanner(status) {",
-  "  currentEmailStatus = status || currentEmailStatus || { enabled: true };",
-  "  const smtpMessage = document.getElementById('smtp-readiness-message');",
-  "  const configured = !!currentEmailStatus.enabled;",
-  "  const message = currentEmailStatus.message || 'Email notifications are not configured. Suggestions and staff workflows still work, but patron emails will not be sent.';",
-  "",
-  "  setVisible('email-status-banner', !configured);",
-  "  if (smtpMessage) {",
-  "    smtpMessage.textContent = message;",
-  "    smtpMessage.className = configured ? 'alert alert-success small' : 'alert alert-warning small';",
-  "  }",
-  "}",
-  "",
-  "setOrganizationsStatus = function setOrganizationsStatus(status, message) {",
-  "  organizationsStatus = status || 'not_loaded';",
-  "  organizationsStatusMessage = message || '';",
-  "  const statusEl = document.getElementById('organizations-status-message');",
-  "  const container = document.getElementById('enabled-libraries-checkbox-container');",
-  "  if (container && organizationsStatus !== 'loaded') {",
-  "    container.removeAttribute('data-loaded');",
-  "  }",
-  "",
-  "  if (statusEl) {",
-  "    const classMap = {",
-  "      not_loaded: 'alert alert-info small mb-3',",
-  "      loading: 'alert alert-info small mb-3',",
-  "      loaded: 'alert alert-success small mb-3',",
-  "      error: 'alert alert-warning small mb-3'",
-  "    };",
-  "    statusEl.className = classMap[organizationsStatus] || classMap.not_loaded;",
-  "    statusEl.textContent = organizationsStatusMessage || 'Polaris organization sync status is unknown.';",
-  "  }",
-  "",
-  "  if (container && organizationsStatus === 'loading') {",
-  "    container.innerHTML = '<div class=\"p-3 text-muted\">Organizations loading...</div>';",
-  "  } else if (container && organizationsStatus === 'error') {",
-  "    container.innerHTML = '<div class=\"p-3 text-warning\">Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.</div>';",
-  "  } else if (container && organizationsStatus === 'not_loaded') {",
-  "    container.innerHTML = '<div class=\"p-3 text-muted\">Organizations not loaded yet.</div>';",
-  "  }",
-  "}",
-  "",
-  "loadEmailStatus = async function loadEmailStatus(orgId) {",
-  "  if (!pb.authStore.isValid || !pb.authStore.model || pb.authStore.model.collectionName !== 'staff_users') {",
-  "    return;",
-  "  }",
-  "",
-  "  const defaultOrgId = isSuperAdminStaff() ? 'system' : (pb.authStore.model.libraryOrgId || '');",
-  "  const targetOrgId = orgId || defaultOrgId;",
-  "  try {",
-  "    const result = await authorizedJson(`/api/asap/staff/email-status?orgId=${encodeURIComponent(targetOrgId)}&_=${Date.now()}`, { cache: 'no-store' });",
-  "    updateEmailStatusBanner(result);",
-  "  } catch (err) {",
-  "    console.warn('Failed to load email status', err);",
-  "  }",
-  "}",
-  "",
-  "checkAuth = function checkAuth() {",
-  "  if (pb.authStore.isValid && pb.authStore.model && pb.authStore.model.collectionName === 'staff_users') {",
-  "    setupContainer.classList.add('hidden');",
-  "    loginContainer.classList.add('hidden');",
-  "    appContainer.classList.remove('hidden');",
-  "    const libraryName = pb.authStore.model.libraryOrgName || (isSuperAdminStaff() ? 'System' : '');",
-  "    const identityLabel = pb.authStore.model.identityKey || pb.authStore.model.username;",
-  "    document.getElementById('display-user').textContent = (pb.authStore.model.displayName || identityLabel) + (libraryName ? ` (${libraryName})` : '');",
-  "    document.getElementById('nav-settings').classList.remove('hidden');",
-  "    showBootstrapAdminMessage();",
-  "    loadEmailStatus();",
-  "",
-  "    const requestedSettingsSection = getSettingsSectionFromHash();",
-  "    if (requestedSettingsSection) {",
-  "      activateStatusTab('settings');",
-  "      updateStageQuery('settings');",
-  "    } else {",
-  "      updateSettingsSaveBarVisibility();",
-  "    }",
-  "",
-  "    if (isSuperAdminStaff() && currentStatus !== 'settings') {",
-  "      loadSettings({ showErrors: false });",
-  "    }",
-  "",
-  "    loadTab(currentStatus);",
-  "  } else {",
-  "    closeOpenDialogs();",
-  "    closeActionMenu?.();",
-  "    setupContainer.classList.toggle('hidden', !setupRequired);",
-  "    loginContainer.classList.toggle('hidden', setupRequired);",
-  "    appContainer.classList.add('hidden');",
-  "    bootstrapAdminMessage = '';",
-  "    showBootstrapAdminMessage();",
-  "  }",
-  "}",
-  "",
-  "loadSetupStatus = async function loadSetupStatus() {",
-  "  try {",
-  "    const res = await fetch('/api/asap/setup/status?t=' + Date.now());",
-  "    if (!res.ok) return;",
-  "    const status = await res.json();",
-  "    setupRequired = !!(status && status.setupRequired);",
-  "  } catch (err) {",
-  "    console.error('Failed to load setup status', err);",
-  "  }",
-  "}",
-  "",
-  "formDataObject = function formDataObject(form) {",
-  "  return Object.fromEntries(new FormData(form).entries());",
-  "}",
-  "",
-  "setInlineResult = function setInlineResult(el, message, className) {",
-  "  if (!el) return;",
-  "  el.textContent = message;",
-  "  el.className = className;",
-  "}",
-  "",
-  "postPolarisTest = async function postPolarisTest(url, resultEl, payload, options = {}) {",
-  "  const btn = options.button || null;",
-  "  if (btn) btn.disabled = true;",
-  "  setInlineResult(resultEl, options.pendingText || 'Testing Polaris...', options.pendingClass || 'text-muted');",
-  "",
-  "  try {",
-  "    const headers = { 'Content-Type': 'application/json' };",
-  "    if (options.token) {",
-  "      headers.Authorization = options.token;",
-  "    }",
-  "",
-  "    const res = await fetch(url, {",
-  "      method: 'POST',",
-  "      headers,",
-  "      body: JSON.stringify(payload || {})",
-  "    });",
-  "    const data = await res.json().catch(() => ({}));",
-  "    if (res.ok && data.success) {",
-  "      setInlineResult(resultEl, options.successText || 'Success! Polaris API is working.', options.successClass || 'text-success font-weight-bold');",
-  "      return true;",
-  "    }",
-  "    setInlineResult(resultEl, 'Error: ' + (data.message || 'Failed'), options.errorClass || 'text-danger font-weight-bold');",
-  "    return false;",
-  "  } catch (err) {",
-  "    setInlineResult(resultEl, options.networkErrorText || 'Error testing Polaris.', options.errorClass || 'text-danger font-weight-bold');",
-  "    return false;",
-  "  } finally {",
-  "    if (btn) btn.disabled = false;",
-  "  }",
-  "}",
-  "",
-  "authorizedJson = async function authorizedJson(path, options = {}) {",
-  "  const headers = { ...(options.headers || {}) };",
-  "  if (pb.authStore.token) {",
-  "    headers.Authorization = pb.authStore.token;",
-  "  }",
-  "  if (options.json !== false) {",
-  "    headers['Content-Type'] = 'application/json';",
-  "  }",
-  "",
-  "  const res = await fetch(path, {",
-  "    method: options.method || 'GET',",
-  "    headers,",
-  "    body: options.body,",
-  "    cache: options.cache || 'default'",
-  "  });",
-  "  const data = await res.json().catch(() => ({}));",
-  "  if (!res.ok) {",
-  "    const err = new Error(data.message || 'Request failed.');",
-  "    err.status = res.status;",
-  "    throw err;",
-  "  }",
-  "  return data;",
-  "}",
-  "",
-  "normalizeAllowedStaffUsers = function normalizeAllowedStaffUsers(value) {",
-  "  return Array.from(new Set(String(value || '')",
-  "    .split(',')",
-  "    .map(item => String(item || '').trim().toLowerCase())",
-  "    .filter(Boolean)))",
-  "    .join(', ');",
-  "}",
-  "",
-  "updateAutoRejectEmailControls = function updateAutoRejectEmailControls() {",
-  "  const enabled = getFieldChecked('outstanding-timeout-enabled');",
-  "  const sendEmail = getFieldChecked('outstanding-timeout-send-email');",
-  "  const additionalTemplates = currentRejectionTemplates || [];",
-  "  const wrapper = document.getElementById('auto-reject-email-wrapper');",
-  "  const templateWrapper = document.getElementById('auto-reject-template-wrapper');",
-  "  const select = document.getElementById('outstanding-timeout-rejection-template-id');",
-  "  const warning = document.getElementById('auto-reject-template-warning');",
-  "  const help = document.getElementById('auto-reject-template-help');",
-  "  if (!wrapper || !select) return;",
-  "",
-  "  wrapper.classList.toggle('hidden', !enabled);",
-  "  if (!enabled) {",
-  "    setFieldChecked('outstanding-timeout-send-email', false);",
-  "    setFieldValue('outstanding-timeout-rejection-template-id', '');",
-  "    return;",
-  "  }",
-  "",
-  "  warning.classList.add('hidden');",
-  "  templateWrapper.classList.toggle('hidden', !sendEmail);",
-  "  select.innerHTML = '';",
-  "  select.disabled = false;",
-  "",
-  "  if (!sendEmail) return;",
-  "",
-  "  // The \"Standard\" template is the one in emails.rejected (no ID)",
-  "  const standardOption = { id: '', name: 'Standard Rejection Email' };",
-  "  const allTemplates = [standardOption, ...additionalTemplates];",
-  "",
-  "  if (allTemplates.length === 1) {",
-  "    // Only standard exists",
-  "    select.innerHTML = `<option value=\"\">${escapeAttr(standardOption.name)}</option>`;",
-  "    select.value = '';",
-  "    select.disabled = true;",
-  "    help.textContent = 'The system will use the default rejection template for this library.';",
-  "    return;",
-  "  }",
-  "",
-  "  select.innerHTML = allTemplates.map(tpl =>",
-  "    `<option value=\"${escapeAttr(tpl.id)}\">${escapeAttr(tpl.name || tpl.subject || 'Rejection template')}</option>`",
-  "  ).join('');",
-  "  ",
-  "  // Restore previous selection if valid, otherwise default to Standard (empty)",
-  "  if (workflowSettings.outstandingTimeoutRejectionTemplateId) {",
-  "    const stillExists = allTemplates.some(t => t.id === workflowSettings.outstandingTimeoutRejectionTemplateId);",
-  "    if (stillExists) {",
-  "      select.value = workflowSettings.outstandingTimeoutRejectionTemplateId;",
-  "    } else {",
-  "      select.value = '';",
-  "    }",
-  "  } else {",
-  "    select.value = '';",
-  "  }",
-  "  ",
-  "  help.textContent = 'Select the template to use for auto-rejected suggestions. \"Standard Rejection Email\" is the default.';",
-  "}",
-  "",
-  "loginForm.addEventListener('submit', async (e) => {",
-  "  e.preventDefault();",
-  "  const errDiv = document.getElementById('login-error');",
-  "  errDiv.classList.add('hidden');",
-  "  try {",
-  "    const data = formDataObject(loginForm);",
-  "    const res = await fetch('/api/asap/staff/login', {",
-  "      method: 'POST',",
-  "      headers: { 'Content-Type': 'application/json' },",
-  "      body: JSON.stringify(data)",
-  "    }).then(r => {",
-  "      if (!r.ok) {",
-  "        const err = new Error('invalid');",
-  "        err.response = r;",
-  "        throw err;",
-  "      }",
-  "      return r.json();",
-  "    });",
-  "    const meta = res.meta || res;",
-  "    bootstrapAdminMessage = meta.bootstrapAdmin",
-  "      ? (meta.bootstrapMessage || 'This is the first staff login, so your account has been made the admin user. Future staff logins will be created with non-admin staff roles.')",
-  "      : '';",
-  "    pb.authStore.save(res.token, res.record);",
-  "    checkAuth();",
-  "  } catch (err) {",
-  "    if (err.response && err.response.status === 409) {",
-  "      setupRequired = true;",
-  "      checkAuth();",
-  "      return;",
-  "    }",
-  "    errDiv.classList.remove('hidden');",
-  "  }",
-  "});",
-  "",
-  "setupForm.addEventListener('submit', async (e) => {",
-  "  e.preventDefault();",
-  "  const btn = document.getElementById('setup-btn');",
-  "  const errDiv = document.getElementById('setup-error');",
-  "  btn.disabled = true;",
-  "  errDiv.classList.add('hidden');",
-  "  errDiv.textContent = '';",
-  "",
-  "  try {",
-  "    const data = formDataObject(setupForm);",
-  "    const res = await fetch('/api/asap/setup', {",
-  "      method: 'POST',",
-  "      headers: { 'Content-Type': 'application/json' },",
-  "      body: JSON.stringify(data)",
-  "    });",
-  "    const result = await res.json();",
-  "    if (!res.ok) {",
-  "      throw new Error(result.message || 'Setup failed.');",
-  "    }",
-  "",
-  "\t    setupRequired = false;",
-  "\t    bootstrapAdminMessage = result.bootstrapMessage || 'Initial setup is complete. Your account is the admin user; future staff logins will be non-admin staff accounts.';",
-  "\t    pb.authStore.save(result.token, result.record);",
-  "\t    currentStatus = 'settings';",
-  "\t    currentSettingsSection = 'start';",
-  "\t    window.history.replaceState(null, '', '#settings-start');",
-  "\t    setOrganizationsStatus('loading', 'Organizations loading from Polaris. Settings will unlock organization selection after this sync completes.');",
-  "\t    checkAuth();",
-  "\t    syncPolarisOrganizations().catch(() => {",
-  "\t      // The visible organization status already explains the failure.",
-  "\t    });",
-  "\t  } catch (err) {",
-  "    errDiv.textContent = err.message || 'Setup failed.';",
-  "    errDiv.classList.remove('hidden');",
-  "  } finally {",
-  "    btn.disabled = false;",
-  "  }",
-  "});",
-  "",
-  "const setupTestPolarisBtn = document.getElementById('setup-test-polaris-btn');",
-  "if (setupTestPolarisBtn) {",
-  "  setupTestPolarisBtn.addEventListener('click', async (e) => {",
-  "    e.preventDefault();",
-  "    await postPolarisTest('/api/asap/setup/test-polaris', document.getElementById('setup-polaris-test-result'), formDataObject(setupForm), {",
-  "      button: setupTestPolarisBtn,",
-  "      pendingText: 'Testing Polaris...',",
-  "      successText: 'Success! Polaris API is working.'",
-  "    });",
-  "  });",
-  "}",
-  "",
-  "logoutBtn.addEventListener('click', (e) => {",
-  "  e.preventDefault();",
-  "  pb.authStore.clear();",
-  "  document.getElementById('login-form').reset();",
-  "  document.getElementById('login-password').value = '';",
-  "  checkAuth();",
-  "});",
-  "",
-  "openProfileDialog = function openProfileDialog() {",
-  "  closeOpenDialogs();",
-  "  const dialog = document.getElementById('profile-dialog');",
-  "  if (!dialog) return;",
-  "  const msg = document.getElementById('profile-msg');",
-  "  if (msg) {",
-  "    msg.textContent = '';",
-  "    msg.className = 'mb-3 font-weight-bold';",
-  "  }",
-  "  setFieldChecked('profile-weekly-action-summary', !!(pb.authStore.model && pb.authStore.model.weekly_action_summary_enabled));",
-  "  setFieldChecked('profile-purchase-reminder-default', !!(pb.authStore.model && pb.authStore.model.purchase_reminder_default));",
-  "  setFieldValue('profile-weekly-action-summary-email', (pb.authStore.model && pb.authStore.model.weekly_action_summary_email) || '');",
-  "  dialog.showModal();",
-  "}",
-  "",
-  "if (profileBtn) {",
-  "  profileBtn.addEventListener('click', (e) => {",
-  "    e.preventDefault();",
-  "    openProfileDialog();",
-  "  });",
-  "}",
-  "",
-  "const profileCancelBtn = document.getElementById('profile-cancel');",
-  "if (profileCancelBtn) {",
-  "  profileCancelBtn.addEventListener('click', () => {",
-  "    const dialog = document.getElementById('profile-dialog');",
-  "    if (dialog && dialog.open) dialog.close();",
-  "  });",
-  "}",
-  "",
-  "const profileForm = document.getElementById('profile-form');",
-  "if (profileForm) {",
-  "  profileForm.addEventListener('submit', async (e) => {",
-  "    e.preventDefault();",
-  "    const msg = document.getElementById('profile-msg');",
-  "    const saveBtn = document.getElementById('profile-save');",
-  "    if (saveBtn) saveBtn.disabled = true;",
-  "    if (msg) {",
-  "      msg.textContent = 'Saving...';",
-  "      msg.className = 'mb-3 font-weight-bold text-info';",
-  "    }",
-  "    try {",
-  "      const summaryEnabled = getFieldChecked('profile-weekly-action-summary');",
-  "      const reminderDefault = getFieldChecked('profile-purchase-reminder-default');",
-  "      const email = getFieldValue('profile-weekly-action-summary-email').trim();",
-  "      if (summaryEnabled && !email) {",
-  "        throw new Error('Enter a staff email address before enabling the weekly summary.');",
-  "      }",
-  "      const updated = await authorizedJson('/api/asap/staff/profile', {",
-  "        method: 'POST',",
-  "        body: JSON.stringify({",
-  "          weekly_action_summary_enabled: summaryEnabled,",
-  "          purchase_reminder_default: reminderDefault,",
-  "          weekly_action_summary_email: email",
-  "        })",
-  "      });",
-  "      pb.authStore.save(pb.authStore.token, Object.assign({}, pb.authStore.model || {}, updated));",
-  "      if (msg) {",
-  "        msg.textContent = 'Profile email preference saved.';",
-  "        msg.className = 'mb-3 font-weight-bold text-success';",
-  "      }",
-  "      showToast('Profile email preference saved.', 'success');",
-  "      setTimeout(() => {",
-  "        const dialog = document.getElementById('profile-dialog');",
-  "        if (dialog && dialog.open) dialog.close();",
-  "      }, 700);",
-  "    } catch (err) {",
-  "      if (msg) {",
-  "        msg.textContent = err.message || 'Could not save your profile email preference. Please try again.';",
-  "        msg.className = 'mb-3 font-weight-bold text-danger';",
-  "      }",
-  "    } finally {",
-  "      if (saveBtn) saveBtn.disabled = false;",
-  "    }",
-  "  });",
-  "}",
-  "",
-  "document.querySelectorAll('#status-tabs .nav-link').forEach(link => {",
-  "  link.addEventListener('click', () => {",
-  "    const nextStatus = link.getAttribute('data-status');",
-  "    activateStatusTab(nextStatus);",
-  "    updateStageQuery(nextStatus);",
-  "    activeTagFilter = '';",
-  "    loadTab(currentStatus);",
-  "  });",
-  "});",
-  "",
-  "if (tagFilterSelect) {",
-  "  tagFilterSelect.addEventListener('change', event => {",
-  "    activeTagFilter = event.target.value || '';",
-  "    renderCurrentGrid(status);",
-  "  });",
-  "}",
-  "",
-  ""
-].join('\n');
+// --- DOM Field Helpers ---
 
-export function install(env) {
-  runLegacyModule(env, source);
+export function setFieldValue(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.value = value;
+}
+
+export function setFieldChecked(id, checked) {
+  const el = document.getElementById(id);
+  if (el) el.checked = checked;
+}
+
+export function getFieldValue(id, fallback = '') {
+  const el = document.getElementById(id);
+  return el ? el.value : fallback;
+}
+
+export function getFieldChecked(id, fallback = false) {
+  const el = document.getElementById(id);
+  return el ? el.checked : fallback;
+}
+
+export function validateStaffUrl(value) {
+  const text = String(value || '').trim();
+  if (!text) return 'Staff URL is required.';
+  let parsed;
+  try {
+    parsed = new URL(text);
+  } catch (err) {
+    return 'Enter a valid Staff URL beginning with http:// or https://.';
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    return 'Staff URL must start with http:// or https://.';
+  }
+  return null;
+}
+
+export function normalizeStaffUrl(value) {
+  const url = new URL(String(value || '').trim());
+  url.hash = '';
+  if (url.pathname.replace(/\/+$/, '').toLowerCase() === '/staff') {
+    url.pathname = '/staff/';
+  }
+  return url.toString();
+}
+
+export function normalizeLeapBibUrlPattern(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (!/^https?:\/\//i.test(text)) {
+    throw new Error('Leap Bib URL pattern must begin with http:// or https://.');
+  }
+  if (!text.includes('{{bibid}}')) {
+    throw new Error('Leap Bib URL pattern must include {{bibid}}.');
+  }
+  return text;
+}
+
+export function leapBibUrl(bibId) {
+  const pattern = String(leapBibUrlPattern || '').trim();
+  const cleanBibId = String(bibId || '').trim();
+  if (!pattern || !cleanBibId || !pattern.includes('{{bibid}}')) {
+    return '';
+  }
+  if (!/^https?:\/\//i.test(pattern)) {
+    return '';
+  }
+  return pattern.split('{{bibid}}').join(encodeURIComponent(cleanBibId));
+}
+
+export function requestedStatusFromUrl() {
+  try {
+    const params = new URLSearchParams(window.location.search || '');
+    const raw = String(params.get('stage') || params.get('status') || '').trim();
+    return stageQueryMap[raw] || '';
+  } catch (err) {
+    return '';
+  }
+}
+
+export function updateStageQuery(status) {
+  try {
+    const url = new URL(window.location.href);
+    if (statusStages.includes(status)) {
+      url.searchParams.set('stage', status === 'suggestion' ? 'submitted' : status);
+    }
+    window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+  } catch (err) {}
+}
+
+export function isPocketBaseAutoCancelError(err) {
+  const message = String((err && err.message) || err || '');
+  return !!(err && err.status === 0 && /aborted|auto.?cancel/i.test(message));
+}
+
+export function isValidSmtpHost(host) {
+  const value = String(host || '').trim();
+  if (!value) return false;
+  if (value.toLowerCase() === 'localhost') return true;
+  if (value.includes('://') || value.includes('/') || value.includes(':') || /\s/.test(value)) return false;
+  const ipv4Pattern = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+  if (ipv4Pattern.test(value)) return true;
+  const labels = value.split('.');
+  if (labels.length < 2) return false;
+  return labels.every(label => /^[a-z0-9-]{1,63}$/i.test(label) && !label.startsWith('-') && !label.endsWith('-'));
+}
+
+export function validateSmtpHostField(showMessage = false) {
+  const host = getFieldValue('smtp-host').trim();
+  const resultEl = document.getElementById('smtp-test-result');
+  if (!host || isValidSmtpHost(host)) {
+    if (showMessage && resultEl) {
+      resultEl.textContent = '';
+      resultEl.className = 'd-block mt-2';
+    }
+    return true;
+  }
+  if (showMessage && resultEl) {
+    resultEl.textContent = 'Enter a valid SMTP host (DNS name or IP only, no protocol or port).';
+    resultEl.className = 'mt-2 text-danger font-weight-bold small';
+  }
+  return false;
+}
+
+export function setVisible(id, visible) {
+  const el = document.getElementById(id);
+  if (el) el.classList.toggle('hidden', !visible);
+}
+
+export function setText(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = value || '';
+}
+
+export function setDisabled(id, disabled) {
+  const el = document.getElementById(id);
+  if (el) el.disabled = !!disabled;
+}
+
+export function setInlineStatus(id, message, type) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = message || '';
+  el.className = type ? `text-${type} font-weight-bold` : '';
+}
+
+// --- In-page Toast / Dialog Helpers ---
+
+export function showToast(message, type = 'success') {
+  const container = document.getElementById('toast-container');
+  if (!container) return;
+  const toast = document.createElement('div');
+  toast.className = `asap-toast asap-toast-${type}`;
+  toast.textContent = message;
+  container.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('show'));
+  setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 300);
+  }, 3500);
+}
+
+export function showAlert(message) {
+  return new Promise(resolve => {
+    const dialog = document.getElementById('alert-dialog');
+    if (!dialog) return resolve();
+    const previousFocus = document.activeElement;
+    document.getElementById('alert-dialog-message').textContent = message;
+    const okBtn = document.getElementById('alert-dialog-ok');
+    let settled = false;
+    function cleanup() {
+      if (settled) return;
+      settled = true;
+      if (dialog.open) dialog.close();
+      okBtn.removeEventListener('click', onOk);
+      dialog.removeEventListener('cancel', onCancel);
+      if (previousFocus && typeof previousFocus.focus === 'function') {
+        previousFocus.focus();
+      }
+      resolve();
+    }
+    function onOk() {
+      cleanup();
+    }
+    function onCancel(event) {
+      event.preventDefault();
+      cleanup();
+    }
+    okBtn.addEventListener('click', onOk);
+    dialog.addEventListener('cancel', onCancel);
+    dialog.showModal();
+    okBtn.focus();
+  });
+}
+
+export function showConfirm(titleOrMessage, maybeMessage) {
+  return new Promise(resolve => {
+    const dialog = document.getElementById('confirm-dialog');
+    if (!dialog) return resolve(false);
+    const previousFocus = document.activeElement;
+    const message = maybeMessage || titleOrMessage;
+    const title = maybeMessage ? titleOrMessage : 'Confirm action';
+    const titleEl = document.getElementById('confirm-dialog-title');
+    if (titleEl) titleEl.textContent = title;
+    document.getElementById('confirm-dialog-message').textContent = message;
+    const okBtn = document.getElementById('confirm-dialog-ok');
+    const cancelBtn = document.getElementById('confirm-dialog-cancel');
+    let settled = false;
+    function cleanup(result) {
+      if (settled) return;
+      settled = true;
+      if (dialog.open) dialog.close();
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      dialog.removeEventListener('cancel', onDialogCancel);
+      if (previousFocus && typeof previousFocus.focus === 'function') {
+        previousFocus.focus();
+      }
+      resolve(result);
+    }
+    function onOk() { cleanup(true); }
+    function onCancel() { cleanup(false); }
+    function onDialogCancel(event) {
+      event.preventDefault();
+      cleanup(false);
+    }
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    dialog.addEventListener('cancel', onDialogCancel);
+    dialog.showModal();
+    cancelBtn.focus();
+  });
+}
+
+export function staffRole() {
+  return pb.authStore.model ? String(pb.authStore.model.role || '').toLowerCase() : '';
+}
+
+export function isSuperAdminStaff() {
+  return staffRole() === 'super_admin';
+}
+
+export function isAdminStaff() {
+  return ['admin', 'super_admin'].includes(staffRole());
+}
+
+export function getSettingsSectionFromHash() {
+  const hash = window.location.hash || '';
+  const prefix = '#settings-';
+  if (!hash.startsWith(prefix)) {
+    return '';
+  }
+
+  const section = decodeURIComponent(hash.slice(prefix.length));
+  return settingsSectionIds.includes(section) ? section : '';
+}
+
+export function updateSettingsSaveBarVisibility() {
+  const bar = document.querySelector('.settings-save-bar');
+  if (!bar) return;
+  bar.classList.toggle('hidden', currentStatus !== 'settings');
+}
+
+export function closeOpenDialogs() {
+  document.querySelectorAll('dialog[open]').forEach(dialog => {
+    try {
+      dialog.close();
+    } catch (err) {}
+  });
+}
+
+export function activateStatusTab(status) {
+  setCurrentStatus(status);
+  document.querySelectorAll('#status-tabs .nav-link').forEach(link => {
+    const isActive = link.getAttribute('data-status') === status;
+    link.classList.toggle('active', isActive);
+    if (link.hasAttribute('role')) {
+      link.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    }
+  });
+  updateSettingsSaveBarVisibility();
+}
+
+export function updateSaveBarState(state) {
+  const title = document.getElementById('settings-save-title');
+  const detail = document.getElementById('settings-save-detail');
+  const warningBadge = document.getElementById('settings-save-warning-badge');
+  const discardBtn = document.getElementById('settings-discard-btn');
+  const msg = document.getElementById('settings-msg');
+  const effectiveState = state || (settingsDirty ? 'dirty' : 'clean');
+  const states = {
+    clean: ['No changes', 'Everything in the current settings context is saved.', 'text-muted'],
+    dirty: ['Unsaved changes', 'Save your edits or discard them to return to the last saved settings.', 'text-warning'],
+    saving: ['Saving...', 'Please wait while ASAP applies these settings.', 'text-info'],
+    saved: ['Saved', 'Your settings were saved successfully.', 'text-success'],
+    error: ['Error saving', 'Review the message below and try again.', 'text-danger']
+  };
+  const next = states[effectiveState] || states.clean;
+  if (title) title.textContent = next[0];
+  if (warningBadge) {
+    warningBadge.classList.toggle('hidden', effectiveState !== 'dirty');
+  }
+  if (detail) {
+    detail.textContent = next[1];
+    detail.className = 'small ' + next[2];
+  }
+  if (discardBtn) {
+    discardBtn.classList.toggle('hidden', effectiveState !== 'dirty' && effectiveState !== 'error');
+    discardBtn.disabled = settingsSaving;
+  }
+  setDisabled('settings-save-btn', settingsSaving || effectiveState === 'clean');
+  if (msg && effectiveState === 'clean') {
+    msg.textContent = '';
+    msg.className = 'mt-2 font-weight-bold';
+  }
+}
+
+export function markSettingsDirty() {
+  if (settingsLoading || settingsSaving) return;
+  setSettingsDirty(true);
+  updateSaveBarState('dirty');
+}
+
+export function markSettingsClean(state = 'clean') {
+  setSettingsDirty(false);
+  updateSaveBarState(state);
+}
+
+export function activateSettingsSection(section, options = {}) {
+  const targetSection = settingsSectionIds.includes(section) ? section : 'start';
+  setCurrentSettingsSection(targetSection);
+
+  document.querySelectorAll('[data-settings-section]').forEach(panel => {
+    const isActive = panel.getAttribute('data-settings-section') === targetSection;
+    panel.classList.toggle('active', isActive);
+    panel.setAttribute('aria-hidden', isActive ? 'false' : 'true');
+  });
+
+  const overridableSections = ['workflow', 'patron', 'templates'];
+  const wrapper = document.getElementById('library-context-wrapper');
+  if (wrapper) {
+    if (overridableSections.includes(targetSection)) {
+      wrapper.classList.remove('hidden');
+    } else {
+      wrapper.classList.add('hidden');
+    }
+  }
+
+  document.querySelectorAll('[data-settings-target]').forEach(button => {
+    const isActive = button.getAttribute('data-settings-target') === targetSection;
+    button.classList.toggle('active', isActive);
+    button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+  });
+
+  if (options.updateHash) {
+    const nextHash = '#settings-' + encodeURIComponent(targetSection);
+    if (window.location.hash !== nextHash) {
+      window.history.replaceState(null, '', nextHash);
+    }
+  }
+
+  if (options.focus) {
+    const panel = document.getElementById('settings-' + targetSection);
+    if (panel) {
+      try {
+        panel.focus({ preventScroll: true });
+      } catch (err) {
+        // Older browsers may not support preventScroll; skip focus instead of causing a jump.
+      }
+    }
+  }
+}
+
+export function initSettingsNavigation() {
+  document.querySelectorAll('.settings-nav-link[data-settings-target]').forEach(button => {
+    const section = button.getAttribute('data-settings-target');
+    button.setAttribute('aria-controls', 'settings-' + section);
+    button.setAttribute('aria-selected', section === currentSettingsSection ? 'true' : 'false');
+    button.addEventListener('click', () => {
+      activateSettingsSection(section, { updateHash: true, focus: true });
+    });
+  });
+
+  window.addEventListener('hashchange', () => {
+    const section = getSettingsSectionFromHash();
+    if (!section) {
+      return;
+    }
+
+    if (pb.authStore.isValid && currentStatus !== 'settings') {
+      activateStatusTab('settings');
+      loadTab('settings');
+      return;
+    }
+
+    activateSettingsSection(section, { updateHash: false, focus: true });
+  });
+
+  activateSettingsSection(getSettingsSectionFromHash() || currentSettingsSection, { updateHash: false });
+}
+
+export function showBootstrapAdminMessage() {
+  const alert = document.getElementById('bootstrap-admin-alert');
+  if (!alert) return;
+  if (bootstrapAdminMessage) {
+    setText('bootstrap-admin-alert', bootstrapAdminMessage);
+    setVisible('bootstrap-admin-alert', true);
+  } else {
+    setText('bootstrap-admin-alert', '');
+    setVisible('bootstrap-admin-alert', false);
+  }
+}
+
+export function updateEmailStatusBanner(status) {
+  currentEmailStatus = status || currentEmailStatus || { enabled: true };
+  const smtpMessage = document.getElementById('smtp-readiness-message');
+  const configured = !!currentEmailStatus.enabled;
+  const message = currentEmailStatus.message || 'Email notifications are not configured. Suggestions and staff workflows still work, but patron emails will not be sent.';
+
+  setVisible('email-status-banner', !configured);
+  if (smtpMessage) {
+    smtpMessage.textContent = message;
+    smtpMessage.className = configured ? 'alert alert-success small' : 'alert alert-warning small';
+  }
+}
+
+export function setOrganizationsStatus(status, message) {
+  setOrganizationsStatus(status || 'not_loaded');
+  setOrganizationsStatusMessage(message || '');
+  const statusEl = document.getElementById('organizations-status-message');
+  const container = document.getElementById('enabled-libraries-checkbox-container');
+  if (container && organizationsStatus !== 'loaded') {
+    container.removeAttribute('data-loaded');
+  }
+
+  if (statusEl) {
+    const classMap = {
+      not_loaded: 'alert alert-info small mb-3',
+      loading: 'alert alert-info small mb-3',
+      loaded: 'alert alert-success small mb-3',
+      error: 'alert alert-warning small mb-3'
+    };
+    statusEl.className = classMap[organizationsStatus] || classMap.not_loaded;
+    statusEl.textContent = organizationsStatusMessage || 'Polaris organization sync status is unknown.';
+  }
+
+  if (container && setOrganizationsStatus(== 'loading') {
+    container.innerHTML = '<div class="p-3 text-muted">Organizations loading...</div>');
+  } else if (container && setOrganizationsStatus(== 'error') {
+    container.innerHTML = '<div class="p-3 text-warning">Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.</div>');
+  } else if (container && setOrganizationsStatus(== 'not_loaded') {
+    container.innerHTML = '<div class="p-3 text-muted">Organizations not loaded yet.</div>');
+  }
+}
+
+export async function loadEmailStatus(orgId) {
+  if (!pb.authStore.isValid || !pb.authStore.model || pb.authStore.model.collectionName !== 'staff_users') {
+    return;
+  }
+
+  const defaultOrgId = isSuperAdminStaff() ? 'system' : (pb.authStore.model.libraryOrgId || '');
+  const targetOrgId = orgId || defaultOrgId;
+  try {
+    const result = await authorizedJson(`/api/asap/staff/email-status?orgId=${encodeURIComponent(targetOrgId)}&_=${Date.now()}`, { cache: 'no-store' });
+    updateEmailStatusBanner(result);
+  } catch (err) {
+    console.warn('Failed to load email status', err);
+  }
+}
+
+export function checkAuth() {
+  if (pb.authStore.isValid && pb.authStore.model && pb.authStore.model.collectionName === 'staff_users') {
+    setupContainer.classList.add('hidden');
+    loginContainer.classList.add('hidden');
+    appContainer.classList.remove('hidden');
+    const libraryName = pb.authStore.model.libraryOrgName || (isSuperAdminStaff() ? 'System' : '');
+    const identityLabel = pb.authStore.model.identityKey || pb.authStore.model.username;
+    document.getElementById('display-user').textContent = (pb.authStore.model.displayName || identityLabel) + (libraryName ? ` (${libraryName})` : '');
+    document.getElementById('nav-settings').classList.remove('hidden');
+    showBootstrapAdminMessage();
+    loadEmailStatus();
+
+    const requestedSettingsSection = getSettingsSectionFromHash();
+    if (requestedSettingsSection) {
+      activateStatusTab('settings');
+      updateStageQuery('settings');
+    } else {
+      updateSettingsSaveBarVisibility();
+    }
+
+    if (isSuperAdminStaff() && currentStatus !== 'settings') {
+      loadSettings({ showErrors: false });
+    }
+
+    loadTab(currentStatus);
+  } else {
+    closeOpenDialogs();
+    closeActionMenu?.();
+    setupContainer.classList.toggle('hidden', !setupRequired);
+    loginContainer.classList.toggle('hidden', setupRequired);
+    appContainer.classList.add('hidden');
+    setBootstrapAdminMessage('');
+    showBootstrapAdminMessage();
+  }
+}
+
+export async function loadSetupStatus() {
+  try {
+    const res = await fetch('/api/asap/setup/status?t=' + Date.now());
+    if (!res.ok) return;
+    const status = await res.json();
+    setSetupRequired(!!(status && status.setupRequired));
+  } catch (err) {
+    console.error('Failed to load setup status', err);
+  }
+}
+
+export function formDataObject(form) {
+  return Object.fromEntries(new FormData(form).entries());
+}
+
+export function setInlineResult(el, message, className) {
+  if (!el) return;
+  el.textContent = message;
+  el.className = className;
+}
+
+export async function postPolarisTest(url, resultEl, payload, options = {}) {
+  const btn = options.button || null;
+  if (btn) btn.disabled = true;
+  setInlineResult(resultEl, options.pendingText || 'Testing Polaris...', options.pendingClass || 'text-muted');
+
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (options.token) {
+      headers.Authorization = options.token;
+    }
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload || {})
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) {
+      setInlineResult(resultEl, options.successText || 'Success! Polaris API is working.', options.successClass || 'text-success font-weight-bold');
+      return true;
+    }
+    setInlineResult(resultEl, 'Error: ' + (data.message || 'Failed'), options.errorClass || 'text-danger font-weight-bold');
+    return false;
+  } catch (err) {
+    setInlineResult(resultEl, options.networkErrorText || 'Error testing Polaris.', options.errorClass || 'text-danger font-weight-bold');
+    return false;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+export async function authorizedJson(path, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  if (pb.authStore.token) {
+    headers.Authorization = pb.authStore.token;
+  }
+  if (options.json !== false) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  const res = await fetch(path, {
+    method: options.method || 'GET',
+    headers,
+    body: options.body,
+    cache: options.cache || 'default'
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.message || 'Request failed.');
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+
+export function normalizeAllowedStaffUsers(value) {
+  return Array.from(new Set(String(value || '')
+    .split(',')
+    .map(item => String(item || '').trim().toLowerCase())
+    .filter(Boolean)))
+    .join(', ');
+}
+
+export function updateAutoRejectEmailControls() {
+  const enabled = getFieldChecked('outstanding-timeout-enabled');
+  const sendEmail = getFieldChecked('outstanding-timeout-send-email');
+  const additionalTemplates = currentRejectionTemplates || [];
+  const wrapper = document.getElementById('auto-reject-email-wrapper');
+  const templateWrapper = document.getElementById('auto-reject-template-wrapper');
+  const select = document.getElementById('outstanding-timeout-rejection-template-id');
+  const warning = document.getElementById('auto-reject-template-warning');
+  const help = document.getElementById('auto-reject-template-help');
+  if (!wrapper || !select) return;
+
+  wrapper.classList.toggle('hidden', !enabled);
+  if (!enabled) {
+    setFieldChecked('outstanding-timeout-send-email', false);
+    setFieldValue('outstanding-timeout-rejection-template-id', '');
+    return;
+  }
+
+  warning.classList.add('hidden');
+  templateWrapper.classList.toggle('hidden', !sendEmail);
+  select.innerHTML = '';
+  select.disabled = false;
+
+  if (!sendEmail) return;
+
+  // The "Standard" template is the one in emails.rejected (no ID)
+  const standardOption = { id: '', name: 'Standard Rejection Email' };
+  const allTemplates = [standardOption, ...additionalTemplates];
+
+  if (allTemplates.length === 1) {
+    // Only standard exists
+    select.innerHTML = `<option value="">${escapeAttr(standardOption.name)}</option>`;
+    select.value = '';
+    select.disabled = true;
+    help.textContent = 'The system will use the default rejection template for this library.';
+    return;
+  }
+
+  select.innerHTML = allTemplates.map(tpl =>
+    `<option value="${escapeAttr(tpl.id)}">${escapeAttr(tpl.name || tpl.subject || 'Rejection template')}</option>`
+  ).join('');
+
+  // Restore previous selection if valid, otherwise default to Standard (empty)
+  if (workflowSettings.outstandingTimeoutRejectionTemplateId) {
+    const stillExists = allTemplates.some(t => t.id === workflowSettings.outstandingTimeoutRejectionTemplateId);
+    if (stillExists) {
+      select.value = workflowSettings.outstandingTimeoutRejectionTemplateId;
+    } else {
+      select.value = '';
+    }
+  } else {
+    select.value = '';
+  }
+
+  help.textContent = 'Select the template to use for auto-rejected suggestions. "Standard Rejection Email" is the default.';
+}
+
+loginForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errDiv = document.getElementById('login-error');
+  errDiv.classList.add('hidden');
+  try {
+    const data = formDataObject(loginForm);
+    const res = await fetch('/api/asap/staff/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    }).then(r => {
+      if (!r.ok) {
+        const err = new Error('invalid');
+        err.response = r;
+        throw err;
+      }
+      return r.json();
+    });
+    const meta = res.meta || res;
+    bootstrapAdminMessage = meta.bootstrapAdmin
+      ? (meta.bootstrapMessage || 'This is the first staff login, so your account has been made the admin user. Future staff logins will be created with non-admin staff roles.')
+      : '';
+    pb.authStore.save(res.token, res.record);
+    checkAuth();
+  } catch (err) {
+    if (err.response && err.response.status === 409) {
+      setSetupRequired(true);
+      checkAuth();
+      return;
+    }
+    errDiv.classList.remove('hidden');
+  }
+});
+
+setupForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = document.getElementById('setup-btn');
+  const errDiv = document.getElementById('setup-error');
+  btn.disabled = true;
+  errDiv.classList.add('hidden');
+  errDiv.textContent = '';
+
+  try {
+    const data = formDataObject(setupForm);
+    const res = await fetch('/api/asap/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    const result = await res.json();
+    if (!res.ok) {
+      throw new Error(result.message || 'Setup failed.');
+    }
+
+	    setSetupRequired(false);
+	    setBootstrapAdminMessage(result.bootstrapMessage || 'Initial setup is complete. Your account is the admin user); future staff logins will be non-admin staff accounts.';
+	    pb.authStore.save(result.token, result.record);
+	    setCurrentStatus('settings');
+	    setCurrentSettingsSection('start');
+	    window.history.replaceState(null, '', '#settings-start');
+	    setOrganizationsStatus('loading', 'Organizations loading from Polaris. Settings will unlock organization selection after this sync completes.');
+	    checkAuth();
+	    syncPolarisOrganizations().catch(() => {
+	      // The visible organization status already explains the failure.
+	    });
+	  } catch (err) {
+    errDiv.textContent = err.message || 'Setup failed.';
+    errDiv.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+const setupTestPolarisBtn = document.getElementById('setup-test-polaris-btn');
+if (setupTestPolarisBtn) {
+  setupTestPolarisBtn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    await postPolarisTest('/api/asap/setup/test-polaris', document.getElementById('setup-polaris-test-result'), formDataObject(setupForm), {
+      button: setupTestPolarisBtn,
+      pendingText: 'Testing Polaris...',
+      successText: 'Success! Polaris API is working.'
+    });
+  });
+}
+
+logoutBtn.addEventListener('click', (e) => {
+  e.preventDefault();
+  pb.authStore.clear();
+  document.getElementById('login-form').reset();
+  document.getElementById('login-password').value = '';
+  checkAuth();
+});
+
+export function openProfileDialog() {
+  closeOpenDialogs();
+  const dialog = document.getElementById('profile-dialog');
+  if (!dialog) return;
+  const msg = document.getElementById('profile-msg');
+  if (msg) {
+    msg.textContent = '';
+    msg.className = 'mb-3 font-weight-bold';
+  }
+  setFieldChecked('profile-weekly-action-summary', !!(pb.authStore.model && pb.authStore.model.weekly_action_summary_enabled));
+  setFieldChecked('profile-purchase-reminder-default', !!(pb.authStore.model && pb.authStore.model.purchase_reminder_default));
+  setFieldValue('profile-weekly-action-summary-email', (pb.authStore.model && pb.authStore.model.weekly_action_summary_email) || '');
+  dialog.showModal();
+}
+
+if (profileBtn) {
+  profileBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    openProfileDialog();
+  });
+}
+
+const profileCancelBtn = document.getElementById('profile-cancel');
+if (profileCancelBtn) {
+  profileCancelBtn.addEventListener('click', () => {
+    const dialog = document.getElementById('profile-dialog');
+    if (dialog && dialog.open) dialog.close();
+  });
+}
+
+const profileForm = document.getElementById('profile-form');
+if (profileForm) {
+  profileForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const msg = document.getElementById('profile-msg');
+    const saveBtn = document.getElementById('profile-save');
+    if (saveBtn) saveBtn.disabled = true;
+    if (msg) {
+      msg.textContent = 'Saving...';
+      msg.className = 'mb-3 font-weight-bold text-info';
+    }
+    try {
+      const summaryEnabled = getFieldChecked('profile-weekly-action-summary');
+      const reminderDefault = getFieldChecked('profile-purchase-reminder-default');
+      const email = getFieldValue('profile-weekly-action-summary-email').trim();
+      if (summaryEnabled && !email) {
+        throw new Error('Enter a staff email address before enabling the weekly summary.');
+      }
+      const updated = await authorizedJson('/api/asap/staff/profile', {
+        method: 'POST',
+        body: JSON.stringify({
+          weekly_action_summary_enabled: summaryEnabled,
+          purchase_reminder_default: reminderDefault,
+          weekly_action_summary_email: email
+        })
+      });
+      pb.authStore.save(pb.authStore.token, Object.assign({}, pb.authStore.model || {}, updated));
+      if (msg) {
+        msg.textContent = 'Profile email preference saved.';
+        msg.className = 'mb-3 font-weight-bold text-success';
+      }
+      showToast('Profile email preference saved.', 'success');
+      setTimeout(() => {
+        const dialog = document.getElementById('profile-dialog');
+        if (dialog && dialog.open) dialog.close();
+      }, 700);
+    } catch (err) {
+      if (msg) {
+        msg.textContent = err.message || 'Could not save your profile email preference. Please try again.';
+        msg.className = 'mb-3 font-weight-bold text-danger';
+      }
+    } finally {
+      if (saveBtn) saveBtn.disabled = false;
+    }
+  });
+}
+
+document.querySelectorAll('#status-tabs .nav-link').forEach(link => {
+  link.addEventListener('click', () => {
+    const nextStatus = link.getAttribute('data-status');
+    activateStatusTab(nextStatus);
+    updateStageQuery(nextStatus);
+    setActiveTagFilter('');
+    loadTab(currentStatus);
+  });
+});
+
+if (tagFilterSelect) {
+  tagFilterSelect.addEventListener('change', event => {
+    setActiveTagFilter(event.target.value || '');
+    renderCurrentGrid(status);
+  });
 }
