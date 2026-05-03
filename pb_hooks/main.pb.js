@@ -1,136 +1,136 @@
 routerAdd("POST", "/api/asap/staff/login", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.staffLogin(e);
+  const staffRoutes = require(`${__hooks}/lib/staff_routes.js`);
+  return staffRoutes.staffLogin(e);
 });
 
 routerAdd("GET", "/api/asap/setup/status", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.setupStatus(e);
+  const setupRoutes = require(`${__hooks}/lib/setup_routes.js`);
+  return setupRoutes.setupStatus(e);
 });
 
 routerAdd("POST", "/api/asap/setup", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.initialSetup(e);
+  const setupRoutes = require(`${__hooks}/lib/setup_routes.js`);
+  return setupRoutes.initialSetup(e);
 });
 
 routerAdd("POST", "/api/asap/setup/test-polaris", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.setupTestPolaris(e);
+  const setupRoutes = require(`${__hooks}/lib/setup_routes.js`);
+  return setupRoutes.setupTestPolaris(e);
 });
 
 routerAdd("POST", "/api/asap/patron/login", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.patronLogin(e);
+  const patronRoutes = require(`${__hooks}/lib/patron_routes.js`);
+  return patronRoutes.patronLogin(e);
 });
 
 routerAdd("POST", "/api/asap/patron/suggestions", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.createSuggestion(e);
+  const patronRoutes = require(`${__hooks}/lib/patron_routes.js`);
+  return patronRoutes.createSuggestion(e);
 });
 
 routerAdd("POST", "/api/asap/staff/suggestions", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.staffCreateSuggestion(e);
+  const staffRoutes = require(`${__hooks}/lib/staff_routes.js`);
+  return staffRoutes.staffCreateSuggestion(e);
 });
 
 routerAdd("POST", "/api/asap/staff/patron-lookup", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.staffLookupPatron(e);
+  const staffRoutes = require(`${__hooks}/lib/staff_routes.js`);
+  return staffRoutes.staffLookupPatron(e);
 });
 
 routerAdd("POST", "/api/asap/staff/bib-lookup", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.staffBibLookup(e);
+  const staffRoutes = require(`${__hooks}/lib/staff_routes.js`);
+  return staffRoutes.staffBibLookup(e);
 });
 
 routerAdd("POST", "/api/asap/staff/test-polaris", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.staffTestPolaris(e);
+  const staffRoutes = require(`${__hooks}/lib/staff_routes.js`);
+  return staffRoutes.staffTestPolaris(e);
 });
 
 routerAdd("POST", "/api/asap/staff/test-smtp", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.staffTestSmtp(e);
+  const staffRoutes = require(`${__hooks}/lib/staff_routes.js`);
+  return staffRoutes.staffTestSmtp(e);
 });
 
 routerAdd("POST", "/api/asap/staff/profile", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.staffProfileUpdate(e);
+  const staffRoutes = require(`${__hooks}/lib/staff_routes.js`);
+  return staffRoutes.staffProfileUpdate(e);
 });
 
 routerAdd("GET", "/api/asap/staff/email-status", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.staffEmailStatus(e);
+  const staffRoutes = require(`${__hooks}/lib/staff_routes.js`);
+  return staffRoutes.staffEmailStatus(e);
 });
 
 routerAdd("GET", "/api/asap/staff/users", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.staffUsersList(e);
+  const staffRoutes = require(`${__hooks}/lib/staff_routes.js`);
+  return staffRoutes.staffUsersList(e);
 });
 
 routerAdd("POST", "/api/asap/staff/users", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.staffUserCreate(e);
+  const staffRoutes = require(`${__hooks}/lib/staff_routes.js`);
+  return staffRoutes.staffUserCreate(e);
 });
 
 routerAdd("POST", "/api/asap/staff/users/{id}/role", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.staffUserRoleUpdate(e);
+  const staffRoutes = require(`${__hooks}/lib/staff_routes.js`);
+  return staffRoutes.staffUserRoleUpdate(e);
 });
 
 routerAdd("DELETE", "/api/asap/staff/users/{id}", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.staffUserDelete(e);
+  const staffRoutes = require(`${__hooks}/lib/staff_routes.js`);
+  return staffRoutes.staffUserDelete(e);
 });
 
 routerAdd("GET", "/api/asap/staff/settings/library", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.getLibrarySettings(e);
+  const staffRoutes = require(`${__hooks}/lib/staff_routes.js`);
+  return staffRoutes.getLibrarySettings(e);
 });
 
 routerAdd("POST", "/api/asap/staff/settings/library", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.updateLibrarySettings(e);
+  const staffRoutes = require(`${__hooks}/lib/staff_routes.js`);
+  return staffRoutes.updateLibrarySettings(e);
 });
 
 routerAdd("GET", "/api/asap/staff/title-requests", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.staffTitleRequestsList(e);
+  const staffRoutes = require(`${__hooks}/lib/staff_routes.js`);
+  return staffRoutes.staffTitleRequestsList(e);
 });
 
 routerAdd("POST", "/api/asap/staff/title-requests/{id}/action", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.staffTitleRequestAction(e);
+  const staffRoutes = require(`${__hooks}/lib/staff_routes.js`);
+  return staffRoutes.staffTitleRequestAction(e);
 });
 
 routerAdd("DELETE", "/api/asap/staff/requests/{id}", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.staffDeleteClosedRequest(e);
+  const staffRoutes = require(`${__hooks}/lib/staff_routes.js`);
+  return staffRoutes.staffDeleteClosedRequest(e);
 });
 
 routerAdd("POST", "/api/asap/staff/requests/delete-closed", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.staffDeleteClosedRequestsBulk(e);
+  const staffRoutes = require(`${__hooks}/lib/staff_routes.js`);
+  return staffRoutes.staffDeleteClosedRequestsBulk(e);
 });
 
 routerAdd("POST", "/api/asap/staff/organizations/sync", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.staffSyncOrganizations(e);
+  const staffRoutes = require(`${__hooks}/lib/staff_routes.js`);
+  return staffRoutes.staffSyncOrganizations(e);
 });
 
 routerAdd("POST", "/api/asap/jobs/hold-check", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.runHoldCheck(e);
+  const jobRoutes = require(`${__hooks}/lib/job_routes.js`);
+  return jobRoutes.runHoldCheck(e);
 });
 
 routerAdd("POST", "/api/asap/jobs/promoter-check", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.staffRunPromoterCheck(e);
+  const jobRoutes = require(`${__hooks}/lib/job_routes.js`);
+  return jobRoutes.staffRunPromoterCheck(e);
 });
 
 routerAdd("POST", "/api/asap/jobs/weekly-staff-action-summary", (e) => {
-  const routes = require(`${__hooks}/lib/routes.js`);
-  return routes.runWeeklyStaffActionSummary(e);
+  const jobRoutes = require(`${__hooks}/lib/job_routes.js`);
+  return jobRoutes.runWeeklyStaffActionSummary(e);
 });
 
 routerAdd("GET", "/api/asap/config", (e) => {

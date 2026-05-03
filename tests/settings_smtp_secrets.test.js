@@ -94,7 +94,7 @@ function runTests() {
   assert.strictEqual(serialized.includes("my-secret-password"), false);
 
   // 6. Submit SMTP settings with blank username/password and verify existing stored ones remain unchanged.
-  const routes = require("../pb_hooks/lib/routes.js");
+  const staffRoutes = require("../pb_hooks/lib/staff_routes.js");
   
   // To test saveSmtpSettings directly, we need to mock it. Since saveSmtpSettings is internal to routes.js, 
   // we test it by invoking updateLibrarySettings or pulling the function if we can. But it's not exported.

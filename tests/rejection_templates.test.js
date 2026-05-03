@@ -6,7 +6,7 @@ global.Record = function Record() {
   return record("saved_tpl_456", {});
 };
 
-const routes = require("../pb_hooks/lib/routes.js");
+const staffRoutes = require("../pb_hooks/lib/staff_routes.js");
 
 function record(id, fields) {
   return {
@@ -70,7 +70,7 @@ function test(name, fn) {
 
 test("deletes an unused rejection template", function () {
   const app = appWithTemplate({ usedByAutoReject: false });
-  routes.saveRejectionTemplates(app, "system", "", []);
+  staffRoutes.saveRejectionTemplates(app, "system", "", []);
   assert.deepStrictEqual(app.deleted, ["tpl_123"]);
 });
 
@@ -78,11 +78,11 @@ test("prevents deleting a rejection template used by auto-reject", function () {
   const app = appWithTemplate({ usedByAutoReject: true });
   assert.throws(
     function () {
-      routes.saveRejectionTemplates(app, "system", "", []);
+      staffRoutes.saveRejectionTemplates(app, "system", "", []);
     },
     function (err) {
-      assert.strictEqual(err.code, routes.TEMPLATE_IN_USE_BY_AUTO_REJECT_CODE);
-      assert.strictEqual(err.message, routes.TEMPLATE_IN_USE_BY_AUTO_REJECT_MESSAGE);
+      assert.strictEqual(err.code, staffRoutes.TEMPLATE_IN_USE_BY_AUTO_REJECT_CODE);
+      assert.strictEqual(err.message, staffRoutes.TEMPLATE_IN_USE_BY_AUTO_REJECT_MESSAGE);
       return true;
     }
   );
@@ -114,7 +114,7 @@ test("keeps a newly created rejection template after PocketBase assigns an id", 
       deleted.push(row.id);
     },
   };
-  routes.saveRejectionTemplates(app, "system", "", [
+  staffRoutes.saveRejectionTemplates(app, "system", "", [
     { id: "client_temp_id", name: "New", subject: "Subject", body: "Body" },
   ]);
   assert.deepStrictEqual(saved.map((row) => row.id), ["saved_tpl_456"]);
@@ -136,7 +136,7 @@ test("clears auto-reject custom template when standard template is selected", fu
     },
     save: function () {},
   };
-  routes.saveWorkflowSettings(app, "system", "", {
+  staffRoutes.saveWorkflowSettings(app, "system", "", {
     outstandingTimeoutEnabled: true,
     outstandingTimeoutSendEmail: true,
     outstandingTimeoutRejectionTemplateId: "",
@@ -175,12 +175,12 @@ test("deletes former auto-reject template after workflow switches to standard", 
       deleted.push(row.id);
     },
   };
-  routes.saveWorkflowSettings(app, "system", "", {
+  staffRoutes.saveWorkflowSettings(app, "system", "", {
     outstandingTimeoutEnabled: true,
     outstandingTimeoutSendEmail: true,
     outstandingTimeoutRejectionTemplateId: "",
   });
-  routes.saveRejectionTemplates(app, "system", "", []);
+  staffRoutes.saveRejectionTemplates(app, "system", "", []);
   assert.strictEqual(workflow.get("outstandingTimeoutRejectionTemplate"), "");
   assert.deepStrictEqual(deleted, ["tpl_custom"]);
 });

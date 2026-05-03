@@ -2,7 +2,7 @@ const assert = require('assert');
 
 global.__hooks = __dirname + '/../pb_hooks';
 
-const routes = require('../pb_hooks/lib/routes.js');
+const routeUtils = require('../pb_hooks/lib/route_utils.js');
 
 function runTests() {
   const uiText = {
@@ -17,7 +17,7 @@ function runTests() {
     }
   };
 
-  const rejectedMessage = routes.renderDuplicateMessage(uiText, {
+  const rejectedMessage = routeUtils.renderDuplicateMessage(uiText, {
     created: '2026-04-29 14:30:00.000Z',
     status: 'closed',
     closeReason: 'rejected',
@@ -34,7 +34,7 @@ function runTests() {
   assert.ok(rejectedMessage.includes('Match: identifier number.'));
   assert.ok(rejectedMessage.includes('Format: Book.'));
 
-  const openMessage = routes.renderDuplicateMessage(uiText, {
+  const openMessage = routeUtils.renderDuplicateMessage(uiText, {
     created: '2026-04-28T10:00:00.000Z',
     status: 'suggestion',
     title: 'Clean Title',
