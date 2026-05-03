@@ -279,13 +279,13 @@ export async function renderLibraryParticipationCheckboxes() {
   const container = document.getElementById('enabled-libraries-checkbox-container');
   if (!container || container.getAttribute('data-loaded') === 'true') return;
 
-  if (setOrganizationsStatus(== 'loading') {
-    container.innerHTML = '<div class="p-3 text-muted">Organizations loading...</div>');
+  if (organizationsStatus == 'loading') {
+    container.innerHTML = '<div class="p-3 text-muted">Organizations loading...</div>'
     return;
   }
 
-  if (setOrganizationsStatus(== 'error') {
-    container.innerHTML = '<div class="p-3 text-warning">Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.</div>');
+  if (organizationsStatus == 'error') {
+    container.innerHTML = '<div class="p-3 text-warning">Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.</div>'
     return;
   }
 
@@ -297,8 +297,8 @@ export async function renderLibraryParticipationCheckboxes() {
     });
 
     if (!orgs.length) {
-      if (setOrganizationsStatus(== 'not_loaded') {
-        container.innerHTML = '<div class="p-3 text-muted">Organizations have not been synced yet. Use Settings > Polaris > Sync Polaris Organizations Now.</div>');
+      if (organizationsStatus == 'not_loaded') {
+        container.innerHTML = '<div class="p-3 text-muted">Organizations have not been synced yet. Use Settings > Polaris > Sync Polaris Organizations Now.</div>'
       } else {
         container.innerHTML = '<div class="p-3 text-muted">Organization sync completed, but no library organizations were returned.</div>';
       }

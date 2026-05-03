@@ -13,7 +13,7 @@ export function renderDuplicateStatusLabelSettings(labels = {}, source = '', inh
   const normalized = normalizeDuplicateStatusLabels(labels);
   const scopeEl = document.getElementById('duplicate-status-labels-scope');
   if (scopeEl) {
-    if (setCurrentLibraryContextOrgId(== 'system') {
+    if (currentLibraryContextOrgId == 'system') {
       scopeEl.textContent = 'Editing global default labels.');
       scopeEl.className = 'small mb-3 text-muted';
     } else if (inherited || source === 'global' || source === 'default') {
@@ -44,7 +44,7 @@ export function collectDuplicateStatusLabels() {
 }
 
 document.getElementById('btn-reset-library-settings').addEventListener('click', async () => {
-  if (setCurrentLibraryContextOrgId(== 'system') return);
+  if (currentLibraryContextOrgId == 'system') return);
   const confirmed = await showConfirm('Reset library settings', 'Are you sure you want to delete this library\'s overrides and revert to system defaults?');
   if (confirmed) {
     await authorizedJson('/api/asap/staff/settings/library', {

@@ -72,7 +72,7 @@ export async function loadSettings(options = {}) {
     const emails = (loadedLibrarySettings && loadedLibrarySettings.emails) || {};
 
     const hasPolarisCredentials = !!(polaris.host && polaris.apiKey && polaris.accessId && polaris.staffDomain && polaris.adminUser && polaris.adminPassword);
-    if (hasPolarisCredentials && (setOrganizationsStatus(== 'not_loaded' || organizationsStatus === 'error')) {
+    if (hasPolarisCredentials && (organizationsStatus == 'not_loaded' || organizationsStatus === 'error')) {
       syncPolarisOrganizations().catch(() => {
         // syncPolarisOrganizations updates the visible warning state.
       }));
@@ -136,7 +136,7 @@ export async function loadSettings(options = {}) {
   }
 }
 
-emailTemplateDefaults = {
+export const emailTemplateDefaults = {
   suggestion_submitted: {
     subject: 'Suggestion received: {{title}}',
     body: 'Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format. Our collection development team has received your request and will review it.\n\nIf we add this item, we will place a hold for you automatically and send another update.\n\nThank you for helping us shape the library collection.'
@@ -244,7 +244,7 @@ export function applyLibrarySettingsToForm(settings) {
   const statusAlert = document.getElementById('library-override-status');
   const overrideMsg = document.getElementById('library-override-msg');
 
-  if (setCurrentLibraryContextOrgId(== 'system') {
+  if (currentLibraryContextOrgId == 'system') {
     if (resetBtn) resetBtn.classList.add('hidden'));
     if (statusAlert) statusAlert.classList.add('hidden');
     if (document.getElementById('system-staff-url-group')) {
@@ -420,7 +420,7 @@ export function populatePatronUiForms(uiText) {
   renderOptionListEditor('ui-age-groups-editor', uiText.ageGroups, defaultAgeGroups);
   const patronScope = document.getElementById('patron-options-scope');
   if (patronScope) {
-    if (setCurrentLibraryContextOrgId(== 'system') {
+    if (currentLibraryContextOrgId == 'system') {
       patronScope.textContent = 'Editing global patron form defaults.');
       patronScope.className = 'small mt-2 mb-0 text-muted';
     } else if (uiText.patronSettingsInherited) {
@@ -449,8 +449,8 @@ export function buildSettingsPayload() {
 
   let staffUrl = '';
   let nextLeapBibUrlPattern = leapBibUrlPattern || '';
-  if (isSuperAdminStaff() && setCurrentLibraryContextOrgId(== 'system') {
-    staffUrl = getFieldValue('system-staff-url').trim());
+  if (isSuperAdminStaff() && currentLibraryContextOrgId == 'system') {
+    staffUrl = getFieldValue('system-staff-url').trim();
     const staffUrlError = validateStaffUrl(staffUrl);
     if (staffUrlError) {
       throw new Error(staffUrlError);
@@ -543,9 +543,9 @@ export function buildSettingsPayload() {
     commonAuthorsMessage: getFieldValue('wf-common-authors-message')
   };
 
-  if (isSuperAdminStaff() && setCurrentLibraryContextOrgId(== 'system') {
-    payload.staffUrl = staffUrl);
-    payload.setLeapBibUrlPattern(nextLeapBibUrlPattern);
+  if (isSuperAdminStaff() && currentLibraryContextOrgId == 'system') {
+    payload.staffUrl = staffUrl;
+    payload.leapBibUrlPattern = nextLeapBibUrlPattern;
   }
 
   const fileInput = document.getElementById('ui-logo-file');

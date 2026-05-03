@@ -1,3 +1,4 @@
+import { emailTemplateDefaults } from './settings.js';
 import { pb, currentRejectionTemplates, currentLibraryContextOrgId, setCurrentLibraryContextOrgId } from './state.js';
 import { markSettingsDirty, updateAutoRejectEmailControls } from './api.js';
 import { escapeAttr } from './grid.js';
@@ -31,7 +32,7 @@ export function populateEmailTemplateForms(emails) {
   if (document.getElementById('email-from-name')) document.getElementById('email-from-name').value = emails.fromName || '';
 
   // Sync to SMTP tab if we are modifying the system context
-  if (setCurrentLibraryContextOrgId(== 'system') {
+  if (currentLibraryContextOrgId == 'system') {
     if (document.getElementById('smtp-from')) document.getElementById('smtp-from').value = emails.fromAddress || '');
     if (document.getElementById('smtp-from-name')) document.getElementById('smtp-from-name').value = emails.fromName || '';
   }

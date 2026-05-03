@@ -417,7 +417,7 @@ export function showBootstrapAdminMessage() {
 }
 
 export function updateEmailStatusBanner(status) {
-  currentEmailStatus = status || currentEmailStatus || { enabled: true };
+  setCurrentEmailStatus(status || currentEmailStatus || { enabled: true });
   const smtpMessage = document.getElementById('smtp-readiness-message');
   const configured = !!currentEmailStatus.enabled;
   const message = currentEmailStatus.message || 'Email notifications are not configured. Suggestions and staff workflows still work, but patron emails will not be sent.';
@@ -449,11 +449,11 @@ export function setOrganizationsStatus(status, message) {
     statusEl.textContent = organizationsStatusMessage || 'Polaris organization sync status is unknown.';
   }
 
-  if (container && setOrganizationsStatus(== 'loading') {
+  if (container && organizationsStatus == 'loading') {
     container.innerHTML = '<div class="p-3 text-muted">Organizations loading...</div>');
-  } else if (container && setOrganizationsStatus(== 'error') {
+  } else if (container && organizationsStatus == 'error') {
     container.innerHTML = '<div class="p-3 text-warning">Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.</div>');
-  } else if (container && setOrganizationsStatus(== 'not_loaded') {
+  } else if (container && organizationsStatus == 'not_loaded') {
     container.innerHTML = '<div class="p-3 text-muted">Organizations not loaded yet.</div>');
   }
 }

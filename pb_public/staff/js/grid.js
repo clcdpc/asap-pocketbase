@@ -200,14 +200,14 @@ export function renderCurrentGrid(status = currentStatus) {
     return;
   }
 
-  grid = new gridjs.Grid({
+  setGrid(new gridjs.Grid({
     columns: getGridColumns(status),
     data: visibleRecords.map(row => getGridRow(row, status)),
     search: true,
     pagination: { limit: 25 },
     sort: true,
     width: '100%'
-  }).render(gridContainer);
+  })).render(gridContainer);
 }
 
 export function updateTabCounts(records) {
