@@ -74,19 +74,25 @@ export function renderRejectionTemplates() {
       <div class="form-group">
         <div class="d-flex justify-content-between align-items-center mb-1">
           <label class="mb-0">Template name</label>
-          <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeRejectionTemplate(${index})">Remove Template</button>
+          <button type="button" class="btn btn-sm btn-outline-danger btn-remove-template">Remove Template</button>
         </div>
-        <input type="text" class="form-control form-control-sm" value="${escapeAttr(template.name || '')}" onchange="updateRejectionTemplate(${index}, 'name', this.value)">
+        <input type="text" class="form-control form-control-sm input-template-name" value="${escapeAttr(template.name || '')}">
       </div>
       <div class="form-group">
         <label>Subject</label>
-        <input type="text" class="form-control form-control-sm" value="${escapeAttr(template.subject || '')}" onchange="updateRejectionTemplate(${index}, 'subject', this.value)">
+        <input type="text" class="form-control form-control-sm input-template-subject" value="${escapeAttr(template.subject || '')}">
       </div>
       <div class="form-group mb-0">
         <label>Body</label>
-        <textarea class="form-control form-control-sm" rows="3" onchange="updateRejectionTemplate(${index}, 'body', this.value)">${escapeAttr(template.body || '')}</textarea>
+        <textarea class="form-control form-control-sm input-template-body" rows="3">${escapeAttr(template.body || '')}</textarea>
       </div>
     `;
+
+    wrapper.querySelector('.btn-remove-template').addEventListener('click', () => removeRejectionTemplate(index));
+    wrapper.querySelector('.input-template-name').addEventListener('change', (e) => updateRejectionTemplate(index, 'name', e.target.value));
+    wrapper.querySelector('.input-template-subject').addEventListener('change', (e) => updateRejectionTemplate(index, 'subject', e.target.value));
+    wrapper.querySelector('.input-template-body').addEventListener('change', (e) => updateRejectionTemplate(index, 'body', e.target.value));
+
     container.appendChild(wrapper);
   });
 }
