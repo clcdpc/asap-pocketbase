@@ -219,18 +219,29 @@ if (refreshStaffUsersBtn) {
 
 export async function populateStaffLibraryOptions() {
   const select = document.getElementById('staff-add-library');
-  if (!select) return;
-  select.innerHTML = '<option value="">Select library</option>';
+  const context = document.getElementById('staff-add-library-context');
+  if (!select || !context) return;
+
   const me = pb.authStore.model || {};
-  if (isSuperAdminStaff()) {
+  const isSuper = isSuperAdminStaff();
+
+  if (isSuper) {
+    select.classList.remove('hidden');
+    context.classList.add('hidden');
+    select.innerHTML = '<option value="">Select library</option>';
     const orgs = await pb.collection('polaris_organizations').getFullList({
       filter: 'organizationCodeId = "2"',
       sort: 'displayName',
       requestKey: 'polaris-orgs-staff-options'
     });
     orgs.forEach(org => select.appendChild(new Option(`${org.displayName || org.name} (ID ${org.organizationId})`, org.organizationId)));
-  } else if (me.libraryOrgId) {
-    select.appendChild(new Option(`${me.libraryOrgName || me.libraryOrgId} (ID ${me.libraryOrgId})`, me.libraryOrgId));
+  } else {
+    select.classList.add('hidden');
+    context.classList.remove('hidden');
+    const libraryName = me.libraryOrgName || me.libraryOrgId || 'My Library';
+    context.textContent = `${libraryName} (ID ${me.libraryOrgId || '?'})`;
+    select.innerHTML = '';
+    select.appendChild(new Option(libraryName, me.libraryOrgId));
     select.value = me.libraryOrgId;
   }
 }
@@ -238,22 +249,51 @@ export async function populateStaffLibraryOptions() {
 const addStaffBtn = document.getElementById('btn-add-staff-user');
 if (addStaffBtn) {
   addStaffBtn.addEventListener('click', async () => {
-    const identity = getFieldValue('staff-add-identity').trim();
-    const libraryOrgId = getFieldValue('staff-add-library').trim();
-    const role = getFieldValue('staff-add-role').trim() || 'staff';
+    const identityInput = document.getElementById('staff-add-identity');
+    const displayInput = document.getElementById('staff-add-display-name');
+    const libSelect = document.getElementById('staff-add-library');
+    const roleSelect = document.getElementById('staff-add-role');
     const msgEl = document.getElementById('staff-users-msg');
+
+    const identity = (identityInput.value || '').trim();
+    const displayName = (displayInput.value || '').trim();
+    const libraryOrgId = (libSelect.value || '').trim();
+    const role = (roleSelect.value || '').trim() || 'staff';
+
     if (!identity) return showAlert('Enter a staff username or identity.');
     if (role !== 'super_admin' && !libraryOrgId) return showAlert('Select a library for this staff member.');
+
+    addStaffBtn.disabled = true;
     try {
-      const libSelect = document.getElementById('staff-add-library');
       const opt = libSelect && libSelect.selectedIndex >= 0 ? libSelect.options[libSelect.selectedIndex] : null;
-      await authorizedJson('/api/asap/staff/users', { method: 'POST', body: JSON.stringify({ username: identity, libraryOrgId, libraryOrgName: opt ? opt.text : '', role }) });
-      setFieldValue('staff-add-identity', '');
-      if (msgEl) { msgEl.textContent = 'Staff member added.'; msgEl.className = 'mb-2 text-success font-weight-bold'; }
+      await authorizedJson('/api/asap/staff/users', {
+        method: 'POST',
+        body: JSON.stringify({
+          username: identity,
+          displayName: displayName,
+          libraryOrgId,
+          libraryOrgName: opt ? opt.text : '',
+          role
+        })
+      });
+
+      identityInput.value = '';
+      displayInput.value = '';
+
+      if (msgEl) {
+        msgEl.innerHTML = '<i class="fa fa-check-circle"></i> Staff record created or updated. This user still signs in with their Polaris credentials.';
+        msgEl.className = 'mb-2 text-success font-weight-bold';
+      }
+
       await populateStaffLibraryOptions();
-    await loadStaffUsers();
+      await loadStaffUsers();
     } catch (err) {
-      if (msgEl) { msgEl.textContent = err.message || 'Failed to add staff member.'; msgEl.className = 'mb-2 text-danger font-weight-bold'; }
+      if (msgEl) {
+        msgEl.textContent = err.message || 'Failed to add staff member.';
+        msgEl.className = 'mb-2 text-danger font-weight-bold';
+      }
+    } finally {
+      addStaffBtn.disabled = false;
     }
   });
 }
