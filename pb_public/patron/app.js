@@ -93,6 +93,7 @@ let publicationOptions = defaultPublicationOptions.slice();
 let ageGroups = defaultAgeGroups.slice();
 let uiConfig = { ...defaultUiText };
 let formatRules = normalizeFormatRules(defaultFormatRules);
+let lastSelectedFormat = formatSelect.value;
 
 let authToken = '';
 
@@ -632,6 +633,16 @@ function handleCommonAuthorSelection() {
   }
 }
 
+function resetCommonAuthorSelection() {
+  const select = document.getElementById('common-author');
+  const msgContainer = document.getElementById('common-author-msg-container');
+  if (!select) return;
+  select.value = '';
+  if (msgContainer) {
+    msgContainer.classList.add('hidden');
+  }
+}
+
 document.getElementById('common-author').addEventListener('change', handleCommonAuthorSelection);
 
 function updateFormatLabels() {
@@ -712,6 +723,13 @@ function setPublicationOptions(options) {
   publicationInput.value = publicationOptions.includes(selected) ? selected : publicationOptions[0];
 }
 
-formatSelect.addEventListener('change', updateFormatUI);
+formatSelect.addEventListener('change', () => {
+  const nextFormat = formatSelect.value;
+  if (nextFormat !== lastSelectedFormat) {
+    resetCommonAuthorSelection();
+    lastSelectedFormat = nextFormat;
+  }
+  updateFormatUI();
+});
 updateFormatUI();
 loadConfig();
