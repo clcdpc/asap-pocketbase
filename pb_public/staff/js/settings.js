@@ -379,6 +379,28 @@ export function populateWorkflowForms(wf) {
 
 export function populatePatronUiForms(uiText) {
   setFieldValue('ui-logo-alt', uiText.logoAlt || '');
+
+  const preview = document.getElementById('ui-logo-preview');
+  if (preview) {
+    preview.src = (uiText.logoUrl || '/jpl.png') + (uiText.logoUrl && uiText.logoUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
+  }
+
+  const statusBadge = document.getElementById('ui-branding-status');
+  if (statusBadge) {
+    const isInherited = !!uiText.brandingInherited;
+    statusBadge.textContent = isInherited ? 'System Default' : 'Library Override';
+    statusBadge.className = isInherited ? 'badge badge-warning' : 'badge badge-info';
+  }
+
+  const resetBtn = document.getElementById('btn-reset-logo');
+  if (resetBtn) {
+    resetBtn.classList.toggle('hidden', !!uiText.brandingInherited || currentLibraryContextOrgId === 'system');
+  }
+
+  // Clear file input label
+  const fileLabel = document.querySelector('label[for="ui-logo-file"] + .custom-file-label') || document.querySelector('label[for="ui-logo-file"]');
+  if (fileLabel) fileLabel.textContent = 'Choose image...';
+
   setFieldValue('ui-patron-page-title', uiText.pageTitle || '');
   setFieldValue('ui-barcode-label', uiText.barcodeLabel || '');
   setFieldValue('ui-pin-label', uiText.pinLabel || '');
@@ -540,10 +562,8 @@ export function buildSettingsPayload() {
     payload.enabledLibraryOrgIds = collectEnabledLibraryIds();
   }
 
-  const fileInput = document.getElementById('ui-logo-file');
-  if (fileInput && fileInput.files.length > 0) {
-    payload.logo = fileInput.files[0];
-  }
+  // Logo and logoAlt are now handled via a dedicated upload path
+  // to avoid sending large files through the JSON settings payload.
 
   return payload;
 }
@@ -775,5 +795,87 @@ document.getElementById('edit-bibid').addEventListener('input', () => {
     setVerifiedBibId('');
     document.getElementById('bib-info-display').classList.add('hidden');
     document.getElementById('bib-info-text').textContent = '';
+  }
+});
+
+document.getElementById('ui-logo-file').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  const label = document.querySelector('label[for="ui-logo-file"] + .custom-file-label') || document.querySelector('label[for="ui-logo-file"]');
+  if (label) {
+    label.textContent = file ? file.name : 'Choose image...';
+  }
+  if (file) {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const preview = document.getElementById('ui-logo-preview');
+      if (preview) preview.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  }
+});
+
+document.getElementById('btn-upload-logo').addEventListener('click', async () => {
+  const fileInput = document.getElementById('ui-logo-file');
+  const altInput = document.getElementById('ui-logo-alt');
+  const btn = document.getElementById('btn-upload-logo');
+  
+  const formData = new FormData();
+  if (fileInput.files.length > 0) {
+    formData.append('logo', fileInput.files[0]);
+  }
+  formData.append('logoAlt', altInput.value.trim());
+
+  btn.disabled = true;
+  const originalText = btn.innerHTML;
+  btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Saving...';
+
+  try {
+    const res = await fetch(`/api/asap/staff/settings/logo?orgId=${encodeURIComponent(currentLibraryContextOrgId)}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': pb.authStore.token
+      },
+      body: formData
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || 'Failed to upload logo');
+    
+    showToast('Branding updated successfully.');
+    // Reload settings to refresh the preview and system config
+    await loadSettings({ showErrors: true });
+    await loadStaffConfig(); // Refresh nav logo
+  } catch (err) {
+    showToast(err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = originalText;
+  }
+});
+
+document.getElementById('btn-reset-logo').addEventListener('click', async () => {
+  if (!await showConfirm('Reset branding?', 'This will delete the library-specific logo and fallback to the system default.')) {
+    return;
+  }
+
+  const btn = document.getElementById('btn-reset-logo');
+  btn.disabled = true;
+
+  try {
+    const res = await fetch(`/api/asap/staff/settings/logo?orgId=${encodeURIComponent(currentLibraryContextOrgId)}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': pb.authStore.token
+      }
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || 'Failed to reset branding');
+    
+    showToast('Branding reset to system defaults.');
+    await loadSettings({ showErrors: true });
+    await loadStaffConfig();
+  } catch (err) {
+    showToast(err.message, 'error');
+  } finally {
+    btn.disabled = false;
   }
 });
