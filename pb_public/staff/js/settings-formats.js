@@ -158,6 +158,15 @@ export function collectAvailableFormats() {
   return available;
 }
 
+export function collectFormatOrder() {
+  const order = [];
+  document.querySelectorAll('.format-setting-row').forEach(row => {
+    const key = row.getAttribute('data-key');
+    if (key) order.push(key);
+  });
+  return order;
+}
+
 export function updateModalFormatDropdowns() {
   ['edit-format', 'new-format'].forEach(id => {
     const select = document.getElementById(id);

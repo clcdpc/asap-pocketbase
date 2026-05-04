@@ -2,7 +2,7 @@ import { pb, settingsContainer, settingsForm, formatMap, availableFormats, setAv
 import { setFieldValue, setFieldChecked, getFieldValue, getFieldChecked, validateStaffUrl, normalizeStaffUrl, normalizeLeapBibUrlPattern, isPocketBaseAutoCancelError, validateSmtpHostField, setVisible, showToast, showConfirm, isSuperAdminStaff, closeOpenDialogs, updateSaveBarState, markSettingsDirty, markSettingsClean, activateSettingsSection, initSettingsNavigation, updateEmailStatusBanner, updateOrganizationsStatusUi, checkAuth, loadSetupStatus, authorizedJson, updateAutoRejectEmailControls } from './api.js';
 import { closeActionMenu, escapeAttr } from './grid.js';
 import { renderEditLeapBibLink } from './modals.js';
-import { renderFormatSettings, collectFormatLabels, collectAvailableFormats, updateModalFormatDropdowns } from './settings-formats.js';
+import { renderFormatSettings, collectFormatLabels, collectAvailableFormats, collectFormatOrder, updateModalFormatDropdowns } from './settings-formats.js';
 import { renderDuplicateStatusLabelSettings, collectDuplicateStatusLabels } from './settings-labels.js';
 import { collectSettingsPolaris, syncPolarisOrganizations, renderLibraryParticipationCheckboxes, collectEnabledLibraryIds } from './settings-polaris.js';
 import { populateEmailTemplateForms } from './settings-templates.js';
@@ -380,11 +380,13 @@ export function populatePatronUiForms(uiText) {
 
   // Format Labels & Available Formats
   const labels = uiText.formatLabels || {};
+  const order = Array.isArray(uiText.formatOrder) ? uiText.formatOrder.filter(k => Object.prototype.hasOwnProperty.call(labels, k)) : [];
+  const orderedKeys = order.length ? order.concat(Object.keys(labels).filter(k => order.indexOf(k) < 0)) : Object.keys(labels);
   const available = uiText.availableFormats || ['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'];
 
   // Sync formatMap and availableFormats with backend data
   Object.keys(formatMap).forEach(k => delete formatMap[k]);
-  Object.assign(formatMap, labels);
+  orderedKeys.forEach(k => { formatMap[k] = labels[k]; });
   
   availableFormats.length = 0;
   available.forEach(k => availableFormats.push(k));
@@ -463,6 +465,7 @@ export function buildSettingsPayload() {
     ebookMessage: getFieldValue('ui-ebook-msg'),
     eaudiobookMessage: getFieldValue('ui-eaudiobook-msg'),
     formatLabels: collectFormatLabels(),
+    formatOrder: collectFormatOrder(),
     availableFormats: collectAvailableFormats(),
     publicationOptions: collectOptionList('ui-publication-options-editor', defaultPublicationOptions),
     ageGroups: collectOptionList('ui-age-groups-editor', defaultAgeGroups),
