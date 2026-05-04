@@ -14,3 +14,7 @@
 **Vulnerability:** The `patronLogin` and `staffLogin` routes bubbled up raw error strings from the Polaris API and internal configuration checks to the end-user. This could leak internal system details, IP addresses, or Polaris error specifics.
 **Learning:** Error messages returned to users should be generic to prevent information disclosure. Detailed error information should be logged on the server for staff troubleshooting.
 **Prevention:** Sanitize error responses by providing user-friendly, non-descriptive messages while ensuring the full error context is captured in the system logs.
+## 2024-05-18 - Prevent Information Disclosure in Authentication APIs
+**Vulnerability:** The `staffLogin` route could leak sensitive internal stack traces or configuration errors to end users if the underlying `polaris.staffAuth` external API call threw an exception.
+**Learning:** Even internally trusted helper functions or APIs can fail unpredictably. If those exceptions are not caught locally, they bubble up to the HTTP response, potentially exposing system topology or API secrets.
+**Prevention:** Always wrap external API calls and authentication routines in `try...catch` blocks within route handlers. Log the full error securely on the server (`e.app.logger().error`) and throw a generic error (e.g., `UnauthorizedError`) to the client.
