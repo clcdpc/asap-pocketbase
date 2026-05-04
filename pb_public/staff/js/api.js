@@ -481,7 +481,8 @@ export function checkAuth() {
     const libraryName = pb.authStore.model.libraryOrgName || (isSuperAdminStaff() ? 'System' : '');
     const identityLabel = pb.authStore.model.identityKey || pb.authStore.model.username;
     document.getElementById('display-user').textContent = (pb.authStore.model.displayName || identityLabel) + (libraryName ? ` (${libraryName})` : '');
-    document.getElementById('nav-settings').classList.remove('hidden');
+    const isAdmin = isAdminStaff();
+    setVisible('nav-settings', isAdmin);
     showBootstrapAdminMessage();
     loadEmailStatus();
 

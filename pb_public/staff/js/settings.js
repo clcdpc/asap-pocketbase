@@ -30,7 +30,7 @@ export async function loadSettings(options = {}) {
     document.querySelectorAll('[data-settings-target]').forEach(el => {
       const section = el.getAttribute('data-settings-target');
       // Allow library admins to see settings they can override
-      const allowedForAdmins = ['templates', 'workflow', 'patron'];
+      const allowedForAdmins = ['staff', 'templates', 'workflow', 'patron'];
       if (!isSuper && !allowedForAdmins.includes(section)) {
         el.classList.add('hidden');
       } else {
@@ -39,9 +39,9 @@ export async function loadSettings(options = {}) {
     });
 
     // If not super admin, force them to an allowed section if they are on a hidden one
-    const allowedForAdmins = ['templates', 'workflow', 'patron'];
+    const allowedForAdmins = ['staff', 'templates', 'workflow', 'patron'];
     if (!isSuper && !allowedForAdmins.includes(currentSettingsSection)) {
-      activateSettingsSection('templates', { updateHash: true });
+      activateSettingsSection('workflow', { updateHash: true });
     }
 
     // Load Library Selector for Super Admins
