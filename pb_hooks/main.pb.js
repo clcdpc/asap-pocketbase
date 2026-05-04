@@ -111,19 +111,25 @@ routerAdd("POST", "/api/asap/jobs/weekly-staff-action-summary", (e) => {
 });
 
 routerAdd("GET", "/api/asap/config", (e) => {
-  const config = require(`${__hooks}/../lib/config.js`);
-  const orgId = e.request.url.query().get("libraryOrgId") || "";
-  var settings = orgId ? config.librarySettings(e.app, orgId) : config.getSettings();
-  
-  var response = settings.ui_text || {};
-  var wf = settings.workflow || settings;
-  
-  response.commonAuthorsEnabled = !!wf.commonAuthorsEnabled;
-  response.commonAuthorsList = wf.commonAuthorsList || "";
-  response.commonAuthorsMessage = wf.commonAuthorsMessage || "";
-  
-  return e.json(200, response);
+  try {
+    const config = require(`${__hooks}/../lib/config.js`);
+    const orgId = e.request.url.query().get("libraryOrgId") || "";
+    var settings = orgId ? config.librarySettings(e.app, orgId) : config.getSettings();
+    
+    var response = settings.ui_text || {};
+    var wf = settings.workflow || settings;
+    
+    response.commonAuthorsEnabled = !!wf.commonAuthorsEnabled;
+    response.commonAuthorsList = wf.commonAuthorsList || "";
+    response.commonAuthorsMessage = wf.commonAuthorsMessage || "";
+    
+    return e.json(200, response);
+  } catch (err) {
+    e.app.logger().error("Config API Error", "error", String(err));
+    return e.json(400, { message: String(err) });
+  }
 });
+
 
 onBootstrap((e) => {
   e.next();
