@@ -215,14 +215,13 @@ test('buildPolarisData() correctly maps fields', () => {
   const data = {
     host: 'host1',
     accessId: 'aid1',
-    apiKey: 'key1',
-    autoPromote: 'false'
+    apiKey: 'key1'
   };
   const result = routeUtils.buildPolarisData(data);
   assert.strictEqual(result.host, 'host1');
   assert.strictEqual(result.accessId, 'aid1');
   assert.strictEqual(result.apiKey, 'key1');
-  assert.strictEqual(result.autoPromote, false);
+  assert.strictEqual(result.autoPromote, undefined);
 });
 
 test('missingPolarisTestFields() identifies missing fields', () => {

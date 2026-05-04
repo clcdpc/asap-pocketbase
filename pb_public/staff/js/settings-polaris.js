@@ -12,7 +12,6 @@ export function collectSettingsPolaris() {
     adminUser: getFieldValue('polaris-admin-user'),
     adminPassword: getFieldValue('polaris-admin-pass'),
     overridePassword: getFieldValue('polaris-override-pass'),
-    autoPromote: getFieldChecked('polaris-auto-promote'),
     langId: "1033",
     appId: "100",
     orgId: "1",

@@ -1,4 +1,4 @@
-import { pb, loginContainer, setupContainer, appContainer, loginForm, setupForm, logoutBtn, profileBtn, tagFilterSelect, currentRejectionTemplates, setCurrentRejectionTemplates, statusStages, stageQueryMap, currentStatus, activeTagFilter, workflowSettings, bootstrapAdminMessage, setupRequired, currentEmailStatus, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, settingsSectionIds, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, setCurrentStatus, setActiveTagFilter, setBootstrapAdminMessage, setSetupRequired, setOrganizationsStatusMessage, setCurrentSettingsSection, setSettingsDirty, setCurrentEmailStatus } from './state.js';
+import { pb, loginContainer, setupContainer, appContainer, loginForm, setupForm, logoutBtn, profileBtn, tagFilterSelect, currentRejectionTemplates, setCurrentRejectionTemplates, statusStages, stageQueryMap, currentStatus, activeTagFilter, workflowSettings, bootstrapAdminMessage, setupRequired, currentEmailStatus, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, settingsSectionIds, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, currentLibraryContextOrgId, setCurrentStatus, setActiveTagFilter, setBootstrapAdminMessage, setSetupRequired, setOrganizationsStatusMessage, setCurrentSettingsSection, setSettingsDirty, setCurrentEmailStatus } from './state.js';
 import { loadTab, renderCurrentGrid, closeActionMenu, escapeAttr } from './grid.js';
 import { syncPolarisOrganizations } from './settings-polaris.js';
 import { loadSettings } from './settings.js';
@@ -293,11 +293,12 @@ export function updateSaveBarState(state) {
   const discardBtn = document.getElementById('settings-discard-btn');
   const msg = document.getElementById('settings-msg');
   const effectiveState = state || (settingsDirty ? 'dirty' : 'clean');
+  const isSystem = currentLibraryContextOrgId === 'system';
   const states = {
-    clean: ['No changes', 'Everything in the current settings context is saved.', 'text-muted'],
-    dirty: ['Unsaved changes', 'Save your edits or discard them to return to the last saved settings.', 'text-warning'],
+    clean: ['No changes', isSystem ? 'System defaults are saved.' : 'Library settings are saved.', 'text-muted'],
+    dirty: ['Unsaved changes', isSystem ? 'Save system defaults or discard.' : 'Save library settings or discard.', 'text-warning'],
     saving: ['Saving...', 'Please wait while ASAP applies these settings.', 'text-info'],
-    saved: ['Saved', 'Your settings were saved successfully.', 'text-success'],
+    saved: ['Saved', isSystem ? 'System defaults saved successfully.' : 'Library settings saved successfully.', 'text-success'],
     error: ['Error saving', 'Review the message below and try again.', 'text-danger']
   };
   const next = states[effectiveState] || states.clean;
@@ -494,7 +495,7 @@ export function checkAuth() {
       updateSettingsSaveBarVisibility();
     }
 
-    if (isSuperAdminStaff() && currentStatus !== 'settings') {
+    if (isAdmin && currentStatus !== 'settings') {
       loadSettings({ showErrors: false });
     }
 

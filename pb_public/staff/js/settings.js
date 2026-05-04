@@ -64,6 +64,10 @@ export async function loadSettings(options = {}) {
       hideSettingsAccessDenied();
       const formEl = document.getElementById('settings-form');
       if (formEl) formEl.classList.remove('hidden');
+      // Library admins need staff users for the Staff Access section
+      await populateStaffLibraryOptions();
+      await loadStaffUsers();
+      updateSaveButtonText();
       return;
     }
 
@@ -80,7 +84,7 @@ export async function loadSettings(options = {}) {
 
     workflowSettings.outstandingTimeoutEnabled = !!((loadedLibrarySettings && loadedLibrarySettings.workflow || {}).outstandingTimeoutEnabled);
     workflowSettings.outstandingTimeoutDays = parseInt(((loadedLibrarySettings && loadedLibrarySettings.workflow || {}).outstandingTimeoutDays) || '30', 10) || 30;
-    workflowSettings.autoPromote = polaris.autoPromote !== false;
+    workflowSettings.autoPromote = !!(loadedLibrarySettings && loadedLibrarySettings.workflow || {}).autoPromote;
 
     // Workflow form population is handled by loadLibrarySettings
 
@@ -105,7 +109,7 @@ export async function loadSettings(options = {}) {
     setFieldValue('polaris-admin-user', polaris.adminUser || '');
     setFieldValue('polaris-admin-pass', polaris.adminPassword || '');
     setFieldValue('polaris-override-pass', polaris.overridePassword || '');
-    setFieldChecked('polaris-auto-promote', polaris.autoPromote !== false);
+
 
     // UI Text and Formats are handled by populatePatronUiForms called via loadLibrarySettings
     // but we can set them here if needed. Since loadLibrarySettings is called right before this,
@@ -247,23 +251,28 @@ export function applyLibrarySettingsToForm(settings) {
     }
   }
 
-  setFieldValue('smtp-host', smtp.host || '');
-  setFieldValue('smtp-port', smtp.port || 587);
-  setFieldValue('smtp-username', '');
-  setFieldValue('smtp-password', '');
-  setVisible('smtp-username-status', !!smtp.usernameSet);
-  setVisible('smtp-password-status', !!smtp.passwordSet);
-  setFieldChecked('smtp-tls', smtp.tls !== false);
-  setFieldValue('smtp-from', emails.fromAddress || '');
-  setFieldValue('smtp-from-name', emails.fromName || '');
-  setFieldValue('polaris-host', polaris.host || '');
-  setFieldValue('polaris-api-key', polaris.apiKey || '');
-  setFieldValue('polaris-access-id', polaris.accessId || '');
-  setFieldValue('polaris-domain', polaris.staffDomain || '');
-  setFieldValue('polaris-admin-user', polaris.adminUser || '');
-  setFieldValue('polaris-admin-pass', polaris.adminPassword || '');
-  setFieldValue('polaris-override-pass', polaris.overridePassword || '');
-  setFieldChecked('polaris-auto-promote', polaris.autoPromote !== false);
+  // Only populate global fields (SMTP/Polaris) when in system context.
+  // When viewing a library, these fields are hidden and should not be overwritten
+  // with empty/stale data, which could cause data loss on save.
+  if (currentLibraryContextOrgId === 'system') {
+    setFieldValue('smtp-host', smtp.host || '');
+    setFieldValue('smtp-port', smtp.port || 587);
+    setFieldValue('smtp-username', '');
+    setFieldValue('smtp-password', '');
+    setVisible('smtp-username-status', !!smtp.usernameSet);
+    setVisible('smtp-password-status', !!smtp.passwordSet);
+    setFieldChecked('smtp-tls', smtp.tls !== false);
+    setFieldValue('smtp-from', emails.fromAddress || '');
+    setFieldValue('smtp-from-name', emails.fromName || '');
+    setFieldValue('polaris-host', polaris.host || '');
+    setFieldValue('polaris-api-key', polaris.apiKey || '');
+    setFieldValue('polaris-access-id', polaris.accessId || '');
+    setFieldValue('polaris-domain', polaris.staffDomain || '');
+    setFieldValue('polaris-admin-user', polaris.adminUser || '');
+    setFieldValue('polaris-admin-pass', polaris.adminPassword || '');
+    setFieldValue('polaris-override-pass', polaris.overridePassword || '');
+
+  }
   const fileInput = document.getElementById('ui-logo-file');
   if (fileInput) fileInput.value = '';
 
@@ -272,13 +281,14 @@ export function applyLibrarySettingsToForm(settings) {
   populateWorkflowForms(settings.workflow || {});
   workflowSettings.outstandingTimeoutEnabled = !!((settings.workflow || {}).outstandingTimeoutEnabled);
   workflowSettings.outstandingTimeoutDays = parseInt(((settings.workflow || {}).outstandingTimeoutDays) || '30', 10) || 30;
-  workflowSettings.autoPromote = polaris.autoPromote !== false;
+  workflowSettings.autoPromote = !!(settings.workflow || {}).autoPromote;
     updateEmailStatusBanner(settings.emailStatus);
     if (settings.organizationSync) {
       const state = settings.organizationSync.status || 'not_loaded';
       const message = settings.organizationSync.error || settings.organizationSync.message || organizationsStatusMessage;
       updateOrganizationsStatusUi(state, message);
     }
+    updateSaveButtonText();
   }
 
 export function discardLibrarySettingsChanges() {
@@ -362,6 +372,9 @@ export function populateWorkflowForms(wf) {
   setFieldValue('wf-common-authors-message', wf.commonAuthorsMessage || '');
   document.getElementById('wf-common-authors-enabled').checked = !!wf.commonAuthorsEnabled;
   toggleCommonAuthorsGroup();
+
+  setFieldChecked('polaris-auto-promote', !!wf.autoPromote);
+  workflowSettings.autoPromote = !!wf.autoPromote;
 }
 
 export function populatePatronUiForms(uiText) {
@@ -417,6 +430,8 @@ export function populatePatronUiForms(uiText) {
 }
 
 export function buildSettingsPayload() {
+  const isSystemContext = isSuperAdminStaff() && currentLibraryContextOrgId === 'system';
+
   function positiveInt(id, fallback, label) {
     const raw = getFieldValue(id, String(fallback)).trim();
     if (!raw) return fallback;
@@ -429,7 +444,7 @@ export function buildSettingsPayload() {
 
   let staffUrl = '';
   let nextLeapBibUrlPattern = leapBibUrlPattern || '';
-  if (isSuperAdminStaff() && currentLibraryContextOrgId === 'system') {
+  if (isSystemContext) {
     staffUrl = getFieldValue('system-staff-url').trim();
     const staffUrlError = validateStaffUrl(staffUrl);
     if (staffUrlError) {
@@ -440,16 +455,6 @@ export function buildSettingsPayload() {
     nextLeapBibUrlPattern = normalizeLeapBibUrlPattern(getFieldValue('leap-bib-url-pattern').trim());
     setFieldValue('leap-bib-url-pattern', nextLeapBibUrlPattern);
   }
-
-  const smtp = {
-    host: getFieldValue('smtp-host').trim(),
-    port: positiveInt('smtp-port', 587, 'SMTP port'),
-    username: getFieldValue('smtp-username').trim(),
-    password: getFieldValue('smtp-password'),
-    tls: getFieldChecked('smtp-tls', true)
-  };
-
-  const polaris = collectSettingsPolaris();
 
   const uiText = {
     logoAlt: getFieldValue('ui-logo-alt'),
@@ -500,7 +505,7 @@ export function buildSettingsPayload() {
   const nextAutoRejectTemplateId = getFieldValue('outstanding-timeout-rejection-template-id');
 
   const payload = {
-    smtp, polaris, ui_text: uiText, emails,
+    ui_text: uiText, emails,
     suggestionLimit: positiveInt('suggestion-limit', 5, 'Suggestion limit'),
     suggestionLimitMessage: getFieldValue('suggestion-limit-msg'),
     outstandingTimeoutEnabled: getFieldChecked('outstanding-timeout-enabled'),
@@ -511,17 +516,28 @@ export function buildSettingsPayload() {
     holdPickupTimeoutDays: positiveInt('hold-pickup-timeout-days', 14, 'Auto-close unpicked-up holds days'),
     pendingHoldTimeoutEnabled: getFieldChecked('pending-hold-timeout-enabled'),
     pendingHoldTimeoutDays: positiveInt('pending-hold-timeout-days', 14, 'Auto-close pending holds days'),
-    enabledLibraryOrgIds: collectEnabledLibraryIds(),
     commonAuthorsEnabled: getFieldChecked('wf-common-authors-enabled'),
     commonAuthorsLabel: getFieldValue('wf-common-authors-label').trim() || 'Popular Creators',
     commonAuthorsHelp: getFieldValue('wf-common-authors-help').trim() || 'See if this is a creator we already collect.',
     commonAuthorsList: sortAuthorsByLastName(getFieldValue('wf-common-authors-list')),
-    commonAuthorsMessage: getFieldValue('wf-common-authors-message')
+    commonAuthorsMessage: getFieldValue('wf-common-authors-message'),
+    autoPromote: getFieldChecked('polaris-auto-promote')
   };
 
-  if (isSuperAdminStaff() && currentLibraryContextOrgId === 'system') {
+  // Only include global-only fields when in system context.
+  // In library context, these fields are hidden and their form values may be stale.
+  if (isSystemContext) {
+    payload.smtp = {
+      host: getFieldValue('smtp-host').trim(),
+      port: positiveInt('smtp-port', 587, 'SMTP port'),
+      username: getFieldValue('smtp-username').trim(),
+      password: getFieldValue('smtp-password'),
+      tls: getFieldChecked('smtp-tls', true)
+    };
+    payload.polaris = collectSettingsPolaris();
     payload.staffUrl = staffUrl;
     payload.leapBibUrlPattern = nextLeapBibUrlPattern;
+    payload.enabledLibraryOrgIds = collectEnabledLibraryIds();
   }
 
   const fileInput = document.getElementById('ui-logo-file');
@@ -549,13 +565,16 @@ export async function saveSettings(options = {}) {
   msg.className = 'mt-2 font-weight-bold text-info';
 
   try {
-    if (!validateSmtpHostField(true)) {
-      throw new Error('SMTP host is invalid.');
+    // Only validate SMTP when editing system defaults (library admins can't see SMTP)
+    if (isSuperAdminStaff() && currentLibraryContextOrgId === 'system') {
+      if (!validateSmtpHostField(true)) {
+        throw new Error('SMTP host is invalid.');
+      }
     }
     const isSuper = isSuperAdminStaff();
     const payload = buildSettingsPayload();
 
-    // Save templates via the new library-scoped API
+    // Save via the library-scoped API
     const libraryPayload = {
       orgId: currentLibraryContextOrgId,
       staffUrl: payload.staffUrl,
@@ -580,7 +599,8 @@ export async function saveSettings(options = {}) {
         commonAuthorsLabel: payload.commonAuthorsLabel,
         commonAuthorsHelp: payload.commonAuthorsHelp,
         commonAuthorsList: payload.commonAuthorsList,
-        commonAuthorsMessage: payload.commonAuthorsMessage
+        commonAuthorsMessage: payload.commonAuthorsMessage,
+        autoPromote: payload.autoPromote
       }
     };
 
@@ -614,6 +634,15 @@ export async function saveSettings(options = {}) {
       button.disabled = false;
     });
     updateSaveBarState(saveHadError ? 'error' : (saveSucceeded ? 'saved' : (settingsDirty ? 'dirty' : 'clean')));
+  }
+}
+
+export function updateSaveButtonText() {
+  const saveBtn = document.getElementById('settings-save-btn');
+  if (saveBtn) {
+    saveBtn.textContent = currentLibraryContextOrgId === 'system'
+      ? 'Save System Defaults'
+      : 'Save Library Settings';
   }
 }
 
