@@ -356,6 +356,8 @@ export function populateWorkflowForms(wf) {
   toggleHoldPickupTimeoutGroup();
   togglePendingHoldTimeoutGroup();
 
+  setFieldValue('wf-common-authors-label', wf.commonAuthorsLabel || 'Popular Creators');
+  setFieldValue('wf-common-authors-help', wf.commonAuthorsHelp || 'See if this is a creator we already collect.');
   setFieldValue('wf-common-authors-list', wf.commonAuthorsList || '');
   setFieldValue('wf-common-authors-message', wf.commonAuthorsMessage || '');
   document.getElementById('wf-common-authors-enabled').checked = !!wf.commonAuthorsEnabled;
@@ -511,6 +513,8 @@ export function buildSettingsPayload() {
     pendingHoldTimeoutDays: positiveInt('pending-hold-timeout-days', 14, 'Auto-close pending holds days'),
     enabledLibraryOrgIds: collectEnabledLibraryIds(),
     commonAuthorsEnabled: getFieldChecked('wf-common-authors-enabled'),
+    commonAuthorsLabel: getFieldValue('wf-common-authors-label').trim() || 'Popular Creators',
+    commonAuthorsHelp: getFieldValue('wf-common-authors-help').trim() || 'See if this is a creator we already collect.',
     commonAuthorsList: sortAuthorsByLastName(getFieldValue('wf-common-authors-list')),
     commonAuthorsMessage: getFieldValue('wf-common-authors-message')
   };
@@ -573,6 +577,8 @@ export async function saveSettings(options = {}) {
         pendingHoldTimeoutDays: payload.pendingHoldTimeoutDays,
         enabledLibraryOrgIds: payload.enabledLibraryOrgIds,
         commonAuthorsEnabled: payload.commonAuthorsEnabled,
+        commonAuthorsLabel: payload.commonAuthorsLabel,
+        commonAuthorsHelp: payload.commonAuthorsHelp,
         commonAuthorsList: payload.commonAuthorsList,
         commonAuthorsMessage: payload.commonAuthorsMessage
       }

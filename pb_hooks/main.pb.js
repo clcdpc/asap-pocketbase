@@ -121,7 +121,9 @@ routerAdd("GET", "/api/asap/config", (e) => {
     
     response.commonAuthorsEnabled = !!wf.commonAuthorsEnabled;
     response.commonAuthorsList = wf.commonAuthorsList || "";
-    response.commonAuthorsMessage = wf.commonAuthorsMessage || "";
+    response.commonAuthorsLabel = wf.commonAuthorsLabel || "Popular Creators";
+    response.commonAuthorsHelp = wf.commonAuthorsHelp || "See if this is a creator we already collect.";
+    response.commonAuthorsMessage = wf.commonAuthorsMessage || "We automatically purchase all upcoming titles by this creator. Please check the catalog to place a hold on 'On Order' items.";
     
     return e.json(200, response);
   } catch (err) {

@@ -590,8 +590,18 @@ function applyCommonAuthors() {
     return;
   }
 
+  const label = document.querySelector('label[for="common-author"]');
+  if (label) {
+    label.textContent = uiConfig.commonAuthorsLabel || 'Popular Creators';
+  }
+
+  const help = document.getElementById('common-authors-help');
+  if (help) {
+    help.textContent = uiConfig.commonAuthorsHelp || 'See if this is a creator we already collect.';
+  }
+
   const currentValue = select.value;
-  select.innerHTML = '<option value="">-- Select an Author --</option>';
+  select.innerHTML = '<option value="">-- Select a Creator --</option>';
   authors.forEach(author => {
     const opt = document.createElement('option');
     opt.value = author;
@@ -611,7 +621,7 @@ function handleCommonAuthorSelection() {
   const submitBtn = document.getElementById('submit-btn');
 
   if (select.value) {
-    msgText.textContent = uiConfig.commonAuthorsMessage || "We automatically purchase all upcoming titles by this author. Please check the catalog to place a hold on 'On Order' items.";
+    msgText.textContent = uiConfig.commonAuthorsMessage || "We automatically purchase all upcoming titles by this creator. Please check the catalog to place a hold on 'On Order' items.";
     msgContainer.classList.remove('hidden');
     physicalFields.classList.add('hidden');
     submitBtn.classList.add('hidden');

@@ -574,29 +574,39 @@
 
                   <hr class="my-4">
 
-                  <!-- Common Author Notification -->
-                  <h5 class="mb-3">Common author notifications</h5>
-                  <p class="text-muted small">Prevent redundant suggestions for popular authors that your library already acquires automatically.</p>
+                  <!-- Common Creator Notification -->
+                  <h5 class="mb-3">Popular creator notifications</h5>
+                  <p class="text-muted small">Prevent redundant suggestions for popular creators that your library already acquires automatically.</p>
 
                   <div class="form-row align-items-center mb-3">
                     <div class="col-auto">
                       <div class="custom-control custom-checkbox">
                         <input type="checkbox" class="custom-control-input" id="wf-common-authors-enabled">
-                        <label class="custom-control-label font-weight-bold" for="wf-common-authors-enabled">Enable Common Author Workflow</label>
+                        <label class="custom-control-label font-weight-bold" for="wf-common-authors-enabled">Enable Popular Creator Workflow</label>
                       </div>
                     </div>
                   </div>
 
                   <div id="common-authors-config-group" class="hidden">
                     <div class="form-group">
-                      <label for="wf-common-authors-list" class="font-weight-bold mb-1">Common Authors</label>
+                      <label for="wf-common-authors-label" class="font-weight-bold mb-1">Section label</label>
+                      <input id="wf-common-authors-label" class="form-control" placeholder="Popular Creators">
+                      <small class="form-text text-muted">Libraries can customize the label patrons see for this dropdown.</small>
+                    </div>
+                    <div class="form-group">
+                      <label for="wf-common-authors-help" class="font-weight-bold mb-1">Section help text</label>
+                      <input id="wf-common-authors-help" class="form-control" placeholder="See if this is a creator we already collect.">
+                      <small class="form-text text-muted">Libraries can customize the explanatory text shown under the dropdown.</small>
+                    </div>
+                    <div class="form-group">
+                      <label for="wf-common-authors-list" class="font-weight-bold mb-1">Creators</label>
                       <textarea id="wf-common-authors-list" class="form-control" rows="5" placeholder="Patterson, James&#10;Grisham, John&#10;Steel, Danielle"></textarea>
-                      <small class="form-text text-muted">Enter one author per line. The list will be automatically sorted by last name when saved.</small>
+                      <small class="form-text text-muted">Enter one creator per line. The list will be automatically sorted by last name when saved.</small>
                     </div>
                     <div class="form-group">
                       <label for="wf-common-authors-message" class="font-weight-bold mb-1">Patron Notification Message (Supports HTML)</label>
                       <textarea id="wf-common-authors-message" class="form-control" rows="3"></textarea>
-                      <small class="form-text text-muted">This message is shown to patrons when they select a common author from the list.</small>
+                      <small class="form-text text-muted">This message is shown to patrons when they select a creator from the list.</small>
                     </div>
                   </div>
 
