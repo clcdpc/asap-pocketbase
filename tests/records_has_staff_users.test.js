@@ -16,7 +16,7 @@ Module.prototype.require = function(moduleName) {
   return originalRequire.apply(this, arguments);
 };
 
-const { hasStaffUsers } = require('../pb_hooks/lib/records.js');
+const { hasStaffUsers } = require('../lib/records.js');
 
 let passed = 0;
 let failed = 0;

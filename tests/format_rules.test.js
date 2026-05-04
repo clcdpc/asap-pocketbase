@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { normalizeMessageBehavior, MESSAGE_BEHAVIORS } = require('../pb_hooks/lib/format_rules.js');
+const { normalizeMessageBehavior, MESSAGE_BEHAVIORS } = require('../lib/format_rules.js');
 
 const testCases = [
   // Valid inputs

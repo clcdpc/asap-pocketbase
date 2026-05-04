@@ -86,7 +86,7 @@ Module.prototype.require = function(moduleName) {
   return originalRequire.apply(this, arguments);
 };
 
-const mail = require("../pb_hooks/lib/mail.js");
+const mail = require("../lib/mail.js");
 
 // Mock PocketBase app
 let sentMessages = [];

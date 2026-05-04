@@ -6,7 +6,7 @@ global.Record = function Record() {
   return record("saved_tpl_456", {});
 };
 
-const routes = require("../pb_hooks/lib/routes.js");
+const routes = require("../lib/staff_routes.js");
 
 function record(id, fields) {
   return {

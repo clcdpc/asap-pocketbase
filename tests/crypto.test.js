@@ -1,6 +1,6 @@
 const assert = require('assert');
 const crypto = require('crypto');
-const pbCrypto = require('../pb_hooks/lib/crypto.js');
+const pbCrypto = require('../lib/crypto.js');
 
 function nodeHmacSha1Base64(secret, message) {
   return crypto.createHmac('sha1', secret).update(message).digest('base64');

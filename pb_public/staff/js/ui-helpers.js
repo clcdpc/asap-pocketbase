@@ -11,7 +11,7 @@ export function escapeHtml(value) {
   return escapeAttr(value);
 }
 
-export function install(env) {
-  env.escapeAttr = escapeAttr;
-  env.escapeHtml = escapeHtml;
+export function install() {
+  window.escapeAttr = escapeAttr;
+  window.escapeHtml = escapeHtml;
 }

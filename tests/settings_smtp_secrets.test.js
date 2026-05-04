@@ -69,7 +69,7 @@ const mockApp = {
 };
 global.$app = mockApp;
 
-const config = require("../pb_hooks/lib/config.js");
+const config = require("../lib/config.js");
 
 function runTests() {
   console.log("Running settings_smtp_secrets tests...");
@@ -94,7 +94,7 @@ function runTests() {
   assert.strictEqual(serialized.includes("my-secret-password"), false);
 
   // 6. Submit SMTP settings with blank username/password and verify existing stored ones remain unchanged.
-  const routes = require("../pb_hooks/lib/routes.js");
+  // const routes = require("../lib/staff_routes.js"); // Unused in this test
   
   // To test saveSmtpSettings directly, we need to mock it. Since saveSmtpSettings is internal to routes.js, 
   // we test it by invoking updateLibrarySettings or pulling the function if we can. But it's not exported.

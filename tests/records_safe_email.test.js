@@ -16,7 +16,7 @@ Module.prototype.require = function(moduleName) {
   return originalRequire.apply(this, arguments);
 };
 
-const { safeEmail } = require('../pb_hooks/lib/records.js');
+const { safeEmail } = require('../lib/records.js');
 
 const testCases = [
   {

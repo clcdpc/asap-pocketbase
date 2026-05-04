@@ -3,7 +3,7 @@ const assert = require('assert');
 // We need to define __hooks globally before requiring polaris.js
 // so that the require statement inside polaris.js works correctly
 global.__hooks = require('path').resolve(__dirname, '../pb_hooks');
-const polaris = require('../pb_hooks/lib/polaris.js');
+const polaris = require('../lib/polaris.js');
 
 console.log('Running tests for appendQuery...');
 

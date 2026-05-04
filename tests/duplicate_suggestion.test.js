@@ -24,7 +24,7 @@ class MockRecord {
 
 global.Record = MockRecord;
 
-const records = require("../pb_hooks/lib/records.js");
+const records = require("../lib/records.js");
 
 function makeApp(initialRequests) {
   const rows = {

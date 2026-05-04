@@ -48,7 +48,7 @@ global.$http = {
   }
 };
 
-const polaris = require('../pb_hooks/lib/polaris.js');
+const polaris = require('../lib/polaris.js');
 
 console.log('Running tests for checkPatronCheckouts...');
 

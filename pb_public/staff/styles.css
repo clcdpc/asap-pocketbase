@@ -37,6 +37,13 @@ body {
   font-size: 0.9rem;
 }
 
+#admin-actions-bar {
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .staff-grid-filter-bar {
   align-items: center;
   display: flex;

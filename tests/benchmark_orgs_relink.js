@@ -3,7 +3,7 @@ const path = require('path');
 const { performance } = require('perf_hooks');
 
 global.__hooks = path.resolve(__dirname, '../pb_hooks');
-const orgs = require('../pb_hooks/lib/orgs.js');
+const orgs = require('../lib/orgs.js');
 
 // Mock data
 const mockParents = {};
@@ -67,7 +67,7 @@ orgs.syncOrganizations = function() { return { synced: 0 } }; // override sync t
 
 // Since relinkParents is NOT exported, we need to read it and eval it
 const fs = require('fs');
-const orgsCode = fs.readFileSync('./pb_hooks/lib/orgs.js', 'utf8');
+const orgsCode = fs.readFileSync('./lib/orgs.js', 'utf8');
 
 // replace findOrganization mock count tracking inside the eval scope
 const testContext = {

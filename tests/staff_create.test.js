@@ -36,8 +36,8 @@ class MockRecord {
 
 global.Record = MockRecord;
 
-const records = require("../pb_hooks/lib/records.js");
-const identity = require("../pb_hooks/lib/identity.js");
+const records = require("../lib/records.js");
+const identity = require("../lib/identity.js");
 
 function appWithRows(rows, options = {}) {
   return {

@@ -5,7 +5,7 @@ const path = require('path');
 global.__hooks = path.resolve(__dirname, '../pb_hooks');
 
 // Load the module to test
-const orgs = require('../pb_hooks/lib/orgs.js');
+const orgs = require('../lib/orgs.js');
 
 console.log('Running tests for normalizeOrgId...');
 
@@ -118,8 +118,8 @@ require('module').prototype.require = function(moduleName) {
 };
 
 // Re-require orgs so it uses the mocked polaris
-delete require.cache[require.resolve('../pb_hooks/lib/orgs.js')];
-const orgsWithMock = require('../pb_hooks/lib/orgs.js');
+delete require.cache[require.resolve('../lib/orgs.js')];
+const orgsWithMock = require('../lib/orgs.js');
 
 let mockLogs = [];
 const mockLogger = {

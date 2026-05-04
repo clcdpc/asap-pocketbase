@@ -16,7 +16,7 @@ Module.prototype.require = function(moduleName) {
   return originalRequire.apply(this, arguments);
 };
 
-const { duplicateContext } = require('../pb_hooks/lib/records.js');
+const { duplicateContext } = require('../lib/records.js');
 
 class MockRecord {
   constructor(data) {

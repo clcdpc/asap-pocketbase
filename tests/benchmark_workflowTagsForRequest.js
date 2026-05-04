@@ -4,7 +4,7 @@ const { performance } = require('perf_hooks');
 // We need to mock the environment
 global.__hooks = `${__dirname}/../pb_hooks`;
 
-const records = require('../pb_hooks/lib/records.js');
+const records = require('../lib/records.js');
 
 // Mock normalizeWorkflowTags
 records.normalizeWorkflowTags = (tags) => tags;

@@ -22,7 +22,7 @@ Module.prototype.require = function(moduleName) {
   return originalRequire.apply(this, arguments);
 };
 
-const { enforceWeeklyLimit } = require('../pb_hooks/lib/records.js');
+const { enforceWeeklyLimit } = require('../lib/records.js');
 
 let mockFindRecordsByFilterResult = [];
 let appCallArgs = [];

@@ -2,7 +2,7 @@ const assert = require('assert');
 
 global.__hooks = __dirname + '/../pb_hooks';
 
-const routes = require('../pb_hooks/lib/routes.js');
+const routes = require('../lib/route_utils.js');
 
 function runTests() {
   const uiText = {

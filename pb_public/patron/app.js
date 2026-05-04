@@ -378,8 +378,23 @@ function normalizeFormatRules(rules) {
   const normalized = structuredClone(defaultFormatRules);
   const incoming = rules && typeof rules === 'object' ? rules : {};
 
-  formatKeys.forEach(format => {
+  // Process all format keys: defaults + any custom formats from the backend
+  const allKeys = new Set([...formatKeys, ...Object.keys(incoming)]);
+  allKeys.forEach(format => {
     const incomingFormat = incoming[format] || {};
+    // Create a base entry for custom formats not in defaults
+    if (!normalized[format]) {
+      normalized[format] = {
+        messageBehavior: 'none',
+        fields: {}
+      };
+      fieldKeys.forEach(field => {
+        normalized[format].fields[field] = {
+          mode: field === 'title' ? 'required' : 'optional',
+          label: defaultFormatRules.book.fields[field]?.label || field
+        };
+      });
+    }
     normalized[format].messageBehavior = normalizeMessageBehavior(incomingFormat.messageBehavior, normalized[format].messageBehavior);
     const incomingFields = incomingFormat.fields || {};
     fieldKeys.forEach(field => {
@@ -436,7 +451,7 @@ function messageHtmlForBehavior(behavior) {
 }
 
 function updateFormatUI() {
-  const format = formatKeys.includes(formatSelect.value) ? formatSelect.value : 'book';
+  const format = formatSelect.value || 'book';
   const rule = formatRules[format] || formatRules.book;
   const messageBehavior = rule.messageBehavior || 'none';
 

@@ -3,7 +3,7 @@ const path = require('path');
 const { performance } = require('perf_hooks');
 
 global.__hooks = path.resolve(__dirname, '../pb_hooks');
-const orgs = require('../pb_hooks/lib/orgs.js');
+const orgs = require('../lib/orgs.js');
 
 // Mock data
 const mockParents = {};
@@ -78,7 +78,7 @@ function createMockApp() {
 const app = createMockApp();
 
 const fs = require('fs');
-let orgsCode = fs.readFileSync('./pb_hooks/lib/orgs.js', 'utf8');
+let orgsCode = fs.readFileSync('./lib/orgs.js', 'utf8');
 
 orgsCode = orgsCode.replace(
 `function relinkParents(app) {

@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { parseStaffIdentity } = require('../pb_hooks/lib/identity.js');
+const { parseStaffIdentity } = require('../lib/identity.js');
 
 const testCases = [
   // 1. DOMAIN\username format

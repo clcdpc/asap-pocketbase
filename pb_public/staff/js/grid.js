@@ -1,777 +1,772 @@
-import { runLegacyModule } from './runtime.js';
+import { gridContainer, staffGridFilterBar, tagFilterSelect, settingsContainer, grid, formatMap, ageMap, closeReasonMap, descriptions, emptyStateMessages, statusStages, currentStatus, currentSuggestions, activeTagFilter, allSuggestions, workflowSettings, currentSettingsSection, activeActionMenu, rowActionIdCounter, rowActionRegistry, setCurrentSuggestions, setActiveTagFilter, setActiveActionMenu, setGrid, setAllSuggestions, incrementRowActionIdCounter } from './state.js';
+import { undoRow, deleteClosedRequest, closeDuplicateRequest } from './actions.js';
+import { leapBibUrl, showToast, showAlert, isSuperAdminStaff, isAdminStaff, getSettingsSectionFromHash, closeOpenDialogs, activateSettingsSection, authorizedJson } from './api.js';
+import { openEdit } from './modals.js';
+import { showSettingsAccessDenied, hideSettingsAccessDenied, loadSettings } from './settings.js';
 
-const source = [
-  "loadTab = async function loadTab(status) {",
-  "  const tabDesc = document.getElementById('tab-desc');",
-  "  let desc = descriptions[status] || '';",
-  "",
-  "  // Add auto-rejection info for Suggestions",
-  "  if (status === 'suggestion') {",
-  "    desc += workflowSettings.outstandingTimeoutEnabled",
-  "      ? ` If auto-reject stalled suggestions is enabled, stalled suggestions will be rejected after ${workflowSettings.outstandingTimeoutDays} days.`",
-  "      : ' Auto-reject stalled suggestions is currently disabled in Settings.';",
-  "  }",
-  "",
-  "  // Add auto-close info for Hold placed",
-  "  if (status === 'hold_placed') {",
-  "    if (workflowSettings.holdPickupTimeoutEnabled) {",
-  "      desc += ` Auto-close unpicked-up holds is enabled, so holds will close after checkout or after ${workflowSettings.holdPickupTimeoutDays} days if the item is never picked up.`;",
-  "    } else {",
-  "      desc += ' Holds will only move to Closed when the patron checks out the item. Enable auto-close unpicked-up holds in Settings to also close holds that are never picked up.';",
-  "    }",
-  "  }",
-  "",
-  "  // Add auto-close info for Pending hold",
-  "  if (status === 'pending_hold') {",
-  "    workflowSettings.pendingHoldTimeoutDays = parseInt(workflowSettings.pendingHoldTimeoutDays || '14', 10) || 14;",
-  "    if (workflowSettings.pendingHoldTimeoutEnabled) {",
-  "      desc += ` Auto-close pending holds is enabled, so items will close after ${workflowSettings.pendingHoldTimeoutDays} days if they are not processed.`;",
-  "    }",
-  "  }",
-  "  tabDesc.textContent = desc;",
-  "",
-  "  // Update job message",
-  "  const jobMsg = document.getElementById('job-msg');",
-  "  if (jobMsg) jobMsg.textContent = '';",
-  "",
-  "  // Admin actions visibility",
-  "  const adminBar = document.getElementById('admin-actions-bar');",
-  "  const promoterBtn = document.getElementById('btn-run-promoter-check');",
-  "  const holdBtn = document.getElementById('btn-run-hold-check');",
-  "  const deleteClosedBtn = document.getElementById('btn-delete-closed-requests');",
-  "",
-  "  adminBar.classList.add('hidden');",
-  "  promoterBtn.classList.add('hidden');",
-  "  holdBtn.classList.add('hidden');",
-  "  if (deleteClosedBtn) deleteClosedBtn.classList.add('hidden');",
-  "",
-  "  const isCurrentlySuperAdmin = isSuperAdminStaff();",
-  "",
-  "  if (isCurrentlySuperAdmin) {",
-  "    if (status === 'outstanding_purchase' && workflowSettings.autoPromote) {",
-  "      adminBar.classList.remove('hidden');",
-  "      promoterBtn.classList.remove('hidden');",
-  "    } else if (status === 'pending_hold') {",
-  "      adminBar.classList.remove('hidden');",
-  "      holdBtn.classList.remove('hidden');",
-  "    }",
-  "  }",
-  "  if (status === 'closed' && isAdminStaff() && deleteClosedBtn) {",
-  "    adminBar.classList.remove('hidden');",
-  "    deleteClosedBtn.classList.remove('hidden');",
-  "  }",
-  "",
-  "  if (status === 'settings') {",
-  "    closeOpenDialogs();",
-  "    closeActionMenu?.();",
-  "    gridContainer.classList.add('hidden');",
-  "    if (staffGridFilterBar) staffGridFilterBar.classList.add('hidden');",
-  "    hideTagFilter();",
-  "    settingsContainer.classList.remove('hidden');",
-  "    activateSettingsSection(getSettingsSectionFromHash() || currentSettingsSection, { updateHash: false });",
-  "    if (!isAdminStaff()) {",
-  "      showSettingsAccessDenied();",
-  "      return;",
-  "    }",
-  "    loadSettings({ showErrors: true });",
-  "    return;",
-  "  }",
-  "",
-  "  gridContainer.classList.remove('hidden');",
-  "  settingsContainer.classList.add('hidden');",
-  "  hideSettingsAccessDenied();",
-  "  resetGrid();",
-  "",
-  "  try {",
-  "    const scopedResult = await authorizedJson('/api/asap/staff/title-requests');",
-  "    allSuggestions = Array.isArray(scopedResult.items) ? scopedResult.items : [];",
-  "    updateTabCounts(allSuggestions);",
-  "",
-  "    currentSuggestions = allSuggestions.filter(row => normalizeStatus(row.status) === status);",
-  "    updateTagFilter(currentSuggestions);",
-  "",
-  "    if (!currentSuggestions.length) {",
-  "      gridContainer.innerHTML = `<div class=\"alert alert-light border\">${escapeAttr(emptyStateMessages[status] || 'No suggestions found.')}</div>`;",
-  "      return;",
-  "    }",
-  "",
-  "    renderCurrentGrid();",
-  "  } catch (err) {",
-  "    console.error('Failed to load data', err);",
-  "  }",
-  "",
-  "  const announcer = document.getElementById('status-announcer');",
-  "  announcer.textContent = \"Loaded \" + status + \" tab.\";",
-  "",
-  "  // Manage focus for screen readers when tab changes",
-  "  const firstHeader = document.getElementById('tab-desc');",
-  "  if (firstHeader) firstHeader.focus();",
-  "}",
-  "",
-  "resetGrid = function resetGrid() {",
-  "  if (grid && typeof grid.destroy === 'function') {",
-  "    grid.destroy();",
-  "  }",
-  "  grid = null;",
-  "  gridContainer.innerHTML = '';",
-  "}",
-  "",
-  "normalizeWorkflowTagLabel = function normalizeWorkflowTagLabel(tag) {",
-  "  const clean = String(tag || '').trim();",
-  "  if (clean === 'dupe found in Polaris' || clean === 'Dupe found in Polaris') {",
-  "    return 'Identifier found';",
-  "  }",
-  "  if (clean === 'ISBN not found in system') {",
-  "    return 'Identifier number not found in system';",
-  "  }",
-  "  return clean;",
-  "}",
-  "",
-  "cleanWorkflowTags = function cleanWorkflowTags(tags) {",
-  "  if (!Array.isArray(tags)) return [];",
-  "  const seen = new Set();",
-  "  const clean = [];",
-  "  tags.forEach(tag => {",
-  "    const label = normalizeWorkflowTagLabel(tag);",
-  "    if (!label || /^\\d+$/.test(label) || seen.has(label)) return;",
-  "    seen.add(label);",
-  "    clean.push(label);",
-  "  });",
-  "  return clean;",
-  "}",
-  "",
-  "tagCountsForRecords = function tagCountsForRecords(records) {",
-  "  const counts = new Map();",
-  "  (records || []).forEach(record => {",
-  "    cleanWorkflowTags(record.workflowTags).forEach(tag => {",
-  "      counts.set(tag, (counts.get(tag) || 0) + 1);",
-  "    });",
-  "  });",
-  "  return Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]));",
-  "}",
-  "",
-  "hideTagFilter = function hideTagFilter() {",
-  "  activeTagFilter = '';",
-  "  if (tagFilterSelect) {",
-  "    tagFilterSelect.classList.add('hidden');",
-  "    tagFilterSelect.innerHTML = '';",
-  "  }",
-  "  if (staffGridFilterBar) {",
-  "    staffGridFilterBar.classList.add('hidden');",
-  "  }",
-  "}",
-  "",
-  "updateTagFilter = function updateTagFilter(records) {",
-  "  if (!tagFilterSelect || !staffGridFilterBar) return;",
-  "  const counts = tagCountsForRecords(records);",
-  "  if (!counts.length) {",
-  "    hideTagFilter();",
-  "    return;",
-  "  }",
-  "",
-  "  const previous = activeTagFilter;",
-  "  tagFilterSelect.innerHTML = [",
-  "    '<option value=\"\">All tags</option>',",
-  "    ...counts.map(([tag, count]) => `<option value=\"${escapeAttr(tag)}\">${escapeAttr(tag)} (${count})</option>`)",
-  "  ].join('');",
-  "",
-  "  const stillExists = counts.some(([tag]) => tag === previous);",
-  "  tagFilterSelect.value = stillExists ? previous : '';",
-  "  activeTagFilter = tagFilterSelect.value;",
-  "  tagFilterSelect.classList.remove('hidden');",
-  "  staffGridFilterBar.classList.remove('hidden');",
-  "}",
-  "",
-  "applyTagFilter = function applyTagFilter(records) {",
-  "  if (!activeTagFilter) return records || [];",
-  "  return (records || []).filter(record => {",
-  "    return cleanWorkflowTags(record.workflowTags).includes(activeTagFilter);",
-  "  });",
-  "}",
-  "",
-  "renderCurrentGrid = function renderCurrentGrid(status = currentStatus) {",
-  "  resetGrid();",
-  "  const visibleRecords = applyTagFilter(currentSuggestions);",
-  "  if (!visibleRecords.length) {",
-  "    gridContainer.innerHTML = '<div class=\"alert alert-light border\">No suggestions match this workflow tag.</div>';",
-  "    return;",
-  "  }",
-  "",
-  "  grid = new gridjs.Grid({",
-  "    columns: getGridColumns(status),",
-  "    data: visibleRecords.map(row => getGridRow(row, status)),",
-  "    search: true,",
-  "    pagination: { limit: 25 },",
-  "    sort: true,",
-  "    width: '100%'",
-  "  }).render(gridContainer);",
-  "}",
-  "",
-  "updateTabCounts = function updateTabCounts(records) {",
-  "  const counts = Object.fromEntries(statusStages.map(status => [status, 0]));",
-  "  records.forEach(row => {",
-  "    const status = normalizeStatus(row.status);",
-  "    if (Object.prototype.hasOwnProperty.call(counts, status)) {",
-  "      counts[status] += 1;",
-  "    }",
-  "  });",
-  "",
-  "  document.querySelectorAll('#status-tabs .nav-link[data-status]').forEach(link => {",
-  "    const status = link.getAttribute('data-status');",
-  "    const count = counts[status];",
-  "    const badge = link.querySelector('.tab-count');",
-  "    if (badge && count !== undefined) {",
-  "      badge.textContent = count;",
-  "      badge.setAttribute('aria-label', count + ' records');",
-  "    }",
-  "  });",
-  "}",
-  "",
-  "formatStandardDate = function formatStandardDate(d) {",
-  "  if (!d) return '';",
-  "  const date = (d instanceof Date) ? d : new Date(d);",
-  "  return date.toLocaleDateString('en-US');",
-  "}",
-  "",
-  "formatDateTime = function formatDateTime(value) {",
-  "  if (!value) return '';",
-  "  const date = new Date(value);",
-  "  return formatStandardDate(date) + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });",
-  "}",
-  "",
-  "normalizeStatus = function normalizeStatus(value) {",
-  "  return String(value || '').trim();",
-  "}",
-  "",
-  "formatPublication = function formatPublication(value) {",
-  "  return String(value || '').trim();",
-  "}",
-  "",
-  "formatNote = function formatNote(note) {",
-  "  const text = String(note || '').trim();",
-  "  if (!text) return '';",
-  "  return gridjs.html(`<button type=\"button\" class=\"truncate-note btn btn-link btn-sm p-0\" style=\"text-decoration:none; font-size: 1.2rem;\" data-full-note=\"${escapeAttr(text)}\" data-notes-action=\"true\" data-no-row-edit=\"true\" title=\"View full note\" aria-label=\"View full note\"><i class=\"fa fa-commenting-o\" aria-hidden=\"true\"></i></button>`);",
-  "}",
-  "",
-  "renderBibIdCell = function renderBibIdCell(row) {",
-  "  const bibId = String(row?.bibid || '').trim();",
-  "  if (!bibId) return '';",
-  "  const url = leapBibUrl(bibId);",
-  "  if (!url) return escapeAttr(bibId);",
-  "  return gridjs.html(`<a href=\"${escapeAttr(url)}\" target=\"_blank\" rel=\"noopener noreferrer\" data-no-row-edit=\"true\">${escapeAttr(bibId)}</a>`);",
-  "}",
-  "",
-  "rowMarker = function rowMarker(row) {",
-  "  return `<span class=\"asap-row-marker\" data-suggestion-id=\"${escapeAttr(row.id)}\" hidden></span>`;",
-  "}",
-  "",
-  "getActionsColumnWidth = function getActionsColumnWidth(status) {",
-  "  if (status === 'suggestion') return '135px';",
-  "  if (status === 'outstanding_purchase') return '165px';",
-  "  return '120px';",
-  "}",
-  "",
-  "getGridColumns = function getGridColumns(status) {",
-  "  const actionsColumn = { name: 'Actions', width: getActionsColumnWidth(status), sort: false };",
-  "",
-  "  if (status === 'suggestion') {",
-  "    return [",
-  "      { name: 'Barcode', width: '140px' },",
-  "      { name: 'Title (original)', width: '320px' },",
-  "      { name: 'Author (original)', width: '150px' },",
-  "      { name: 'Format', width: '100px' },",
-  "      { name: 'Timing', width: '100px' },",
-  "      { name: 'Submitted', width: '100px' },",
-  "      { name: 'Notes', width: '60px' },",
-  "      actionsColumn,",
-  "    ];",
-  "  }",
-  "",
-  "  if (status === 'closed') {",
-  "    return [",
-  "      { name: 'Barcode', width: '140px' },",
-  "      { name: 'Title (original)', width: '320px' },",
-  "      { name: 'Author (original)', width: '150px' },",
-  "      { name: 'Format', width: '100px' },",
-  "      { name: 'Submitted', width: '100px' },",
-  "      { name: 'Closed reason', width: '140px' },",
-  "      { name: 'Notes', width: '60px' },",
-  "      actionsColumn,",
-  "    ];",
-  "  }",
-  "",
-  "  return [",
-  "    { name: 'Barcode', width: '140px' },",
-  "    { name: 'Title (original)', width: '320px' },",
-  "    { name: 'Author (original)', width: '150px' },",
-  "    { name: 'Identifier number', width: '140px' },",
-  "    { name: 'BIB ID', width: '100px' },",
-  "    { name: 'Age group', width: '100px' },",
-  "    { name: 'Format', width: '100px' },",
-  "    { name: 'Timing', width: '100px' },",
-  "    { name: 'Submitted', width: '100px' },",
-  "    { name: 'Last checked', width: '120px' },",
-  "    { name: 'Notes', width: '60px' },",
-  "    actionsColumn,",
-  "  ];",
-  "}",
-  "",
-  "",
-  "getDuplicateBadgesHtml = function getDuplicateBadgesHtml(row) {",
-  "  if (!allSuggestions || !allSuggestions.length) return '';",
-  "",
-  "  const duplicates = allSuggestions.filter(r => {",
-  "    if (r.id === row.id) return false;",
-  "",
-  "    // Check identifier match if both have one",
-  "    if (r.identifier && row.identifier && r.identifier.trim().toLowerCase() === row.identifier.trim().toLowerCase()) {",
-  "      return true;",
-  "    }",
-  "",
-  "    // Check BibID match",
-  "    if (r.bibid && row.bibid && r.bibid.trim().toLowerCase() === row.bibid.trim().toLowerCase()) {",
-  "      return true;",
-  "    }",
-  "",
-  "    // Check title match",
-  "    if (r.title && row.title && r.title.trim().toLowerCase() === row.title.trim().toLowerCase()) {",
-  "      return true;",
-  "    }",
-  "",
-  "    return false;",
-  "  });",
-  "",
-  "  if (!duplicates.length) return '';",
-  "",
-  "  // Group by status",
-  "  const statusCounts = {};",
-  "  duplicates.forEach(d => {",
-  "    const s = normalizeStatus(d.status);",
-  "    statusCounts[s] = (statusCounts[s] || 0) + 1;",
-  "  });",
-  "",
-  "  const statusNames = {",
-  "    'suggestion': 'Suggestion',",
-  "    'outstanding_purchase': 'Pending purchase',",
-  "    'pending_hold': 'Pending hold',",
-  "    'hold_placed': 'Hold placed',",
-  "    'closed': 'Closed'",
-  "  };",
-  "",
-  "  const statusColors = {",
-  "    'suggestion': 'badge-secondary',",
-  "    'outstanding_purchase': 'badge-info',",
-  "    'pending_hold': 'badge-warning',",
-  "    'hold_placed': 'badge-success',",
-  "    'closed': 'badge-dark'",
-  "  };",
-  "",
-  "  let badges = '';",
-  "  for (const [status, count] of Object.entries(statusCounts)) {",
-  "    const displayName = statusNames[status] || status;",
-  "    const colorClass = statusColors[status] || 'badge-secondary';",
-  "    const text = count > 1 ? `Dup (${displayName} x${count})` : `Dup (${displayName})`;",
-  "    badges += ` <span class=\"badge ${colorClass} asap-duplicate-badge\" title=\"${count} duplicate(s) in ${displayName} stage\">${text}</span>`;",
-  "  }",
-  "",
-  "  return badges;",
-  "}",
-  "",
-  "getWorkflowTagBadgesHtml = function getWorkflowTagBadgesHtml(row) {",
-  "  const visibleTags = cleanWorkflowTags(row.workflowTags);",
-  "  if (!visibleTags.length) return '';",
-  "  return visibleTags.map(tag => {",
-  "    const label = escapeAttr(tag);",
-  "    return ` <span class=\"badge workflow-tag asap-polaris-tag\" title=\"Polaris check tag\">${label}</span>`;",
-  "  }).join('');",
-  "}",
-  "",
-  "hasWorkflowTag = function hasWorkflowTag(row, label) {",
-  "  return cleanWorkflowTags(row?.workflowTags).includes(label);",
-  "}",
-  "",
-  "renderWorkflowTags = function renderWorkflowTags(tags) {",
-  "  const clean = cleanWorkflowTags(tags);",
-  "  if (!clean.length) {",
-  "    return '<div class=\"text-muted small\">No workflow tags</div>';",
-  "  }",
-  "  return `<div class=\"workflow-tag-list\">${clean.map(tag => `<span class=\"workflow-tag\">${escapeAttr(tag)}</span>`).join('')}</div>`;",
-  "}",
-  "",
-  "getIsbnCheckBadgesHtml = function getIsbnCheckBadgesHtml(row) {",
-  "  const status = typeof row?.isbnCheckStatus === 'string' ? row.isbnCheckStatus : '';",
-  "  const isbnStatusLabels = {",
-  "    pending: 'New / identifier number check in progress',",
-  "    found: 'Identifier number found',",
-  "    not_found: 'Identifier number not found',",
-  "    error_max_retries: 'Identifier number check retry limit reached'",
-  "  };",
-  "  const label = isbnStatusLabels[status];",
-  "  if (!label) return '';",
-  "  if (status === 'found' && hasWorkflowTag(row, 'Identifier found')) return '';",
-  "  if (status === 'not_found' && hasWorkflowTag(row, 'Identifier number not found in system')) return '';",
-  "  const tooltip = status === 'pending'",
-  "    ? 'Background identifier number processing is still running. This suggestion is already submitted.'",
-  "    : 'Identifier number background processing result.';",
-  "  return ` <span class=\"badge badge-info asap-isbn-check-badge\" title=\"${escapeAttr(tooltip)}\">${escapeAttr(label)}</span>`;",
-  "}",
-  "",
-  "renderTitleCell = function renderTitleCell(row) {",
-  "  const title = row.title || '';",
-  "  const badges = getDuplicateBadgesHtml(row) + getIsbnCheckBadgesHtml(row);",
-  "  return gridjs.html(`",
-  "    <div class=\"staff-title-cell\">",
-  "      ${rowMarker(row)}",
-  "      <div",
-  "        class=\"staff-title-main\"",
-  "        tabindex=\"0\"",
-  "        title=\"${escapeAttr(title)}\"",
-  "        aria-label=\"Full title: ${escapeAttr(title)}\"",
-  "      >",
-  "        ${escapeAttr(title)}${badges}",
-  "      </div>",
-  "      ${renderWorkflowTags(row.workflowTags)}",
-  "    </div>",
-  "  `);",
-  "}",
-  "",
-  "getTitleBadgesHtml = function getTitleBadgesHtml(row) {",
-  "  return getDuplicateBadgesHtml(row) + getWorkflowTagBadgesHtml(row) + getIsbnCheckBadgesHtml(row);",
-  "}",
-  "",
-  "getGridRow = function getGridRow(row, status) {",
-  "  if (status === 'suggestion') {",
-  "    return [",
-  "      row.barcode,",
-  "      renderTitleCell(row),",
-  "      row.author,",
-  "      formatMap[row.format] || row.format,",
-  "      formatPublication(row.publication),",
-  "      formatStandardDate(row.created),",
-  "      formatNote(row.notes),",
-  "      gridjs.html(renderRowActions(row)),",
-  "    ];",
-  "  }",
-  "",
-  "  if (status === 'closed') {",
-  "    return [",
-  "      row.barcode,",
-  "      renderTitleCell(row),",
-  "      row.author,",
-  "      formatMap[row.format] || row.format,",
-  "      formatStandardDate(row.created),",
-  "      formatCloseReason(row),",
-  "      formatNote(row.notes),",
-  "      gridjs.html(renderRowActions(row)),",
-  "    ];",
-  "  }",
-  "",
-  "  return [",
-  "    row.barcode,",
-  "    renderTitleCell(row),",
-  "    row.author,",
-  "    row.identifier,",
-  "    renderBibIdCell(row),",
-  "    ageMap[row.agegroup] || row.agegroup,",
-  "    formatMap[row.format] || row.format,",
-  "    formatPublication(row.publication),",
-  "    formatStandardDate(row.created),",
-  "    formatDateTime(row.lastPromoterCheck),",
-  "    formatNote(row.notes),",
-  "    gridjs.html(renderRowActions(row)),",
-  "  ];",
-  "}",
-  "",
-  "formatCloseReason = function formatCloseReason(row) {",
-  "  if (normalizeStatus(row.status) !== 'closed') {",
-  "    return '';",
-  "  }",
-  "  return closeReasonMap[row.closeReason] || 'Closed';",
-  "}",
-  "",
-  "getRowActions = function getRowActions(row) {",
-  "  const status = normalizeStatus(row.status);",
-  "",
-  "  if (status === 'suggestion') {",
-  "    return {",
-  "      primary: { label: 'Purchase', className: 'btn-primary', onClick: () => openEdit(row.id, 'outstanding_purchase', 'Approve for purchase', 'purchase') },",
-  "      secondary: [",
-  "        { label: 'Already own', onClick: () => openEdit(row.id, 'pending_hold', 'Already own', 'alreadyOwn') },",
-  "        { label: 'Reject', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Reject', 'reject') },",
-  "        { label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose') },",
-  "        { label: 'Edit', onClick: () => openEdit(row.id, 'suggestion', 'Edit suggestion', '') },",
-  "      ]",
-  "    };",
-  "  }",
-  "",
-  "  if (status === 'outstanding_purchase') {",
-  "    return {",
-  "      primary: { label: 'Ready for hold', className: 'btn-success', onClick: () => openEdit(row.id, 'pending_hold', 'Move to Pending hold', '') },",
-  "      secondary: [",
-  "        { label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose') },",
-  "        { label: 'Undo', onClick: () => undoRow(row.id) },",
-  "        { label: 'Edit', onClick: () => openEdit(row.id, 'outstanding_purchase', 'Edit', '') },",
-  "      ]",
-  "    };",
-  "  }",
-  "",
-  "  if (status === 'pending_hold' || status === 'hold_placed' || status === 'closed') {",
-  "    const secondary = [];",
-  "    if ((status === 'pending_hold' || status === 'hold_placed') && hasWorkflowTag(row, 'Hold exists (same patron)')) {",
-  "      secondary.push({ label: 'Close duplicate', className: 'danger', onClick: () => closeDuplicateRequest(row.id) });",
-  "    }",
-  "    if (status !== 'closed') secondary.push({ label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose') });",
-  "    secondary.push({ label: 'Edit', onClick: () => openEdit(row.id, row.status, 'Edit', '') });",
-  "    if (status === 'closed' && isAdminStaff()) {",
-  "      secondary.push({ label: 'Delete', className: 'danger', onClick: () => deleteClosedRequest(row.id) });",
-  "    }",
-  "    return {",
-  "      primary: { label: 'Undo', className: 'btn-outline-secondary', onClick: () => undoRow(row.id) },",
-  "      secondary",
-  "    };",
-  "  }",
-  "",
-  "  return {",
-  "    primary: { label: 'Edit', className: 'btn-secondary', onClick: () => openEdit(row.id, row.status, 'Edit', '') },",
-  "    secondary: []",
-  "  };",
-  "}",
-  "",
-  "runRowAction = async function runRowAction(action) {",
-  "  closeActionMenu();",
-  "  try {",
-  "    await action.onClick();",
-  "  } catch (error) {",
-  "    await showAlert(error.message || String(error) || 'Action failed');",
-  "  }",
-  "}",
-  "",
-  "registerRowAction = function registerRowAction(action) {",
-  "  rowActionIdCounter += 1;",
-  "  const actionId = `row-action-${rowActionIdCounter}`;",
-  "  rowActionRegistry.set(actionId, action);",
-  "  return actionId;",
-  "}",
-  "",
-  "getRegisteredRowAction = function getRegisteredRowAction(actionId) {",
-  "  return rowActionRegistry.get(actionId);",
-  "}",
-  "",
-  "renderRowActions = function renderRowActions(row) {",
-  "  const actions = getRowActions(row);",
-  "  const primaryActionId = registerRowAction(actions.primary);",
-  "  let markup = `<div class=\"row-action-group\" data-no-row-edit=\"true\">`;",
-  "  markup += `<button type=\"button\" class=\"btn btn-sm row-action-primary ${escapeAttr(actions.primary.className || 'btn-primary')}\" data-row-action-id=\"${primaryActionId}\" data-no-row-edit=\"true\">${escapeAttr(actions.primary.label)}</button>`;",
-  "  if (actions.secondary?.length) {",
-  "    const menuActionIds = actions.secondary.map(action => registerRowAction(action)).join(',');",
-  "    markup += `<button type=\"button\" class=\"btn btn-sm btn-outline-secondary row-action-menu-trigger\" aria-haspopup=\"menu\" aria-expanded=\"false\" data-row-menu-action-ids=\"${menuActionIds}\" data-no-row-edit=\"true\">⋯</button>`;",
-  "  }",
-  "  markup += `</div>`;",
-  "  return markup;",
-  "}",
-  "",
-  "openActionMenu = function openActionMenu(triggerButton, actionIds) {",
-  "  closeActionMenu();",
-  "  const layer = document.getElementById('action-menu-layer');",
-  "  if (!layer) return;",
-  "  triggerButton.setAttribute('aria-expanded', 'true');",
-  "  const menu = document.createElement('div');",
-  "  menu.className = 'row-action-menu';",
-  "  menu.setAttribute('role', 'menu');",
-  "  actionIds.forEach((actionId) => {",
-  "    const action = getRegisteredRowAction(actionId);",
-  "    if (!action) return;",
-  "    const item = document.createElement('button');",
-  "    item.type = 'button';",
-  "    item.className = `row-action-menu-item ${action.className || ''}`.trim();",
-  "    item.setAttribute('role', 'menuitem');",
-  "    item.setAttribute('data-row-action-id', actionId);",
-  "    item.setAttribute('data-no-row-edit', 'true');",
-  "    item.textContent = action.label;",
-  "    menu.appendChild(item);",
-  "  });",
-  "  layer.appendChild(menu);",
-  "  positionActionMenu(triggerButton, menu);",
-  "  activeActionMenu = { triggerButton, menu };",
-  "}",
-  "",
-  "positionActionMenu = function positionActionMenu(triggerButton, menu) {",
-  "  const triggerRect = triggerButton.getBoundingClientRect();",
-  "  const menuRect = menu.getBoundingClientRect();",
-  "  const spacing = 6;",
-  "  const viewportPadding = 8;",
-  "  let top = triggerRect.bottom + spacing;",
-  "  let left = triggerRect.right - menuRect.width;",
-  "  if (top + menuRect.height > window.innerHeight - viewportPadding) {",
-  "    top = triggerRect.top - menuRect.height - spacing;",
-  "  }",
-  "  left = Math.max(viewportPadding, Math.min(left, window.innerWidth - menuRect.width - viewportPadding));",
-  "  menu.style.top = `${top}px`;",
-  "  menu.style.left = `${left}px`;",
-  "}",
-  "",
-  "closeActionMenu = function closeActionMenu() {",
-  "  if (!activeActionMenu) return;",
-  "  activeActionMenu.triggerButton?.setAttribute('aria-expanded', 'false');",
-  "  activeActionMenu.menu?.remove();",
-  "  activeActionMenu = null;",
-  "}",
-  "",
-  "escapeAttr = function escapeAttr(value) {",
-  "  return String(value || \"\")",
-  "    .replace(/&/g, \"&amp;\")",
-  "    .replace(/\"/g, \"&quot;\")",
-  "    .replace(/'/g, \"&#39;\")",
-  "    .replace(/</g, \"&lt;\")",
-  "    .replace(/>/g, \"&gt;\");",
-  "}",
-  "",
-  "function sanitizeHtml(html) {",
-  "  if (!html) return \"\";",
-  "  try {",
-  "    const doc = new DOMParser().parseFromString(html, \"text/html\");",
-  "    const safeTags = [\"P\", \"BR\", \"B\", \"I\", \"STRONG\", \"EM\", \"DIV\", \"SPAN\", \"A\", \"UL\", \"OL\", \"LI\", \"H1\", \"H2\", \"H3\", \"H4\", \"H5\", \"H6\", \"BLOCKQUOTE\", \"TABLE\", \"THEAD\", \"TBODY\", \"TR\", \"TH\", \"TD\", \"U\", \"S\", \"HR\"];",
-  "    const safeAttrs = [\"href\", \"target\", \"rel\", \"title\", \"class\", \"id\", \"aria-label\", \"aria-hidden\"];",
-  "    ",
-  "    // Recursive walker to remove unsafe tags and attributes",
-  "    function walk(parent) {",
-  "      const children = Array.from(parent.childNodes);",
-  "      children.forEach(node => {",
-  "        if (node.nodeType === 1) { // Element",
-  "          if (!safeTags.includes(node.tagName)) {",
-  "            // Unsafe tag: replace with its text content",
-  "            const text = document.createTextNode(node.textContent);",
-  "            parent.replaceChild(text, node);",
-  "          } else {",
-  "            // Safe tag: check attributes",
-  "            const attrs = node.attributes;",
-  "            for (let i = attrs.length - 1; i >= 0; i--) {",
-  "              const name = attrs[i].name.toLowerCase();",
-  "              const value = attrs[i].value.trim().toLowerCase();",
-  "              ",
-  "              if (!safeAttrs.includes(name) || (name === \"href\" && value.startsWith(\"javascript:\"))) {",
-  "                node.removeAttribute(name);",
-  "              }",
-  "            }",
-  "            walk(node);",
-  "          }",
-  "        }",
-  "      });",
-  "    }",
-  "    ",
-  "    walk(doc.body);",
-  "    return doc.body.innerHTML;",
-  "  } catch (err) {",
-  "    return escapeAttr(html);",
-  "  }",
-  "}",
-  "",
-  "function shouldIgnoreRowEditClick(target, event) {",
-  "  if (event.defaultPrevented) return true;",
-  "  if (event.button !== 0) return true;",
-  "  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return true;",
-  "",
-  "  return !!target.closest([",
-  "    'button',",
-  "    'a',",
-  "    'input',",
-  "    'select',",
-  "    'textarea',",
-  "    'label',",
-  "    'summary',",
-  "    '[role=\"button\"]',",
-  "    '[role=\"menu\"]',",
-  "    '[role=\"menuitem\"]',",
-  "    '[data-row-action-id]',",
-  "    '[data-row-menu-action-ids]',",
-  "    '[data-no-row-edit]',",
-  "    '[data-notes-action]',",
-  "    '.row-action-group',",
-  "    '.row-action-menu',",
-  "    '.gridjs-search',",
-  "    '.gridjs-pagination'",
-  "  ].join(','));",
-  "}",
-  "",
-  "function openSuggestionEditFromRow(recordId) {",
-  "  const row = currentSuggestions.find(item => item.id === recordId) || allSuggestions.find(item => item.id === recordId);",
-  "  if (!row) {",
-  "    showToast('Could not find that suggestion. Refresh and try again.', 'error');",
-  "    return;",
-  "  }",
-  "",
-  "  const status = normalizeStatus(row.status);",
-  "  openEdit(row.id, status || currentStatus, status === 'suggestion' ? 'Edit suggestion' : 'Edit', '');",
-  "}",
-  "",
-  "gridContainer.addEventListener('click', (e) => {",
-  "  const target = e.target;",
-  "  if (!(target instanceof Element)) return;",
-  "",
-  "  const actionButton = e.target.closest('[data-row-action-id]');",
-  "  if (actionButton) {",
-  "    e.preventDefault();",
-  "    e.stopPropagation();",
-  "    const action = getRegisteredRowAction(actionButton.getAttribute('data-row-action-id'));",
-  "    if (action) runRowAction(action);",
-  "    return;",
-  "  }",
-  "",
-  "  const menuTrigger = e.target.closest('[data-row-menu-action-ids]');",
-  "  if (menuTrigger) {",
-  "    e.preventDefault();",
-  "    e.stopPropagation();",
-  "    const actionIds = (menuTrigger.getAttribute('data-row-menu-action-ids') || '').split(',').filter(Boolean);",
-  "    openActionMenu(menuTrigger, actionIds);",
-  "    return;",
-  "  }",
-  "",
-  "  const truncateBtn = e.target.closest('.truncate-note');",
-  "  if (truncateBtn && gridContainer.contains(truncateBtn)) {",
-  "    e.preventDefault();",
-  "    e.stopPropagation();",
-  "    const fullNote = truncateBtn.getAttribute('data-full-note');",
-  "    document.getElementById('noteDialogContent').textContent = fullNote;",
-  "    document.getElementById('noteDialog').showModal();",
-  "    document.getElementById('noteDialogCloseBtn').focus();",
-  "    return;",
-  "  }",
-  "",
-  "  if (shouldIgnoreRowEditClick(target, e)) return;",
-  "",
-  "  const tableRow = target.closest('tr');",
-  "  if (!tableRow || !gridContainer.contains(tableRow)) return;",
-  "",
-  "  const marker = tableRow.querySelector('[data-suggestion-id]');",
-  "  const recordId = marker ? marker.getAttribute('data-suggestion-id') : '';",
-  "  if (!recordId) return;",
-  "",
-  "  openSuggestionEditFromRow(recordId);",
-  "});",
-  "",
-  "document.addEventListener('click', (event) => {",
-  "  const menuActionButton = event.target.closest('#action-menu-layer [data-row-action-id]');",
-  "  if (menuActionButton) {",
-  "    event.preventDefault();",
-  "    event.stopPropagation();",
-  "    const action = getRegisteredRowAction(menuActionButton.getAttribute('data-row-action-id'));",
-  "    if (action) runRowAction(action);",
-  "    return;",
-  "  }",
-  "  if (!activeActionMenu) return;",
-  "  const clickedMenu = activeActionMenu.menu.contains(event.target);",
-  "  const clickedTrigger = activeActionMenu.triggerButton.contains(event.target);",
-  "  if (!clickedMenu && !clickedTrigger) closeActionMenu();",
-  "});",
-  "document.addEventListener('keydown', (event) => {",
-  "  if (event.key === 'Escape') closeActionMenu();",
-  "});",
-  "window.addEventListener('resize', closeActionMenu);",
-  "window.addEventListener('scroll', closeActionMenu, true);",
-  "",
-  ""
-].join('\n');
+export async function loadTab(status) {
+  const tabDesc = document.getElementById('tab-desc');
+  let desc = descriptions[status] || '';
 
-export function install(env) {
-  runLegacyModule(env, source);
+  // Add auto-rejection info for Suggestions
+  if (status === 'suggestion') {
+    desc += workflowSettings.outstandingTimeoutEnabled
+      ? ` If auto-reject stalled suggestions is enabled, stalled suggestions will be rejected after ${workflowSettings.outstandingTimeoutDays} days.`
+      : ' Auto-reject stalled suggestions is currently disabled in Settings.';
+  }
+
+  // Add auto-close info for Hold placed
+  if (status === 'hold_placed') {
+    if (workflowSettings.holdPickupTimeoutEnabled) {
+      desc += ` Auto-close unpicked-up holds is enabled, so holds will close after checkout or after ${workflowSettings.holdPickupTimeoutDays} days if the item is never picked up.`;
+    } else {
+      desc += ' Holds will only move to Closed when the patron checks out the item. Enable auto-close unpicked-up holds in Settings to also close holds that are never picked up.';
+    }
+  }
+
+  // Add auto-close info for Pending hold
+  if (status === 'pending_hold') {
+    workflowSettings.pendingHoldTimeoutDays = parseInt(workflowSettings.pendingHoldTimeoutDays || '14', 10) || 14;
+    if (workflowSettings.pendingHoldTimeoutEnabled) {
+      desc += ` Auto-close pending holds is enabled, so items will close after ${workflowSettings.pendingHoldTimeoutDays} days if they are not processed.`;
+    }
+  }
+  tabDesc.textContent = desc;
+
+  // Update job message
+  const jobMsg = document.getElementById('job-msg');
+  if (jobMsg) jobMsg.textContent = '';
+
+  // Admin actions visibility
+  const adminBar = document.getElementById('admin-actions-bar');
+  const promoterBtn = document.getElementById('btn-run-promoter-check');
+  const holdBtn = document.getElementById('btn-run-hold-check');
+  const deleteClosedBtn = document.getElementById('btn-delete-closed-requests');
+
+  adminBar.classList.add('hidden');
+  promoterBtn.classList.add('hidden');
+  holdBtn.classList.add('hidden');
+  if (deleteClosedBtn) deleteClosedBtn.classList.add('hidden');
+
+  const isCurrentlySuperAdmin = isSuperAdminStaff();
+
+  if (isCurrentlySuperAdmin) {
+    if (status === 'outstanding_purchase' && workflowSettings.autoPromote) {
+      adminBar.classList.remove('hidden');
+      promoterBtn.classList.remove('hidden');
+    } else if (status === 'pending_hold') {
+      adminBar.classList.remove('hidden');
+      holdBtn.classList.remove('hidden');
+    }
+  }
+  if (status === 'closed' && isAdminStaff() && deleteClosedBtn) {
+    adminBar.classList.remove('hidden');
+    deleteClosedBtn.classList.remove('hidden');
+  }
+
+  if (status === 'settings') {
+    closeOpenDialogs();
+    closeActionMenu?.();
+    gridContainer.classList.add('hidden');
+    if (staffGridFilterBar) staffGridFilterBar.classList.add('hidden');
+    hideTagFilter();
+    settingsContainer.classList.remove('hidden');
+    activateSettingsSection(getSettingsSectionFromHash() || currentSettingsSection, { updateHash: false });
+    if (!isAdminStaff()) {
+      showSettingsAccessDenied();
+      return;
+    }
+    loadSettings({ showErrors: true });
+    return;
+  }
+
+  gridContainer.classList.remove('hidden');
+  settingsContainer.classList.add('hidden');
+  hideSettingsAccessDenied();
+  resetGrid();
+
+  try {
+    const scopedResult = await authorizedJson('/api/asap/staff/title-requests');
+    setAllSuggestions(Array.isArray(scopedResult.items) ? scopedResult.items : []);
+    updateTabCounts(allSuggestions);
+
+    setCurrentSuggestions(allSuggestions.filter(row => normalizeStatus(row.status) === status));
+    updateTagFilter(currentSuggestions);
+
+    if (!currentSuggestions.length) {
+      gridContainer.innerHTML = `<div class="alert alert-light border">${escapeAttr(emptyStateMessages[status] || 'No suggestions found.')}</div>`;
+      return;
+    }
+
+    renderCurrentGrid();
+  } catch (err) {
+    console.error('Failed to load data', err);
+  }
+
+  const announcer = document.getElementById('status-announcer');
+  announcer.textContent = "Loaded " + status + " tab.";
+
+  // Manage focus for screen readers when tab changes
+  const firstHeader = document.getElementById('tab-desc');
+  if (firstHeader) firstHeader.focus();
 }
+
+export function resetGrid() {
+  if (grid && typeof grid.destroy === 'function') {
+    grid.destroy();
+  }
+  setGrid(null);
+  gridContainer.innerHTML = '';
+}
+
+export function normalizeWorkflowTagLabel(tag) {
+  const clean = String(tag || '').trim();
+  if (clean === 'dupe found in Polaris' || clean === 'Dupe found in Polaris') {
+    return 'Identifier found';
+  }
+  if (clean === 'ISBN not found in system') {
+    return 'Identifier number not found in system';
+  }
+  return clean;
+}
+
+export function cleanWorkflowTags(tags) {
+  if (!Array.isArray(tags)) return [];
+  const seen = new Set();
+  const clean = [];
+  tags.forEach(tag => {
+    const label = normalizeWorkflowTagLabel(tag);
+    if (!label || /^\d+$/.test(label) || seen.has(label)) return;
+    seen.add(label);
+    clean.push(label);
+  });
+  return clean;
+}
+
+export function tagCountsForRecords(records) {
+  const counts = new Map();
+  (records || []).forEach(record => {
+    cleanWorkflowTags(record.workflowTags).forEach(tag => {
+      counts.set(tag, (counts.get(tag) || 0) + 1);
+    });
+  });
+  return Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+export function hideTagFilter() {
+  setActiveTagFilter('');
+  if (tagFilterSelect) {
+    tagFilterSelect.classList.add('hidden');
+    tagFilterSelect.innerHTML = '';
+  }
+  if (staffGridFilterBar) {
+    staffGridFilterBar.classList.add('hidden');
+  }
+}
+
+export function updateTagFilter(records) {
+  if (!tagFilterSelect || !staffGridFilterBar) return;
+  const counts = tagCountsForRecords(records);
+  if (!counts.length) {
+    hideTagFilter();
+    return;
+  }
+
+  const previous = activeTagFilter;
+  tagFilterSelect.innerHTML = [
+    '<option value="">All tags</option>',
+    ...counts.map(([tag, count]) => `<option value="${escapeAttr(tag)}">${escapeAttr(tag)} (${count})</option>`)
+  ].join('');
+
+  const stillExists = counts.some(([tag]) => tag === previous);
+  tagFilterSelect.value = stillExists ? previous : '';
+  setActiveTagFilter(tagFilterSelect.value);
+  tagFilterSelect.classList.remove('hidden');
+  staffGridFilterBar.classList.remove('hidden');
+}
+
+export function applyTagFilter(records) {
+  if (!activeTagFilter) return records || [];
+  return (records || []).filter(record => {
+    return cleanWorkflowTags(record.workflowTags).includes(activeTagFilter);
+  });
+}
+
+export function renderCurrentGrid(status = currentStatus) {
+  resetGrid();
+  const visibleRecords = applyTagFilter(currentSuggestions);
+  if (!visibleRecords.length) {
+    gridContainer.innerHTML = '<div class="alert alert-light border">No suggestions match this workflow tag.</div>';
+    return;
+  }
+
+  setGrid(new gridjs.Grid({
+    columns: getGridColumns(status),
+    data: visibleRecords.map(row => getGridRow(row, status)),
+    search: true,
+    pagination: { limit: 25 },
+    sort: true,
+    width: '100%'
+  }).render(gridContainer));
+}
+
+export function updateTabCounts(records) {
+  const counts = Object.fromEntries(statusStages.map(status => [status, 0]));
+  records.forEach(row => {
+    const status = normalizeStatus(row.status);
+    if (Object.prototype.hasOwnProperty.call(counts, status)) {
+      counts[status] += 1;
+    }
+  });
+
+  document.querySelectorAll('#status-tabs .nav-link[data-status]').forEach(link => {
+    const status = link.getAttribute('data-status');
+    const count = counts[status];
+    const badge = link.querySelector('.tab-count');
+    if (badge && count !== undefined) {
+      badge.textContent = count;
+      badge.setAttribute('aria-label', count + ' records');
+    }
+  });
+}
+
+export function formatStandardDate(d) {
+  if (!d) return '';
+  const date = (d instanceof Date) ? d : new Date(d);
+  return date.toLocaleDateString('en-US');
+}
+
+export function formatDateTime(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  return formatStandardDate(date) + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+export function normalizeStatus(value) {
+  return String(value || '').trim();
+}
+
+export function formatPublication(value) {
+  return String(value || '').trim();
+}
+
+export function formatNote(note) {
+  const text = String(note || '').trim();
+  if (!text) return '';
+  return gridjs.html(`<button type="button" class="truncate-note btn btn-link btn-sm p-0" style="text-decoration:none; font-size: 1.2rem;" data-full-note="${escapeAttr(text)}" data-notes-action="true" data-no-row-edit="true" title="View full note" aria-label="View full note"><i class="fa fa-commenting-o" aria-hidden="true"></i></button>`);
+}
+
+export function renderBibIdCell(row) {
+  const bibId = String(row?.bibid || '').trim();
+  if (!bibId) return '';
+  const url = leapBibUrl(bibId);
+  if (!url) return escapeAttr(bibId);
+  return gridjs.html(`<a href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer" data-no-row-edit="true">${escapeAttr(bibId)}</a>`);
+}
+
+export function rowMarker(row) {
+  return `<span class="asap-row-marker" data-suggestion-id="${escapeAttr(row.id)}" hidden></span>`;
+}
+
+export function getActionsColumnWidth(status) {
+  if (status === 'suggestion') return '135px';
+  if (status === 'outstanding_purchase') return '165px';
+  return '120px';
+}
+
+export function getGridColumns(status) {
+  const actionsColumn = { name: 'Actions', width: getActionsColumnWidth(status), sort: false };
+
+  if (status === 'suggestion') {
+    return [
+      { name: 'Barcode', width: '140px' },
+      { name: 'Title (original)', width: '320px' },
+      { name: 'Author (original)', width: '150px' },
+      { name: 'Format', width: '100px' },
+      { name: 'Timing', width: '100px' },
+      { name: 'Submitted', width: '100px' },
+      { name: 'Notes', width: '60px' },
+      actionsColumn,
+    ];
+  }
+
+  if (status === 'closed') {
+    return [
+      { name: 'Barcode', width: '140px' },
+      { name: 'Title (original)', width: '320px' },
+      { name: 'Author (original)', width: '150px' },
+      { name: 'Format', width: '100px' },
+      { name: 'Submitted', width: '100px' },
+      { name: 'Closed reason', width: '140px' },
+      { name: 'Notes', width: '60px' },
+      actionsColumn,
+    ];
+  }
+
+  return [
+    { name: 'Barcode', width: '140px' },
+    { name: 'Title (original)', width: '320px' },
+    { name: 'Author (original)', width: '150px' },
+    { name: 'Identifier number', width: '140px' },
+    { name: 'BIB ID', width: '100px' },
+    { name: 'Age group', width: '100px' },
+    { name: 'Format', width: '100px' },
+    { name: 'Timing', width: '100px' },
+    { name: 'Submitted', width: '100px' },
+    { name: 'Last checked', width: '120px' },
+    { name: 'Notes', width: '60px' },
+    actionsColumn,
+  ];
+}
+
+
+export function getDuplicateBadgesHtml(row) {
+  if (!allSuggestions || !allSuggestions.length) return '';
+
+  const duplicates = allSuggestions.filter(r => {
+    if (r.id === row.id) return false;
+
+    // Check identifier match if both have one
+    if (r.identifier && row.identifier && r.identifier.trim().toLowerCase() === row.identifier.trim().toLowerCase()) {
+      return true;
+    }
+
+    // Check BibID match
+    if (r.bibid && row.bibid && r.bibid.trim().toLowerCase() === row.bibid.trim().toLowerCase()) {
+      return true;
+    }
+
+    // Check title match
+    if (r.title && row.title && r.title.trim().toLowerCase() === row.title.trim().toLowerCase()) {
+      return true;
+    }
+
+    return false;
+  });
+
+  if (!duplicates.length) return '';
+
+  // Group by status
+  const statusCounts = {};
+  duplicates.forEach(d => {
+    const s = normalizeStatus(d.status);
+    statusCounts[s] = (statusCounts[s] || 0) + 1;
+  });
+
+  const statusNames = {
+    'suggestion': 'Suggestion',
+    'outstanding_purchase': 'Pending purchase',
+    'pending_hold': 'Pending hold',
+    'hold_placed': 'Hold placed',
+    'closed': 'Closed'
+  };
+
+  const statusColors = {
+    'suggestion': 'badge-secondary',
+    'outstanding_purchase': 'badge-info',
+    'pending_hold': 'badge-warning',
+    'hold_placed': 'badge-success',
+    'closed': 'badge-dark'
+  };
+
+  let badges = '';
+  for (const [status, count] of Object.entries(statusCounts)) {
+    const displayName = statusNames[status] || status;
+    const colorClass = statusColors[status] || 'badge-secondary';
+    const text = count > 1 ? `Dup (${displayName} x${count})` : `Dup (${displayName})`;
+    badges += ` <span class="badge ${colorClass} asap-duplicate-badge" title="${count} duplicate(s) in ${displayName} stage">${text}</span>`;
+  }
+
+  return badges;
+}
+
+export function getWorkflowTagBadgesHtml(row) {
+  const visibleTags = cleanWorkflowTags(row.workflowTags);
+  if (!visibleTags.length) return '';
+  return visibleTags.map(tag => {
+    const label = escapeAttr(tag);
+    return ` <span class="badge workflow-tag asap-polaris-tag" title="Polaris check tag">${label}</span>`;
+  }).join('');
+}
+
+export function hasWorkflowTag(row, label) {
+  return cleanWorkflowTags(row?.workflowTags).includes(label);
+}
+
+export function renderWorkflowTags(tags) {
+  const clean = cleanWorkflowTags(tags);
+  if (!clean.length) {
+    return '<div class="text-muted small">No workflow tags</div>';
+  }
+  return `<div class="workflow-tag-list">${clean.map(tag => `<span class="workflow-tag">${escapeAttr(tag)}</span>`).join('')}</div>`;
+}
+
+export function getIsbnCheckBadgesHtml(row) {
+  const status = typeof row?.isbnCheckStatus === 'string' ? row.isbnCheckStatus : '';
+  const isbnStatusLabels = {
+    pending: 'New / identifier number check in progress',
+    found: 'Identifier number found',
+    not_found: 'Identifier number not found',
+    error_max_retries: 'Identifier number check retry limit reached'
+  };
+  const label = isbnStatusLabels[status];
+  if (!label) return '';
+  if (status === 'found' && hasWorkflowTag(row, 'Identifier found')) return '';
+  if (status === 'not_found' && hasWorkflowTag(row, 'Identifier number not found in system')) return '';
+  const tooltip = status === 'pending'
+    ? 'Background identifier number processing is still running. This suggestion is already submitted.'
+    : 'Identifier number background processing result.';
+  return ` <span class="badge badge-info asap-isbn-check-badge" title="${escapeAttr(tooltip)}">${escapeAttr(label)}</span>`;
+}
+
+export function renderTitleCell(row) {
+  const title = row.title || '';
+  const badges = getDuplicateBadgesHtml(row) + getIsbnCheckBadgesHtml(row);
+  return gridjs.html(`
+    <div class="staff-title-cell">
+      ${rowMarker(row)}
+      <div
+        class="staff-title-main"
+        tabindex="0"
+        title="${escapeAttr(title)}"
+        aria-label="Full title: ${escapeAttr(title)}"
+      >
+        ${escapeAttr(title)}${badges}
+      </div>
+      ${renderWorkflowTags(row.workflowTags)}
+    </div>
+  `);
+}
+
+export function getTitleBadgesHtml(row) {
+  return getDuplicateBadgesHtml(row) + getWorkflowTagBadgesHtml(row) + getIsbnCheckBadgesHtml(row);
+}
+
+export function getGridRow(row, status) {
+  if (status === 'suggestion') {
+    return [
+      row.barcode,
+      renderTitleCell(row),
+      row.author,
+      formatMap[row.format] || row.format,
+      formatPublication(row.publication),
+      formatStandardDate(row.created),
+      formatNote(row.notes),
+      gridjs.html(renderRowActions(row)),
+    ];
+  }
+
+  if (status === 'closed') {
+    return [
+      row.barcode,
+      renderTitleCell(row),
+      row.author,
+      formatMap[row.format] || row.format,
+      formatStandardDate(row.created),
+      formatCloseReason(row),
+      formatNote(row.notes),
+      gridjs.html(renderRowActions(row)),
+    ];
+  }
+
+  return [
+    row.barcode,
+    renderTitleCell(row),
+    row.author,
+    row.identifier,
+    renderBibIdCell(row),
+    ageMap[row.agegroup] || row.agegroup,
+    formatMap[row.format] || row.format,
+    formatPublication(row.publication),
+    formatStandardDate(row.created),
+    formatDateTime(row.lastPromoterCheck),
+    formatNote(row.notes),
+    gridjs.html(renderRowActions(row)),
+  ];
+}
+
+export function formatCloseReason(row) {
+  if (normalizeStatus(row.status) !== 'closed') {
+    return '';
+  }
+  return closeReasonMap[row.closeReason] || 'Closed';
+}
+
+export function getRowActions(row) {
+  const status = normalizeStatus(row.status);
+
+  if (status === 'suggestion') {
+    return {
+      primary: { label: 'Purchase', className: 'btn-primary', onClick: () => openEdit(row.id, 'outstanding_purchase', 'Approve for purchase', 'purchase') },
+      secondary: [
+        { label: 'Already own', onClick: () => openEdit(row.id, 'pending_hold', 'Already own', 'alreadyOwn') },
+        { label: 'Reject', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Reject', 'reject') },
+        { label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose') },
+        { label: 'Edit', onClick: () => openEdit(row.id, 'suggestion', 'Edit suggestion', '') },
+      ]
+    };
+  }
+
+  if (status === 'outstanding_purchase') {
+    return {
+      primary: { label: 'Ready for hold', className: 'btn-success', onClick: () => openEdit(row.id, 'pending_hold', 'Move to Pending hold', '') },
+      secondary: [
+        { label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose') },
+        { label: 'Undo', onClick: () => undoRow(row.id) },
+        { label: 'Edit', onClick: () => openEdit(row.id, 'outstanding_purchase', 'Edit', '') },
+      ]
+    };
+  }
+
+  if (status === 'pending_hold' || status === 'hold_placed' || status === 'closed') {
+    const secondary = [];
+    if ((status === 'pending_hold' || status === 'hold_placed') && hasWorkflowTag(row, 'Hold exists (same patron)')) {
+      secondary.push({ label: 'Close duplicate', className: 'danger', onClick: () => closeDuplicateRequest(row.id) });
+    }
+    if (status !== 'closed') secondary.push({ label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose') });
+    secondary.push({ label: 'Edit', onClick: () => openEdit(row.id, row.status, 'Edit', '') });
+    if (status === 'closed' && isAdminStaff()) {
+      secondary.push({ label: 'Delete', className: 'danger', onClick: () => deleteClosedRequest(row.id) });
+    }
+    return {
+      primary: { label: 'Undo', className: 'btn-outline-secondary', onClick: () => undoRow(row.id) },
+      secondary
+    };
+  }
+
+  return {
+    primary: { label: 'Edit', className: 'btn-secondary', onClick: () => openEdit(row.id, row.status, 'Edit', '') },
+    secondary: []
+  };
+}
+
+export async function runRowAction(action) {
+  closeActionMenu();
+  try {
+    await action.onClick();
+  } catch (error) {
+    await showAlert(error.message || String(error) || 'Action failed');
+  }
+}
+
+export function registerRowAction(action) {
+  const actionId = `row-action-${incrementRowActionIdCounter()}`;
+  rowActionRegistry.set(actionId, action);
+  return actionId;
+}
+
+export function getRegisteredRowAction(actionId) {
+  return rowActionRegistry.get(actionId);
+}
+
+export function renderRowActions(row) {
+  const actions = getRowActions(row);
+  const primaryActionId = registerRowAction(actions.primary);
+  let markup = `<div class="row-action-group" data-no-row-edit="true">`;
+  markup += `<button type="button" class="btn btn-sm row-action-primary ${escapeAttr(actions.primary.className || 'btn-primary')}" data-row-action-id="${primaryActionId}" data-no-row-edit="true">${escapeAttr(actions.primary.label)}</button>`;
+  if (actions.secondary?.length) {
+    const menuActionIds = actions.secondary.map(action => registerRowAction(action)).join(',');
+    markup += `<button type="button" class="btn btn-sm btn-outline-secondary row-action-menu-trigger" aria-haspopup="menu" aria-expanded="false" data-row-menu-action-ids="${menuActionIds}" data-no-row-edit="true">⋯</button>`;
+  }
+  markup += `</div>`;
+  return markup;
+}
+
+export function openActionMenu(triggerButton, actionIds) {
+  closeActionMenu();
+  const layer = document.getElementById('action-menu-layer');
+  if (!layer) return;
+  triggerButton.setAttribute('aria-expanded', 'true');
+  const menu = document.createElement('div');
+  menu.className = 'row-action-menu';
+  menu.setAttribute('role', 'menu');
+  actionIds.forEach((actionId) => {
+    const action = getRegisteredRowAction(actionId);
+    if (!action) return;
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = `row-action-menu-item ${action.className || ''}`.trim();
+    item.setAttribute('role', 'menuitem');
+    item.setAttribute('data-row-action-id', actionId);
+    item.setAttribute('data-no-row-edit', 'true');
+    item.textContent = action.label;
+    menu.appendChild(item);
+  });
+  layer.appendChild(menu);
+  positionActionMenu(triggerButton, menu);
+  setActiveActionMenu({ triggerButton, menu });
+}
+
+export function positionActionMenu(triggerButton, menu) {
+  const triggerRect = triggerButton.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const spacing = 6;
+  const viewportPadding = 8;
+  let top = triggerRect.bottom + spacing;
+  let left = triggerRect.right - menuRect.width;
+  if (top + menuRect.height > window.innerHeight - viewportPadding) {
+    top = triggerRect.top - menuRect.height - spacing;
+  }
+  left = Math.max(viewportPadding, Math.min(left, window.innerWidth - menuRect.width - viewportPadding));
+  menu.style.top = `${top}px`;
+  menu.style.left = `${left}px`;
+}
+
+export function closeActionMenu() {
+  if (!activeActionMenu) return;
+  activeActionMenu.triggerButton?.setAttribute('aria-expanded', 'false');
+  activeActionMenu.menu?.remove();
+  setActiveActionMenu(null);
+}
+
+export function escapeAttr(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function sanitizeHtml(html) {
+  if (!html) return "";
+  try {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const safeTags = ["P", "BR", "B", "I", "STRONG", "EM", "DIV", "SPAN", "A", "UL", "OL", "LI", "H1", "H2", "H3", "H4", "H5", "H6", "BLOCKQUOTE", "TABLE", "THEAD", "TBODY", "TR", "TH", "TD", "U", "S", "HR"];
+    const safeAttrs = ["href", "target", "rel", "title", "class", "id", "aria-label", "aria-hidden"];
+
+    // Recursive walker to remove unsafe tags and attributes
+    function walk(parent) {
+      const children = Array.from(parent.childNodes);
+      children.forEach(node => {
+        if (node.nodeType === 1) { // Element
+          if (!safeTags.includes(node.tagName)) {
+            // Unsafe tag: replace with its text content
+            const text = document.createTextNode(node.textContent);
+            parent.replaceChild(text, node);
+          } else {
+            // Safe tag: check attributes
+            const attrs = node.attributes;
+            for (let i = attrs.length - 1; i >= 0; i--) {
+              const name = attrs[i].name.toLowerCase();
+              const value = attrs[i].value.trim().toLowerCase();
+
+              if (!safeAttrs.includes(name) || (name === "href" && value.startsWith("javascript:"))) {
+                node.removeAttribute(name);
+              }
+            }
+            walk(node);
+          }
+        }
+      });
+    }
+
+    walk(doc.body);
+    return doc.body.innerHTML;
+  } catch (err) {
+    return escapeAttr(html);
+  }
+}
+
+function shouldIgnoreRowEditClick(target, event) {
+  if (event.defaultPrevented) return true;
+  if (event.button !== 0) return true;
+  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return true;
+
+  return !!target.closest([
+    'button',
+    'a',
+    'input',
+    'select',
+    'textarea',
+    'label',
+    'summary',
+    '[role="button"]',
+    '[role="menu"]',
+    '[role="menuitem"]',
+    '[data-row-action-id]',
+    '[data-row-menu-action-ids]',
+    '[data-no-row-edit]',
+    '[data-notes-action]',
+    '.row-action-group',
+    '.row-action-menu',
+    '.gridjs-search',
+    '.gridjs-pagination'
+  ].join(','));
+}
+
+function openSuggestionEditFromRow(recordId) {
+  const row = currentSuggestions.find(item => item.id === recordId) || allSuggestions.find(item => item.id === recordId);
+  if (!row) {
+    showToast('Could not find that suggestion. Refresh and try again.', 'error');
+    return;
+  }
+
+  const status = normalizeStatus(row.status);
+  openEdit(row.id, status || currentStatus, status === 'suggestion' ? 'Edit suggestion' : 'Edit', '');
+}
+
+gridContainer.addEventListener('click', (e) => {
+  const target = e.target;
+  if (!(target instanceof Element)) return;
+
+  const actionButton = e.target.closest('[data-row-action-id]');
+  if (actionButton) {
+    e.preventDefault();
+    e.stopPropagation();
+    const action = getRegisteredRowAction(actionButton.getAttribute('data-row-action-id'));
+    if (action) runRowAction(action);
+    return;
+  }
+
+  const menuTrigger = e.target.closest('[data-row-menu-action-ids]');
+  if (menuTrigger) {
+    e.preventDefault();
+    e.stopPropagation();
+    const actionIds = (menuTrigger.getAttribute('data-row-menu-action-ids') || '').split(',').filter(Boolean);
+    openActionMenu(menuTrigger, actionIds);
+    return;
+  }
+
+  const truncateBtn = e.target.closest('.truncate-note');
+  if (truncateBtn && gridContainer.contains(truncateBtn)) {
+    e.preventDefault();
+    e.stopPropagation();
+    const fullNote = truncateBtn.getAttribute('data-full-note');
+    document.getElementById('noteDialogContent').textContent = fullNote;
+    document.getElementById('noteDialog').showModal();
+    document.getElementById('noteDialogCloseBtn').focus();
+    return;
+  }
+
+  if (shouldIgnoreRowEditClick(target, e)) return;
+
+  const tableRow = target.closest('tr');
+  if (!tableRow || !gridContainer.contains(tableRow)) return;
+
+  const marker = tableRow.querySelector('[data-suggestion-id]');
+  const recordId = marker ? marker.getAttribute('data-suggestion-id') : '';
+  if (!recordId) return;
+
+  openSuggestionEditFromRow(recordId);
+});
+
+document.addEventListener('click', (event) => {
+  const menuActionButton = event.target.closest('#action-menu-layer [data-row-action-id]');
+  if (menuActionButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    const action = getRegisteredRowAction(menuActionButton.getAttribute('data-row-action-id'));
+    if (action) runRowAction(action);
+    return;
+  }
+  if (!activeActionMenu) return;
+  const clickedMenu = activeActionMenu.menu.contains(event.target);
+  const clickedTrigger = activeActionMenu.triggerButton.contains(event.target);
+  if (!clickedMenu && !clickedTrigger) closeActionMenu();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') closeActionMenu();
+});
+window.addEventListener('resize', closeActionMenu);
+window.addEventListener('scroll', closeActionMenu, true);

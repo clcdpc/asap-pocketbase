@@ -38,7 +38,7 @@ class MockRecord {
 
 global.Record = MockRecord;
 
-const { auditDeletedRequest } = require('../pb_hooks/lib/records.js');
+const { auditDeletedRequest } = require('../lib/records.js');
 
 let savedRecords = [];
 const mockApp = {

@@ -16,7 +16,7 @@ function extractFunction(source, name) {
   throw new Error(`Could not parse ${name}`);
 }
 
-const jobsSource = fs.readFileSync(path.resolve(__dirname, '../pb_hooks/lib/jobs.js'), 'utf8');
+const jobsSource = fs.readFileSync(path.resolve(__dirname, '../lib/jobs.js'), 'utf8');
 const fnCode = extractFunction(jobsSource, 'promoteRequestNow');
 
 function makeRecord(initial) {

@@ -3,7 +3,7 @@ const path = require("path");
 
 global.__hooks = path.resolve(__dirname, "../pb_hooks");
 
-const config = require("../pb_hooks/lib/config.js");
+const config = require("../lib/config.js");
 
 function createMockApp(options) {
   let calls = [];

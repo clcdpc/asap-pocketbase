@@ -2,7 +2,7 @@ const assert = require("assert");
 
 global.__hooks = __dirname + "/../pb_hooks";
 
-const jobs = require("../pb_hooks/lib/jobs.js");
+const jobs = require("../lib/jobs.js");
 
 class MockRecord {
   constructor(data) {
