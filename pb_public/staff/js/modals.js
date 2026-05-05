@@ -172,7 +172,7 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
   const bibid = document.getElementById('edit-bibid').value.trim();
   const row = currentSuggestions.find(r => r.id === id) || allSuggestions.find(r => r.id === id);
   if (row && row.status === 'outstanding_purchase' && bibid && !row.autohold) {
-    const confirmed = await showConfirm('Do Not Auto Place Hold', 'This request is marked Do Not Auto Place Hold. Saving this BIB ID will close the request once the title is identified, rather than sending it through the hold-placement workflow.');
+    const confirmed = await showConfirm('Do Not Auto Place Hold', 'This request is marked Do Not Auto Place Hold. Saving this BIB ID will close the request immediately and skip the hold-placement workflow.');
     if (!confirmed) return;
   }
 
