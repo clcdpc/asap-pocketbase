@@ -99,6 +99,13 @@ test('queryValueFromUrl() parses query parameters', () => {
   assert.strictEqual(routeUtils.queryValueFromUrl('http://example.com', 'a'), '');
 });
 
+test('queryValueFromUrl() handles malformed URI strings securely', () => {
+  // These would normally throw "URIError: URI malformed" with decodeURIComponent
+  assert.strictEqual(routeUtils.queryValueFromUrl('http://example.com?%xyz=1', '%xyz'), '1');
+  assert.strictEqual(routeUtils.queryValueFromUrl('http://example.com?a=%xyz', 'a'), '%xyz');
+  assert.strictEqual(routeUtils.queryValueFromUrl('http://example.com?%=%', '%'), '%');
+});
+
 test('parseJsonObject() parses valid JSON strings', () => {
   assert.deepStrictEqual(routeUtils.parseJsonObject('{"a":1}'), { a: 1 });
   assert.deepStrictEqual(routeUtils.parseJsonObject('  {"a":1}  '), { a: 1 });
