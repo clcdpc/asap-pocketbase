@@ -156,7 +156,7 @@ export function renderEditLeapBibLink(bibId) {
   const container = document.getElementById('edit-leap-bib-link-container');
   if (!container) return;
   const url = leapBibUrl(bibId);
-  if (!url) {
+  if (!url || !/^https?:\/\//i.test(url)) {
     container.classList.add('hidden');
     container.innerHTML = '';
     return;

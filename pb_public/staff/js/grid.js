@@ -371,7 +371,7 @@ export function renderBibIdCell(row) {
   const bibId = String(row?.bibid || '').trim();
   if (!bibId) return '';
   const url = leapBibUrl(bibId);
-  if (!url) return escapeAttr(bibId);
+  if (!url || !/^https?:\/\//i.test(url)) return escapeAttr(bibId);
   return gridjs.html(`<a href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer" data-no-row-edit="true">${escapeAttr(bibId)}</a>`);
 }
 
