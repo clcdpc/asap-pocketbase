@@ -246,7 +246,15 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
         'hold_placed': 'Hold placed',
         'closed': 'Closed'
       };
-      await showAlert(`Note: This suggestion moved directly to "${statusNames[updatedRecord.status] || updatedRecord.status}" because it was detected as already being on hold or having a BIB ID.`);
+      
+      let reason = 'it was detected as already being on hold or having a BIB ID';
+      if (updatedRecord.status === 'closed' && updatedRecord.closeReason === 'purchased_no_hold') {
+        reason = 'the patron has opted out of automatic hold placement';
+      } else if (updatedRecord.status === 'closed' && updatedRecord.closeReason === 'duplicate_hold') {
+        reason = 'a duplicate hold or request was detected for this patron';
+      }
+
+      await showAlert(`Note: This suggestion moved directly to "${statusNames[updatedRecord.status] || updatedRecord.status}" because ${reason}.`);
     }
 
     loadTab(currentStatus);
