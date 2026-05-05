@@ -119,15 +119,111 @@ export function resetGrid() {
   gridContainer.innerHTML = '';
 }
 
-export function normalizeWorkflowTagLabel(tag) {
-  const clean = String(tag || '').trim();
-  if (clean === 'dupe found in Polaris' || clean === 'Dupe found in Polaris') {
+export function normalizeLabel(label) {
+  const clean = String(label || '').trim();
+  if (!clean) return '';
+  const lower = clean.toLowerCase();
+  if (lower === 'dupe found in polaris' || lower === 'identifier found') {
     return 'Identifier found';
   }
-  if (clean === 'ISBN not found in system') {
+  if (lower === 'isbn not found in system' || lower === 'identifier number not found in system') {
     return 'Identifier number not found in system';
   }
   return clean;
+}
+
+export function getDuplicateLabels(row) {
+  if (!allSuggestions || !allSuggestions.length) return [];
+
+  const duplicates = allSuggestions.filter(r => {
+    if (r.id === row.id) return false;
+    if (r.libraryOrgId !== row.libraryOrgId) return false;
+
+    // Check identifier match if both have one
+    if (r.identifier && row.identifier && r.identifier.trim().toLowerCase() === row.identifier.trim().toLowerCase()) {
+      return true;
+    }
+
+    // Check BibID match
+    if (r.bibid && row.bibid && r.bibid.trim().toLowerCase() === row.bibid.trim().toLowerCase()) {
+      return true;
+    }
+
+    // Check title match
+    if (r.title && row.title && r.title.trim().toLowerCase() === row.title.trim().toLowerCase()) {
+      return true;
+    }
+
+    return false;
+  });
+
+  if (!duplicates.length) return [];
+
+  // Group by status
+  const statusCounts = {};
+  duplicates.forEach(d => {
+    const s = normalizeStatus(d.status);
+    statusCounts[s] = (statusCounts[s] || 0) + 1;
+  });
+
+  const statusNames = {
+    'suggestion': 'Suggestion',
+    'outstanding_purchase': 'Pending purchase',
+    'pending_hold': 'Pending hold',
+    'hold_placed': 'Hold placed',
+    'closed': 'Closed'
+  };
+
+  const labels = [];
+  for (const [status, count] of Object.entries(statusCounts)) {
+    const displayName = statusNames[status] || status;
+    const text = count > 1 ? `Dup (${displayName} x${count})` : `Dup (${displayName})`;
+    labels.push(text);
+  }
+  return labels;
+}
+
+export function getIsbnCheckLabel(row) {
+  const status = typeof row?.isbnCheckStatus === 'string' ? row.isbnCheckStatus : '';
+  const isbnStatusLabels = {
+    pending: 'New / identifier number check in progress',
+    found: 'Identifier number found',
+    not_found: 'Identifier number not found',
+    error_max_retries: 'Identifier number check retry limit reached'
+  };
+  const label = isbnStatusLabels[status];
+  if (!label) return '';
+
+  // Suppress if already in workflow tags
+  if (status === 'found' && hasWorkflowTag(row, 'Identifier found')) return '';
+  if (status === 'not_found' && hasWorkflowTag(row, 'Identifier number not found in system')) return '';
+
+  return label;
+}
+
+/**
+ * Canonical source for all visible badges/labels for a row.
+ * Used for both rendering and filtering.
+ */
+export function getFilterableLabelsForRow(row) {
+  const labels = new Set();
+  
+  // 1. Stored workflow tags
+  cleanWorkflowTags(row.workflowTags).forEach(tag => labels.add(normalizeLabel(tag)));
+  
+  // 2. Computed duplicate labels
+  getDuplicateLabels(row).forEach(label => labels.add(normalizeLabel(label)));
+  
+  // 3. Computed ISBN check label
+  const isbnLabel = getIsbnCheckLabel(row);
+  if (isbnLabel) labels.add(normalizeLabel(isbnLabel));
+  
+  // Return as sorted array of display labels
+  return Array.from(labels).filter(Boolean).sort((a, b) => a.localeCompare(b));
+}
+
+export function normalizeWorkflowTagLabel(tag) {
+  return normalizeLabel(tag);
 }
 
 export function cleanWorkflowTags(tags) {
@@ -146,7 +242,7 @@ export function cleanWorkflowTags(tags) {
 export function tagCountsForRecords(records) {
   const counts = new Map();
   (records || []).forEach(record => {
-    cleanWorkflowTags(record.workflowTags).forEach(tag => {
+    getFilterableLabelsForRow(record).forEach(tag => {
       counts.set(tag, (counts.get(tag) || 0) + 1);
     });
   });
@@ -188,7 +284,7 @@ export function updateTagFilter(records) {
 export function applyTagFilter(records) {
   if (!activeTagFilter) return records || [];
   return (records || []).filter(record => {
-    return cleanWorkflowTags(record.workflowTags).includes(activeTagFilter);
+    return getFilterableLabelsForRow(record).includes(activeTagFilter);
   });
 }
 
@@ -321,46 +417,8 @@ export function getGridColumns(status) {
 
 
 export function getDuplicateBadgesHtml(row) {
-  if (!allSuggestions || !allSuggestions.length) return '';
-
-  const duplicates = allSuggestions.filter(r => {
-    if (r.id === row.id) return false;
-    if (r.libraryOrgId !== row.libraryOrgId) return false;
-
-    // Check identifier match if both have one
-    if (r.identifier && row.identifier && r.identifier.trim().toLowerCase() === row.identifier.trim().toLowerCase()) {
-      return true;
-    }
-
-    // Check BibID match
-    if (r.bibid && row.bibid && r.bibid.trim().toLowerCase() === row.bibid.trim().toLowerCase()) {
-      return true;
-    }
-
-    // Check title match
-    if (r.title && row.title && r.title.trim().toLowerCase() === row.title.trim().toLowerCase()) {
-      return true;
-    }
-
-    return false;
-  });
-
-  if (!duplicates.length) return '';
-
-  // Group by status
-  const statusCounts = {};
-  duplicates.forEach(d => {
-    const s = normalizeStatus(d.status);
-    statusCounts[s] = (statusCounts[s] || 0) + 1;
-  });
-
-  const statusNames = {
-    'suggestion': 'Suggestion',
-    'outstanding_purchase': 'Pending purchase',
-    'pending_hold': 'Pending hold',
-    'hold_placed': 'Hold placed',
-    'closed': 'Closed'
-  };
+  const labels = getDuplicateLabels(row);
+  if (!labels.length) return '';
 
   const statusColors = {
     'suggestion': 'badge-secondary',
@@ -370,15 +428,13 @@ export function getDuplicateBadgesHtml(row) {
     'closed': 'badge-dark'
   };
 
-  let badges = '';
-  for (const [status, count] of Object.entries(statusCounts)) {
-    const displayName = statusNames[status] || status;
-    const colorClass = statusColors[status] || 'badge-secondary';
-    const text = count > 1 ? `Dup (${displayName} x${count})` : `Dup (${displayName})`;
-    badges += ` <span class="badge ${colorClass} asap-duplicate-badge" title="${count} duplicate(s) in ${displayName} stage">${text}</span>`;
-  }
-
-  return badges;
+  return labels.map(text => {
+    // Extract status from text e.g. "Dup (Pending hold)" or "Dup (Pending hold x2)"
+    const match = text.match(/\(([^x)]+)/);
+    const statusName = match ? match[1].trim().toLowerCase().replace(/ /g, '_') : '';
+    const colorClass = statusColors[statusName] || 'badge-secondary';
+    return ` <span class="badge ${colorClass} asap-duplicate-badge">${escapeAttr(text)}</span>`;
+  }).join('');
 }
 
 export function getWorkflowTagBadgesHtml(row) {
@@ -403,20 +459,14 @@ export function renderWorkflowTags(tags) {
 }
 
 export function getIsbnCheckBadgesHtml(row) {
-  const status = typeof row?.isbnCheckStatus === 'string' ? row.isbnCheckStatus : '';
-  const isbnStatusLabels = {
-    pending: 'New / identifier number check in progress',
-    found: 'Identifier number found',
-    not_found: 'Identifier number not found',
-    error_max_retries: 'Identifier number check retry limit reached'
-  };
-  const label = isbnStatusLabels[status];
+  const label = getIsbnCheckLabel(row);
   if (!label) return '';
-  if (status === 'found' && hasWorkflowTag(row, 'Identifier found')) return '';
-  if (status === 'not_found' && hasWorkflowTag(row, 'Identifier number not found in system')) return '';
+  
+  const status = typeof row?.isbnCheckStatus === 'string' ? row.isbnCheckStatus : '';
   const tooltip = status === 'pending'
     ? 'Background identifier number processing is still running. This suggestion is already submitted.'
     : 'Identifier number background processing result.';
+    
   return ` <span class="badge badge-info asap-isbn-check-badge" title="${escapeAttr(tooltip)}">${escapeAttr(label)}</span>`;
 }
 
