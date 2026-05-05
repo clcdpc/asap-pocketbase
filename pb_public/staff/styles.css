@@ -844,6 +844,10 @@ code {
   border: 1px solid rgba(0, 0, 0, 0.12);
   cursor: pointer;
   transition: opacity 0.15s ease-in-out;
+  padding: 0.15rem 0.45rem;
+  border-radius: 0.35rem;
+  font-size: 0.75rem;
+  vertical-align: middle;
 }
 .asap-duplicate-badge:hover {
   opacity: 0.85;
@@ -902,6 +906,10 @@ code {
   color: #fff;
   cursor: pointer;
   transition: background-color 0.15s ease-in-out;
+  padding: 0.15rem 0.45rem;
+  border-radius: 0.35rem;
+  font-size: 0.75rem;
+  vertical-align: middle;
 }
 .asap-isbn-check-badge:hover {
   background-color: #138496;
@@ -923,6 +931,8 @@ code {
   overflow: hidden;
   line-height: 1.35;
   border-radius: 4px;
+  padding: 4px 0;
+  margin: -4px 0;
 }
 
 .staff-title-main:focus {
