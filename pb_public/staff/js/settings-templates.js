@@ -9,13 +9,6 @@ export function setTemplateInputsDisabled(disabled) {
   });
 }
 
-export function clearTemplateInputs() {
-  templateFieldIds.forEach(id => {
-    const field = document.getElementById(id);
-    if (field) field.value = '';
-  });
-}
-
 export function setTemplateStatus(message, className, hidden = false) {
   const statusAlert = document.getElementById('library-override-status');
   if (!statusAlert) return;
