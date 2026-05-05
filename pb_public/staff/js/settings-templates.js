@@ -16,14 +16,6 @@ export function clearTemplateInputs() {
   });
 }
 
-export function setTemplateStatus(message, className, hidden = false) {
-  const statusAlert = document.getElementById('library-override-status');
-  if (!statusAlert) return;
-  statusAlert.className = className || 'alert alert-warning mb-4';
-  statusAlert.textContent = message || '';
-  statusAlert.classList.toggle('hidden', hidden);
-}
-
 export function populateEmailTemplateForms(emails) {
   emails = emails || {};
 
