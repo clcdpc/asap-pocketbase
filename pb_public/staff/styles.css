@@ -189,7 +189,8 @@ body {
 }
 
 #grid-container .gridjs-td:has(.staff-title-cell),
-#grid-container .gridjs-td:has(.workflow-tag-list) {
+#grid-container .gridjs-td:has(.workflow-tag-list),
+#grid-container .gridjs-td:has(.barcode-cell) {
   white-space: normal;
   overflow: visible;
 }
@@ -935,16 +936,32 @@ code {
 }
 .barcode-cell {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 6px;
+  gap: 4px;
   width: 100%;
 }
 
-.barcode-text {
+.barcode-content {
   flex: 1;
+  min-width: 0;
+  line-height: 1.2;
+}
+
+.barcode-text {
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.barcode-patron-name {
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+  margin-top: 1px;
 }
 
 .quick-new-suggestion {

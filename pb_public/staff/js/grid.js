@@ -381,9 +381,15 @@ export function rowMarker(row) {
 
 export function renderBarcodeCell(row) {
   const barcode = escapeAttr(row.barcode || '');
+  const name = [row.nameFirst, row.nameLast].filter(Boolean).join(' ').trim();
+  const nameHtml = name ? `<div class="barcode-patron-name text-muted small">${escapeAttr(name)}</div>` : '';
+  
   return gridjs.html(`
     <div class="barcode-cell">
-      <span class="barcode-text">${barcode}</span>
+      <div class="barcode-content">
+        <div class="barcode-text">${barcode}</div>
+        ${nameHtml}
+      </div>
       <button type="button" class="btn btn-link btn-sm p-0 ml-1 quick-new-suggestion" 
               data-barcode="${barcode}" 
               data-no-row-edit="true" 
