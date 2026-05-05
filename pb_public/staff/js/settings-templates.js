@@ -2,13 +2,6 @@ import { pb, currentRejectionTemplates, setCurrentRejectionTemplates, currentLib
 import { markSettingsDirty, updateAutoRejectEmailControls, getFieldChecked, getFieldValue, showAlert } from './api.js';
 import { escapeAttr } from './grid.js';
 
-export function clearTemplateInputs() {
-  templateFieldIds.forEach(id => {
-    const field = document.getElementById(id);
-    if (field) field.value = '';
-  });
-}
-
 export function populateEmailTemplateForms(emails) {
   emails = emails || {};
 
