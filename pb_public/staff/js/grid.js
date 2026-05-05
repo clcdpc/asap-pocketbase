@@ -293,6 +293,15 @@ export function applyTagFilter(records) {
   });
 }
 
+export function toggleTagFilter(tagName) {
+  const nextTag = activeTagFilter === tagName ? '' : tagName;
+  setActiveTagFilter(nextTag);
+  if (tagFilterSelect) {
+    tagFilterSelect.value = nextTag;
+  }
+  renderCurrentGrid(currentStatus);
+}
+
 export function renderCurrentGrid(status = currentStatus) {
   resetGrid();
   const visibleRecords = applyTagFilter(currentSuggestions);
@@ -434,11 +443,13 @@ export function getDuplicateBadgesHtml(row) {
   };
 
   return labels.map(text => {
+    const normalized = normalizeLabel(text);
+    const isActive = activeTagFilter === normalized;
     // Extract status from text e.g. "Dup (Pending hold)" or "Dup (Pending hold x2)"
     const match = text.match(/\(([^x)]+)/);
     const statusName = match ? match[1].trim().toLowerCase().replace(/ /g, '_') : '';
     const colorClass = statusColors[statusName] || 'badge-secondary';
-    return ` <span class="badge ${colorClass} asap-duplicate-badge">${escapeAttr(text)}</span>`;
+    return ` <span class="badge ${colorClass} asap-duplicate-badge ${isActive ? 'active' : ''}" data-tag="${escapeAttr(normalized)}" role="button" title="${isActive ? 'Clear filter' : 'Filter by ' + escapeAttr(text)}">${escapeAttr(text)}</span>`;
   }).join('');
 }
 
@@ -463,19 +474,25 @@ export function renderWorkflowTags(tags, row) {
   if (!clean.length) {
     return '<div class="text-muted small">No workflow tags</div>';
   }
-  return `<div class="workflow-tag-list">${clean.map(tag => `<span class="workflow-tag">${escapeAttr(tag)}</span>`).join('')}</div>`;
+  return `<div class="workflow-tag-list">${clean.map(tag => {
+    const normalized = normalizeLabel(tag);
+    const isActive = activeTagFilter === normalized;
+    return `<span class="workflow-tag ${isActive ? 'active' : ''}" data-tag="${escapeAttr(normalized)}" role="button" title="${isActive ? 'Clear filter' : 'Filter by ' + escapeAttr(tag)}">${escapeAttr(tag)}</span>`;
+  }).join('')}</div>`;
 }
 
 export function getIsbnCheckBadgesHtml(row) {
   const label = getIsbnCheckLabel(row);
   if (!label) return '';
+  const normalized = normalizeLabel(label);
+  const isActive = activeTagFilter === normalized;
   
   const status = typeof row?.isbnCheckStatus === 'string' ? row.isbnCheckStatus : '';
   const tooltip = status === 'pending'
     ? 'Background identifier number processing is still running. This suggestion is already submitted.'
     : 'Identifier number background processing result.';
     
-  return ` <span class="badge badge-info asap-isbn-check-badge" title="${escapeAttr(tooltip)}">${escapeAttr(label)}</span>`;
+  return ` <span class="badge badge-info asap-isbn-check-badge ${isActive ? 'active' : ''}" data-tag="${escapeAttr(normalized)}" role="button" title="${isActive ? 'Clear filter' : tooltip}">${escapeAttr(label)}</span>`;
 }
 
 export function renderTitleCell(row) {
@@ -791,6 +808,15 @@ gridContainer.addEventListener('click', (e) => {
     document.getElementById('noteDialogContent').textContent = fullNote;
     document.getElementById('noteDialog').showModal();
     document.getElementById('noteDialogCloseBtn').focus();
+    return;
+  }
+
+  const tagBadge = target.closest('.workflow-tag, .asap-duplicate-badge, .asap-isbn-check-badge');
+  if (tagBadge && gridContainer.contains(tagBadge)) {
+    e.preventDefault();
+    e.stopPropagation();
+    const tag = tagBadge.getAttribute('data-tag');
+    if (tag) toggleTagFilter(tag);
     return;
   }
 

@@ -831,6 +831,16 @@ code {
 
 .asap-duplicate-badge {
   border: 1px solid rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+  transition: opacity 0.15s ease-in-out;
+}
+.asap-duplicate-badge:hover {
+  opacity: 0.85;
+}
+.asap-duplicate-badge.active {
+  border-color: #000;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #6c757d;
+  font-weight: 800;
 }
 
 .edit-modal-tags {
@@ -858,6 +868,16 @@ code {
   overflow-wrap: anywhere;
   padding: 0.15rem 0.45rem;
   white-space: normal;
+  cursor: pointer;
+  transition: background-color 0.15s ease-in-out;
+}
+.workflow-tag:hover {
+  background-color: #0a58ca;
+}
+.workflow-tag.active {
+  background-color: #052c65;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #0b5ed7;
+  font-weight: 800;
 }
 
 .asap-polaris-tag {
@@ -869,6 +889,16 @@ code {
   background-color: #17a2b8;
   border: 1px solid rgba(0, 0, 0, 0.16);
   color: #fff;
+  cursor: pointer;
+  transition: background-color 0.15s ease-in-out;
+}
+.asap-isbn-check-badge:hover {
+  background-color: #138496;
+}
+.asap-isbn-check-badge.active {
+  background-color: #117a8b;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #17a2b8;
+  font-weight: 800;
 }
 
 .staff-title-cell {
