@@ -8,12 +8,6 @@ export function normalizePublicationOptions(options) {
   return cleaned.length ? Array.from(new Set(cleaned)) : defaultPublicationOptions.slice();
 }
 
-export function normalizeAgeGroups(options) {
-  const raw = Array.isArray(options) ? options : String(options || '').split(/\r?\n/);
-  const cleaned = raw.map(option => String(option && typeof option === 'object' ? option.label : option || '').trim()).filter(Boolean);
-  return cleaned.length ? Array.from(new Set(cleaned)) : defaultAgeGroups.slice();
-}
-
 export function optionIdFromLabel(label, fallback = 'option') {
   const id = String(label || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
   return id || fallback;
