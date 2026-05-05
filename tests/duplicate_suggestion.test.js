@@ -11,6 +11,9 @@ class MockRecord {
   get(key) {
     return this.data[key];
   }
+  getInt(key) {
+    return parseInt(this.data[key]) || 0;
+  }
   set(key, value) {
     this.data[key] = value;
   }
