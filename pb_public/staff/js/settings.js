@@ -1,4 +1,4 @@
-import { pb, settingsContainer, settingsForm, formatMap, availableFormats, setAvailableFormats, currentRejectionTemplates, verifiedBibId, publicationOptions, setPublicationOptions, workflowSettings, currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, libraryContextLoadSerial, librarySelectorBound, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, lastWorkflowEnabledList, defaultPublicationOptions, defaultAgeGroups, emailTemplateDefaults, setVerifiedBibId, setCurrentLibraryContextOrgId, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId, setLibrarySelectorBound, setSettingsSaving, setSettingsLoading, setLeapBibUrlPattern, setLastWorkflowEnabledList, incrementLibraryContextLoadSerial } from './state.js';
+import { pb, settingsContainer, settingsForm, formatMap, availableFormats, setAvailableFormats, currentRejectionTemplates, verifiedBibId, publicationOptions, setPublicationOptions, workflowSettings, currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, initialSettingsSnapshot, libraryContextLoadSerial, librarySelectorBound, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, lastWorkflowEnabledList, defaultPublicationOptions, defaultAgeGroups, emailTemplateDefaults, setVerifiedBibId, setCurrentLibraryContextOrgId, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId, setInitialSettingsSnapshot, setLibrarySelectorBound, setSettingsSaving, setSettingsLoading, setLeapBibUrlPattern, setLastWorkflowEnabledList, incrementLibraryContextLoadSerial } from './state.js';
 import { setFieldValue, setFieldChecked, getFieldValue, getFieldChecked, validateStaffUrl, normalizeStaffUrl, normalizeLeapBibUrlPattern, isPocketBaseAutoCancelError, validateSmtpHostField, setVisible, showToast, showConfirm, isSuperAdminStaff, closeOpenDialogs, updateSaveBarState, markSettingsDirty, markSettingsClean, activateSettingsSection, initSettingsNavigation, updateEmailStatusBanner, updateOrganizationsStatusUi, checkAuth, loadSetupStatus, authorizedJson, updateAutoRejectEmailControls } from './api.js';
 import { closeActionMenu, escapeAttr } from './grid.js';
 import { renderEditLeapBibLink } from './modals.js';
@@ -296,6 +296,7 @@ export function discardLibrarySettingsChanges() {
   setSettingsLoading(true);
   try {
     applyLibrarySettingsToForm(cloneLibrarySettingsSnapshot(lastSavedLibrarySettingsSnapshot));
+    captureSettingsBaseline();
     markSettingsClean('clean');
     const msg = document.getElementById('settings-msg');
     if (msg) {
@@ -324,6 +325,7 @@ export async function loadLibrarySettings(orgId) {
     settings = result;
     rememberLastSavedLibrarySettings(settings);
     applyLibrarySettingsToForm(settings);
+    captureSettingsBaseline();
     return settings;
 
   } catch (err) {
@@ -456,7 +458,7 @@ export function populatePatronUiForms(uiText) {
   setAgeGroups(uiText.ageGroups);
 }
 
-export function buildSettingsPayload() {
+function _serializeSettingsState(validate = false) {
   const isSystemContext = isSuperAdminStaff() && currentLibraryContextOrgId === 'system';
 
   function positiveInt(id, fallback, label) {
@@ -464,7 +466,10 @@ export function buildSettingsPayload() {
     if (!raw) return fallback;
     const value = parseInt(raw, 10);
     if (!Number.isFinite(value) || value < 1) {
-      throw new Error(`${label} must be a number greater than 0.`);
+      if (validate) {
+        throw new Error(`${label} must be a number greater than 0.`);
+      }
+      return value; // Return as-is for serialization if not validating
     }
     return value;
   }
@@ -473,14 +478,19 @@ export function buildSettingsPayload() {
   let nextLeapBibUrlPattern = leapBibUrlPattern || '';
   if (isSystemContext) {
     staffUrl = getFieldValue('system-staff-url').trim();
-    const staffUrlError = validateStaffUrl(staffUrl);
-    if (staffUrlError) {
-      throw new Error(staffUrlError);
+    if (validate) {
+      const staffUrlError = validateStaffUrl(staffUrl);
+      if (staffUrlError) {
+        throw new Error(staffUrlError);
+      }
+      staffUrl = normalizeStaffUrl(staffUrl);
+      setFieldValue('system-staff-url', staffUrl);
     }
-    staffUrl = normalizeStaffUrl(staffUrl);
-    setFieldValue('system-staff-url', staffUrl);
-    nextLeapBibUrlPattern = normalizeLeapBibUrlPattern(getFieldValue('leap-bib-url-pattern').trim());
-    setFieldValue('leap-bib-url-pattern', nextLeapBibUrlPattern);
+    nextLeapBibUrlPattern = getFieldValue('leap-bib-url-pattern').trim();
+    if (validate) {
+      nextLeapBibUrlPattern = normalizeLeapBibUrlPattern(nextLeapBibUrlPattern);
+      setFieldValue('leap-bib-url-pattern', nextLeapBibUrlPattern);
+    }
   }
 
   const uiText = {
@@ -521,7 +531,7 @@ export function buildSettingsPayload() {
       subject: getFieldValue('email-rejected-subject'),
       body: getFieldValue('email-rejected-body')
     },
-    rejection_templates: currentRejectionTemplates,
+    rejection_templates: JSON.parse(JSON.stringify(currentRejectionTemplates || [])),
     hold_placed: {
       subject: getFieldValue('email-hold-subject'),
       body: getFieldValue('email-hold-body')
@@ -554,8 +564,6 @@ export function buildSettingsPayload() {
     externalSearchUrlTemplate: getFieldValue('wf-external-search-url-template').trim() || 'https://www.amazon.com/s?k={{title}}'
   };
 
-  // Only include global-only fields when in system context.
-  // In library context, these fields are hidden and their form values may be stale.
   if (isSystemContext) {
     payload.smtp = {
       host: getFieldValue('smtp-host').trim(),
@@ -570,10 +578,25 @@ export function buildSettingsPayload() {
     payload.enabledLibraryOrgIds = collectEnabledLibraryIds();
   }
 
-  // Logo and logoAlt are now handled via a dedicated upload path
-  // to avoid sending large files through the JSON settings payload.
-
   return payload;
+}
+
+export function serializeSettingsState() {
+  return _serializeSettingsState(false);
+}
+
+export function buildSettingsPayload() {
+  return _serializeSettingsState(true);
+}
+
+export function captureSettingsBaseline() {
+  setInitialSettingsSnapshot(JSON.stringify(serializeSettingsState()));
+}
+
+export function checkSettingsDirty() {
+  if (!initialSettingsSnapshot) return false;
+  const currentState = JSON.stringify(serializeSettingsState());
+  return currentState !== initialSettingsSnapshot;
 }
 
 export async function saveSettings(options = {}) {
@@ -641,6 +664,7 @@ export async function saveSettings(options = {}) {
     });
 
     await libraryPromise;
+    captureSettingsBaseline();
     msg.textContent = options.successText || 'Settings saved.';
     msg.className = 'mt-2 font-weight-bold text-success';
     if (options.clearDelay !== 0) {

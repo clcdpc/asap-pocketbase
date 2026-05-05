@@ -68,6 +68,9 @@ export function setLastSavedLibrarySettingsSnapshot(snapshot) { lastSavedLibrary
 export let lastSavedLibrarySettingsOrgId = 'system';
 export function setLastSavedLibrarySettingsOrgId(id) { lastSavedLibrarySettingsOrgId = id; }
 
+export let initialSettingsSnapshot = null;
+export function setInitialSettingsSnapshot(snapshot) { initialSettingsSnapshot = snapshot; }
+
 export let libraryTemplateOverrides = {};
 export function setLibraryTemplateOverrides(overrides) { libraryTemplateOverrides = overrides; }
 
