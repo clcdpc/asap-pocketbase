@@ -210,8 +210,13 @@ export function getFilterableLabelsForRow(row) {
   
   // 1. Stored workflow tags
   cleanWorkflowTags(row.workflowTags).forEach(tag => labels.add(normalizeLabel(tag)));
-  
-  // 2. Computed duplicate labels
+
+  // 2. Autohold preference
+  if (row.autohold === false) {
+    labels.add("No hold requested");
+  }
+
+  // 3. Computed duplicate labels
   getDuplicateLabels(row).forEach(label => labels.add(normalizeLabel(label)));
   
   // 3. Computed ISBN check label
@@ -450,8 +455,11 @@ export function hasWorkflowTag(row, label) {
   return cleanWorkflowTags(row?.workflowTags).includes(label);
 }
 
-export function renderWorkflowTags(tags) {
+export function renderWorkflowTags(tags, row) {
   const clean = cleanWorkflowTags(tags);
+  if (row && row.autohold === false && !clean.includes("No hold requested")) {
+    clean.push("No hold requested");
+  }
   if (!clean.length) {
     return '<div class="text-muted small">No workflow tags</div>';
   }
@@ -484,7 +492,7 @@ export function renderTitleCell(row) {
       >
         ${escapeAttr(title)}${badges}
       </div>
-      ${renderWorkflowTags(row.workflowTags)}
+      ${renderWorkflowTags(row.workflowTags, row)}
     </div>
   `);
 }

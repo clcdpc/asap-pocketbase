@@ -34,7 +34,7 @@ export function openEdit(id, nextStatus, dialogTitle, actionStr) {
   document.getElementById('edit-exact-publication-date').value = dateOnly(row.exactPublicationDate);
   document.getElementById('edit-autohold').checked = !!row.autohold;
   renderEditPatronContext(row);
-  renderEditWorkflowTags(row.workflowTags);
+  renderEditWorkflowTags(row.workflowTags, row);
   renderEditLeapBibLink(row.bibid);
   renderPurchaseReminderOption(actionStr);
 
@@ -143,12 +143,12 @@ export function renderEditPatronContext(row) {
   `;
 }
 
-export function renderEditWorkflowTags(tags) {
+export function renderEditWorkflowTags(tags, row) {
   const container = document.getElementById('edit-workflow-tags');
   if (!container) return;
   container.innerHTML = `
     <div class="small font-weight-bold mb-1">Workflow tags</div>
-    ${renderWorkflowTags(tags)}
+    ${renderWorkflowTags(tags, row)}
   `;
 }
 
