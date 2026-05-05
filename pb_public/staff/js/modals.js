@@ -178,8 +178,9 @@ export function renderExternalSearchButton(title, identifier) {
     return;
   }
 
+  let cleanTitle = (title || '').split(' (')[0].trim();
   let url = template;
-  url = url.replace(/\{\{title\}\}/g, encodeURIComponent(title || ''));
+  url = url.replace(/\{\{title\}\}/g, encodeURIComponent(cleanTitle));
   url = url.replace(/\{\{identifier\}\}/g, encodeURIComponent(identifier || ''));
 
   container.innerHTML = `
