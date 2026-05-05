@@ -374,6 +374,7 @@ export function populateWorkflowForms(wf) {
   toggleCommonAuthorsGroup();
 
   setFieldChecked('polaris-auto-promote', !!wf.autoPromote);
+  setFieldChecked('allow-patron-autohold-opt-out', !!wf.allowPatronAutoholdOptOut);
   workflowSettings.autoPromote = !!wf.autoPromote;
 }
 
@@ -543,7 +544,8 @@ export function buildSettingsPayload() {
     commonAuthorsHelp: getFieldValue('wf-common-authors-help').trim() || 'See if this is a creator we already collect.',
     commonAuthorsList: sortAuthorsByLastName(getFieldValue('wf-common-authors-list')),
     commonAuthorsMessage: getFieldValue('wf-common-authors-message'),
-    autoPromote: getFieldChecked('polaris-auto-promote')
+    autoPromote: getFieldChecked('polaris-auto-promote'),
+    allowPatronAutoholdOptOut: getFieldChecked('allow-patron-autohold-opt-out')
   };
 
   // Only include global-only fields when in system context.
@@ -620,7 +622,8 @@ export async function saveSettings(options = {}) {
         commonAuthorsHelp: payload.commonAuthorsHelp,
         commonAuthorsList: payload.commonAuthorsList,
         commonAuthorsMessage: payload.commonAuthorsMessage,
-        autoPromote: payload.autoPromote
+        autoPromote: payload.autoPromote,
+        allowPatronAutoholdOptOut: payload.allowPatronAutoholdOptOut
       }
     };
 

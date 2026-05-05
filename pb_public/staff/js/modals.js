@@ -32,6 +32,7 @@ export function openEdit(id, nextStatus, dialogTitle, actionStr) {
   document.getElementById('edit-age').value = row.agegroup || 'adult';
   setSelectValue(document.getElementById('edit-publication'), row.publication || publicationOptions[0]);
   document.getElementById('edit-exact-publication-date').value = dateOnly(row.exactPublicationDate);
+  document.getElementById('edit-autohold').checked = !!row.autohold;
   renderEditPatronContext(row);
   renderEditWorkflowTags(row.workflowTags);
   renderEditLeapBibLink(row.bibid);
@@ -194,6 +195,7 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
     publication: document.getElementById('edit-publication').value,
     exactPublicationDate: document.getElementById('edit-exact-publication-date').value,
     notes: document.getElementById('edit-notes').value,
+    autohold: document.getElementById('edit-autohold').checked,
     editedBy: pb.authStore.model.username
   };
   const reminderCheckbox = document.getElementById('edit-email-purchase-reminder');

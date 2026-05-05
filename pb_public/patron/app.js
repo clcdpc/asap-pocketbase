@@ -336,6 +336,13 @@ suggestionForm.addEventListener('submit', async (e) => {
   try {
     const fd = new FormData(suggestionForm);
     const data = Object.fromEntries(fd.entries());
+    
+    // Explicitly handle autohold checkbox to ensure boolean is sent even if unchecked
+    const autoholdCheckbox = document.getElementById('autohold');
+    if (autoholdCheckbox) {
+      data.autohold = autoholdCheckbox.checked;
+    }
+
     const result = await request('/api/asap/patron/suggestions', {
       method: 'POST',
       body: JSON.stringify(data)
@@ -570,6 +577,11 @@ function applyUiConfig() {
   updateFormatUI();
   updateFormatLabels();
   applyCommonAuthors();
+  
+  const autoholdField = document.getElementById('field-autohold');
+  if (autoholdField) {
+    autoholdField.classList.toggle('hidden', !uiConfig.allowPatronAutoholdOptOut);
+  }
 }
 
 function applyCommonAuthors() {

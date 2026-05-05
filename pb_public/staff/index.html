@@ -550,6 +550,17 @@
                     </div>
                   </div>
 
+                  <!-- Automation: Autohold Opt-out -->
+                  <div class="form-row align-items-center mb-4">
+                    <div class="col-auto">
+                      <div class="custom-control custom-checkbox">
+                        <input type="checkbox" class="custom-control-input" id="allow-patron-autohold-opt-out">
+                        <label class="custom-control-label font-weight-bold" for="allow-patron-autohold-opt-out">Allow patron autohold opt-out</label>
+                      </div>
+                      <small class="form-text text-muted">Let patrons choose to decline automatic hold placement when submitting a suggestion. If unchecked, all suggestions default to automatic holds.</small>
+                    </div>
+                  </div>
+
                   <!-- Stage 3: Pending hold -->
                   <div class="form-row align-items-center mb-2">
                     <div class="col-auto">
@@ -1050,6 +1061,12 @@
         <input type="checkbox" class="custom-control-input" id="edit-email-purchase-reminder">
         <label class="custom-control-label" for="edit-email-purchase-reminder">Email me a purchase reminder</label>
         <small id="edit-purchase-reminder-help" class="form-text text-muted"></small>
+      </div>
+
+      <div class="custom-control custom-checkbox mt-2">
+        <input type="checkbox" class="custom-control-input" id="edit-autohold">
+        <label class="custom-control-label" for="edit-autohold">Automatic hold</label>
+        <small class="form-text text-muted">Automatically place a hold in Polaris for this suggestion.</small>
       </div>
 
     </div>

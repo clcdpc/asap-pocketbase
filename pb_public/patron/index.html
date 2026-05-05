@@ -12,8 +12,10 @@
     body { padding: 20px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
     .hidden { display: none !important; }
     .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
-    .form-group label { text-align: right; font-weight: bold; }
-    .reqAuth label { padding-top: 7px; }
+    .form-group label:not(.custom-control-label) { text-align: right; font-weight: bold; }
+    .reqAuth label:not(.custom-control-label) { padding-top: 7px; }
+    .custom-control-label { padding-top: 2px; }
+    .custom-control-label::before, .custom-control-label::after { top: 0.35rem !important; }
 
     /* Accessibility Overrides */
     .btn-primary { background-color: #0056b3; border-color: #004a9b; }
@@ -157,6 +159,15 @@
               <option value="Coming soon">Coming soon</option>
               <option value="Published a while back">Published a while back</option>
             </select>
+          </div>
+        </div>
+        <div class="form-group row reqAuth hidden" id="field-autohold">
+          <div class="offset-5 col-7">
+            <div class="custom-control custom-checkbox">
+              <input type="checkbox" class="custom-control-input" id="autohold" checked>
+              <label class="custom-control-label font-weight-bold" for="autohold">Place a hold for me if purchased</label>
+              <small class="form-text text-muted">We will automatically place a hold for you if the library decides to purchase this item. Uncheck this if you do not want a hold placed.</small>
+            </div>
           </div>
         </div>
         <div class="form-group row reqAuth">
