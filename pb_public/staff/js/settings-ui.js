@@ -222,19 +222,6 @@ export function collectPatronFormatRules() {
   return rules;
 }
 
-export function populatePublicationSelect(select, selectedValue) {
-  if (!select) return;
-  const selected = selectedValue || select.value || publicationOptions[0];
-  select.innerHTML = '';
-  publicationOptions.forEach(option => {
-    const item = document.createElement('option');
-    item.value = option;
-    item.textContent = option;
-    select.appendChild(item);
-  });
-  setSelectValue(select, selected);
-}
-
 export function setSelectValue(select, value) {
   if (!select) return;
   value = String(value || '').trim();
