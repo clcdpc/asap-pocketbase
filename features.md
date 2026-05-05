@@ -18,6 +18,9 @@
 * Real-time duplicate suggestion checking
 * Library-specific branding (logo, title, login prompts) based on `libraryOrgId`
 * Professional email notifications (Submitted, Rejected, Hold Placed, etc.)
+* Custom Formats (ability to set custom material formats in UI settings)
+* External Search (Amazon search integration option via `externalSearchUrlTemplate`)
+* Common Authors Feature (alerts patrons to popular creators automatically purchased)
 
 ## Staff Experience
 * Staff dashboard portal (`/staff/`)
@@ -32,12 +35,17 @@
   * Cascading configuration overrides (Library vs System default)
   * Custom Sender Identities (From Email, From Name)
 * Profile menu with option to opt-in to weekly action summary emails
+* Custom Rejection Templates for standardized decline reasons
+* Bulk deletion capabilities for closed requests
+* Setup Wizard & Global SMTP Configuration
 
 ## Polaris Integration
 * Secure API communication via HMCA-SHA1 signatures
 * Real-time BIB/Hold lookups
 * Automated hold placement
 * Fulfillment tracking
+* Manual Test Integrations (Test Polaris connection endpoint)
+* Data Redaction (Centralized masking of patron identifier/sensitive keys in logs)
 
 ## Automated Workflows (Cron Jobs)
 Background jobs are executed automatically based on cron schedules.
@@ -51,6 +59,7 @@ Background jobs are executed automatically based on cron schedules.
 * **ISBN Checks** (`asap-isbn-check` via `processPendingSuggestionIsbnChecks` / `processPendingIsbnChecks`): Runs background ISBN checks and tags suggestions with "found" or "not found".
 * **Organization Sync** (`asap-organization-sync` via `runScheduledOrganizationSync`): Synchronizes the Polaris organization hierarchy once a day.
 * **Weekly Staff Action Summary** (`asap-weekly-staff-action-summary` via `runWeeklyStaffActionSummary`): Sends weekly emails summarizing new suggestions and approved purchases missing BIB IDs to opted-in staff.
+* **Manual Job Triggers** APIs for staff to manually run checking processes.
 
 ## Setup & Configuration
 * Initial Setup Wizard
