@@ -643,6 +643,23 @@
                     </div>
                   </div>
 
+                  <hr class="my-4">
+
+                  <!-- External Search -->
+                  <h5 class="mb-3">External search provider</h5>
+                  <p class="text-muted small">Configure a button in the request edit modal to quickly search external sites like Amazon or Google.</p>
+                  <div class="form-row">
+                    <div class="form-group col-md-6">
+                      <label for="wf-external-search-label" class="font-weight-bold mb-1">Search button label</label>
+                      <input id="wf-external-search-label" class="form-control" placeholder="Search Amazon">
+                    </div>
+                    <div class="form-group col-md-6">
+                      <label for="wf-external-search-url-template" class="font-weight-bold mb-1">URL template</label>
+                      <input id="wf-external-search-url-template" class="form-control" placeholder="https://www.amazon.com/s?k={{title}}">
+                      <small class="form-text text-muted">Use <code>{{title}}</code> or <code>{{identifier}}</code> as placeholders.</small>
+                    </div>
+                  </div>
+
                 </div>
               </div>
             </section>
@@ -986,7 +1003,10 @@
       </div>
 
       <div class="form-group mb-2">
-        <label class="small font-weight-bold mb-1">Title (original)</label>
+        <div class="d-flex justify-content-between align-items-end mb-1">
+          <label class="small font-weight-bold mb-0">Title (original)</label>
+          <div id="edit-external-search-container"></div>
+        </div>
         <input type="text" id="edit-title" class="form-control form-control-sm">
       </div>
 

@@ -1,4 +1,4 @@
-import { pb, formatMap, availableFormats, currentRejectionTemplates, currentStatus, currentSuggestions, allSuggestions, verifiedBibId, publicationOptions, setVerifiedBibId } from './state.js';
+import { pb, formatMap, availableFormats, currentRejectionTemplates, currentStatus, currentSuggestions, allSuggestions, verifiedBibId, publicationOptions, setVerifiedBibId, workflowSettings } from './state.js';
 import { leapBibUrl, showToast, showAlert, showConfirm, openProfileDialog } from './api.js';
 import { loadTab, formatStandardDate, renderWorkflowTags, escapeAttr } from './grid.js';
 import { setSelectValue, dateOnly } from './settings-ui.js';
@@ -36,6 +36,7 @@ export function openEdit(id, nextStatus, dialogTitle, actionStr) {
   renderEditPatronContext(row);
   renderEditWorkflowTags(row.workflowTags, row);
   renderEditLeapBibLink(row.bibid);
+  renderExternalSearchButton(row.title, row.identifier);
   renderPurchaseReminderOption(actionStr);
 
   const username = (pb.authStore.model && pb.authStore.model.username) ? pb.authStore.model.username : 'staff';
@@ -163,6 +164,29 @@ export function renderEditLeapBibLink(bibId) {
   }
   container.classList.remove('hidden');
   container.innerHTML = `<a class="btn btn-sm btn-outline-primary" href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">Open Bib in Leap</a>`;
+}
+
+export function renderExternalSearchButton(title, identifier) {
+  const container = document.getElementById('edit-external-search-container');
+  if (!container) return;
+
+  const label = workflowSettings.externalSearchLabel || 'Search Amazon';
+  const template = workflowSettings.externalSearchUrlTemplate || '';
+
+  if (!template || !template.includes('://')) {
+    container.innerHTML = '';
+    return;
+  }
+
+  let url = template;
+  url = url.replace(/\{\{title\}\}/g, encodeURIComponent(title || ''));
+  url = url.replace(/\{\{identifier\}\}/g, encodeURIComponent(identifier || ''));
+
+  container.innerHTML = `
+    <a href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer" class="btn btn-xs btn-outline-info">
+      <i class="fa fa-external-link"></i> ${escapeAttr(label)}
+    </a>
+  `;
 }
 
 document.getElementById('edit-form').addEventListener('submit', async (e) => {

@@ -132,6 +132,8 @@ routerAdd("GET", "/api/asap/config", (e) => {
     response.commonAuthorsLabel = wf.commonAuthorsLabel || "Popular Creators";
     response.commonAuthorsHelp = wf.commonAuthorsHelp || "See if this is a creator we already collect.";
     response.commonAuthorsMessage = wf.commonAuthorsMessage || "We automatically purchase all upcoming titles by this creator. Please check the catalog to place a hold on 'On Order' items.";
+    response.externalSearchLabel = wf.externalSearchLabel || "Search Amazon";
+    response.externalSearchUrlTemplate = wf.externalSearchUrlTemplate || "https://www.amazon.com/s?k={{title}}";
     
     return e.json(200, response);
   } catch (err) {
@@ -139,9 +141,7 @@ routerAdd("GET", "/api/asap/config", (e) => {
     return e.json(400, { message: String(err) });
   }
 });
- 
- 
- 
+
 onBootstrap((e) => {
   e.next();
   require(`${__hooks}/../lib/config.js`).applyMailSettings(e.app);

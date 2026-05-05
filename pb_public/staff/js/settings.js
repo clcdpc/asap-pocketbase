@@ -376,6 +376,10 @@ export function populateWorkflowForms(wf) {
   setFieldChecked('polaris-auto-promote', !!wf.autoPromote);
   setFieldChecked('allow-patron-autohold-opt-out', !!wf.allowPatronAutoholdOptOut);
   workflowSettings.autoPromote = !!wf.autoPromote;
+  setFieldValue('wf-external-search-label', wf.externalSearchLabel || 'Search Amazon');
+  setFieldValue('wf-external-search-url-template', wf.externalSearchUrlTemplate || 'https://www.amazon.com/s?k={{title}}');
+  workflowSettings.externalSearchLabel = wf.externalSearchLabel || 'Search Amazon';
+  workflowSettings.externalSearchUrlTemplate = wf.externalSearchUrlTemplate || 'https://www.amazon.com/s?k={{title}}';
 }
 
 export function populatePatronUiForms(uiText) {
@@ -545,7 +549,9 @@ export function buildSettingsPayload() {
     commonAuthorsList: sortAuthorsByLastName(getFieldValue('wf-common-authors-list')),
     commonAuthorsMessage: getFieldValue('wf-common-authors-message'),
     autoPromote: getFieldChecked('polaris-auto-promote'),
-    allowPatronAutoholdOptOut: getFieldChecked('allow-patron-autohold-opt-out')
+    allowPatronAutoholdOptOut: getFieldChecked('allow-patron-autohold-opt-out'),
+    externalSearchLabel: getFieldValue('wf-external-search-label').trim() || 'Search Amazon',
+    externalSearchUrlTemplate: getFieldValue('wf-external-search-url-template').trim() || 'https://www.amazon.com/s?k={{title}}'
   };
 
   // Only include global-only fields when in system context.
@@ -623,7 +629,9 @@ export async function saveSettings(options = {}) {
         commonAuthorsList: payload.commonAuthorsList,
         commonAuthorsMessage: payload.commonAuthorsMessage,
         autoPromote: payload.autoPromote,
-        allowPatronAutoholdOptOut: payload.allowPatronAutoholdOptOut
+        allowPatronAutoholdOptOut: payload.allowPatronAutoholdOptOut,
+        externalSearchLabel: payload.externalSearchLabel,
+        externalSearchUrlTemplate: payload.externalSearchUrlTemplate
       }
     };
 

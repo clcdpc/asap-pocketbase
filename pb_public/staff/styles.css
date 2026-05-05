@@ -505,6 +505,12 @@ body {
 .btn-success:hover {
   background-color: #145523 !important;
 }
+.btn-xs {
+  padding: 0.125rem 0.35rem;
+  font-size: 0.7rem;
+  line-height: 1.2;
+  border-radius: 0.2rem;
+}
 
 .text-muted {
   color: #5a6268 !important;

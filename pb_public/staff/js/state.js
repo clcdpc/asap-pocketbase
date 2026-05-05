@@ -57,7 +57,7 @@ export function setVerifiedBibId(id) { verifiedBibId = id; }
 export let publicationOptions = defaultPublicationOptions.slice();
 export function setPublicationOptions(opts) { publicationOptions = opts; }
 
-export let workflowSettings = { autoPromote: false, allowPatronAutoholdOptOut: false, outstandingTimeoutEnabled: false, outstandingTimeoutDays: 30, outstandingTimeoutSendEmail: false, outstandingTimeoutRejectionTemplateId: '', holdPickupTimeoutEnabled: false, holdPickupTimeoutDays: 14, pendingHoldTimeoutEnabled: false, pendingHoldTimeoutDays: 14 };
+export let workflowSettings = { autoPromote: false, allowPatronAutoholdOptOut: false, outstandingTimeoutEnabled: false, outstandingTimeoutDays: 30, outstandingTimeoutSendEmail: false, outstandingTimeoutRejectionTemplateId: '', holdPickupTimeoutEnabled: false, holdPickupTimeoutDays: 14, pendingHoldTimeoutEnabled: false, pendingHoldTimeoutDays: 14, externalSearchLabel: 'Search Amazon', externalSearchUrlTemplate: 'https://www.amazon.com/s?k={{title}}' };
 
 export let currentLibraryContextOrgId = 'system';
 export function setCurrentLibraryContextOrgId(id) { currentLibraryContextOrgId = id; }
