@@ -100,8 +100,15 @@ export function renderPurchaseReminderOption(actionStr) {
   checkbox.disabled = !email;
   help.innerHTML = email
     ? `Send purchase details to ${escapeAttr(email)}.`
-    : 'Add an email address to your <a href="#" onclick="openProfileDialog(); return false;">staff profile</a> to email yourself purchase reminders.';
+    : 'Add an email address to your <a href="#" class="js-open-profile-dialog">staff profile</a> to email yourself purchase reminders.';
 }
+
+document.addEventListener('click', (e) => {
+  if (e.target.closest('.js-open-profile-dialog')) {
+    e.preventDefault();
+    openProfileDialog();
+  }
+});
 
 export function renderEditPatronContext(row) {
   const editBody = document.querySelector('#editModal .asap-dialog-edit-body');

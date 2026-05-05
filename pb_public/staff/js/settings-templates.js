@@ -74,17 +74,17 @@ export function renderRejectionTemplates() {
       <div class="form-group">
         <div class="d-flex justify-content-between align-items-center mb-1">
           <label class="mb-0">Template name</label>
-          <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeRejectionTemplate(${index})">Remove Template</button>
+          <button type="button" class="btn btn-sm btn-outline-danger js-remove-rejection-template" data-index="${index}">Remove Template</button>
         </div>
-        <input type="text" class="form-control form-control-sm" value="${escapeAttr(template.name || '')}" onchange="updateRejectionTemplate(${index}, 'name', this.value)">
+        <input type="text" class="form-control form-control-sm js-update-rejection-template" data-field="name" data-index="${index}" value="${escapeAttr(template.name || '')}">
       </div>
       <div class="form-group">
         <label>Subject</label>
-        <input type="text" class="form-control form-control-sm" value="${escapeAttr(template.subject || '')}" onchange="updateRejectionTemplate(${index}, 'subject', this.value)">
+        <input type="text" class="form-control form-control-sm js-update-rejection-template" data-field="subject" data-index="${index}" value="${escapeAttr(template.subject || '')}">
       </div>
       <div class="form-group mb-0">
         <label>Body</label>
-        <textarea class="form-control form-control-sm" rows="3" onchange="updateRejectionTemplate(${index}, 'body', this.value)">${escapeAttr(template.body || '')}</textarea>
+        <textarea class="form-control form-control-sm js-update-rejection-template" data-field="body" data-index="${index}" rows="3">${escapeAttr(template.body || '')}</textarea>
       </div>
     `;
     container.appendChild(wrapper);
@@ -132,3 +132,24 @@ if (btnAddRejectionTemplate) {
     markSettingsDirty();
   });
 }
+
+document.addEventListener('click', (e) => {
+  const removeBtn = e.target.closest('.js-remove-rejection-template');
+  if (removeBtn) {
+    const index = parseInt(removeBtn.getAttribute('data-index'), 10);
+    if (!isNaN(index)) {
+      removeRejectionTemplate(index);
+    }
+  }
+});
+
+document.addEventListener('change', (e) => {
+  const updateInput = e.target.closest('.js-update-rejection-template');
+  if (updateInput) {
+    const index = parseInt(updateInput.getAttribute('data-index'), 10);
+    const field = updateInput.getAttribute('data-field');
+    if (!isNaN(index) && field) {
+      updateRejectionTemplate(index, field, updateInput.value);
+    }
+  }
+});
