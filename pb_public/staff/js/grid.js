@@ -325,6 +325,7 @@ export function getDuplicateBadgesHtml(row) {
 
   const duplicates = allSuggestions.filter(r => {
     if (r.id === row.id) return false;
+    if (r.libraryOrgId !== row.libraryOrgId) return false;
 
     // Check identifier match if both have one
     if (r.identifier && row.identifier && r.identifier.trim().toLowerCase() === row.identifier.trim().toLowerCase()) {
