@@ -587,14 +587,6 @@ export async function authorizedJson(path, options = {}) {
   return data;
 }
 
-export function normalizeAllowedStaffUsers(value) {
-  return Array.from(new Set(String(value || '')
-    .split(',')
-    .map(item => String(item || '').trim().toLowerCase())
-    .filter(Boolean)))
-    .join(', ');
-}
-
 export function updateAutoRejectEmailControls() {
   const enabled = getFieldChecked('outstanding-timeout-enabled');
   const sendEmail = getFieldChecked('outstanding-timeout-send-email');
