@@ -4,7 +4,9 @@ import { loadTab, escapeAttr } from './grid.js';
 
 document.getElementById('btn-new-suggestion').addEventListener('click', () => {
   document.getElementById('new-suggestion-form').reset();
+  setFieldChecked('new-autohold', true);
   setFieldChecked('staff-new-suggestion-email-patron', false);
+  document.getElementById('new-exact-publication-date').value = '';
   clearNewSuggestionError();
   resetStaffPatronLookup();
   document.getElementById('newSuggestionModal').showModal();
@@ -94,7 +96,9 @@ document.getElementById('new-suggestion-form').addEventListener('submit', async 
     format: document.getElementById('new-format').value,
     agegroup: document.getElementById('new-age').value,
     publication: document.getElementById('new-publication').value,
+    exactPublicationDate: document.getElementById('new-exact-publication-date').value,
     notes: document.getElementById('new-notes').value,
+    autohold: getFieldChecked('new-autohold'),
     emailPatronConfirmation: getFieldChecked('staff-new-suggestion-email-patron')
   };
 
@@ -144,7 +148,9 @@ export function clearNewSuggestionDetails() {
   document.getElementById('new-format').selectedIndex = 0;
   document.getElementById('new-age').selectedIndex = 0;
   document.getElementById('new-publication').selectedIndex = 0;
+  document.getElementById('new-exact-publication-date').value = '';
   document.getElementById('new-notes').value = '';
+  setFieldChecked('new-autohold', true);
 }
 
 export function setNewSuggestionDetailsEnabled(enabled) {

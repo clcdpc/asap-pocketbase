@@ -1103,43 +1103,70 @@
       </div>
 
       <div id="new-suggestion-details" class="hidden">
-        <div class="alert alert-success py-2">Patron verified. You can now enter the suggestion details.</div>
-        <div class="form-group"><label>Title (original) *</label><input type="text" id="new-title"
-            class="form-control new-detail-field" required disabled></div>
-        <div class="form-group"><label>Author (original)</label><input type="text" id="new-author"
-            class="form-control new-detail-field" disabled></div>
-        <div class="form-group"><label>Identifier number</label><input type="text" id="new-identifier"
-            class="form-control new-detail-field" disabled></div>
+        <div class="alert alert-success py-1 px-2 small mb-3">Patron verified. Enter suggestion details below.</div>
+        
+        <div class="form-group mb-2">
+          <label class="small font-weight-bold mb-1">Title (original) *</label>
+          <input type="text" id="new-title" class="form-control form-control-sm new-detail-field" required disabled>
+        </div>
 
-        <div class="form-group">
-          <label>Format</label>
-          <select id="new-format" class="form-control new-detail-field" disabled>
-            <option value="book">Book</option>
-            <option value="audiobook_cd">Audiobook (Physical CD)</option>
-            <option value="dvd">DVD</option>
-            <option value="music_cd">Music CD</option>
-            <option value="ebook">eBook</option>
-            <option value="eaudiobook">eAudiobook</option>
-          </select>
+        <div class="form-row">
+          <div class="form-group col-6 mb-2">
+            <label class="small font-weight-bold mb-1">Author (original)</label>
+            <input type="text" id="new-author" class="form-control form-control-sm new-detail-field" disabled>
+          </div>
+          <div class="form-group col-6 mb-2">
+            <label class="small font-weight-bold mb-1">Identifier number</label>
+            <input type="text" id="new-identifier" class="form-control form-control-sm new-detail-field" disabled>
+          </div>
         </div>
-        <div class="form-group">
-          <label>Age</label>
-          <select id="new-age" class="form-control new-detail-field" disabled>
-          </select>
+
+        <div class="form-row">
+          <div class="form-group col-6 mb-2">
+            <label class="small font-weight-bold mb-1">Format</label>
+            <select id="new-format" class="form-control form-control-sm new-detail-field" disabled>
+              <option value="book">Book</option>
+              <option value="audiobook_cd">Audiobook (Physical CD)</option>
+              <option value="dvd">DVD</option>
+              <option value="music_cd">Music CD</option>
+              <option value="ebook">eBook</option>
+              <option value="eaudiobook">eAudiobook</option>
+            </select>
+          </div>
+          <div class="form-group col-6 mb-2">
+            <label class="small font-weight-bold mb-1">Age group</label>
+            <select id="new-age" class="form-control form-control-sm new-detail-field" disabled>
+            </select>
+          </div>
         </div>
-        <div class="form-group">
-          <label>Publication timing</label>
-          <select id="new-publication" class="form-control new-detail-field publication-options-select" disabled>
-            <option value="Already published">Already published</option>
-            <option value="Coming soon">Coming soon</option>
-            <option value="Published a while back">Published a while back</option>
-          </select>
+
+        <div class="form-row">
+          <div class="form-group col-6 mb-2">
+            <label class="small font-weight-bold mb-1">Publication timing</label>
+            <select id="new-publication" class="form-control form-control-sm new-detail-field publication-options-select" disabled>
+              <option value="Already published">Already published</option>
+              <option value="Coming soon">Coming soon</option>
+              <option value="Published a while back">Published a while back</option>
+            </select>
+          </div>
+          <div class="form-group col-6 mb-2">
+            <label class="small font-weight-bold mb-1">Exact date</label>
+            <input type="date" id="new-exact-publication-date" class="form-control form-control-sm new-detail-field" disabled>
+          </div>
         </div>
-        <div class="form-group">
-          <label>Staff notes</label>
-          <textarea id="new-notes" class="form-control new-detail-field" rows="2" disabled></textarea>
+
+        <div class="form-group mb-0">
+          <label class="small font-weight-bold mb-1">Staff notes</label>
+          <textarea id="new-notes" class="form-control form-control-sm new-detail-field" rows="2" disabled></textarea>
         </div>
+
         <div class="custom-control custom-checkbox mt-3">
+          <input type="checkbox" class="custom-control-input new-detail-field" id="new-autohold" disabled>
+          <label class="custom-control-label" for="new-autohold">Automatic hold</label>
+          <small class="form-text text-muted">Automatically place a hold in Polaris for this suggestion.</small>
+        </div>
+
+        <div class="custom-control custom-checkbox mt-2">
           <input type="checkbox" class="custom-control-input new-detail-field" id="staff-new-suggestion-email-patron" disabled>
           <label class="custom-control-label" for="staff-new-suggestion-email-patron">Email patron a confirmation for this submission</label>
         </div>
