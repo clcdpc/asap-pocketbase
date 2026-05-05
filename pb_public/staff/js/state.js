@@ -58,7 +58,6 @@ export let publicationOptions = defaultPublicationOptions.slice();
 export function setPublicationOptions(opts) { publicationOptions = opts; }
 
 export let workflowSettings = { autoPromote: false, outstandingTimeoutEnabled: false, outstandingTimeoutDays: 30, outstandingTimeoutSendEmail: false, outstandingTimeoutRejectionTemplateId: '', holdPickupTimeoutEnabled: false, holdPickupTimeoutDays: 14, pendingHoldTimeoutEnabled: false, pendingHoldTimeoutDays: 14 };
-export function setWorkflowSettings(settings) { workflowSettings = settings; }
 
 export let currentLibraryContextOrgId = 'system';
 export function setCurrentLibraryContextOrgId(id) { currentLibraryContextOrgId = id; }
