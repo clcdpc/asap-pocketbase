@@ -2,12 +2,6 @@ import { pb, formatMap, patronFormatKeys, patronFormatFields, defaultPatronForma
 import { isValidSmtpHost, validateSmtpHostField, showToast, markSettingsDirty } from './api.js';
 import { escapeAttr } from './grid.js';
 
-export function normalizePublicationOptions(options) {
-  const raw = Array.isArray(options) ? options : String(options || '').split(/\r?\n/);
-  const cleaned = raw.map(option => String(option && typeof option === 'object' ? option.label : option || '').trim()).filter(Boolean);
-  return cleaned.length ? Array.from(new Set(cleaned)) : defaultPublicationOptions.slice();
-}
-
 export function normalizeAgeGroups(options) {
   const raw = Array.isArray(options) ? options : String(options || '').split(/\r?\n/);
   const cleaned = raw.map(option => String(option && typeof option === 'object' ? option.label : option || '').trim()).filter(Boolean);
