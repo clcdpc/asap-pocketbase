@@ -770,3 +770,10 @@ document.addEventListener('keydown', (event) => {
 });
 window.addEventListener('resize', closeActionMenu);
 window.addEventListener('scroll', closeActionMenu, true);
+
+document.addEventListener('click', (e) => {
+  if (e.target.closest('.js-close-note-dialog')) {
+    const dialog = document.getElementById('noteDialog');
+    if (dialog) dialog.close();
+  }
+});

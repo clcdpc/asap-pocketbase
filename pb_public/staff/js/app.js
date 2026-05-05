@@ -19,10 +19,7 @@ initStaffApp();
 import { openProfileDialog, closeOpenDialogs, setFieldChecked, setFieldValue } from './api.js';
 import { updateRejectionTemplate, removeRejectionTemplate } from './settings-templates.js';
 
-window.openProfileDialog = openProfileDialog;
 window.closeOpenDialogs = closeOpenDialogs;
 window.setFieldChecked = setFieldChecked;
 window.setFieldValue = setFieldValue;
-window.updateRejectionTemplate = updateRejectionTemplate;
-window.removeRejectionTemplate = removeRejectionTemplate;
 window.pb = state.pb;

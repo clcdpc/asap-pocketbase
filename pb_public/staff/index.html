@@ -939,14 +939,11 @@
 <dialog id="noteDialog" class="asap-dialog asap-dialog-note">
   <div class="asap-dialog-header asap-dialog-header-muted">
     <h5 class="asap-dialog-title">Full note</h5>
-    <button type="button" onclick="document.getElementById('noteDialog').close()"
-      class="asap-dialog-close"
-      aria-label="Close dialog">&times;</button>
+    <button type="button" class="asap-dialog-close js-close-note-dialog" aria-label="Close dialog">&times;</button>
   </div>
   <div id="noteDialogContent" class="asap-dialog-note-content"></div>
   <div class="asap-dialog-footer">
-    <button id="noteDialogCloseBtn" type="button" class="btn btn-secondary btn-sm"
-      onclick="document.getElementById('noteDialog').close()">Close</button>
+    <button id="noteDialogCloseBtn" type="button" class="btn btn-secondary btn-sm js-close-note-dialog">Close</button>
   </div>
 </dialog>
 
