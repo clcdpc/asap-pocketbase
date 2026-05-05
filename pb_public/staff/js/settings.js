@@ -837,8 +837,15 @@ document.getElementById('btn-upload-logo').addEventListener('click', async () =>
       },
       body: formData
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.message || 'Failed to upload logo');
+
+    // Check if response is JSON before parsing to avoid "Unexpected token in JSON" errors on 500s
+    const isJson = res.headers.get('content-type')?.includes('application/json');
+    const data = isJson ? await res.json() : null;
+
+    if (!res.ok) {
+      console.error('Server Error:', data);
+      throw new Error(data?.message || `Server error: ${res.status}`);
+    }
     
     showToast('Branding updated successfully.');
     // Reload settings to refresh the preview and system config

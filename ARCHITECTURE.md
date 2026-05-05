@@ -24,8 +24,8 @@ The system relies on several core PocketBase collections:
     *   **Statuses:** `suggestion` (new), `outstanding_purchase` (approved, waiting for BIB), `pending_hold` (BIB found, waiting for hold placement), `hold_placed` (hold successfully placed in Polaris), `closed` (fulfilled or rejected).
 *   **`patron_users`**: Cached profiles of patrons who have logged in. Used for tracking limits and linking requests.
 *   **`staff_users`**: Staff accounts. Supports Role-Based Access Control (RBAC): `staff`, `admin` (library-scoped), and `super_admin` (system-wide).
-*   **`app_settings`**: Global configuration (Singleton record `settings0000001`). Stores Polaris PAPI credentials, SMTP settings, default email templates, and system-wide UI text.
-*   **`library_settings`**: Branch-level configuration overrides. Allows individual libraries in a consortium to define their own email templates, UI text, and workflow timeouts.
+*   **`system_settings`, `polaris_settings`, `smtp_settings`**: Global system configuration for Polaris integration, SMTP, and system-wide behavior.
+*   **`workflow_settings`, `ui_settings`, `email_templates`**: Core configuration for suggestion workflows, branding, and communications. These support a dual-layer architecture using a `scope` field ('system' or 'library') to provide system-wide defaults and library-specific overrides.
 *   **`polaris_organizations`**: Cached synchronization of the Polaris organization hierarchy.
 
 ---
