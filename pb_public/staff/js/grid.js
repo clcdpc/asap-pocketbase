@@ -439,10 +439,6 @@ export function renderTitleCell(row) {
   `);
 }
 
-export function getTitleBadgesHtml(row) {
-  return getDuplicateBadgesHtml(row) + getWorkflowTagBadgesHtml(row) + getIsbnCheckBadgesHtml(row);
-}
-
 export function getGridRow(row, status) {
   if (status === 'suggestion') {
     return [
