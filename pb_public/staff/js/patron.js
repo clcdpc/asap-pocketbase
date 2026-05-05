@@ -186,3 +186,20 @@ export function patronLookupName(data) {
   const name = [data.nameFirst, data.nameLast].filter(Boolean).join(' ').trim();
   return name || 'barcode found';
 }
+
+export async function openNewSuggestionForPatron(barcode) {
+  if (!barcode) return;
+  document.getElementById('new-suggestion-form').reset();
+  setFieldChecked('new-autohold', true);
+  setFieldChecked('staff-new-suggestion-email-patron', false);
+  document.getElementById('new-exact-publication-date').value = '';
+  clearNewSuggestionError();
+  resetStaffPatronLookup();
+  
+  document.getElementById('new-barcode').value = barcode;
+  document.getElementById('newSuggestionModal').showModal();
+  document.getElementById('close-new-modal-btn').focus();
+  
+  // Trigger lookup automatically
+  document.getElementById('btn-lookup-patron').click();
+}

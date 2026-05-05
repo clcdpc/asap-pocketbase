@@ -1,7 +1,8 @@
 import { gridContainer, staffGridFilterBar, tagFilterSelect, settingsContainer, grid, formatMap, ageMap, closeReasonMap, descriptions, emptyStateMessages, statusStages, currentStatus, currentSuggestions, activeTagFilter, allSuggestions, workflowSettings, currentSettingsSection, activeActionMenu, rowActionIdCounter, rowActionRegistry, setCurrentSuggestions, setActiveTagFilter, setActiveActionMenu, setGrid, setAllSuggestions, incrementRowActionIdCounter } from './state.js';
+import { openEdit } from './modals.js';
+import { openNewSuggestionForPatron } from './patron.js';
 import { undoRow, deleteClosedRequest, closeDuplicateRequest } from './actions.js';
 import { leapBibUrl, showToast, showAlert, isSuperAdminStaff, isAdminStaff, getSettingsSectionFromHash, closeOpenDialogs, activateSettingsSection, authorizedJson } from './api.js';
-import { openEdit } from './modals.js';
 import { showSettingsAccessDenied, hideSettingsAccessDenied, loadSettings } from './settings.js';
 
 export async function loadTab(status) {
@@ -378,6 +379,22 @@ export function rowMarker(row) {
   return `<span class="asap-row-marker" data-suggestion-id="${escapeAttr(row.id)}" hidden></span>`;
 }
 
+export function renderBarcodeCell(row) {
+  const barcode = escapeAttr(row.barcode || '');
+  return gridjs.html(`
+    <div class="barcode-cell">
+      <span class="barcode-text">${barcode}</span>
+      <button type="button" class="btn btn-link btn-sm p-0 ml-1 quick-new-suggestion" 
+              data-barcode="${barcode}" 
+              data-no-row-edit="true" 
+              title="New suggestion for this patron" 
+              aria-label="New suggestion for this patron">
+        <i class="fa fa-plus-circle" aria-hidden="true"></i>
+      </button>
+    </div>
+  `);
+}
+
 export function getActionsColumnWidth(status) {
   if (status === 'suggestion') return '135px';
   if (status === 'outstanding_purchase') return '165px';
@@ -517,7 +534,7 @@ export function renderTitleCell(row) {
 export function getGridRow(row, status) {
   if (status === 'suggestion') {
     return [
-      row.barcode,
+      renderBarcodeCell(row),
       renderTitleCell(row),
       row.author,
       formatMap[row.format] || row.format,
@@ -530,7 +547,7 @@ export function getGridRow(row, status) {
 
   if (status === 'closed') {
     return [
-      row.barcode,
+      renderBarcodeCell(row),
       renderTitleCell(row),
       row.author,
       formatMap[row.format] || row.format,
@@ -542,7 +559,7 @@ export function getGridRow(row, status) {
   }
 
   return [
-    row.barcode,
+    renderBarcodeCell(row),
     renderTitleCell(row),
     row.author,
     row.identifier,
@@ -817,6 +834,15 @@ gridContainer.addEventListener('click', (e) => {
     e.stopPropagation();
     const tag = tagBadge.getAttribute('data-tag');
     if (tag) toggleTagFilter(tag);
+    return;
+  }
+
+  const quickNewBtn = target.closest('.quick-new-suggestion');
+  if (quickNewBtn && gridContainer.contains(quickNewBtn)) {
+    e.preventDefault();
+    e.stopPropagation();
+    const barcode = quickNewBtn.getAttribute('data-barcode');
+    if (barcode) openNewSuggestionForPatron(barcode);
     return;
   }
 
