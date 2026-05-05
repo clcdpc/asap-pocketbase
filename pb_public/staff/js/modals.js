@@ -1,5 +1,5 @@
 import { pb, formatMap, availableFormats, currentRejectionTemplates, currentStatus, currentSuggestions, allSuggestions, verifiedBibId, publicationOptions, setVerifiedBibId } from './state.js';
-import { leapBibUrl, showToast, showAlert, openProfileDialog } from './api.js';
+import { leapBibUrl, showToast, showAlert, showConfirm, openProfileDialog } from './api.js';
 import { loadTab, formatStandardDate, renderWorkflowTags, escapeAttr } from './grid.js';
 import { setSelectValue, dateOnly } from './settings-ui.js';
 
@@ -170,6 +170,12 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
   const id = document.getElementById('edit-id').value;
   const nextStatus = document.getElementById('edit-next-status').value;
   const bibid = document.getElementById('edit-bibid').value.trim();
+  const row = currentSuggestions.find(r => r.id === id) || allSuggestions.find(r => r.id === id);
+  if (row && row.status === 'outstanding_purchase' && bibid && !row.autohold) {
+    const confirmed = await showConfirm('Do Not Auto Place Hold', 'This request is marked Do Not Auto Place Hold. Saving this BIB ID will close the request once the title is identified, rather than sending it through the hold-placement workflow.');
+    if (!confirmed) return;
+  }
+
   if (nextStatus === 'pending_hold') {
     if (!bibid) {
       await showAlert('BIB ID is required before moving this suggestion to Pending hold.');
