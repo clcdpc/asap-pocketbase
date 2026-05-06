@@ -185,7 +185,13 @@ const normalizeUsernameCases = [
   { input: 'USER', expected: 'user' },
   { input: '', expected: '' },
   { input: null, expected: '' },
-  { input: undefined, expected: '' }
+  { input: undefined, expected: '' },
+  { input: 123, expected: '123' },
+  { input: 0, expected: '' },
+  { input: true, expected: 'true' },
+  { input: false, expected: '' },
+  { input: [], expected: '' },
+  { input: {}, expected: '[object object]' }
 ];
 
 runTestSuite('normalizeUsername', normalizeUsernameCases, (tc) => {
