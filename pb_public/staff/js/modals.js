@@ -3,7 +3,7 @@ import { leapBibUrl, showToast, showAlert, showConfirm, openProfileDialog } from
 import { loadTab, formatStandardDate, renderWorkflowTags, escapeAttr } from './grid.js';
 import { setSelectValue, dateOnly } from './settings-ui.js';
 
-export function openEdit(id, nextStatus, dialogTitle, actionStr) {
+export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
   const row = currentSuggestions.find(r => r.id === id) || allSuggestions.find(r => r.id === id);
   if (!row) return;
 
@@ -12,6 +12,11 @@ export function openEdit(id, nextStatus, dialogTitle, actionStr) {
   document.getElementById('edit-next-status').value = nextStatus;
   document.getElementById('edit-action').value = actionStr;
   setBibIdRequirement(nextStatus);
+
+  const submitBtn = document.getElementById('edit-submit-btn');
+  if (submitBtn) {
+    submitBtn.textContent = buttonLabel || 'Save';
+  }
 
   document.getElementById('edit-title').value = row.title || '';
   document.getElementById('edit-author').value = row.author || '';

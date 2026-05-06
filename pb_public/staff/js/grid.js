@@ -583,23 +583,23 @@ export function getRowActions(row) {
 
   if (status === 'suggestion') {
     return {
-      primary: { label: 'Purchase', className: 'btn-primary', onClick: () => openEdit(row.id, 'outstanding_purchase', 'Approve for purchase', 'purchase') },
+      primary: { label: 'Purchase', className: 'btn-primary', onClick: () => openEdit(row.id, 'outstanding_purchase', 'Approve for purchase', 'purchase', 'Purchase') },
       secondary: [
-        { label: 'Already own', onClick: () => openEdit(row.id, 'pending_hold', 'Already own', 'alreadyOwn') },
-        { label: 'Reject', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Reject', 'reject') },
-        { label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose') },
-        { label: 'Edit', onClick: () => openEdit(row.id, 'suggestion', 'Edit suggestion', '') },
+        { label: 'Already own', onClick: () => openEdit(row.id, 'pending_hold', 'Already own', 'alreadyOwn', 'Already own') },
+        { label: 'Reject', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Reject', 'reject', 'Reject') },
+        { label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose', 'Silent close') },
+        { label: 'Edit', onClick: () => openEdit(row.id, 'suggestion', 'Edit suggestion', '', 'Save') },
       ]
     };
   }
 
   if (status === 'outstanding_purchase') {
     return {
-      primary: { label: 'Ready for hold', className: 'btn-success', onClick: () => openEdit(row.id, 'pending_hold', 'Move to Pending hold', '') },
+      primary: { label: 'Ready for hold', className: 'btn-success', onClick: () => openEdit(row.id, 'pending_hold', 'Move to Pending hold', '', 'Ready for hold') },
       secondary: [
-        { label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose') },
+        { label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose', 'Silent close') },
         { label: 'Undo', onClick: () => undoRow(row.id) },
-        { label: 'Edit', onClick: () => openEdit(row.id, 'outstanding_purchase', 'Edit', '') },
+        { label: 'Edit', onClick: () => openEdit(row.id, 'outstanding_purchase', 'Edit', '', 'Save') },
       ]
     };
   }
@@ -609,8 +609,8 @@ export function getRowActions(row) {
     if ((status === 'pending_hold' || status === 'hold_placed') && hasWorkflowTag(row, 'Hold exists (same patron)')) {
       secondary.push({ label: 'Close duplicate', className: 'danger', onClick: () => closeDuplicateRequest(row.id) });
     }
-    if (status !== 'closed') secondary.push({ label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose') });
-    secondary.push({ label: 'Edit', onClick: () => openEdit(row.id, row.status, 'Edit', '') });
+    if (status !== 'closed') secondary.push({ label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose', 'Silent close') });
+    secondary.push({ label: 'Edit', onClick: () => openEdit(row.id, row.status, 'Edit', '', 'Save') });
     if (status === 'closed' && isAdminStaff()) {
       secondary.push({ label: 'Delete', className: 'danger', onClick: () => deleteClosedRequest(row.id) });
     }
@@ -621,7 +621,7 @@ export function getRowActions(row) {
   }
 
   return {
-    primary: { label: 'Edit', className: 'btn-secondary', onClick: () => openEdit(row.id, row.status, 'Edit', '') },
+    primary: { label: 'Edit', className: 'btn-secondary', onClick: () => openEdit(row.id, row.status, 'Edit', '', 'Save') },
     secondary: []
   };
 }
@@ -789,7 +789,7 @@ function openSuggestionEditFromRow(recordId) {
   }
 
   const status = normalizeStatus(row.status);
-  openEdit(row.id, status || currentStatus, status === 'suggestion' ? 'Edit suggestion' : 'Edit', '');
+  openEdit(row.id, status || currentStatus, status === 'suggestion' ? 'Edit suggestion' : 'Edit', '', 'Save');
 }
 
 gridContainer.addEventListener('click', (e) => {
