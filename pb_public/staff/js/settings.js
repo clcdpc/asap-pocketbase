@@ -378,10 +378,25 @@ export function populateWorkflowForms(wf) {
   setFieldChecked('polaris-auto-promote', !!wf.autoPromote);
   setFieldChecked('allow-patron-autohold-opt-out', !!wf.allowPatronAutoholdOptOut);
   workflowSettings.autoPromote = !!wf.autoPromote;
-  setFieldValue('wf-external-search-label', wf.externalSearchLabel || 'Search Amazon');
-  setFieldValue('wf-external-search-url-template', wf.externalSearchUrlTemplate || 'https://www.amazon.com/s?k={{title}}');
-  workflowSettings.externalSearchLabel = wf.externalSearchLabel || 'Search Amazon';
-  workflowSettings.externalSearchUrlTemplate = wf.externalSearchUrlTemplate || 'https://www.amazon.com/s?k={{title}}';
+  setFieldChecked('wf-external-search-1-enabled', !!wf.externalSearch1Enabled);
+  setFieldValue('wf-external-search-1-label', wf.externalSearch1Label || 'Search Amazon');
+  setFieldValue('wf-external-search-1-url-template', wf.externalSearch1UrlTemplate || 'https://www.amazon.com/s?k={{title}}');
+  setFieldChecked('wf-external-search-2-enabled', !!wf.externalSearch2Enabled);
+  setFieldValue('wf-external-search-2-label', wf.externalSearch2Label || 'Search Goodreads');
+  setFieldValue('wf-external-search-2-url-template', wf.externalSearch2UrlTemplate || 'https://www.goodreads.com/search?q={{title}}');
+  setFieldChecked('wf-external-search-3-enabled', !!wf.externalSearch3Enabled);
+  setFieldValue('wf-external-search-3-label', wf.externalSearch3Label || 'Search WorldCat');
+  setFieldValue('wf-external-search-3-url-template', wf.externalSearch3UrlTemplate || 'https://www.worldcat.org/search?q={{title}}');
+
+  workflowSettings.externalSearch1Enabled = !!wf.externalSearch1Enabled;
+  workflowSettings.externalSearch1Label = wf.externalSearch1Label || 'Search Amazon';
+  workflowSettings.externalSearch1UrlTemplate = wf.externalSearch1UrlTemplate || 'https://www.amazon.com/s?k={{title}}';
+  workflowSettings.externalSearch2Enabled = !!wf.externalSearch2Enabled;
+  workflowSettings.externalSearch2Label = wf.externalSearch2Label || 'Search Goodreads';
+  workflowSettings.externalSearch2UrlTemplate = wf.externalSearch2UrlTemplate || 'https://www.goodreads.com/search?q={{title}}';
+  workflowSettings.externalSearch3Enabled = !!wf.externalSearch3Enabled;
+  workflowSettings.externalSearch3Label = wf.externalSearch3Label || 'Search WorldCat';
+  workflowSettings.externalSearch3UrlTemplate = wf.externalSearch3UrlTemplate || 'https://www.worldcat.org/search?q={{title}}';
 }
 
 export function populatePatronUiForms(uiText) {
@@ -560,8 +575,15 @@ function _serializeSettingsState(validate = false) {
     commonAuthorsMessage: getFieldValue('wf-common-authors-message'),
     autoPromote: getFieldChecked('polaris-auto-promote'),
     allowPatronAutoholdOptOut: getFieldChecked('allow-patron-autohold-opt-out'),
-    externalSearchLabel: getFieldValue('wf-external-search-label').trim() || 'Search Amazon',
-    externalSearchUrlTemplate: getFieldValue('wf-external-search-url-template').trim() || 'https://www.amazon.com/s?k={{title}}'
+    externalSearch1Enabled: getFieldChecked('wf-external-search-1-enabled'),
+    externalSearch1Label: getFieldValue('wf-external-search-1-label').trim() || 'Search Amazon',
+    externalSearch1UrlTemplate: getFieldValue('wf-external-search-1-url-template').trim() || 'https://www.amazon.com/s?k={{title}}',
+    externalSearch2Enabled: getFieldChecked('wf-external-search-2-enabled'),
+    externalSearch2Label: getFieldValue('wf-external-search-2-label').trim() || 'Search Goodreads',
+    externalSearch2UrlTemplate: getFieldValue('wf-external-search-2-url-template').trim() || 'https://www.goodreads.com/search?q={{title}}',
+    externalSearch3Enabled: getFieldChecked('wf-external-search-3-enabled'),
+    externalSearch3Label: getFieldValue('wf-external-search-3-label').trim() || 'Search WorldCat',
+    externalSearch3UrlTemplate: getFieldValue('wf-external-search-3-url-template').trim() || 'https://www.worldcat.org/search?q={{title}}'
   };
 
   if (isSystemContext) {
@@ -653,8 +675,15 @@ export async function saveSettings(options = {}) {
         commonAuthorsMessage: payload.commonAuthorsMessage,
         autoPromote: payload.autoPromote,
         allowPatronAutoholdOptOut: payload.allowPatronAutoholdOptOut,
-        externalSearchLabel: payload.externalSearchLabel,
-        externalSearchUrlTemplate: payload.externalSearchUrlTemplate
+        externalSearch1Enabled: payload.externalSearch1Enabled,
+        externalSearch1Label: payload.externalSearch1Label,
+        externalSearch1UrlTemplate: payload.externalSearch1UrlTemplate,
+        externalSearch2Enabled: payload.externalSearch2Enabled,
+        externalSearch2Label: payload.externalSearch2Label,
+        externalSearch2UrlTemplate: payload.externalSearch2UrlTemplate,
+        externalSearch3Enabled: payload.externalSearch3Enabled,
+        externalSearch3Label: payload.externalSearch3Label,
+        externalSearch3UrlTemplate: payload.externalSearch3UrlTemplate
       }
     };
 

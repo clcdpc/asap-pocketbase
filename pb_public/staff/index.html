@@ -646,17 +646,60 @@
                   <hr class="my-4">
 
                   <!-- External Search -->
-                  <h5 class="mb-3">External search provider</h5>
-                  <p class="text-muted small">Configure a button in the request edit modal to quickly search external sites like Amazon or Google.</p>
-                  <div class="form-row">
-                    <div class="form-group col-md-6">
-                      <label for="wf-external-search-label" class="font-weight-bold mb-1">Search button label</label>
-                      <input id="wf-external-search-label" class="form-control" placeholder="Search Amazon">
+                  <h5 class="mb-3">External search providers</h5>
+                  <p class="text-muted small">Configure up to 3 buttons in the request edit modal to quickly search external sites like Amazon, Goodreads, or WorldCat.</p>
+                  
+                  <div class="form-row mb-1 d-none d-md-flex">
+                    <div class="col-auto" style="width: 100px;"></div>
+                    <div class="col-md-4"><small class="font-weight-bold">Button Label</small></div>
+                    <div class="col-md-6"><small class="font-weight-bold">URL Template (supports {{title}} and {{identifier}})</small></div>
+                  </div>
+
+                  <!-- Provider 1 -->
+                  <div class="form-row align-items-center mb-2">
+                    <div class="col-auto" style="width: 100px;">
+                      <div class="custom-control custom-checkbox">
+                        <input type="checkbox" class="custom-control-input" id="wf-external-search-1-enabled">
+                        <label class="custom-control-label font-weight-bold" for="wf-external-search-1-enabled">#1 (Yellow)</label>
+                      </div>
                     </div>
-                    <div class="form-group col-md-6">
-                      <label for="wf-external-search-url-template" class="font-weight-bold mb-1">URL template</label>
-                      <input id="wf-external-search-url-template" class="form-control" placeholder="https://www.amazon.com/s?k={{title}}">
-                      <small class="form-text text-muted">Use <code>{{title}}</code> or <code>{{identifier}}</code> as placeholders.</small>
+                    <div class="form-group col-md-4 mb-0">
+                      <input id="wf-external-search-1-label" class="form-control" placeholder="Search Amazon">
+                    </div>
+                    <div class="form-group col-md-6 mb-0">
+                      <input id="wf-external-search-1-url-template" class="form-control" placeholder="https://www.amazon.com/s?k={{title}}">
+                    </div>
+                  </div>
+
+                  <!-- Provider 2 -->
+                  <div class="form-row align-items-center mb-2">
+                    <div class="col-auto" style="width: 100px;">
+                      <div class="custom-control custom-checkbox">
+                        <input type="checkbox" class="custom-control-input" id="wf-external-search-2-enabled">
+                        <label class="custom-control-label font-weight-bold" for="wf-external-search-2-enabled">#2 (Green)</label>
+                      </div>
+                    </div>
+                    <div class="form-group col-md-4 mb-0">
+                      <input id="wf-external-search-2-label" class="form-control" placeholder="Search Goodreads">
+                    </div>
+                    <div class="form-group col-md-6 mb-0">
+                      <input id="wf-external-search-2-url-template" class="form-control" placeholder="https://www.goodreads.com/search?q={{title}}">
+                    </div>
+                  </div>
+
+                  <!-- Provider 3 -->
+                  <div class="form-row align-items-center mb-2">
+                    <div class="col-auto" style="width: 100px;">
+                      <div class="custom-control custom-checkbox">
+                        <input type="checkbox" class="custom-control-input" id="wf-external-search-3-enabled">
+                        <label class="custom-control-label font-weight-bold" for="wf-external-search-3-enabled">#3 (Blue)</label>
+                      </div>
+                    </div>
+                    <div class="form-group col-md-4 mb-0">
+                      <input id="wf-external-search-3-label" class="form-control" placeholder="Search WorldCat">
+                    </div>
+                    <div class="form-group col-md-6 mb-0">
+                      <input id="wf-external-search-3-url-template" class="form-control" placeholder="https://www.worldcat.org/search?q={{title}}">
                     </div>
                   </div>
 

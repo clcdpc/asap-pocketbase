@@ -57,7 +57,17 @@ export function setVerifiedBibId(id) { verifiedBibId = id; }
 export let publicationOptions = defaultPublicationOptions.slice();
 export function setPublicationOptions(opts) { publicationOptions = opts; }
 
-export let workflowSettings = { autoPromote: false, allowPatronAutoholdOptOut: false, outstandingTimeoutEnabled: false, outstandingTimeoutDays: 30, outstandingTimeoutSendEmail: false, outstandingTimeoutRejectionTemplateId: '', holdPickupTimeoutEnabled: false, holdPickupTimeoutDays: 14, pendingHoldTimeoutEnabled: false, pendingHoldTimeoutDays: 14, externalSearchLabel: 'Search Amazon', externalSearchUrlTemplate: 'https://www.amazon.com/s?k={{title}}' };
+export let workflowSettings = { autoPromote: false, allowPatronAutoholdOptOut: false, outstandingTimeoutEnabled: false, outstandingTimeoutDays: 30, outstandingTimeoutSendEmail: false, outstandingTimeoutRejectionTemplateId: '', holdPickupTimeoutEnabled: false, holdPickupTimeoutDays: 14, pendingHoldTimeoutEnabled: false, pendingHoldTimeoutDays: 14,
+    externalSearch1Enabled: true,
+    externalSearch1Label: 'Search Amazon',
+    externalSearch1UrlTemplate: 'https://www.amazon.com/s?k={{title}}',
+    externalSearch2Enabled: false,
+    externalSearch2Label: 'Search Goodreads',
+    externalSearch2UrlTemplate: 'https://www.goodreads.com/search?q={{title}}',
+    externalSearch3Enabled: false,
+    externalSearch3Label: 'Search WorldCat',
+    externalSearch3UrlTemplate: 'https://www.worldcat.org/search?q={{title}}'
+  };
 
 export let currentLibraryContextOrgId = 'system';
 export function setCurrentLibraryContextOrgId(id) { currentLibraryContextOrgId = id; }

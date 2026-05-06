@@ -170,24 +170,36 @@ export function renderExternalSearchButton(title, identifier) {
   const container = document.getElementById('edit-external-search-container');
   if (!container) return;
 
-  const label = workflowSettings.externalSearchLabel || 'Search Amazon';
-  const template = workflowSettings.externalSearchUrlTemplate || '';
-
-  if (!template || !template.includes('://')) {
-    container.innerHTML = '';
-    return;
-  }
+  const buttons = [];
+  const providers = [
+    { enabled: workflowSettings.externalSearch1Enabled, label: workflowSettings.externalSearch1Label, template: workflowSettings.externalSearch1UrlTemplate },
+    { enabled: workflowSettings.externalSearch2Enabled, label: workflowSettings.externalSearch2Label, template: workflowSettings.externalSearch2UrlTemplate },
+    { enabled: workflowSettings.externalSearch3Enabled, label: workflowSettings.externalSearch3Label, template: workflowSettings.externalSearch3UrlTemplate }
+  ];
 
   let cleanTitle = (title || '').split(' (')[0].trim();
-  let url = template;
-  url = url.replace(/\{\{title\}\}/g, encodeURIComponent(cleanTitle));
-  url = url.replace(/\{\{identifier\}\}/g, encodeURIComponent(identifier || ''));
+  const encodedTitle = encodeURIComponent(cleanTitle);
+  const encodedId = encodeURIComponent(identifier || '');
 
-  container.innerHTML = `
-    <a href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer" class="btn btn-xs btn-outline-info">
-      <i class="fa fa-external-link"></i> ${escapeAttr(label)}
-    </a>
-  `;
+  const buttonClasses = ['btn-warning', 'btn-success', 'btn-primary'];
+
+  providers.forEach((p, index) => {
+    if (!p.enabled || !p.template || !p.template.includes('://')) return;
+
+    let url = p.template;
+    url = url.replace(/\{\{title\}\}/g, encodedTitle);
+    url = url.replace(/\{\{identifier\}\}/g, encodedId);
+
+    const btnClass = buttonClasses[index] || 'btn-info';
+
+    buttons.push(`
+      <a href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer" class="btn btn-xs ${btnClass} mr-1 mb-1">
+        <i class="fa fa-external-link"></i> ${escapeAttr(p.label || 'Search')}
+      </a>
+    `);
+  });
+
+  container.innerHTML = buttons.join('');
 }
 
 document.getElementById('edit-form').addEventListener('submit', async (e) => {
