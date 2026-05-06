@@ -1059,6 +1059,12 @@ code {
   border-bottom: none;
 }
 
+.asap-accordion-header-row {
+  display: flex;
+  align-items: stretch;
+  background: #fff;
+}
+
 .asap-accordion-header {
   width: 100%;
   display: flex;
@@ -1077,9 +1083,41 @@ code {
   background-color: #fcfdff;
 }
 
+.asap-accordion-header-row:hover .asap-accordion-header,
+.asap-accordion-header-row:hover .asap-accordion-delete {
+  background-color: #fcfdff;
+}
+
 .asap-accordion-header[aria-expanded="true"] {
   background-color: #f8faff;
   border-bottom: 1px solid #edf2f7;
+}
+
+.asap-accordion-item.active > .asap-accordion-header-row {
+  border-bottom: 1px solid #edf2f7;
+}
+
+.asap-accordion-item.active > .asap-accordion-header-row .asap-accordion-header,
+.asap-accordion-item.active > .asap-accordion-header-row .asap-accordion-delete {
+  background-color: #f8faff;
+}
+
+.asap-accordion-item.active > .asap-accordion-header-row .asap-accordion-header {
+  border-bottom: none;
+}
+
+.asap-accordion-delete {
+  flex: 0 0 auto;
+  padding: 0 24px 0 12px;
+  border: none;
+  border-radius: 0;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.asap-accordion-delete:hover,
+.asap-accordion-delete:focus {
+  text-decoration: underline;
 }
 
 .asap-accordion-title {

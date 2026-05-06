@@ -1,6 +1,58 @@
 import { pb, currentRejectionTemplates, setCurrentRejectionTemplates, currentLibraryContextOrgId, setCurrentLibraryContextOrgId, emailTemplateDefaults, templateFieldIds } from './state.js';
-import { markSettingsDirty, updateAutoRejectEmailControls, getFieldChecked, getFieldValue, showAlert } from './api.js';
+import { markSettingsDirty, updateAutoRejectEmailControls, getFieldChecked, getFieldValue, showAlert, showConfirm } from './api.js';
 import { escapeAttr } from './grid.js';
+
+let lastActiveTemplateField = null;
+let placeholderHelperResetTimer = null;
+
+function isTemplatePlaceholderField(el) {
+  if (!el || (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA')) return false;
+
+  if (templateFieldIds.includes(el.id)) return true;
+
+  const field = el.getAttribute('data-field');
+  return el.closest('#rejection-templates-accordion-container') && (field === 'subject' || field === 'body');
+}
+
+function trackActiveTemplateField(el) {
+  if (isTemplatePlaceholderField(el)) {
+    lastActiveTemplateField = el;
+  }
+}
+
+function validLastActiveTemplateField() {
+  if (!lastActiveTemplateField || !document.contains(lastActiveTemplateField) || !isTemplatePlaceholderField(lastActiveTemplateField)) {
+    lastActiveTemplateField = null;
+    return null;
+  }
+  return lastActiveTemplateField;
+}
+
+function flashPlaceholderHelper(message) {
+  const helper = document.querySelector('.placeholder-helper-compact .small.mt-2');
+  if (!helper) return;
+
+  const originalMessage = helper.getAttribute('data-original-message') || helper.textContent;
+  helper.setAttribute('data-original-message', originalMessage);
+  helper.textContent = message;
+  clearTimeout(placeholderHelperResetTimer);
+  placeholderHelperResetTimer = setTimeout(() => {
+    helper.textContent = helper.getAttribute('data-original-message') || originalMessage;
+  }, 2200);
+}
+
+function insertPlaceholderIntoField(field, placeholder) {
+  const start = typeof field.selectionStart === 'number' ? field.selectionStart : field.value.length;
+  const end = typeof field.selectionEnd === 'number' ? field.selectionEnd : start;
+  const text = field.value;
+  const caret = start + placeholder.length;
+
+  field.value = text.substring(0, start) + placeholder + text.substring(end);
+  field.focus();
+  field.selectionStart = field.selectionEnd = caret;
+  field.dispatchEvent(new Event('input', { bubbles: true }));
+  field.dispatchEvent(new Event('change', { bubbles: true }));
+}
 
 export function populateEmailTemplateForms(emails) {
   emails = emails || {};
@@ -78,17 +130,19 @@ export function renderRejectionTemplates() {
     const summaryText = template.subject || 'No subject set';
 
     item.innerHTML = `
-      <button type="button" class="asap-accordion-header" aria-expanded="false" aria-controls="panel-rejection-${index}">
-        <span class="asap-accordion-title">Rejected: ${escapeAttr(template.name || 'New Reason')}</span>
-        <span class="asap-accordion-summary">${escapeAttr(summaryText)}</span>
-        <i class="fa fa-chevron-down asap-accordion-chevron"></i>
-      </button>
+      <div class="asap-accordion-header-row">
+        <button type="button" class="asap-accordion-header" aria-expanded="false" aria-controls="panel-rejection-${index}">
+          <span class="asap-accordion-title">Rejected: ${escapeAttr(template.name || 'New Reason')}</span>
+          <span class="asap-accordion-summary">${escapeAttr(summaryText)}</span>
+          <i class="fa fa-chevron-down asap-accordion-chevron"></i>
+        </button>
+        <button type="button" class="btn btn-link text-danger asap-accordion-delete js-remove-rejection-template" data-index="${index}" aria-label="Delete template ${escapeAttr(template.name || summaryText || 'Rejection template')}">
+          <i class="fa fa-trash mr-1" aria-hidden="true"></i>Delete template
+        </button>
+      </div>
       <div id="panel-rejection-${index}" class="asap-accordion-panel" role="region">
         <div class="form-group">
-          <div class="d-flex justify-content-between align-items-center mb-1">
-            <label class="template-editor-label mb-0">Template name</label>
-            <button type="button" class="btn btn-xs btn-outline-danger js-remove-rejection-template" data-index="${index}">Remove Template</button>
-          </div>
+          <label class="template-editor-label">Template name</label>
           <input type="text" class="form-control form-control-sm js-update-rejection-template" data-field="name" data-index="${index}" value="${escapeAttr(template.name || '')}">
         </div>
         <div class="form-group">
@@ -153,6 +207,7 @@ export function updateRejectionTemplate(index, field, value) {
 export async function removeRejectionTemplate(index) {
   const template = currentRejectionTemplates[index];
   if (!template) return;
+  const templateName = template.name || template.subject || 'this rejection template';
 
   const autoRejectEnabled = getFieldChecked('outstanding-timeout-enabled');
   const sendEmail = getFieldChecked('outstanding-timeout-send-email');
@@ -163,6 +218,9 @@ export async function removeRejectionTemplate(index) {
     return;
   }
 
+  const confirmed = await showConfirm('Delete template?', `Delete "${templateName}"? This cannot be undone after you save these settings.`);
+  if (!confirmed) return;
+
   currentRejectionTemplates.splice(index, 1);
   renderRejectionTemplates();
   updateAutoRejectEmailControls();
@@ -170,30 +228,43 @@ export async function removeRejectionTemplate(index) {
 }
 
 // Event Listeners
+const emailTemplatesAccordion = document.getElementById('email-templates-accordion');
+if (emailTemplatesAccordion) {
+  emailTemplatesAccordion.addEventListener('focusin', (e) => {
+    trackActiveTemplateField(e.target);
+  });
+
+  emailTemplatesAccordion.addEventListener('keyup', (e) => {
+    trackActiveTemplateField(e.target);
+  });
+
+  emailTemplatesAccordion.addEventListener('click', (e) => {
+    trackActiveTemplateField(e.target);
+  });
+}
+
+const settingsTemplatesPanel = document.getElementById('settings-templates');
+if (settingsTemplatesPanel) {
+  settingsTemplatesPanel.addEventListener('click', (e) => {
+    const chip = e.target.closest('.placeholder-chip');
+    if (!chip) return;
+
+    const placeholder = chip.textContent;
+    const field = validLastActiveTemplateField();
+    if (field) {
+      insertPlaceholderIntoField(field, placeholder);
+    } else {
+      flashPlaceholderHelper('Focus a template Subject or Body field first, then click a placeholder.');
+    }
+  });
+}
+
 document.addEventListener('click', (e) => {
   // Accordion Header Click
   const header = e.target.closest('.asap-accordion-header');
   if (header) {
     const item = header.closest('.asap-accordion-item');
     if (item) toggleAccordion(item);
-    return;
-  }
-
-  // Placeholder Click
-  const chip = e.target.closest('.placeholder-chip');
-  if (chip) {
-    const placeholder = chip.textContent;
-    const activeEl = document.activeElement;
-    if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
-      const start = activeEl.selectionStart;
-      const end = activeEl.selectionEnd;
-      const text = activeEl.value;
-      activeEl.value = text.substring(0, start) + placeholder + text.substring(end);
-      activeEl.selectionStart = activeEl.selectionEnd = start + placeholder.length;
-      activeEl.focus();
-      activeEl.dispatchEvent(new Event('input', { bubbles: true }));
-      activeEl.dispatchEvent(new Event('change', { bubbles: true }));
-    }
     return;
   }
 
