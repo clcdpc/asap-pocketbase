@@ -36,6 +36,11 @@ function appWithTemplate(options) {
     },
     findRecordsByFilter: function (collection) {
       if (collection === "rejection_templates") return [template];
+      if (collection === "workflow_settings" && options.usedByAutoReject) {
+        return [record("workflow_123", {
+          outstandingTimeoutRejectionTemplate: template.id,
+        })];
+      }
       return [];
     },
     findFirstRecordByFilter: function (collection) {
