@@ -209,7 +209,14 @@ const normalizeDomainCases = [
   { input: 'DOMAIN', expected: 'domain' },
   { input: '', expected: '' },
   { input: null, expected: '' },
-  { input: undefined, expected: '' }
+  { input: undefined, expected: '' },
+  { input: '\t  domain \n', expected: 'domain' },
+  { input: 'domain', expected: 'domain' },
+  { input: 'domain123.com', expected: 'domain123.com' },
+  { input: 0, expected: '' },
+  { input: false, expected: '' },
+  { input: 123, expected: '123' },
+  { input: true, expected: 'true' }
 ];
 
 runTestSuite('normalizeDomain', normalizeDomainCases, (tc) => {
