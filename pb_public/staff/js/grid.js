@@ -402,9 +402,9 @@ export function renderBarcodeCell(row) {
 }
 
 export function getActionsColumnWidth(status) {
-  if (status === 'suggestion') return '135px';
-  if (status === 'outstanding_purchase') return '165px';
-  return '120px';
+  if (status === 'suggestion') return '180px';
+  if (status === 'outstanding_purchase') return '160px';
+  return '100px';
 }
 
 export function getGridColumns(status) {
@@ -412,7 +412,7 @@ export function getGridColumns(status) {
 
   if (status === 'suggestion') {
     return [
-      { name: 'Barcode', width: '140px' },
+      { name: 'Barcode', width: '170px' },
       { name: 'Title (original)', width: '320px' },
       { name: 'Author (original)', width: '150px' },
       { name: 'Format', width: '100px' },
@@ -425,7 +425,7 @@ export function getGridColumns(status) {
 
   if (status === 'closed') {
     return [
-      { name: 'Barcode', width: '140px' },
+      { name: 'Barcode', width: '170px' },
       { name: 'Title (original)', width: '320px' },
       { name: 'Author (original)', width: '150px' },
       { name: 'Format', width: '100px' },
@@ -437,7 +437,7 @@ export function getGridColumns(status) {
   }
 
   return [
-    { name: 'Barcode', width: '140px' },
+    { name: 'Barcode', width: '170px' },
     { name: 'Title (original)', width: '320px' },
     { name: 'Author (original)', width: '150px' },
     { name: 'Identifier number', width: '140px' },
@@ -446,7 +446,6 @@ export function getGridColumns(status) {
     { name: 'Format', width: '100px' },
     { name: 'Timing', width: '100px' },
     { name: 'Submitted', width: '100px' },
-    { name: 'Last checked', width: '120px' },
     { name: 'Notes', width: '60px' },
     actionsColumn,
   ];
@@ -565,7 +564,6 @@ export function getGridRow(row, status) {
     formatMap[row.format] || row.format,
     formatPublication(row.publication),
     formatStandardDate(row.created),
-    formatDateTime(row.lastPromoterCheck),
     formatNote(row.notes),
     gridjs.html(renderRowActions(row)),
   ];
@@ -583,10 +581,12 @@ export function getRowActions(row) {
 
   if (status === 'suggestion') {
     return {
-      primary: { label: 'Purchase', className: 'btn-primary', onClick: () => openEdit(row.id, 'outstanding_purchase', 'Approve for purchase', 'purchase', 'Purchase') },
+      visible: [
+        { label: 'Purchase', className: 'btn-primary', onClick: () => openEdit(row.id, 'outstanding_purchase', 'Approve for purchase', 'purchase', 'Purchase') },
+        { label: 'Reject', className: 'btn-outline-danger', onClick: () => openEdit(row.id, 'closed', 'Reject', 'reject', 'Reject') }
+      ],
       secondary: [
         { label: 'Already own', onClick: () => openEdit(row.id, 'pending_hold', 'Already own', 'alreadyOwn', 'Already own') },
-        { label: 'Reject', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Reject', 'reject', 'Reject') },
         { label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose', 'Silent close') },
         { label: 'Edit', onClick: () => openEdit(row.id, 'suggestion', 'Edit suggestion', '', 'Save') },
       ]
@@ -647,9 +647,30 @@ export function getRegisteredRowAction(actionId) {
 
 export function renderRowActions(row) {
   const actions = getRowActions(row);
-  const primaryActionId = registerRowAction(actions.primary);
   let markup = `<div class="row-action-group" data-no-row-edit="true">`;
-  markup += `<button type="button" class="btn btn-sm row-action-primary ${escapeAttr(actions.primary.className || 'btn-primary')}" data-row-action-id="${primaryActionId}" data-no-row-edit="true">${escapeAttr(actions.primary.label)}</button>`;
+
+  if (actions.visible && actions.visible.length > 0) {
+    actions.visible.forEach((action, index) => {
+      const actionId = registerRowAction(action);
+      const isFirst = index === 0;
+      const isLast = (index === actions.visible.length - 1) && (!actions.secondary || actions.secondary.length === 0);
+
+      let classes = `btn btn-sm ${action.className || 'btn-primary'}`;
+      if (isFirst) {
+        classes += ' row-action-primary';
+      } else if (isLast) {
+        // No special class needed, default border radii apply on right
+      } else {
+        classes += ' row-action-middle';
+      }
+
+      markup += `<button type="button" class="${escapeAttr(classes)}" data-row-action-id="${actionId}" data-no-row-edit="true">${escapeAttr(action.label)}</button>`;
+    });
+  } else if (actions.primary) {
+    const primaryActionId = registerRowAction(actions.primary);
+    markup += `<button type="button" class="btn btn-sm row-action-primary ${escapeAttr(actions.primary.className || 'btn-primary')}" data-row-action-id="${primaryActionId}" data-no-row-edit="true">${escapeAttr(actions.primary.label)}</button>`;
+  }
+
   if (actions.secondary?.length) {
     const menuActionIds = actions.secondary.map(action => registerRowAction(action)).join(',');
     markup += `<button type="button" class="btn btn-sm btn-outline-secondary row-action-menu-trigger" aria-haspopup="menu" aria-expanded="false" data-row-menu-action-ids="${menuActionIds}" data-no-row-edit="true">⋯</button>`;

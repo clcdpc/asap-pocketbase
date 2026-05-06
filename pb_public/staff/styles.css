@@ -188,7 +188,10 @@ body {
   white-space: nowrap;
 }
 
-#grid-container .gridjs-td:has(.truncate-note) {
+#grid-container .gridjs-th:last-child,
+#grid-container .gridjs-td:last-child,
+#grid-container .gridjs-th:nth-last-child(2),
+#grid-container .gridjs-td:nth-last-child(2) {
   text-align: center !important;
 }
 
@@ -393,6 +396,12 @@ body {
 .row-action-menu-trigger {
   border-top-left-radius: 0;
   border-bottom-left-radius: 0;
+  margin-left: -1px;
+  border-left-width: 1px;
+}
+
+.row-action-middle {
+  border-radius: 0;
   margin-left: -1px;
   border-left-width: 1px;
 }

@@ -1,6 +1,6 @@
 import { pb, formatMap, availableFormats, currentRejectionTemplates, currentStatus, currentSuggestions, allSuggestions, verifiedBibId, publicationOptions, setVerifiedBibId, workflowSettings } from './state.js';
 import { leapBibUrl, showToast, showAlert, showConfirm, openProfileDialog } from './api.js';
-import { loadTab, formatStandardDate, renderWorkflowTags, escapeAttr } from './grid.js';
+import { loadTab, formatStandardDate, formatDateTime, renderWorkflowTags, escapeAttr } from './grid.js';
 import { setSelectValue, dateOnly } from './settings-ui.js';
 
 export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
@@ -43,6 +43,7 @@ export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
   renderEditLeapBibLink(row.bibid);
   renderExternalSearchButton(row.title, row.identifier);
   renderPurchaseReminderOption(actionStr);
+  renderEditMetadata(row);
 
   const username = (pb.authStore.model && pb.authStore.model.username) ? pb.authStore.model.username : 'staff';
   const today = formatStandardDate(new Date());
@@ -156,6 +157,28 @@ export function renderEditWorkflowTags(tags, row) {
     <div class="small font-weight-bold mb-1">Workflow tags</div>
     ${renderWorkflowTags(tags, row)}
   `;
+}
+
+export function renderEditMetadata(row) {
+  const editBody = document.querySelector('#editModal .asap-dialog-edit-body');
+  if (!editBody) return;
+
+  let block = document.getElementById('edit-metadata');
+  if (!block) {
+    block = document.createElement('div');
+    block.id = 'edit-metadata';
+    block.className = 'mt-3 pt-2 border-top small text-muted';
+    editBody.appendChild(block);
+  }
+
+  const lastChecked = row.lastPromoterCheck ? formatDateTime(row.lastPromoterCheck) : null;
+  if (lastChecked) {
+    block.innerHTML = `Auto-promoter last checked: ${escapeAttr(lastChecked)}`;
+    block.classList.remove('hidden');
+  } else {
+    block.innerHTML = '';
+    block.classList.add('hidden');
+  }
 }
 
 export function renderEditLeapBibLink(bibId) {
