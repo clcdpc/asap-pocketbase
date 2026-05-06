@@ -9,6 +9,8 @@ import { populateEmailTemplateForms } from './settings-templates.js';
 import { updatePublicationOptionsUi, setAgeGroups, renderPatronFormatRulesEditor, collectPatronFormatRules, renderOptionListEditor, collectOptionList, addOptionListRow, handleOptionListClick } from './settings-ui.js';
 import { loadStaffUsers, populateStaffLibraryOptions } from './settings-users.js';
 
+const adminSettingsSections = ['start', 'staff', 'templates', 'workflow', 'patron'];
+
 export function showSettingsAccessDenied() {
   settingsContainer.classList.remove('hidden');
   setVisible('settings-error', true);
@@ -26,117 +28,143 @@ export async function loadSettings(options = {}) {
   setSettingsLoading(true);
 
   try {
-    // Filter sidebar for non-super admins
-    document.querySelectorAll('[data-settings-target]').forEach(el => {
-      const section = el.getAttribute('data-settings-target');
-      // Allow library admins to see settings they can override
-      const allowedForAdmins = ['start', 'staff', 'templates', 'workflow', 'patron'];
-      if (!isSuper && !allowedForAdmins.includes(section)) {
-        el.classList.add('hidden');
-      } else {
-        el.classList.remove('hidden');
-      }
-    });
-
-    // If not super admin, force them to an allowed section if they are on a hidden one
-    const allowedForAdmins = ['start', 'staff', 'templates', 'workflow', 'patron'];
-    if (!isSuper && !allowedForAdmins.includes(currentSettingsSection)) {
-      activateSettingsSection('workflow', { updateHash: true });
-    }
-
-    // Load Library Selector for Super Admins
-    if (isSuper) {
-      await populateLibrarySelector();
-      document.getElementById('super-admin-library-selector').classList.remove('hidden');
-    } else {
-      document.getElementById('super-admin-library-selector').classList.add('hidden');
-      setCurrentLibraryContextOrgId(pb.authStore.model.libraryOrgId || 'system');
-      const libraryName = pb.authStore.model.libraryOrgName || 'My Library';
-      document.getElementById('library-context-display').textContent = currentLibraryContextOrgId === 'system'
-        ? libraryName
-        : `${libraryName} (ID ${currentLibraryContextOrgId})`;
-    }
+    updateSettingsSidebar(isSuper);
+    ensureAllowedSettingsSection(isSuper);
+    await loadLibraryContext(isSuper);
 
     const loadedLibrarySettings = await loadLibrarySettings(currentLibraryContextOrgId);
 
     if (!isSuper) {
-      // Hide error, show form for library admins even if they can't load system-scoped settings.
-      hideSettingsAccessDenied();
-      const formEl = document.getElementById('settings-form');
-      if (formEl) formEl.classList.remove('hidden');
-      // Library admins need staff users for the Staff Access section
-      await populateStaffLibraryOptions();
-      await loadStaffUsers();
-      updateSaveButtonText();
+      await loadLibraryAdminSettings();
       return;
     }
 
-    const smtp = (loadedLibrarySettings && loadedLibrarySettings.smtp) || {};
     const polaris = (loadedLibrarySettings && loadedLibrarySettings.polaris) || {};
-    const emails = (loadedLibrarySettings && loadedLibrarySettings.emails) || {};
-
-    const hasPolarisCredentials = !!(polaris.host && polaris.apiKey && polaris.accessId && polaris.staffDomain && polaris.adminUser && polaris.adminPassword);
-    if (hasPolarisCredentials && (organizationsStatus === 'not_loaded' || organizationsStatus === 'error')) {
-      syncPolarisOrganizations().catch(() => {
-        // syncPolarisOrganizations updates the visible warning state.
-      });
-    }
-
-    workflowSettings.outstandingTimeoutEnabled = !!((loadedLibrarySettings && loadedLibrarySettings.workflow || {}).outstandingTimeoutEnabled);
-    workflowSettings.outstandingTimeoutDays = parseInt(((loadedLibrarySettings && loadedLibrarySettings.workflow || {}).outstandingTimeoutDays) || '30', 10) || 30;
-    workflowSettings.autoPromote = !!(loadedLibrarySettings && loadedLibrarySettings.workflow || {}).autoPromote;
+    maybeSyncPolarisOrganizations(polaris);
+    updateWorkflowSettingsSummary(loadedLibrarySettings);
 
     // Workflow form population is handled by loadLibrarySettings
 
-    // SMTP
-    setFieldValue('smtp-host', smtp.host || '');
-    setFieldValue('smtp-port', smtp.port || 587);
-    setFieldValue('smtp-username', '');
-    setFieldValue('smtp-password', '');
-    setVisible('smtp-username-status', !!smtp.usernameSet);
-    setVisible('smtp-password-status', !!smtp.passwordSet);
-    setFieldChecked('smtp-tls', smtp.tls !== false);
-
-    // Also populate the duplicate SMTP fields with the emails value
-    setFieldValue('smtp-from', emails.fromAddress || '');
-    setFieldValue('smtp-from-name', emails.fromName || '');
-
-    // Polaris
-    setFieldValue('polaris-host', polaris.host || '');
-    setFieldValue('polaris-api-key', polaris.apiKey || '');
-    setFieldValue('polaris-access-id', polaris.accessId || '');
-    setFieldValue('polaris-domain', polaris.staffDomain || '');
-    setFieldValue('polaris-admin-user', polaris.adminUser || '');
-    setFieldValue('polaris-admin-pass', polaris.adminPassword || '');
-    setFieldValue('polaris-override-pass', polaris.overridePassword || '');
-
-
-    // UI Text and Formats are handled by populatePatronUiForms called via loadLibrarySettings
-    // but we can set them here if needed. Since loadLibrarySettings is called right before this,
-    // it will be populated. Wait, loadLibrarySettings is called AT THE TOP of loadSettings asynchronously!
-    // So if it completes before loadSettings finishes, loadSettings might overwrite it?
-    // Actually, loadLibrarySettings is awaited at the top. So we should just remove the uiText Population from loadSettings and let loadLibrarySettings handle it.
-    await populateStaffLibraryOptions();
-    await loadStaffUsers();
-
-
-
-    // Success: hide error, show form
-    hideSettingsAccessDenied();
-    const formEl = document.getElementById('settings-form');
-    if (formEl) formEl.classList.remove('hidden');
+    populateSystemSettingsForms(loadedLibrarySettings);
+    await loadStaffAccessSettings();
+    showSettingsForm();
 
   } catch (err) {
-    if (isPocketBaseAutoCancelError(err)) {
-      return;
-    }
-    console.error('Failed to load settings', err);
-    if (showErrors) {
-      showSettingsAccessDenied();
-    }
+    handleLoadSettingsError(err, showErrors);
   } finally {
     setSettingsLoading(false);
     markSettingsClean('clean');
+  }
+}
+
+function updateSettingsSidebar(isSuper) {
+  document.querySelectorAll('[data-settings-target]').forEach(el => {
+    const section = el.getAttribute('data-settings-target');
+    if (!isSuper && !adminSettingsSections.includes(section)) {
+      el.classList.add('hidden');
+    } else {
+      el.classList.remove('hidden');
+    }
+  });
+}
+
+function ensureAllowedSettingsSection(isSuper) {
+  if (!isSuper && !adminSettingsSections.includes(currentSettingsSection)) {
+    activateSettingsSection('workflow', { updateHash: true });
+  }
+}
+
+async function loadLibraryContext(isSuper) {
+  const selector = document.getElementById('super-admin-library-selector');
+
+  if (isSuper) {
+    await populateLibrarySelector();
+    selector.classList.remove('hidden');
+    return;
+  }
+
+  selector.classList.add('hidden');
+  setCurrentLibraryContextOrgId(pb.authStore.model.libraryOrgId || 'system');
+  const libraryName = pb.authStore.model.libraryOrgName || 'My Library';
+  document.getElementById('library-context-display').textContent = currentLibraryContextOrgId === 'system'
+    ? libraryName
+    : `${libraryName} (ID ${currentLibraryContextOrgId})`;
+}
+
+async function loadLibraryAdminSettings() {
+  // Library admins can still edit library-scoped settings even without system settings access.
+  showSettingsForm();
+  await loadStaffAccessSettings();
+  updateSaveButtonText();
+}
+
+async function loadStaffAccessSettings() {
+  await populateStaffLibraryOptions();
+  await loadStaffUsers();
+}
+
+function maybeSyncPolarisOrganizations(polaris) {
+  const hasPolarisCredentials = !!(polaris.host && polaris.apiKey && polaris.accessId && polaris.staffDomain && polaris.adminUser && polaris.adminPassword);
+  if (hasPolarisCredentials && (organizationsStatus === 'not_loaded' || organizationsStatus === 'error')) {
+    syncPolarisOrganizations().catch(() => {
+      // syncPolarisOrganizations updates the visible warning state.
+    });
+  }
+}
+
+function updateWorkflowSettingsSummary(settings) {
+  const workflow = (settings && settings.workflow) || {};
+  workflowSettings.outstandingTimeoutEnabled = !!workflow.outstandingTimeoutEnabled;
+  workflowSettings.outstandingTimeoutDays = parseInt(workflow.outstandingTimeoutDays || '30', 10) || 30;
+  workflowSettings.autoPromote = !!workflow.autoPromote;
+}
+
+function populateSystemSettingsForms(settings) {
+  const smtp = (settings && settings.smtp) || {};
+  const polaris = (settings && settings.polaris) || {};
+  const emails = (settings && settings.emails) || {};
+
+  populateSmtpSettingsForm(smtp, emails);
+  populatePolarisSettingsForm(polaris);
+}
+
+function populateSmtpSettingsForm(smtp, emails) {
+  setFieldValue('smtp-host', smtp.host || '');
+  setFieldValue('smtp-port', smtp.port || 587);
+  setFieldValue('smtp-username', '');
+  setFieldValue('smtp-password', '');
+  setVisible('smtp-username-status', !!smtp.usernameSet);
+  setVisible('smtp-password-status', !!smtp.passwordSet);
+  setFieldChecked('smtp-tls', smtp.tls !== false);
+
+  // Also populate the duplicate SMTP fields with the emails value.
+  setFieldValue('smtp-from', emails.fromAddress || '');
+  setFieldValue('smtp-from-name', emails.fromName || '');
+}
+
+function populatePolarisSettingsForm(polaris) {
+  setFieldValue('polaris-host', polaris.host || '');
+  setFieldValue('polaris-api-key', polaris.apiKey || '');
+  setFieldValue('polaris-access-id', polaris.accessId || '');
+  setFieldValue('polaris-domain', polaris.staffDomain || '');
+  setFieldValue('polaris-admin-user', polaris.adminUser || '');
+  setFieldValue('polaris-admin-pass', polaris.adminPassword || '');
+  setFieldValue('polaris-override-pass', polaris.overridePassword || '');
+}
+
+function showSettingsForm() {
+  hideSettingsAccessDenied();
+  const formEl = document.getElementById('settings-form');
+  if (formEl) formEl.classList.remove('hidden');
+}
+
+function handleLoadSettingsError(err, showErrors) {
+  if (isPocketBaseAutoCancelError(err)) {
+    return;
+  }
+  console.error('Failed to load settings', err);
+  if (showErrors) {
+    showSettingsAccessDenied();
   }
 }
 

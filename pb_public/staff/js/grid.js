@@ -6,6 +6,33 @@ import { leapBibUrl, showToast, showAlert, isSuperAdminStaff, isAdminStaff, getS
 import { showSettingsAccessDenied, hideSettingsAccessDenied, loadSettings } from './settings.js';
 
 export async function loadTab(status) {
+  renderTabDescription(status);
+  clearJobMessage();
+  updateAdminActions(status);
+
+  if (status === 'settings') {
+    loadSettingsTab();
+    return;
+  }
+
+  prepareGridView();
+
+  try {
+    const records = await fetchTitleRequests();
+    setAllSuggestions(records);
+    updateTabCounts(records);
+
+    if (!renderStatusGrid(status, records)) {
+      return;
+    }
+  } catch (err) {
+    handleLoadTabError(err);
+  }
+
+  announceTabLoaded(status);
+}
+
+function renderTabDescription(status) {
   const tabDesc = document.getElementById('tab-desc');
   let desc = descriptions[status] || '';
 
@@ -33,12 +60,14 @@ export async function loadTab(status) {
     }
   }
   tabDesc.textContent = desc;
+}
 
-  // Update job message
+function clearJobMessage() {
   const jobMsg = document.getElementById('job-msg');
   if (jobMsg) jobMsg.textContent = '';
+}
 
-  // Admin actions visibility
+function updateAdminActions(status) {
   const adminBar = document.getElementById('admin-actions-bar');
   const promoterBtn = document.getElementById('btn-run-promoter-check');
   const holdBtn = document.getElementById('btn-run-hold-check');
@@ -64,52 +93,59 @@ export async function loadTab(status) {
     adminBar.classList.remove('hidden');
     deleteClosedBtn.classList.remove('hidden');
   }
+}
 
-  if (status === 'settings') {
-    closeOpenDialogs();
-    closeActionMenu?.();
-    gridContainer.classList.add('hidden');
-    if (staffGridFilterBar) staffGridFilterBar.classList.add('hidden');
-    hideTagFilter();
-    settingsContainer.classList.remove('hidden');
-    activateSettingsSection(getSettingsSectionFromHash() || currentSettingsSection, { updateHash: false });
-    if (!isAdminStaff()) {
-      showSettingsAccessDenied();
-      return;
-    }
-    loadSettings({ showErrors: true });
+function loadSettingsTab() {
+  closeOpenDialogs();
+  closeActionMenu?.();
+  gridContainer.classList.add('hidden');
+  if (staffGridFilterBar) staffGridFilterBar.classList.add('hidden');
+  hideTagFilter();
+  settingsContainer.classList.remove('hidden');
+  activateSettingsSection(getSettingsSectionFromHash() || currentSettingsSection, { updateHash: false });
+  if (!isAdminStaff()) {
+    showSettingsAccessDenied();
     return;
   }
+  loadSettings({ showErrors: true });
+}
 
+function prepareGridView() {
   gridContainer.classList.remove('hidden');
   settingsContainer.classList.add('hidden');
   hideSettingsAccessDenied();
   resetGrid();
+}
 
-  try {
-    const scopedResult = await authorizedJson('/api/asap/staff/title-requests');
-    setAllSuggestions(Array.isArray(scopedResult.items) ? scopedResult.items : []);
-    updateTabCounts(allSuggestions);
+async function fetchTitleRequests() {
+  const scopedResult = await authorizedJson('/api/asap/staff/title-requests');
+  return Array.isArray(scopedResult.items) ? scopedResult.items : [];
+}
 
-    setCurrentSuggestions(allSuggestions.filter(row => normalizeStatus(row.status) === status));
-    updateTagFilter(currentSuggestions);
+function renderStatusGrid(status, records) {
+  setCurrentSuggestions(records.filter(row => normalizeStatus(row.status) === status));
+  updateTagFilter(currentSuggestions);
 
-    if (!currentSuggestions.length) {
-      gridContainer.innerHTML = `<div class="alert alert-light border">${escapeAttr(emptyStateMessages[status] || 'No suggestions found.')}</div>`;
-      return;
-    }
-
-    renderCurrentGrid();
-  } catch (err) {
-    console.error('Failed to load data', err);
+  if (!currentSuggestions.length) {
+    gridContainer.innerHTML = `<div class="alert alert-light border">${escapeAttr(emptyStateMessages[status] || 'No suggestions found.')}</div>`;
+    return false;
   }
 
+  renderCurrentGrid();
+  return true;
+}
+
+function announceTabLoaded(status) {
   const announcer = document.getElementById('status-announcer');
   announcer.textContent = "Loaded " + status + " tab.";
 
   // Manage focus for screen readers when tab changes
   const firstHeader = document.getElementById('tab-desc');
   if (firstHeader) firstHeader.focus();
+}
+
+function handleLoadTabError(err) {
+  console.error('Failed to load data', err);
 }
 
 export function resetGrid() {
