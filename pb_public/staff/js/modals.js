@@ -40,6 +40,7 @@ export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
   document.getElementById('edit-autohold').checked = !!row.autohold;
   renderEditPatronContext(row);
   renderEditWorkflowTags(row.workflowTags, row);
+  renderEditClaimState(row);
   renderEditLeapBibLink(row.bibid);
   renderExternalSearchButton(row.title, row.identifier);
   renderPurchaseReminderOption(actionStr);
@@ -56,6 +57,23 @@ export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
 
   document.getElementById('editModal').showModal();
   document.getElementById('close-modal-btn').focus();
+}
+
+export function renderEditClaimState(row) {
+  const container = document.getElementById('edit-claim-state');
+  if (!container) return;
+  const currentStaffId = String((pb.authStore.model && pb.authStore.model.id) || '').trim();
+  const claimantId = String(row.claimedByStaffUserId || '').trim();
+  if (!claimantId) {
+    container.innerHTML = '<div class="small font-weight-bold mb-1">Claim</div><span class="claim-badge claim-badge--unclaimed">Unclaimed</span>';
+    return;
+  }
+  if (currentStaffId && claimantId === currentStaffId) {
+    container.innerHTML = '<div class="small font-weight-bold mb-1">Claim</div><span class="claim-badge claim-badge--mine">Mine</span>';
+    return;
+  }
+  const name = row.claimedByDisplayName || 'Staff';
+  container.innerHTML = `<div class="small font-weight-bold mb-1">Claim</div><span class="claim-badge claim-badge--claimed">Claimed by ${escapeAttr(name)}</span>`;
 }
 
 export function getExistingHistory(row) {

@@ -48,6 +48,15 @@ When adding a new setting:
 - make sure the runtime reader uses the same fallback logic as the editor UI
 - verify that switching between system and library views preserves the expected value
 
+### Analytics scope
+All analytics must respect library scope.
+
+Rules:
+- Library users see only their own library’s analytics.
+- Super admin may view a specific library or an all-libraries global view.
+- Scope must be applied in the query/data layer, not just implied in the UI.
+- Every new metric must define its scope behavior before implementation.
+
 ### Manual verification checklist for new settings
 For each new setting, verify all of the following:
 - save at system level persists correctly

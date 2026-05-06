@@ -158,12 +158,41 @@ body {
   white-space: nowrap;
 }
 
-#tag-filter {
+#tag-filter,
+#claim-filter {
   width: auto;
   min-width: 200px;
   max-width: 400px;
   padding-right: 2rem !important;
   text-overflow: ellipsis;
+}
+
+.claim-badge {
+  border-radius: 0.35rem;
+  display: inline-flex;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  padding: 0.18rem 0.45rem;
+  white-space: normal;
+}
+
+.claim-badge--mine {
+  background: #155724;
+  color: #fff;
+}
+
+.claim-badge--claimed {
+  background: #e2e3e5;
+  color: #383d41;
+}
+
+.claim-badge--unclaimed {
+  background: #fff;
+  border: 1px solid #ced4da;
+  color: #6c757d;
 }
 
 .org-checkbox-scroll {
@@ -303,6 +332,7 @@ body {
 
 #grid-container .gridjs-td:has(.staff-title-cell),
 #grid-container .gridjs-td:has(.workflow-tag-list),
+#grid-container .gridjs-td:has(.claim-badge),
 #grid-container .gridjs-td:has(.barcode-cell) {
   white-space: normal;
   overflow: visible;

@@ -1,4 +1,4 @@
-import { pb, loginContainer, setupContainer, appContainer, loginForm, setupForm, logoutBtn, profileBtn, tagFilterSelect, currentRejectionTemplates, setCurrentRejectionTemplates, statusStages, stageQueryMap, currentStatus, activeTagFilter, workflowSettings, bootstrapAdminMessage, setupRequired, currentEmailStatus, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, settingsSectionIds, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, currentLibraryContextOrgId, setCurrentStatus, setActiveTagFilter, setBootstrapAdminMessage, setSetupRequired, setOrganizationsStatusMessage, setCurrentSettingsSection, setSettingsDirty, setCurrentEmailStatus } from './state.js';
+import { pb, loginContainer, setupContainer, appContainer, loginForm, setupForm, logoutBtn, profileBtn, tagFilterSelect, claimFilterSelect, currentRejectionTemplates, setCurrentRejectionTemplates, statusStages, stageQueryMap, currentStatus, activeTagFilter, workflowSettings, bootstrapAdminMessage, setupRequired, currentEmailStatus, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, settingsSectionIds, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, currentLibraryContextOrgId, setCurrentStatus, setActiveTagFilter, setCurrentClaimFilter, setBootstrapAdminMessage, setSetupRequired, setOrganizationsStatusMessage, setCurrentSettingsSection, setSettingsDirty, setCurrentEmailStatus } from './state.js';
 import { loadTab, renderCurrentGrid, closeActionMenu, escapeAttr } from './grid.js';
 import { syncPolarisOrganizations } from './settings-polaris.js';
 import { loadSettings, checkSettingsDirty } from './settings.js';
@@ -819,6 +819,7 @@ document.querySelectorAll('#status-tabs .nav-link').forEach(link => {
     activateStatusTab(nextStatus);
     updateStageQuery(nextStatus);
     setActiveTagFilter('');
+    setCurrentClaimFilter('all');
     loadTab(currentStatus);
   });
 });
@@ -826,6 +827,13 @@ document.querySelectorAll('#status-tabs .nav-link').forEach(link => {
 if (tagFilterSelect) {
   tagFilterSelect.addEventListener('change', event => {
     setActiveTagFilter(event.target.value || '');
-    renderCurrentGrid(status);
+    renderCurrentGrid(currentStatus);
+  });
+}
+
+if (claimFilterSelect) {
+  claimFilterSelect.addEventListener('change', event => {
+    setCurrentClaimFilter(event.target.value || 'all');
+    renderCurrentGrid(currentStatus);
   });
 }

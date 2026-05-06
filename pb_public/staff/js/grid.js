@@ -1,4 +1,4 @@
-import { gridContainer, staffGridFilterBar, tagFilterSelect, settingsContainer, grid, formatMap, ageMap, closeReasonMap, descriptions, emptyStateMessages, statusStages, currentStatus, currentSuggestions, activeTagFilter, allSuggestions, workflowSettings, currentSettingsSection, activeActionMenu, rowActionIdCounter, rowActionRegistry, setCurrentSuggestions, setActiveTagFilter, setActiveActionMenu, setGrid, setAllSuggestions, incrementRowActionIdCounter } from './state.js';
+import { pb, gridContainer, staffGridFilterBar, tagFilterSelect, claimFilterSelect, settingsContainer, grid, formatMap, ageMap, closeReasonMap, descriptions, emptyStateMessages, statusStages, currentStatus, currentSuggestions, activeTagFilter, currentClaimFilter, allSuggestions, workflowSettings, currentSettingsSection, activeActionMenu, rowActionIdCounter, rowActionRegistry, setCurrentSuggestions, setActiveTagFilter, setCurrentClaimFilter, setActiveActionMenu, setGrid, setAllSuggestions, incrementRowActionIdCounter } from './state.js';
 import { openEdit } from './modals.js';
 import { openNewSuggestionForPatron } from './patron.js';
 import { undoRow, deleteClosedRequest, closeDuplicateRequest } from './actions.js';
@@ -20,6 +20,7 @@ export async function loadTab(status) {
 
   if (status === 'analytics') {
     hideTagFilter();
+    hideClaimFilter();
     await loadAnalytics(gridContainer);
     announceTabLoaded(status);
     return;
@@ -109,6 +110,7 @@ function loadSettingsTab() {
   gridContainer.classList.add('hidden');
   if (staffGridFilterBar) staffGridFilterBar.classList.add('hidden');
   hideTagFilter();
+  hideClaimFilter();
   settingsContainer.classList.remove('hidden');
   activateSettingsSection(getSettingsSectionFromHash() || currentSettingsSection, { updateHash: false });
   if (!isAdminStaff()) {
@@ -133,6 +135,7 @@ async function fetchTitleRequests() {
 function renderStatusGrid(status, records) {
   setCurrentSuggestions(records.filter(row => normalizeStatus(row.status) === status));
   updateTagFilter(currentSuggestions);
+  updateClaimFilter();
 
   if (!currentSuggestions.length) {
     gridContainer.innerHTML = `<div class="alert alert-light border">${escapeAttr(emptyStateMessages[status] || 'No suggestions found.')}</div>`;
@@ -310,6 +313,12 @@ export function hideTagFilter() {
   }
 }
 
+export function hideClaimFilter() {
+  if (claimFilterSelect) {
+    claimFilterSelect.classList.add('hidden');
+  }
+}
+
 export function updateTagFilter(records) {
   if (!tagFilterSelect || !staffGridFilterBar) return;
   const counts = tagCountsForRecords(records);
@@ -331,11 +340,41 @@ export function updateTagFilter(records) {
   staffGridFilterBar.classList.remove('hidden');
 }
 
+export function updateClaimFilter() {
+  if (!claimFilterSelect || !staffGridFilterBar) return;
+  claimFilterSelect.value = currentClaimFilter;
+  claimFilterSelect.classList.remove('hidden');
+  staffGridFilterBar.classList.remove('hidden');
+}
+
 export function applyTagFilter(records) {
   if (!activeTagFilter) return records || [];
   return (records || []).filter(record => {
     return getFilterableLabelsForRow(record).includes(activeTagFilter);
   });
+}
+
+export function currentStaffId() {
+  return String((pb.authStore.model && pb.authStore.model.id) || '').trim();
+}
+
+export function isClaimedByCurrentUser(row) {
+  const staffId = currentStaffId();
+  return !!staffId && String(row?.claimedByStaffUserId || '').trim() === staffId;
+}
+
+export function isUnclaimed(row) {
+  return !String(row?.claimedByStaffUserId || '').trim();
+}
+
+export function applyClaimFilter(records, filter = currentClaimFilter, staffId = currentStaffId()) {
+  if (filter === 'mine') {
+    return (records || []).filter(record => !!staffId && String(record.claimedByStaffUserId || '').trim() === staffId);
+  }
+  if (filter === 'unclaimed') {
+    return (records || []).filter(record => isUnclaimed(record));
+  }
+  return records || [];
 }
 
 export function toggleTagFilter(tagName) {
@@ -349,9 +388,9 @@ export function toggleTagFilter(tagName) {
 
 export function renderCurrentGrid(status = currentStatus) {
   resetGrid();
-  const visibleRecords = applyTagFilter(currentSuggestions);
+  const visibleRecords = applyClaimFilter(applyTagFilter(currentSuggestions));
   if (!visibleRecords.length) {
-    gridContainer.innerHTML = '<div class="alert alert-light border">No suggestions match this workflow tag.</div>';
+    gridContainer.innerHTML = `<div class="alert alert-light border">${escapeAttr(emptyFilteredGridMessage())}</div>`;
     return;
   }
 
@@ -363,6 +402,22 @@ export function renderCurrentGrid(status = currentStatus) {
     sort: true,
     width: '100%'
   }).render(gridContainer));
+}
+
+function emptyFilteredGridMessage() {
+  if (activeTagFilter && currentClaimFilter !== 'all') {
+    return 'No suggestions match this workflow tag and claim filter.';
+  }
+  if (activeTagFilter) {
+    return 'No suggestions match this workflow tag.';
+  }
+  if (currentClaimFilter === 'mine') {
+    return 'No requests in this stage are claimed by you.';
+  }
+  if (currentClaimFilter === 'unclaimed') {
+    return 'No unclaimed requests in this stage.';
+  }
+  return 'No suggestions found.';
 }
 
 export function updateTabCounts(records) {
@@ -462,6 +517,7 @@ export function getGridColumns(status) {
       { name: 'Format', width: '100px' },
       { name: 'Timing', width: '100px' },
       { name: 'Submitted', width: '100px' },
+      { name: 'Claimed by', width: '110px' },
       { name: 'Notes', width: '60px' },
       actionsColumn,
     ];
@@ -475,6 +531,7 @@ export function getGridColumns(status) {
       { name: 'Format', width: '100px' },
       { name: 'Submitted', width: '100px' },
       { name: 'Closed reason', width: '140px' },
+      { name: 'Claimed by', width: '110px' },
       { name: 'Notes', width: '60px' },
       actionsColumn,
     ];
@@ -490,6 +547,7 @@ export function getGridColumns(status) {
     { name: 'Format', width: '100px' },
     { name: 'Timing', width: '100px' },
     { name: 'Submitted', width: '100px' },
+    { name: 'Claimed by', width: '110px' },
     { name: 'Notes', width: '60px' },
     actionsColumn,
   ];
@@ -593,6 +651,17 @@ export function renderTitleCell(row) {
   `);
 }
 
+export function renderClaimCell(row) {
+  if (isUnclaimed(row)) {
+    return gridjs.html('<span class="claim-badge claim-badge--unclaimed">Unclaimed</span>');
+  }
+  if (isClaimedByCurrentUser(row)) {
+    return gridjs.html('<span class="claim-badge claim-badge--mine">Mine</span>');
+  }
+  const name = row.claimedByDisplayName || 'Staff';
+  return gridjs.html(`<span class="claim-badge claim-badge--claimed" title="Claimed by ${escapeAttr(name)}">Claimed by ${escapeAttr(name)}</span>`);
+}
+
 export function getGridRow(row, status) {
   if (status === 'suggestion') {
     return [
@@ -602,6 +671,7 @@ export function getGridRow(row, status) {
       formatMap[row.format] || row.format,
       formatPublication(row.publication),
       formatStandardDate(row.created),
+      renderClaimCell(row),
       formatNote(row.notes),
       gridjs.html(renderRowActions(row)),
     ];
@@ -615,6 +685,7 @@ export function getGridRow(row, status) {
       formatMap[row.format] || row.format,
       formatStandardDate(row.created),
       formatCloseReason(row),
+      renderClaimCell(row),
       formatNote(row.notes),
       gridjs.html(renderRowActions(row)),
     ];
@@ -630,6 +701,7 @@ export function getGridRow(row, status) {
     formatMap[row.format] || row.format,
     formatPublication(row.publication),
     formatStandardDate(row.created),
+    renderClaimCell(row),
     formatNote(row.notes),
     gridjs.html(renderRowActions(row)),
   ];
@@ -653,6 +725,7 @@ export function getRowActions(row) {
       ],
       secondary: [
         { label: 'Already own', onClick: () => openEdit(row.id, 'pending_hold', 'Already own', 'alreadyOwn', 'Already own') },
+        ...claimActionsForRow(row),
         { label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose', 'Silent close') },
         { label: 'Edit', onClick: () => openEdit(row.id, 'suggestion', 'Edit suggestion', '', 'Save') },
       ]
@@ -663,6 +736,7 @@ export function getRowActions(row) {
     return {
       primary: { label: 'Ready for hold', className: 'btn-success', onClick: () => openEdit(row.id, 'pending_hold', 'Move to Pending hold', '', 'Ready for hold') },
       secondary: [
+        ...claimActionsForRow(row),
         { label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose', 'Silent close') },
         { label: 'Undo', onClick: () => undoRow(row.id) },
         { label: 'Edit', onClick: () => openEdit(row.id, 'outstanding_purchase', 'Edit', '', 'Save') },
@@ -675,6 +749,7 @@ export function getRowActions(row) {
     if ((status === 'pending_hold' || status === 'hold_placed') && hasWorkflowTag(row, 'Hold exists (same patron)')) {
       secondary.push({ label: 'Close duplicate', className: 'danger', onClick: () => closeDuplicateRequest(row.id) });
     }
+    claimActionsForRow(row).forEach(action => secondary.push(action));
     if (status !== 'closed') secondary.push({ label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose', 'Silent close') });
     secondary.push({ label: 'Edit', onClick: () => openEdit(row.id, row.status, 'Edit', '', 'Save') });
     if (status === 'closed' && isAdminStaff()) {
@@ -688,8 +763,43 @@ export function getRowActions(row) {
 
   return {
     primary: { label: 'Edit', className: 'btn-secondary', onClick: () => openEdit(row.id, row.status, 'Edit', '', 'Save') },
-    secondary: []
+    secondary: claimActionsForRow(row)
   };
+}
+
+export function claimActionsForRow(row) {
+  if (isUnclaimed(row)) {
+    return [{ label: 'Claim', onClick: () => claimRequest(row.id) }];
+  }
+  if (isClaimedByCurrentUser(row)) {
+    return [{ label: 'Unclaim', onClick: () => unclaimRequest(row.id) }];
+  }
+  if (isAdminStaff()) {
+    return [{ label: 'Clear claim', className: 'danger', onClick: () => unclaimRequest(row.id) }];
+  }
+  return [];
+}
+
+export async function claimRequest(requestId) {
+  await mutateRequestClaim(requestId, 'claim', 'Request claimed.');
+}
+
+export async function unclaimRequest(requestId) {
+  await mutateRequestClaim(requestId, 'unclaim', 'Request unclaimed.');
+}
+
+async function mutateRequestClaim(requestId, action, successMessage) {
+  try {
+    await authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(requestId)}/${action}`, {
+      method: 'POST',
+      body: JSON.stringify({})
+    });
+    showToast(successMessage, 'success');
+  } catch (err) {
+    await showAlert(err.message || 'Claim update failed.');
+  } finally {
+    await loadTab(currentStatus);
+  }
 }
 
 export async function runRowAction(action) {
