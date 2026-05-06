@@ -13,6 +13,7 @@ export const profileBtn = document.getElementById('profile-btn');
 export const gridContainer = document.getElementById('grid-container');
 export const staffGridFilterBar = document.getElementById('staff-grid-filter-bar');
 export const tagFilterSelect = document.getElementById('tag-filter');
+export const claimFilterSelect = document.getElementById('claim-filter');
 export const settingsContainer = document.getElementById('settings-container');
 export const settingsForm = document.getElementById('settings-form');
 export let grid = undefined;
@@ -44,6 +45,9 @@ export function setCurrentSuggestions(suggestions) { currentSuggestions = sugges
 
 export let activeTagFilter = '';
 export function setActiveTagFilter(filter) { activeTagFilter = filter; }
+
+export let currentClaimFilter = 'all';
+export function setCurrentClaimFilter(filter) { currentClaimFilter = ['mine', 'unclaimed'].includes(filter) ? filter : 'all'; }
 
 export let allSuggestions = [];
 export function setAllSuggestions(suggestions) { allSuggestions = suggestions; }

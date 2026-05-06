@@ -162,6 +162,12 @@
     <div id="staff-grid-filter-bar" class="staff-grid-filter-bar hidden">
       <label for="tag-filter" class="sr-only">Filter by workflow tag</label>
       <select id="tag-filter" class="form-control form-control-sm hidden" aria-label="Filter by workflow tag"></select>
+      <label for="claim-filter" class="sr-only">Filter by claim state</label>
+      <select id="claim-filter" class="form-control form-control-sm hidden" aria-label="Filter by claim state">
+        <option value="all">All requests</option>
+        <option value="mine">Mine</option>
+        <option value="unclaimed">Unclaimed</option>
+      </select>
     </div>
     <div id="grid-container"></div>
 
@@ -1099,6 +1105,11 @@
       <div id="edit-workflow-tags" class="edit-modal-tags">
         <div class="small font-weight-bold mb-1">Workflow tags</div>
         <div class="text-muted small">No workflow tags</div>
+      </div>
+
+      <div id="edit-claim-state" class="edit-claim-state mb-2">
+        <div class="small font-weight-bold mb-1">Claim</div>
+        <span class="claim-badge claim-badge--unclaimed">Unclaimed</span>
       </div>
 
       <div class="form-group mb-2">

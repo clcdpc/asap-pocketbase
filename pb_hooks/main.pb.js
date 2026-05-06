@@ -94,6 +94,14 @@ routerAdd("GET", "/api/asap/staff/analytics", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffAnalytics(e);
 });
 
+routerAdd("POST", "/api/asap/staff/title-requests/{id}/claim", (e) => {
+  return require(`${__hooks}/../lib/staff_routes.js`).staffClaimTitleRequest(e);
+});
+
+routerAdd("POST", "/api/asap/staff/title-requests/{id}/unclaim", (e) => {
+  return require(`${__hooks}/../lib/staff_routes.js`).staffUnclaimTitleRequest(e);
+});
+
 routerAdd("POST", "/api/asap/staff/title-requests/{id}/action", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffTitleRequestAction(e);
 });
