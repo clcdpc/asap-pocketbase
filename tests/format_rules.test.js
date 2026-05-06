@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { normalizeMessageBehavior, MESSAGE_BEHAVIORS } = require('../lib/format_rules.js');
+const { defaultFormatRules, normalizeMessageBehavior, MESSAGE_BEHAVIORS } = require('../lib/format_rules.js');
 
 const testCases = [
   // Valid inputs
@@ -51,6 +51,30 @@ testCases.forEach((tc, index) => {
     failed++;
   }
 });
+
+
+console.log('\nRunning tests for pb_hooks/lib/format_rules.js (defaultFormatRules)...');
+
+try {
+  const rules1 = defaultFormatRules();
+  const rules2 = defaultFormatRules();
+
+  // They should have identical content
+  assert.deepStrictEqual(rules1, rules2, 'defaultFormatRules() should return identical content');
+
+  // They should be different instances
+  assert.notStrictEqual(rules1, rules2, 'defaultFormatRules() should return new instances');
+
+  // Deep clone check
+  rules1.book.fields.title.mode = 'custom';
+  assert.notStrictEqual(rules1.book.fields.title.mode, rules2.book.fields.title.mode, 'Deep clone failed, objects share references');
+
+  console.log('✅ defaultFormatRules behavior tests passed');
+} catch (err) {
+  console.error('❌ defaultFormatRules behavior tests failed');
+  console.error(err);
+  failed++;
+}
 
 console.log(`\nTests finished: ${passed} passed, ${failed} failed.`);
 
