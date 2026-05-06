@@ -391,17 +391,33 @@ export function renderCurrentGrid(status = currentStatus) {
   const visibleRecords = applyClaimFilter(applyTagFilter(currentSuggestions));
   if (!visibleRecords.length) {
     gridContainer.innerHTML = `<div class="alert alert-light border">${escapeAttr(emptyFilteredGridMessage())}</div>`;
+    const searchContainer = document.getElementById('grid-search-container');
+    if (searchContainer) searchContainer.innerHTML = '';
     return;
   }
 
-  setGrid(new gridjs.Grid({
+  const g = new gridjs.Grid({
     columns: getGridColumns(status),
     data: visibleRecords.map(row => getGridRow(row, status)),
-    search: true,
+    search: {
+      placeholder: 'Search...'
+    },
     pagination: { limit: 25 },
     sort: true,
     width: '100%'
-  }).render(gridContainer));
+  });
+  setGrid(g);
+  g.render(gridContainer);
+
+  // Move search box to our custom container so it appears first in the filter bar
+  setTimeout(() => {
+    const searchContainer = document.getElementById('grid-search-container');
+    const gridSearch = gridContainer.querySelector('.gridjs-search');
+    if (searchContainer && gridSearch) {
+      searchContainer.innerHTML = '';
+      searchContainer.appendChild(gridSearch);
+    }
+  }, 0);
 }
 
 function emptyFilteredGridMessage() {
