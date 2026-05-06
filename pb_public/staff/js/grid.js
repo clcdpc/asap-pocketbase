@@ -394,14 +394,18 @@ export function renderCurrentGrid(status = currentStatus) {
     return;
   }
 
-  setGrid(new gridjs.Grid({
+  const g = new gridjs.Grid({
     columns: getGridColumns(status),
     data: visibleRecords.map(row => getGridRow(row, status)),
-    search: true,
+    search: {
+      placeholder: 'Search...'
+    },
     pagination: { limit: 25 },
     sort: true,
     width: '100%'
-  }).render(gridContainer));
+  });
+  setGrid(g);
+  g.render(gridContainer);
 }
 
 function emptyFilteredGridMessage() {

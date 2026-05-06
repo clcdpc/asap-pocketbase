@@ -12,6 +12,7 @@ export const logoutBtn = document.getElementById('logout-btn');
 export const profileBtn = document.getElementById('profile-btn');
 export const gridContainer = document.getElementById('grid-container');
 export const staffGridFilterBar = document.getElementById('staff-grid-filter-bar');
+export const gridSearchInput = document.getElementById('grid-search-input');
 export const tagFilterSelect = document.getElementById('tag-filter');
 export const claimFilterSelect = document.getElementById('claim-filter');
 export const settingsContainer = document.getElementById('settings-container');
