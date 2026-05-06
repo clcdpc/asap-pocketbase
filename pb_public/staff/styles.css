@@ -59,26 +59,15 @@ body {
 }
 
 #grid-search-container .gridjs-search {
+  display: none;
+}
+
+#grid-search-input {
   width: 100%;
-  float: none !important;
-  margin: 0 !important;
-  padding: 0 !important;
 }
 
-#grid-search-container .gridjs-search-input {
-  width: 100% !important;
-  height: 31px; /* Match Bootstrap 4 btn-sm / form-control-sm height */
-  padding: 0.25rem 0.5rem !important;
-  font-size: 0.875rem !important;
-  line-height: 1.5 !important;
-  border-radius: 0.2rem !important;
-  border: 1px solid #ced4da !important;
-}
-
-#grid-search-container .gridjs-search-input:focus {
-  border-color: #80bdff !important;
-  outline: 0 !important;
-  box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25) !important;
+.gridjs-head {
+  display: none !important;
 }
 
 .analytics-shell {
