@@ -515,6 +515,26 @@ export function hasWorkflowTag(row, label) {
   return cleanWorkflowTags(row?.workflowTags).includes(label);
 }
 
+export function getWorkflowTagPresentation(tag) {
+  const label = normalizeLabel(tag);
+  const lower = label.toLowerCase();
+  const failureTags = new Set([
+    'hold failed'
+  ]);
+
+  if (failureTags.has(lower)) {
+    return {
+      text: `! ${label}`,
+      variant: 'error'
+    };
+  }
+
+  return {
+    text: label,
+    variant: 'info'
+  };
+}
+
 export function renderWorkflowTags(tags, row) {
   const clean = cleanWorkflowTags(tags);
   if (row && row.autohold === false && !clean.includes("No hold requested")) {
@@ -525,8 +545,10 @@ export function renderWorkflowTags(tags, row) {
   }
   return `<div class="workflow-tag-list">${clean.map(tag => {
     const normalized = normalizeLabel(tag);
+    const presentation = getWorkflowTagPresentation(tag);
+    const variant = presentation.variant || 'info';
     const isActive = activeTagFilter === normalized;
-    return `<span class="workflow-tag ${isActive ? 'active' : ''}" data-tag="${escapeAttr(normalized)}" role="button" title="${isActive ? 'Clear filter' : 'Filter by ' + escapeAttr(tag)}">${escapeAttr(tag)}</span>`;
+    return `<span class="workflow-tag workflow-tag--${escapeAttr(variant)} ${isActive ? 'active' : ''}" data-tag="${escapeAttr(normalized)}" role="button" title="${isActive ? 'Clear filter' : 'Filter by ' + escapeAttr(normalized)}">${escapeAttr(presentation.text)}</span>`;
   }).join('')}</div>`;
 }
 

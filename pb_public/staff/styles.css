@@ -880,28 +880,67 @@ code {
 
 .workflow-tag {
   align-items: center;
-  background: #0b5ed7;
   border: 1px solid rgba(0, 0, 0, 0.16);
   border-radius: 0.35rem;
-  color: #fff;
   display: inline-flex;
   font-size: 0.75rem;
   font-weight: 600;
+  gap: 0.2rem;
   line-height: 1.2;
   max-width: 100%;
   overflow-wrap: anywhere;
   padding: 0.15rem 0.45rem;
   white-space: normal;
   cursor: pointer;
-  transition: background-color 0.15s ease-in-out;
+  transition: background-color 0.15s ease-in-out, opacity 0.15s ease-in-out;
 }
 .workflow-tag:hover {
-  background-color: #0a58ca;
+  opacity: 0.88;
 }
 .workflow-tag.active {
+  font-weight: 800;
+}
+
+.workflow-tag--info {
+  background-color: #0b5ed7;
+  color: #fff;
+}
+
+.workflow-tag--info.active {
   background-color: #052c65;
   box-shadow: 0 0 0 2px #fff, 0 0 0 4px #0b5ed7;
-  font-weight: 800;
+}
+
+.workflow-tag--success {
+  background-color: #19692c;
+  color: #fff;
+}
+
+.workflow-tag--success.active {
+  background-color: #0f401b;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #19692c;
+}
+
+.workflow-tag--warning {
+  background-color: #b76e00;
+  color: #fff;
+}
+
+.workflow-tag--warning.active {
+  background-color: #704300;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #b76e00;
+}
+
+.workflow-tag--error {
+  background-color: #b02a37;
+  border-color: #8f1f2a;
+  color: #fff;
+  font-weight: 700;
+}
+
+.workflow-tag--error.active {
+  background-color: #7a1620;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #b02a37;
 }
 
 .asap-polaris-tag {
