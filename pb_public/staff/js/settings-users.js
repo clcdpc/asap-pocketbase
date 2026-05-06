@@ -250,13 +250,11 @@ const addStaffBtn = document.getElementById('btn-add-staff-user');
 if (addStaffBtn) {
   addStaffBtn.addEventListener('click', async () => {
     const identityInput = document.getElementById('staff-add-identity');
-    const displayInput = document.getElementById('staff-add-display-name');
     const libSelect = document.getElementById('staff-add-library');
     const roleSelect = document.getElementById('staff-add-role');
     const msgEl = document.getElementById('staff-users-msg');
 
     const identity = (identityInput.value || '').trim();
-    const displayName = (displayInput.value || '').trim();
     const libraryOrgId = (libSelect.value || '').trim();
     const role = (roleSelect.value || '').trim() || 'staff';
 
@@ -270,7 +268,6 @@ if (addStaffBtn) {
         method: 'POST',
         body: JSON.stringify({
           username: identity,
-          displayName: displayName,
           libraryOrgId,
           libraryOrgName: opt ? opt.text : '',
           role
@@ -278,7 +275,6 @@ if (addStaffBtn) {
       });
 
       identityInput.value = '';
-      displayInput.value = '';
 
       if (msgEl) {
         msgEl.innerHTML = '<i class="fa fa-check-circle"></i> Staff record created or updated. This user still signs in with their Polaris credentials.';
