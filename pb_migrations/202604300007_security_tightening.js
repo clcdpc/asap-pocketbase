@@ -19,7 +19,6 @@ migrate((app) => {
             collection.viewRule = "@request.auth.collectionName = 'staff_users' && @request.auth.role = 'super_admin'";
             app.save(collection);
         } catch (err) {
-            console.log("Migration warning: collection " + name + " not found or could not be updated.");
         }
     });
 
