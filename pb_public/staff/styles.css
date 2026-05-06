@@ -1041,3 +1041,137 @@ code {
 .option-list-row .btn {
   min-width: 2rem;
 }
+
+/* ASAP Accordion Styles */
+.asap-accordion {
+  border: 1px solid #dee2e6;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
+}
+
+.asap-accordion-item {
+  border-bottom: 1px solid #eee;
+}
+
+.asap-accordion-item:last-child {
+  border-bottom: none;
+}
+
+.asap-accordion-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 24px;
+  background: #fff;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+  outline: none !important;
+}
+
+.asap-accordion-header:hover {
+  background-color: #fcfdff;
+}
+
+.asap-accordion-header[aria-expanded="true"] {
+  background-color: #f8faff;
+  border-bottom: 1px solid #edf2f7;
+}
+
+.asap-accordion-title {
+  font-weight: 700;
+  color: #2d3748;
+  font-size: 1.05rem;
+  flex: 0 0 220px;
+}
+
+.asap-accordion-summary {
+  flex: 1;
+  color: #718096;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 20px;
+  opacity: 1;
+  transition: opacity 0.2s ease;
+}
+
+.asap-accordion-header[aria-expanded="true"] .asap-accordion-summary {
+  opacity: 0;
+}
+
+.asap-accordion-chevron {
+  color: #a0aec0;
+  transition: transform 0.3s ease;
+}
+
+.asap-accordion-header[aria-expanded="true"] .asap-accordion-chevron {
+  transform: rotate(180deg);
+  color: #3182ce;
+}
+
+.asap-accordion-panel {
+  display: none;
+  padding: 24px;
+  background: #fff;
+}
+
+.asap-accordion-item.active .asap-accordion-panel {
+  display: block;
+}
+
+/* Template Editor Enhancements */
+.template-editor-textarea {
+  min-height: 250px;
+  max-height: 500px;
+  line-height: 1.6;
+  font-family: inherit;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 12px 16px;
+  transition: border-color 0.2s;
+}
+
+.template-editor-textarea:focus {
+  border-color: #3182ce;
+  box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.15);
+}
+
+.template-editor-label {
+  display: block;
+  font-weight: 600;
+  color: #4a5568;
+  margin-bottom: 8px;
+  font-size: 0.9rem;
+}
+
+.placeholder-helper-compact {
+  background: #ebf8ff;
+  border: 1px solid #bee3f8;
+  color: #2c5282;
+  border-radius: 8px;
+  padding: 12px 16px;
+}
+
+.placeholder-chip {
+  display: inline-block;
+  background: #fff;
+  border: 1px solid #cbd5e0;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-family: monospace;
+  font-size: 0.85rem;
+  margin: 2px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.placeholder-chip:hover {
+  border-color: #3182ce;
+  background: #f7fafc;
+}

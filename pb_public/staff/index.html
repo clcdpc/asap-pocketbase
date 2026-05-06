@@ -902,78 +902,134 @@
               <div class="card-header d-flex justify-content-between align-items-center">
                 <div>
                   <h2 class="h4 mb-1">Email templates</h2>
-                  <p class="text-muted mb-0">Configure sender details and customize email templates. Use
-                    <code>{{name}}</code>, <code>{{title}}</code>, <code>{{author}}</code>,
-                    <code>{{format}}</code>, and <code>{{barcode}}</code> as placeholders.
-                  </p>
+                  <p class="text-muted mb-0">Customize how your library communicates with patrons throughout the suggestion lifecycle.</p>
                 </div>
               </div>
               <div class="card-body">
+                
+                <div class="placeholder-helper-compact mb-4">
+                  <div class="small font-weight-bold mb-2">Available Placeholders</div>
+                  <div id="template-placeholders">
+                    <span class="placeholder-chip" title="Click to copy">{{name}}</span>
+                    <span class="placeholder-chip" title="Click to copy">{{title}}</span>
+                    <span class="placeholder-chip" title="Click to copy">{{author}}</span>
+                    <span class="placeholder-chip" title="Click to copy">{{format}}</span>
+                    <span class="placeholder-chip" title="Click to copy">{{barcode}}</span>
+                  </div>
+                  <div class="small mt-2 opacity-75">Click a placeholder to insert it into the active text field.</div>
+                </div>
 
-                <div class="card mb-4">
-                  <div class="card-header"><strong>Sender Details</strong></div>
-                  <div class="card-body pb-0">
-                    <div class="form-row">
-                      <div class="form-group col-md-6"><label for="email-from-address">From Email Address</label><input
-                          type="email" id="email-from-address" class="form-control"></div>
-                      <div class="form-group col-md-6"><label for="email-from-name">From Name</label><input type="text"
-                          id="email-from-name" class="form-control"></div>
+                <div class="asap-accordion" id="email-templates-accordion">
+                  
+                  <!-- Sender Details -->
+                  <div class="asap-accordion-item" id="accordion-sender-details">
+                    <button type="button" class="asap-accordion-header" aria-expanded="false" aria-controls="panel-sender-details">
+                      <span class="asap-accordion-title">Sender Details</span>
+                      <span class="asap-accordion-summary" id="summary-sender-details"></span>
+                      <i class="fa fa-chevron-down asap-accordion-chevron"></i>
+                    </button>
+                    <div id="panel-sender-details" class="asap-accordion-panel" role="region">
+                      <div class="form-row">
+                        <div class="form-group col-md-6">
+                          <label for="email-from-address" class="template-editor-label">From Email Address</label>
+                          <input type="email" id="email-from-address" class="form-control">
+                        </div>
+                        <div class="form-group col-md-6">
+                          <label for="email-from-name" class="template-editor-label">From Name</label>
+                          <input type="text" id="email-from-name" class="form-control">
+                        </div>
+                      </div>
+                      <small class="form-text text-muted">If left blank, the system will use the System Defaults.</small>
                     </div>
-                    <small class="form-text text-muted mb-3">If left blank, the system will use the System
-                      Defaults.</small>
                   </div>
+
+                  <!-- Submission Confirmation -->
+                  <div class="asap-accordion-item" id="accordion-submit">
+                    <button type="button" class="asap-accordion-header" aria-expanded="false" aria-controls="panel-submit">
+                      <span class="asap-accordion-title">Submission confirmation</span>
+                      <span class="asap-accordion-summary" id="summary-submit"></span>
+                      <i class="fa fa-chevron-down asap-accordion-chevron"></i>
+                    </button>
+                    <div id="panel-submit" class="asap-accordion-panel" role="region">
+                      <div class="form-group">
+                        <label for="email-submit-subject" class="template-editor-label">Subject</label>
+                        <input type="text" id="email-submit-subject" class="form-control">
+                      </div>
+                      <div class="form-group mb-0">
+                        <label for="email-submit-body" class="template-editor-label">Body</label>
+                        <textarea id="email-submit-body" class="form-control template-editor-textarea" rows="8"></textarea>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Already Owned -->
+                  <div class="asap-accordion-item" id="accordion-owned">
+                    <button type="button" class="asap-accordion-header" aria-expanded="false" aria-controls="panel-owned">
+                      <span class="asap-accordion-title">Already owned</span>
+                      <span class="asap-accordion-summary" id="summary-owned"></span>
+                      <i class="fa fa-chevron-down asap-accordion-chevron"></i>
+                    </button>
+                    <div id="panel-owned" class="asap-accordion-panel" role="region">
+                      <div class="form-group">
+                        <label for="email-owned-subject" class="template-editor-label">Subject</label>
+                        <input type="text" id="email-owned-subject" class="form-control">
+                      </div>
+                      <div class="form-group mb-0">
+                        <label for="email-owned-body" class="template-editor-label">Body</label>
+                        <textarea id="email-owned-body" class="form-control template-editor-textarea" rows="8"></textarea>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Hold Placed -->
+                  <div class="asap-accordion-item" id="accordion-hold">
+                    <button type="button" class="asap-accordion-header" aria-expanded="false" aria-controls="panel-hold">
+                      <span class="asap-accordion-title">Hold placed</span>
+                      <span class="asap-accordion-summary" id="summary-hold"></span>
+                      <i class="fa fa-chevron-down asap-accordion-chevron"></i>
+                    </button>
+                    <div id="panel-hold" class="asap-accordion-panel" role="region">
+                      <div class="form-group">
+                        <label for="email-hold-subject" class="template-editor-label">Subject</label>
+                        <input type="text" id="email-hold-subject" class="form-control">
+                      </div>
+                      <div class="form-group mb-0">
+                        <label for="email-hold-body" class="template-editor-label">Body</label>
+                        <textarea id="email-hold-body" class="form-control template-editor-textarea" rows="8"></textarea>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Rejected Default -->
+                  <div class="asap-accordion-item" id="accordion-rejected">
+                    <button type="button" class="asap-accordion-header" aria-expanded="false" aria-controls="panel-rejected">
+                      <span class="asap-accordion-title">Rejected (default)</span>
+                      <span class="asap-accordion-summary" id="summary-rejected"></span>
+                      <i class="fa fa-chevron-down asap-accordion-chevron"></i>
+                    </button>
+                    <div id="panel-rejected" class="asap-accordion-panel" role="region">
+                      <div class="form-group">
+                        <label for="email-rejected-subject" class="template-editor-label">Subject</label>
+                        <input type="text" id="email-rejected-subject" class="form-control">
+                      </div>
+                      <div class="form-group mb-0">
+                        <label for="email-rejected-body" class="template-editor-label">Body</label>
+                        <textarea id="email-rejected-body" class="form-control template-editor-textarea" rows="8"></textarea>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Dynamic Rejection Templates -->
+                  <div id="rejection-templates-accordion-container"></div>
+
                 </div>
 
-                <div class="card mb-3">
-                  <div class="card-header"><strong>Submission confirmation</strong></div>
-                  <div class="card-body">
-                    <div class="form-group"><label for="email-submit-subject">Subject</label><input type="text"
-                        id="email-submit-subject" class="form-control"></div>
-                    <div class="form-group"><label for="email-submit-body">Body</label><textarea id="email-submit-body"
-                        class="form-control" rows="5"></textarea></div>
-                  </div>
+                <div class="mt-4 text-center">
+                  <button type="button" id="btn-add-rejection-template" class="btn btn-outline-primary">
+                    <i class="fa fa-plus mr-1"></i> Add additional rejection template
+                  </button>
                 </div>
 
-                <div class="card mb-3">
-                  <div class="card-header"><strong>Already owned</strong></div>
-                  <div class="card-body">
-                    <div class="form-group"><label for="email-owned-subject">Subject</label><input type="text"
-                        id="email-owned-subject" class="form-control"></div>
-                    <div class="form-group"><label for="email-owned-body">Body</label><textarea id="email-owned-body"
-                        class="form-control" rows="5"></textarea></div>
-                  </div>
-                </div>
-
-                <div class="card mb-3">
-                  <div class="card-header"><strong>Rejected (default)</strong></div>
-                  <div class="card-body">
-                    <div class="form-group"><label for="email-rejected-subject">Subject</label><input type="text"
-                        id="email-rejected-subject" class="form-control"></div>
-                    <div class="form-group"><label for="email-rejected-body">Body</label><textarea
-                        id="email-rejected-body" class="form-control" rows="5"></textarea></div>
-                  </div>
-                </div>
-
-                <div class="card mb-3">
-                  <div class="card-header d-flex justify-content-between align-items-center">
-                    <strong>Additional rejection templates</strong>
-                    <button type="button" id="btn-add-rejection-template" class="btn btn-sm btn-outline-primary">Add
-                      template</button>
-                  </div>
-                  <div class="card-body">
-                    <div id="rejection-templates-container"></div>
-                  </div>
-                </div>
-
-                <div class="card mb-0">
-                  <div class="card-header"><strong>Hold placed</strong></div>
-                  <div class="card-body">
-                    <div class="form-group"><label for="email-hold-subject">Subject</label><input type="text"
-                        id="email-hold-subject" class="form-control"></div>
-                    <div class="form-group"><label for="email-hold-body">Body</label><textarea id="email-hold-body"
-                        class="form-control" rows="5"></textarea></div>
-                  </div>
-                </div>
               </div>
             </div>
           </section>
