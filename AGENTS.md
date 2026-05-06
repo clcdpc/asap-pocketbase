@@ -24,7 +24,7 @@ When possible, implement scoped settings using explicit fallback behavior:
 - save to the correct scope intentionally, never implicitly
 
 ### Do not do this
-- Do not assume every new field belongs at the system level.
+- Do not assume every new field belongs only at the system level.
 - Do not save based only on what screen the user is on.
 - Do not load from one scope and save to another.
 - Do not add a field to the form without adding matching load/save/fallback logic.
