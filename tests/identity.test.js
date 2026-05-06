@@ -171,7 +171,11 @@ const displayIdentityCases = [
   { domain: '  Domain  ', username: '  User  ', expected: 'DOMAIN\\user' },
   { domain: null, username: 'user', expected: 'user' },
   { domain: 'domain', username: null, expected: 'DOMAIN\\' },
-  { domain: null, username: null, expected: '' }
+  { domain: null, username: null, expected: '' },
+  { domain: undefined, username: undefined, expected: '' },
+  { domain: 'dOmAiN', username: 'UsErNaMe', expected: 'DOMAIN\\username' },
+  { domain: 123, username: 456, expected: '123\\456' },
+  { domain: '   ', username: '   ', expected: '' }
 ];
 
 runTestSuite('displayIdentity', displayIdentityCases, (tc) => {
