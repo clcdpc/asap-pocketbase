@@ -1,0 +1,83 @@
+const assert = require("assert");
+
+global.__hooks = __dirname + "/../pb_hooks";
+
+const staffRoutes = require("../lib/staff_routes.js");
+
+class MockRecord {
+  constructor(data) {
+    this.data = data;
+    this.id = data.id || Math.random().toString(36).slice(2);
+    this.created = data.created;
+    this.updated = data.updated;
+  }
+  get(key) {
+    return this.data[key];
+  }
+  getBool(key) {
+    return !!this.data[key];
+  }
+}
+
+function staff(role, libraryOrgId) {
+  return new MockRecord({
+    role,
+    libraryOrgId,
+    libraryOrgName: libraryOrgId ? "Library " + libraryOrgId : ""
+  });
+}
+
+function appWithNoTags() {
+  return {
+    findRecordsByFilter(collection) {
+      if (collection === "title_request_tags") return [];
+      return [];
+    }
+  };
+}
+
+const rows = [
+  new MockRecord({ status: "suggestion", libraryOrgId: "10", created: "2026-04-20 10:00:00", updated: "2026-04-20 10:00:00" }),
+  new MockRecord({ status: "outstanding_purchase", libraryOrgId: "10", created: "2026-03-01 10:00:00", updated: "2026-03-02 10:00:00" }),
+  new MockRecord({ status: "pending_hold", libraryOrgId: "20", created: "2026-04-01 10:00:00", updated: "2026-04-03 10:00:00", isbnCheckStatus: "error_max_retries" }),
+  new MockRecord({ status: "closed", libraryOrgId: "10", closeReason: "rejected", created: "2026-04-01 10:00:00", updated: "2026-04-11 10:00:00" }),
+  new MockRecord({ status: "closed", libraryOrgId: "10", closeReason: "hold_completed", created: "2026-03-01 10:00:00", updated: "2026-03-10 10:00:00" }),
+];
+
+const range = {
+  key: "last30",
+  start: new Date("2026-04-01T00:00:00Z"),
+  end: new Date("2026-05-01T00:00:00Z")
+};
+
+const libraryScope = staffRoutes.resolveAnalyticsScope(appWithNoTags(), staff("staff", "10"), "all");
+assert.strictEqual(libraryScope.mode, "library");
+assert.strictEqual(libraryScope.libraryOrgId, "10");
+assert.strictEqual(libraryScope.filter, "libraryOrgId = {:libraryOrgId}");
+
+const superAllScope = staffRoutes.resolveAnalyticsScope(appWithNoTags(), staff("super_admin", ""), "all");
+assert.strictEqual(superAllScope.mode, "all");
+assert.strictEqual(superAllScope.filter, "id != ''");
+
+const summary = staffRoutes.loadAnalyticsSummary(libraryScope, range, rows.filter(row => row.get("libraryOrgId") === "10"));
+assert.strictEqual(summary.newSuggestions, 2);
+assert.strictEqual(summary.openRequests, 2);
+assert.strictEqual(summary.closedRequests, 1);
+assert.strictEqual(Math.round(summary.averageDaysToClose), 10);
+
+const stages = staffRoutes.loadStageCounts(libraryScope, rows.filter(row => row.get("libraryOrgId") === "10"));
+assert.strictEqual(stages.suggestion, 1);
+assert.strictEqual(stages.outstanding_purchase, 1);
+assert.strictEqual(stages.closed, 2);
+
+const reasons = staffRoutes.loadClosedReasonBreakdown(libraryScope, range, rows.filter(row => row.get("libraryOrgId") === "10"));
+assert.deepStrictEqual(reasons, [{ reason: "rejected", count: 1 }]);
+
+const aging = staffRoutes.loadAgingMetrics(libraryScope, rows.filter(row => row.get("libraryOrgId") === "10"), new Date("2026-05-01T00:00:00Z"));
+assert.strictEqual(aging.openOlderThanThreshold, 1);
+assert.strictEqual(aging.averageAgeByStage.find(row => row.status === "outstanding_purchase").count, 1);
+
+const exceptions = staffRoutes.loadExceptionCounts(appWithNoTags(), superAllScope, range, rows);
+assert.strictEqual(exceptions.identifierFailures, 1);
+
+console.log("Staff analytics tests passed.");

@@ -4,6 +4,7 @@ import { openNewSuggestionForPatron } from './patron.js';
 import { undoRow, deleteClosedRequest, closeDuplicateRequest } from './actions.js';
 import { leapBibUrl, showToast, showAlert, isSuperAdminStaff, isAdminStaff, getSettingsSectionFromHash, closeOpenDialogs, activateSettingsSection, authorizedJson } from './api.js';
 import { showSettingsAccessDenied, hideSettingsAccessDenied, loadSettings } from './settings.js';
+import { loadAnalytics } from './analytics.js';
 
 export async function loadTab(status) {
   renderTabDescription(status);
@@ -16,6 +17,13 @@ export async function loadTab(status) {
   }
 
   prepareGridView();
+
+  if (status === 'analytics') {
+    hideTagFilter();
+    await loadAnalytics(gridContainer);
+    announceTabLoaded(status);
+    return;
+  }
 
   try {
     const records = await fetchTitleRequests();

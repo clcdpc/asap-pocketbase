@@ -52,6 +52,112 @@ body {
   margin-bottom: 0.75rem;
 }
 
+.analytics-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.analytics-header {
+  align-items: flex-start;
+  background: #fff;
+  border: 1px solid #dee2e6;
+  border-radius: 0.5rem;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 1rem;
+}
+
+.analytics-controls {
+  align-items: flex-end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: flex-end;
+}
+
+.analytics-control {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  min-width: 180px;
+}
+
+.analytics-control-label,
+.analytics-card-label,
+.analytics-card-hint {
+  color: #6c757d;
+  font-size: 0.78rem;
+}
+
+.analytics-control-label,
+.analytics-card-label {
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.analytics-summary,
+.analytics-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.analytics-summary {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.analytics-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.analytics-card,
+.analytics-panel {
+  background: #fff;
+  border: 1px solid #dee2e6;
+  border-radius: 0.5rem;
+}
+
+.analytics-card {
+  padding: 0.9rem;
+}
+
+.analytics-card-value {
+  color: #212529;
+  font-size: 1.7rem;
+  font-weight: 800;
+  line-height: 1.15;
+  margin: 0.2rem 0;
+}
+
+.analytics-panel-header {
+  border-bottom: 1px solid #e9ecef;
+  padding: 0.9rem 1rem;
+}
+
+.analytics-table {
+  display: flex;
+  flex-direction: column;
+}
+
+.analytics-row {
+  align-items: center;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 0.65rem 1rem;
+}
+
+.analytics-row + .analytics-row {
+  border-top: 1px solid #f1f3f5;
+}
+
+.analytics-row strong {
+  text-align: right;
+  white-space: nowrap;
+}
+
 #tag-filter {
   width: auto;
   min-width: 200px;
@@ -452,6 +558,20 @@ body {
 }
 
 @media (max-width: 900px) {
+  .analytics-header {
+    flex-direction: column;
+  }
+
+  .analytics-controls,
+  .analytics-control {
+    width: 100%;
+  }
+
+  .analytics-summary,
+  .analytics-grid {
+    grid-template-columns: 1fr;
+  }
+
   .settings-shell {
     display: block;
   }
