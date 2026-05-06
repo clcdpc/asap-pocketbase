@@ -30,6 +30,15 @@ When possible, implement scoped settings using explicit fallback behavior:
 - Do not add a field to the form without adding matching load/save/fallback logic.
 - Do not treat “missing override” and “blank override” as the same thing unless that is explicitly intended.
 
+### Notes, comments, and audit history
+Workflow notes must distinguish clearly between:
+- existing committed history
+- user draft comments
+- pending system-generated audit text
+- Do not show past-tense audit entries in editable notes fields before an action succeeds.
+If preview text is needed, show it separately and label it as pending.
+Only append system audit/history entries after successful completion of the action.
+
 ### Implementation guidance for agents
 When adding a new setting:
 - identify its scope in the PR description or code comment

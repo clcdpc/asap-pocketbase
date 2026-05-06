@@ -1,6 +1,6 @@
 import { pb, formatMap, availableFormats, currentRejectionTemplates, currentStatus, currentSuggestions, allSuggestions, verifiedBibId, publicationOptions, setVerifiedBibId, workflowSettings } from './state.js';
 import { leapBibUrl, showToast, showAlert, showConfirm, openProfileDialog } from './api.js';
-import { loadTab, formatStandardDate, formatDateTime, renderWorkflowTags, escapeAttr } from './grid.js';
+import { loadTab, formatDateTime, renderWorkflowTags, escapeAttr } from './grid.js';
 import { setSelectValue, dateOnly } from './settings-ui.js';
 
 export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
@@ -45,44 +45,119 @@ export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
   renderPurchaseReminderOption(actionStr);
   renderEditMetadata(row);
 
-  const username = (pb.authStore.model && pb.authStore.model.username) ? pb.authStore.model.username : 'staff';
-  const today = formatStandardDate(new Date());
-  let appendNotes = '';
-  if (actionStr === 'alreadyOwn') appendNotes = `${today} ALREADY OWN by ${username}.`;
-  if (actionStr === 'reject') appendNotes = `${today} REJECTED by ${username}.`;
-  if (actionStr === 'silentClose') appendNotes = `${today} SILENTLY CLOSED by ${username}.`;
-
-  const existingNotes = (row.notes || '').trim();
-  document.getElementById('edit-notes').value = appendNotes + (appendNotes && existingNotes ? '\n' : '') + existingNotes;
+  document.getElementById('edit-notes').value = getExistingHistory(row);
+  renderPendingAuditPreview(row, nextStatus, actionStr);
 
   document.getElementById('bib-info-display').classList.add('hidden');
   document.getElementById('bib-info-text').textContent = '';
   setVerifiedBibId(row.bibid || '');
 
-  const rejectionContainer = document.getElementById('edit-rejection-template-container');
-  if (actionStr === 'reject' && currentRejectionTemplates.length > 0) {
-    rejectionContainer.classList.remove('hidden');
-    const select = document.getElementById('edit-rejection-template');
-    select.innerHTML = '<option value="">Default rejection template</option>';
-    const sortedTemplates = [...currentRejectionTemplates].sort((a, b) => {
-      const nameA = (a.name || a.subject || '').toLowerCase();
-      const nameB = (b.name || b.subject || '').toLowerCase();
-      return nameA.localeCompare(nameB);
-    });
-
-    sortedTemplates.forEach(t => {
-      const opt = document.createElement('option');
-      opt.value = t.id;
-      opt.textContent = t.name || t.subject;
-      select.appendChild(opt);
-    });
-  } else {
-    rejectionContainer.classList.add('hidden');
-    document.getElementById('edit-rejection-template').value = '';
-  }
+  renderRejectionTemplateSelector(actionStr);
 
   document.getElementById('editModal').showModal();
   document.getElementById('close-modal-btn').focus();
+}
+
+export function getExistingHistory(row) {
+  return (row.notes || '').trim();
+}
+
+export function getDraftCommentValue() {
+  return document.getElementById('edit-notes').value;
+}
+
+export function buildPendingAuditPreview(row, nextStatus, actionStr) {
+  const username = (pb.authStore.model && pb.authStore.model.username) ? pb.authStore.model.username : 'staff';
+  const actionDescriptions = {
+    alreadyOwn: 'This request will be marked Already own',
+    reject: 'This request will be rejected',
+    silentClose: 'This request will be closed silently',
+    purchase: 'This request will move to Pending purchase'
+  };
+  const actionText = actionDescriptions[actionStr];
+  if (actionText) {
+    return `${actionText} by ${username}.`;
+  }
+
+  const currentStatus = row.status || '';
+  if (nextStatus && nextStatus !== currentStatus) {
+    return `This request will move from ${workflowStatusLabel(currentStatus)} to ${workflowStatusLabel(nextStatus)} by ${username}.`;
+  }
+
+  return '';
+}
+
+export function renderPendingAuditPreview(row, nextStatus, actionStr) {
+  const container = document.getElementById('edit-pending-audit-preview');
+  const text = document.getElementById('edit-pending-audit-preview-text');
+  if (!container || !text) return;
+
+  const preview = buildPendingAuditPreview(row, nextStatus, actionStr);
+  text.textContent = preview;
+  container.classList.toggle('hidden', !preview);
+}
+
+function workflowStatusLabel(status) {
+  const labels = {
+    suggestion: 'Suggestions',
+    outstanding_purchase: 'Pending purchase',
+    pending_hold: 'Pending hold',
+    hold_placed: 'Hold placed',
+    closed: 'Closed'
+  };
+  return labels[status] || status || 'current status';
+}
+
+export function renderRejectionTemplateSelector(actionStr) {
+  const rejectionContainer = document.getElementById('edit-rejection-template-container');
+  const select = document.getElementById('edit-rejection-template');
+  const availability = document.getElementById('edit-rejection-template-availability');
+  if (!rejectionContainer || !select) return;
+
+  if (actionStr !== 'reject') {
+    rejectionContainer.classList.add('hidden');
+    select.value = '';
+    if (availability) {
+      availability.textContent = '';
+      availability.classList.add('hidden');
+    }
+    return;
+  }
+
+  rejectionContainer.classList.remove('hidden');
+  select.innerHTML = '<option value="">Default rejection template (recommended)</option>';
+  select.value = '';
+
+  const sortedTemplates = [...currentRejectionTemplates].sort((a, b) => {
+    const nameA = (a.name || a.subject || '').toLowerCase();
+    const nameB = (b.name || b.subject || '').toLowerCase();
+    return nameA.localeCompare(nameB);
+  });
+
+  sortedTemplates.forEach(t => {
+    const opt = document.createElement('option');
+    opt.value = t.id;
+    opt.textContent = t.name || t.subject || 'Rejection template';
+    select.appendChild(opt);
+  });
+
+  renderRejectionTemplateAvailability(sortedTemplates.length);
+}
+
+function renderRejectionTemplateAvailability(otherTemplateCount) {
+  const availability = document.getElementById('edit-rejection-template-availability');
+  if (!availability) return;
+
+  if (otherTemplateCount < 1) {
+    availability.textContent = '';
+    availability.classList.add('hidden');
+    return;
+  }
+
+  availability.textContent = otherTemplateCount === 1
+    ? '1 other template available'
+    : `${otherTemplateCount} other templates available`;
+  availability.classList.remove('hidden');
 }
 
 export function staffProfileEmail() {
@@ -265,7 +340,7 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
     agegroup: document.getElementById('edit-age').value,
     publication: document.getElementById('edit-publication').value,
     exactPublicationDate: document.getElementById('edit-exact-publication-date').value,
-    notes: document.getElementById('edit-notes').value,
+    notes: getDraftCommentValue(),
     autohold: document.getElementById('edit-autohold').checked,
     editedBy: pb.authStore.model.username
   };

@@ -1086,10 +1086,12 @@
       <input type="hidden" id="edit-action">
 
       <div class="form-group mb-2 hidden" id="edit-rejection-template-container">
-        <label class="small font-weight-bold mb-1">Rejection template</label>
+        <label for="edit-rejection-template" class="small font-weight-bold mb-1">Rejection template</label>
         <select id="edit-rejection-template" class="form-control form-control-sm">
-          <option value="">Default rejection template</option>
+          <option value="">Default rejection template (recommended)</option>
         </select>
+        <small id="edit-rejection-template-help" class="form-text text-muted">Default template selected. Choose another template if needed.</small>
+        <small id="edit-rejection-template-availability" class="form-text text-muted hidden"></small>
       </div>
 
       <div id="edit-workflow-tags" class="edit-modal-tags">
@@ -1166,8 +1168,14 @@
       </div>
 
       <div class="form-group mb-0">
-        <label class="small font-weight-bold mb-1">Notes</label>
+        <label for="edit-notes" class="small font-weight-bold mb-1">Notes / staff comments</label>
         <textarea id="edit-notes" class="form-control form-control-sm" rows="2"></textarea>
+        <small class="form-text text-muted">Saved notes are shown here. Pending workflow history is added only after submit succeeds.</small>
+      </div>
+
+      <div id="edit-pending-audit-preview" class="alert alert-light border py-2 px-3 mt-2 mb-0 small hidden" aria-live="polite">
+        <div class="font-weight-bold">Will be added on submit</div>
+        <div id="edit-pending-audit-preview-text"></div>
       </div>
 
       <div id="edit-purchase-reminder-container" class="custom-control custom-checkbox mt-3 hidden">
