@@ -25,9 +25,7 @@ migrate((app) => {
     workflowSettings.fields.add(new Field(field("externalSearch3UrlTemplate", "text", { required: false })));
     
     app.save(workflowSettings);
-  } catch (err) {
-    console.log("Error adding fields to workflow_settings: " + err);
-  }
+  } catch (err) {}
 
   // Migrate existing data and set defaults
   const records = app.findRecordsByFilter("workflow_settings", "id != ''");
@@ -58,9 +56,7 @@ migrate((app) => {
     workflowSettings.fields.removeByName("externalSearchLabel");
     workflowSettings.fields.removeByName("externalSearchUrlTemplate");
     app.save(workflowSettings);
-  } catch (err) {
-    console.log("Error removing old fields from workflow_settings: " + err);
-  }
+  } catch (err) {}
 
 }, (app) => {
   const workflowSettings = app.findCollectionByNameOrId("workflow_settings");
