@@ -1158,6 +1158,20 @@ code {
   max-width: 520px;
 }
 
+.staff-field-with-action,
+.staff-author-cell {
+  align-items: center;
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+
+.staff-field-with-action .staff-title-main,
+.staff-author-text {
+  flex: 1;
+  min-width: 0;
+}
+
 .staff-title-main {
   display: -webkit-box;
   -webkit-line-clamp: 3;
@@ -1166,7 +1180,35 @@ code {
   line-height: 1.35;
   border-radius: 4px;
   padding: 4px 0;
-  margin: -4px 0;
+  margin: 0;
+}
+
+.polaris-row-search {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: #007bff;
+  cursor: pointer;
+  display: inline-flex;
+  height: 32px;
+  justify-content: center;
+  margin-left: 2px;
+  padding: 0;
+  transition: background-color 0.15s, color 0.15s;
+  width: 32px;
+  flex-shrink: 0;
+}
+
+.polaris-row-search:hover,
+.polaris-row-search:focus {
+  background-color: rgba(0, 123, 255, 0.1);
+  color: #0056b3;
+  outline: none;
+}
+
+.polaris-row-search i {
+  font-size: 16px;
 }
 
 .staff-title-main:focus {
@@ -1182,6 +1224,64 @@ code {
 
 .staff-title-cell .workflow-tag-list {
   margin-top: 0.35rem;
+}
+
+.staff-author-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.25;
+  overflow: hidden;
+}
+
+.polaris-row-search {
+  color: #007bff;
+  flex-shrink: 0;
+  font-size: 0.95rem;
+  opacity: 0.55;
+  transition: opacity 0.2s, transform 0.1s;
+}
+
+.polaris-row-search:hover {
+  color: #0056b3;
+  opacity: 1;
+  text-decoration: none;
+  transform: scale(1.1);
+}
+
+.polaris-row-search:active {
+  transform: scale(0.95);
+}
+
+.asap-dialog-polaris-search {
+  max-width: 760px;
+  width: min(760px, calc(100vw - 2rem));
+}
+
+.polaris-search-results {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.polaris-search-result {
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+}
+
+.polaris-search-result-title {
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.polaris-search-result-meta {
+  color: #6c757d;
+  font-size: 0.82rem;
+  margin-top: 0.2rem;
+}
+
+.polaris-search-result-actions {
+  margin-top: 0.45rem;
 }
 
 .option-list-editor {
@@ -1437,4 +1537,31 @@ code {
 .placeholder-chip:hover {
   border-color: #3182ce;
   background: #f7fafc;
+}
+
+#polaris-search-controls {
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+#polaris-search-controls label {
+  color: #495057;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+#polaris-search-title-input,
+#polaris-search-author-input {
+  border-color: #ced4da;
+  font-size: 0.95rem;
+  padding: 0.5rem 0.75rem;
+}
+
+#polaris-search-title-input:focus,
+#polaris-search-author-input:focus {
+  border-color: #80bdff;
+  box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+}
+
+.polaris-search-results {
+  margin-top: 1rem;
 }

@@ -1,4 +1,4 @@
-import { pb, formatMap, patronFormatKeys, patronFormatFields, defaultPatronFormatRules, currentSuggestions, verifiedBibId, publicationOptions, setPublicationOptions, defaultPublicationOptions, defaultAgeGroups, setVerifiedBibId } from './state.js';
+import { pb, formatMap, patronFormatKeys, patronFormatFields, defaultPatronFormatRules, currentSuggestions, publicationOptions, setPublicationOptions, defaultPublicationOptions, defaultAgeGroups, setVerifiedBibId } from './state.js';
 import { isValidSmtpHost, validateSmtpHostField, showToast, markSettingsDirty } from './api.js';
 import { escapeAttr } from './grid.js';
 
@@ -363,21 +363,29 @@ document.addEventListener('drop', (e) => {
   }
 });
 
-document.getElementById('btn-bib-lookup').addEventListener('click', async () => {
-  const bibId = document.getElementById('edit-bibid').value.trim();
-  const btn = document.getElementById('btn-bib-lookup');
+export async function lookupEditBibById(options = {}) {
+  const bibInput = document.getElementById('edit-bibid');
+  const bibId = String(options.bibId !== undefined ? options.bibId : bibInput.value).trim();
+  if (options.bibId !== undefined) {
+    bibInput.value = bibId;
+    bibInput.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  const btn = Object.prototype.hasOwnProperty.call(options, 'button') ? options.button : document.getElementById('btn-bib-lookup');
   const display = document.getElementById('bib-info-display');
   const text = document.getElementById('bib-info-text');
+  const originalButtonText = btn ? btn.textContent : '';
 
   if (!bibId) {
     display.classList.remove('hidden', 'alert-info');
     display.classList.add('alert-danger');
     text.textContent = 'Please enter a BIB ID first.';
-    return;
+    return null;
   }
 
-  btn.disabled = true;
-  btn.textContent = '...';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = options.pendingText || '...';
+  }
   display.classList.add('hidden');
 
   try {
@@ -429,15 +437,23 @@ document.getElementById('btn-bib-lookup').addEventListener('click', async () => 
 
     text.textContent = infoText;
     setVerifiedBibId(bibId);
+    return data;
   } catch (err) {
     display.classList.remove('hidden', 'alert-info');
     display.classList.add('alert-danger');
     text.textContent = 'Error: ' + err.message;
     setVerifiedBibId('');
+    return null;
   } finally {
-    btn.disabled = false;
-    btn.textContent = 'Lookup BIB';
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = options.doneText || originalButtonText || 'Lookup BIB';
+    }
   }
+}
+
+document.getElementById('btn-bib-lookup').addEventListener('click', async () => {
+  await lookupEditBibById();
 });
 
 export function dateOnly(value) {

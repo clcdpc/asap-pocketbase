@@ -153,6 +153,9 @@ routerAdd("GET", "/api/asap/config", (e) => {
     response.externalSearch3Enabled = !!wf.externalSearch3Enabled;
     response.externalSearch3Label = wf.externalSearch3Label || "Search WorldCat";
     response.externalSearch3UrlTemplate = wf.externalSearch3UrlTemplate || "https://www.worldcat.org/search?q={{title}}";
+    response.externalSearch4Enabled = !!wf.externalSearch4Enabled;
+    response.externalSearch4Label = wf.externalSearch4Label || "";
+    response.externalSearch4UrlTemplate = wf.externalSearch4UrlTemplate || "";
     
     return e.json(200, response);
   } catch (err) {

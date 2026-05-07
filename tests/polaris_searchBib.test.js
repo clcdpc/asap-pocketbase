@@ -282,6 +282,62 @@ try {
   failed++;
 }
 
+// Test 9: Title search returns normalized short result list
+try {
+  httpSendResult = {
+    statusCode: 200,
+    throwError: false,
+    json: {
+      TotalRecordsFound: 12,
+      BibSearchRows: [
+        { ControlNumber: "111", Title: "First Title", Author: "First Author", PublicationYear: "2026", MaterialType: "Book" },
+        { ControlNumber: "222", Title: "Second Title", Author: "Second Author", PublicationYear: "2025", MaterialType: "eBook" }
+      ]
+    }
+  };
+
+  const staff = { AccessToken: "mock_token", AccessSecret: "mock_secret" };
+  const result = polaris.searchBibs(staff, { mode: "title", query: "  first title  ", limit: 1 });
+
+  assert.strictEqual(result.status, "found");
+  assert.strictEqual(result.mode, "title");
+  assert.strictEqual(result.query, "first title");
+  assert.strictEqual(result.totalMatches, 12);
+  assert.strictEqual(result.results.length, 1);
+  assert.deepStrictEqual(result.results[0], {
+    bibId: "111",
+    title: "First Title",
+    author: "First Author",
+    publication: "2026",
+    format: "Book",
+    identifier: ""
+  });
+  assert.ok(httpSendArgs.url.includes("q=first%20title"));
+  assert.ok(httpSendArgs.url.includes("sortby=PD"));
+
+  console.log('✅ Test case 9 (Title search result list) passed');
+  passed++;
+} catch (err) {
+  console.error('❌ Test case 9 failed:', err.stack);
+  failed++;
+}
+
+// Test 10: Author search validates missing query
+try {
+  const staff = { AccessToken: "mock_token", AccessSecret: "mock_secret" };
+  const result = polaris.searchBibs(staff, { mode: "author", query: "   " });
+
+  assert.strictEqual(result.status, "error");
+  assert.strictEqual(result.error, "missing_query");
+  assert.deepStrictEqual(result.results, []);
+
+  console.log('✅ Test case 10 (Author search missing query) passed');
+  passed++;
+} catch (err) {
+  console.error('❌ Test case 10 failed:', err.stack);
+  failed++;
+}
+
 console.log(`\nTests finished: ${passed} passed, ${failed} failed.`);
 
 if (failed > 0) {

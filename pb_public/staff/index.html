@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="UTF-8">
-  <link id="app-icon" rel="icon" type="image/png" href="" />
+  <link id="app-icon" rel="icon" type="image/png" href="/jpl.png" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ASAP Staff App</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.1.3/dist/css/bootstrap.min.css"
@@ -658,7 +658,7 @@
 
                   <!-- External Search -->
                   <h5 class="mb-3">External search providers</h5>
-                  <p class="text-muted small">Configure up to 3 buttons in the request edit modal to quickly search external sites like Amazon, Goodreads, or WorldCat.</p>
+                  <p class="text-muted small">Configure up to 4 buttons in the request edit modal to quickly search external sites like Amazon, Goodreads, WorldCat, or another provider.</p>
                   
                   <div class="form-row mb-1 d-none d-md-flex">
                     <div class="col-auto" style="width: 100px;"></div>
@@ -711,6 +711,22 @@
                     </div>
                     <div class="form-group col-md-6 mb-0">
                       <input id="wf-external-search-3-url-template" class="form-control" placeholder="https://www.worldcat.org/search?q={{title}}">
+                    </div>
+                  </div>
+
+                  <!-- Provider 4 -->
+                  <div class="form-row align-items-center mb-2">
+                    <div class="col-auto" style="width: 100px;">
+                      <div class="custom-control custom-checkbox">
+                        <input type="checkbox" class="custom-control-input" id="wf-external-search-4-enabled">
+                        <label class="custom-control-label font-weight-bold" for="wf-external-search-4-enabled">#4 (Info)</label>
+                      </div>
+                    </div>
+                    <div class="form-group col-md-4 mb-0">
+                      <input id="wf-external-search-4-label" class="form-control" placeholder="Search provider">
+                    </div>
+                    <div class="form-group col-md-6 mb-0">
+                      <input id="wf-external-search-4-url-template" class="form-control" placeholder="https://example.org/search?q={{title}}">
                     </div>
                   </div>
 
@@ -1217,6 +1233,34 @@
       <button type="submit" id="edit-submit-btn" class="btn btn-sm btn-primary px-4">Ok</button>
     </div>
   </form>
+</dialog>
+
+<!-- Polaris search dialog -->
+<dialog id="polarisSearchDialog" class="asap-dialog asap-dialog-polaris-search">
+  <div class="asap-dialog-header">
+    <h5 class="asap-dialog-title" id="polaris-search-title">Search Polaris</h5>
+    <button type="button" id="close-polaris-search-x"
+      class="asap-dialog-close"
+      aria-label="Close Polaris search dialog">&times;</button>
+  </div>
+  <div class="asap-dialog-body">
+    <div id="polaris-search-summary" class="text-muted small mb-3"></div>
+    <div id="polaris-search-controls" class="mb-3 bg-light p-3 border rounded">
+      <div class="form-group mb-2">
+        <label for="polaris-search-input" class="font-weight-bold small">Polaris keyword search</label>
+        <input type="text" id="polaris-search-input" class="form-control form-control-sm" placeholder="Keywords...">
+      </div>
+      <div class="d-flex align-items-center justify-content-between">
+        <button type="button" id="polaris-search-rerun-btn" class="btn btn-sm btn-primary">Search Polaris</button>
+        <div id="polaris-search-mode-switch"></div>
+      </div>
+    </div>
+    <div id="polaris-search-status" class="alert alert-light border py-2 px-3 small" role="status" aria-live="polite"></div>
+    <div id="polaris-search-results" class="polaris-search-results"></div>
+  </div>
+  <div class="asap-dialog-edit-footer">
+    <button type="button" id="close-polaris-search-btn" class="btn btn-sm btn-secondary">Close</button>
+  </div>
 </dialog>
 
 <!-- New suggestion dialog -->

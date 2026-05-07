@@ -1,5 +1,5 @@
 import { pb, gridContainer, staffGridFilterBar, tagFilterSelect, claimFilterSelect, settingsContainer, grid, formatMap, ageMap, closeReasonMap, descriptions, emptyStateMessages, statusStages, currentStatus, currentSuggestions, activeTagFilter, currentClaimFilter, currentWorkflowOrgScopeId, allSuggestions, workflowSettings, currentSettingsSection, activeActionMenu, rowActionIdCounter, rowActionRegistry, setCurrentSuggestions, setActiveTagFilter, setCurrentClaimFilter, setCurrentWorkflowOrgScopeId, setActiveActionMenu, setGrid, setAllSuggestions, incrementRowActionIdCounter } from './state.js';
-import { openEdit } from './modals.js';
+import { openEdit, openPolarisSearch, polarisSearchValueForRow } from './modals.js';
 import { openNewSuggestionForPatron } from './patron.js';
 import { undoRow, deleteClosedRequest, closeDuplicateRequest } from './actions.js';
 import { leapBibUrl, showToast, showAlert, isSuperAdminStaff, isAdminStaff, getSettingsSectionFromHash, closeOpenDialogs, activateSettingsSection, authorizedJson } from './api.js';
@@ -574,7 +574,7 @@ export function getGridColumns(status) {
     return [
       { name: 'Barcode', width: '170px' },
       { name: 'Title (original)', width: '320px' },
-      { name: 'Author (original)', width: '150px' },
+      { name: 'Author (original)', width: '200px' },
       { name: 'Format', width: '100px' },
       { name: 'Timing', width: '100px' },
       { name: 'Submitted', width: '100px' },
@@ -588,7 +588,7 @@ export function getGridColumns(status) {
     return [
       { name: 'Barcode', width: '170px' },
       { name: 'Title (original)', width: '320px' },
-      { name: 'Author (original)', width: '150px' },
+      { name: 'Author (original)', width: '200px' },
       { name: 'Format', width: '100px' },
       { name: 'Submitted', width: '100px' },
       { name: 'Closed reason', width: '140px' },
@@ -601,7 +601,7 @@ export function getGridColumns(status) {
   return [
     { name: 'Barcode', width: '170px' },
     { name: 'Title (original)', width: '320px' },
-    { name: 'Author (original)', width: '150px' },
+    { name: 'Author (original)', width: '200px' },
     { name: 'Identifier number', width: '140px' },
     { name: 'BIB ID', width: '100px' },
     { name: 'Age group', width: '100px' },
@@ -693,21 +693,51 @@ export function getIsbnCheckBadgesHtml(row) {
   return ` <span class="badge badge-info asap-isbn-check-badge ${isActive ? 'active' : ''}" data-tag="${escapeAttr(normalized)}" role="button" title="${isActive ? 'Clear filter' : tooltip}">${escapeAttr(label)}</span>`;
 }
 
+export function renderPolarisRowSearchButton(row, mode) {
+  const value = polarisSearchValueForRow(row, mode);
+  if (!value) return '';
+  const label = mode === 'author' ? 'Search Polaris using this author text' : 'Search Polaris using this title text';
+  return `
+    <button type="button"
+      class="polaris-row-search"
+      data-no-row-edit="true"
+      data-polaris-search-mode="${escapeAttr(mode)}"
+      data-suggestion-id="${escapeAttr(row.id)}"
+      title="${escapeAttr(label)}"
+      aria-label="${escapeAttr(label)}">
+      <i class="fa fa-search" aria-hidden="true"></i>
+    </button>
+  `;
+}
+
 export function renderTitleCell(row) {
   const title = row.title || '';
   const badges = getDuplicateBadgesHtml(row) + getIsbnCheckBadgesHtml(row);
   return gridjs.html(`
     <div class="staff-title-cell">
       ${rowMarker(row)}
-      <div
-        class="staff-title-main"
-        tabindex="0"
-        title="${escapeAttr(title)}"
-        aria-label="Full title: ${escapeAttr(title)}"
-      >
-        ${escapeAttr(title)}${badges}
+      <div class="staff-field-with-action">
+        <div
+          class="staff-title-main"
+          tabindex="0"
+          title="${escapeAttr(title)}"
+          aria-label="Full title: ${escapeAttr(title)}"
+        >
+          ${escapeAttr(title)}${badges}
+        </div>
+        ${renderPolarisRowSearchButton(row, 'title')}
       </div>
       ${renderWorkflowTags(row.workflowTags, row)}
+    </div>
+  `);
+}
+
+export function renderAuthorCell(row) {
+  const author = row.author || '';
+  return gridjs.html(`
+    <div class="staff-author-cell">
+      <span class="staff-author-text" title="${escapeAttr(author)}">${escapeAttr(author)}</span>
+      ${renderPolarisRowSearchButton(row, 'author')}
     </div>
   `);
 }
@@ -728,7 +758,7 @@ export function getGridRow(row, status) {
     return [
       renderBarcodeCell(row),
       renderTitleCell(row),
-      row.author,
+      renderAuthorCell(row),
       formatMap[row.format] || row.format,
       formatPublication(row.publication),
       formatStandardDate(row.created),
@@ -742,7 +772,7 @@ export function getGridRow(row, status) {
     return [
       renderBarcodeCell(row),
       renderTitleCell(row),
-      row.author,
+      renderAuthorCell(row),
       formatMap[row.format] || row.format,
       formatStandardDate(row.created),
       formatCloseReason(row),
@@ -755,7 +785,7 @@ export function getGridRow(row, status) {
   return [
     renderBarcodeCell(row),
     renderTitleCell(row),
-    row.author,
+    renderAuthorCell(row),
     row.identifier,
     renderBibIdCell(row),
     ageMap[row.agegroup] || row.agegroup,
@@ -1098,6 +1128,21 @@ gridContainer.addEventListener('click', (e) => {
     e.stopPropagation();
     const barcode = quickNewBtn.getAttribute('data-barcode');
     if (barcode) openNewSuggestionForPatron(barcode);
+    return;
+  }
+
+  const polarisSearchBtn = target.closest('.polaris-row-search');
+  if (polarisSearchBtn && gridContainer.contains(polarisSearchBtn)) {
+    e.preventDefault();
+    e.stopPropagation();
+    const recordId = polarisSearchBtn.getAttribute('data-suggestion-id');
+    const mode = polarisSearchBtn.getAttribute('data-polaris-search-mode') || 'title';
+    const row = currentSuggestions.find(item => item.id === recordId) || allSuggestions.find(item => item.id === recordId);
+    if (row) {
+      openPolarisSearch(row, mode);
+    } else {
+      showToast('Could not find that suggestion. Refresh and try again.', 'error');
+    }
     return;
   }
 
