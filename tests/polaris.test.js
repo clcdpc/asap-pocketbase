@@ -50,7 +50,7 @@ global.$http = {
 
 const polaris = require('../lib/polaris.js');
 
-console.log('Running tests for checkPatronCheckouts...');
+console.log('Running tests for polaris.js...');
 
 let passed = 0;
 let failed = 0;
@@ -160,6 +160,23 @@ try {
   passed++;
 } catch (err) {
   console.error('❌ Test case 4 failed:', err.stack);
+  failed++;
+}
+
+
+// Test 5: placeHold error path (StatusType === 1)
+try {
+  httpSendResult = {
+    statusCode: 200,
+    json: { StatusType: 1, StatusValue: 10 }
+  };
+  const result = polaris.placeHold(null, 123, 456);
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(result.statusValue, 10);
+  console.log('✅ Test case 5 (placeHold error path) passed');
+  passed++;
+} catch (err) {
+  console.error('❌ Test case 5 failed:', err.stack);
   failed++;
 }
 
