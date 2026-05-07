@@ -59,6 +59,21 @@ const superAllScope = staffRoutes.resolveAnalyticsScope(appWithNoTags(), staff("
 assert.strictEqual(superAllScope.mode, "all");
 assert.strictEqual(superAllScope.filter, "id != ''");
 
+const staffWorkflowTamperedScope = staffRoutes.titleRequestListScope(appWithNoTags(), staff("staff", "10"), "20");
+assert.strictEqual(staffWorkflowTamperedScope.mode, "library");
+assert.strictEqual(staffWorkflowTamperedScope.libraryOrgId, "10");
+assert.strictEqual(staffWorkflowTamperedScope.filter, "libraryOrgId = {:libraryOrgId}");
+assert.deepStrictEqual(staffWorkflowTamperedScope.params, { libraryOrgId: "10" });
+
+const superWorkflowAllScope = staffRoutes.titleRequestListScope(appWithNoTags(), staff("super_admin", ""), "all");
+assert.strictEqual(superWorkflowAllScope.mode, "all");
+assert.strictEqual(superWorkflowAllScope.filter, "id != ''");
+
+const superWorkflowLibraryScope = staffRoutes.titleRequestListScope(appWithNoTags(), staff("super_admin", ""), "20");
+assert.strictEqual(superWorkflowLibraryScope.mode, "library");
+assert.strictEqual(superWorkflowLibraryScope.libraryOrgId, "20");
+assert.strictEqual(superWorkflowLibraryScope.filter, "libraryOrgId = {:libraryOrgId}");
+
 const summary = staffRoutes.loadAnalyticsSummary(libraryScope, range, rows.filter(row => row.get("libraryOrgId") === "10"));
 assert.strictEqual(summary.newSuggestions, 2);
 assert.strictEqual(summary.openRequests, 2);

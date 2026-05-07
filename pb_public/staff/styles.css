@@ -66,6 +66,24 @@ body {
   width: 100%;
 }
 
+.workflow-scope-control {
+  align-items: center;
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0;
+}
+
+.workflow-scope-label {
+  color: #495057;
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.workflow-scope-control select {
+  min-width: 220px;
+  width: auto;
+}
+
 .gridjs-head {
   display: none !important;
 }

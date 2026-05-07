@@ -1,4 +1,4 @@
-import { pb, gridContainer, staffGridFilterBar, tagFilterSelect, claimFilterSelect, settingsContainer, grid, formatMap, ageMap, closeReasonMap, descriptions, emptyStateMessages, statusStages, currentStatus, currentSuggestions, activeTagFilter, currentClaimFilter, allSuggestions, workflowSettings, currentSettingsSection, activeActionMenu, rowActionIdCounter, rowActionRegistry, setCurrentSuggestions, setActiveTagFilter, setCurrentClaimFilter, setActiveActionMenu, setGrid, setAllSuggestions, incrementRowActionIdCounter } from './state.js';
+import { pb, gridContainer, staffGridFilterBar, tagFilterSelect, claimFilterSelect, settingsContainer, grid, formatMap, ageMap, closeReasonMap, descriptions, emptyStateMessages, statusStages, currentStatus, currentSuggestions, activeTagFilter, currentClaimFilter, currentWorkflowOrgScopeId, allSuggestions, workflowSettings, currentSettingsSection, activeActionMenu, rowActionIdCounter, rowActionRegistry, setCurrentSuggestions, setActiveTagFilter, setCurrentClaimFilter, setCurrentWorkflowOrgScopeId, setActiveActionMenu, setGrid, setAllSuggestions, incrementRowActionIdCounter } from './state.js';
 import { openEdit } from './modals.js';
 import { openNewSuggestionForPatron } from './patron.js';
 import { undoRow, deleteClosedRequest, closeDuplicateRequest } from './actions.js';
@@ -19,6 +19,7 @@ export async function loadTab(status) {
   prepareGridView();
 
   if (status === 'analytics') {
+    hideWorkflowScopeControl();
     hideTagFilter();
     hideClaimFilter();
     await loadAnalytics(gridContainer);
@@ -27,7 +28,9 @@ export async function loadTab(status) {
   }
 
   try {
-    const records = await fetchTitleRequests();
+    const scopedResult = await fetchTitleRequests();
+    const records = Array.isArray(scopedResult.items) ? scopedResult.items : [];
+    updateWorkflowScopeControl(scopedResult);
     setAllSuggestions(records);
     updateTabCounts(records);
 
@@ -128,8 +131,62 @@ function prepareGridView() {
 }
 
 async function fetchTitleRequests() {
-  const scopedResult = await authorizedJson('/api/asap/staff/title-requests');
-  return Array.isArray(scopedResult.items) ? scopedResult.items : [];
+  const params = new URLSearchParams();
+  if (isSuperAdminStaff()) {
+    params.set('scope', currentWorkflowOrgScopeId || 'all');
+  }
+  params.set('_', String(Date.now()));
+  return authorizedJson('/api/asap/staff/title-requests?' + params.toString(), { cache: 'no-store' });
+}
+
+function updateWorkflowScopeControl(data) {
+  const wrapper = document.getElementById('workflow-library-scope-label');
+  const select = document.getElementById('workflow-library-scope');
+  if (!wrapper || !select) return;
+
+  const scope = data && data.scope ? data.scope : {};
+  if (!scope.superAdmin) {
+    hideWorkflowScopeControl();
+    return;
+  }
+
+  const libraries = Array.isArray(data.availableLibraries) ? data.availableLibraries.slice() : [];
+  const selectedScopeId = scope.mode === 'library' && scope.libraryOrgId ? scope.libraryOrgId : 'all';
+  setCurrentWorkflowOrgScopeId(selectedScopeId);
+
+  if (scope.mode === 'library' && scope.libraryOrgId && !libraries.some(library => String(library.orgId) === String(scope.libraryOrgId))) {
+    libraries.push({ orgId: scope.libraryOrgId, name: scope.label || 'Current library' });
+  }
+
+  select.innerHTML = [
+    `<option value="all"${selectedScopeId === 'all' ? ' selected' : ''}>All libraries</option>`,
+    ...libraries.map(library => {
+      const orgId = String(library.orgId || '').trim();
+      const selected = selectedScopeId === orgId ? ' selected' : '';
+      return `<option value="${escapeAttr(orgId)}"${selected}>${escapeAttr(library.name || orgId)} (ID ${escapeAttr(orgId)})</option>`;
+    })
+  ].join('');
+  select.value = selectedScopeId;
+
+  if (!select.dataset.workflowScopeBound) {
+    select.addEventListener('change', () => {
+      setCurrentWorkflowOrgScopeId(select.value || 'all');
+      loadTab(currentStatus);
+    });
+    select.dataset.workflowScopeBound = 'true';
+  }
+
+  wrapper.classList.remove('hidden');
+  if (staffGridFilterBar) {
+    staffGridFilterBar.classList.remove('hidden');
+  }
+}
+
+function hideWorkflowScopeControl() {
+  const wrapper = document.getElementById('workflow-library-scope-label');
+  const select = document.getElementById('workflow-library-scope');
+  if (wrapper) wrapper.classList.add('hidden');
+  if (select) select.innerHTML = '';
 }
 
 function renderStatusGrid(status, records) {

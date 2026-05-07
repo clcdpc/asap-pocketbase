@@ -50,6 +50,9 @@ export function setActiveTagFilter(filter) { activeTagFilter = filter; }
 export let currentClaimFilter = 'all';
 export function setCurrentClaimFilter(filter) { currentClaimFilter = ['mine', 'unclaimed'].includes(filter) ? filter : 'all'; }
 
+export let currentWorkflowOrgScopeId = 'all';
+export function setCurrentWorkflowOrgScopeId(scopeId) { currentWorkflowOrgScopeId = String(scopeId || 'all').trim() || 'all'; }
+
 export let allSuggestions = [];
 export function setAllSuggestions(suggestions) { allSuggestions = suggestions; }
 
