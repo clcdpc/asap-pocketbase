@@ -116,6 +116,12 @@ The system also runs a Polaris organization sync once a day at 2 AM server time.
 
 Staff users can opt into a weekly action summary email from their profile menu and enter the email address where they want the report delivered. The summary runs on Sunday at 8 PM server time by default and includes new suggestions plus approved purchases still missing BIB IDs. Override the schedule with `ASAP_WEEKLY_STAFF_ACTION_SUMMARY_CRON_SCHEDULE`. Set the Staff URL in **Settings > Getting Started** so email links point to the public staff interface; `ASAP_STAFF_URL` remains supported as a first-run/fallback value for existing deployments. A protected manual trigger is available at `POST /api/asap/jobs/weekly-staff-action-summary`; authenticate with a super admin session or `Authorization: Bearer {ASAP_CRON_SECRET}`.
 
+Workflow queue jobs process records in oldest-first pages and stop at a configurable per-run cap. The paging controls are system-only environment settings:
+- `ASAP_JOB_PAGE_SIZE` defaults to `50` and is clamped from `1` to `500`.
+- `ASAP_JOB_MAX_PER_RUN` defaults to `500` and is clamped from `1` to `5000`.
+- Timeout queues may share `ASAP_TIMEOUT_PAGE_SIZE` and `ASAP_TIMEOUT_MAX_PER_RUN`.
+- Queue-specific overrides use names like `ASAP_PENDING_HOLDS_PAGE_SIZE`, `ASAP_PENDING_HOLDS_MAX_PER_RUN`, `ASAP_HOLD_PICKUP_TIMEOUT_PAGE_SIZE`, and `ASAP_HOLD_PICKUP_TIMEOUT_MAX_PER_RUN`.
+
 You can manually trigger these jobs or adjust their settings from the **Settings** tab in the Staff Dashboard.
 
 ---
