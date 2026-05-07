@@ -11,6 +11,12 @@ import { loadStaffUsers, populateStaffLibraryOptions } from './settings-users.js
 
 const adminSettingsSections = ['start', 'staff', 'templates', 'workflow', 'patron'];
 
+export function normalizeExternalSearchUrlTemplate(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  return text.includes('://') ? text : `https://${text}`;
+}
+
 export function showSettingsAccessDenied() {
   settingsContainer.classList.remove('hidden');
   setVisible('settings-error', true);
@@ -415,6 +421,9 @@ export function populateWorkflowForms(wf) {
   setFieldChecked('wf-external-search-3-enabled', !!wf.externalSearch3Enabled);
   setFieldValue('wf-external-search-3-label', wf.externalSearch3Label || 'Search WorldCat');
   setFieldValue('wf-external-search-3-url-template', wf.externalSearch3UrlTemplate || 'https://www.worldcat.org/search?q={{title}}');
+  setFieldChecked('wf-external-search-4-enabled', !!wf.externalSearch4Enabled);
+  setFieldValue('wf-external-search-4-label', wf.externalSearch4Label || '');
+  setFieldValue('wf-external-search-4-url-template', wf.externalSearch4UrlTemplate || '');
 
   workflowSettings.externalSearch1Enabled = !!wf.externalSearch1Enabled;
   workflowSettings.externalSearch1Label = wf.externalSearch1Label || 'Search Amazon';
@@ -425,6 +434,9 @@ export function populateWorkflowForms(wf) {
   workflowSettings.externalSearch3Enabled = !!wf.externalSearch3Enabled;
   workflowSettings.externalSearch3Label = wf.externalSearch3Label || 'Search WorldCat';
   workflowSettings.externalSearch3UrlTemplate = wf.externalSearch3UrlTemplate || 'https://www.worldcat.org/search?q={{title}}';
+  workflowSettings.externalSearch4Enabled = !!wf.externalSearch4Enabled;
+  workflowSettings.externalSearch4Label = wf.externalSearch4Label || '';
+  workflowSettings.externalSearch4UrlTemplate = wf.externalSearch4UrlTemplate || '';
 }
 
 export function populatePatronUiForms(uiText) {
@@ -583,6 +595,17 @@ function _serializeSettingsState(validate = false) {
 
   const sendAutoRejectEmail = getFieldChecked('outstanding-timeout-send-email');
   const nextAutoRejectTemplateId = getFieldValue('outstanding-timeout-rejection-template-id');
+  const externalSearch1UrlTemplate = normalizeExternalSearchUrlTemplate(getFieldValue('wf-external-search-1-url-template').trim() || 'https://www.amazon.com/s?k={{title}}');
+  const externalSearch2UrlTemplate = normalizeExternalSearchUrlTemplate(getFieldValue('wf-external-search-2-url-template').trim() || 'https://www.goodreads.com/search?q={{title}}');
+  const externalSearch3UrlTemplate = normalizeExternalSearchUrlTemplate(getFieldValue('wf-external-search-3-url-template').trim() || 'https://www.worldcat.org/search?q={{title}}');
+  const externalSearch4UrlTemplate = normalizeExternalSearchUrlTemplate(getFieldValue('wf-external-search-4-url-template'));
+
+  if (validate) {
+    setFieldValue('wf-external-search-1-url-template', externalSearch1UrlTemplate);
+    setFieldValue('wf-external-search-2-url-template', externalSearch2UrlTemplate);
+    setFieldValue('wf-external-search-3-url-template', externalSearch3UrlTemplate);
+    setFieldValue('wf-external-search-4-url-template', externalSearch4UrlTemplate);
+  }
 
   const payload = {
     ui_text: uiText, emails,
@@ -605,13 +628,16 @@ function _serializeSettingsState(validate = false) {
     allowPatronAutoholdOptOut: getFieldChecked('allow-patron-autohold-opt-out'),
     externalSearch1Enabled: getFieldChecked('wf-external-search-1-enabled'),
     externalSearch1Label: getFieldValue('wf-external-search-1-label').trim() || 'Search Amazon',
-    externalSearch1UrlTemplate: getFieldValue('wf-external-search-1-url-template').trim() || 'https://www.amazon.com/s?k={{title}}',
+    externalSearch1UrlTemplate: externalSearch1UrlTemplate,
     externalSearch2Enabled: getFieldChecked('wf-external-search-2-enabled'),
     externalSearch2Label: getFieldValue('wf-external-search-2-label').trim() || 'Search Goodreads',
-    externalSearch2UrlTemplate: getFieldValue('wf-external-search-2-url-template').trim() || 'https://www.goodreads.com/search?q={{title}}',
+    externalSearch2UrlTemplate: externalSearch2UrlTemplate,
     externalSearch3Enabled: getFieldChecked('wf-external-search-3-enabled'),
     externalSearch3Label: getFieldValue('wf-external-search-3-label').trim() || 'Search WorldCat',
-    externalSearch3UrlTemplate: getFieldValue('wf-external-search-3-url-template').trim() || 'https://www.worldcat.org/search?q={{title}}'
+    externalSearch3UrlTemplate: externalSearch3UrlTemplate,
+    externalSearch4Enabled: getFieldChecked('wf-external-search-4-enabled'),
+    externalSearch4Label: getFieldValue('wf-external-search-4-label').trim(),
+    externalSearch4UrlTemplate: externalSearch4UrlTemplate
   };
 
   if (isSystemContext) {
@@ -711,7 +737,10 @@ export async function saveSettings(options = {}) {
         externalSearch2UrlTemplate: payload.externalSearch2UrlTemplate,
         externalSearch3Enabled: payload.externalSearch3Enabled,
         externalSearch3Label: payload.externalSearch3Label,
-        externalSearch3UrlTemplate: payload.externalSearch3UrlTemplate
+        externalSearch3UrlTemplate: payload.externalSearch3UrlTemplate,
+        externalSearch4Enabled: payload.externalSearch4Enabled,
+        externalSearch4Label: payload.externalSearch4Label,
+        externalSearch4UrlTemplate: payload.externalSearch4UrlTemplate
       }
     };
 

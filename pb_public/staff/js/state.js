@@ -74,7 +74,10 @@ export let workflowSettings = { autoPromote: false, allowPatronAutoholdOptOut: f
     externalSearch2UrlTemplate: 'https://www.goodreads.com/search?q={{title}}',
     externalSearch3Enabled: false,
     externalSearch3Label: 'Search WorldCat',
-    externalSearch3UrlTemplate: 'https://www.worldcat.org/search?q={{title}}'
+    externalSearch3UrlTemplate: 'https://www.worldcat.org/search?q={{title}}',
+    externalSearch4Enabled: false,
+    externalSearch4Label: '',
+    externalSearch4UrlTemplate: ''
   };
 
 export let currentLibraryContextOrgId = 'system';

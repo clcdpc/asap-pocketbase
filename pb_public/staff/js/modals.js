@@ -1,7 +1,7 @@
 import { pb, formatMap, availableFormats, currentRejectionTemplates, currentStatus, currentSuggestions, allSuggestions, verifiedBibId, publicationOptions, setVerifiedBibId, workflowSettings } from './state.js';
 import { leapBibUrl, showToast, showAlert, showConfirm, openProfileDialog } from './api.js';
 import { loadTab, formatDateTime, renderWorkflowTags, escapeAttr } from './grid.js';
-import { setSelectValue, dateOnly } from './settings-ui.js';
+import { setSelectValue, dateOnly, lookupEditBibById } from './settings-ui.js';
 
 export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
   const row = currentSuggestions.find(r => r.id === id) || allSuggestions.find(r => r.id === id);
@@ -295,7 +295,8 @@ export function renderExternalSearchButton(title, identifier) {
   const providers = [
     { enabled: workflowSettings.externalSearch1Enabled, label: workflowSettings.externalSearch1Label, template: workflowSettings.externalSearch1UrlTemplate },
     { enabled: workflowSettings.externalSearch2Enabled, label: workflowSettings.externalSearch2Label, template: workflowSettings.externalSearch2UrlTemplate },
-    { enabled: workflowSettings.externalSearch3Enabled, label: workflowSettings.externalSearch3Label, template: workflowSettings.externalSearch3UrlTemplate }
+    { enabled: workflowSettings.externalSearch3Enabled, label: workflowSettings.externalSearch3Label, template: workflowSettings.externalSearch3UrlTemplate },
+    { enabled: workflowSettings.externalSearch4Enabled, label: workflowSettings.externalSearch4Label, template: workflowSettings.externalSearch4UrlTemplate }
   ];
 
   let cleanTitle = (title || '').split(' (')[0].trim();
@@ -322,6 +323,260 @@ export function renderExternalSearchButton(title, identifier) {
 
   container.innerHTML = buttons.join('');
 }
+
+function polarisSearchModeLabel(mode) {
+  if (mode === 'author') return 'author';
+  if (mode === 'title_author') return 'title and author';
+  if (mode === 'identifier') return 'identifier';
+  return 'title';
+}
+
+function hasOwn(row, key) {
+  return Object.prototype.hasOwnProperty.call(row || {}, key);
+}
+
+function looksLikeCatalogWrappedValue(prefix) {
+  prefix = String(prefix || '').trim();
+  if (!prefix) return false;
+  return prefix.includes(' / ') ||
+    /[.;:]$/.test(prefix) ||
+    /,\s*\d{4}/.test(prefix) ||
+    /\b(author|editor|illustrator|director|producer)\.?$/i.test(prefix);
+}
+
+function basicPolarisSearchText(value) {
+  return String(value || '')
+    .replace(/\([^()]*\)/g, ' ')
+    .replace(/[\u201c\u201d]/g, '"')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\/:;,.]+/g, ' ')
+    .replace(/\s+-\s+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function fallbackPolarisSearchValue(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  const wrapped = text.match(/^(.*)\(([^()]*)\)\s*$/);
+  if (wrapped) {
+    const prefix = String(wrapped[1] || '').trim();
+    const original = String(wrapped[2] || '').trim();
+    if (original && looksLikeCatalogWrappedValue(prefix)) {
+      return basicPolarisSearchText(original);
+    }
+  }
+  return basicPolarisSearchText(text);
+}
+
+export function polarisSearchValueForRow(row, mode) {
+  if (mode === 'author') {
+    return hasOwn(row, 'polarisSearchAuthor')
+      ? String(row.polarisSearchAuthor || '').trim()
+      : fallbackPolarisSearchValue(row.author);
+  }
+  if (mode === 'identifier') {
+    return String(row.identifier || '').trim();
+  }
+  return hasOwn(row, 'polarisSearchTitle')
+    ? String(row.polarisSearchTitle || '').trim()
+    : fallbackPolarisSearchValue(row.title);
+}
+
+function polarisSearchQueryForRow(row, mode) {
+  if (mode === 'title_author') {
+    return [
+      polarisSearchValueForRow(row, 'title'),
+      polarisSearchValueForRow(row, 'author')
+    ].filter(Boolean).join(' ').trim();
+  }
+  return polarisSearchValueForRow(row, mode);
+}
+
+function polarisResultMeta(result) {
+  return [
+    result.author ? 'Author: ' + result.author : '',
+    result.publication ? 'Publication: ' + result.publication : '',
+    result.format ? 'Format: ' + result.format : '',
+    result.identifier ? 'Identifier: ' + result.identifier : '',
+    result.bibId ? 'BIB: ' + result.bibId : ''
+  ].filter(Boolean).join(' | ');
+}
+
+function polarisSearchElements() {
+  return {
+    dialog: document.getElementById('polarisSearchDialog'),
+    title: document.getElementById('polaris-search-title'),
+    summary: document.getElementById('polaris-search-summary'),
+    modeSwitch: document.getElementById('polaris-search-mode-switch'),
+    status: document.getElementById('polaris-search-status'),
+    results: document.getElementById('polaris-search-results'),
+    searchInput: document.getElementById('polaris-search-input'),
+    rerunBtn: document.getElementById('polaris-search-rerun-btn')
+  };
+}
+
+async function fetchPolarisSearch(row, mode, query, options) {
+  const res = await fetch('/api/asap/staff/bib-lookup', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': pb.authStore.token
+    },
+    body: JSON.stringify({
+      mode,
+      query: query,
+      title: options?.title || '',
+      author: options?.author || '',
+      requestId: row.id || ''
+    })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || 'Polaris search failed');
+  return data;
+}
+
+function renderPolarisSearchResults(row, mode, data) {
+  const els = polarisSearchElements();
+  if (data.status === 'error') {
+    els.status.className = 'alert alert-danger py-2 px-3 small';
+    els.status.style.wordBreak = 'break-all';
+    els.status.textContent = 'Polaris search failed: ' + (data.error || data.message || 'Polaris returned an error.');
+    els.results.innerHTML = '';
+    return;
+  }
+  const results = Array.isArray(data.results) ? data.results.slice(0, 10) : [];
+  els.status.className = 'alert alert-light border py-2 px-3 small';
+  els.status.textContent = results.length
+    ? `${results.length} result${results.length === 1 ? '' : 's'} shown${data.totalMatches > results.length ? ' of ' + data.totalMatches : ''}.`
+    : 'No Polaris matches found.';
+
+  els.results.innerHTML = results.map((result, index) => {
+    const title = result.title || '(No title returned)';
+    const meta = polarisResultMeta(result);
+    return `
+      <div class="polaris-search-result">
+        <div class="polaris-search-result-title">${escapeAttr(title)}</div>
+        ${meta ? `<div class="polaris-search-result-meta">${escapeAttr(meta)}</div>` : ''}
+        <div class="polaris-search-result-actions">
+          <button type="button" class="btn btn-sm btn-primary polaris-search-select"
+            data-result-index="${index}"
+            ${result.bibId ? '' : 'disabled'}
+            aria-label="Use Polaris BIB ${escapeAttr(result.bibId || '')} for this request">
+            Use this BIB
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  els.results.querySelectorAll('.polaris-search-select').forEach(button => {
+    button.addEventListener('click', async () => {
+      const result = results[parseInt(button.getAttribute('data-result-index') || '-1', 10)];
+      if (!result || !result.bibId) return;
+      els.dialog.close();
+      openEdit(row.id, row.status || currentStatus, 'Edit suggestion', '', 'Save');
+      await lookupEditBibById({ bibId: result.bibId, button: null });
+    });
+  });
+}
+
+export async function openPolarisSearch(row, mode) {
+  if (!row) return;
+  const els = polarisSearchElements();
+  if (!els.dialog) return;
+
+  mode = String(mode || 'title').trim().toLowerCase();
+  
+  const originalTitle = polarisSearchValueForRow(row, 'title');
+  const originalAuthor = polarisSearchValueForRow(row, 'author');
+
+  // Initialize input based on launch mode
+  if (mode === 'title') {
+    els.searchInput.value = originalTitle;
+  } else if (mode === 'author') {
+    els.searchInput.value = originalAuthor;
+  } else if (mode === 'title_author') {
+    els.searchInput.value = `${originalTitle} ${originalAuthor}`.trim();
+  }
+
+  const runSearch = async () => {
+    const currentEls = polarisSearchElements();
+    const query = currentEls.searchInput.value.trim();
+
+    if (!query) {
+      showToast('Please enter search terms.', 'warning');
+      return;
+    }
+
+    els.status.className = 'alert alert-light border py-2 px-3 small';
+    els.status.textContent = 'Searching Polaris...';
+    els.results.innerHTML = '';
+
+    try {
+      // For keyword search, we send the same query for title/author context to the backend
+      const data = await fetchPolarisSearch(row, mode, query, { title: query, author: '' });
+      renderPolarisSearchResults(row, mode, data);
+    } catch (err) {
+      els.status.className = 'alert alert-danger py-2 px-3 small';
+      els.status.textContent = 'Error: ' + err.message;
+    }
+  };
+
+  els.title.textContent = 'Search Polaris';
+  els.summary.innerHTML = `
+    <div class="mb-1">This searches Polaris across keyword fields using the text below.</div>
+    <div class="text-muted small">Started from ${mode === 'author' ? 'author' : 'title'}: "${mode === 'author' ? (originalAuthor || 'Unknown') : (originalTitle || 'Unknown')}"</div>
+  `;
+  
+  // Only show "Add author" if we started from title and have an author available
+  els.modeSwitch.innerHTML = (mode === 'title' && originalAuthor)
+    ? '<button type="button" class="btn btn-sm btn-outline-secondary" id="polaris-search-add-author">Add author to search</button>'
+    : '';
+
+  const addAuthorBtn = document.getElementById('polaris-search-add-author');
+  if (addAuthorBtn) {
+    addAuthorBtn.addEventListener('click', () => {
+      const currentEls = polarisSearchElements();
+      const currentVal = currentEls.searchInput.value.trim();
+      currentEls.searchInput.value = `${currentVal} ${originalAuthor}`.trim();
+      addAuthorBtn.remove(); // Only add once
+      runSearch();
+    });
+  }
+
+  // Handle rerun button
+  const newRerunBtn = els.rerunBtn.cloneNode(true);
+  els.rerunBtn.parentNode.replaceChild(newRerunBtn, els.rerunBtn);
+  els.rerunBtn = newRerunBtn;
+  els.rerunBtn.addEventListener('click', runSearch);
+
+  // Handle Enter key in input
+  const newInp = els.searchInput.cloneNode(true);
+  els.searchInput.parentNode.replaceChild(newInp, els.searchInput);
+  
+  // Re-fetch els after clone
+  const updatedEls = polarisSearchElements();
+  updatedEls.searchInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      runSearch();
+    }
+  });
+
+  if (!els.dialog.open) {
+    els.dialog.showModal();
+  }
+
+  runSearch();
+}
+
+function closePolarisSearchDialog() {
+  const dialog = document.getElementById('polarisSearchDialog');
+  if (dialog) dialog.close();
+}
+
+document.getElementById('close-polaris-search-x')?.addEventListener('click', closePolarisSearchDialog);
+document.getElementById('close-polaris-search-btn')?.addEventListener('click', closePolarisSearchDialog);
 
 document.getElementById('edit-form').addEventListener('submit', async (e) => {
   e.preventDefault();
