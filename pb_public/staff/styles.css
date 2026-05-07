@@ -1176,6 +1176,22 @@ code {
   margin-top: 2px;
 }
 
+.field-with-action {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.field-with-action__input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.field-with-action__button {
+  flex: 0 0 28px;
+}
+
 .staff-title-cell {
   max-width: 520px;
 }

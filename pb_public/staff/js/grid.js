@@ -1,5 +1,5 @@
 import { pb, gridContainer, staffGridFilterBar, tagFilterSelect, claimFilterSelect, settingsContainer, grid, formatMap, ageMap, closeReasonMap, descriptions, emptyStateMessages, statusStages, currentStatus, currentSuggestions, activeTagFilter, currentClaimFilter, currentWorkflowOrgScopeId, allSuggestions, workflowSettings, currentSettingsSection, activeActionMenu, rowActionIdCounter, rowActionRegistry, setCurrentSuggestions, setActiveTagFilter, setCurrentClaimFilter, setCurrentWorkflowOrgScopeId, setActiveActionMenu, setGrid, setAllSuggestions, incrementRowActionIdCounter } from './state.js';
-import { openEdit, openPolarisSearch, polarisSearchValueForRow } from './modals.js';
+import { openEdit, openPolarisSearch, polarisSearchValueForRow, renderPolarisSearchButtonMarkup } from './modals.js';
 import { openNewSuggestionForPatron } from './patron.js';
 import { undoRow, deleteClosedRequest, closeDuplicateRequest } from './actions.js';
 import { leapBibUrl, showToast, showAlert, isSuperAdminStaff, isAdminStaff, getSettingsSectionFromHash, closeOpenDialogs, activateSettingsSection, authorizedJson } from './api.js';
@@ -696,18 +696,11 @@ export function getIsbnCheckBadgesHtml(row) {
 export function renderPolarisRowSearchButton(row, mode) {
   const value = polarisSearchValueForRow(row, mode);
   if (!value) return '';
-  const label = mode === 'author' ? 'Search Polaris using this author text' : 'Search Polaris using this title text';
-  return `
-    <button type="button"
-      class="polaris-row-search"
-      data-no-row-edit="true"
-      data-polaris-search-mode="${escapeAttr(mode)}"
-      data-suggestion-id="${escapeAttr(row.id)}"
-      title="${escapeAttr(label)}"
-      aria-label="${escapeAttr(label)}">
-      <i class="fa fa-search" aria-hidden="true"></i>
-    </button>
-  `;
+  return renderPolarisSearchButtonMarkup(mode, {
+    'data-no-row-edit': 'true',
+    'data-polaris-search-mode': mode,
+    'data-suggestion-id': row.id
+  });
 }
 
 export function renderTitleCell(row) {

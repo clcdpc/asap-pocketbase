@@ -24,7 +24,7 @@ assert.strictEqual(
 
 assert.strictEqual(
   records.polarisSubmittedSearchValue("Kraus, Daniel, 1975- author. ()"),
-  "Kraus Daniel 1975- author"
+  ""
 );
 
 assert.strictEqual(

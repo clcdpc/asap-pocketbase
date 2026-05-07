@@ -331,6 +331,29 @@ function polarisSearchModeLabel(mode) {
   return 'title';
 }
 
+export function polarisSearchButtonLabel(mode) {
+  if (mode === 'author') return 'Search Polaris using this author text';
+  if (mode === 'identifier') return 'Search Polaris using this identifier';
+  return 'Search Polaris using this title text';
+}
+
+export function renderPolarisSearchButtonMarkup(mode, attrs = {}) {
+  const label = attrs.label || polarisSearchButtonLabel(mode);
+  const attrText = Object.keys(attrs).filter(key => key !== 'label' && key !== 'class' && attrs[key] !== undefined && attrs[key] !== null && attrs[key] !== false).map(key => {
+    if (attrs[key] === true) return escapeAttr(key);
+    return `${escapeAttr(key)}="${escapeAttr(attrs[key])}"`;
+  }).join(' ');
+  return `
+    <button type="button"
+      class="polaris-row-search${attrs.class ? ' ' + escapeAttr(attrs.class) : ''}"
+      ${attrText}
+      title="${escapeAttr(label)}"
+      aria-label="${escapeAttr(label)}">
+      <i class="fa fa-search" aria-hidden="true"></i>
+    </button>
+  `;
+}
+
 function hasOwn(row, key) {
   return Object.prototype.hasOwnProperty.call(row || {}, key);
 }
@@ -361,7 +384,7 @@ function fallbackPolarisSearchValue(value) {
   if (wrapped) {
     const prefix = String(wrapped[1] || '').trim();
     const original = String(wrapped[2] || '').trim();
-    if (original && looksLikeCatalogWrappedValue(prefix)) {
+    if (looksLikeCatalogWrappedValue(prefix)) {
       return basicPolarisSearchText(original);
     }
   }
@@ -435,7 +458,7 @@ async function fetchPolarisSearch(row, mode, query, options) {
   return data;
 }
 
-function renderPolarisSearchResults(row, mode, data) {
+function renderPolarisSearchResults(row, mode, data, options = {}) {
   const els = polarisSearchElements();
   if (data.status === 'error') {
     els.status.className = 'alert alert-danger py-2 px-3 small';
@@ -474,27 +497,44 @@ function renderPolarisSearchResults(row, mode, data) {
       const result = results[parseInt(button.getAttribute('data-result-index') || '-1', 10)];
       if (!result || !result.bibId) return;
       els.dialog.close();
+      if (options.source === 'edit') {
+        const editModal = document.getElementById('editModal');
+        if (editModal && !editModal.open) {
+          editModal.showModal();
+        }
+        await lookupEditBibById({ bibId: result.bibId, button: null });
+        const bibInput = document.getElementById('edit-bibid');
+        if (bibInput) bibInput.focus();
+        showToast('Polaris BIB applied to the edit form.', 'success');
+        return;
+      }
       openEdit(row.id, row.status || currentStatus, 'Edit suggestion', '', 'Save');
       await lookupEditBibById({ bibId: result.bibId, button: null });
     });
   });
 }
 
-export async function openPolarisSearch(row, mode) {
+export async function openPolarisSearch(row, mode, options = {}) {
   if (!row) return;
   const els = polarisSearchElements();
   if (!els.dialog) return;
 
   mode = String(mode || 'title').trim().toLowerCase();
   
-  const originalTitle = polarisSearchValueForRow(row, 'title');
-  const originalAuthor = polarisSearchValueForRow(row, 'author');
+  const originalTitle = options.title !== undefined ? String(options.title || '').trim() : polarisSearchValueForRow(row, 'title');
+  const originalAuthor = options.author !== undefined ? String(options.author || '').trim() : polarisSearchValueForRow(row, 'author');
+  const originalIdentifier = options.identifier !== undefined ? String(options.identifier || '').trim() : polarisSearchValueForRow(row, 'identifier');
+  const initialQuery = options.query !== undefined ? String(options.query || '').trim() : '';
 
   // Initialize input based on launch mode
-  if (mode === 'title') {
+  if (initialQuery) {
+    els.searchInput.value = initialQuery;
+  } else if (mode === 'title') {
     els.searchInput.value = originalTitle;
   } else if (mode === 'author') {
     els.searchInput.value = originalAuthor;
+  } else if (mode === 'identifier') {
+    els.searchInput.value = originalIdentifier;
   } else if (mode === 'title_author') {
     els.searchInput.value = `${originalTitle} ${originalAuthor}`.trim();
   }
@@ -514,8 +554,8 @@ export async function openPolarisSearch(row, mode) {
 
     try {
       // For keyword search, we send the same query for title/author context to the backend
-      const data = await fetchPolarisSearch(row, mode, query, { title: query, author: '' });
-      renderPolarisSearchResults(row, mode, data);
+      const data = await fetchPolarisSearch(row, mode, query, { title: query, author: mode === 'author' ? query : '' });
+      renderPolarisSearchResults(row, mode, data, options);
     } catch (err) {
       els.status.className = 'alert alert-danger py-2 px-3 small';
       els.status.textContent = 'Error: ' + err.message;
@@ -525,7 +565,7 @@ export async function openPolarisSearch(row, mode) {
   els.title.textContent = 'Search Polaris';
   els.summary.innerHTML = `
     <div class="mb-1">This searches Polaris across keyword fields using the text below.</div>
-    <div class="text-muted small">Started from ${mode === 'author' ? 'author' : 'title'}: "${mode === 'author' ? (originalAuthor || 'Unknown') : (originalTitle || 'Unknown')}"</div>
+    <div class="text-muted small">Started from ${polarisSearchModeLabel(mode)}: "${els.searchInput.value || 'Unknown'}"</div>
   `;
   
   // Only show "Add author" if we started from title and have an author available
@@ -563,6 +603,22 @@ export async function openPolarisSearch(row, mode) {
     }
   });
 
+  const returnDialog = options.returnDialog || null;
+  const returnFocus = options.returnFocus || null;
+  let shouldReturnDialog = !!(returnDialog && returnDialog.open);
+  if (shouldReturnDialog) {
+    returnDialog.close();
+    const reopenReturnDialog = () => {
+      if (shouldReturnDialog && returnDialog && !returnDialog.open) {
+        returnDialog.showModal();
+        if (returnFocus && typeof returnFocus.focus === 'function') {
+          returnFocus.focus();
+        }
+      }
+    };
+    els.dialog.addEventListener('close', reopenReturnDialog, { once: true });
+  }
+
   if (!els.dialog.open) {
     els.dialog.showModal();
   }
@@ -575,8 +631,55 @@ function closePolarisSearchDialog() {
   if (dialog) dialog.close();
 }
 
+function currentEditPolarisSearchRow() {
+  const id = document.getElementById('edit-id')?.value || '';
+  const existing = currentSuggestions.find(r => r.id === id) || allSuggestions.find(r => r.id === id) || {};
+  const title = document.getElementById('edit-title')?.value || '';
+  const author = document.getElementById('edit-author')?.value || '';
+  const identifier = document.getElementById('edit-identifier')?.value || '';
+  return Object.assign({}, existing, {
+    id: id || existing.id || '',
+    title,
+    author,
+    identifier,
+    polarisSearchTitle: fallbackPolarisSearchValue(title),
+    polarisSearchAuthor: fallbackPolarisSearchValue(author)
+  });
+}
+
+function editPolarisSearchInputForMode(mode) {
+  if (mode === 'author') return document.getElementById('edit-author');
+  if (mode === 'identifier') return document.getElementById('edit-identifier');
+  return document.getElementById('edit-title');
+}
+
+function launchEditPolarisSearch(mode, button) {
+  const input = editPolarisSearchInputForMode(mode);
+  const row = currentEditPolarisSearchRow();
+  const query = mode === 'identifier'
+    ? String(input?.value || '').trim()
+    : polarisSearchValueForRow(row, mode);
+  if (!query) {
+    showToast('Enter text before searching Polaris.', 'warning');
+    if (input) input.focus();
+    return;
+  }
+  openPolarisSearch(row, mode, {
+    source: 'edit',
+    query,
+    title: polarisSearchValueForRow(row, 'title'),
+    author: polarisSearchValueForRow(row, 'author'),
+    identifier: document.getElementById('edit-identifier')?.value || '',
+    returnDialog: document.getElementById('editModal'),
+    returnFocus: button || input
+  });
+}
+
 document.getElementById('close-polaris-search-x')?.addEventListener('click', closePolarisSearchDialog);
 document.getElementById('close-polaris-search-btn')?.addEventListener('click', closePolarisSearchDialog);
+document.getElementById('edit-title-polaris-search')?.addEventListener('click', (e) => launchEditPolarisSearch('title', e.currentTarget));
+document.getElementById('edit-author-polaris-search')?.addEventListener('click', (e) => launchEditPolarisSearch('author', e.currentTarget));
+document.getElementById('edit-identifier-polaris-search')?.addEventListener('click', (e) => launchEditPolarisSearch('identifier', e.currentTarget));
 
 document.getElementById('edit-form').addEventListener('submit', async (e) => {
   e.preventDefault();

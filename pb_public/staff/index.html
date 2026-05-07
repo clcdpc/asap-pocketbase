@@ -1137,18 +1137,39 @@
 
       <div class="form-group mb-2">
         <label class="small font-weight-bold mb-1">Title (original)</label>
-        <input type="text" id="edit-title" class="form-control form-control-sm">
+        <div class="field-with-action">
+          <input type="text" id="edit-title" class="form-control form-control-sm field-with-action__input">
+          <button type="button" id="edit-title-polaris-search" class="polaris-row-search field-with-action__button"
+            title="Search Polaris using this title text"
+            aria-label="Search Polaris using this title text">
+            <i class="fa fa-search" aria-hidden="true"></i>
+          </button>
+        </div>
         <div id="edit-external-search-container" class="mt-1 d-flex flex-wrap"></div>
       </div>
 
       <div class="form-row">
         <div class="form-group col-6 mb-2">
           <label class="small font-weight-bold mb-1">Author (original)</label>
-          <input type="text" id="edit-author" class="form-control form-control-sm">
+          <div class="field-with-action">
+            <input type="text" id="edit-author" class="form-control form-control-sm field-with-action__input">
+            <button type="button" id="edit-author-polaris-search" class="polaris-row-search field-with-action__button"
+              title="Search Polaris using this author text"
+              aria-label="Search Polaris using this author text">
+              <i class="fa fa-search" aria-hidden="true"></i>
+            </button>
+          </div>
         </div>
         <div class="form-group col-6 mb-2">
           <label class="small font-weight-bold mb-1">Identifier number</label>
-          <input type="text" id="edit-identifier" class="form-control form-control-sm">
+          <div class="field-with-action">
+            <input type="text" id="edit-identifier" class="form-control form-control-sm field-with-action__input">
+            <button type="button" id="edit-identifier-polaris-search" class="polaris-row-search field-with-action__button"
+              title="Search Polaris using this identifier"
+              aria-label="Search Polaris using this identifier">
+              <i class="fa fa-search" aria-hidden="true"></i>
+            </button>
+          </div>
         </div>
       </div>
 
