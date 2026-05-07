@@ -26,7 +26,6 @@ migrate((app) => {
     
     app.save(workflowSettings);
   } catch (err) {
-    console.log("Error adding fields to workflow_settings: " + err);
   }
 
   // Migrate existing data and set defaults
@@ -59,7 +58,6 @@ migrate((app) => {
     workflowSettings.fields.removeByName("externalSearchUrlTemplate");
     app.save(workflowSettings);
   } catch (err) {
-    console.log("Error removing old fields from workflow_settings: " + err);
   }
 
 }, (app) => {
