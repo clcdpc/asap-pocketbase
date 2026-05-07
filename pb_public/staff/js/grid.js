@@ -711,33 +711,30 @@ export function renderPolarisRowSearchButton(row, mode) {
 }
 
 export function renderTitleCell(row) {
-  const title = row.title || '';
-  const badges = getDuplicateBadgesHtml(row) + getIsbnCheckBadgesHtml(row);
   return gridjs.html(`
-    <div class="staff-title-cell">
-      ${rowMarker(row)}
-      <div class="staff-field-with-action">
-        <div
-          class="staff-title-main"
-          tabindex="0"
-          title="${escapeAttr(title)}"
-          aria-label="Full title: ${escapeAttr(title)}"
-        >
-          ${escapeAttr(title)}${badges}
-        </div>
+    <div class="staff-title-cell searchable-cell">
+      <div class="searchable-cell-text">
+        <div class="staff-title-main" title="${escapeAttr(row.title || '')}">${escapeAttr(row.title || '')}</div>
+        ${renderWorkflowTags(row.workflowTags, row)}
+      </div>
+      <div class="searchable-cell-action">
         ${renderPolarisRowSearchButton(row, 'title')}
       </div>
-      ${renderWorkflowTags(row.workflowTags, row)}
     </div>
   `);
 }
 
 export function renderAuthorCell(row) {
-  const author = row.author || '';
+  const author = (row.author || '').trim();
+  if (!author) return '';
   return gridjs.html(`
-    <div class="staff-author-cell">
-      <span class="staff-author-text" title="${escapeAttr(author)}">${escapeAttr(author)}</span>
-      ${renderPolarisRowSearchButton(row, 'author')}
+    <div class="searchable-cell">
+      <div class="searchable-cell-text" title="${escapeAttr(author)}">
+        <span class="staff-author-text">${escapeAttr(author)}</span>
+      </div>
+      <div class="searchable-cell-action">
+        ${renderPolarisRowSearchButton(row, 'author')}
+      </div>
     </div>
   `);
 }

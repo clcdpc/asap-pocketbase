@@ -367,6 +367,7 @@ body {
 }
 
 #grid-container .gridjs-td:has(.staff-title-cell),
+#grid-container .gridjs-td:has(.searchable-cell),
 #grid-container .gridjs-td:has(.workflow-tag-list),
 #grid-container .gridjs-td:has(.claim-badge),
 #grid-container .gridjs-td:has(.barcode-cell) {
@@ -1154,21 +1155,34 @@ code {
   font-weight: 800;
 }
 
+.searchable-cell {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  min-width: 0;
+  width: 100%;
+}
+
+.searchable-cell-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.searchable-cell-action {
+  align-items: flex-start;
+  display: flex;
+  flex: 0 0 28px;
+  justify-content: center;
+  margin-top: 2px;
+}
+
 .staff-title-cell {
   max-width: 520px;
 }
 
-.staff-field-with-action,
-.staff-author-cell {
-  align-items: center;
-  display: flex;
-  gap: 4px;
-  min-width: 0;
-}
-
-.staff-field-with-action .staff-title-main,
+.staff-title-main,
 .staff-author-text {
-  flex: 1;
+  display: block;
   min-width: 0;
 }
 
@@ -1177,9 +1191,9 @@ code {
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  line-height: 1.35;
+  line-height: 1.4;
   border-radius: 4px;
-  padding: 4px 0;
+  padding: 2px 0; /* Reduced padding to help alignment */
   margin: 0;
 }
 
@@ -1191,13 +1205,12 @@ code {
   color: #007bff;
   cursor: pointer;
   display: inline-flex;
-  height: 32px;
+  flex-shrink: 0;
+  height: 28px;
   justify-content: center;
-  margin-left: 2px;
   padding: 0;
   transition: background-color 0.15s, color 0.15s;
-  width: 32px;
-  flex-shrink: 0;
+  width: 28px;
 }
 
 .polaris-row-search:hover,
@@ -1230,27 +1243,8 @@ code {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
-  line-height: 1.25;
+  line-height: 1.4;
   overflow: hidden;
-}
-
-.polaris-row-search {
-  color: #007bff;
-  flex-shrink: 0;
-  font-size: 0.95rem;
-  opacity: 0.55;
-  transition: opacity 0.2s, transform 0.1s;
-}
-
-.polaris-row-search:hover {
-  color: #0056b3;
-  opacity: 1;
-  text-decoration: none;
-  transform: scale(1.1);
-}
-
-.polaris-row-search:active {
-  transform: scale(0.95);
 }
 
 .asap-dialog-polaris-search {
