@@ -180,6 +180,77 @@ try {
   failed++;
 }
 
+// Test 6: patron name search builds protected PATNF query and normalizes rows
+try {
+  httpSendResult = {
+    statusCode: 200,
+    json: {
+      TotalRecordsFound: 2,
+      PatronSearchRows: {
+        PatronSearchRow: [
+          {
+            PatronID: "p1",
+            Barcode: "29000000000001",
+            NameFirst: "Jane",
+            NameLast: "Smith",
+            OrganizationName: "Main Library"
+          },
+          {
+            PatronID: "p2",
+            Barcode: "29000000000002",
+            PatronFirstLastName: "Jane Smythe",
+            OrganizationName: "Branch Library"
+          }
+        ]
+      }
+    }
+  };
+
+  const staff = { AccessToken: "mock_token", AccessSecret: "mock_secret" };
+  const result = polaris.searchPatrons(staff, { query: "Jane Smith", limit: 10 });
+
+  assert.strictEqual(result.status, "found");
+  assert.strictEqual(result.totalMatches, 2);
+  assert.strictEqual(result.results.length, 2);
+  assert.strictEqual(result.results[0].barcode, "29000000000001");
+  assert.strictEqual(result.results[0].name, "Jane Smith");
+  assert.strictEqual(result.results[1].name, "Jane Smythe");
+  assert.strictEqual(httpSendArgs.method, "GET");
+  assert.ok(httpSendArgs.url.includes("/protected/v1/"));
+  assert.ok(httpSendArgs.url.includes("/mock_token/search/patrons/boolean"));
+  assert.ok(httpSendArgs.url.includes("q=PATNF%3D%22Jane%20Smith%22"));
+  assert.ok(httpSendArgs.url.includes("sortby=PATNF"));
+  assert.ok(httpSendArgs.url.includes("patronsperpage=10"));
+  assert.strictEqual(httpSendArgs.headers["X-PAPI-AccessToken"], "mock_token");
+
+  console.log('✅ Test case 6 (patron name search) passed');
+  passed++;
+} catch (err) {
+  console.error('❌ Test case 6 failed:', err.stack);
+  failed++;
+}
+
+// Test 7: patron name search maps Polaris no-results code to not_found
+try {
+  httpSendResult = {
+    statusCode: 200,
+    json: {
+      PAPIErrorCode: -1,
+      ErrorMessage: "No records found"
+    }
+  };
+
+  const result = polaris.searchPatrons({ AccessToken: "mock_token", AccessSecret: "mock_secret" }, { query: "No One" });
+  assert.strictEqual(result.status, "not_found");
+  assert.strictEqual(result.results.length, 0);
+
+  console.log('✅ Test case 7 (patron search not found) passed');
+  passed++;
+} catch (err) {
+  console.error('❌ Test case 7 failed:', err.stack);
+  failed++;
+}
+
 console.log(`\nTests finished: ${passed} passed, ${failed} failed.`);
 
 if (failed > 0) {

@@ -20,6 +20,12 @@ document.getElementById('close-new-modal-x').addEventListener('click', () => {
 document.getElementById('close-new-modal-btn').addEventListener('click', () => {
   document.getElementById('newSuggestionModal').close();
 });
+document.getElementById('close-patron-search-x').addEventListener('click', () => {
+  document.getElementById('patronSearchDialog').close();
+});
+document.getElementById('close-patron-search-btn').addEventListener('click', () => {
+  document.getElementById('patronSearchDialog').close();
+});
 
 document.getElementById('new-barcode').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
@@ -29,21 +35,21 @@ document.getElementById('new-barcode').addEventListener('keydown', (e) => {
 });
 
 document.getElementById('new-barcode').addEventListener('input', () => {
-  const barcode = document.getElementById('new-barcode').value.trim();
-  if (verifiedNewSuggestionBarcode && barcode !== verifiedNewSuggestionBarcode) {
+  const patronQuery = document.getElementById('new-barcode').value.trim();
+  if (verifiedNewSuggestionBarcode && patronQuery !== verifiedNewSuggestionBarcode) {
     resetStaffPatronLookup();
-    showLookupResult('Barcode changed. Look up the patron again before entering suggestion details.', 'warning');
+    showLookupResult('Patron lookup changed. Look up the patron again before entering suggestion details.', 'warning');
   }
 });
 
 document.getElementById('btn-lookup-patron').addEventListener('click', async () => {
-  const barcode = document.getElementById('new-barcode').value.trim();
+  const patronQuery = document.getElementById('new-barcode').value.trim();
   const btn = document.getElementById('btn-lookup-patron');
   clearNewSuggestionError();
   resetStaffPatronLookup();
 
-  if (!barcode) {
-    showLookupResult('Enter a patron barcode before lookup.', 'danger');
+  if (!patronQuery) {
+    showLookupResult('Enter a patron barcode or name before lookup.', 'danger');
     document.getElementById('new-barcode').focus();
     return;
   }
@@ -57,21 +63,21 @@ document.getElementById('btn-lookup-patron').addEventListener('click', async () 
         'Content-Type': 'application/json',
         'Authorization': pb.authStore.token
       },
-      body: JSON.stringify({ barcode })
+      body: JSON.stringify({ query: patronQuery })
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(data.message || 'Invalid patron barcode');
+      throw new Error(data.message || 'No patron found. Try barcode, or first name then last name.');
     }
 
-    setVerifiedNewSuggestionBarcode(String(data.barcode || barcode).trim());
-    setNewSuggestionDetailsEnabled(true);
-    const emailStr = data.email ? ` | Email: ${data.email}` : ' | No email on file';
-    const libraryStr = data.libraryOrgName ? ` | Library: ${data.libraryOrgName}` : '';
-    showLookupResult('Patron verified: ' + patronLookupName(data) + ' (' + verifiedNewSuggestionBarcode + ')' + emailStr + libraryStr, 'success');
-    document.getElementById('new-title').focus();
+    if (data.status === 'multiple' && Array.isArray(data.results)) {
+      openPatronSearchDialog(patronQuery, data.results);
+      return;
+    }
+
+    applySelectedPatron(data);
   } catch (err) {
-    showLookupResult(err.message || 'Invalid patron barcode', 'danger');
+    showLookupResult(err.message || 'No patron found. Try barcode, or first name then last name.', 'danger');
     document.getElementById('new-barcode').focus();
   } finally {
     btn.disabled = false;
@@ -83,7 +89,7 @@ document.getElementById('new-suggestion-form').addEventListener('submit', async 
   e.preventDefault();
   const barcode = document.getElementById('new-barcode').value.trim();
   if (!verifiedNewSuggestionBarcode || barcode !== verifiedNewSuggestionBarcode) {
-    showNewSuggestionError('Look up and verify the patron barcode before submitting a suggestion.');
+    showNewSuggestionError('Look up and verify the patron before submitting a suggestion.');
     document.getElementById('new-barcode').focus();
     return;
   }
@@ -131,6 +137,73 @@ document.getElementById('new-suggestion-form').addEventListener('submit', async 
     btn.textContent = 'Submit';
   }
 });
+
+function applySelectedPatron(data) {
+  const barcode = String(data.barcode || '').trim();
+  if (!barcode) {
+    showLookupResult('Could not verify selected patron.', 'danger');
+    document.getElementById('new-barcode').focus();
+    return;
+  }
+
+  setVerifiedNewSuggestionBarcode(barcode);
+  document.getElementById('new-barcode').value = barcode;
+  setNewSuggestionDetailsEnabled(true);
+
+  const emailStr = data.email ? ` | Email: ${data.email}` : ' | No email on file';
+  const libraryStr = data.libraryOrgName ? ` | Library: ${data.libraryOrgName}` : '';
+  showLookupResult('Patron verified: ' + patronLookupName(data) + ' (' + barcode + ')' + emailStr + libraryStr, 'success');
+  document.getElementById('new-title').focus();
+}
+
+function patronSearchElements() {
+  return {
+    dialog: document.getElementById('patronSearchDialog'),
+    summary: document.getElementById('patron-search-summary'),
+    status: document.getElementById('patron-search-status'),
+    results: document.getElementById('patron-search-results')
+  };
+}
+
+function openPatronSearchDialog(query, results) {
+  const els = patronSearchElements();
+  if (!els.dialog) return;
+
+  els.summary.textContent = `Multiple patrons matched "${query}". Choose the correct patron.`;
+  els.status.className = 'alert alert-light border py-2 px-3 small';
+  els.status.textContent = `${results.length} result${results.length === 1 ? '' : 's'} shown.`;
+
+  els.results.innerHTML = results.map((result, index) => {
+    const name = patronLookupName(result) || result.name || 'Patron';
+    const barcode = result.barcode || '';
+    const library = result.libraryOrgName || 'Library not returned';
+    return `
+      <div class="polaris-search-result">
+        <div class="polaris-search-result-title">${escapeAttr(name)}</div>
+        <div class="polaris-search-result-meta">Barcode: ${escapeAttr(barcode)} | Library: ${escapeAttr(library)}</div>
+        <div class="polaris-search-result-actions">
+          <button type="button" class="btn btn-sm btn-primary patron-search-select" data-result-index="${escapeAttr(String(index))}">
+            Use this patron
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  els.results.querySelectorAll('.patron-search-select').forEach(button => {
+    button.addEventListener('click', () => {
+      const index = parseInt(button.getAttribute('data-result-index') || '-1', 10);
+      const result = results[index];
+      if (!result || !result.barcode) return;
+      els.dialog.close();
+      applySelectedPatron(result);
+    });
+  });
+
+  if (!els.dialog.open) {
+    els.dialog.showModal();
+  }
+}
 
 export function resetStaffPatronLookup() {
   setVerifiedNewSuggestionBarcode('');

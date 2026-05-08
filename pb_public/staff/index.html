@@ -1289,6 +1289,24 @@
   </div>
 </dialog>
 
+<!-- Patron search dialog -->
+<dialog id="patronSearchDialog" class="asap-dialog">
+  <div class="asap-dialog-header">
+    <h5 class="asap-dialog-title" id="patron-search-title">Select patron</h5>
+    <button type="button" id="close-patron-search-x"
+      class="asap-dialog-close"
+      aria-label="Close patron search dialog">&times;</button>
+  </div>
+  <div class="asap-dialog-body">
+    <div id="patron-search-summary" class="text-muted small mb-3"></div>
+    <div id="patron-search-status" class="alert alert-light border py-2 px-3 small" role="status" aria-live="polite"></div>
+    <div id="patron-search-results" class="polaris-search-results"></div>
+  </div>
+  <div class="asap-dialog-edit-footer">
+    <button type="button" id="close-patron-search-btn" class="btn btn-sm btn-secondary">Cancel</button>
+  </div>
+</dialog>
+
 <!-- New suggestion dialog -->
 <dialog id="newSuggestionModal" class="asap-dialog asap-dialog-new">
   <form id="new-suggestion-form">
@@ -1302,14 +1320,14 @@
       <p>Submit a suggestion on behalf of a patron.</p>
 
       <div class="form-group">
-        <label>Patron barcode *</label>
+        <label>Patron barcode or name *</label>
         <div class="input-group">
           <input type="text" id="new-barcode" class="form-control" required>
           <div class="input-group-append">
             <button type="button" id="btn-lookup-patron" class="btn btn-outline-primary">Lookup patron</button>
           </div>
         </div>
-        <small class="form-text text-muted">Look up the patron before entering suggestion details.</small>
+        <small class="form-text text-muted">Enter barcode, or enter first name then last name.</small>
         <div id="new-lookup-result" class="mt-2 hidden" aria-live="polite"></div>
       </div>
 
