@@ -487,6 +487,7 @@ export function checkAuth() {
     setVisible('nav-settings', isAdmin);
     showBootstrapAdminMessage();
     loadEmailStatus();
+    applyProfileClaimFilterDefault();
 
     const requestedSettingsSection = getSettingsSectionFromHash();
     if (requestedSettingsSection) {
@@ -731,10 +732,34 @@ if (setupTestPolarisBtn) {
 logoutBtn.addEventListener('click', (e) => {
   e.preventDefault();
   pb.authStore.clear();
+  clearAppliedProfileClaimFilterDefault();
+  setCurrentClaimFilter('all');
   document.getElementById('login-form').reset();
   document.getElementById('login-password').value = '';
   checkAuth();
 });
+
+let appliedProfileClaimFilterDefaultForStaffId = '';
+
+function profileDefaultClaimFilter(model = pb.authStore.model) {
+  return model && model.default_mine_unclaimed_filter ? 'mine_unclaimed' : 'all';
+}
+
+function applyProfileClaimFilterDefault(options = {}) {
+  const model = pb.authStore.model || {};
+  const staffId = String(model.id || '').trim();
+  if (!staffId) return;
+  if (!options.force && appliedProfileClaimFilterDefaultForStaffId === staffId) return;
+  setCurrentClaimFilter(profileDefaultClaimFilter(model));
+  if (claimFilterSelect) {
+    claimFilterSelect.value = profileDefaultClaimFilter(model);
+  }
+  appliedProfileClaimFilterDefaultForStaffId = staffId;
+}
+
+function clearAppliedProfileClaimFilterDefault() {
+  appliedProfileClaimFilterDefaultForStaffId = '';
+}
 
 export function openProfileDialog() {
   closeOpenDialogs();
@@ -747,6 +772,7 @@ export function openProfileDialog() {
   }
   setFieldChecked('profile-weekly-action-summary', !!(pb.authStore.model && pb.authStore.model.weekly_action_summary_enabled));
   setFieldChecked('profile-purchase-reminder-default', !!(pb.authStore.model && pb.authStore.model.purchase_reminder_default));
+  setFieldChecked('profile-default-mine-unclaimed-filter', !!(pb.authStore.model && pb.authStore.model.default_mine_unclaimed_filter));
   setFieldValue('profile-weekly-action-summary-email', (pb.authStore.model && pb.authStore.model.weekly_action_summary_email) || '');
   dialog.showModal();
 }
@@ -780,6 +806,7 @@ if (profileForm) {
     try {
       const summaryEnabled = getFieldChecked('profile-weekly-action-summary');
       const reminderDefault = getFieldChecked('profile-purchase-reminder-default');
+      const mineUnclaimedDefault = getFieldChecked('profile-default-mine-unclaimed-filter');
       const email = getFieldValue('profile-weekly-action-summary-email').trim();
       if (summaryEnabled && !email) {
         throw new Error('Enter a staff email address before enabling the weekly summary.');
@@ -789,22 +816,27 @@ if (profileForm) {
         body: JSON.stringify({
           weekly_action_summary_enabled: summaryEnabled,
           purchase_reminder_default: reminderDefault,
+          default_mine_unclaimed_filter: mineUnclaimedDefault,
           weekly_action_summary_email: email
         })
       });
       pb.authStore.save(pb.authStore.token, Object.assign({}, pb.authStore.model || {}, updated));
+      applyProfileClaimFilterDefault({ force: true });
+      if (!['settings', 'analytics'].includes(currentStatus)) {
+        renderCurrentGrid(currentStatus);
+      }
       if (msg) {
-        msg.textContent = 'Profile email preference saved.';
+        msg.textContent = 'Profile preferences saved.';
         msg.className = 'mb-3 font-weight-bold text-success';
       }
-      showToast('Profile email preference saved.', 'success');
+      showToast('Profile preferences saved.', 'success');
       setTimeout(() => {
         const dialog = document.getElementById('profile-dialog');
         if (dialog && dialog.open) dialog.close();
       }, 700);
     } catch (err) {
       if (msg) {
-        msg.textContent = err.message || 'Could not save your profile email preference. Please try again.';
+        msg.textContent = err.message || 'Could not save your profile preferences. Please try again.';
         msg.className = 'mb-3 font-weight-bold text-danger';
       }
     } finally {
@@ -819,7 +851,6 @@ document.querySelectorAll('#status-tabs .nav-link').forEach(link => {
     activateStatusTab(nextStatus);
     updateStageQuery(nextStatus);
     setActiveTagFilter('');
-    setCurrentClaimFilter('all');
     if (gridSearchInput) gridSearchInput.value = '';
     loadTab(currentStatus);
   });

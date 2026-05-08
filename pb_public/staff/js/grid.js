@@ -431,6 +431,12 @@ export function applyClaimFilter(records, filter = currentClaimFilter, staffId =
   if (filter === 'unclaimed') {
     return (records || []).filter(record => isUnclaimed(record));
   }
+  if (filter === 'mine_unclaimed') {
+    return (records || []).filter(record => {
+      const claimedBy = String(record.claimedByStaffUserId || '').trim();
+      return !claimedBy || (!!staffId && claimedBy === staffId);
+    });
+  }
   return records || [];
 }
 
@@ -477,6 +483,9 @@ function emptyFilteredGridMessage() {
   }
   if (currentClaimFilter === 'unclaimed') {
     return 'No unclaimed requests in this stage.';
+  }
+  if (currentClaimFilter === 'mine_unclaimed') {
+    return 'No requests in this stage are claimed by you or unclaimed.';
   }
   return 'No suggestions found.';
 }

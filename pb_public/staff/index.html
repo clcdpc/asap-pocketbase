@@ -172,6 +172,7 @@
       <label for="claim-filter" class="sr-only">Filter by claim state</label>
       <select id="claim-filter" class="form-control form-control-sm hidden" aria-label="Filter by claim state">
         <option value="all">All requests</option>
+        <option value="mine_unclaimed">Mine + unclaimed</option>
         <option value="mine">Mine</option>
         <option value="unclaimed">Unclaimed</option>
       </select>
@@ -1426,6 +1427,10 @@
     <div class="custom-control custom-checkbox mb-2">
       <input type="checkbox" class="custom-control-input" id="profile-purchase-reminder-default">
       <label class="custom-control-label font-weight-bold" for="profile-purchase-reminder-default">Default to sending purchase reminders to myself</label>
+    </div>
+    <div class="custom-control custom-checkbox mb-2">
+      <input type="checkbox" class="custom-control-input" id="profile-default-mine-unclaimed-filter">
+      <label class="custom-control-label font-weight-bold" for="profile-default-mine-unclaimed-filter">Default request filter to mine + unclaimed</label>
     </div>
     <div class="form-group mb-2">
       <label for="profile-weekly-action-summary-email" class="font-weight-bold">Staff email address</label>

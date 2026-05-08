@@ -48,7 +48,7 @@ export let activeTagFilter = '';
 export function setActiveTagFilter(filter) { activeTagFilter = filter; }
 
 export let currentClaimFilter = 'all';
-export function setCurrentClaimFilter(filter) { currentClaimFilter = ['mine', 'unclaimed'].includes(filter) ? filter : 'all'; }
+export function setCurrentClaimFilter(filter) { currentClaimFilter = ['mine', 'unclaimed', 'mine_unclaimed'].includes(filter) ? filter : 'all'; }
 
 export let currentWorkflowOrgScopeId = 'all';
 export function setCurrentWorkflowOrgScopeId(scopeId) { currentWorkflowOrgScopeId = String(scopeId || 'all').trim() || 'all'; }

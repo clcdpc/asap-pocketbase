@@ -166,6 +166,7 @@ migrate((app) => {
       field("scope", "select", { maxSelect: 1, values: ["library", "system"] }),
       field("lastOrgSync", "date"),
       field("weekly_action_summary_enabled", "bool"),
+      field("default_mine_unclaimed_filter", "bool"),
       field("weekly_action_summary_email", "email"),
     ],
     indexes: [
