@@ -169,10 +169,12 @@
       </div>
       <label for="tag-filter" class="sr-only">Filter by workflow flag</label>
       <select id="tag-filter" class="form-control form-control-sm hidden" aria-label="Filter by workflow flag"></select>
-      <label class="similar-request-filter-control">
-        <input type="checkbox" id="similar-request-filter" aria-label="Show only records with similar requests elsewhere">
-        <span>Similar request elsewhere</span>
-      </label>
+      <label for="similar-request-filter" class="sr-only">Filter by similar request presence</label>
+      <select id="similar-request-filter" class="form-control form-control-sm" aria-label="Filter by similar request presence">
+        <option value="all">All requests</option>
+        <option value="similar">Similar requests</option>
+        <option value="unique">Unique requests</option>
+      </select>
       <label for="claim-filter" class="sr-only">Filter by claim state</label>
       <select id="claim-filter" class="form-control form-control-sm hidden" aria-label="Filter by claim state">
         <option value="all">All requests</option>
