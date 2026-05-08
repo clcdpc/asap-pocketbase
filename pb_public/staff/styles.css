@@ -1036,24 +1036,6 @@ code {
   width: 80px;
 }
 
-.asap-duplicate-badge {
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  cursor: pointer;
-  transition: opacity 0.15s ease-in-out;
-  padding: 0.15rem 0.45rem;
-  border-radius: 0.35rem;
-  font-size: 0.75rem;
-  vertical-align: middle;
-}
-.asap-duplicate-badge:hover {
-  opacity: 0.85;
-}
-.asap-duplicate-badge.active {
-  border-color: #000;
-  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #6c757d;
-  font-weight: 800;
-}
-
 .edit-modal-tags {
   margin: 0 0 1rem;
 }
@@ -1065,94 +1047,129 @@ code {
   max-width: 100%;
 }
 
-.workflow-tag {
-  align-items: center;
-  border: 1px solid rgba(0, 0, 0, 0.16);
-  border-radius: 0.35rem;
-  display: inline-flex;
-  font-size: 0.75rem;
-  font-weight: 600;
-  gap: 0.2rem;
-  line-height: 1.2;
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  padding: 0.15rem 0.45rem;
-  white-space: normal;
-  cursor: pointer;
-  transition: background-color 0.15s ease-in-out, opacity 0.15s ease-in-out;
+.duplicate-summary {
+  margin-bottom: 0.35rem;
 }
-.workflow-tag:hover {
+
+.duplicate-summary-btn {
+  align-items: center;
+  background: #fff3cd;
+  border: 1px solid #ffda6a;
+  border-radius: 0.45rem;
+  color: #664d03;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 700;
+  gap: 0.35rem;
+  line-height: 1.2;
+  padding: 0.22rem 0.45rem;
+  text-align: left;
+}
+
+.duplicate-summary-btn:focus {
+  outline: 3px solid rgba(13, 110, 253, 0.35);
+  outline-offset: 2px;
+}
+
+.duplicate-details {
+  background: #fffdf3;
+  border-left: 3px solid #ffda6a;
+  color: #4f3b00;
+  font-size: 0.78rem;
+  margin: 0.25rem 0 0.4rem;
+  padding: 0.35rem 0.5rem;
+}
+
+.duplicate-details ul {
+  margin: 0.2rem 0;
+  padding-left: 1.2rem;
+}
+
+.flag-badge {
+  border-radius: 0.45rem;
+  cursor: pointer;
+  display: inline-block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.2;
+  margin: 0.15rem 0.25rem 0 0;
+  padding: 0.22rem 0.45rem;
+  transition: opacity 0.15s ease-in-out;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.flag-badge:hover {
   opacity: 0.88;
 }
-.workflow-tag.active {
+
+.flag-badge.active {
   font-weight: 800;
 }
 
-.workflow-tag--info {
-  background-color: #0b5ed7;
-  color: #fff;
+.flag-related {
+  background: #f3e8ff;
+  border: 1px solid #c084fc;
+  color: #6b21a8;
 }
 
-.workflow-tag--info.active {
-  background-color: #052c65;
-  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #0b5ed7;
+.flag-related.active {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #c084fc;
 }
 
-.workflow-tag--success {
-  background-color: #19692c;
-  color: #fff;
+.flag-info {
+  background: #e7f0ff;
+  border: 1px solid #6ea8fe;
+  color: #084298;
 }
 
-.workflow-tag--success.active {
-  background-color: #0f401b;
-  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #19692c;
+.flag-info.active {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #6ea8fe;
 }
 
-.workflow-tag--warning {
-  background-color: #b76e00;
-  color: #fff;
+.flag-warning {
+  background: #fff3cd;
+  border: 1px solid #ffda6a;
+  color: #664d03;
 }
 
-.workflow-tag--warning.active {
-  background-color: #704300;
-  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #b76e00;
+.flag-warning.active {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #ffda6a;
 }
 
-.workflow-tag--error {
-  background-color: #b02a37;
-  border-color: #8f1f2a;
-  color: #fff;
-  font-weight: 700;
+.flag-success {
+  background: #d1e7dd;
+  border: 1px solid #75b798;
+  color: #0f5132;
 }
 
-.workflow-tag--error.active {
-  background-color: #7a1620;
-  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #b02a37;
+.flag-success.active {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #75b798;
+}
+
+.flag-muted {
+  background: #f1f3f5;
+  border: 1px solid #ced4da;
+  color: #495057;
+}
+
+.flag-muted.active {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #ced4da;
+}
+
+.flag-error {
+  background: #f8d7da;
+  border: 1px solid #ea868f;
+  color: #842029;
+}
+
+.flag-error.active {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #ea868f;
 }
 
 .asap-polaris-tag {
-  border-color: rgba(255, 255, 255, 0.75);
   border-style: dashed;
-}
-
-.asap-isbn-check-badge {
-  background-color: #17a2b8;
-  border: 1px solid rgba(0, 0, 0, 0.16);
-  color: #fff;
-  cursor: pointer;
-  transition: background-color 0.15s ease-in-out;
-  padding: 0.15rem 0.45rem;
-  border-radius: 0.35rem;
-  font-size: 0.75rem;
-  vertical-align: middle;
-}
-.asap-isbn-check-badge:hover {
-  background-color: #138496;
-}
-.asap-isbn-check-badge.active {
-  background-color: #117a8b;
-  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #17a2b8;
-  font-weight: 800;
 }
 
 .searchable-cell {

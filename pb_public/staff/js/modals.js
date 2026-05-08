@@ -247,7 +247,7 @@ export function renderEditWorkflowTags(tags, row) {
   const container = document.getElementById('edit-workflow-tags');
   if (!container) return;
   container.innerHTML = `
-    <div class="small font-weight-bold mb-1">Workflow tags</div>
+    <div class="small font-weight-bold mb-1">Workflow flags</div>
     ${renderWorkflowTags(tags, row)}
   `;
 }

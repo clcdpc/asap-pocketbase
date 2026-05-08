@@ -1,4 +1,4 @@
-import { pb, gridContainer, staffGridFilterBar, tagFilterSelect, claimFilterSelect, settingsContainer, grid, formatMap, ageMap, closeReasonMap, descriptions, emptyStateMessages, statusStages, currentStatus, currentSuggestions, activeTagFilter, currentClaimFilter, currentWorkflowOrgScopeId, allSuggestions, workflowSettings, currentSettingsSection, activeActionMenu, rowActionIdCounter, rowActionRegistry, setCurrentSuggestions, setActiveTagFilter, setCurrentClaimFilter, setCurrentWorkflowOrgScopeId, setActiveActionMenu, setGrid, setAllSuggestions, incrementRowActionIdCounter } from './state.js';
+import { pb, gridContainer, staffGridFilterBar, tagFilterSelect, claimFilterSelect, settingsContainer, grid, formatMap, ageMap, closeReasonMap, descriptions, emptyStateMessages, statusStages, currentStatus, currentSuggestions, activeTagFilter, currentClaimFilter, currentWorkflowOrgScopeId, allSuggestions, workflowSettings, currentSettingsSection, activeActionMenu, rowActionIdCounter, rowActionRegistry, setCurrentStatus, setCurrentSuggestions, setActiveTagFilter, setCurrentClaimFilter, setCurrentWorkflowOrgScopeId, setActiveActionMenu, setGrid, setAllSuggestions, incrementRowActionIdCounter } from './state.js';
 import { openEdit, openPolarisSearch, polarisSearchValueForRow, renderPolarisSearchButtonMarkup } from './modals.js';
 import { openNewSuggestionForPatron } from './patron.js';
 import { undoRow, deleteClosedRequest, closeDuplicateRequest } from './actions.js';
@@ -7,6 +7,7 @@ import { showSettingsAccessDenied, hideSettingsAccessDenied, loadSettings } from
 import { loadAnalytics } from './analytics.js';
 
 export async function loadTab(status) {
+  syncStatusTab(status);
   renderTabDescription(status);
   clearJobMessage();
   updateAdminActions(status);
@@ -42,6 +43,17 @@ export async function loadTab(status) {
   }
 
   announceTabLoaded(status);
+}
+
+function syncStatusTab(status) {
+  setCurrentStatus(status);
+  document.querySelectorAll('#status-tabs .nav-link').forEach(link => {
+    const isActive = link.getAttribute('data-status') === status;
+    link.classList.toggle('active', isActive);
+    if (link.hasAttribute('role')) {
+      link.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    }
+  });
 }
 
 function renderTabDescription(status) {
@@ -228,64 +240,161 @@ export function normalizeLabel(label) {
   const clean = String(label || '').trim();
   if (!clean) return '';
   const lower = clean.toLowerCase();
-  if (lower === 'dupe found in polaris' || lower === 'identifier found') {
+  if (lower === 'dupe found in polaris' || lower === 'identifier found' || lower === 'identifier number found') {
     return 'Identifier found';
   }
-  if (lower === 'isbn not found in system' || lower === 'identifier number not found in system') {
+  if (lower === 'isbn not found in system' || lower === 'identifier number not found in system' || lower === 'identifier number not found') {
     return 'Identifier number not found in system';
   }
   return clean;
 }
 
-export function getDuplicateLabels(row) {
-  if (!allSuggestions || !allSuggestions.length) return [];
+const duplicateStatusNames = {
+  suggestion: 'Suggestions',
+  outstanding_purchase: 'Pending purchase',
+  pending_hold: 'Pending hold',
+  hold_placed: 'Hold placed',
+  closed: 'Closed'
+};
 
-  const duplicates = allSuggestions.filter(r => {
+function duplicateMatchReasons(row, candidate) {
+  const reasons = [];
+  if (candidate.identifier && row.identifier && candidate.identifier.trim().toLowerCase() === row.identifier.trim().toLowerCase()) {
+    reasons.push('identifier');
+  }
+  if (candidate.bibid && row.bibid && candidate.bibid.trim().toLowerCase() === row.bibid.trim().toLowerCase()) {
+    reasons.push('BIB ID');
+  }
+  if (candidate.title && row.title && candidate.title.trim().toLowerCase() === row.title.trim().toLowerCase()) {
+    reasons.push('title');
+  }
+  return reasons;
+}
+
+export function getDuplicateSummary(row) {
+  if (!allSuggestions || !allSuggestions.length) return null;
+
+  const matches = allSuggestions.map(r => {
     if (r.id === row.id) return false;
     if (r.libraryOrgId !== row.libraryOrgId) return false;
+    const reasons = duplicateMatchReasons(row, r);
+    return reasons.length ? { row: r, reasons } : null;
+  }).filter(Boolean);
 
-    // Check identifier match if both have one
-    if (r.identifier && row.identifier && r.identifier.trim().toLowerCase() === row.identifier.trim().toLowerCase()) {
-      return true;
-    }
-
-    // Check BibID match
-    if (r.bibid && row.bibid && r.bibid.trim().toLowerCase() === row.bibid.trim().toLowerCase()) {
-      return true;
-    }
-
-    // Check title match
-    if (r.title && row.title && r.title.trim().toLowerCase() === row.title.trim().toLowerCase()) {
-      return true;
-    }
-
-    return false;
-  });
-
-  if (!duplicates.length) return [];
+  if (!matches.length) return null;
 
   // Group by status
   const statusCounts = {};
-  duplicates.forEach(d => {
-    const s = normalizeStatus(d.status);
+  const reasonSet = new Set();
+  matches.forEach(match => {
+    const s = normalizeStatus(match.row.status);
     statusCounts[s] = (statusCounts[s] || 0) + 1;
+    match.reasons.forEach(reason => reasonSet.add(reason));
   });
 
-  const statusNames = {
-    'suggestion': 'Suggestion',
-    'outstanding_purchase': 'Pending purchase',
-    'pending_hold': 'Pending hold',
-    'hold_placed': 'Hold placed',
-    'closed': 'Closed'
+  return {
+    count: matches.length,
+    statusCounts,
+    reasons: Array.from(reasonSet)
   };
+}
+
+export function getDuplicateLabels(row) {
+  const summary = getDuplicateSummary(row);
+  if (!summary) return [];
 
   const labels = [];
-  for (const [status, count] of Object.entries(statusCounts)) {
-    const displayName = statusNames[status] || status;
+  for (const [status, count] of Object.entries(summary.statusCounts)) {
+    const displayName = duplicateStatusNames[status] || status;
     const text = count > 1 ? `Dup (${displayName} x${count})` : `Dup (${displayName})`;
     labels.push(text);
   }
   return labels;
+}
+
+export const flagDisplayMap = {
+  'Dup (Suggestion)': {
+    label: 'Also in Suggestions',
+    className: 'flag-related'
+  },
+  'Duplicate suggestion': {
+    label: 'Also in Suggestions',
+    className: 'flag-related'
+  },
+  'Dup (Closed)': {
+    label: 'Also in Closed',
+    className: 'flag-related'
+  },
+  'Dup (Closed x2)': {
+    label: 'Also in Closed x2',
+    className: 'flag-related'
+  },
+  'Hold exists (same patron)': {
+    label: 'Patron already has hold',
+    className: 'flag-success'
+  },
+  'Hold placed': {
+    label: 'Hold placed',
+    className: 'flag-success'
+  },
+  'Hold failed': {
+    label: 'Hold failed',
+    className: 'flag-error'
+  },
+  '! Hold failed': {
+    label: 'Hold failed',
+    className: 'flag-error'
+  },
+  'Identifier found': {
+    label: 'Identifier present',
+    className: 'flag-info'
+  },
+  'Identifier number found': {
+    label: 'Identifier present',
+    className: 'flag-info'
+  },
+  'Identifier number not found in system': {
+    label: 'Identifier not found in catalog',
+    className: 'flag-warning'
+  },
+  'Identifier number not found': {
+    label: 'Identifier not found in catalog',
+    className: 'flag-warning'
+  },
+  'No hold requested': {
+    label: 'No auto-hold',
+    className: 'flag-muted'
+  }
+};
+
+export function getFlagDisplay(rawFlag) {
+  const raw = String(rawFlag || '').trim();
+  if (flagDisplayMap[raw]) return flagDisplayMap[raw];
+
+  const duplicateMatch = raw.match(/^Dup \((.+)\)$/);
+  if (duplicateMatch) {
+    return {
+      label: `Also in ${duplicateMatch[1].trim()}`,
+      className: 'flag-related'
+    };
+  }
+
+  if (/^!?\s*Hold failed/i.test(raw)) {
+    return {
+      label: 'Hold failed',
+      className: 'flag-error'
+    };
+  }
+
+  return {
+    label: raw,
+    className: 'flag-info'
+  };
+}
+
+function isSimilarRequestFlag(flag) {
+  const raw = String(flag || '').trim();
+  return raw === 'Duplicate suggestion' || /^Dup \(/.test(raw);
 }
 
 export function getIsbnCheckLabel(row) {
@@ -299,11 +408,33 @@ export function getIsbnCheckLabel(row) {
   const label = isbnStatusLabels[status];
   if (!label) return '';
 
-  // Suppress if already in workflow tags
-  if (status === 'found' && hasWorkflowTag(row, 'Identifier found')) return '';
-  if (status === 'not_found' && hasWorkflowTag(row, 'Identifier number not found in system')) return '';
+  // Suppress if the effective workflow flags already include this identifier state.
+  if (status === 'found' && effectiveWorkflowFlagsForRow(row).includes('Identifier found')) return '';
+  if (status === 'not_found' && effectiveWorkflowFlagsForRow(row).includes('Identifier number not found in system')) return '';
 
   return label;
+}
+
+export function effectiveWorkflowFlagsForRow(row, tags = row?.workflowTags) {
+  const clean = cleanWorkflowTags(tags).filter(flag => !isSimilarRequestFlag(flag));
+  const hasIdentifierFound = clean.includes('Identifier found');
+  const hasIdentifierNotFound = clean.includes('Identifier number not found in system');
+
+  if (!hasIdentifierFound && !hasIdentifierNotFound) {
+    return clean;
+  }
+
+  const flags = clean.filter(flag => flag !== 'Identifier found' && flag !== 'Identifier number not found in system');
+  const status = typeof row?.isbnCheckStatus === 'string' ? row.isbnCheckStatus : '';
+  const bibid = String(row?.bibid || '').trim();
+
+  if (bibid || status === 'found' || (hasIdentifierFound && status !== 'not_found')) {
+    flags.push('Identifier found');
+  } else {
+    flags.push('Identifier number not found in system');
+  }
+
+  return flags;
 }
 
 /**
@@ -311,25 +442,26 @@ export function getIsbnCheckLabel(row) {
  * Used for both rendering and filtering.
  */
 export function getFilterableLabelsForRow(row) {
-  const labels = new Set();
+  const flags = new Set();
   
-  // 1. Stored workflow tags
-  cleanWorkflowTags(row.workflowTags).forEach(tag => labels.add(normalizeLabel(tag)));
+  // 1. Stored workflow flags
+  effectiveWorkflowFlagsForRow(row).forEach(flag => flags.add(normalizeLabel(flag)));
 
   // 2. Autohold preference
   if (row.autohold === false) {
-    labels.add("No hold requested");
+    flags.add("No hold requested");
   }
 
-  // 3. Computed duplicate labels
-  getDuplicateLabels(row).forEach(label => labels.add(normalizeLabel(label)));
-  
-  // 3. Computed ISBN check label
+  // 3. Computed identifier check label
   const isbnLabel = getIsbnCheckLabel(row);
-  if (isbnLabel) labels.add(normalizeLabel(isbnLabel));
+  if (isbnLabel) flags.add(normalizeLabel(isbnLabel));
   
-  // Return as sorted array of display labels
-  return Array.from(labels).filter(Boolean).sort((a, b) => a.localeCompare(b));
+  // Return as sorted array of raw flag values used by filtering.
+  return Array.from(flags).filter(Boolean).sort((a, b) => {
+    const aDisplay = getFlagDisplay(a).label;
+    const bDisplay = getFlagDisplay(b).label;
+    return aDisplay.localeCompare(bDisplay) || a.localeCompare(b);
+  });
 }
 
 export function normalizeWorkflowTagLabel(tag) {
@@ -352,11 +484,15 @@ export function cleanWorkflowTags(tags) {
 export function tagCountsForRecords(records) {
   const counts = new Map();
   (records || []).forEach(record => {
-    getFilterableLabelsForRow(record).forEach(tag => {
-      counts.set(tag, (counts.get(tag) || 0) + 1);
+    getFilterableLabelsForRow(record).forEach(flag => {
+      counts.set(flag, (counts.get(flag) || 0) + 1);
     });
   });
-  return Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  return Array.from(counts.entries()).sort((a, b) => {
+    const aDisplay = getFlagDisplay(a[0]).label;
+    const bDisplay = getFlagDisplay(b[0]).label;
+    return aDisplay.localeCompare(bDisplay) || a[0].localeCompare(b[0]);
+  });
 }
 
 export function hideTagFilter() {
@@ -386,8 +522,11 @@ export function updateTagFilter(records) {
 
   const previous = activeTagFilter;
   tagFilterSelect.innerHTML = [
-    '<option value="">All tags</option>',
-    ...counts.map(([tag, count]) => `<option value="${escapeAttr(tag)}">${escapeAttr(tag)} (${count})</option>`)
+    '<option value="">All flags</option>',
+    ...counts.map(([flag, count]) => {
+      const display = getFlagDisplay(flag);
+      return `<option value="${escapeAttr(flag)}">${escapeAttr(display.label)} (${count})</option>`;
+    })
   ].join('');
 
   const stillExists = counts.some(([tag]) => tag === previous);
@@ -473,10 +612,10 @@ export function renderCurrentGrid(status = currentStatus) {
 
 function emptyFilteredGridMessage() {
   if (activeTagFilter && currentClaimFilter !== 'all') {
-    return 'No suggestions match this workflow tag and claim filter.';
+    return 'No suggestions match this workflow flag and claim filter.';
   }
   if (activeTagFilter) {
-    return 'No suggestions match this workflow tag.';
+    return 'No suggestions match this workflow flag.';
   }
   if (currentClaimFilter === 'mine') {
     return 'No requests in this stage are claimed by you.';
@@ -625,66 +764,45 @@ export function getGridColumns(status) {
 
 
 export function getDuplicateBadgesHtml(row) {
-  const labels = getDuplicateLabels(row);
-  if (!labels.length) return '';
+  const flags = getDuplicateLabels(row);
+  if (!flags.length) return '';
 
-  const statusColors = {
-    'suggestion': 'badge-secondary',
-    'outstanding_purchase': 'badge-info',
-    'pending_hold': 'badge-warning',
-    'hold_placed': 'badge-success',
-    'closed': 'badge-dark'
-  };
-
-  return labels.map(text => {
-    const normalized = normalizeLabel(text);
+  return flags.map(rawFlag => {
+    const normalized = normalizeLabel(rawFlag);
+    const display = getFlagDisplay(rawFlag);
     const isActive = activeTagFilter === normalized;
-    // Extract status from text e.g. "Dup (Pending hold)" or "Dup (Pending hold x2)"
-    const match = text.match(/\(([^x)]+)/);
-    const statusName = match ? match[1].trim().toLowerCase().replace(/ /g, '_') : '';
-    const colorClass = statusColors[statusName] || 'badge-secondary';
-    return ` <span class="badge ${colorClass} asap-duplicate-badge ${isActive ? 'active' : ''}" data-tag="${escapeAttr(normalized)}" role="button" title="${isActive ? 'Clear filter' : 'Filter by ' + escapeAttr(text)}">${escapeAttr(text)}</span>`;
+    const title = isActive ? 'Clear filter' : 'Filter by ' + display.label;
+    return ` <span class="flag-badge ${escapeAttr(display.className)} ${isActive ? 'active' : ''}" data-tag="${escapeAttr(normalized)}" role="button" title="${escapeAttr(title)}">${escapeAttr(display.label)}</span>`;
   }).join('');
 }
 
 export function hasWorkflowTag(row, label) {
-  return cleanWorkflowTags(row?.workflowTags).includes(label);
+  return effectiveWorkflowFlagsForRow(row).includes(label);
 }
 
 export function getWorkflowTagPresentation(tag) {
   const label = normalizeLabel(tag);
-  const lower = label.toLowerCase();
-  const failureTags = new Set([
-    'hold failed'
-  ]);
-
-  if (failureTags.has(lower)) {
-    return {
-      text: `! ${label}`,
-      variant: 'error'
-    };
-  }
-
+  const display = getFlagDisplay(label);
   return {
-    text: label,
-    variant: 'info'
+    text: display.label,
+    className: display.className
   };
 }
 
 export function renderWorkflowTags(tags, row) {
-  const clean = cleanWorkflowTags(tags);
+  const clean = row ? effectiveWorkflowFlagsForRow(row, tags) : cleanWorkflowTags(tags);
   if (row && row.autohold === false && !clean.includes("No hold requested")) {
     clean.push("No hold requested");
   }
   if (!clean.length) {
-    return '<div class="text-muted small">No workflow tags</div>';
+    return '<div class="text-muted small">No workflow flags</div>';
   }
-  return `<div class="workflow-tag-list">${clean.map(tag => {
-    const normalized = normalizeLabel(tag);
-    const presentation = getWorkflowTagPresentation(tag);
-    const variant = presentation.variant || 'info';
+  return `<div class="workflow-tag-list">${clean.map(flag => {
+    const normalized = normalizeLabel(flag);
+    const presentation = getWorkflowTagPresentation(flag);
     const isActive = activeTagFilter === normalized;
-    return `<span class="workflow-tag workflow-tag--${escapeAttr(variant)} ${isActive ? 'active' : ''}" data-tag="${escapeAttr(normalized)}" role="button" title="${isActive ? 'Clear filter' : 'Filter by ' + escapeAttr(normalized)}">${escapeAttr(presentation.text)}</span>`;
+    const title = isActive ? 'Clear filter' : 'Filter by ' + presentation.text;
+    return `<span class="flag-badge ${escapeAttr(presentation.className)} ${isActive ? 'active' : ''}" data-tag="${escapeAttr(normalized)}" role="button" title="${escapeAttr(title)}">${escapeAttr(presentation.text)}</span>`;
   }).join('')}</div>`;
 }
 
@@ -698,8 +816,47 @@ export function getIsbnCheckBadgesHtml(row) {
   const tooltip = status === 'pending'
     ? 'Background identifier number processing is still running. This suggestion is already submitted.'
     : 'Identifier number background processing result.';
+  const display = getFlagDisplay(label);
     
-  return ` <span class="badge badge-info asap-isbn-check-badge ${isActive ? 'active' : ''}" data-tag="${escapeAttr(normalized)}" role="button" title="${isActive ? 'Clear filter' : tooltip}">${escapeAttr(label)}</span>`;
+  return ` <span class="flag-badge ${escapeAttr(display.className)} ${isActive ? 'active' : ''}" data-tag="${escapeAttr(normalized)}" role="button" title="${escapeAttr(isActive ? 'Clear filter' : tooltip)}">${escapeAttr(display.label)}</span>`;
+}
+
+export function renderDuplicateSummary(row) {
+  const summary = getDuplicateSummary(row);
+  if (!summary) return '';
+
+  const id = `duplicate-details-${escapeAttr(row.id || '')}`;
+  const label = summary.count === 1
+    ? 'Similar request elsewhere'
+    : `Similar request elsewhere: ${summary.count} matches`;
+  const statusLines = Object.entries(summary.statusCounts)
+    .sort((a, b) => (duplicateStatusNames[a[0]] || a[0]).localeCompare(duplicateStatusNames[b[0]] || b[0]))
+    .map(([status, count]) => {
+      const statusName = duplicateStatusNames[status] || status;
+      return `<li>${escapeAttr(String(count))} in ${escapeAttr(statusName)}</li>`;
+    })
+    .join('');
+  const reasons = summary.reasons.length ? summary.reasons.join('/') : 'title or identifier';
+
+  return `
+    <div class="duplicate-summary">
+      <button
+        type="button"
+        class="duplicate-summary-btn"
+        aria-expanded="false"
+        aria-controls="${id}"
+        data-no-row-edit="true"
+      >
+        <span class="duplicate-summary-icon" aria-hidden="true">▸</span>
+        <span>${escapeAttr(label)}</span>
+      </button>
+      <div id="${id}" class="duplicate-details hidden">
+        <div>This title or identifier appears in another ASAP stage.</div>
+        <ul>${statusLines}</ul>
+        <div>Matched by: ${escapeAttr(reasons)}</div>
+      </div>
+    </div>
+  `;
 }
 
 export function renderPolarisRowSearchButton(row, mode) {
@@ -716,6 +873,7 @@ export function renderTitleCell(row) {
   return gridjs.html(`
     <div class="staff-title-cell searchable-cell">
       <div class="searchable-cell-text">
+        ${renderDuplicateSummary(row)}
         <div class="staff-title-main" title="${escapeAttr(row.title || '')}">${escapeAttr(row.title || '')}</div>
         ${renderWorkflowTags(row.workflowTags, row)}
       </div>
@@ -1112,7 +1270,21 @@ gridContainer.addEventListener('click', (e) => {
     return;
   }
 
-  const tagBadge = target.closest('.workflow-tag, .asap-duplicate-badge, .asap-isbn-check-badge');
+  const duplicateSummaryBtn = target.closest('.duplicate-summary-btn');
+  if (duplicateSummaryBtn && gridContainer.contains(duplicateSummaryBtn)) {
+    e.preventDefault();
+    e.stopPropagation();
+    const expanded = duplicateSummaryBtn.getAttribute('aria-expanded') === 'true';
+    const detailsId = duplicateSummaryBtn.getAttribute('aria-controls');
+    const details = detailsId ? document.getElementById(detailsId) : null;
+    duplicateSummaryBtn.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+    const icon = duplicateSummaryBtn.querySelector('.duplicate-summary-icon');
+    if (icon) icon.textContent = expanded ? '▸' : '▾';
+    if (details) details.classList.toggle('hidden', expanded);
+    return;
+  }
+
+  const tagBadge = target.closest('.flag-badge, .workflow-tag, .asap-duplicate-badge, .asap-isbn-check-badge');
   if (tagBadge && gridContainer.contains(tagBadge)) {
     e.preventDefault();
     e.stopPropagation();
