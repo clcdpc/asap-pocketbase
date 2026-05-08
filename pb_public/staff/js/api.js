@@ -1,4 +1,4 @@
-import { pb, loginContainer, setupContainer, appContainer, loginForm, setupForm, logoutBtn, profileBtn, grid, gridSearchInput, tagFilterSelect, claimFilterSelect, currentRejectionTemplates, setCurrentRejectionTemplates, statusStages, stageQueryMap, currentStatus, activeTagFilter, workflowSettings, bootstrapAdminMessage, setupRequired, currentEmailStatus, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, settingsSectionIds, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, currentLibraryContextOrgId, setCurrentStatus, setActiveTagFilter, setCurrentClaimFilter, setBootstrapAdminMessage, setSetupRequired, setOrganizationsStatusMessage, setCurrentSettingsSection, setSettingsDirty, setCurrentEmailStatus } from './state.js';
+import { pb, loginContainer, setupContainer, appContainer, loginForm, setupForm, logoutBtn, profileBtn, grid, gridSearchInput, tagFilterSelect, claimFilterSelect, similarRequestFilterCheckbox, currentRejectionTemplates, setCurrentRejectionTemplates, statusStages, stageQueryMap, currentStatus, activeTagFilter, workflowSettings, bootstrapAdminMessage, setupRequired, currentEmailStatus, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, settingsSectionIds, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, currentLibraryContextOrgId, setCurrentStatus, setActiveTagFilter, setCurrentClaimFilter, setSimilarRequestFilterEnabled, setBootstrapAdminMessage, setSetupRequired, setOrganizationsStatusMessage, setCurrentSettingsSection, setSettingsDirty, setCurrentEmailStatus } from './state.js';
 import { loadTab, renderCurrentGrid, closeActionMenu, escapeAttr } from './grid.js';
 import { syncPolarisOrganizations } from './settings-polaris.js';
 import { loadSettings, checkSettingsDirty } from './settings.js';
@@ -872,6 +872,13 @@ if (gridSearchInput) {
 if (tagFilterSelect) {
   tagFilterSelect.addEventListener('change', event => {
     setActiveTagFilter(event.target.value || '');
+    renderCurrentGrid(currentStatus);
+  });
+}
+
+if (similarRequestFilterCheckbox) {
+  similarRequestFilterCheckbox.addEventListener('change', event => {
+    setSimilarRequestFilterEnabled(!!event.target.checked);
     renderCurrentGrid(currentStatus);
   });
 }

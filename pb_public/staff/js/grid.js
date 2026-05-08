@@ -1,4 +1,4 @@
-import { pb, gridContainer, staffGridFilterBar, tagFilterSelect, claimFilterSelect, settingsContainer, grid, formatMap, ageMap, closeReasonMap, descriptions, emptyStateMessages, statusStages, currentStatus, currentSuggestions, activeTagFilter, currentClaimFilter, currentWorkflowOrgScopeId, allSuggestions, workflowSettings, currentSettingsSection, activeActionMenu, rowActionIdCounter, rowActionRegistry, setCurrentStatus, setCurrentSuggestions, setActiveTagFilter, setCurrentClaimFilter, setCurrentWorkflowOrgScopeId, setActiveActionMenu, setGrid, setAllSuggestions, incrementRowActionIdCounter } from './state.js';
+import { pb, gridContainer, staffGridFilterBar, tagFilterSelect, claimFilterSelect, similarRequestFilterCheckbox, settingsContainer, grid, formatMap, ageMap, closeReasonMap, descriptions, emptyStateMessages, statusStages, currentStatus, currentSuggestions, activeTagFilter, currentClaimFilter, similarRequestFilterEnabled, currentWorkflowOrgScopeId, allSuggestions, workflowSettings, currentSettingsSection, activeActionMenu, rowActionIdCounter, rowActionRegistry, setCurrentStatus, setCurrentSuggestions, setActiveTagFilter, setCurrentClaimFilter, setCurrentWorkflowOrgScopeId, setActiveActionMenu, setGrid, setAllSuggestions, incrementRowActionIdCounter } from './state.js';
 import { openEdit, openPolarisSearch, polarisSearchValueForRow, renderPolarisSearchButtonMarkup } from './modals.js';
 import { openNewSuggestionForPatron } from './patron.js';
 import { undoRow, deleteClosedRequest, closeDuplicateRequest } from './actions.js';
@@ -540,6 +540,9 @@ export function updateClaimFilter() {
   if (!claimFilterSelect || !staffGridFilterBar) return;
   claimFilterSelect.value = currentClaimFilter;
   claimFilterSelect.classList.remove('hidden');
+  if (similarRequestFilterCheckbox) {
+    similarRequestFilterCheckbox.checked = similarRequestFilterEnabled;
+  }
   staffGridFilterBar.classList.remove('hidden');
 }
 
@@ -548,6 +551,11 @@ export function applyTagFilter(records) {
   return (records || []).filter(record => {
     return getFilterableLabelsForRow(record).includes(activeTagFilter);
   });
+}
+
+export function applySimilarRequestFilter(records) {
+  if (!similarRequestFilterEnabled) return records || [];
+  return (records || []).filter(record => !!getDuplicateSummary(record));
 }
 
 export function currentStaffId() {
@@ -590,7 +598,7 @@ export function toggleTagFilter(tagName) {
 
 export function renderCurrentGrid(status = currentStatus) {
   resetGrid();
-  const visibleRecords = applyClaimFilter(applyTagFilter(currentSuggestions));
+  const visibleRecords = applyClaimFilter(applySimilarRequestFilter(applyTagFilter(currentSuggestions)));
   if (!visibleRecords.length) {
     gridContainer.innerHTML = `<div class="alert alert-light border">${escapeAttr(emptyFilteredGridMessage())}</div>`;
     return;
@@ -611,6 +619,9 @@ export function renderCurrentGrid(status = currentStatus) {
 }
 
 function emptyFilteredGridMessage() {
+  if (similarRequestFilterEnabled) {
+    return 'No records with similar requests elsewhere match the current filters.';
+  }
   if (activeTagFilter && currentClaimFilter !== 'all') {
     return 'No suggestions match this workflow flag and claim filter.';
   }

@@ -84,6 +84,26 @@ body {
   width: auto;
 }
 
+.similar-request-filter-control {
+  align-items: center;
+  border: 1px solid #ffda6a;
+  border-radius: 0.45rem;
+  color: #664d03;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.875rem;
+  font-weight: 700;
+  gap: 0.4rem;
+  margin-bottom: 0;
+  padding: 0.35rem 0.55rem;
+  white-space: nowrap;
+}
+
+.similar-request-filter-control input {
+  cursor: pointer;
+  margin: 0;
+}
+
 .gridjs-head {
   display: none !important;
 }

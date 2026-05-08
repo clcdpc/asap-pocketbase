@@ -15,6 +15,7 @@ export const staffGridFilterBar = document.getElementById('staff-grid-filter-bar
 export const gridSearchInput = document.getElementById('grid-search-input');
 export const tagFilterSelect = document.getElementById('tag-filter');
 export const claimFilterSelect = document.getElementById('claim-filter');
+export const similarRequestFilterCheckbox = document.getElementById('similar-request-filter');
 export const settingsContainer = document.getElementById('settings-container');
 export const settingsForm = document.getElementById('settings-form');
 export let grid = undefined;
@@ -49,6 +50,9 @@ export function setActiveTagFilter(filter) { activeTagFilter = filter; }
 
 export let currentClaimFilter = 'all';
 export function setCurrentClaimFilter(filter) { currentClaimFilter = ['mine', 'unclaimed', 'mine_unclaimed'].includes(filter) ? filter : 'all'; }
+
+export let similarRequestFilterEnabled = false;
+export function setSimilarRequestFilterEnabled(enabled) { similarRequestFilterEnabled = !!enabled; }
 
 export let currentWorkflowOrgScopeId = 'all';
 export function setCurrentWorkflowOrgScopeId(scopeId) { currentWorkflowOrgScopeId = String(scopeId || 'all').trim() || 'all'; }
