@@ -48,6 +48,28 @@ When adding a new setting:
 - make sure the runtime reader uses the same fallback logic as the editor UI
 - verify that switching between system and library views preserves the expected value
 
+### Frontend DOM safety
+Do not use `innerHTML` for new UI code.
+
+Default to safe DOM APIs:
+- create elements with `document.createElement`
+- set text with `textContent`
+- set attributes with `setAttribute`
+- append children with `append`, `appendChild`, or `replaceChildren`
+- use `classList` for classes
+
+Do not inject patron, staff, Polaris, API, settings, or other runtime data into HTML strings.
+
+If markup must be generated dynamically, build it with DOM nodes instead of string concatenation. If an existing code path already uses `innerHTML`, prefer refactoring it to DOM construction when touching that area.
+
+Only use `innerHTML` when all of the following are true:
+- the content is static developer-authored markup, or it has gone through a project-approved sanitizer
+- no user/API/runtime data is interpolated into the string
+- the reason is documented in a nearby code comment
+- tests or manual verification cover the rendered path
+
+Never treat escaping helpers as permission to build arbitrary HTML strings. Escaping reduces risk, but DOM construction is the preferred pattern.
+
 ### Analytics scope
 All analytics must respect library scope.
 

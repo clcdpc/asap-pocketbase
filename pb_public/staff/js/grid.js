@@ -58,21 +58,52 @@ function syncStatusTab(status) {
 
 function renderTabDescription(status) {
   const tabDesc = document.getElementById('tab-desc');
-  let desc = descriptions[status] || '';
+  tabDesc.replaceChildren();
+  tabDesc.textContent = descriptions[status] || '';
+
+  const addSuffix = (strongText, plainText) => {
+    tabDesc.appendChild(document.createTextNode(' '));
+    const strong = document.createElement('strong');
+    strong.textContent = strongText;
+    tabDesc.appendChild(strong);
+    tabDesc.appendChild(document.createTextNode(plainText));
+
+    const link = document.createElement('a');
+    const url = new URL(window.location.href);
+    url.searchParams.set('stage', 'settings');
+    url.hash = 'settings-workflow';
+    link.href = url.pathname + url.search + url.hash;
+    link.textContent = 'Settings';
+    tabDesc.appendChild(link);
+
+    tabDesc.appendChild(document.createTextNode(')'));
+  };
 
   // Add auto-rejection info for Suggestions
   if (status === 'suggestion') {
-    desc += workflowSettings.outstandingTimeoutEnabled
-      ? ` If auto-reject stalled suggestions is enabled, stalled suggestions will be rejected after ${workflowSettings.outstandingTimeoutDays} days.`
-      : ' Auto-reject stalled suggestions is currently disabled in Settings.';
+    if (workflowSettings.outstandingTimeoutEnabled) {
+      addSuffix('Auto-reject enabled:', ` Stalled suggestions will be auto-rejected after ${workflowSettings.outstandingTimeoutDays} days. (`);
+    } else {
+      addSuffix('Auto-reject disabled:', ' Stalled suggestions will not be auto-rejected. (');
+    }
+  }
+
+  // Add auto-promoter info for Pending purchase
+  if (status === 'outstanding_purchase') {
+    tabDesc.textContent = 'Pending purchase contains approved suggestions that are waiting to appear in Polaris. Staff can also add a BIB ID manually.';
+    if (workflowSettings.autoPromote) {
+      addSuffix('Auto-promoter enabled:', ' ASAP will check Polaris automatically. (');
+    } else {
+      addSuffix('Auto-promoter disabled:', ' ASAP will not check Polaris automatically. (');
+    }
   }
 
   // Add auto-close info for Hold placed
   if (status === 'hold_placed') {
     if (workflowSettings.holdPickupTimeoutEnabled) {
-      desc += ` Auto-close unpicked-up holds is enabled, so holds will close after checkout or after ${workflowSettings.holdPickupTimeoutDays} days if the item is never picked up.`;
+      addSuffix('Auto-close unpicked-up holds enabled:', ` Holds will auto-close after checkout, or after ${workflowSettings.holdPickupTimeoutDays} days if the item is never picked up. (`);
     } else {
-      desc += ' Holds will only move to Closed when the patron checks out the item. Enable auto-close unpicked-up holds in Settings to also close holds that are never picked up.';
+      addSuffix('Auto-close unpicked-up holds disabled:', ' Holds will only move to Closed when the patron checks out the item. (');
     }
   }
 
@@ -80,10 +111,11 @@ function renderTabDescription(status) {
   if (status === 'pending_hold') {
     workflowSettings.pendingHoldTimeoutDays = parseInt(workflowSettings.pendingHoldTimeoutDays || '14', 10) || 14;
     if (workflowSettings.pendingHoldTimeoutEnabled) {
-      desc += ` Auto-close pending holds is enabled, so items will close after ${workflowSettings.pendingHoldTimeoutDays} days if they are not processed.`;
+      addSuffix('Auto-close pending holds enabled:', ` Items will auto-close after ${workflowSettings.pendingHoldTimeoutDays} days if they are not processed. (`);
+    } else {
+      addSuffix('Auto-close pending holds disabled:', ' Items will remain here indefinitely until processed. (');
     }
   }
-  tabDesc.textContent = desc;
 }
 
 function clearJobMessage() {
