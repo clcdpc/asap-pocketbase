@@ -1233,7 +1233,8 @@ function sanitizeHtml(html) {
               const name = attrs[i].name.toLowerCase();
               const value = attrs[i].value.trim().toLowerCase();
 
-              if (!safeAttrs.includes(name) || (name === "href" && value.startsWith("javascript:"))) {
+              const cleanValue = value.replace(/[\s\u0000-\u0020]/g, '');
+              if (!safeAttrs.includes(name) || (name === "href" && (cleanValue.startsWith("javascript:") || cleanValue.startsWith("data:") || cleanValue.startsWith("vbscript:")))) {
                 node.removeAttribute(name);
               }
             }

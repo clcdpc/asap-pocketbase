@@ -256,8 +256,12 @@ export function getSettingsSectionFromHash() {
     return '';
   }
 
-  const section = decodeURIComponent(hash.slice(prefix.length));
-  return settingsSectionIds.includes(section) ? section : '';
+  try {
+    const section = decodeURIComponent(hash.slice(prefix.length));
+    return settingsSectionIds.includes(section) ? section : '';
+  } catch (e) {
+    return '';
+  }
 }
 
 export function updateSettingsSaveBarVisibility() {
