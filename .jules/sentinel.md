@@ -14,3 +14,7 @@
 **Vulnerability:** The `patronLogin` and `staffLogin` routes bubbled up raw error strings from the Polaris API and internal configuration checks to the end-user. This could leak internal system details, IP addresses, or Polaris error specifics.
 **Learning:** Error messages returned to users should be generic to prevent information disclosure. Detailed error information should be logged on the server for staff troubleshooting.
 **Prevention:** Sanitize error responses by providing user-friendly, non-descriptive messages while ensuring the full error context is captured in the system logs.
+## 2026-05-02 - Prevent Privilege Escalation in Role Deletions
+**Vulnerability:** Similar to role updates, a standard `admin` user could delete a `super_admin`'s account because the `staffUserDelete` endpoint only verified that at least one super admin remains, rather than strictly requiring `super_admin` privileges to delete a `super_admin` account.
+**Learning:** Role-based access control (RBAC) must check both the user *performing* the action and the *target* user of the action. Modifying or deleting elevated roles requires elevated authorization.
+**Prevention:** Ensure all endpoints that perform state-changing operations on user accounts strictly validate the actor's privileges against the target object's sensitivity tier.
