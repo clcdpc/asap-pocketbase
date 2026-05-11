@@ -1,4 +1,4 @@
-import { formatMap, availableFormats, setAvailableFormats, currentFormatClaimRules, formatClaimStaffOptions } from './state.js';
+import { formatMap, availableFormats, setAvailableFormats, currentFormatClaimRules, setCurrentFormatClaimRules, formatClaimStaffOptions } from './state.js';
 import { setInlineStatus, showConfirm, markSettingsDirty } from './api.js';
 import { escapeAttr } from './grid.js';
 import { renderPatronFormatRulesEditor, collectPatronFormatRules } from './settings-ui.js';
@@ -245,14 +245,33 @@ export function collectFormatOrder() {
   return order;
 }
 
+export function updateFormatClaimRuleState(format, staffUserId) {
+  const rules = [...(currentFormatClaimRules || [])];
+  const idx = rules.findIndex(r => r.format === format);
+  if (staffUserId) {
+    if (idx >= 0) {
+      rules[idx] = { ...rules[idx], staffUserId };
+    } else {
+      rules.push({ format, staffUserId });
+    }
+  } else if (idx >= 0) {
+    rules.splice(idx, 1);
+  }
+  setCurrentFormatClaimRules(rules);
+}
+
 export function collectFormatClaimRules() {
   const rules = [];
-  document.querySelectorAll('.format-setting-row').forEach(row => {
-    const format = row.getAttribute('data-key');
-    const staffUserId = row.querySelector('.format-claim-staff-select')?.value || '';
-    if (format) rules.push({ format, staffUserId });
-  });
-  return rules;
+  const rows = document.querySelectorAll('.format-setting-row');
+  if (rows.length > 0) {
+    rows.forEach(row => {
+      const format = row.getAttribute('data-key');
+      const staffUserId = row.querySelector('.format-claim-staff-select')?.value || '';
+      if (format) rules.push({ format, staffUserId });
+    });
+    return rules;
+  }
+  return currentFormatClaimRules || [];
 }
 
 export function updateModalFormatDropdowns() {
@@ -333,6 +352,8 @@ if (formatSettingsContainer) {
       markSettingsDirty();
     }
     if (e.target.classList.contains('format-claim-staff-select')) {
+      const format = e.target.closest('tr')?.getAttribute('data-key');
+      updateFormatClaimRuleState(format, e.target.value);
       markSettingsDirty();
     }
   });

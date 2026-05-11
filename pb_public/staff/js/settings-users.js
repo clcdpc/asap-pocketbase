@@ -1,6 +1,7 @@
-import { pb, canAssignSuperAdmin, setCanAssignSuperAdmin, formatMap, availableFormats, currentFormatClaimRules } from './state.js';
+import { pb, canAssignSuperAdmin, setCanAssignSuperAdmin, formatMap, availableFormats, currentFormatClaimRules, setCurrentFormatClaimRules, currentLibraryContextOrgId } from './state.js';
 import { setFieldValue, getFieldValue, showAlert, showConfirm, isSuperAdminStaff, authorizedJson, markSettingsDirty } from './api.js';
 import { escapeAttr } from './grid.js';
+import { updateFormatClaimRuleState } from './settings-formats.js';
 
 export function formatLastLogin(lastLogin) {
   const raw = String(lastLogin || '').trim();
@@ -154,14 +155,16 @@ export function renderStaffUsers(users) {
 
 function formatAssignmentMapFromDom() {
   const byFormat = {};
+  // 1. Start with the state variable (Source of truth for user intent)
+  (currentFormatClaimRules || []).forEach(rule => {
+    if (rule && rule.format) byFormat[rule.format] = rule.staffUserId || '';
+  });
+  // 2. Overlay with current DOM values if the Formats tab has been rendered.
+  // This captures any pending changes made directly in the Formats tab dropdowns.
   document.querySelectorAll('.format-setting-row').forEach(row => {
     const format = row.getAttribute('data-key');
     const staffUserId = row.querySelector('.format-claim-staff-select')?.value || '';
-    if (format && staffUserId) byFormat[format] = staffUserId;
-  });
-  if (Object.keys(byFormat).length) return byFormat;
-  (currentFormatClaimRules || []).forEach(rule => {
-    if (rule && rule.format && rule.staffUserId) byFormat[rule.format] = rule.staffUserId;
+    if (format) byFormat[format] = staffUserId;
   });
   return byFormat;
 }
@@ -188,7 +191,10 @@ function renderStaffFormatClaimToggles(container, user) {
     check.setAttribute('data-format', format);
     check.setAttribute('data-staff-id', staffId);
     check.checked = assignments[format] === staffId;
-    if (assignments[format] && assignments[format] !== staffId) {
+    if (currentLibraryContextOrgId === 'system') {
+      check.disabled = true;
+      item.title = 'Switch to a specific library context to manage auto-claim rules.';
+    } else if (assignments[format] && assignments[format] !== staffId) {
       item.title = 'Currently assigned to another staff member. Checking this will replace that assignment.';
     }
     const text = document.createElement('span');
@@ -200,9 +206,17 @@ function renderStaffFormatClaimToggles(container, user) {
 }
 
 function setFormatAssignment(format, staffId) {
+  // 1. Update the state variable immediately so re-renders of the staff table reflect the change.
+  updateFormatClaimRuleState(format, staffId);
+
+  // 2. Update the "Formats" tab DOM if it exists and has the necessary options.
   const row = document.querySelector(`.format-setting-row[data-key="${CSS.escape(format)}"]`);
   const select = row ? row.querySelector('.format-claim-staff-select') : null;
-  if (select) select.value = staffId || '';
+  if (select) {
+    // If the staffId is not a valid option (e.g. because options haven't loaded yet),
+    // the value won't change here, but we've already updated the state for persistence.
+    select.value = staffId || '';
+  }
 }
 
 const staffUsersTableBody = document.getElementById('staff-users-table-body');
