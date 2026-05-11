@@ -472,6 +472,7 @@ export function populatePatronUiForms(uiText) {
   setFieldValue('ui-login-note', uiText.loginNote || 'Use of this service requires a valid library card. Contact your library if you need assistance with your card or PIN.');
   setFieldValue('ui-suggestion-note', uiText.suggestionFormNote || 'If the library decides to purchase your suggestion, we will automatically place a hold on it and send a confirmation email. Make sure to check your spam folder if you don\'t see the email.');
   setFieldValue('ui-no-email-msg', uiText.noEmailMessage || 'No email is specified on your library account, which means we won\'t be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.');
+  setFieldValue('ui-system-not-enabled-msg', uiText.systemNotEnabledMessage || '{{library}} does not currently participate in this suggestion service.');
   setFieldValue('ui-success-title', uiText.successTitle || 'Suggestion Submitted');
   setFieldValue('ui-success-msg', uiText.successMessage || 'You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>');
   setFieldValue('ui-already-submitted-msg', uiText.alreadySubmittedMessage || 'This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.<div>Thank you for using this library\'s suggestion service.</div>');
@@ -559,6 +560,7 @@ function _serializeSettingsState(validate = false) {
     loginNote: getFieldValue('ui-login-note'),
     suggestionFormNote: getFieldValue('ui-suggestion-note'),
     noEmailMessage: getFieldValue('ui-no-email-msg'),
+    systemNotEnabledMessage: getFieldValue('ui-system-not-enabled-msg'),
     successTitle: getFieldValue('ui-success-title'),
     successMessage: getFieldValue('ui-success-msg'),
     alreadySubmittedMessage: getFieldValue('ui-already-submitted-msg'),
