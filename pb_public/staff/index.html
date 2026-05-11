@@ -312,6 +312,16 @@
                     <div id="enabled-libraries-checkbox-container" class="border rounded bg-light org-checkbox-scroll">
                       <div class="p-3 text-muted">Organizations not loaded yet.</div>
                     </div>
+                    <div id="ui-system-not-enabled-group" class="form-group mt-3">
+                      <label for="ui-system-not-enabled-msg" class="font-weight-bold">Participation warning message (supports HTML)</label>
+                      <textarea id="ui-system-not-enabled-msg" class="form-control" rows="3"></textarea>
+                      <small class="form-text text-muted">Shown to patrons from libraries that are not enabled for this service. Available placeholders: <code>{{library}}</code>.</small>
+                    </div>
+                    <div id="ui-misconfigured-group" class="form-group mt-3">
+                      <label for="ui-misconfigured-msg" class="font-weight-bold">Misconfigured system message (supports HTML)</label>
+                      <textarea id="ui-misconfigured-msg" class="form-control" rows="3"></textarea>
+                      <small class="form-text text-muted">Shown to patrons when there is a Polaris connection or configuration error. Available placeholders: <code>{{library}}</code>.</small>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -830,11 +840,6 @@
                   <textarea id="ui-no-email-msg" class="form-control" rows="3"></textarea>
                   <small class="form-text text-muted">Shown to patrons who do not have an email address on file in
                     Polaris.</small>
-                </div>
-                <div class="form-group">
-                  <label for="ui-system-not-enabled-msg">Participation warning message (supports HTML)</label>
-                  <textarea id="ui-system-not-enabled-msg" class="form-control" rows="3"></textarea>
-                  <small class="form-text text-muted">Shown to patrons from libraries that are not enabled for this service. Available placeholders: <code>{{library}}</code>.</small>
                 </div>
                 <div class="form-row">
                   <div class="form-group col-md-4">

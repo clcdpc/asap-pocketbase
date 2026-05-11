@@ -274,6 +274,11 @@ loginForm.addEventListener('submit', async (e) => {
   try {
     const fd = new FormData(loginForm);
     const data = Object.fromEntries(fd.entries());
+    const params = new URLSearchParams(window.location.search);
+    const orgId = params.get('libraryOrgId') || localStorage.getItem('asap_patron_library_org_id') || '';
+    if (orgId) {
+      data.libraryOrgId = orgId;
+    }
     const result = await request('/api/asap/patron/login', {
       method: 'POST',
       body: JSON.stringify(data)
