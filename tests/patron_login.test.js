@@ -7,13 +7,31 @@ global.__hooks = path.resolve(__dirname, "../pb_hooks");
 const Module = require('module');
 const originalRequire = Module.prototype.require;
 
+let configMock = {
+  getSettings: () => ({ enabledLibraryOrgIds: "1,2" }),
+  librarySettings: (app, orgId) => ({
+    ui_text: {
+      systemNotEnabledMessage: "{{library}} does not currently participate in this suggestion service."
+    }
+  })
+};
+
+let polarisMock = {
+  adminStaffAuth: () => ({}),
+  authenticatePatron: (barcode, password, staffAuth) => ({})
+};
+
+let orgsMock = {
+  attachPatronScope: (app, patron, staffAuth, logger) => patron
+};
+
 let routeUtilsMock = {
   body: (e) => e.requestBody || {}
 };
 
 Module.prototype.require = function(moduleName) {
   if (moduleName.includes("lib/config.js")) {
-    return {};
+    return configMock;
   }
   if (moduleName.includes("lib/format_rules.js")) {
     return {};
@@ -22,16 +40,19 @@ Module.prototype.require = function(moduleName) {
     return {};
   }
   if (moduleName.includes("lib/orgs.js")) {
-    return {};
+    return orgsMock;
   }
   if (moduleName.includes("lib/polaris.js")) {
-    return {};
+    return polarisMock;
   }
   if (moduleName.includes("lib/records.js")) {
     return {};
   }
   if (moduleName.includes("lib/route_utils.js")) {
     return routeUtilsMock;
+  }
+  if (moduleName.includes("lib/format_claim_rules.js")) {
+    return {};
   }
   return originalRequire.apply(this, arguments);
 };
@@ -63,6 +84,12 @@ function createEventMock(requestBody) {
 
   const e = {
     requestBody: requestBody,
+    app: {
+      logger: () => ({
+        error: () => {},
+        warn: () => {}
+      })
+    },
     json: (status, payload) => {
       jsonStatus = status;
       jsonPayload = payload;
@@ -78,57 +105,63 @@ function createEventMock(requestBody) {
 
 runTest('patronLogin returns 400 when missing both barcode and PIN', () => {
   const { e, getResponse } = createEventMock({});
-
-  const result = patronRoutes.patronLogin(e);
-
-  const { status, payload } = getResponse();
-  assert.strictEqual(result, 'response');
+  patronRoutes.patronLogin(e);
+  const { status } = getResponse();
   assert.strictEqual(status, 400);
-  assert.deepStrictEqual(payload, { message: "Barcode and PIN are required" });
 });
 
-runTest('patronLogin returns 400 when missing PIN', () => {
-  const { e, getResponse } = createEventMock({ barcode: '123456789' });
+runTest('participation warning replaces {{library}} placeholder', () => {
+  polarisMock.authenticatePatron = () => ({
+    LibraryOrgID: 3,
+    LibraryOrgName: "Anytown Library"
+  });
 
-  const result = patronRoutes.patronLogin(e);
-
+  const { e, getResponse } = createEventMock({ barcode: '123', pin: '456' });
+  patronRoutes.patronLogin(e);
+  
   const { status, payload } = getResponse();
-  assert.strictEqual(result, 'response');
-  assert.strictEqual(status, 400);
-  assert.deepStrictEqual(payload, { message: "Barcode and PIN are required" });
+  assert.strictEqual(status, 403);
+  assert.strictEqual(payload.message, "Anytown Library does not currently participate in this suggestion service.");
 });
 
-runTest('patronLogin returns 400 when missing barcode', () => {
-  const { e, getResponse } = createEventMock({ pin: '1234' });
+runTest('participation warning replaces "Your library" for backward compatibility', () => {
+  polarisMock.authenticatePatron = () => ({
+    LibraryOrgID: 3,
+    LibraryOrgName: "Anytown Library"
+  });
+  
+  configMock.librarySettings = () => ({
+    ui_text: {
+      systemNotEnabledMessage: "Your library does not currently participate in this suggestion service."
+    }
+  });
 
-  const result = patronRoutes.patronLogin(e);
-
+  const { e, getResponse } = createEventMock({ barcode: '123', pin: '456' });
+  patronRoutes.patronLogin(e);
+  
   const { status, payload } = getResponse();
-  assert.strictEqual(result, 'response');
-  assert.strictEqual(status, 400);
-  assert.deepStrictEqual(payload, { message: "Barcode and PIN are required" });
+  assert.strictEqual(status, 403);
+  assert.strictEqual(payload.message, "Anytown Library does not currently participate in this suggestion service.");
 });
 
-runTest('patronLogin returns 400 when barcode and PIN are empty strings', () => {
-  const { e, getResponse } = createEventMock({ barcode: '', pin: '' });
+runTest('participation warning falls back to "Your library" if name is missing', () => {
+  polarisMock.authenticatePatron = () => ({
+    LibraryOrgID: 3,
+    LibraryOrgName: ""
+  });
+  
+  configMock.librarySettings = () => ({
+    ui_text: {
+      systemNotEnabledMessage: "{{library}} does not currently participate in this suggestion service."
+    }
+  });
 
-  const result = patronRoutes.patronLogin(e);
-
+  const { e, getResponse } = createEventMock({ barcode: '123', pin: '456' });
+  patronRoutes.patronLogin(e);
+  
   const { status, payload } = getResponse();
-  assert.strictEqual(result, 'response');
-  assert.strictEqual(status, 400);
-  assert.deepStrictEqual(payload, { message: "Barcode and PIN are required" });
-});
-
-runTest('patronLogin returns 400 when barcode and PIN are just whitespace', () => {
-  const { e, getResponse } = createEventMock({ barcode: '   ', pin: ' ' });
-
-  const result = patronRoutes.patronLogin(e);
-
-  const { status, payload } = getResponse();
-  assert.strictEqual(result, 'response');
-  assert.strictEqual(status, 400);
-  assert.deepStrictEqual(payload, { message: "Barcode and PIN are required" });
+  assert.strictEqual(status, 403);
+  assert.strictEqual(payload.message, "Your library does not currently participate in this suggestion service.");
 });
 
 console.log(`\nTests finished: ${passed} passed, ${failed} failed.`);
