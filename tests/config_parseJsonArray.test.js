@@ -5,6 +5,10 @@ global.__hooks = path.resolve(__dirname, "../pb_hooks");
 
 const config = require("../lib/config.js");
 
+function byteJson(value) {
+  return Array.from(Buffer.from(JSON.stringify(value), "utf8"));
+}
+
 function runTests() {
   console.log("Running config.parseJsonArray tests...");
 
@@ -31,6 +35,10 @@ function runTests() {
   test("parseJsonArray() parses valid JSON array strings", () => {
     assert.deepStrictEqual(config.parseJsonArray('["a", "b"]', []), ["a", "b"]);
     assert.deepStrictEqual(config.parseJsonArray('  [1, 2, 3]  ', []), [1, 2, 3]);
+  });
+
+  test("parseJsonArray() decodes JSON byte arrays", () => {
+    assert.deepStrictEqual(config.parseJsonArray(byteJson([{ label: "Café" }]), []), [{ label: "Café" }]);
   });
 
   test("parseJsonArray() returns fallback for valid JSON but not an array", () => {

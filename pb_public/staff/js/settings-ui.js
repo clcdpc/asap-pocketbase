@@ -13,11 +13,70 @@ export function optionIdFromLabel(label, fallback = 'option') {
   return id || fallback;
 }
 
+function isByteArray(value) {
+  return Array.isArray(value) && value.length > 0 && value.every(item => Number.isInteger(item) && item >= 0 && item <= 255);
+}
+
+function decodeByteArray(value) {
+  if (!isByteArray(value)) return null;
+  for (let i = 0; i < value.length; i += 1) {
+    if ([9, 10, 13, 32].includes(value[i])) continue;
+    if (value[i] !== 91 && value[i] !== 123) return null;
+    break;
+  }
+  if (typeof TextDecoder !== 'undefined') {
+    try {
+      return new TextDecoder('utf-8').decode(new Uint8Array(value));
+    } catch (err) {
+      // Fall through to the small decoder below for older embedded browsers.
+    }
+  }
+  let output = '';
+  for (let i = 0; i < value.length;) {
+    const b1 = value[i++];
+    if (b1 < 0x80) {
+      output += String.fromCharCode(b1);
+    } else if (b1 >= 0xC2 && b1 < 0xE0 && i < value.length) {
+      const b2 = value[i++];
+      output += String.fromCharCode(((b1 & 0x1F) << 6) | (b2 & 0x3F));
+    } else if (b1 >= 0xE0 && b1 < 0xF0 && i + 1 < value.length) {
+      const b2 = value[i++];
+      const b3 = value[i++];
+      output += String.fromCharCode(((b1 & 0x0F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F));
+    } else if (b1 >= 0xF0 && b1 < 0xF5 && i + 2 < value.length) {
+      const b2 = value[i++];
+      const b3 = value[i++];
+      const b4 = value[i++];
+      let codePoint = ((b1 & 0x07) << 18) | ((b2 & 0x3F) << 12) | ((b3 & 0x3F) << 6) | (b4 & 0x3F);
+      codePoint -= 0x10000;
+      output += String.fromCharCode(0xD800 + (codePoint >> 10), 0xDC00 + (codePoint & 0x3FF));
+    } else {
+      output += '\uFFFD';
+    }
+  }
+  return output;
+}
+
 export function normalizeOptionList(options, fallbackLabels) {
   const fallback = (fallbackLabels || []).map((label, index) => ({ id: optionIdFromLabel(label, `option_${index + 1}`), label, enabled: true, sortOrder: (index + 1) * 10 }));
   let raw = [];
-  if (Array.isArray(options)) raw = options;
-  else raw = String(options || '').split(/\r?\n/).map(label => ({ label }));
+  const decoded = decodeByteArray(options);
+  if (decoded !== null) options = decoded;
+  if (Array.isArray(options)) {
+    raw = options;
+  } else {
+    const text = String(options || '').trim();
+    if (text.charAt(0) === '[') {
+      try {
+        const parsed = JSON.parse(text);
+        raw = Array.isArray(parsed) ? parsed : [];
+      } catch (err) {
+        raw = [];
+      }
+    } else {
+      raw = String(options || '').split(/\r?\n/).map(label => ({ label }));
+    }
+  }
   const seenLabels = new Set();
   const seenIds = new Set();
   const normalized = [];
@@ -70,13 +129,13 @@ export function setAgeGroups(options) {
       el.textContent = opt;
       select.appendChild(el);
     });
-    if (val && !normalized.includes(val)) {
+    if (id === 'edit-age' && val && !normalized.includes(val)) {
       const el = document.createElement('option');
       el.value = val;
       el.textContent = val;
       select.appendChild(el);
     }
-    select.value = val || normalized[0] || '';
+    select.value = normalized.includes(val) || id === 'edit-age' ? (val || normalized[0] || '') : (normalized[0] || '');
   });
 }
 

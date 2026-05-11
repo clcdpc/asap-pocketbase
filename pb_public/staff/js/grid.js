@@ -954,11 +954,12 @@ export function renderClaimCell(row) {
   if (isUnclaimed(row)) {
     return gridjs.html('<span class="claim-badge claim-badge--unclaimed">Unclaimed</span>');
   }
+  const source = row.claimType === 'automatic_format_rule' ? 'Auto-assigned by format rule' : 'Manual claim';
   if (isClaimedByCurrentUser(row)) {
-    return gridjs.html('<span class="claim-badge claim-badge--mine">Mine</span>');
+    return gridjs.html(`<div><span class="claim-badge claim-badge--mine" title="${escapeAttr(source)}">Mine</span><div class="small text-muted">${escapeAttr(source)}</div></div>`);
   }
   const name = row.claimedByDisplayName || 'Staff';
-  return gridjs.html(`<span class="claim-badge claim-badge--claimed" title="Claimed by ${escapeAttr(name)}">Claimed by ${escapeAttr(name)}</span>`);
+  return gridjs.html(`<div><span class="claim-badge claim-badge--claimed" title="Claimed by ${escapeAttr(name)}. ${escapeAttr(source)}">Claimed by ${escapeAttr(name)}</span><div class="small text-muted">${escapeAttr(source)}</div></div>`);
 }
 
 export function getGridRow(row, status) {

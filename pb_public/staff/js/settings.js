@@ -1,8 +1,8 @@
-import { pb, settingsContainer, settingsForm, formatMap, availableFormats, setAvailableFormats, currentRejectionTemplates, verifiedBibId, publicationOptions, setPublicationOptions, workflowSettings, currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, initialSettingsSnapshot, libraryContextLoadSerial, librarySelectorBound, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, lastWorkflowEnabledList, defaultPublicationOptions, defaultAgeGroups, emailTemplateDefaults, setVerifiedBibId, setCurrentLibraryContextOrgId, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId, setInitialSettingsSnapshot, setLibrarySelectorBound, setSettingsSaving, setSettingsLoading, setLeapBibUrlPattern, setLastWorkflowEnabledList, incrementLibraryContextLoadSerial } from './state.js';
+import { pb, settingsContainer, settingsForm, formatMap, availableFormats, setAvailableFormats, currentRejectionTemplates, verifiedBibId, publicationOptions, setPublicationOptions, workflowSettings, currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, initialSettingsSnapshot, libraryContextLoadSerial, librarySelectorBound, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, lastWorkflowEnabledList, defaultPublicationOptions, defaultAgeGroups, emailTemplateDefaults, setVerifiedBibId, setCurrentLibraryContextOrgId, setCurrentFormatClaimRules, setFormatClaimStaffOptions, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId, setInitialSettingsSnapshot, setLibrarySelectorBound, setSettingsSaving, setSettingsLoading, setLeapBibUrlPattern, setLastWorkflowEnabledList, incrementLibraryContextLoadSerial } from './state.js';
 import { setFieldValue, setFieldChecked, getFieldValue, getFieldChecked, validateStaffUrl, normalizeStaffUrl, normalizeLeapBibUrlPattern, isPocketBaseAutoCancelError, validateSmtpHostField, setVisible, showToast, showConfirm, isSuperAdminStaff, closeOpenDialogs, updateSaveBarState, markSettingsDirty, markSettingsClean, activateSettingsSection, initSettingsNavigation, updateEmailStatusBanner, updateOrganizationsStatusUi, checkAuth, loadSetupStatus, authorizedJson, updateAutoRejectEmailControls } from './api.js';
 import { closeActionMenu, escapeAttr } from './grid.js';
 import { renderEditLeapBibLink } from './modals.js';
-import { renderFormatSettings, collectFormatLabels, collectAvailableFormats, collectFormatOrder, updateModalFormatDropdowns } from './settings-formats.js';
+import { renderFormatSettings, collectFormatLabels, collectAvailableFormats, collectFormatOrder, collectFormatClaimRules, updateModalFormatDropdowns } from './settings-formats.js';
 import { renderDuplicateStatusLabelSettings, collectDuplicateStatusLabels } from './settings-labels.js';
 import { collectSettingsPolaris, syncPolarisOrganizations, renderLibraryParticipationCheckboxes, collectEnabledLibraryIds } from './settings-polaris.js';
 import { populateEmailTemplateForms } from './settings-templates.js';
@@ -248,6 +248,8 @@ export function applyLibrarySettingsToForm(settings) {
   const emails = settings.emails || {};
   const smtp = settings.smtp || {};
   const polaris = settings.polaris || {};
+  setCurrentFormatClaimRules(settings.formatClaimRules || []);
+  setFormatClaimStaffOptions(settings.formatClaimStaffOptions || []);
   setLeapBibUrlPattern(settings.leapBibUrlPattern || '');
 
   const resetBtn = document.getElementById('btn-reset-library-settings');
@@ -609,6 +611,7 @@ function _serializeSettingsState(validate = false) {
 
   const payload = {
     ui_text: uiText, emails,
+    formatClaimRules: collectFormatClaimRules(),
     suggestionLimit: positiveInt('suggestion-limit', 5, 'Suggestion limit'),
     suggestionLimitMessage: getFieldValue('suggestion-limit-msg'),
     outstandingTimeoutEnabled: getFieldChecked('outstanding-timeout-enabled'),
@@ -710,6 +713,7 @@ export async function saveSettings(options = {}) {
       polaris: payload.polaris,
       emails: payload.emails,
       ui_text: payload.ui_text,
+      formatClaimRules: currentLibraryContextOrgId === 'system' ? [] : payload.formatClaimRules,
       workflow: {
         suggestionLimit: payload.suggestionLimit,
         suggestionLimitMessage: payload.suggestionLimitMessage,

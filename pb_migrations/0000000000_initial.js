@@ -238,6 +238,8 @@ migrate((app) => {
       field("claimedByStaffUserId", "text", { max: 64 }),
       field("claimedByDisplayName", "text", { max: 256 }),
       field("claimedAt", "date"),
+      field("claimType", "select", { maxSelect: 1, values: ["manual", "automatic_format_rule"] }),
+      field("claimRuleId", "text", { max: 64 }),
       field("editedBy", "text", { max: 256 }),
       field("notes", "editor", { maxSize: 5000, convertURLs: false }),
       field("bibid", "text", { max: 128 }),
@@ -259,7 +261,34 @@ migrate((app) => {
       "CREATE INDEX idx_title_requests_created ON title_requests (created)",
       "CREATE INDEX idx_title_requests_close_reason ON title_requests (closeReason)",
       "CREATE INDEX idx_title_requests_library_org_status ON title_requests (libraryOrgId, status)",
-      "CREATE INDEX idx_title_requests_library_org_created ON title_requests (libraryOrgId, created)"
+      "CREATE INDEX idx_title_requests_library_org_created ON title_requests (libraryOrgId, created)",
+      "CREATE INDEX idx_title_requests_claim_type ON title_requests (claimType)",
+      "CREATE INDEX idx_title_requests_claim_rule ON title_requests (claimRuleId)"
+    ]
+  });
+
+  const formatClaimRules = saveCollection(app, {
+    type: "base",
+    name: "format_claim_rules",
+    listRule: "@request.auth.collectionName = 'staff_users' && (@request.auth.role = 'super_admin' || (@request.auth.role = 'admin' && libraryOrgId = @request.auth.libraryOrgId))",
+    viewRule: "@request.auth.collectionName = 'staff_users' && (@request.auth.role = 'super_admin' || (@request.auth.role = 'admin' && libraryOrgId = @request.auth.libraryOrgId))",
+    createRule: "@request.auth.collectionName = 'staff_users' && (@request.auth.role = 'super_admin' || (@request.auth.role = 'admin' && libraryOrgId = @request.auth.libraryOrgId))",
+    updateRule: "@request.auth.collectionName = 'staff_users' && (@request.auth.role = 'super_admin' || (@request.auth.role = 'admin' && libraryOrgId = @request.auth.libraryOrgId))",
+    deleteRule: "@request.auth.collectionName = 'staff_users' && (@request.auth.role = 'super_admin' || (@request.auth.role = 'admin' && libraryOrgId = @request.auth.libraryOrgId))",
+    fields: [
+      rel("libraryOrganization", organizations),
+      field("libraryOrgId", "text", { required: true, max: 32 }),
+      field("format", "text", { required: true, max: 64 }),
+      rel("staffUser", staffUsers),
+      field("staffUserId", "text", { required: true, max: 64 }),
+      field("active", "bool"),
+      rel("createdBy", staffUsers),
+      rel("updatedBy", staffUsers),
+    ],
+    indexes: [
+      "CREATE UNIQUE INDEX idx_format_claim_rules_library_format ON format_claim_rules (libraryOrgId, format)",
+      "CREATE INDEX idx_format_claim_rules_library ON format_claim_rules (libraryOrgId)",
+      "CREATE INDEX idx_format_claim_rules_staff ON format_claim_rules (staffUserId)"
     ]
   });
 

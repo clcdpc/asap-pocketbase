@@ -704,15 +704,18 @@ function normalizePublicationOptions(options) {
   return cleaned.length ? Array.from(new Set(cleaned)) : defaultPublicationOptions.slice();
 }
 
+function normalizeAgeGroups(options) {
+  const raw = Array.isArray(options) ? options : String(options || '').split(/\r?\n/);
+  const cleaned = raw
+    .filter(option => !(option && typeof option === 'object') || option.enabled !== false)
+    .map(option => String(option && typeof option === 'object' ? option.label : option || '').trim())
+    .filter(Boolean);
+  return cleaned.length ? Array.from(new Set(cleaned)) : defaultAgeGroups.slice();
+}
+
 function setPublicationOptions(options) {
   publicationOptions = normalizePublicationOptions(options);
-  let ageGroups = defaultAgeGroups;
-  if (uiConfig.ageGroups && Array.isArray(uiConfig.ageGroups)) {
-    ageGroups = uiConfig.ageGroups
-      .filter(option => !(option && typeof option === 'object') || option.enabled !== false)
-      .map(option => String(option && typeof option === 'object' ? option.label : option || '').trim())
-      .filter(Boolean);
-  }
+  ageGroups = normalizeAgeGroups(uiConfig.ageGroups);
   
   const pubSelect = document.getElementById('publication');
   pubSelect.innerHTML = '';
@@ -724,6 +727,7 @@ function setPublicationOptions(options) {
   });
   
   const ageSelect = document.getElementById('agegroup');
+  const selectedAgeGroup = agegroupInput.value;
   ageSelect.innerHTML = '';
   ageGroups.forEach(opt => {
     const el = document.createElement('option');
@@ -734,6 +738,7 @@ function setPublicationOptions(options) {
 
   const selected = publicationInput.value;
   publicationInput.value = publicationOptions.includes(selected) ? selected : publicationOptions[0];
+  agegroupInput.value = ageGroups.includes(selectedAgeGroup) ? selectedAgeGroup : ageGroups[0];
 }
 
 formatSelect.addEventListener('change', () => {

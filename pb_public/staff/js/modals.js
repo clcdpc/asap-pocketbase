@@ -62,18 +62,34 @@ export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
 export function renderEditClaimState(row) {
   const container = document.getElementById('edit-claim-state');
   if (!container) return;
+  container.replaceChildren();
+  const label = document.createElement('div');
+  label.className = 'small font-weight-bold mb-1';
+  label.textContent = 'Claim';
+  container.appendChild(label);
   const currentStaffId = String((pb.authStore.model && pb.authStore.model.id) || '').trim();
   const claimantId = String(row.claimedByStaffUserId || '').trim();
+  const badge = document.createElement('span');
+  badge.className = 'claim-badge';
   if (!claimantId) {
-    container.innerHTML = '<div class="small font-weight-bold mb-1">Claim</div><span class="claim-badge claim-badge--unclaimed">Unclaimed</span>';
+    badge.classList.add('claim-badge--unclaimed');
+    badge.textContent = 'Unclaimed';
+    container.appendChild(badge);
     return;
   }
   if (currentStaffId && claimantId === currentStaffId) {
-    container.innerHTML = '<div class="small font-weight-bold mb-1">Claim</div><span class="claim-badge claim-badge--mine">Mine</span>';
-    return;
+    badge.classList.add('claim-badge--mine');
+    badge.textContent = 'Mine';
+  } else {
+    const name = row.claimedByDisplayName || 'Staff';
+    badge.classList.add('claim-badge--claimed');
+    badge.textContent = `Claimed by ${name}`;
   }
-  const name = row.claimedByDisplayName || 'Staff';
-  container.innerHTML = `<div class="small font-weight-bold mb-1">Claim</div><span class="claim-badge claim-badge--claimed">Claimed by ${escapeAttr(name)}</span>`;
+  container.appendChild(badge);
+  const source = document.createElement('div');
+  source.className = 'small text-muted mt-1';
+  source.textContent = row.claimType === 'automatic_format_rule' ? 'Auto-assigned by format rule' : 'Manual claim';
+  container.appendChild(source);
 }
 
 export function getExistingHistory(row) {
@@ -691,6 +707,17 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
     const confirmed = await showConfirm('Do Not Auto Place Hold', 'This request is marked Do Not Auto Place Hold. Saving this BIB ID will close the request immediately and skip the hold-placement workflow.');
     if (!confirmed) return;
   }
+  const nextFormatValue = document.getElementById('edit-format').value;
+  if (row && nextFormatValue && nextFormatValue !== row.format) {
+    let warning = 'Changing the format may update the automatic claim assignment for this suggestion.';
+    if (row.claimedByStaffUserId && row.claimType === 'automatic_format_rule') {
+      warning = 'This suggestion is currently auto-claimed based on its format. Changing the format may reassign it to another staff member.';
+    } else if (row.claimedByStaffUserId) {
+      warning = 'This suggestion was manually claimed. Changing the format will not change the current claim.';
+    }
+    const confirmed = await showConfirm('Format change may affect claim', warning);
+    if (!confirmed) return;
+  }
 
   if (nextStatus === 'pending_hold') {
     if (!bibid) {
@@ -712,7 +739,7 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
     author: document.getElementById('edit-author').value,
     identifier: document.getElementById('edit-identifier').value,
     bibid: bibid,
-    format: document.getElementById('edit-format').value,
+    format: nextFormatValue,
     agegroup: document.getElementById('edit-age').value,
     publication: document.getElementById('edit-publication').value,
     exactPublicationDate: document.getElementById('edit-exact-publication-date').value,

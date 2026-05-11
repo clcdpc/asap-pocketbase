@@ -1,4 +1,4 @@
-import { formatMap, availableFormats, setAvailableFormats } from './state.js';
+import { formatMap, availableFormats, setAvailableFormats, currentFormatClaimRules, formatClaimStaffOptions } from './state.js';
 import { setInlineStatus, showConfirm, markSettingsDirty } from './api.js';
 import { escapeAttr } from './grid.js';
 import { renderPatronFormatRulesEditor, collectPatronFormatRules } from './settings-ui.js';
@@ -20,50 +20,128 @@ export function renderFormatSettings() {
     }
   });
 
-  container.innerHTML = `
-    <p class="small text-muted mb-2">Drag rows to reorder. The <strong>Show</strong> checkbox controls whether the format appears in the patron dropdown. The <strong>Patron #</strong> column shows its position in the patron dropdown.</p>
-    <div class="table-responsive">
-      <table class="table table-sm mb-0">
-        <thead>
-          <tr>
-            <th class="format-drag-col"></th>
-            <th class="format-show-col" title="Check to show this format in the patron dropdown">Show</th>
-            <th style="width: 60px; text-align: center;" title="Position in the patron format dropdown">Patron&nbsp;#</th>
-            <th class="format-key-col">Format key</th>
-            <th>Display label</th>
-          </tr>
-        </thead>
-        <tbody id="format-settings-body">
-          ${allKeys.map(key => {
-            const isEnabled = availableFormats.includes(key);
-            const pos = patronPositions[key];
-            return `
-            <tr class="format-setting-row${isEnabled ? '' : ' text-muted'}" data-key="${escapeAttr(key)}" draggable="true">
-              <td class="align-middle text-muted format-drag-handle">&#8597;</td>
-              <td class="align-middle">
-                <div class="custom-control custom-checkbox">
-                  <input type="checkbox" class="custom-control-input format-enabled-check" id="fmt-chk-${key}" ${isEnabled ? 'checked' : ''}>
-                  <label class="custom-control-label" for="fmt-chk-${key}"></label>
-                </div>
-              </td>
-              <td class="align-middle text-center">
-                ${pos ? `<span class="badge badge-primary">${pos}</span>` : '<span class="text-muted">&mdash;</span>'}
-              </td>
-              <td class="align-middle"><code>${escapeAttr(key)}</code></td>
-              <td>
-                <div class="d-flex align-items-center">
-                  <input type="text" class="form-control form-control-sm format-label-input w-100" value="${escapeAttr(formatMap[key] || key)}">
-                  ${['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'].includes(key) ? '' : '<button type="button" class="btn btn-sm btn-outline-danger btn-remove-format text-nowrap ml-2">Remove Format</button>'}
-                </div>
-              </td>
-            </tr>
-          `}).join('')}
-        </tbody>
-      </table>
-    </div>
-  `;
+  container.replaceChildren();
+
+  const help = document.createElement('p');
+  help.className = 'small text-muted mb-2';
+  help.textContent = 'Drag rows to reorder. Show controls whether the format appears in the patron dropdown. Auto-claim is library-only and does not inherit from system defaults.';
+  container.appendChild(help);
+
+  const tableWrap = document.createElement('div');
+  tableWrap.className = 'table-responsive';
+  const table = document.createElement('table');
+  table.className = 'table table-sm mb-0';
+  const thead = document.createElement('thead');
+  const headRow = document.createElement('tr');
+  [
+    ['', 'format-drag-col'],
+    ['Show', 'format-show-col'],
+    ['Patron #', ''],
+    ['Format key', 'format-key-col'],
+    ['Display label', ''],
+    ['Auto-claim staff', '']
+  ].forEach(([label, className]) => {
+    const th = document.createElement('th');
+    if (className) th.className = className;
+    th.textContent = label;
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  tbody.id = 'format-settings-body';
+  const claimByFormat = formatClaimRulesByFormat();
+
+  allKeys.forEach(key => {
+    const isEnabled = availableFormats.includes(key);
+    const pos = patronPositions[key];
+    const tr = document.createElement('tr');
+    tr.className = `format-setting-row${isEnabled ? '' : ' text-muted'}`;
+    tr.setAttribute('data-key', key);
+    tr.draggable = true;
+
+    const dragTd = document.createElement('td');
+    dragTd.className = 'align-middle text-muted format-drag-handle';
+    dragTd.textContent = '\u2195';
+    tr.appendChild(dragTd);
+
+    const showTd = document.createElement('td');
+    showTd.className = 'align-middle';
+    const checkWrap = document.createElement('div');
+    checkWrap.className = 'custom-control custom-checkbox';
+    const check = document.createElement('input');
+    check.type = 'checkbox';
+    check.className = 'custom-control-input format-enabled-check';
+    check.id = `fmt-chk-${key}`;
+    check.checked = isEnabled;
+    const checkLabel = document.createElement('label');
+    checkLabel.className = 'custom-control-label';
+    checkLabel.setAttribute('for', check.id);
+    checkWrap.append(check, checkLabel);
+    showTd.appendChild(checkWrap);
+    tr.appendChild(showTd);
+
+    const posTd = document.createElement('td');
+    posTd.className = 'align-middle text-center';
+    const posSpan = document.createElement('span');
+    posSpan.className = pos ? 'badge badge-primary' : 'text-muted';
+    posSpan.textContent = pos ? String(pos) : '-';
+    posTd.appendChild(posSpan);
+    tr.appendChild(posTd);
+
+    const keyTd = document.createElement('td');
+    keyTd.className = 'align-middle';
+    const code = document.createElement('code');
+    code.textContent = key;
+    keyTd.appendChild(code);
+    tr.appendChild(keyTd);
+
+    const labelTd = document.createElement('td');
+    const labelWrap = document.createElement('div');
+    labelWrap.className = 'd-flex align-items-center';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'form-control form-control-sm format-label-input w-100';
+    input.value = formatMap[key] || key;
+    labelWrap.appendChild(input);
+    if (!['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'].includes(key)) {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'btn btn-sm btn-outline-danger btn-remove-format text-nowrap ml-2';
+      remove.textContent = 'Remove Format';
+      labelWrap.appendChild(remove);
+    }
+    labelTd.appendChild(labelWrap);
+    tr.appendChild(labelTd);
+
+    const claimTd = document.createElement('td');
+    const select = document.createElement('select');
+    select.className = 'form-control form-control-sm format-claim-staff-select';
+    select.appendChild(new Option('No automatic claimant', ''));
+    formatClaimStaffOptions.forEach(staff => {
+      select.appendChild(new Option(staff.displayName || staff.username || 'Staff', staff.id || ''));
+    });
+    select.value = claimByFormat[key] || '';
+    claimTd.appendChild(select);
+    tr.appendChild(claimTd);
+
+    tbody.appendChild(tr);
+  });
+
+  table.appendChild(tbody);
+  tableWrap.appendChild(table);
+  container.appendChild(tableWrap);
 
   initFormatDragSort();
+}
+
+function formatClaimRulesByFormat() {
+  const byFormat = {};
+  (currentFormatClaimRules || []).forEach(rule => {
+    if (rule && rule.format) byFormat[rule.format] = rule.staffUserId || '';
+  });
+  return byFormat;
 }
 
 export function initFormatDragSort() {
@@ -167,6 +245,16 @@ export function collectFormatOrder() {
   return order;
 }
 
+export function collectFormatClaimRules() {
+  const rules = [];
+  document.querySelectorAll('.format-setting-row').forEach(row => {
+    const format = row.getAttribute('data-key');
+    const staffUserId = row.querySelector('.format-claim-staff-select')?.value || '';
+    if (format) rules.push({ format, staffUserId });
+  });
+  return rules;
+}
+
 export function updateModalFormatDropdowns() {
   ['edit-format', 'new-format'].forEach(id => {
     const select = document.getElementById(id);
@@ -242,6 +330,9 @@ if (formatSettingsContainer) {
       syncFormatMapOrder();
       renderFormatSettings();
       updateModalFormatDropdowns();
+      markSettingsDirty();
+    }
+    if (e.target.classList.contains('format-claim-staff-select')) {
       markSettingsDirty();
     }
   });
