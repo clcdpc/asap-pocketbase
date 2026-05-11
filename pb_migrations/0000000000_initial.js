@@ -733,7 +733,7 @@ migrate((app) => {
     duplicateLabelManual: "Closed",
     duplicateLabelSilent: "Closed",
     noEmailMessage: "No email is specified on your library account, which means we won't be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.",
-    systemNotEnabledMessage: "Your library does not currently participate in this suggestion service.",
+    systemNotEnabledMessage: "{{library}} does not currently participate in this suggestion service.",
     ebookMessage: "<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
     eaudiobookMessage: "<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
     publicationOptions: "Already published\nComing soon\nPublished a while back",
