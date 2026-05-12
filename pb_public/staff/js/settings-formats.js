@@ -261,17 +261,34 @@ export function updateFormatClaimRuleState(format, staffUserId) {
 }
 
 export function collectFormatClaimRules() {
-  const rules = [];
-  const rows = document.querySelectorAll('.format-setting-row');
-  if (rows.length > 0) {
-    rows.forEach(row => {
-      const format = row.getAttribute('data-key');
-      const staffUserId = row.querySelector('.format-claim-staff-select')?.value || '';
-      if (format) rules.push({ format, staffUserId });
-    });
-    return rules;
-  }
-  return currentFormatClaimRules || [];
+  const byFormat = {};
+
+  // Start with in-memory state so assignments made in the Staff tab are preserved.
+  (currentFormatClaimRules || []).forEach(rule => {
+    if (rule && rule.format) byFormat[rule.format] = rule.staffUserId || '';
+  });
+
+  // Overlay with current DOM values when the Formats tab has been rendered.
+  // If the DOM select can't represent a current state value (e.g. options lag),
+  // keep the state value instead of unintentionally clearing it.
+  document.querySelectorAll('.format-setting-row').forEach(row => {
+    const format = row.getAttribute('data-key');
+    if (!format) return;
+    const select = row.querySelector('.format-claim-staff-select');
+    if (!select) return;
+    const domValue = select.value || '';
+    const stateValue = byFormat[format] || '';
+    const stateOptionExists = !stateValue || Array.from(select.options).some(opt => opt.value === stateValue);
+    if (domValue === '' && stateValue && !stateOptionExists) {
+      return;
+    }
+    const optionExists = domValue === '' || Array.from(select.options).some(opt => opt.value === domValue);
+    if (optionExists) {
+      byFormat[format] = domValue;
+    }
+  });
+
+  return Object.keys(byFormat).map(format => ({ format, staffUserId: byFormat[format] || '' }));
 }
 
 export function updateModalFormatDropdowns() {
