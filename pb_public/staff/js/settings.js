@@ -10,6 +10,7 @@ import { updatePublicationOptionsUi, setAgeGroups, renderPatronFormatRulesEditor
 import { loadStaffUsers, populateStaffLibraryOptions } from './settings-users.js';
 
 const adminSettingsSections = ['start', 'staff', 'templates', 'workflow', 'patron'];
+const SUPER_ADMIN_LIBRARY_CONTEXT_STORAGE_KEY = 'asap.superAdmin.settings.libraryContextOrgId';
 
 export function normalizeExternalSearchUrlTemplate(value) {
   const text = String(value || '').trim();
@@ -26,6 +27,21 @@ export function showSettingsAccessDenied() {
 
 export function hideSettingsAccessDenied() {
   setVisible('settings-error', false);
+}
+
+function readSavedSuperAdminLibraryContext() {
+  try {
+    const value = window.localStorage.getItem(SUPER_ADMIN_LIBRARY_CONTEXT_STORAGE_KEY);
+    return String(value || '').trim();
+  } catch (err) {
+    return '';
+  }
+}
+
+function saveSuperAdminLibraryContext(orgId) {
+  try {
+    window.localStorage.setItem(SUPER_ADMIN_LIBRARY_CONTEXT_STORAGE_KEY, String(orgId || 'system'));
+  } catch (err) {}
 }
 
 export async function loadSettings(options = {}) {
@@ -181,7 +197,8 @@ export async function populateLibrarySelector() {
   if (!select) return;
 
   try {
-    const selectedOrgId = currentLibraryContextOrgId || select.value || 'system';
+    const savedOrgId = readSavedSuperAdminLibraryContext();
+    const selectedOrgId = savedOrgId || currentLibraryContextOrgId || select.value || 'system';
     select.disabled = true;
     select.innerHTML = '<option value="system">System Defaults</option>';
 
@@ -200,6 +217,7 @@ export async function populateLibrarySelector() {
 
     select.value = Array.from(select.options).some(option => option.value === selectedOrgId) ? selectedOrgId : 'system';
     setCurrentLibraryContextOrgId(select.value);
+    saveSuperAdminLibraryContext(select.value);
     const selectedOption = select.options[select.selectedIndex];
     if (selectedOption) {
       document.getElementById('library-context-display').textContent = selectedOption.text;
@@ -217,6 +235,7 @@ export async function populateLibrarySelector() {
           }
         }
         setCurrentLibraryContextOrgId(nextOrgId);
+        saveSuperAdminLibraryContext(nextOrgId);
         const display = e.target.options[e.target.selectedIndex].text;
         document.getElementById('library-context-display').textContent = display;
         await loadLibrarySettings(currentLibraryContextOrgId);
