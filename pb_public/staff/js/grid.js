@@ -803,7 +803,6 @@ export function getGridColumns(status) {
     { name: 'Author (original)', width: '200px' },
     { name: 'Identifier number', width: '140px' },
     { name: 'BIB ID', width: '100px' },
-    { name: 'Age group', width: '100px' },
     { name: 'Format', width: '100px' },
     { name: 'Timing', width: '100px' },
     { name: 'Submitted', width: '100px' },

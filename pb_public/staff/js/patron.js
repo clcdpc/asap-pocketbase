@@ -218,7 +218,6 @@ export function clearNewSuggestionDetails() {
   document.getElementById('new-author').value = '';
   document.getElementById('new-identifier').value = '';
   document.getElementById('new-format').selectedIndex = 0;
-  document.getElementById('new-age').selectedIndex = 0;
   document.getElementById('new-publication').selectedIndex = 0;
   document.getElementById('new-exact-publication-date').value = '';
   document.getElementById('new-notes').value = '';
