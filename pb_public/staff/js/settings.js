@@ -14,7 +14,7 @@ const adminSettingsSections = ['start', 'staff', 'templates', 'workflow', 'patro
 export function normalizeExternalSearchUrlTemplate(value) {
   const text = String(value || '').trim();
   if (!text) return '';
-  return text.includes('://') ? text : `https://${text}`;
+  return /^https?:\/\//i.test(text) ? text : `https://${text}`;
 }
 
 export function showSettingsAccessDenied() {
