@@ -157,6 +157,26 @@ routerAdd("GET", "/api/asap/config", (e) => {
     response.externalSearch4Label = wf.externalSearch4Label || "";
     response.externalSearch4UrlTemplate = wf.externalSearch4UrlTemplate || "";
     
+    // Participation check
+    if (orgId) {
+      var appSettings = config.getSettings();
+      var enabledLibraries = String(appSettings.enabledLibraryOrgIds || "").trim();
+      if (enabledLibraries) {
+        var enabledList = enabledLibraries.split(",").map(function (id) { return id.trim(); }).filter(function (id) { return id.length > 0; });
+        if (enabledList.length > 0 && enabledList.indexOf(orgId) < 0) {
+          response.systemNotEnabled = true;
+          var msg = response.systemNotEnabledMessage || "{{library}} does not currently participate in this suggestion service.";
+          var org = require(`${__hooks}/../lib/orgs.js`).findOrganization(e.app, orgId);
+          var libraryName = org ? String(org.get("displayName") || org.get("name") || "Your library") : "Your library";
+          msg = msg.replace(/\{\{library\}\}/g, libraryName);
+          if (msg.indexOf("Your library") >= 0) {
+            msg = msg.replace("Your library", libraryName);
+          }
+          response.systemNotEnabledMessage = msg;
+        }
+      }
+    }
+
     return e.json(200, response);
   } catch (err) {
     e.app.logger().error("Config API Error", "error", String(err));

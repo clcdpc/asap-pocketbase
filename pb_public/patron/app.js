@@ -512,6 +512,15 @@ async function loadConfig() {
   try {
     const config = normalizeUiConfig(await request(getConfigUrl()));
     uiConfig = { ...uiConfig, ...config };
+    
+    if (uiConfig.systemNotEnabled) {
+      const errorDiv = document.getElementById('login-error');
+      errorDiv.innerHTML = sanitizeHtml(uiConfig.systemNotEnabledMessage || 'Your library does not currently participate in this suggestion service.');
+      errorDiv.classList.remove('hidden');
+      const btn = document.getElementById('login-btn');
+      if (btn) btn.disabled = true;
+    }
+
     applyUiConfig();
   } catch (err) {
     console.error('Failed to load config', err);
