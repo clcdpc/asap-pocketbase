@@ -1,4 +1,4 @@
-import { pb, settingsContainer, settingsForm, formatMap, availableFormats, setAvailableFormats, currentRejectionTemplates, verifiedBibId, publicationOptions, setPublicationOptions, workflowSettings, currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, initialSettingsSnapshot, libraryContextLoadSerial, librarySelectorBound, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, lastWorkflowEnabledList, defaultPublicationOptions, defaultAgeGroups, emailTemplateDefaults, setVerifiedBibId, setCurrentLibraryContextOrgId, setCurrentFormatClaimRules, setFormatClaimStaffOptions, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId, setInitialSettingsSnapshot, setLibrarySelectorBound, setSettingsSaving, setSettingsLoading, setLeapBibUrlPattern, setLastWorkflowEnabledList, incrementLibraryContextLoadSerial } from './state.js';
+import { pb, settingsContainer, settingsForm, formatMap, availableFormats, setAvailableFormats, currentRejectionTemplates, verifiedBibId, publicationOptions, setPublicationOptions, workflowSettings, currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, initialSettingsSnapshot, libraryContextLoadSerial, librarySelectorBound, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, lastWorkflowEnabledList, defaultPublicationOptions, emailTemplateDefaults, setVerifiedBibId, setCurrentLibraryContextOrgId, setCurrentFormatClaimRules, setFormatClaimStaffOptions, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId, setInitialSettingsSnapshot, setLibrarySelectorBound, setSettingsSaving, setSettingsLoading, setLeapBibUrlPattern, setLastWorkflowEnabledList, incrementLibraryContextLoadSerial } from './state.js';
 import { setFieldValue, setFieldChecked, getFieldValue, getFieldChecked, validateStaffUrl, normalizeStaffUrl, normalizeLeapBibUrlPattern, isPocketBaseAutoCancelError, validateSmtpHostField, setVisible, showToast, showConfirm, isSuperAdminStaff, closeOpenDialogs, updateSaveBarState, markSettingsDirty, markSettingsClean, activateSettingsSection, initSettingsNavigation, updateEmailStatusBanner, updateOrganizationsStatusUi, checkAuth, loadSetupStatus, authorizedJson, updateAutoRejectEmailControls } from './api.js';
 import { closeActionMenu, escapeAttr } from './grid.js';
 import { renderEditLeapBibLink } from './modals.js';
@@ -6,7 +6,7 @@ import { renderFormatSettings, collectFormatLabels, collectAvailableFormats, col
 import { renderDuplicateStatusLabelSettings, collectDuplicateStatusLabels } from './settings-labels.js';
 import { collectSettingsPolaris, syncPolarisOrganizations, renderLibraryParticipationCheckboxes, collectEnabledLibraryIds } from './settings-polaris.js';
 import { populateEmailTemplateForms } from './settings-templates.js';
-import { updatePublicationOptionsUi, setAgeGroups, renderPatronFormatRulesEditor, collectPatronFormatRules, renderOptionListEditor, collectOptionList, addOptionListRow, handleOptionListClick } from './settings-ui.js';
+import { updatePublicationOptionsUi, renderPatronFormatRulesEditor, collectPatronFormatRules, renderOptionListEditor, collectOptionList, addOptionListRow, handleOptionListClick } from './settings-ui.js';
 import { loadStaffUsers, populateStaffLibraryOptions } from './settings-users.js';
 
 const adminSettingsSections = ['start', 'staff', 'templates', 'workflow', 'patron'];
@@ -831,9 +831,7 @@ document.getElementById('settings-discard-btn')?.addEventListener('click', (e) =
 settingsForm.addEventListener('input', markSettingsDirty);
 settingsForm.addEventListener('change', markSettingsDirty);
 document.getElementById('ui-publication-options-editor')?.addEventListener('click', handleOptionListClick);
-document.getElementById('ui-age-groups-editor')?.addEventListener('click', handleOptionListClick);
 document.getElementById('btn-add-publication-option')?.addEventListener('click', () => addOptionListRow('ui-publication-options-editor', defaultPublicationOptions));
-document.getElementById('btn-add-age-group')?.addEventListener('click', () => addOptionListRow('ui-age-groups-editor', defaultAgeGroups));
 
 export async function loadStaffConfig() {
   try {

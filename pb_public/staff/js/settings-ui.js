@@ -1,12 +1,6 @@
-import { pb, formatMap, patronFormatKeys, patronFormatFields, defaultPatronFormatRules, currentSuggestions, publicationOptions, setPublicationOptions, defaultPublicationOptions, defaultAgeGroups, setVerifiedBibId } from './state.js';
+import { pb, formatMap, patronFormatKeys, patronFormatFields, defaultPatronFormatRules, currentSuggestions, publicationOptions, setPublicationOptions, defaultPublicationOptions, setVerifiedBibId } from './state.js';
 import { isValidSmtpHost, validateSmtpHostField, showToast, markSettingsDirty } from './api.js';
 import { escapeAttr } from './grid.js';
-
-export function normalizeAgeGroups(options) {
-  const raw = Array.isArray(options) ? options : String(options || '').split(/\r?\n/);
-  const cleaned = raw.map(option => String(option && typeof option === 'object' ? option.label : option || '').trim()).filter(Boolean);
-  return cleaned.length ? Array.from(new Set(cleaned)) : defaultAgeGroups.slice();
-}
 
 export function optionIdFromLabel(label, fallback = 'option') {
   const id = String(label || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
@@ -116,28 +110,6 @@ export function updatePublicationOptionsUi(options) {
 }
 
 
-export function setAgeGroups(options) {
-  const normalized = enabledOptionLabels(options, defaultAgeGroups);
-  ['edit-age', 'new-age'].forEach(id => {
-    const select = document.getElementById(id);
-    if (!select) return;
-    const val = select.value || normalized[0];
-    select.innerHTML = '';
-    normalized.forEach(opt => {
-      const el = document.createElement('option');
-      el.value = opt;
-      el.textContent = opt;
-      select.appendChild(el);
-    });
-    if (id === 'edit-age' && val && !normalized.includes(val)) {
-      const el = document.createElement('option');
-      el.value = val;
-      el.textContent = val;
-      select.appendChild(el);
-    }
-    select.value = normalized.includes(val) || id === 'edit-age' ? (val || normalized[0] || '') : (normalized[0] || '');
-  });
-}
 
 export function normalizePatronFormatRules(rules) {
   const normalized = structuredClone(defaultPatronFormatRules);
@@ -353,7 +325,7 @@ export function handleOptionListClick(event) {
   if (!editor) return;
   const row = button.closest('.option-list-row');
   if (!row) return;
-  const fallback = editor.id === 'ui-age-groups-editor' ? defaultAgeGroups : defaultPublicationOptions;
+  const fallback = defaultPublicationOptions;
   const list = collectOptionList(editor.id, fallback);
   const index = Array.from(editor.querySelectorAll('.option-list-row')).indexOf(row);
   if (button.classList.contains('option-list-delete')) {
@@ -413,7 +385,7 @@ document.addEventListener('drop', (e) => {
     editor.querySelectorAll('.option-list-row').forEach(r => r.classList.remove('option-row-drop-target'));
     if (target && target !== optionDraggingRow) {
       editor.insertBefore(optionDraggingRow, target);
-      const fallback = editor.id === 'ui-age-groups-editor' ? defaultAgeGroups : defaultPublicationOptions;
+      const fallback = defaultPublicationOptions;
       const list = collectOptionList(editor.id, fallback);
       list.forEach((option, nextIndex) => option.sortOrder = (nextIndex + 1) * 10);
       renderOptionListEditor(editor.id, list, fallback);

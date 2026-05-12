@@ -1,5 +1,4 @@
 export const defaultPublicationOptions = ['Already published', 'Coming soon', 'Published a while back'];
-export const defaultAgeGroups = ['Adult', 'Young Adult / Teen', 'Children'];
 
 export const pb = new window.PocketBase(window.location.origin);
 export const SETTINGS_RECORD_ID = 'settings0000001';
