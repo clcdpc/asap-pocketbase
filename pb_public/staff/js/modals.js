@@ -322,7 +322,7 @@ export function renderExternalSearchButton(title, identifier) {
   const buttonClasses = ['btn-warning', 'btn-success', 'btn-primary'];
 
   providers.forEach((p, index) => {
-    if (!p.enabled || !p.template || !p.template.includes('://')) return;
+    if (!p.enabled || !p.template || !/^https?:\/\//i.test(p.template)) return;
 
     let url = p.template;
     url = url.replace(/\{\{title\}\}/g, encodedTitle);
