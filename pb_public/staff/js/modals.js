@@ -34,7 +34,6 @@ export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
     }
   }
   editFormat.value = fmt;
-  document.getElementById('edit-age').value = row.agegroup || 'adult';
   setSelectValue(document.getElementById('edit-publication'), row.publication || publicationOptions[0]);
   document.getElementById('edit-exact-publication-date').value = dateOnly(row.exactPublicationDate);
   document.getElementById('edit-autohold').checked = !!row.autohold;
@@ -740,7 +739,6 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
     identifier: document.getElementById('edit-identifier').value,
     bibid: bibid,
     format: nextFormatValue,
-    agegroup: document.getElementById('edit-age').value,
     publication: document.getElementById('edit-publication').value,
     exactPublicationDate: document.getElementById('edit-exact-publication-date').value,
     notes: getDraftCommentValue(),

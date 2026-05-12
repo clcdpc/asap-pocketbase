@@ -997,7 +997,6 @@ export function getGridRow(row, status) {
     renderAuthorCell(row),
     row.identifier,
     renderBibIdCell(row),
-    ageMap[row.agegroup] || row.agegroup,
     formatMap[row.format] || row.format,
     formatPublication(row.publication),
     formatStandardDate(row.created),

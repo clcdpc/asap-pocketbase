@@ -526,7 +526,6 @@ export function populatePatronUiForms(uiText) {
   updateModalFormatDropdowns();
 
   renderOptionListEditor('ui-publication-options-editor', uiText.publicationOptions, defaultPublicationOptions);
-  renderOptionListEditor('ui-age-groups-editor', uiText.ageGroups, defaultAgeGroups);
   const patronScope = document.getElementById('patron-options-scope');
   if (patronScope) {
     if (currentLibraryContextOrgId === 'system') {
@@ -542,7 +541,6 @@ export function populatePatronUiForms(uiText) {
   }
   renderPatronFormatRulesEditor(uiText.formatRules);
   updatePublicationOptionsUi(uiText.publicationOptions);
-  setAgeGroups(uiText.ageGroups);
 }
 
 function _serializeSettingsState(validate = false) {
@@ -601,7 +599,6 @@ function _serializeSettingsState(validate = false) {
     formatOrder: collectFormatOrder(),
     availableFormats: collectAvailableFormats(),
     publicationOptions: collectOptionList('ui-publication-options-editor', defaultPublicationOptions),
-    ageGroups: collectOptionList('ui-age-groups-editor', defaultAgeGroups),
     formatRules: collectPatronFormatRules()
   };
 
