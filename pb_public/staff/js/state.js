@@ -182,3 +182,7 @@ export const emailTemplateDefaults = {
     body: 'Hello {{name}},\n\nGood news! We have decided to purchase {{title}} by {{author}} and have placed a hold on it for you (card {{barcode}}). You will receive another notification when it is ready to be picked up.\n\nThank you for using the library\'s suggestion service.'
   }
 };
+
+export let libraryOverridesSummary = {};
+export function setLibraryOverridesSummary(summary) { libraryOverridesSummary = summary || {}; }
+

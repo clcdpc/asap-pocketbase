@@ -1,7 +1,8 @@
 import { pb, loginContainer, setupContainer, appContainer, loginForm, setupForm, logoutBtn, profileBtn, grid, gridSearchInput, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, currentRejectionTemplates, setCurrentRejectionTemplates, statusStages, stageQueryMap, currentStatus, activeTagFilter, workflowSettings, bootstrapAdminMessage, setupRequired, currentEmailStatus, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, settingsSectionIds, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, currentLibraryContextOrgId, setCurrentStatus, setActiveTagFilter, setCurrentClaimFilter, setCurrentSimilarRequestFilter, setBootstrapAdminMessage, setSetupRequired, setOrganizationsStatusMessage, setCurrentSettingsSection, setSettingsDirty, setCurrentEmailStatus } from './state.js';
 import { loadTab, renderCurrentGrid, closeActionMenu, escapeAttr } from './grid.js';
 import { syncPolarisOrganizations } from './settings-polaris.js';
-import { loadSettings, checkSettingsDirty, handleLibraryContextSwitch } from './settings.js';
+import { loadSettings, checkSettingsDirty, handleLibraryContextSwitch, refreshLibrarySelectorIndicators } from './settings.js';
+
 
 // --- DOM Field Helpers ---
 
@@ -370,6 +371,7 @@ export function activateSettingsSection(section, options = {}) {
     }
   }
   updateLibraryOverrideStatusVisibility(targetSection);
+  refreshLibrarySelectorIndicators();
 
   // System-only section guard: disable form controls and show a banner
   // when a library is selected in the context dropdown.
@@ -637,7 +639,8 @@ export async function authorizedJson(path, options = {}) {
   if (pb.authStore.token) {
     headers.Authorization = pb.authStore.token;
   }
-  if (options.json !== false) {
+  const method = (options.method || 'GET').toUpperCase();
+  if (options.json !== false && (options.body || (method !== 'GET' && method !== 'HEAD'))) {
     headers['Content-Type'] = 'application/json';
   }
 

@@ -1,4 +1,5 @@
-import { pb, settingsContainer, settingsForm, formatMap, availableFormats, setAvailableFormats, currentRejectionTemplates, verifiedBibId, publicationOptions, setPublicationOptions, workflowSettings, currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, initialSettingsSnapshot, libraryContextLoadSerial, librarySelectorBound, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, lastWorkflowEnabledList, defaultPublicationOptions, emailTemplateDefaults, setVerifiedBibId, setCurrentLibraryContextOrgId, setCurrentFormatClaimRules, setFormatClaimStaffOptions, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId, setInitialSettingsSnapshot, setLibrarySelectorBound, setSettingsSaving, setSettingsLoading, setLeapBibUrlPattern, setLastWorkflowEnabledList, incrementLibraryContextLoadSerial } from './state.js';
+import { pb, settingsContainer, settingsForm, formatMap, availableFormats, setAvailableFormats, currentRejectionTemplates, verifiedBibId, publicationOptions, setPublicationOptions, workflowSettings, currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, initialSettingsSnapshot, libraryContextLoadSerial, librarySelectorBound, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, lastWorkflowEnabledList, defaultPublicationOptions, emailTemplateDefaults, setVerifiedBibId, setCurrentLibraryContextOrgId, setCurrentFormatClaimRules, setFormatClaimStaffOptions, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId, setInitialSettingsSnapshot, setLibrarySelectorBound, setSettingsSaving, setSettingsLoading, setLeapBibUrlPattern, setLastWorkflowEnabledList, incrementLibraryContextLoadSerial, libraryOverridesSummary, setLibraryOverridesSummary } from './state.js';
+
 import { setFieldValue, setFieldChecked, getFieldValue, getFieldChecked, validateStaffUrl, normalizeStaffUrl, normalizeLeapBibUrlPattern, isPocketBaseAutoCancelError, validateSmtpHostField, setVisible, showToast, showConfirm, isSuperAdminStaff, closeOpenDialogs, updateSaveBarState, markSettingsDirty, markSettingsClean, activateSettingsSection, initSettingsNavigation, updateEmailStatusBanner, updateOrganizationsStatusUi, checkAuth, loadSetupStatus, authorizedJson, updateAutoRejectEmailControls, updateLibraryOverrideStatusVisibility } from './api.js';
 import { closeActionMenu, escapeAttr } from './grid.js';
 import { renderEditLeapBibLink } from './modals.js';
@@ -42,6 +43,46 @@ function saveSuperAdminLibraryContext(orgId) {
   try {
     window.localStorage.setItem(SUPER_ADMIN_LIBRARY_CONTEXT_STORAGE_KEY, String(orgId || 'system'));
   } catch (err) {}
+}
+
+export async function fetchLibraryOverridesSummary() {
+  try {
+    const summary = await authorizedJson('/api/asap/staff/settings/overrides-summary');
+    setLibraryOverridesSummary(summary);
+  } catch (err) {
+    if (!isPocketBaseAutoCancelError(err)) {
+      console.error('Failed to fetch library overrides summary', err);
+    }
+  }
+}
+
+export function refreshLibrarySelectorIndicators() {
+  const select = document.getElementById('select-library-context');
+  if (!select) return;
+
+  const summary = libraryOverridesSummary || {};
+  const activeSection = currentSettingsSection;
+
+  Array.from(select.options).forEach(opt => {
+    if (opt.value === 'system') return;
+    
+    // Remove existing indicator if present
+    let text = opt.textContent.replace(/ ●$/, '');
+    
+    const sections = summary[opt.value] || [];
+    if (sections.includes(activeSection)) {
+      text += ' ●';
+    }
+    
+    if (opt.textContent !== text) {
+      opt.textContent = text;
+      // Also update the display text if this is the selected option
+      if (opt.value === currentLibraryContextOrgId) {
+        const display = document.getElementById('library-context-display');
+        if (display) display.textContent = text;
+      }
+    }
+  });
 }
 
 export async function loadSettings(options = {}) {
@@ -216,7 +257,14 @@ export async function populateLibrarySelector() {
     });
 
     select.value = Array.from(select.options).some(option => option.value === selectedOrgId) ? selectedOrgId : 'system';
+    
+    if (isSuperAdminStaff()) {
+      await fetchLibraryOverridesSummary();
+      refreshLibrarySelectorIndicators();
+    }
+
     setCurrentLibraryContextOrgId(select.value);
+
     saveSuperAdminLibraryContext(select.value);
     const selectedOption = select.options[select.selectedIndex];
     if (selectedOption) {

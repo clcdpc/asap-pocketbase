@@ -13,14 +13,14 @@ const escapeAttr = new Function('value', `
   return escapeAttr(value);
 `);
 
-// Extract escapeHtml from patron app
-const patronAppContent = fs.readFileSync(path.join(__dirname, '../pb_public/patron/app.js'), 'utf8');
-const escapeHtmlMatch = patronAppContent.match(/function escapeHtml\(str\) {[\s\S]*?}/);
+// Extract escapeHtml from patron HTML helper module
+const patronHtmlContent = fs.readFileSync(path.join(__dirname, '../pb_public/patron/js/html.js'), 'utf8');
+const escapeHtmlMatch = patronHtmlContent.match(/export function escapeHtml\(str\) {[\s\S]*?^}/m);
 if (!escapeHtmlMatch) {
-  throw new Error("Could not find escapeHtml in patron/app.js");
+  throw new Error("Could not find escapeHtml in patron/js/html.js");
 }
 const escapeHtml = new Function('str', `
-  ${escapeHtmlMatch[0]}
+  ${escapeHtmlMatch[0].replace('export ', '')}
   return escapeHtml(str);
 `);
 

@@ -80,6 +80,11 @@ routerAdd("POST", "/api/asap/staff/settings/library", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).updateLibrarySettings(e);
 });
 
+routerAdd("GET", "/api/asap/staff/settings/overrides-summary", (e) => {
+  return require(`${__hooks}/../lib/staff_routes.js`).getLibraryOverridesSummary(e);
+});
+
+
 routerAdd("POST", "/api/asap/staff/settings/logo", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffSaveLogo(e);
 });
