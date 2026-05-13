@@ -160,8 +160,8 @@ export function normalizePatronFormatRules(rules) {
 
 function getPatronFormatRuleSummary(rule) {
   if (rule.messageBehavior === 'message') return 'Shows custom message';
-  if (rule.messageBehavior === 'ebookMessage') return 'Shows eBook message (legacy)';
-  if (rule.messageBehavior === 'eaudiobookMessage') return 'Shows eAudiobook message (legacy)';
+  if (rule.messageBehavior === 'ebookMessage') return 'Shows eBook message';
+  if (rule.messageBehavior === 'eaudiobookMessage') return 'Shows eAudiobook message';
 
   const fields = Object.values(rule.fields || {});
   const shown = fields.filter(f => f.mode !== 'hidden').length;
@@ -242,8 +242,8 @@ export function renderPatronFormatRulesEditor(rules) {
     ];
     
     // Add legacy options if they are already selected
-    if (rule.messageBehavior === 'ebookMessage') behaviors.push(['ebookMessage', 'Show eBook message (legacy)']);
-    if (rule.messageBehavior === 'eaudiobookMessage') behaviors.push(['eaudiobookMessage', 'Show eAudiobook message (legacy)']);
+    if (rule.messageBehavior === 'ebookMessage') behaviors.push(['ebookMessage', 'Show eBook message']);
+    if (rule.messageBehavior === 'eaudiobookMessage') behaviors.push(['eaudiobookMessage', 'Show eAudiobook message']);
 
     behaviors.forEach(([val, label]) => {
       const opt = new Option(label, val);
