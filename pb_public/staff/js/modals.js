@@ -249,13 +249,24 @@ export function renderEditPatronContext(row) {
   const preferredPickupBranchName = row.preferredPickupBranchName || '—';
   const barcode = row.barcode || '—';
 
-  block.innerHTML = `
-    <div><strong>Patron:</strong> ${escapeAttr(patronName)}</div>
-    <div><strong>Email:</strong> ${escapeAttr(patronEmail)}</div>
-    <div><strong>Barcode:</strong> ${escapeAttr(barcode)}</div>
-    <div><strong>Library:</strong> ${escapeAttr(libraryOrgName)}</div>
-    <div><strong>Preferred pickup branch:</strong> ${escapeAttr(preferredPickupBranchName)}</div>
-  `;
+  block.replaceChildren();
+  
+  const fields = [
+    { label: 'Patron', value: patronName },
+    { label: 'Email', value: patronEmail },
+    { label: 'Barcode', value: barcode },
+    { label: 'Library', value: libraryOrgName },
+    { label: 'Preferred pickup branch', value: preferredPickupBranchName }
+  ];
+
+  fields.forEach(f => {
+    const div = document.createElement('div');
+    const strong = document.createElement('strong');
+    strong.textContent = f.label + ':';
+    div.appendChild(strong);
+    div.append(' ' + f.value);
+    block.appendChild(div);
+  });
 }
 
 export function renderEditWorkflowTags(tags, row) {
@@ -306,20 +317,7 @@ export function renderExternalSearchButton(title, identifier) {
   const container = document.getElementById('edit-external-search-container');
   if (!container) return;
 
-  const buttons = [];
-  const providers = [
-    { enabled: workflowSettings.externalSearch1Enabled, label: workflowSettings.externalSearch1Label, template: workflowSettings.externalSearch1UrlTemplate },
-    { enabled: workflowSettings.externalSearch2Enabled, label: workflowSettings.externalSearch2Label, template: workflowSettings.externalSearch2UrlTemplate },
-    { enabled: workflowSettings.externalSearch3Enabled, label: workflowSettings.externalSearch3Label, template: workflowSettings.externalSearch3UrlTemplate },
-    { enabled: workflowSettings.externalSearch4Enabled, label: workflowSettings.externalSearch4Label, template: workflowSettings.externalSearch4UrlTemplate }
-  ];
-
-  let cleanTitle = (title || '').split(' (')[0].trim();
-  const encodedTitle = encodeURIComponent(cleanTitle);
-  const encodedId = encodeURIComponent(identifier || '');
-
-  const buttonClasses = ['btn-warning', 'btn-success', 'btn-primary'];
-
+  const nodes = [];
   providers.forEach((p, index) => {
     if (!p.enabled || !p.template || !/^https?:\/\//i.test(p.template)) return;
 
@@ -328,15 +326,21 @@ export function renderExternalSearchButton(title, identifier) {
     url = url.replace(/\{\{identifier\}\}/g, encodedId);
 
     const btnClass = buttonClasses[index] || 'btn-info';
-
-    buttons.push(`
-      <a href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer" class="btn btn-xs ${btnClass} mr-1 mb-1">
-        <i class="fa fa-external-link"></i> ${escapeAttr(p.label || 'Search')}
-      </a>
-    `);
+    const a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.className = `btn btn-xs ${btnClass} mr-1 mb-1`;
+    
+    const icon = document.createElement('i');
+    icon.className = 'fa fa-external-link';
+    icon.setAttribute('aria-hidden', 'true');
+    a.appendChild(icon);
+    a.append(' ' + (p.label || 'Search'));
+    nodes.push(a);
   });
 
-  container.innerHTML = buttons.join('');
+  container.replaceChildren(...nodes);
 }
 
 function polarisSearchModeLabel(mode) {
@@ -488,29 +492,39 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
     ? `${results.length} result${results.length === 1 ? '' : 's'} shown${data.totalMatches > results.length ? ' of ' + data.totalMatches : ''}.`
     : 'No Polaris matches found.';
 
-  els.results.innerHTML = results.map((result, index) => {
+  els.results.replaceChildren();
+  results.forEach((result, index) => {
     const title = result.title || '(No title returned)';
     const meta = polarisResultMeta(result);
-    return `
-      <div class="polaris-search-result">
-        <div class="polaris-search-result-title">${escapeAttr(title)}</div>
-        ${meta ? `<div class="polaris-search-result-meta">${escapeAttr(meta)}</div>` : ''}
-        <div class="polaris-search-result-actions">
-          <button type="button" class="btn btn-sm btn-primary polaris-search-select"
-            data-result-index="${index}"
-            ${result.bibId ? '' : 'disabled'}
-            aria-label="Use Polaris BIB ${escapeAttr(result.bibId || '')} for this request">
-            Use this BIB
-          </button>
-        </div>
-      </div>
-    `;
-  }).join('');
-
-  els.results.querySelectorAll('.polaris-search-select').forEach(button => {
-    button.addEventListener('click', async () => {
-      const result = results[parseInt(button.getAttribute('data-result-index') || '-1', 10)];
-      if (!result || !result.bibId) return;
+    
+    const div = document.createElement('div');
+    div.className = 'polaris-search-result';
+    
+    const titleDiv = document.createElement('div');
+    titleDiv.className = 'polaris-search-result-title';
+    titleDiv.textContent = title;
+    div.appendChild(titleDiv);
+    
+    if (meta) {
+      const metaDiv = document.createElement('div');
+      metaDiv.className = 'polaris-search-result-meta';
+      metaDiv.textContent = meta;
+      div.appendChild(metaDiv);
+    }
+    
+    const actionsDiv = document.createElement('div');
+    actionsDiv.className = 'polaris-search-result-actions';
+    
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-sm btn-primary polaris-search-select';
+    btn.setAttribute('data-result-index', index);
+    if (!result.bibId) btn.disabled = true;
+    btn.setAttribute('aria-label', `Use Polaris BIB ${result.bibId || ''} for this request`);
+    btn.textContent = 'Use this BIB';
+    
+    btn.addEventListener('click', async () => {
+      if (!result.bibId) return;
       els.dialog.close();
       if (options.source === 'edit') {
         const editModal = document.getElementById('editModal');
@@ -526,6 +540,10 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
       openEdit(row.id, row.status || currentStatus, 'Edit suggestion', '', 'Save');
       await lookupEditBibById({ bibId: result.bibId, button: null });
     });
+    
+    actionsDiv.appendChild(btn);
+    div.appendChild(actionsDiv);
+    els.results.appendChild(div);
   });
 }
 

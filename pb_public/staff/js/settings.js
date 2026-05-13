@@ -506,8 +506,6 @@ export function populatePatronUiForms(uiText) {
   setFieldValue('ui-success-msg', uiText.successMessage || 'You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>');
   setFieldValue('ui-already-submitted-msg', uiText.alreadySubmittedMessage || 'This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.<div>Thank you for using this library\'s suggestion service.</div>');
   renderDuplicateStatusLabelSettings(uiText.duplicateStatusLabels || {}, uiText.duplicateStatusLabelsSource || '', !!uiText.duplicateStatusLabelsInherited);
-  setFieldValue('ui-ebook-msg', uiText.ebookMessage || '<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>');
-  setFieldValue('ui-eaudiobook-msg', uiText.eaudiobookMessage || '<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>');
 
   // Format Labels & Available Formats
   const labels = uiText.formatLabels || {};
@@ -593,8 +591,6 @@ function _serializeSettingsState(validate = false) {
     successMessage: getFieldValue('ui-success-msg'),
     alreadySubmittedMessage: getFieldValue('ui-already-submitted-msg'),
     duplicateStatusLabels: collectDuplicateStatusLabels(),
-    ebookMessage: getFieldValue('ui-ebook-msg'),
-    eaudiobookMessage: getFieldValue('ui-eaudiobook-msg'),
     formatLabels: collectFormatLabels(),
     formatOrder: collectFormatOrder(),
     availableFormats: collectAvailableFormats(),

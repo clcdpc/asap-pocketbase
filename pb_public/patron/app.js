@@ -53,7 +53,8 @@ const defaultFormatRules = {
     }
   },
   ebook: {
-    messageBehavior: 'ebookMessage',
+    messageBehavior: 'message',
+    message: '<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>',
     fields: {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Author' },
@@ -62,7 +63,8 @@ const defaultFormatRules = {
     }
   },
   eaudiobook: {
-    messageBehavior: 'eaudiobookMessage',
+    messageBehavior: 'message',
+    message: '<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>',
     fields: {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Author' },
@@ -376,7 +378,7 @@ function normalizeMode(value, fallback) {
 }
 
 function normalizeMessageBehavior(value, fallback) {
-  return ['none', 'ebookMessage', 'eaudiobookMessage'].includes(value) ? value : fallback || 'none';
+  return ['none', 'message', 'ebookMessage', 'eaudiobookMessage'].includes(value) ? value : fallback || 'none';
 }
 
 function normalizeFormatRules(rules) {
@@ -401,6 +403,7 @@ function normalizeFormatRules(rules) {
       });
     }
     normalized[format].messageBehavior = normalizeMessageBehavior(incomingFormat.messageBehavior, normalized[format].messageBehavior);
+    normalized[format].message = String(incomingFormat.message || normalized[format].message || '').trim();
     const incomingFields = incomingFormat.fields || {};
     fieldKeys.forEach(field => {
       const incomingField = incomingFields[field] || {};
@@ -444,12 +447,16 @@ function fieldElements(field) {
   };
 }
 
-function messageHtmlForBehavior(behavior) {
+function messageHtmlForBehavior(behavior, formatKey) {
+  const rule = formatRules[formatKey] || {};
+  if (behavior === 'message') {
+    return rule.message || '';
+  }
   if (behavior === 'ebookMessage') {
-    return uiConfig.ebookMessage || '<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>';
+    return uiConfig.ebookMessage || rule.message || '<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>';
   }
   if (behavior === 'eaudiobookMessage') {
-    return uiConfig.eaudiobookMessage || '<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>';
+    return uiConfig.eaudiobookMessage || rule.message || '<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>';
   }
   return '';
 }
@@ -465,7 +472,7 @@ function updateFormatUI() {
     document.getElementById('submit-error').classList.add('hidden');
 
     const msgContainer = document.getElementById('econtent-msg-container');
-    msgContainer.innerHTML = sanitizeHtml(messageHtmlForBehavior(messageBehavior));
+    msgContainer.innerHTML = sanitizeHtml(messageHtmlForBehavior(messageBehavior, format));
 
     fieldKeys.forEach(field => {
       const els = fieldElements(field);
