@@ -113,7 +113,7 @@ let byteOverrideRecord = makeRecord("override-byte-100", {
   ])
 });
 let byteOverridden = config.uiText(createMockApp({ overrideRecord: byteOverrideRecord }), "100");
-assert.deepStrictEqual(labels(byteOverridden.publicationOptions), ["CafÃ© preorder"]);
+assert.deepStrictEqual(labels(byteOverridden.publicationOptions), ["Café preorder"]);
 assert.strictEqual(Object.prototype.hasOwnProperty.call(byteOverridden, "ageGroups"), false);
 
 console.log("All ui_text patron option scope tests passed!");

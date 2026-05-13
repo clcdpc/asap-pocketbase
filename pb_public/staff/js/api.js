@@ -338,6 +338,18 @@ export function markSettingsClean(state = 'clean') {
 }
 
 export const systemOnlySections = ['start', 'polaris', 'smtp'];
+export const libraryOverrideStatusSections = ['workflow', 'patron', 'templates'];
+export const libraryContextSections = libraryOverrideStatusSections.concat(['staff']);
+
+export function updateLibraryOverrideStatusVisibility(section, contextOrgId = currentLibraryContextOrgId) {
+  const statusAlert = document.getElementById('library-override-status');
+  if (!statusAlert) return;
+
+  const targetSection = settingsSectionIds.includes(section) ? section : 'start';
+  const isLibraryContext = contextOrgId && contextOrgId !== 'system';
+  const shouldShow = isLibraryContext && libraryOverrideStatusSections.includes(targetSection);
+  statusAlert.classList.toggle('hidden', !shouldShow);
+}
 
 export function activateSettingsSection(section, options = {}) {
   const targetSection = settingsSectionIds.includes(section) ? section : 'start';
@@ -349,15 +361,15 @@ export function activateSettingsSection(section, options = {}) {
     panel.setAttribute('aria-hidden', isActive ? 'false' : 'true');
   });
 
-  const overridableSections = ['workflow', 'patron', 'templates', 'staff'];
   const wrapper = document.getElementById('library-context-wrapper');
   if (wrapper) {
-    if (overridableSections.includes(targetSection)) {
+    if (libraryContextSections.includes(targetSection)) {
       wrapper.classList.remove('hidden');
     } else {
       wrapper.classList.add('hidden');
     }
   }
+  updateLibraryOverrideStatusVisibility(targetSection);
 
   // System-only section guard: disable form controls and show a banner
   // when a library is selected in the context dropdown.
@@ -382,10 +394,10 @@ export function activateSettingsSection(section, options = {}) {
         const switchBtn = document.createElement('button');
         switchBtn.type = 'button';
         switchBtn.className = 'btn btn-link btn-sm p-0 font-weight-bold system-only-switch-link';
-        switchBtn.textContent = 'Switch to System Defaults';
-        switchBtn.addEventListener('click', (e) => {
+        switchBtn.textContent = 'Switch to System Level';
+        switchBtn.addEventListener('click', async (e) => {
           e.preventDefault();
-          handleLibraryContextSwitch('system');
+          await handleLibraryContextSwitch('system');
         });
         banner.appendChild(switchBtn);
         const suffix = document.createTextNode(' to edit.');

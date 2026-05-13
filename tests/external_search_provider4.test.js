@@ -94,7 +94,7 @@ function runTests() {
   assert.ok(settingsJs.includes("setFieldValue('wf-external-search-4-url-template', externalSearch4UrlTemplate)"));
 
   const modalJs = fileText("pb_public/staff/js/modals.js");
-  assert.ok(modalJs.includes("workflowSettings.externalSearch4Enabled"));
+  assert.ok(modalJs.includes("workflowSettings[`externalSearch${i}Enabled`]"));
   assert.ok(modalJs.includes("buttonClasses[index] || 'btn-info'"));
 
   const html = fileText("pb_public/staff/index.html");

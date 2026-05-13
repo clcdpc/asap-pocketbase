@@ -45,6 +45,12 @@ function createDocument(selects) {
     getElementById: function (id) {
       return selects[id] || null;
     },
+    querySelectorAll: function (selector) {
+      if (selector === ".publication-options-select") {
+        return selects.publication || [];
+      }
+      return [];
+    },
     createElement: function () {
       return { value: "", textContent: "" };
     }
@@ -58,11 +64,11 @@ function loadHelpers(document) {
     extractFunction("decodeByteArray"),
     extractFunction("normalizeOptionList"),
     extractFunction("enabledOptionLabels"),
-    extractFunction("setAgeGroups")
+    extractFunction("updatePublicationOptionsUi")
   ].join("\n\n");
-  return new Function("document", "defaultAgeGroups", helperSource + "\nreturn { normalizeOptionList, setAgeGroups };")(
+  return new Function("document", "defaultPublicationOptions", helperSource + "\nreturn { normalizeOptionList, updatePublicationOptionsUi };")(
     document,
-    ["Adult", "Young Adult / Teen", "Children"]
+    ["Already published", "Coming soon", "Published a while back"]
   );
 }
 
@@ -73,22 +79,18 @@ function byteJson(value) {
 function runTests() {
   console.log("Running staff public option select tests...");
 
-  const selects = {
-    "edit-age": new FakeSelect("Historical Group"),
-    "new-age": new FakeSelect("Previous Library Group")
-  };
+  const publicationSelect = new FakeSelect("Previous Library Option");
+  const selects = { publication: [publicationSelect] };
   const document = createDocument(selects);
   const helpers = loadHelpers(document);
 
-  helpers.setAgeGroups([
-    { id: "adult", label: "Adult", enabled: true, sortOrder: 10 },
-    { id: "kids", label: "Kids", enabled: true, sortOrder: 20 }
+  helpers.updatePublicationOptionsUi([
+    { id: "new", label: "New release", enabled: true, sortOrder: 10 },
+    { id: "backlist", label: "Backlist", enabled: true, sortOrder: 20 }
   ]);
 
-  assert.strictEqual(selects["new-age"].value, "Adult", "new suggestion age group should reset to the selected library's first valid option");
-  assert.deepStrictEqual(selects["new-age"].options.map(function (option) { return option.value; }), ["Adult", "Kids"]);
-  assert.strictEqual(selects["edit-age"].value, "Historical Group", "edit age group may preserve a historical record value");
-  assert.deepStrictEqual(selects["edit-age"].options.map(function (option) { return option.value; }), ["Adult", "Kids", "Historical Group"]);
+  assert.strictEqual(publicationSelect.value, "New release", "publication select should reset stale values to the selected library's first valid option");
+  assert.deepStrictEqual(publicationSelect.options.map(function (option) { return option.value; }), ["New release", "Backlist"]);
 
   const byteOptions = helpers.normalizeOptionList(byteJson([
     { id: "cafe", label: "Café preorder", enabled: true, sortOrder: 10 },

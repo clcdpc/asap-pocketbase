@@ -1,5 +1,5 @@
 import { pb, settingsContainer, settingsForm, formatMap, availableFormats, setAvailableFormats, currentRejectionTemplates, verifiedBibId, publicationOptions, setPublicationOptions, workflowSettings, currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, initialSettingsSnapshot, libraryContextLoadSerial, librarySelectorBound, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, lastWorkflowEnabledList, defaultPublicationOptions, emailTemplateDefaults, setVerifiedBibId, setCurrentLibraryContextOrgId, setCurrentFormatClaimRules, setFormatClaimStaffOptions, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId, setInitialSettingsSnapshot, setLibrarySelectorBound, setSettingsSaving, setSettingsLoading, setLeapBibUrlPattern, setLastWorkflowEnabledList, incrementLibraryContextLoadSerial } from './state.js';
-import { setFieldValue, setFieldChecked, getFieldValue, getFieldChecked, validateStaffUrl, normalizeStaffUrl, normalizeLeapBibUrlPattern, isPocketBaseAutoCancelError, validateSmtpHostField, setVisible, showToast, showConfirm, isSuperAdminStaff, closeOpenDialogs, updateSaveBarState, markSettingsDirty, markSettingsClean, activateSettingsSection, initSettingsNavigation, updateEmailStatusBanner, updateOrganizationsStatusUi, checkAuth, loadSetupStatus, authorizedJson, updateAutoRejectEmailControls } from './api.js';
+import { setFieldValue, setFieldChecked, getFieldValue, getFieldChecked, validateStaffUrl, normalizeStaffUrl, normalizeLeapBibUrlPattern, isPocketBaseAutoCancelError, validateSmtpHostField, setVisible, showToast, showConfirm, isSuperAdminStaff, closeOpenDialogs, updateSaveBarState, markSettingsDirty, markSettingsClean, activateSettingsSection, initSettingsNavigation, updateEmailStatusBanner, updateOrganizationsStatusUi, checkAuth, loadSetupStatus, authorizedJson, updateAutoRejectEmailControls, updateLibraryOverrideStatusVisibility } from './api.js';
 import { closeActionMenu, escapeAttr } from './grid.js';
 import { renderEditLeapBibLink } from './modals.js';
 import { renderFormatSettings, collectFormatLabels, collectAvailableFormats, collectFormatOrder, collectFormatClaimRules, updateModalFormatDropdowns } from './settings-formats.js';
@@ -225,23 +225,7 @@ export async function populateLibrarySelector() {
 
     if (!librarySelectorBound) {
       select.addEventListener('change', async (e) => {
-        const nextOrgId = e.target.value || 'system';
-        const previousOrgId = currentLibraryContextOrgId || 'system';
-        if (settingsDirty) {
-          const proceed = await showConfirm('Unsaved changes', 'You have unsaved changes. Switch libraries without saving?');
-          if (!proceed) {
-            e.target.value = previousOrgId;
-            return;
-          }
-        }
-        setCurrentLibraryContextOrgId(nextOrgId);
-        saveSuperAdminLibraryContext(nextOrgId);
-        const display = e.target.options[e.target.selectedIndex].text;
-        document.getElementById('library-context-display').textContent = display;
-        await loadLibrarySettings(currentLibraryContextOrgId);
-        markSettingsClean('clean');
-        // Re-evaluate system-only section guard for the current section
-        activateSettingsSection(currentSettingsSection, { updateHash: false });
+        await switchLibraryContext(e.target.value || 'system', e.target);
       });
       setLibrarySelectorBound(true);
     }
@@ -290,7 +274,6 @@ export function applyLibrarySettingsToForm(settings) {
       renderLibraryParticipationCheckboxes();
     }
   } else {
-    if (statusAlert) statusAlert.classList.remove('hidden');
     if (document.getElementById('system-staff-url-group')) {
       document.getElementById('system-staff-url-group').classList.add('hidden');
     }
@@ -306,6 +289,7 @@ export function applyLibrarySettingsToForm(settings) {
       if (overrideMsg) overrideMsg.innerHTML = '<i class="fa fa-info-circle mr-1"></i> Editing: <strong>' + escapeAttr(document.getElementById('library-context-display').textContent || 'selected library') + '</strong>. This library is using system defaults. Saving will create a library-specific override.';
       if (resetBtn) resetBtn.classList.add('hidden');
     }
+    updateLibraryOverrideStatusVisibility(currentSettingsSection);
   }
 
   // Only populate global fields (SMTP/Polaris) when in system context.
@@ -369,12 +353,39 @@ export function discardLibrarySettingsChanges() {
   }
 }
 
+export async function switchLibraryContext(orgId, select = document.getElementById('select-library-context')) {
+  const nextOrgId = orgId || 'system';
+  const previousOrgId = currentLibraryContextOrgId || 'system';
+  if (!select) return false;
+
+  if (settingsDirty) {
+    const proceed = await showConfirm('Unsaved changes', 'You have unsaved changes. Switch libraries without saving?');
+    if (!proceed) {
+      select.value = previousOrgId;
+      return false;
+    }
+  }
+
+  select.value = nextOrgId;
+  setCurrentLibraryContextOrgId(nextOrgId);
+  saveSuperAdminLibraryContext(nextOrgId);
+  const selectedOption = select.options && select.options[select.selectedIndex];
+  const contextDisplay = document.getElementById('library-context-display');
+  if (selectedOption && contextDisplay) {
+    contextDisplay.textContent = selectedOption.text;
+  }
+
+  await loadLibrarySettings(currentLibraryContextOrgId);
+  markSettingsClean('clean');
+  // Re-evaluate the active section after every context switch so system-only
+  // guards and library override banners match the newly loaded scope.
+  activateSettingsSection(currentSettingsSection, { updateHash: false });
+  return true;
+}
+
 export async function handleLibraryContextSwitch(orgId) {
   const select = document.getElementById('select-library-context');
-  if (select) {
-    select.value = orgId || 'system';
-    select.dispatchEvent(new Event('change'));
-  }
+  return switchLibraryContext(orgId || 'system', select);
 }
 
 export async function loadLibrarySettings(orgId) {

@@ -126,7 +126,7 @@ export function setOrganizationsStatus(status) { organizationsStatus = status; }
 export let organizationsStatusMessage = 'Polaris organizations have not been loaded yet. Organization selection will be available after the Polaris organization sync completes.';
 export function setOrganizationsStatusMessage(msg) { organizationsStatusMessage = msg; }
 
-export const settingsSectionIds = ['start', 'polaris', 'staff', 'smtp', 'workflow', 'patron', 'templates'];
+export const settingsSectionIds = ['start', 'polaris', 'smtp', 'staff', 'workflow', 'patron', 'templates'];
 export let currentSettingsSection = 'start';
 export function setCurrentSettingsSection(section) { currentSettingsSection = section; }
 

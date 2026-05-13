@@ -694,7 +694,7 @@ body {
 .settings-panel-locked input,
 .settings-panel-locked select,
 .settings-panel-locked textarea,
-.settings-panel-locked .btn:not(.settings-nav-link) {
+.settings-panel-locked .btn:not(.settings-nav-link):not(.system-only-switch-link) {
   opacity: 0.5;
   pointer-events: none;
 }

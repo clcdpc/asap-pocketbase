@@ -48,6 +48,26 @@ When adding a new setting:
 - make sure the runtime reader uses the same fallback logic as the editor UI
 - verify that switching between system and library views preserves the expected value
 
+### System-only settings
+System-only settings live only at the system level. They are not library defaults, and a library context must not be able to edit or save them.
+
+When presenting system-only settings from a library context:
+- use "system level" language, not "system defaults"
+- route any "switch to system level" action through the same context-switch path as the library selector
+- warn about unsaved library changes before switching away from the library context
+- keep system-only controls disabled while in library context, except for the explicit switch-to-system-level action
+- never populate or save system-only fields from blank or disabled library-context controls
+- verify library-context saves do not include system-only payload keys, while system-context saves still do
+
+### Global records with scoped fields
+Not every settings-adjacent screen is a library override setting. Staff access manages global `staff_users` records whose role and library fields determine scope; it does not save a library settings override.
+
+When a screen manages global records with scoped fields:
+- keep library context controls only when they filter or preselect record scope
+- do not show "using system defaults" or "saving will create a library-specific override" messaging
+- keep create/update/delete APIs scoped by authorization and record fields, not by settings override state
+- add UI regression coverage near `tests/settings_staff_scope_banner.test.js` when changing settings navigation or scope banners
+
 ### Patron public option settings
 Publication timing and age groups are system defaults with library overrides.
 
