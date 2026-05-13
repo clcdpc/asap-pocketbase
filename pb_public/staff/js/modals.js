@@ -850,7 +850,7 @@ export function setBibIdRequirement(nextStatus) {
     bibHint.classList.toggle('text-danger', isRequired);
     bibHint.classList.toggle('font-weight-bold', isRequired);
     bibHint.textContent = isRequired
-      ? 'Required to identify the item in the catalog and proceed with the request.'
+      ? 'Required before moving this suggestion to the Pending hold phase.'
       : 'Needed to link this request to a catalog record.';
   }
 }

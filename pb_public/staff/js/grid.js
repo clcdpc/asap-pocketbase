@@ -90,7 +90,7 @@ function renderTabDescription(status) {
 
   // Add auto-promoter info for Pending purchase
   if (status === 'outstanding_purchase') {
-    tabDesc.textContent = 'Pending purchase contains approved suggestions that are waiting to appear in Polaris. Staff can also add a BIB ID manually.';
+    tabDesc.textContent = 'Pending purchase contains approved suggestions that are waiting to appear in Polaris. Staff can add a BIB ID to move a suggestion to the Pending hold phase.';
     if (workflowSettings.autoPromote) {
       addSuffix('Auto-promoter enabled:', ' ASAP will check Polaris automatically. (');
     } else {
