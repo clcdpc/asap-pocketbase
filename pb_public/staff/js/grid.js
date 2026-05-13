@@ -5,6 +5,7 @@ import { undoRow, deleteClosedRequest, closeDuplicateRequest } from './actions.j
 import { leapBibUrl, showToast, showAlert, isSuperAdminStaff, isAdminStaff, getSettingsSectionFromHash, closeOpenDialogs, activateSettingsSection, authorizedJson } from './api.js';
 import { showSettingsAccessDenied, hideSettingsAccessDenied, loadSettings } from './settings.js';
 import { loadAnalytics } from './analytics.js';
+import { renderNoteActivity } from './note-activity.js';
 
 export async function loadTab(status) {
   syncStatusTab(status);
@@ -720,10 +721,11 @@ export function formatPublication(value) {
   return String(value || '').trim();
 }
 
-export function formatNote(note) {
+export function formatNote(row) {
+  const note = row?.notes;
   const text = String(note || '').trim();
   if (!text) return '';
-  return gridjs.html(`<button type="button" class="truncate-note btn btn-link btn-sm p-0" style="text-decoration:none; font-size: 1.2rem;" data-full-note="${escapeAttr(text)}" data-notes-action="true" data-no-row-edit="true" title="View full note" aria-label="View full note"><i class="fa fa-commenting-o" aria-hidden="true"></i></button>`);
+  return gridjs.html(`<button type="button" class="truncate-note" data-note-record-id="${escapeAttr(row?.id || '')}" data-notes-action="true" data-no-row-edit="true" title="View notes and activity" aria-label="View notes and activity"><i class="fa fa-commenting-o" aria-hidden="true"></i></button>`);
 }
 
 export function renderBibIdCell(row) {
@@ -971,7 +973,7 @@ export function getGridRow(row, status) {
       formatPublication(row.publication),
       formatStandardDate(row.created),
       renderClaimCell(row),
-      formatNote(row.notes),
+      formatNote(row),
       gridjs.html(renderRowActions(row)),
     ];
   }
@@ -985,7 +987,7 @@ export function getGridRow(row, status) {
       formatStandardDate(row.created),
       formatCloseReason(row),
       renderClaimCell(row),
-      formatNote(row.notes),
+      formatNote(row),
       gridjs.html(renderRowActions(row)),
     ];
   }
@@ -1000,7 +1002,7 @@ export function getGridRow(row, status) {
     formatPublication(row.publication),
     formatStandardDate(row.created),
     renderClaimCell(row),
-    formatNote(row.notes),
+    formatNote(row),
     gridjs.html(renderRowActions(row)),
   ];
 }
@@ -1314,10 +1316,17 @@ gridContainer.addEventListener('click', (e) => {
   if (truncateBtn && gridContainer.contains(truncateBtn)) {
     e.preventDefault();
     e.stopPropagation();
-    const fullNote = truncateBtn.getAttribute('data-full-note');
-    document.getElementById('noteDialogContent').textContent = fullNote;
-    document.getElementById('noteDialog').showModal();
-    document.getElementById('noteDialogCloseBtn').focus();
+    const recordId = truncateBtn.getAttribute('data-note-record-id');
+    const row = currentSuggestions.find(item => item.id === recordId) || allSuggestions.find(item => item.id === recordId);
+    const content = document.getElementById('noteDialogContent');
+    const dialog = document.getElementById('noteDialog');
+    if (!row || !content || !dialog) {
+      showToast('Could not find those notes. Refresh and try again.', 'error');
+      return;
+    }
+    content.replaceChildren(renderNoteActivity(row.notes));
+    dialog.showModal();
+    document.getElementById('noteDialogCloseBtn')?.focus();
     return;
   }
 
