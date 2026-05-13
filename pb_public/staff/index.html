@@ -1284,15 +1284,15 @@
 </dialog>
 
 <!-- New suggestion dialog -->
-<dialog id="newSuggestionModal" class="asap-dialog asap-dialog-new">
-  <form id="new-suggestion-form">
+<dialog id="newSuggestionModal" class="asap-dialog asap-dialog-edit">
+  <form id="new-suggestion-form" class="asap-dialog-form-scroll">
     <div class="asap-dialog-header">
-      <h5 class="asap-dialog-title">New suggestion</h5>
+      <h5 class="asap-dialog-title-sm">New suggestion</h5>
       <button type="button" id="close-new-modal-x"
         class="asap-dialog-close"
         aria-label="Close dialog">&times;</button>
     </div>
-    <div class="asap-dialog-body">
+    <div class="asap-dialog-edit-body">
       <p>Submit a suggestion on behalf of a patron.</p>
 
       <div class="form-group">
@@ -1308,7 +1308,6 @@
       </div>
 
       <div id="new-suggestion-details" class="hidden">
-        <div class="alert alert-success py-1 px-2 small mb-3">Patron verified. Enter suggestion details below.</div>
         
         <div class="form-group mb-2">
           <label class="small font-weight-bold mb-1">Title (original) *</label>
@@ -1327,7 +1326,7 @@
         </div>
 
         <div class="form-row">
-          <div class="form-group col-6 mb-2">
+          <div class="form-group col-5 mb-2">
             <label class="small font-weight-bold mb-1">Format</label>
             <select id="new-format" class="form-control form-control-sm new-detail-field" disabled>
               <option value="book">Book</option>
@@ -1338,10 +1337,7 @@
               <option value="eaudiobook">eAudiobook</option>
             </select>
           </div>
-        </div>
-
-        <div class="form-row">
-          <div class="form-group col-6 mb-2">
+          <div class="form-group col-4 mb-2">
             <label class="small font-weight-bold mb-1">Publication timing</label>
             <select id="new-publication" class="form-control form-control-sm new-detail-field publication-options-select" disabled>
               <option value="Already published">Already published</option>
@@ -1349,14 +1345,14 @@
               <option value="Published a while back">Published a while back</option>
             </select>
           </div>
-          <div class="form-group col-6 mb-2">
+          <div class="form-group col-3 mb-2">
             <label class="small font-weight-bold mb-1">Exact date</label>
             <input type="date" id="new-exact-publication-date" class="form-control form-control-sm new-detail-field" disabled>
           </div>
         </div>
 
         <div class="form-group mb-0">
-          <label class="small font-weight-bold mb-1">Staff notes</label>
+          <label class="small font-weight-bold mb-1">Notes / staff comments</label>
           <textarea id="new-notes" class="form-control form-control-sm new-detail-field" rows="2" disabled></textarea>
         </div>
 
@@ -1372,7 +1368,7 @@
         </div>
       </div>
     </div>
-    <div class="asap-dialog-new-footer">
+    <div class="asap-dialog-edit-footer">
       <div id="new-error-summary" class="asap-dialog-footer-error hidden" role="alert" aria-live="assertive"></div>
       <button type="button" id="close-new-modal-btn" class="btn btn-secondary mr-2">Cancel</button>
       <button type="submit" class="btn btn-success" id="btn-submit-new" disabled>Submit</button>

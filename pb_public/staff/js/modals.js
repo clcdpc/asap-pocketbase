@@ -228,20 +228,32 @@ document.addEventListener('click', (e) => {
   }
 });
 
-export function renderEditPatronContext(row) {
-  const editBody = document.querySelector('#editModal .asap-dialog-edit-body');
-  if (!editBody) return;
+export function renderPatronContext(row, options = {}) {
+  const {
+    containerSelector,
+    blockId,
+    expanded = false,
+    anchorSelector,
+    insertAfter = true
+  } = options;
 
-  let block = document.getElementById('edit-patron-context');
+  const container = document.querySelector(containerSelector);
+  if (!container) return;
+
+  let block = document.getElementById(blockId);
   if (!block) {
     block = document.createElement('div');
-    block.id = 'edit-patron-context';
+    block.id = blockId;
     block.className = 'alert alert-light border py-2 px-3 mb-2 small';
-    const anchor = document.getElementById('edit-rejection-template-container');
-    if (anchor && anchor.parentNode === editBody) {
-      editBody.insertBefore(block, anchor.nextSibling);
+    const anchor = container.querySelector(anchorSelector);
+    if (anchor && anchor.parentNode === container) {
+      if (insertAfter) {
+        container.insertBefore(block, anchor.nextSibling);
+      } else {
+        container.insertBefore(block, anchor);
+      }
     } else {
-      editBody.insertBefore(block, editBody.firstChild);
+      container.insertBefore(block, container.firstChild);
     }
   }
 
@@ -257,7 +269,7 @@ export function renderEditPatronContext(row) {
   const summaryBtn = document.createElement('button');
   summaryBtn.type = 'button';
   summaryBtn.className = 'edit-patron-summary';
-  summaryBtn.setAttribute('aria-expanded', 'false');
+  summaryBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
 
   const chevron = document.createElement('i');
   chevron.className = 'fa fa-chevron-right edit-patron-summary-chevron';
@@ -272,12 +284,12 @@ export function renderEditPatronContext(row) {
 
   const hint = document.createElement('span');
   hint.className = 'edit-patron-summary-hint';
-  hint.textContent = 'Show details';
+  hint.textContent = expanded ? 'Hide details' : 'Show details';
   summaryBtn.appendChild(hint);
 
   block.appendChild(summaryBtn);
 
-  // Detail rows (hidden by default)
+  // Detail rows
   const detailRows = document.createElement('div');
   detailRows.className = 'edit-patron-detail-rows';
 
@@ -300,11 +312,26 @@ export function renderEditPatronContext(row) {
 
   block.appendChild(detailRows);
 
+  if (expanded) {
+    block.classList.add('edit-patron-context-expanded');
+  } else {
+    block.classList.remove('edit-patron-context-expanded');
+  }
+
   // Toggle behavior
   summaryBtn.addEventListener('click', () => {
-    const expanded = block.classList.toggle('edit-patron-context-expanded');
-    summaryBtn.setAttribute('aria-expanded', String(expanded));
-    hint.textContent = expanded ? 'Hide details' : 'Show details';
+    const isExpanded = block.classList.toggle('edit-patron-context-expanded');
+    summaryBtn.setAttribute('aria-expanded', String(isExpanded));
+    hint.textContent = isExpanded ? 'Hide details' : 'Show details';
+  });
+}
+
+export function renderEditPatronContext(row) {
+  renderPatronContext(row, {
+    containerSelector: '#editModal .asap-dialog-edit-body',
+    blockId: 'edit-patron-context',
+    expanded: false,
+    anchorSelector: '#edit-rejection-template-container'
   });
 }
 

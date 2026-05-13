@@ -1,6 +1,7 @@
 import { pb, verifiedNewSuggestionBarcode, setVerifiedNewSuggestionBarcode } from './state.js';
 import { setFieldChecked, getFieldChecked } from './api.js';
 import { loadTab, escapeAttr } from './grid.js';
+import { renderPatronContext } from './modals.js';
 
 document.getElementById('btn-new-suggestion').addEventListener('click', () => {
   document.getElementById('new-suggestion-form').reset();
@@ -149,9 +150,22 @@ function applySelectedPatron(data) {
   document.getElementById('new-barcode').value = barcode;
   setNewSuggestionDetailsEnabled(true);
 
-  const emailStr = data.email ? ` | Email: ${data.email}` : ' | No email on file';
-  const libraryStr = data.libraryOrgName ? ` | Library: ${data.libraryOrgName}` : '';
-  showLookupResult('Patron verified: ' + patronLookupName(data) + ' (' + barcode + ')' + emailStr + libraryStr, 'success');
+  // Match the layout of the edit modal, but expanded by default
+  renderPatronContext(data, {
+    containerSelector: '#newSuggestionModal .asap-dialog-edit-body',
+    blockId: 'new-patron-context',
+    expanded: true,
+    anchorSelector: '#new-suggestion-details',
+    insertAfter: false
+  });
+
+  // Hide the old simple lookup result
+  const oldResult = document.getElementById('new-lookup-result');
+  if (oldResult) {
+    oldResult.classList.add('hidden');
+    oldResult.textContent = '';
+  }
+
   document.getElementById('new-title').focus();
 }
 
@@ -211,6 +225,8 @@ export function resetStaffPatronLookup() {
   setNewSuggestionDetailsEnabled(false);
   document.getElementById('new-lookup-result').className = 'mt-2 hidden';
   document.getElementById('new-lookup-result').textContent = '';
+  const ctx = document.getElementById('new-patron-context');
+  if (ctx) ctx.remove();
 }
 
 export function clearNewSuggestionDetails() {
