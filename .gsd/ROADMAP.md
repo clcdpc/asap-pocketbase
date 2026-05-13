@@ -83,3 +83,39 @@
 - [x] Super admin in "System Defaults" context sees ALL staff users.
 - [x] Super admin in a library context sees ONLY staff users for that library.
 - [x] Adding a staff member while in a library context defaults to that library.
+
+---
+
+### Phase 5: Enhance Settings Scope Switching
+**Status**: ✅ Complete
+**Objective**: Improve the UX for switching to system-wide settings from locked sections by adding direct links in banners and ensuring safe handling of unsaved changes.
+**Depends on**: Phase 4
+
+**Tasks**:
+- [x] Add a "Switch to System Defaults" button/link to the system-only guard banner in `api.js`.
+- [x] Implement a `handleLibraryContextSwitch` helper in `settings.js` that handles dirty check and saving before switching.
+- [x] Update the library selector in `settings.js` to use the new helper.
+- [x] Ensure that switching to system context from a locked section maintains the current section view.
+
+**Verification**:
+- [x] Clicking "Switch to System Defaults" in a locked section banner successfully switches context and unlocks the section.
+- [x] Switching context with unsaved changes prompts the user to save or discard.
+- [x] Switching context via the banner keeps the user on the same settings section.
+
+---
+
+### Phase 6: Super Admin Library Switcher for Staff Access
+**Status**: ⬜ Not Started
+**Objective**: Enable the library context switcher for the Staff Access section and provide Super Admins with visibility into total system users when viewing a specific library.
+**Depends on**: Phase 5
+
+**Tasks**:
+- [ ] Update `staffUsersList` in `lib/staff_routes.js` to return `totalAcrossSystem` count for Super Admins.
+- [ ] Add `'staff'` to `overridableSections` in `pb_public/staff/js/api.js` to show the library context switcher in the Staff Access section.
+- [ ] Update `loadStaffUsers` in `pb_public/staff/js/settings-users.js` to display the count of users in other libraries when a specific library context is selected.
+
+**Verification**:
+- [ ] Super Admin sees the library context switcher (blue bar) when navigating to "Staff Access".
+- [ ] Switching libraries in the context switcher updates the staff list.
+- [ ] When a library is selected, a message shows how many users exist in other libraries.
+- [ ] Switching back to "System Defaults" shows all users and removes the "other users" count.
