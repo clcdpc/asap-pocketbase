@@ -1114,10 +1114,107 @@ code {
 }
 
 .asap-dialog-edit-body {
-  padding: 15px 20px;
+  padding: 10px 20px;
   overflow-y: auto;
   flex: 1 1 auto;
   min-height: 0;
+}
+
+/* Compact edit-modal density overrides */
+.asap-dialog-edit-body .form-group > label {
+  margin-bottom: 2px;
+}
+
+.asap-dialog-edit-body .form-control,
+.asap-dialog-edit-body .form-control-sm {
+  font-size: 0.95rem;
+  padding: 0.3rem 0.5rem;
+}
+
+.asap-dialog-edit-body input[type="date"] {
+  padding-left: 0.25rem;
+  padding-right: 0.2rem;
+}
+
+/* Merged status row: flags + claim inline */
+.edit-status-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+  font-size: var(--asap-font-size-sm);
+}
+
+.edit-status-group {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.edit-status-group-label {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.edit-status-group-value {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+}
+
+.edit-status-group .text-muted {
+  font-size: var(--asap-font-size-xs);
+}
+
+/* Collapsible patron context */
+.edit-patron-summary {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: var(--asap-font-size-sm);
+  padding: 0;
+  color: var(--asap-color-text);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  text-align: left;
+}
+
+.edit-patron-summary:hover {
+  color: var(--asap-color-primary);
+}
+
+.edit-patron-summary-chevron {
+  font-size: 0.7rem;
+  transition: transform 0.2s ease;
+  color: var(--asap-color-text-muted);
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+}
+
+.edit-patron-context-expanded .edit-patron-summary-chevron {
+  transform: rotate(90deg);
+}
+
+.edit-patron-summary-hint {
+  color: var(--asap-color-text-muted);
+  font-size: var(--asap-font-size-xs);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.edit-patron-detail-rows {
+  display: none;
+  padding-top: 0.35rem;
+}
+
+.edit-patron-context-expanded .edit-patron-detail-rows {
+  display: block;
 }
 
 .asap-dialog-note-content {

@@ -62,10 +62,12 @@ export function renderEditClaimState(row) {
   const container = document.getElementById('edit-claim-state');
   if (!container) return;
   container.replaceChildren();
-  const label = document.createElement('div');
-  label.className = 'small font-weight-bold mb-1';
-  label.textContent = 'Claim';
+  const label = document.createElement('span');
+  label.className = 'edit-status-group-label';
+  label.textContent = 'Claim:';
   container.appendChild(label);
+  const valueWrap = document.createElement('span');
+  valueWrap.className = 'edit-status-group-value';
   const currentStaffId = String((pb.authStore.model && pb.authStore.model.id) || '').trim();
   const claimantId = String(row.claimedByStaffUserId || '').trim();
   const badge = document.createElement('span');
@@ -73,10 +75,7 @@ export function renderEditClaimState(row) {
   if (!claimantId) {
     badge.classList.add('claim-badge--unclaimed');
     badge.textContent = 'Unclaimed';
-    container.appendChild(badge);
-    return;
-  }
-  if (currentStaffId && claimantId === currentStaffId) {
+  } else if (currentStaffId && claimantId === currentStaffId) {
     badge.classList.add('claim-badge--mine');
     badge.textContent = 'Mine';
   } else {
@@ -84,11 +83,14 @@ export function renderEditClaimState(row) {
     badge.classList.add('claim-badge--claimed');
     badge.textContent = `Claimed by ${name}`;
   }
-  container.appendChild(badge);
-  const source = document.createElement('div');
-  source.className = 'small text-muted mt-1';
-  source.textContent = row.claimType === 'automatic_format_rule' ? 'Auto-assigned by format rule' : 'Manual claim';
-  container.appendChild(source);
+  valueWrap.appendChild(badge);
+  if (claimantId) {
+    const source = document.createElement('span');
+    source.className = 'text-muted';
+    source.textContent = row.claimType === 'automatic_format_rule' ? '(auto)' : '(manual)';
+    valueWrap.appendChild(source);
+  }
+  container.appendChild(valueWrap);
 }
 
 export function getExistingHistory(row) {
@@ -250,7 +252,35 @@ export function renderEditPatronContext(row) {
   const barcode = row.barcode || '—';
 
   block.replaceChildren();
-  
+
+  // Summary toggle button
+  const summaryBtn = document.createElement('button');
+  summaryBtn.type = 'button';
+  summaryBtn.className = 'edit-patron-summary';
+  summaryBtn.setAttribute('aria-expanded', 'false');
+
+  const chevron = document.createElement('i');
+  chevron.className = 'fa fa-chevron-right edit-patron-summary-chevron';
+  chevron.setAttribute('aria-hidden', 'true');
+  summaryBtn.appendChild(chevron);
+
+  const summaryText = document.createElement('span');
+  const summaryParts = [patronName];
+  if (libraryOrgName !== '—') summaryParts.push(libraryOrgName);
+  summaryText.textContent = summaryParts.join(' · ');
+  summaryBtn.appendChild(summaryText);
+
+  const hint = document.createElement('span');
+  hint.className = 'edit-patron-summary-hint';
+  hint.textContent = 'Show details';
+  summaryBtn.appendChild(hint);
+
+  block.appendChild(summaryBtn);
+
+  // Detail rows (hidden by default)
+  const detailRows = document.createElement('div');
+  detailRows.className = 'edit-patron-detail-rows';
+
   const fields = [
     { label: 'Patron', value: patronName },
     { label: 'Email', value: patronEmail },
@@ -265,17 +295,46 @@ export function renderEditPatronContext(row) {
     strong.textContent = f.label + ':';
     div.appendChild(strong);
     div.append(' ' + f.value);
-    block.appendChild(div);
+    detailRows.appendChild(div);
+  });
+
+  block.appendChild(detailRows);
+
+  // Toggle behavior
+  summaryBtn.addEventListener('click', () => {
+    const expanded = block.classList.toggle('edit-patron-context-expanded');
+    summaryBtn.setAttribute('aria-expanded', String(expanded));
+    hint.textContent = expanded ? 'Hide details' : 'Show details';
   });
 }
 
 export function renderEditWorkflowTags(tags, row) {
   const container = document.getElementById('edit-workflow-tags');
   if (!container) return;
-  container.innerHTML = `
-    <div class="small font-weight-bold mb-1">Workflow flags</div>
-    ${renderWorkflowTags(tags, row)}
-  `;
+  container.replaceChildren();
+  const label = document.createElement('span');
+  label.className = 'edit-status-group-label';
+  label.textContent = 'Flags:';
+  container.appendChild(label);
+  const valueWrap = document.createElement('span');
+  valueWrap.className = 'edit-status-group-value';
+  // renderWorkflowTags returns verbose "No workflow flags" for empty state;
+  // use a compact "None" label for the inline status row
+  const tagHtml = renderWorkflowTags(tags, row);
+  if (tagHtml.includes('No workflow flags')) {
+    const none = document.createElement('span');
+    none.className = 'text-muted';
+    none.textContent = 'None';
+    valueWrap.appendChild(none);
+  } else {
+    const temp = document.createElement('div');
+    // Static developer-authored markup from renderWorkflowTags
+    temp.innerHTML = tagHtml;
+    while (temp.firstChild) {
+      valueWrap.appendChild(temp.firstChild);
+    }
+  }
+  container.appendChild(valueWrap);
 }
 
 export function renderEditMetadata(row) {

@@ -1113,14 +1113,15 @@
         <small id="edit-rejection-template-availability" class="form-text text-muted hidden"></small>
       </div>
 
-      <div id="edit-workflow-tags" class="edit-modal-tags">
-        <div class="small font-weight-bold mb-1">Workflow flags</div>
-        <div class="text-muted small">No workflow flags</div>
-      </div>
-
-      <div id="edit-claim-state" class="edit-claim-state mb-2">
-        <div class="small font-weight-bold mb-1">Claim</div>
-        <span class="claim-badge claim-badge--unclaimed">Unclaimed</span>
+      <div class="edit-status-row">
+        <div id="edit-workflow-tags" class="edit-status-group">
+          <span class="edit-status-group-label">Flags:</span>
+          <span class="edit-status-group-value"><span class="text-muted">None</span></span>
+        </div>
+        <div id="edit-claim-state" class="edit-status-group">
+          <span class="edit-status-group-label">Claim:</span>
+          <span class="edit-status-group-value"><span class="claim-badge claim-badge--unclaimed">Unclaimed</span></span>
+        </div>
       </div>
 
       <div class="form-group mb-2">
@@ -1179,7 +1180,7 @@
       </div>
 
       <div class="form-row">
-        <div class="form-group col-6 mb-2">
+        <div class="form-group col-5 mb-2">
           <label class="small font-weight-bold mb-1">Format</label>
           <select id="edit-format" class="form-control form-control-sm">
             <option value="book">Book</option>
@@ -1190,10 +1191,7 @@
             <option value="eaudiobook">eAudiobook</option>
           </select>
         </div>
-      </div>
-
-      <div class="form-row">
-        <div class="form-group col-6 mb-2">
+        <div class="form-group col-4 mb-2">
           <label class="small font-weight-bold mb-1">Publication timing</label>
           <select id="edit-publication" class="form-control form-control-sm publication-options-select">
             <option value="Already published">Already published</option>
@@ -1201,7 +1199,7 @@
             <option value="Published a while back">Published a while back</option>
           </select>
         </div>
-        <div class="form-group col-6 mb-2">
+        <div class="form-group col-3 mb-2">
           <label class="small font-weight-bold mb-1">Exact date</label>
           <input type="date" id="edit-exact-publication-date" class="form-control form-control-sm">
         </div>
