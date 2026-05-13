@@ -120,18 +120,23 @@ export function normalizeAgeGroups(options) {
 }
 
 export function setPublicationOptions(options) {
-  publicationOptions = normalizePublicationOptions(options);
+  const next = normalizePublicationOptions(options);
+  publicationOptions.splice(0, publicationOptions.length, ...next);
 }
 
 export function setAgeGroups(options) {
-  ageGroups = normalizeAgeGroups(options);
+  const next = normalizeAgeGroups(options);
+  ageGroups.splice(0, ageGroups.length, ...next);
 }
 
 export function applyLoadedUiText(config) {
   const nextConfig = normalizeUiConfig(config);
-  uiConfig = { ...uiConfig, ...nextConfig };
+  Object.assign(uiConfig, nextConfig);
   if (uiConfig.formatRules) {
-    formatRules = normalizeFormatRules(uiConfig.formatRules, defaultFormatRules, formatKeys, fieldKeys);
+    const nextRules = normalizeFormatRules(uiConfig.formatRules, defaultFormatRules, formatKeys, fieldKeys);
+    // Clear existing keys to ensure a clean merge
+    Object.keys(formatRules).forEach(key => delete formatRules[key]);
+    Object.assign(formatRules, nextRules);
     uiConfig.formatRules = formatRules;
   }
   setPublicationOptions(uiConfig.publicationOptions);

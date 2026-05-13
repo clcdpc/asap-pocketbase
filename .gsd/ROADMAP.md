@@ -160,3 +160,22 @@
 - [ ] Libraries with custom settings in the active section are clearly marked (e.g., with a dot or "Custom" label).
 - [ ] The indicators are only visible to super admins in the system settings context.
 
+---
+
+### Phase 9: Patron Text Placeholders for Barcode and PIN Labels
+**Status**: ✅ Complete
+**Objective**: Allow Patron Experience message fields to use placeholders for the configured patron login labels ({{barcode_label}} and {{pin_label}}), ensuring messaging stays synchronized with customized labels.
+**Depends on**: None
+
+**Tasks**:
+- [x] Implement `applyPatronTextPlaceholders` helper in `pb_public/patron/js/html.js`.
+- [x] Integrate placeholder replacement into `pb_public/patron/js/form-ui.js` for all configurable message fields.
+- [x] Integrate placeholder replacement into `pb_public/patron/js/auth.js` and `pb_public/patron/js/submit.js`.
+- [x] Update `pb_public/staff/index.html` with help text for message fields.
+- [x] Update `pb_public/staff/js/settings-ui.js` with help text for format-specific message fields.
+
+**Verification**:
+- [x] System defaults render label placeholders correctly.
+- [x] Library-specific labels render correctly in both inherited and library-specific messages.
+- [x] Existing placeholders (e.g., {{duplicate_date}}) still work.
+- [x] Security: Labels containing HTML-like text do not inject executable markup.

@@ -282,7 +282,11 @@ export function renderPatronFormatRulesEditor(rules) {
     messageArea.rows = 4;
     messageArea.value = rule.message || '';
     
-    messageWrap.append(messageLabel, messageArea);
+    const messageHint = document.createElement('small');
+    messageHint.className = 'form-text text-muted mt-2';
+    messageHint.innerHTML = 'Available placeholders: <code>{{barcode_label}}</code>, <code>{{pin_label}}</code>.';
+
+    messageWrap.append(messageLabel, messageArea, messageHint);
 
     // Table
     const tableWrap = document.createElement('div');

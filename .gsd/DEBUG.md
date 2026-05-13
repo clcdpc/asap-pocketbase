@@ -1,34 +1,21 @@
-# Debug Session: Suggestion Submission Failure (Unique Email)
+# Debug Session: Library messaging not loading via libraryOrgId parameter
 
 ## Symptom
-When submitting a new suggestion for patron `PACREG2473720`, the request fails with a 400 error: `validation_not_unique` on the `email` field.
+When navigating to `http://127.0.0.1:8090/patron/?libraryOrgId=2`, the patron portal does not show the messaging configured for library ID 2.
 
-**When:** Submitting a new suggestion via the staff "New suggestion" modal.
-**Expected:** Suggestion is created successfully.
-**Actual:** Error: `{"data": {"email": {"code": "validation_not_unique", "message": "Value must be unique."}}}`
+**When:** Navigating to the patron portal with a `libraryOrgId` query parameter.
+**Expected:** The portal should load and display the UI configuration (labels, messages, logo) specific to that library.
+**Actual:** The portal appears to be showing system defaults or possibly an incorrect library's configuration.
 
 ## Evidence
-- Payload includes `barcode`, `title`, etc.
-- Error explicitly points to a uniqueness constraint violation on the `email` field.
-- Patron: `PACREG2473720` (Wes Osborn-DEL, cwosborn@gmail.com)
-- Database check confirms another record (`21868001586580`) already has the email `cwosborn@gmail.com`.
-- `patron_users` is an Auth collection, which enforces unique emails in PocketBase.
+- User reported: `http://127.0.0.1:8090/patron/?libraryOrgId=2` doesn't show library 2 messaging.
+- Screen shot shows library Alexandria (ID 2) has custom settings saved.
+- I need to verify how `libraryOrgId` is handled in `pb_public/patron/js/config.js` and the backend.
 
 ## Hypotheses
+
 | # | Hypothesis | Likelihood | Status |
 |---|------------|------------|--------|
-| 1 | `patron_users` (Auth collection) requires unique emails, and the patron's email is already in use by another barcode. | 100% | CONFIRMED |
-| 2 | Multiple suggestions are being submitted with the same email in the `title_requests` table. | 0% | ELIMINATED (no unique constraint on `title_requests.email`) |
-
-## Attempts
-
-### Attempt 1
-**Testing:** H1 — Email uniqueness in `patron_users`.
-**Action:** Checked database and Polaris data.
-**Result:** Confirmed that `PACREG2473720` has an email already owned by `21868001586580` in the local DB.
-**Conclusion:** CONFIRMED. The system cannot currently handle shared emails because of the PB Auth collection constraint.
-
-## Resolution Plan
-1. Add a non-unique `notificationEmail` field to `patron_users`.
-2. Use a unique fake email (`barcode@patron.asap.local`) for the PB Auth record to bypass uniqueness constraints.
-3. Update suggestion creation to use the real email from Polaris or `notificationEmail`.
+| 1 | The `libraryOrgId` query parameter is not correctly parsed or passed to the config loading API. | 40% | UNTESTED |
+| 2 | The backend API `/api/asap/patron/config` does not correctly resolve the library-specific settings based on `libraryOrgId`. | 40% | UNTESTED |
+| 3 | The frontend is loading the config but not applying it correctly to the UI. | 20% | UNTESTED |

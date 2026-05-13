@@ -314,13 +314,13 @@
                     </div>
                     <div id="ui-system-not-enabled-group" class="form-group mt-3">
                       <label for="ui-system-not-enabled-msg" class="font-weight-bold">Participation warning message (supports HTML)</label>
-                      <textarea id="ui-system-not-enabled-msg" class="form-control" rows="3"></textarea>
-                      <small class="form-text text-muted">Shown to patrons from libraries that are not enabled for this service. Available placeholders: <code>{{library}}</code>.</small>
+                      <textarea id="ui-system-not-enabled-msg" class="form-control" rows="3" aria-describedby="ui-system-not-enabled-msg-hint"></textarea>
+                      <small id="ui-system-not-enabled-msg-hint" class="form-text text-muted">Shown to patrons from libraries that are not enabled for this service. Available placeholders: <code>{{library}}</code>, <code>{{barcode_label}}</code>, <code>{{pin_label}}</code>.</small>
                     </div>
                     <div id="ui-misconfigured-group" class="form-group mt-3">
                       <label for="ui-misconfigured-msg" class="font-weight-bold">Misconfigured system message (supports HTML)</label>
-                      <textarea id="ui-misconfigured-msg" class="form-control" rows="3"></textarea>
-                      <small class="form-text text-muted">Shown to patrons when there is a Polaris connection or configuration error. Available placeholders: <code>{{library}}</code>.</small>
+                      <textarea id="ui-misconfigured-msg" class="form-control" rows="3" aria-describedby="ui-misconfigured-msg-hint"></textarea>
+                      <small id="ui-misconfigured-msg-hint" class="form-text text-muted">Shown to patrons when there is a Polaris connection or configuration error. Available placeholders: <code>{{library}}</code>, <code>{{barcode_label}}</code>, <code>{{pin_label}}</code>.</small>
                     </div>
                   </div>
                 </div>
@@ -818,7 +818,7 @@
                         <label for="ui-patron-page-title">Main Page Title (Patron Portal) <span class="text-danger" aria-hidden="true">*</span></label>
                         <input type="text" id="ui-patron-page-title" class="form-control" placeholder="Material Suggestion" required aria-required="true" aria-describedby="ui-patron-page-title-hint">
                         <small id="ui-patron-page-title-hint" class="form-text text-muted">The main heading displayed at the top of the patron
-                          portal.</small>
+                          portal. Available placeholders: <code>{{barcode_label}}</code>, <code>{{pin_label}}</code>.</small>
                       </div>
                       <div class="row">
                         <div class="col-md-6">
@@ -836,11 +836,13 @@
                       </div>
                       <div class="form-group">
                         <label for="ui-login-prompt">Login Prompt (Supports HTML)</label>
-                        <textarea id="ui-login-prompt" class="form-control" rows="2"></textarea>
+                        <textarea id="ui-login-prompt" class="form-control" rows="2" aria-describedby="ui-login-prompt-hint"></textarea>
+                        <small id="ui-login-prompt-hint" class="form-text text-muted">Available placeholders: <code>{{barcode_label}}</code>, <code>{{pin_label}}</code>.</small>
                       </div>
                       <div class="form-group mb-0">
                         <label for="ui-login-note">Login requirement note (supports HTML)</label>
-                        <textarea id="ui-login-note" class="form-control" rows="3"></textarea>
+                        <textarea id="ui-login-note" class="form-control" rows="3" aria-describedby="ui-login-note-hint"></textarea>
+                        <small id="ui-login-note-hint" class="form-text text-muted">Available placeholders: <code>{{barcode_label}}</code>, <code>{{pin_label}}</code>.</small>
                       </div>
                     </div>
                   </div>
@@ -854,13 +856,14 @@
                     <div id="panel-patron-suggestion-messages" class="asap-accordion-panel" role="region" aria-labelledby="accordion-patron-suggestion-messages">
                       <div class="form-group">
                         <label for="ui-suggestion-note">Suggestion form note (supports HTML)</label>
-                        <textarea id="ui-suggestion-note" class="form-control" rows="3"></textarea>
+                        <textarea id="ui-suggestion-note" class="form-control" rows="3" aria-describedby="ui-suggestion-note-hint"></textarea>
+                        <small id="ui-suggestion-note-hint" class="form-text text-muted">Available placeholders: <code>{{barcode_label}}</code>, <code>{{pin_label}}</code>.</small>
                       </div>
                       <div class="form-group">
                         <label for="ui-no-email-msg">No email warning message (supports HTML)</label>
                         <textarea id="ui-no-email-msg" class="form-control" rows="3" aria-describedby="ui-no-email-msg-hint"></textarea>
                         <small id="ui-no-email-msg-hint" class="form-text text-muted">Shown to patrons who do not have an email address on file in
-                          Polaris.</small>
+                          Polaris. Available placeholders: <code>{{barcode_label}}</code>, <code>{{pin_label}}</code>.</small>
                       </div>
                       <div class="form-row">
                         <div class="form-group col-md-4">
@@ -869,14 +872,15 @@
                         </div>
                         <div class="form-group col-md-8">
                           <label for="ui-success-msg">Success message (supports HTML)</label>
-                          <textarea id="ui-success-msg" class="form-control" rows="3"></textarea>
-                        </div>
+                          <textarea id="ui-success-msg" class="form-control" rows="3" aria-describedby="ui-success-msg-hint"></textarea>
+                        <small id="ui-success-msg-hint" class="form-text text-muted">Available placeholders: <code>{{barcode_label}}</code>, <code>{{pin_label}}</code>.</small>
+                      </div>
                       </div>
                       <div class="form-group">
                         <label for="ui-already-submitted-msg">Already submitted message (supports HTML)</label>
                         <textarea id="ui-already-submitted-msg" class="form-control" rows="3" aria-describedby="ui-already-submitted-msg-hint"></textarea>
                         <small id="ui-already-submitted-msg-hint" class="form-text text-muted">Shown when a patron tries to submit a title they have already
-                          requested. Available placeholders: <code>{{duplicate_date}}</code>,
+                          requested. Available placeholders: <code>{{barcode_label}}</code>, <code>{{pin_label}}</code>, <code>{{duplicate_date}}</code>,
                           <code>{{duplicate_status}}</code>, <code>{{duplicate_title}}</code>,
                           <code>{{duplicate_author}}</code>, <code>{{duplicate_format}}</code>, and
                           <code>{{duplicate_match_type}}</code>.</small>

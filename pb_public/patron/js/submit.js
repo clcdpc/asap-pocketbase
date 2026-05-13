@@ -4,7 +4,7 @@ import { applySuccessConfig, defaultUiText, uiConfig } from './config.js';
 import { renderConflictMessage, renderSuccessMessage } from './form-ui.js';
 import { showConflictStep, showSuccessStep } from './steps.js';
 import { byId, setText, setVisible } from './dom.js';
-import { escapeHtml, sanitizeHtml } from './html.js';
+import { escapeHtml, sanitizeHtml, applyPatronTextPlaceholders } from './html.js';
 import { handleSessionExpired } from './auth.js';
 
 export function setSubmitBusy(isBusy) {
@@ -44,7 +44,7 @@ export function renderConflict(result, fallbackMessage) {
   if (conflictBody) {
     const message = result.conflictMessage || (fallbackMessage ? escapeHtml(fallbackMessage) : (uiConfig.alreadySubmittedMessage || defaultUiText.alreadySubmittedMessage));
     // Conflict response HTML is sanitized before rendering.
-    conflictBody.innerHTML = sanitizeHtml(message);
+    conflictBody.innerHTML = sanitizeHtml(applyPatronTextPlaceholders(message, uiConfig));
   } else {
     renderConflictMessage();
   }

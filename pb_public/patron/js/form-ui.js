@@ -17,7 +17,7 @@ import {
 } from './config.js';
 import { getFieldRule } from './form-rules.js';
 import { byId, optionNode, replaceChildren, setLabel, setText, setVisible } from './dom.js';
-import { sanitizeHtml } from './html.js';
+import { sanitizeHtml, applyPatronTextPlaceholders } from './html.js';
 import { showSuggestionStep } from './steps.js';
 
 export function fieldElements(field) {
@@ -37,12 +37,12 @@ export function fieldElements(field) {
 
 export function messageHtmlForBehavior(behavior, formatKey) {
   const rule = formatRules[formatKey] || {};
-  if (behavior === 'message') return rule.message || '';
+  if (behavior === 'message') return applyPatronTextPlaceholders(rule.message || '', uiConfig);
   if (behavior === 'ebookMessage') {
-    return uiConfig.ebookMessage || rule.message || defaultFormatRules.ebook.message;
+    return applyPatronTextPlaceholders(uiConfig.ebookMessage || rule.message || defaultFormatRules.ebook.message, uiConfig);
   }
   if (behavior === 'eaudiobookMessage') {
-    return uiConfig.eaudiobookMessage || rule.message || defaultFormatRules.eaudiobook.message;
+    return applyPatronTextPlaceholders(uiConfig.eaudiobookMessage || rule.message || defaultFormatRules.eaudiobook.message, uiConfig);
   }
   return '';
 }
@@ -110,11 +110,11 @@ export function populatePublicationOptions(options) {
 }
 
 export function renderSuccessMessage() {
-  setText('success-title', uiConfig.successTitle || defaultUiText.successTitle);
+  setText('success-title', applyPatronTextPlaceholders(uiConfig.successTitle || defaultUiText.successTitle, uiConfig));
   const body = byId('success-body');
   if (body) {
     // Configured message HTML is sanitized before rendering.
-    body.innerHTML = sanitizeHtml(uiConfig.successMessage || defaultUiText.successMessage);
+    body.innerHTML = sanitizeHtml(applyPatronTextPlaceholders(uiConfig.successMessage || defaultUiText.successMessage, uiConfig));
   }
 }
 
@@ -122,7 +122,7 @@ export function renderConflictMessage(message) {
   const body = byId('conflict-body');
   if (body) {
     // Configured message HTML is sanitized before rendering.
-    body.innerHTML = sanitizeHtml(message || uiConfig.alreadySubmittedMessage || defaultUiText.alreadySubmittedMessage);
+    body.innerHTML = sanitizeHtml(applyPatronTextPlaceholders(message || uiConfig.alreadySubmittedMessage || defaultUiText.alreadySubmittedMessage, uiConfig));
   }
 }
 
@@ -146,8 +146,8 @@ export function applyCommonAuthors() {
   }
 
   const label = document.querySelector('label[for="common-author"]');
-  if (label) label.textContent = uiConfig.commonAuthorsLabel || 'Popular Creators';
-  setText('common-authors-help', uiConfig.commonAuthorsHelp || 'See if this is a creator we already collect.');
+  if (label) label.textContent = applyPatronTextPlaceholders(uiConfig.commonAuthorsLabel || 'Popular Creators', uiConfig);
+  setText('common-authors-help', applyPatronTextPlaceholders(uiConfig.commonAuthorsHelp || 'See if this is a creator we already collect.', uiConfig));
 
   const currentValue = select.value;
   replaceChildren(select, optionNode('', '-- Select a Creator --'), ...authors.map(author => optionNode(author, author)));
@@ -164,7 +164,7 @@ export function handleCommonAuthorSelection() {
   if (!select || !msgContainer || !submitBtn) return;
 
   if (select.value) {
-    setText('common-author-msg', uiConfig.commonAuthorsMessage || "We automatically purchase all upcoming titles by this creator. Please check the catalog to place a hold on 'On Order' items.");
+    setText('common-author-msg', applyPatronTextPlaceholders(uiConfig.commonAuthorsMessage || "We automatically purchase all upcoming titles by this creator. Please check the catalog to place a hold on 'On Order' items.", uiConfig));
     msgContainer.classList.remove('hidden');
     if (physicalFields) physicalFields.classList.add('hidden');
     submitBtn.classList.add('hidden');
@@ -204,8 +204,9 @@ export function applyUiConfig() {
   const appIcon = byId('app-icon');
 
   if (uiConfig.pageTitle) {
-    setText('main-title', uiConfig.pageTitle);
-    document.title = uiConfig.pageTitle;
+    const pageTitle = applyPatronTextPlaceholders(uiConfig.pageTitle, uiConfig);
+    setText('main-title', pageTitle);
+    document.title = pageTitle;
   }
 
   if (uiConfig.barcodeLabel) {
@@ -214,10 +215,22 @@ export function applyUiConfig() {
   }
   if (uiConfig.pinLabel) setText('lbl-pin-login', uiConfig.pinLabel);
 
-  if (uiConfig.suggestionFormNote) setText('ui-note-text', uiConfig.suggestionFormNote);
-  if (uiConfig.loginNote) setText('ui-login-note-container', uiConfig.loginNote);
-  if (uiConfig.loginPrompt) setText('ui-login-prompt', uiConfig.loginPrompt);
-  if (uiConfig.noEmailMessage) setText('no-email-msg', uiConfig.noEmailMessage);
+  if (uiConfig.suggestionFormNote) {
+    const noteEl = byId('ui-note-text');
+    if (noteEl) noteEl.innerHTML = sanitizeHtml(applyPatronTextPlaceholders(uiConfig.suggestionFormNote, uiConfig));
+  }
+  if (uiConfig.loginNote) {
+    const noteEl = byId('ui-login-note-container');
+    if (noteEl) noteEl.innerHTML = sanitizeHtml(applyPatronTextPlaceholders(uiConfig.loginNote, uiConfig));
+  }
+  if (uiConfig.loginPrompt) {
+    const promptEl = byId('ui-login-prompt');
+    if (promptEl) promptEl.innerHTML = sanitizeHtml(applyPatronTextPlaceholders(uiConfig.loginPrompt, uiConfig));
+  }
+  if (uiConfig.noEmailMessage) {
+    const msgEl = byId('no-email-msg');
+    if (msgEl) msgEl.innerHTML = sanitizeHtml(applyPatronTextPlaceholders(uiConfig.noEmailMessage, uiConfig));
+  }
 
   if (uiConfig.logoUrl) {
     if (navLogo) {
@@ -232,7 +245,7 @@ export function applyUiConfig() {
     const errorDiv = byId('login-error');
     if (errorDiv) {
       // Configured message HTML is sanitized before rendering.
-      errorDiv.innerHTML = sanitizeHtml(uiConfig.systemNotEnabledMessage || 'Your library does not currently participate in this suggestion service.');
+      errorDiv.innerHTML = sanitizeHtml(applyPatronTextPlaceholders(uiConfig.systemNotEnabledMessage || 'Your library does not currently participate in this suggestion service.', uiConfig));
       errorDiv.classList.remove('hidden');
     }
     const btn = byId('login-btn');
