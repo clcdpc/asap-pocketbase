@@ -34,9 +34,18 @@ export async function loadStaffUsers() {
     const orgId = currentLibraryContextOrgId || 'system';
     const result = await authorizedJson(`/api/asap/staff/users?orgId=${encodeURIComponent(orgId)}`);
     const users = Array.isArray(result.users) ? result.users : [];
+    const totalAcrossSystem = result.totalAcrossSystem;
     setCanAssignSuperAdmin(!!result.canAssignSuperAdmin);
     renderStaffUsers(users);
     msgEl.textContent = users.length ? `Loaded ${users.length} staff user${users.length === 1 ? '' : 's'}.` : 'No staff users found.';
+
+    if (isSuperAdminStaff() && currentLibraryContextOrgId && currentLibraryContextOrgId !== 'system' && totalAcrossSystem !== undefined) {
+      const others = totalAcrossSystem - users.length;
+      if (others > 0) {
+        msgEl.textContent += ` (${others} other staff user${others === 1 ? '' : 's'} in different libraries)`;
+      }
+    }
+
     msgEl.className = 'mb-2 text-muted';
   } catch (err) {
     console.error('Failed to load staff users', err);
