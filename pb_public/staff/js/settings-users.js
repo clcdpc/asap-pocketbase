@@ -327,30 +327,22 @@ export async function populateStaffLibraryOptions() {
   const isSuper = isSuperAdminStaff();
 
   if (isSuper) {
+    // Super admins always get the dropdown so they can add staff to any library.
+    select.classList.remove('hidden');
+    context.classList.add('hidden');
+
     const isLibraryContext = currentLibraryContextOrgId && currentLibraryContextOrgId !== 'system';
+    
+    select.innerHTML = '<option value="">Select library</option>';
+    const orgs = await pb.collection('polaris_organizations').getFullList({
+      filter: 'organizationCodeId = "2"',
+      sort: 'displayName',
+      requestKey: 'polaris-orgs-staff-options'
+    });
+    orgs.forEach(org => select.appendChild(new Option(`${org.displayName || org.name} (ID ${org.organizationId})`, org.organizationId)));
+
     if (isLibraryContext) {
-      select.classList.add('hidden');
-      context.classList.remove('hidden');
-      const orgs = await pb.collection('polaris_organizations').getFullList({
-        filter: `organizationId = "${currentLibraryContextOrgId}"`,
-        requestKey: 'polaris-org-staff-selected'
-      });
-      const org = orgs[0];
-      const libraryName = org ? (org.displayName || org.name) : `ID ${currentLibraryContextOrgId}`;
-      context.textContent = `${libraryName} (ID ${currentLibraryContextOrgId})`;
-      select.innerHTML = '';
-      select.appendChild(new Option(libraryName, currentLibraryContextOrgId));
       select.value = currentLibraryContextOrgId;
-    } else {
-      select.classList.remove('hidden');
-      context.classList.add('hidden');
-      select.innerHTML = '<option value="">Select library</option>';
-      const orgs = await pb.collection('polaris_organizations').getFullList({
-        filter: 'organizationCodeId = "2"',
-        sort: 'displayName',
-        requestKey: 'polaris-orgs-staff-options'
-      });
-      orgs.forEach(org => select.appendChild(new Option(`${org.displayName || org.name} (ID ${org.organizationId})`, org.organizationId)));
     }
   } else {
     select.classList.add('hidden');
