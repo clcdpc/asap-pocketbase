@@ -110,14 +110,36 @@
 **Depends on**: Phase 5
 
 **Tasks**:
-- [ ] Update `staffUsersList` in `lib/staff_routes.js` to return `totalAcrossSystem` count for Super Admins.
-- [ ] Add `'staff'` to `overridableSections` in `pb_public/staff/js/api.js` to show the library context switcher in the Staff Access section.
-- [ ] Update `loadStaffUsers` in `pb_public/staff/js/settings-users.js` to display the count of users in other libraries when a specific library context is selected.
-- [ ] Unlock the library selection dropdown for Super Admins in the "Add staff member" form so they can add staff to any library at any time.
+- [x] Update `staffUsersList` in `lib/staff_routes.js` to return `totalAcrossSystem` count for Super Admins.
+- [x] Add `'staff'` to `overridableSections` in `pb_public/staff/js/api.js` to show the library context switcher in the Staff Access section.
+- [x] Update `loadStaffUsers` in `pb_public/staff/js/settings-users.js` to display the count of users in other libraries when a specific library context is selected.
+- [x] Unlock the library selection dropdown for Super Admins in the "Add staff member" form so they can add staff to any library at any time.
 
 **Verification**:
-- [ ] Super Admin sees the library context switcher (blue bar) when navigating to "Staff Access".
-- [ ] Switching libraries in the context switcher updates the staff list.
-- [ ] When a library is selected, a message shows how many users exist in other libraries.
-- [ ] Switching back to "System Defaults" shows all users and removes the "other users" count.
-- [ ] "Add staff member" library dropdown is always available and interactive for Super Admins.
+- [x] Super Admin sees the library context switcher (blue bar) when navigating to "Staff Access".
+- [x] Switching libraries in the context switcher updates the staff list.
+- [x] When a library is selected, a message shows how many users exist in other libraries.
+- [x] Switching back to "System Defaults" shows all users and removes the "other users" count.
+- [x] "Add staff member" library dropdown is always available and interactive for Super Admins.
+
+---
+
+### Phase 7: Refine Auto-Claims Scoping and Staff Management
+**Status**: ⬜ Not Started
+**Objective**: Remove auto-claim settings from individual staff users, ensure auto-claim rules are strictly library-scoped in Patron Experience settings, and enforce library context for super admins.
+**Depends on**: Phase 6
+
+**Tasks**:
+- [ ] Remove Auto-claims column and checkbox rendering from the Staff access list.
+- [ ] Remove save/update behavior for auto-claims from staff-user updates.
+- [ ] Rename/verify the staff user’s library field as `homeLibraryId` / `libraryId`.
+- [ ] Update Patron Experience UI to show auto-claim settings only after resolving a specific library context.
+- [ ] For super admins in System context, require a library picker before editing Patron Experience settings.
+- [ ] Add regression tests proving that `formatClaimRules` cannot be saved under system scope and remain library-scoped.
+
+**Verification**:
+- [ ] Staff access list no longer shows Auto-claims column.
+- [ ] Staff user updates do not include auto-claim data.
+- [ ] Patron Experience auto-claim settings are hidden in System context.
+- [ ] Super admins are prompted to pick a library before editing Patron Experience.
+- [ ] Tests confirm `formatClaimRules` persistence scope.
