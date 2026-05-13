@@ -240,6 +240,8 @@ export async function populateLibrarySelector() {
         document.getElementById('library-context-display').textContent = display;
         await loadLibrarySettings(currentLibraryContextOrgId);
         markSettingsClean('clean');
+        // Re-evaluate system-only section guard for the current section
+        activateSettingsSection(currentSettingsSection, { updateHash: false });
       });
       setLibrarySelectorBound(true);
     }
@@ -344,6 +346,10 @@ export function applyLibrarySettingsToForm(settings) {
       updateOrganizationsStatusUi(state, message);
     }
     updateSaveButtonText();
+    // Refresh system-only section guard after settings population
+    if (!settingsLoading) {
+      activateSettingsSection(currentSettingsSection, { updateHash: false });
+    }
   }
 
 export function discardLibrarySettingsChanges() {
