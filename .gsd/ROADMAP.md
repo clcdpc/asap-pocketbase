@@ -105,7 +105,7 @@
 ---
 
 ### Phase 6: Super Admin Library Switcher for Staff Access
-**Status**: ⬜ Not Started
+**Status**: ✅ Complete
 **Objective**: Enable the library context switcher for the Staff Access section and provide Super Admins with visibility into total system users. Ensure Super Admins can add staff to any library regardless of current context.
 **Depends on**: Phase 5
 
