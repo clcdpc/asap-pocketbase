@@ -1,34 +1,21 @@
-# Debug Session: Suggestion Row and Purchase Action Fail
+# Debug Session: staffUsersList 400 Bad Request
 
 ## Symptom
-Clicking on a suggestion row does not open the edit dialog, and clicking the "Purchase" button fails. A JS alert shows "providers is not defined".
+`GET /api/asap/staff/users?orgId=8` and `GET /api/asap/staff/users?orgId=system` return 400 Bad Request.
 
-**When:** When interacting with the suggestions table in the staff interface.
-**Expected:** Row click should open edit dialog; Purchase button should trigger purchase flow.
-**Actual:** "providers is not defined" error alert.
+**When:** When loading the Staff Access settings tab or switching library context.
+**Expected:** Should return a list of staff users.
+**Actual:** Returns 400 Bad Request.
 
 ## Evidence
-- Screenshot shows alert: "providers is not defined".
-- Issue affects both row clicking and the Purchase button because both trigger `openEdit`.
-- `pb_public/staff/js/modals.js`: `renderExternalSearchButton` uses `providers`, `encodedTitle`, `encodedId`, and `buttonClasses`, none of which are defined or imported.
+- Browser console shows 400 error.
+- Screenshot shows "Something went wrong while processing your request."
+- Try-catch added to `staffUsersList` should have returned a JSON error message, but the user's screenshot still shows "Something went wrong...", which is the default `authorizedJson` error message when the response body is not valid JSON or doesn't have a message.
 
 ## Hypotheses
 
 | # | Hypothesis | Likelihood | Status |
 |---|------------|------------|--------|
-| 1 | Missing variable definitions in `renderExternalSearchButton` in `modals.js` | 100% | UNTESTED |
-
-## Attempts
-
-### Attempt 1
-**Testing:** H1 — Fix missing variables in `renderExternalSearchButton`.
-**Action:** Define `providers`, `encodedTitle`, `encodedId`, and `buttonClasses` within `renderExternalSearchButton` using `workflowSettings`.
-**Result:** Code applied.
-**Conclusion:** CONFIRMED. The error was due to missing variable definitions in `renderExternalSearchButton`, which is called by `openEdit`. Since both row clicks and the "Purchase" button trigger `openEdit`, both were broken.
-
-## Resolution
-
-**Root Cause:** `renderExternalSearchButton` in `pb_public/staff/js/modals.js` used several undefined variables (`providers`, `encodedTitle`, `encodedId`, `buttonClasses`).
-**Fix:** Defined these variables within the function, deriving `providers` from `workflowSettings`.
-**Verified:** Manual verification by clicking rows and the Purchase button in the UI.
-**Regression Check:** Verified that external search buttons still render correctly in the edit dialog.
+| 1 | Runtime error in `staffUsersList` or its dependencies (records.js, route_utils.js) | 80% | UNTESTED |
+| 2 | Syntax error in `lib/staff_routes.js` preventing it from being required correctly | 10% | UNTESTED |
+| 3 | PocketBase version incompatibility with used functions (e.g. e.request.queryParam) | 10% | UNTESTED |

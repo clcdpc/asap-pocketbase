@@ -369,7 +369,16 @@ export function discardLibrarySettingsChanges() {
   }
 }
 
+export async function handleLibraryContextSwitch(orgId) {
+  const select = document.getElementById('select-library-context');
+  if (select) {
+    select.value = orgId || 'system';
+    select.dispatchEvent(new Event('change'));
+  }
+}
+
 export async function loadLibrarySettings(orgId) {
+
   const requestedOrgId = orgId || 'system';
   incrementLibraryContextLoadSerial();
   const requestId = libraryContextLoadSerial;

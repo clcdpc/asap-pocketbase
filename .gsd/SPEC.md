@@ -1,17 +1,27 @@
-# SPEC: Clarify BIB ID Role in Workflow Descriptions
+# SPEC: Refine Auto-Claims Scoping and Staff Management
 
 ## Goal
-Improve staff clarity by explicitly stating that a BIB ID is the mechanism for moving a suggestion from the "Pending purchase" stage to the "Pending hold" stage.
+Remove auto-claim configuration exposure from the general staff access interface, restrict auto-claim rule settings to library-scoped patron experience configurations, and implement regression testing for persistence scope.
 
 ## Status: FINALIZED
 
 ## Requirements
-1. Update the description for the "Pending purchase" tab in the staff interface.
-2. Update the helper text (hint) for the BIB ID field in the edit modal to mention the "Pending hold" phase.
-3. Ensure consistency across `state.js` (data source) and `grid.js` (UI implementation).
+1. **Fix Missing Export**:
+   - Implement and export `handleLibraryContextSwitch` in `settings.js` to resolve the `SyntaxError` in `api.js`.
 
-## Design
-- **Current text (Pending purchase):** "Pending purchase contains approved suggestions that are waiting to appear in Polaris. Staff can also add a BIB ID manually."
-- **Proposed text (Pending purchase):** "Pending purchase contains approved suggestions that are waiting to appear in Polaris. Staff can add a BIB ID to move a suggestion to the Pending hold phase."
-- **Current text (BIB ID hint):** "Required to identify the item in the catalog and proceed with the request."
-- **Proposed text (BIB ID hint):** "Required before moving this suggestion to the Pending hold phase."
+2. **Staff Access List Refinement**:
+   - Remove "Auto-claims" column from the staff grid.
+   - Remove checkbox rendering and click-to-save logic for auto-claims in the staff list.
+
+3. **Patron Experience Auto-Claim Scoping**:
+   - Hide the "Auto-claim staff" column/selects in the "Material Formats" table *only* when the "System Defaults" context is active.
+   - Filter the staff options in the auto-claim dropdowns to only show staff members whose library affiliation matches the current active library context.
+   - Enforce that only one auto-claimant can be assigned per format type (handled by the table structure).
+
+4. **Persistence Hardening**:
+   - Update the settings save payload to ensure `formatClaimRules` are strictly library-scoped and cannot be saved under a global system context.
+   - Ensure that `formatClaimRules` are only sent to the API when a library orgId is present and active (except for empty arrays in system saves).
+
+5. **Regression Testing**:
+   - Add tests to verify that `formatClaimRules` cannot be persisted under the system scope.
+   - Verify that library-level overrides for auto-claims work correctly and only show relevant staff.

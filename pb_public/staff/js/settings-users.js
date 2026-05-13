@@ -28,7 +28,8 @@ export async function loadStaffUsers() {
   if (refreshBtn) refreshBtn.disabled = true;
   msgEl.textContent = 'Loading staff users...';
   msgEl.className = 'mb-2 text-muted';
-    bodyEl.innerHTML = '<tr><td colspan="8" class="text-muted">Loading staff users...</td></tr>';
+    bodyEl.innerHTML = '<tr><td colspan="7" class="text-muted">Loading staff users...</td></tr>';
+
 
   try {
     const orgId = currentLibraryContextOrgId || 'system';
@@ -51,7 +52,8 @@ export async function loadStaffUsers() {
     console.error('Failed to load staff users', err);
     msgEl.textContent = err.message || 'Failed to load staff users.';
     msgEl.className = 'mb-2 text-danger font-weight-bold';
-    bodyEl.innerHTML = '<tr><td colspan="8" class="text-muted">Unable to load staff users.</td></tr>';
+    bodyEl.innerHTML = '<tr><td colspan="7" class="text-muted">Unable to load staff users.</td></tr>';
+
   } finally {
     if (refreshBtn) refreshBtn.disabled = false;
   }
@@ -68,7 +70,8 @@ export function renderStaffUsers(users) {
   if (!users.length) {
     const tr = document.createElement('tr');
     const td = document.createElement('td');
-      td.colSpan = 8;
+      td.colSpan = 7;
+
     td.className = 'text-muted';
     td.textContent = 'No staff users found.';
     tr.appendChild(td);
@@ -130,10 +133,6 @@ export function renderStaffUsers(users) {
     tdRole.appendChild(select);
     tr.appendChild(tdRole);
 
-    const tdAutoClaim = document.createElement('td');
-    tdAutoClaim.className = 'staff-auto-claim-cell';
-    renderStaffFormatClaimToggles(tdAutoClaim, user);
-    tr.appendChild(tdAutoClaim);
 
     const tdLastLogin = document.createElement('td');
     tdLastLogin.className = 'staff-last-login-cell';
@@ -179,55 +178,7 @@ function formatAssignmentMapFromDom() {
   return byFormat;
 }
 
-function renderStaffFormatClaimToggles(container, user) {
-  const assignments = formatAssignmentMapFromDom();
-  const staffId = user.id || '';
-  const formats = availableFormats.length ? availableFormats : Object.keys(formatMap);
-  if (!formats.length || user.scope === 'system' || !user.libraryOrgId) {
-    const empty = document.createElement('span');
-    empty.className = 'text-muted small';
-    empty.textContent = 'Not available';
-    container.appendChild(empty);
-    return;
-  }
-  const wrap = document.createElement('div');
-  wrap.className = 'staff-format-claim-list';
-  formats.forEach(format => {
-    const item = document.createElement('label');
-    item.className = 'staff-format-claim-item small mr-2 mb-1';
-    const check = document.createElement('input');
-    check.type = 'checkbox';
-    check.className = 'staff-format-claim-check mr-1';
-    check.setAttribute('data-format', format);
-    check.setAttribute('data-staff-id', staffId);
-    check.checked = assignments[format] === staffId;
-    if (currentLibraryContextOrgId === 'system') {
-      check.disabled = true;
-      item.title = 'Switch to a specific library context to manage auto-claim rules.';
-    } else if (assignments[format] && assignments[format] !== staffId) {
-      item.title = 'Currently assigned to another staff member. Checking this will replace that assignment.';
-    }
-    const text = document.createElement('span');
-    text.textContent = formatMap[format] || format;
-    item.append(check, text);
-    wrap.appendChild(item);
-  });
-  container.appendChild(wrap);
-}
 
-function setFormatAssignment(format, staffId) {
-  // 1. Update the state variable immediately so re-renders of the staff table reflect the change.
-  updateFormatClaimRuleState(format, staffId);
-
-  // 2. Update the "Formats" tab DOM if it exists and has the necessary options.
-  const row = document.querySelector(`.format-setting-row[data-key="${CSS.escape(format)}"]`);
-  const select = row ? row.querySelector('.format-claim-staff-select') : null;
-  if (select) {
-    // If the staffId is not a valid option (e.g. because options haven't loaded yet),
-    // the value won't change here, but we've already updated the state for persistence.
-    select.value = staffId || '';
-  }
-}
 
 const staffUsersTableBody = document.getElementById('staff-users-table-body');
 if (staffUsersTableBody) {
@@ -251,24 +202,6 @@ if (staffUsersTableBody) {
       return;
     }
 
-    const claimToggle = e.target.closest('.staff-format-claim-check');
-    if (claimToggle) {
-      const format = claimToggle.getAttribute('data-format') || '';
-      const staffId = claimToggle.getAttribute('data-staff-id') || '';
-      const assignments = formatAssignmentMapFromDom();
-      if (claimToggle.checked && assignments[format] && assignments[format] !== staffId) {
-        const formatLabel = formatMap[format] || format;
-        const ok = await showConfirm('Replace auto-claim rule', `${formatLabel} is currently assigned to another staff member. Assigning it here will replace that rule.`);
-        if (!ok) {
-          claimToggle.checked = false;
-          return;
-        }
-      }
-      setFormatAssignment(format, claimToggle.checked ? staffId : '');
-      markSettingsDirty();
-      loadStaffUsers();
-      return;
-    }
 
     const btn = e.target.closest('.staff-role-save');
     if (!btn) return;

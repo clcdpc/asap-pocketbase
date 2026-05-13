@@ -126,15 +126,12 @@
 
 ### Phase 7: Refine Auto-Claims Scoping and Staff Management
 **Status**: ⬜ Not Started
-**Objective**: Remove auto-claim settings from individual staff users, ensure auto-claim rules are strictly library-scoped in Patron Experience settings, and enforce library context for super admins.
-**Depends on**: Phase 6
+**Objective**: Remove auto-claim settings from staff users view, ensure auto-claim rules are strictly library-scoped in Patron Experience settings, and enforce library context for super admins.
 
 **Tasks**:
 - [ ] Remove Auto-claims column and checkbox rendering from the Staff access list.
-- [ ] Remove save/update behavior for auto-claims from staff-user updates.
-- [ ] Rename/verify the staff user’s library field as `homeLibraryId` / `libraryId`.
+- [ ] Remove save/update behavior for auto-claims from staff-user updates from the staff access list.
 - [ ] Update Patron Experience UI to show auto-claim settings only after resolving a specific library context.
-- [ ] For super admins in System context, require a library picker before editing Patron Experience settings.
 - [ ] Add regression tests proving that `formatClaimRules` cannot be saved under system scope and remain library-scoped.
 
 **Verification**:

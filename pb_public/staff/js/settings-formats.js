@@ -1,4 +1,5 @@
-import { formatMap, availableFormats, setAvailableFormats, currentFormatClaimRules, setCurrentFormatClaimRules, formatClaimStaffOptions } from './state.js';
+import { formatMap, availableFormats, setAvailableFormats, currentFormatClaimRules, setCurrentFormatClaimRules, formatClaimStaffOptions, currentLibraryContextOrgId } from './state.js';
+
 import { setInlineStatus, showConfirm, markSettingsDirty, showToast } from './api.js';
 import { escapeAttr } from './grid.js';
 import { renderPatronFormatRulesEditor, collectPatronFormatRules } from './settings-ui.js';
@@ -33,19 +34,28 @@ export function renderFormatSettings() {
   table.className = 'table table-sm mb-0';
   const thead = document.createElement('thead');
   const headRow = document.createElement('tr');
-  [
+
+  const isSystem = currentLibraryContextOrgId === 'system';
+
+
+  const columns = [
     ['', 'format-drag-col'],
     ['Show', 'format-show-col'],
     ['Patron #', ''],
     ['Format key', 'format-key-col'],
-    ['Display label', ''],
-    ['Auto-claim staff', '']
-  ].forEach(([label, className]) => {
+    ['Display label', '']
+  ];
+  if (!isSystem) {
+    columns.push(['Auto-claim staff', '']);
+  }
+
+  columns.forEach(([label, className]) => {
     const th = document.createElement('th');
     if (className) th.className = className;
     th.textContent = label;
     headRow.appendChild(th);
   });
+
   thead.appendChild(headRow);
   table.appendChild(thead);
 
@@ -115,16 +125,22 @@ export function renderFormatSettings() {
     labelTd.appendChild(labelWrap);
     tr.appendChild(labelTd);
 
-    const claimTd = document.createElement('td');
-    const select = document.createElement('select');
-    select.className = 'form-control form-control-sm format-claim-staff-select';
-    select.appendChild(new Option('No automatic claimant', ''));
-    formatClaimStaffOptions.forEach(staff => {
-      select.appendChild(new Option(staff.displayName || staff.username || 'Staff', staff.id || ''));
-    });
-    select.value = claimByFormat[key] || '';
-    claimTd.appendChild(select);
-    tr.appendChild(claimTd);
+    if (!isSystem) {
+      const claimTd = document.createElement('td');
+      const select = document.createElement('select');
+      select.className = 'form-control form-control-sm format-claim-staff-select';
+      select.appendChild(new Option('No automatic claimant', ''));
+      
+      const staffForContext = formatClaimStaffOptions.filter(staff => staff.libraryOrgId === currentLibraryContextOrgId);
+      staffForContext.forEach(staff => {
+        select.appendChild(new Option(staff.displayName || staff.username || 'Staff', staff.id || ''));
+      });
+      
+      select.value = claimByFormat[key] || '';
+      claimTd.appendChild(select);
+      tr.appendChild(claimTd);
+    }
+
 
     tbody.appendChild(tr);
   });
