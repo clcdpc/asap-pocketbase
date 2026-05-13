@@ -147,7 +147,28 @@ runTest('staff users exist, Polaris partially configured (missing apiKey)', () =
   assert.strictEqual(result, 'response');
   assert.strictEqual(jsonStatus, 200);
   assert.deepStrictEqual(jsonPayload, {
-    setupRequired: false,
+    setupRequired: true,
+    hasStaffUsers: true,
+    polarisConfigured: false
+  });
+});
+
+// 4. Test scenario where staff users exist but Polaris is missing; setup should re-open for recovery.
+runTest('staff users exist, Polaris missing should require recovery setup', () => {
+  configMock.polaris = () => ({ host: '', accessId: '', apiKey: '' });
+  recordsMock.hasStaffUsers = () => true;
+
+  let jsonPayload = null;
+  const e = {
+    app: 'mock_app',
+    json: (_status, payload) => {
+      jsonPayload = payload;
+      return 'response';
+    }
+  };
+  setupStatus(e);
+  assert.deepStrictEqual(jsonPayload, {
+    setupRequired: true,
     hasStaffUsers: true,
     polarisConfigured: false
   });

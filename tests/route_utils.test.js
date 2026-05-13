@@ -45,6 +45,22 @@ test('body() returns empty object if no body', () => {
   assert.deepStrictEqual(routeUtils.body(e), {});
 });
 
+test('body() parses JSON string request body', () => {
+  const e = {
+    requestInfo: () => ({ body: '{"username":"staff","password":"secret"}' })
+  };
+  assert.deepStrictEqual(routeUtils.body(e), { username: 'staff', password: 'secret' });
+});
+
+test('body() parses byte-array JSON request body', () => {
+  const json = '{"username":"staff","password":"secret"}';
+  const bytes = Array.from(Buffer.from(json, 'utf8'));
+  const e = {
+    requestInfo: () => ({ body: bytes })
+  };
+  assert.deepStrictEqual(routeUtils.body(e), { username: 'staff', password: 'secret' });
+});
+
 test('requestHeader() retrieves header case-insensitively from requestInfo', () => {
   const e = {
     requestInfo: () => ({

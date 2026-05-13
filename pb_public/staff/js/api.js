@@ -702,7 +702,19 @@ setupForm.addEventListener('submit', async (e) => {
       throw new Error(result.message || 'Setup failed.');
     }
 
-	    setSetupRequired(false);
+    if (result && result.recoveredPolaris) {
+      setSetupRequired(false);
+      setBootstrapAdminMessage(result.message || 'Polaris settings were recovered. You can sign in now.');
+      setupForm.reset();
+      const loginError = document.getElementById('login-error');
+      if (loginError) {
+        loginError.classList.add('hidden');
+      }
+      checkAuth();
+      return;
+    }
+
+		    setSetupRequired(false);
 	    setBootstrapAdminMessage(result.bootstrapMessage || 'Initial setup is complete. Your account is the admin user; future staff logins will be non-admin staff accounts.');
 	    pb.authStore.save(result.token, result.record);
 	    setCurrentStatus('settings');
