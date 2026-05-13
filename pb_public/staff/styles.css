@@ -874,6 +874,10 @@ body {
     margin-top: var(--asap-font-size-body);
   }
 
+  .branding-settings-layout {
+    grid-template-columns: 1fr;
+  }
+
   #settings-msg {
     margin-top: 10px;
   }
@@ -1845,8 +1849,35 @@ code {
   background: var(--asap-color-surface);
 }
 
-.asap-accordion-item.active .asap-accordion-panel {
+.asap-accordion-item.active > .asap-accordion-panel {
   display: block;
+}
+
+.patron-settings-accordion {
+  box-shadow: none;
+}
+
+.branding-settings-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 32%) minmax(0, 1fr);
+  gap: 24px;
+  align-items: center;
+}
+
+.branding-preview-panel,
+.branding-fields-panel,
+.settings-subsection {
+  min-width: 0;
+}
+
+.settings-subsection {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--asap-color-border);
+}
+
+.patron-publication-options-field {
+  max-width: 720px;
 }
 
 /* Template Editor Enhancements */

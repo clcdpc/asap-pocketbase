@@ -159,22 +159,41 @@ export function renderRejectionTemplates() {
   });
 }
 
-export function toggleAccordion(item) {
-  const isExpanded = item.querySelector('.asap-accordion-header').getAttribute('aria-expanded') === 'true';
-  
-  // Close all others
-  const allItems = document.querySelectorAll('.asap-accordion-item');
-  allItems.forEach(i => {
-    i.classList.remove('active');
-    i.querySelector('.asap-accordion-header').setAttribute('aria-expanded', 'false');
-  });
+function accordionHeaderForItem(item) {
+  if (!item) return null;
+  for (const child of item.children) {
+    if (child.classList && child.classList.contains('asap-accordion-header')) {
+      return child;
+    }
+    if (child.classList && child.classList.contains('asap-accordion-header-row')) {
+      const header = child.querySelector('.asap-accordion-header');
+      if (header) return header;
+    }
+  }
+  return null;
+}
 
-  // Toggle this one
+export function toggleAccordion(item) {
+  const header = accordionHeaderForItem(item);
+  if (!header) return;
+
+  const accordion = item.closest('.asap-accordion');
+  const allowMultiple = accordion && accordion.getAttribute('data-accordion-multiple') === 'true';
+  const isExpanded = header.getAttribute('aria-expanded') === 'true';
+
+  if (!allowMultiple && accordion) {
+    Array.from(accordion.children).forEach(i => {
+      if (!i.classList || !i.classList.contains('asap-accordion-item') || i === item) return;
+      const siblingHeader = accordionHeaderForItem(i);
+      i.classList.remove('active');
+      if (siblingHeader) siblingHeader.setAttribute('aria-expanded', 'false');
+    });
+  }
+
+  item.classList.toggle('active', !isExpanded);
+  header.setAttribute('aria-expanded', isExpanded ? 'false' : 'true');
+
   if (!isExpanded) {
-    item.classList.add('active');
-    item.querySelector('.asap-accordion-header').setAttribute('aria-expanded', 'true');
-    
-    // Focus first input in panel
     setTimeout(() => {
       const firstInput = item.querySelector('.asap-accordion-panel input, .asap-accordion-panel textarea');
       if (firstInput) firstInput.focus();

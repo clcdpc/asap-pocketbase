@@ -10,7 +10,7 @@
     integrity="sha384-MCw98/SFnGE8fJT3GXwEOngsV7Zt27NXFoaoApmYm81iuXoPkFOJwJ8ERdknLPMO" crossorigin="anonymous">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridjs@6.2.0/dist/theme/mermaid.min.css">
-  <link rel="stylesheet" href="/staff/styles.css">
+  <link rel="stylesheet" href="/staff/styles.css?v=20260513-patron-accordion">
 </head>
 
 <body>
@@ -761,150 +761,186 @@
                   options.</p>
               </div>
               <div class="card-body">
-                <hr>
-                <h3 class="h5">Branding</h3>
-                <p class="text-muted small">Customize the logo and alt text shown to patrons. Library-specific logos
-                  override the system default.</p>
-
-                <div class="card mb-4 bg-light">
-                  <div class="card-body">
-                    <div class="row align-items-center">
-                      <div class="col-md-4 text-center">
-                        <div class="branding-preview-container p-3 bg-white border rounded mb-2">
-                          <img id="ui-logo-preview" src="/jpl.png" alt="Logo preview"
-                            style="max-width: 100%; max-height: 80px; object-fit: contain;">
-                        </div>
-                        <div id="ui-branding-status" class="badge badge-warning">System Default</div>
-                      </div>
-                      <div class="col-md-8">
-                        <div class="form-group">
-                          <label for="ui-logo-file" class="font-weight-bold">Update Logo</label>
-                          <div class="custom-file">
-                            <input type="file" class="custom-file-input" id="ui-logo-file"
-                              accept="image/png, image/jpeg, image/svg+xml, image/gif">
-                            <label class="custom-file-label" for="ui-logo-file">Choose image...</label>
-                          </div>
-                          <small class="form-text text-muted">Recommended: PNG or SVG with transparent background, height
-                            around 60-100px.</small>
-                        </div>
-                        <div class="form-group mb-0">
-                          <label for="ui-logo-alt" class="font-weight-bold">Logo Alt Text</label>
-                          <input type="text" id="ui-logo-alt" class="form-control" placeholder="Library Logo">
-                        </div>
-                      </div>
-                    </div>
-                    <div class="mt-3 text-right">
-                      <button type="button" id="btn-reset-logo" class="btn btn-outline-danger btn-sm hidden">
-                        <i class="fa fa-refresh mr-1"></i> Reset to System Default
-                      </button>
-                      <button type="button" id="btn-upload-logo" class="btn btn-primary btn-sm ml-2">
-                        <i class="fa fa-upload mr-1"></i> Save Branding Changes
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                <div class="form-group">
-                  <label for="ui-patron-page-title">Main Page Title (Patron Portal) <span class="text-danger" aria-hidden="true">*</span></label>
-                  <input type="text" id="ui-patron-page-title" class="form-control" placeholder="Material Suggestion" required aria-required="true" aria-describedby="ui-patron-page-title-hint">
-                  <small id="ui-patron-page-title-hint" class="form-text text-muted">The main heading displayed at the top of the patron
-                    portal.</small>
-                </div>
-                <div class="row">
-                  <div class="col-md-6">
-                    <div class="form-group">
-                      <label for="ui-barcode-label">Barcode Label <span class="text-danger" aria-hidden="true">*</span></label>
-                      <input type="text" id="ui-barcode-label" class="form-control" placeholder="Library Card" required aria-required="true">
-                    </div>
-                  </div>
-                  <div class="col-md-6">
-                    <div class="form-group">
-                      <label for="ui-pin-label">Pin Label <span class="text-danger" aria-hidden="true">*</span></label>
-                      <input type="text" id="ui-pin-label" class="form-control" placeholder="Pin" required aria-required="true">
-                    </div>
-                  </div>
-                </div>
-                <div class="form-group">
-                  <label for="ui-login-prompt">Login Prompt (Supports HTML)</label>
-                  <textarea id="ui-login-prompt" class="form-control" rows="2"></textarea>
-                </div>
-                <div class="form-group">
-                  <label for="ui-login-note">Login requirement note (supports HTML)</label>
-                  <textarea id="ui-login-note" class="form-control" rows="3"></textarea>
-                </div>
-                <div class="form-group">
-                  <label for="ui-suggestion-note">Suggestion form note (supports HTML)</label>
-                  <textarea id="ui-suggestion-note" class="form-control" rows="3"></textarea>
-                </div>
-                <div class="form-group">
-                  <label for="ui-no-email-msg">No email warning message (supports HTML)</label>
-                  <textarea id="ui-no-email-msg" class="form-control" rows="3" aria-describedby="ui-no-email-msg-hint"></textarea>
-                  <small id="ui-no-email-msg-hint" class="form-text text-muted">Shown to patrons who do not have an email address on file in
-                    Polaris.</small>
-                </div>
-                <div class="form-row">
-                  <div class="form-group col-md-4">
-                    <label for="ui-success-title">Success title</label>
-                    <input type="text" id="ui-success-title" class="form-control">
-                  </div>
-                  <div class="form-group col-md-8">
-                    <label for="ui-success-msg">Success message (supports HTML)</label>
-                    <textarea id="ui-success-msg" class="form-control" rows="3"></textarea>
-                  </div>
-                </div>
-                <div class="form-group">
-                  <label for="ui-already-submitted-msg">Already submitted message (supports HTML)</label>
-                  <textarea id="ui-already-submitted-msg" class="form-control" rows="3" aria-describedby="ui-already-submitted-msg-hint"></textarea>
-                  <small id="ui-already-submitted-msg-hint" class="form-text text-muted">Shown when a patron tries to submit a title they have already
-                    requested. Available placeholders: <code>{{duplicate_date}}</code>,
-                    <code>{{duplicate_status}}</code>, <code>{{duplicate_title}}</code>,
-                    <code>{{duplicate_author}}</code>, <code>{{duplicate_format}}</code>, and
-                    <code>{{duplicate_match_type}}</code>.</small>
-                </div>
-                <div class="card mb-3">
-                  <div class="card-header">
-                    <strong>Duplicate request status labels</strong>
-                  </div>
-                  <div class="card-body">
-                    <p class="text-muted small">These labels are shown through the
-                      <code>{{duplicate_status}}</code> placeholder in the already submitted message.</p>
-                    <p class="text-muted small">These labels apply to the selected library only. If no custom labels
-                      are saved, the system uses the global default labels.</p>
-                    <p id="duplicate-status-labels-scope" class="small mb-3 text-muted"></p>
-                    <div id="duplicate-status-labels-container" class="form-row"></div>
-                  </div>
-                </div>
-                <div class="row">
-                  <div class="form-group col-md-6">
-                    <label>Publication timing options</label>
-                    <div id="ui-publication-options-editor" class="option-list-editor" data-option-list="publicationOptions"></div>
-                    <button type="button" id="btn-add-publication-option" class="btn btn-sm btn-outline-primary mt-2">Add option</button>
-                  </div>
-                </div>
-                <small class="form-text text-muted">These patron form options apply to the selected library. If no
-                  custom values are saved, the system uses the global defaults. Prefer disabling options over deleting
-                  options that may already be used by existing suggestions.</small>
-                <p id="patron-options-scope" class="small mt-2 mb-0 text-muted"></p>
-                <div class="card mt-4">
-                  <div class="card-header d-flex justify-content-between align-items-center">
-                    <strong>Format display names</strong>
-                    <button type="button" id="btn-open-add-format-modal" class="btn btn-sm btn-outline-primary">
-                      <i class="fa fa-plus mr-1"></i> Add format
+                <div id="patron-experience-accordion" class="asap-accordion patron-settings-accordion" data-accordion-multiple="true">
+                  <div class="asap-accordion-item active" id="accordion-patron-branding">
+                    <button type="button" class="asap-accordion-header" aria-expanded="true" aria-controls="panel-patron-branding">
+                      <span class="asap-accordion-title">Branding</span>
+                      <span class="asap-accordion-summary">Logo, alt text, and library override status</span>
+                      <i class="fa fa-chevron-down asap-accordion-chevron"></i>
                     </button>
+                    <div id="panel-patron-branding" class="asap-accordion-panel" role="region" aria-labelledby="accordion-patron-branding">
+                      <p class="text-muted small">Customize the logo and alt text shown to patrons. Library-specific logos
+                        override the system default.</p>
+                      <div class="branding-settings-layout">
+                        <div class="branding-preview-panel text-center">
+                          <div class="branding-preview-container p-3 bg-white border rounded mb-2">
+                            <img id="ui-logo-preview" src="/jpl.png" alt="Logo preview"
+                              style="max-width: 100%; max-height: 80px; object-fit: contain;">
+                          </div>
+                          <div id="ui-branding-status" class="badge badge-warning">System Default</div>
+                        </div>
+                        <div class="branding-fields-panel">
+                          <div class="form-group">
+                            <label for="ui-logo-file" class="font-weight-bold">Update Logo</label>
+                            <div class="custom-file">
+                              <input type="file" class="custom-file-input" id="ui-logo-file"
+                                accept="image/png, image/jpeg, image/svg+xml, image/gif">
+                              <label class="custom-file-label" for="ui-logo-file">Choose image...</label>
+                            </div>
+                            <small class="form-text text-muted">Recommended: PNG or SVG with transparent background, height
+                              around 60-100px.</small>
+                          </div>
+                          <div class="form-group mb-0">
+                            <label for="ui-logo-alt" class="font-weight-bold">Logo Alt Text</label>
+                            <input type="text" id="ui-logo-alt" class="form-control" placeholder="Library Logo">
+                          </div>
+                        </div>
+                      </div>
+                      <div class="mt-3 text-right">
+                        <button type="button" id="btn-reset-logo" class="btn btn-outline-danger btn-sm hidden">
+                          <i class="fa fa-refresh mr-1"></i> Reset to System Default
+                        </button>
+                        <button type="button" id="btn-upload-logo" class="btn btn-primary btn-sm ml-2">
+                          <i class="fa fa-upload mr-1"></i> Save Branding Changes
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                  <div class="card-body">
-                    <p class="text-muted small">Manage material formats shown to patrons. Enabled formats appear in the
-                      patron portal dropdown. You can also add custom formats here.</p>
-                    <div id="format-settings-container"></div>
+
+                  <div class="asap-accordion-item active" id="accordion-patron-login-text">
+                    <button type="button" class="asap-accordion-header" aria-expanded="true" aria-controls="panel-patron-login-text">
+                      <span class="asap-accordion-title">Login / Portal Text</span>
+                      <span class="asap-accordion-summary">Title, barcode/PIN labels, and login copy</span>
+                      <i class="fa fa-chevron-down asap-accordion-chevron"></i>
+                    </button>
+                    <div id="panel-patron-login-text" class="asap-accordion-panel" role="region" aria-labelledby="accordion-patron-login-text">
+                      <div class="form-group">
+                        <label for="ui-patron-page-title">Main Page Title (Patron Portal) <span class="text-danger" aria-hidden="true">*</span></label>
+                        <input type="text" id="ui-patron-page-title" class="form-control" placeholder="Material Suggestion" required aria-required="true" aria-describedby="ui-patron-page-title-hint">
+                        <small id="ui-patron-page-title-hint" class="form-text text-muted">The main heading displayed at the top of the patron
+                          portal.</small>
+                      </div>
+                      <div class="row">
+                        <div class="col-md-6">
+                          <div class="form-group">
+                            <label for="ui-barcode-label">Barcode Label <span class="text-danger" aria-hidden="true">*</span></label>
+                            <input type="text" id="ui-barcode-label" class="form-control" placeholder="Library Card" required aria-required="true">
+                          </div>
+                        </div>
+                        <div class="col-md-6">
+                          <div class="form-group">
+                            <label for="ui-pin-label">Pin Label <span class="text-danger" aria-hidden="true">*</span></label>
+                            <input type="text" id="ui-pin-label" class="form-control" placeholder="Pin" required aria-required="true">
+                          </div>
+                        </div>
+                      </div>
+                      <div class="form-group">
+                        <label for="ui-login-prompt">Login Prompt (Supports HTML)</label>
+                        <textarea id="ui-login-prompt" class="form-control" rows="2"></textarea>
+                      </div>
+                      <div class="form-group mb-0">
+                        <label for="ui-login-note">Login requirement note (supports HTML)</label>
+                        <textarea id="ui-login-note" class="form-control" rows="3"></textarea>
+                      </div>
+                    </div>
                   </div>
-                </div>
-                <div class="card mt-4">
-                  <div class="card-header">
-                    <strong>Patron format rules</strong>
+
+                  <div class="asap-accordion-item" id="accordion-patron-suggestion-messages">
+                    <button type="button" class="asap-accordion-header" aria-expanded="false" aria-controls="panel-patron-suggestion-messages">
+                      <span class="asap-accordion-title">Suggestion Messages</span>
+                      <span class="asap-accordion-summary">Form notes, warnings, success copy, and duplicate labels</span>
+                      <i class="fa fa-chevron-down asap-accordion-chevron"></i>
+                    </button>
+                    <div id="panel-patron-suggestion-messages" class="asap-accordion-panel" role="region" aria-labelledby="accordion-patron-suggestion-messages">
+                      <div class="form-group">
+                        <label for="ui-suggestion-note">Suggestion form note (supports HTML)</label>
+                        <textarea id="ui-suggestion-note" class="form-control" rows="3"></textarea>
+                      </div>
+                      <div class="form-group">
+                        <label for="ui-no-email-msg">No email warning message (supports HTML)</label>
+                        <textarea id="ui-no-email-msg" class="form-control" rows="3" aria-describedby="ui-no-email-msg-hint"></textarea>
+                        <small id="ui-no-email-msg-hint" class="form-text text-muted">Shown to patrons who do not have an email address on file in
+                          Polaris.</small>
+                      </div>
+                      <div class="form-row">
+                        <div class="form-group col-md-4">
+                          <label for="ui-success-title">Success title</label>
+                          <input type="text" id="ui-success-title" class="form-control">
+                        </div>
+                        <div class="form-group col-md-8">
+                          <label for="ui-success-msg">Success message (supports HTML)</label>
+                          <textarea id="ui-success-msg" class="form-control" rows="3"></textarea>
+                        </div>
+                      </div>
+                      <div class="form-group">
+                        <label for="ui-already-submitted-msg">Already submitted message (supports HTML)</label>
+                        <textarea id="ui-already-submitted-msg" class="form-control" rows="3" aria-describedby="ui-already-submitted-msg-hint"></textarea>
+                        <small id="ui-already-submitted-msg-hint" class="form-text text-muted">Shown when a patron tries to submit a title they have already
+                          requested. Available placeholders: <code>{{duplicate_date}}</code>,
+                          <code>{{duplicate_status}}</code>, <code>{{duplicate_title}}</code>,
+                          <code>{{duplicate_author}}</code>, <code>{{duplicate_format}}</code>, and
+                          <code>{{duplicate_match_type}}</code>.</small>
+                      </div>
+                      <div class="settings-subsection">
+                        <h3 class="h6">Duplicate request status labels</h3>
+                        <p class="text-muted small">These labels are shown through the
+                          <code>{{duplicate_status}}</code> placeholder in the already submitted message.</p>
+                        <p class="text-muted small">These labels apply to the selected library only. If no custom labels
+                          are saved, the system uses the global default labels.</p>
+                        <p id="duplicate-status-labels-scope" class="small mb-3 text-muted"></p>
+                        <div id="duplicate-status-labels-container" class="form-row"></div>
+                      </div>
+                    </div>
                   </div>
-                  <div class="card-body">
-                    <p class="text-muted small">Choose which patron fields are shown for each format. Labels are
-                      display-only; values always save to the existing database fields.</p>
-                    <div id="format-rules-editor"></div>
+
+                  <div class="asap-accordion-item" id="accordion-patron-publication-options">
+                    <button type="button" class="asap-accordion-header" aria-expanded="false" aria-controls="panel-patron-publication-options">
+                      <span class="asap-accordion-title">Publication Timing Options</span>
+                      <span class="asap-accordion-summary">Options shown in the patron publication timing select</span>
+                      <i class="fa fa-chevron-down asap-accordion-chevron"></i>
+                    </button>
+                    <div id="panel-patron-publication-options" class="asap-accordion-panel" role="region" aria-labelledby="accordion-patron-publication-options">
+                      <div class="form-group patron-publication-options-field">
+                        <label>Publication timing options</label>
+                        <div id="ui-publication-options-editor" class="option-list-editor" data-option-list="publicationOptions"></div>
+                        <button type="button" id="btn-add-publication-option" class="btn btn-sm btn-outline-primary mt-2">Add option</button>
+                      </div>
+                      <small class="form-text text-muted">These patron form options apply to the selected library. If no
+                        custom values are saved, the system uses the global defaults. Prefer disabling options over deleting
+                        options that may already be used by existing suggestions.</small>
+                      <p id="patron-options-scope" class="small mt-2 mb-0 text-muted"></p>
+                    </div>
+                  </div>
+
+                  <div class="asap-accordion-item" id="accordion-patron-format-display">
+                    <button type="button" class="asap-accordion-header" aria-expanded="false" aria-controls="panel-patron-format-display">
+                      <span class="asap-accordion-title">Format Display Names</span>
+                      <span class="asap-accordion-summary">Format labels, visibility, ordering, and custom formats</span>
+                      <i class="fa fa-chevron-down asap-accordion-chevron"></i>
+                    </button>
+                    <div id="panel-patron-format-display" class="asap-accordion-panel" role="region" aria-labelledby="accordion-patron-format-display">
+                      <div class="d-flex justify-content-between align-items-center mb-3">
+                        <p class="text-muted small mb-0">Manage material formats shown to patrons. Enabled formats appear in the
+                          patron portal dropdown. You can also add custom formats here.</p>
+                        <button type="button" id="btn-open-add-format-modal" class="btn btn-sm btn-outline-primary ml-3">
+                          <i class="fa fa-plus mr-1"></i> Add format
+                        </button>
+                      </div>
+                      <div id="format-settings-container"></div>
+                    </div>
+                  </div>
+
+                  <div class="asap-accordion-item" id="accordion-patron-format-rules">
+                    <button type="button" class="asap-accordion-header" aria-expanded="false" aria-controls="panel-patron-format-rules">
+                      <span class="asap-accordion-title">Patron Format Rules</span>
+                      <span class="asap-accordion-summary">Per-format fields and patron-facing messages</span>
+                      <i class="fa fa-chevron-down asap-accordion-chevron"></i>
+                    </button>
+                    <div id="panel-patron-format-rules" class="asap-accordion-panel" role="region" aria-labelledby="accordion-patron-format-rules">
+                      <p class="text-muted small">Choose which patron fields are shown for each format. Labels are
+                        display-only; values always save to the existing database fields.</p>
+                      <div id="format-rules-editor"></div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1472,7 +1508,7 @@
 
 <script src="https://unpkg.com/pocketbase/dist/pocketbase.umd.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gridjs@6.2.0/dist/gridjs.umd.js"></script>
-<script type="module" src="./js/app.js?v=20260501-modules"></script>
+<script type="module" src="./js/app.js?v=20260513-patron-accordion"></script>
 </body>
 
 </html>
