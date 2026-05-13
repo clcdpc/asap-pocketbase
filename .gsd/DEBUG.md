@@ -1,21 +1,34 @@
-# Debug Session: staffUsersList 400 Bad Request
+# Debug Session: Suggestion Submission Failure (Unique Email)
 
 ## Symptom
-`GET /api/asap/staff/users?orgId=8` and `GET /api/asap/staff/users?orgId=system` return 400 Bad Request.
+When submitting a new suggestion for patron `PACREG2473720`, the request fails with a 400 error: `validation_not_unique` on the `email` field.
 
-**When:** When loading the Staff Access settings tab or switching library context.
-**Expected:** Should return a list of staff users.
-**Actual:** Returns 400 Bad Request.
+**When:** Submitting a new suggestion via the staff "New suggestion" modal.
+**Expected:** Suggestion is created successfully.
+**Actual:** Error: `{"data": {"email": {"code": "validation_not_unique", "message": "Value must be unique."}}}`
 
 ## Evidence
-- Browser console shows 400 error.
-- Screenshot shows "Something went wrong while processing your request."
-- Try-catch added to `staffUsersList` should have returned a JSON error message, but the user's screenshot still shows "Something went wrong...", which is the default `authorizedJson` error message when the response body is not valid JSON or doesn't have a message.
+- Payload includes `barcode`, `title`, etc.
+- Error explicitly points to a uniqueness constraint violation on the `email` field.
+- Patron: `PACREG2473720` (Wes Osborn-DEL, cwosborn@gmail.com)
+- Database check confirms another record (`21868001586580`) already has the email `cwosborn@gmail.com`.
+- `patron_users` is an Auth collection, which enforces unique emails in PocketBase.
 
 ## Hypotheses
-
 | # | Hypothesis | Likelihood | Status |
 |---|------------|------------|--------|
-| 1 | Runtime error in `staffUsersList` or its dependencies (records.js, route_utils.js) | 80% | UNTESTED |
-| 2 | Syntax error in `lib/staff_routes.js` preventing it from being required correctly | 10% | UNTESTED |
-| 3 | PocketBase version incompatibility with used functions (e.g. e.request.queryParam) | 10% | UNTESTED |
+| 1 | `patron_users` (Auth collection) requires unique emails, and the patron's email is already in use by another barcode. | 100% | CONFIRMED |
+| 2 | Multiple suggestions are being submitted with the same email in the `title_requests` table. | 0% | ELIMINATED (no unique constraint on `title_requests.email`) |
+
+## Attempts
+
+### Attempt 1
+**Testing:** H1 — Email uniqueness in `patron_users`.
+**Action:** Checked database and Polaris data.
+**Result:** Confirmed that `PACREG2473720` has an email already owned by `21868001586580` in the local DB.
+**Conclusion:** CONFIRMED. The system cannot currently handle shared emails because of the PB Auth collection constraint.
+
+## Resolution Plan
+1. Add a non-unique `notificationEmail` field to `patron_users`.
+2. Use a unique fake email (`barcode@patron.asap.local`) for the PB Auth record to bypass uniqueness constraints.
+3. Update suggestion creation to use the real email from Polaris or `notificationEmail`.
