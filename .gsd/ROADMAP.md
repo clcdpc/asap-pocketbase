@@ -140,3 +140,23 @@
 - [ ] Patron Experience auto-claim settings are hidden in System context.
 - [ ] Super admins are prompted to pick a library before editing Patron Experience.
 - [ ] Tests confirm `formatClaimRules` persistence scope.
+
+---
+
+### Phase 8: Library Override Indicators in Context Switcher
+**Status**: ⬜ Not Started
+**Objective**: Provide visual indicators in the library context switcher for super admins to identify which libraries have overrides for the currently active settings section.
+**Depends on**: Phase 7
+
+**Tasks**:
+- [ ] Create a backend API endpoint to fetch a summary of library overrides by section.
+- [ ] Implement logic in `settings.js` to fetch and cache the override summary.
+- [ ] Update `populateLibrarySelector` to apply indicators to the dropdown options.
+- [ ] Add logic to refresh indicators when the active settings section changes.
+- [ ] Ensure indicators distinguish between "inheriting from system" and "custom override".
+
+**Verification**:
+- [ ] Switching between settings sections (e.g., Workflow vs Patron Experience) updates the indicators in the library selector.
+- [ ] Libraries with custom settings in the active section are clearly marked (e.g., with a dot or "Custom" label).
+- [ ] The indicators are only visible to super admins in the system settings context.
+

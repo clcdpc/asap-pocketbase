@@ -11,6 +11,8 @@ Finalizing ASAP PocketBase staff interface and system administration hardening.
 - [x] Phase 5: Settings UI and Data Persistence
 - [x] Phase 6: Super Admin Library Switcher
 - [ ] Phase 7: Refine Auto-Claims Scoping and Staff Management
+- [ ] Phase 8: Library Override Indicators in Context Switcher
+
 
 ## Current Position
 - **Phase**: 7
