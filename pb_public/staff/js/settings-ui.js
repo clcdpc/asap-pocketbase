@@ -194,6 +194,7 @@ export function renderPatronFormatRulesEditor(rules) {
     const item = document.createElement('div');
     item.className = 'asap-accordion-item';
     item.setAttribute('data-format', format);
+    item.setAttribute('data-behavior', rule.messageBehavior);
 
     const header = document.createElement('button');
     header.type = 'button';
@@ -231,33 +232,37 @@ export function renderPatronFormatRulesEditor(rules) {
     behaviorLabel.setAttribute('for', `format-rule-message-${format}`);
     behaviorLabel.textContent = 'Message behavior';
 
-    const behaviorSelect = document.createElement('select');
-    behaviorSelect.id = `format-rule-message-${format}`;
-    behaviorSelect.className = 'form-control form-control-sm format-rule-message';
-    behaviorSelect.setAttribute('data-format', format);
-    
-    const behaviors = [
-      ['none', 'Show fields and allow submission'],
-      ['message', 'Show custom message only']
-    ];
-    
-    // Add legacy options if they are already selected
-    if (rule.messageBehavior === 'ebookMessage') behaviors.push(['ebookMessage', 'Show eBook message']);
-    if (rule.messageBehavior === 'eaudiobookMessage') behaviors.push(['eaudiobookMessage', 'Show eAudiobook message']);
-
-    behaviors.forEach(([val, label]) => {
-      const opt = new Option(label, val);
-      opt.selected = rule.messageBehavior === val;
-      behaviorSelect.add(opt);
-    });
-
     if (isEcontent) {
-      behaviorSelect.disabled = true;
+      const behaviorText = document.createElement('span');
+      behaviorText.className = 'badge badge-info py-2 px-3';
+      behaviorText.textContent = rule.messageBehavior === 'ebookMessage' ? 'Show eBook message' : 
+                                rule.messageBehavior === 'eaudiobookMessage' ? 'Show eAudiobook message' : 'Show custom message';
+      
       const lockedNote = document.createElement('div');
       lockedNote.className = 'small text-muted ml-2 d-inline-block';
       lockedNote.textContent = '(Required for this format)';
-      behaviorForm.append(behaviorLabel, behaviorSelect, lockedNote);
+      behaviorForm.append(behaviorLabel, behaviorText, lockedNote);
     } else {
+      const behaviorSelect = document.createElement('select');
+      behaviorSelect.id = `format-rule-message-${format}`;
+      behaviorSelect.className = 'form-control form-control-sm format-rule-message';
+      behaviorSelect.setAttribute('data-format', format);
+      
+      const behaviors = [
+        ['none', 'Show fields and allow submission'],
+        ['message', 'Show custom message only']
+      ];
+      
+      // Add legacy options if they are already selected
+      if (rule.messageBehavior === 'ebookMessage') behaviors.push(['ebookMessage', 'Show eBook message']);
+      if (rule.messageBehavior === 'eaudiobookMessage') behaviors.push(['eaudiobookMessage', 'Show eAudiobook message']);
+
+      behaviors.forEach(([val, label]) => {
+        const opt = new Option(label, val);
+        opt.selected = rule.messageBehavior === val;
+        behaviorSelect.add(opt);
+      });
+
       behaviorForm.append(behaviorLabel, behaviorSelect);
     }
     behaviorGroup.appendChild(behaviorForm);
@@ -359,13 +364,15 @@ export function collectPatronFormatRules() {
   const editor = document.getElementById('format-rules-editor');
   if (!editor) return rules;
 
-  editor.querySelectorAll('.format-rule-message').forEach(select => {
-    const format = select.getAttribute('data-format');
+  editor.querySelectorAll('.asap-accordion-item').forEach(item => {
+    const format = item.getAttribute('data-format');
+    const behavior = item.getAttribute('data-behavior') || 'none';
     if (!rules[format]) {
-      rules[format] = { messageBehavior: 'none', message: '', fields: {} };
+      rules[format] = { messageBehavior: behavior, message: '', fields: {} };
       patronFormatFields.forEach(f => { rules[format].fields[f.key] = { mode: f.key === 'title' ? 'required' : 'optional', label: f.label }; });
+    } else {
+      rules[format].messageBehavior = behavior;
     }
-    rules[format].messageBehavior = select.value;
   });
 
   editor.querySelectorAll('.format-rule-custom-message').forEach(textarea => {
@@ -408,9 +415,7 @@ document.addEventListener('input', (e) => {
     if (!summary) return;
 
     // Collect current state for this format to compute summary
-    const rule = { messageBehavior: 'none', message: '', fields: {} };
-    const messageSelect = document.getElementById(`format-rule-message-${format}`);
-    if (messageSelect) rule.messageBehavior = messageSelect.value;
+    const rule = { messageBehavior: item.getAttribute('data-behavior') || 'none', message: '', fields: {} };
     
     const messageArea = item.querySelector('.format-rule-custom-message');
     if (messageArea) rule.message = messageArea.value;
@@ -437,6 +442,7 @@ document.addEventListener('change', (e) => {
     const summary = item.querySelector('.asap-accordion-summary');
     if (!summary) return;
 
+    item.setAttribute('data-behavior', target.value);
     const rule = { messageBehavior: target.value, message: '', fields: {} };
     const messageArea = item.querySelector('.format-rule-custom-message');
     if (messageArea) rule.message = messageArea.value;
