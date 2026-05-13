@@ -27,12 +27,29 @@ migrate((app) => {
 
   addField(titleRequests, field("claimType", "select", { maxSelect: 1, values: ["manual", "automatic_format_rule"] }));
   addField(titleRequests, field("claimRuleId", "text", { max: 64 }));
-  titleRequests.indexes = [
-    ...(titleRequests.indexes || []),
-    "CREATE INDEX IF NOT EXISTS idx_title_requests_claim_type ON title_requests (claimType)",
-    "CREATE INDEX IF NOT EXISTS idx_title_requests_claim_rule ON title_requests (claimRuleId)"
-  ];
+  
+  const idx1 = "CREATE INDEX IF NOT EXISTS idx_title_requests_claim_type ON title_requests (claimType)";
+  const idx2 = "CREATE INDEX IF NOT EXISTS idx_title_requests_claim_rule ON title_requests (claimRuleId)";
+  const existingIndexes = titleRequests.indexes || [];
+  
+  const hasIdx1 = existingIndexes.some(i => i.includes("idx_title_requests_claim_type"));
+  const hasIdx2 = existingIndexes.some(i => i.includes("idx_title_requests_claim_rule"));
+
+  if (!hasIdx1) {
+    existingIndexes.push(idx1);
+  }
+  if (!hasIdx2) {
+    existingIndexes.push(idx2);
+  }
+  titleRequests.indexes = existingIndexes;
   app.save(titleRequests);
+
+  try {
+    const existing = app.findCollectionByNameOrId("format_claim_rules");
+    if (existing) {
+      return;
+    }
+  } catch (err) {}
 
   try {
     const rules = new Collection({
@@ -54,9 +71,9 @@ migrate((app) => {
         rel("updatedBy", staffUsers),
       ],
       indexes: [
-        "CREATE UNIQUE INDEX idx_format_claim_rules_library_format ON format_claim_rules (libraryOrgId, format)",
-        "CREATE INDEX idx_format_claim_rules_library ON format_claim_rules (libraryOrgId)",
-        "CREATE INDEX idx_format_claim_rules_staff ON format_claim_rules (staffUserId)"
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_format_claim_rules_library_format ON format_claim_rules (libraryOrgId, format)",
+        "CREATE INDEX IF NOT EXISTS idx_format_claim_rules_library ON format_claim_rules (libraryOrgId)",
+        "CREATE INDEX IF NOT EXISTS idx_format_claim_rules_staff ON format_claim_rules (staffUserId)"
       ]
     });
     app.save(rules);

@@ -90,7 +90,7 @@ function renderTabDescription(status) {
 
   // Add auto-promoter info for Pending purchase
   if (status === 'outstanding_purchase') {
-    tabDesc.textContent = 'Pending purchase contains approved suggestions that are waiting to appear in Polaris. Staff can also add a BIB ID manually.';
+    tabDesc.textContent = 'Pending purchase contains approved suggestions that are waiting to appear in Polaris. Staff can add a BIB ID to move a suggestion to the Pending hold phase.';
     if (workflowSettings.autoPromote) {
       addSuffix('Auto-promoter enabled:', ' ASAP will check Polaris automatically. (');
     } else {
@@ -803,7 +803,6 @@ export function getGridColumns(status) {
     { name: 'Author (original)', width: '200px' },
     { name: 'Identifier number', width: '140px' },
     { name: 'BIB ID', width: '100px' },
-    { name: 'Age group', width: '100px' },
     { name: 'Format', width: '100px' },
     { name: 'Timing', width: '100px' },
     { name: 'Submitted', width: '100px' },
@@ -997,7 +996,6 @@ export function getGridRow(row, status) {
     renderAuthorCell(row),
     row.identifier,
     renderBibIdCell(row),
-    ageMap[row.agegroup] || row.agegroup,
     formatMap[row.format] || row.format,
     formatPublication(row.publication),
     formatStandardDate(row.created),

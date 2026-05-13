@@ -1,5 +1,5 @@
 import { formatMap, availableFormats, setAvailableFormats, currentFormatClaimRules, setCurrentFormatClaimRules, formatClaimStaffOptions } from './state.js';
-import { setInlineStatus, showConfirm, markSettingsDirty } from './api.js';
+import { setInlineStatus, showConfirm, markSettingsDirty, showToast } from './api.js';
 import { escapeAttr } from './grid.js';
 import { renderPatronFormatRulesEditor, collectPatronFormatRules } from './settings-ui.js';
 
@@ -309,6 +309,41 @@ export function updateModalFormatDropdowns() {
   });
 }
 
+const btnOpenAddFormatModal = document.getElementById('btn-open-add-format-modal');
+if (btnOpenAddFormatModal) {
+  btnOpenAddFormatModal.addEventListener('click', () => {
+    const modal = document.getElementById('addFormatModal');
+    if (modal) {
+      const errorDiv = document.getElementById('new-format-error');
+      if (errorDiv) {
+        errorDiv.textContent = '';
+        errorDiv.classList.add('hidden');
+      }
+      document.getElementById('new-format-key').value = '';
+      document.getElementById('new-format-label').value = '';
+      modal.showModal();
+      document.getElementById('new-format-key').focus();
+    }
+  });
+}
+
+const closeAddFormatModal = () => {
+  const modal = document.getElementById('addFormatModal');
+  if (modal && modal.open) modal.close();
+};
+
+document.getElementById('close-add-format-modal-x')?.addEventListener('click', closeAddFormatModal);
+document.getElementById('close-add-format-modal-btn')?.addEventListener('click', closeAddFormatModal);
+
+const addFormatForm = document.getElementById('add-format-form');
+if (addFormatForm) {
+  addFormatForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('btn-add-format');
+    if (btn) btn.click();
+  });
+}
+
 const btnAddFormat = document.getElementById('btn-add-format');
 if (btnAddFormat) {
   btnAddFormat.addEventListener('click', () => {
@@ -317,27 +352,39 @@ if (btnAddFormat) {
     const rawKey = keyInput ? keyInput.value.trim() : '';
     const rawLabel = labelInput ? labelInput.value.trim() : '';
     const key = rawKey.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '');
+    const errorDiv = document.getElementById('new-format-error');
+
     if (!key) {
-      setInlineStatus('new-format-error', 'Enter a short format key, such as videogame.', 'danger');
+      if (errorDiv) {
+        errorDiv.textContent = 'Enter a short format key, such as videogame.';
+        errorDiv.classList.remove('hidden');
+      }
       if (keyInput) keyInput.focus();
       return;
     }
     if (!/^[a-z0-9_]+$/.test(key)) {
-      setInlineStatus('new-format-error', 'Use only letters, numbers, and underscores for the format key.', 'danger');
+      if (errorDiv) {
+        errorDiv.textContent = 'Use only letters, numbers, and underscores for the format key.';
+        errorDiv.classList.remove('hidden');
+      }
       if (keyInput) keyInput.focus();
       return;
     }
     if (formatMap[key]) {
-      setInlineStatus('new-format-error', 'This format key already exists.', 'danger');
+      if (errorDiv) {
+        errorDiv.textContent = 'This format key already exists.';
+        errorDiv.classList.remove('hidden');
+      }
       if (keyInput) keyInput.focus();
       return;
     }
     const label = rawLabel || key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
     formatMap[key] = label;
     availableFormats.push(key);
-    if (keyInput) keyInput.value = '';
-    if (labelInput) labelInput.value = '';
-    setInlineStatus('new-format-error', `Added ${label}. Save settings to keep this format.`, 'success');
+    
+    closeAddFormatModal();
+    showToast(`Added ${label}. Save settings to keep this format.`, 'success');
+    
     renderFormatSettings();
     renderPatronFormatRulesEditor(collectPatronFormatRules());
     markSettingsDirty();

@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-05-13T03:13:00Z",
+  "title": "Design System: ASAP",
+  "extensions": {
+    "colorMeta": {
+      "primary": { "role": "primary", "displayName": "Civic Blue", "canonical": "#007bff", "tonalRamp": ["#003366", "#004085", "#0056b3", "#007bff", "#3395ff", "#66afff", "#99c9ff", "#cce4ff"] },
+      "success": { "role": "primary", "displayName": "Workflow Green", "canonical": "#19692c", "tonalRamp": ["#0b2e13", "#145523", "#19692c", "#218838", "#28a745", "#51cf66", "#8ce99a", "#b2f2bb"] },
+      "neutral-bg": { "role": "neutral", "displayName": "Foundation Gray", "canonical": "#f5f5f5", "tonalRamp": ["#212529", "#343a40", "#495057", "#adb5bd", "#dee2e6", "#e9ecef", "#f8f9fa", "#ffffff"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Analytics Display", "purpose": "High-level metrics and numbers." },
+      "headline": { "displayName": "Section Headline", "purpose": "Main dashboard section titles." },
+      "body": { "displayName": "Main Body", "purpose": "Standard readable text and descriptions." }
+    },
+    "shadows": [
+      { "name": "surface-elevation", "value": "0 4px 12px rgba(0, 0, 0, 0.1)", "purpose": "Main app container and modals." },
+      { "name": "interactive-lift", "value": "0 2px 8px rgba(0, 0, 0, 0.04)", "purpose": "Cards and panels." }
+    ],
+    "motion": [
+      { "name": "ease-standard", "value": "cubic-bezier(0.4, 0, 0.2, 1)", "purpose": "Standard state transitions." }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "576px" },
+      { "name": "md", "value": "768px" },
+      { "name": "lg", "value": "992px" },
+      { "name": "xl", "value": "1200px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Standard action button for primary workflows.",
+      "html": "<button class=\"ds-btn-primary\">SUBMIT REQUEST</button>",
+      "css": ".ds-btn-primary { background: #007bff; color: #ffffff; padding: 8px 16px; font-family: Roboto, -apple-system, sans-serif; font-weight: 700; font-size: 0.875rem; border: none; border-radius: 4px; cursor: pointer; transition: background 0.2s; } .ds-btn-primary:hover { background: #0056b3; }"
+    },
+    {
+      "name": "Success Button",
+      "kind": "button",
+      "refersTo": "button-success",
+      "description": "Used for 'New Suggestion' or approval actions.",
+      "html": "<button class=\"ds-btn-success\">+ NEW SUGGESTION</button>",
+      "css": ".ds-btn-success { background: #19692c; color: #ffffff; padding: 8px 16px; font-family: Roboto, -apple-system, sans-serif; font-weight: 700; font-size: 0.875rem; border: none; border-radius: 4px; cursor: pointer; transition: background 0.2s; } .ds-btn-success:hover { background: #145523; }"
+    },
+    {
+      "name": "Dashboard Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Standard container for dashboard sections and forms.",
+      "html": "<div class=\"ds-card\"><h3 class=\"ds-card-title\">Section Title</h3><p class=\"ds-card-body\">This is a standard card content area.</p></div>",
+      "css": ".ds-card { background: #ffffff; border: 1px solid #dee2e6; border-radius: 8px; padding: 20px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04); font-family: Roboto, -apple-system, sans-serif; } .ds-card-title { font-size: 1.25rem; font-weight: 600; margin-top: 0; margin-bottom: 12px; } .ds-card-body { font-size: 1rem; color: #212529; margin: 0; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Civic Registry",
+    "overview": "ASAP is designed as a high-density, professional utility. The aesthetic is institutional and dependable, signifying the system's role as a public utility.",
+    "keyCharacteristics": [
+      "Institutional Trust: Solid deep blues and crisp neutrals.",
+      "Expert Efficiency: High information density.",
+      "Tactile Confidence: Clear boundaries and intentional shadows."
+    ],
+    "rules": [
+      { "name": "The Authority Rule", "body": "Civic Blue is reserved for meaningful actions and identity.", "section": "colors" },
+      { "name": "The Shadow-of-State Rule", "body": "Shadows respond to interaction, never a decorative default.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do use Roboto for all text.",
+      "Do keep information density high in staff views.",
+      "Do ensure 4px border-radius on interactive elements."
+    ],
+    "donts": [
+      "Don't use overly round or 'bubbly' UI components.",
+      "Don't use neon or high-chroma accent colors.",
+      "Don't use border-left greater than 1px as a colored stripe."
+    ]
+  }
+}

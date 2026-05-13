@@ -10,12 +10,11 @@ const physicalFields = document.getElementById('physical-fields');
 const econtentFields = document.getElementById('econtent-fields');
 const authorInput = document.getElementById('author');
 const titleInput = document.getElementById('title');
-const agegroupInput = document.getElementById('agegroup');
 const publicationInput = document.getElementById('publication');
 const defaultPublicationOptions = ['Already published', 'Coming soon', 'Published a while back'];
 const defaultAgeGroups = ['Adult', 'Young Adult / Teen', 'Children'];
 const formatKeys = ['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'];
-const fieldKeys = ['title', 'author', 'identifier', 'agegroup', 'publication'];
+const fieldKeys = ['title', 'author', 'identifier', 'publication'];
 const defaultFormatRules = {
   book: {
     messageBehavior: 'none',
@@ -23,7 +22,6 @@ const defaultFormatRules = {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Author' },
       identifier: { mode: 'optional', label: 'Identifier number' },
-      agegroup: { mode: 'required', label: 'Age Group' },
       publication: { mode: 'required', label: 'Publication Timing' }
     }
   },
@@ -33,7 +31,6 @@ const defaultFormatRules = {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Author' },
       identifier: { mode: 'optional', label: 'Identifier number' },
-      agegroup: { mode: 'required', label: 'Age Group' },
       publication: { mode: 'required', label: 'Publication Timing' }
     }
   },
@@ -43,7 +40,6 @@ const defaultFormatRules = {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Director/Actors/Producer' },
       identifier: { mode: 'hidden', label: 'UPC' },
-      agegroup: { mode: 'required', label: 'Age Group' },
       publication: { mode: 'required', label: 'Publication Timing' }
     }
   },
@@ -53,27 +49,26 @@ const defaultFormatRules = {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Artist' },
       identifier: { mode: 'hidden', label: 'UPC' },
-      agegroup: { mode: 'required', label: 'Age Group' },
       publication: { mode: 'required', label: 'Publication Timing' }
     }
   },
   ebook: {
-    messageBehavior: 'ebookMessage',
+    messageBehavior: 'message',
+    message: '<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>',
     fields: {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Author' },
       identifier: { mode: 'optional', label: 'Identifier number' },
-      agegroup: { mode: 'required', label: 'Age Group' },
       publication: { mode: 'required', label: 'Publication Timing' }
     }
   },
   eaudiobook: {
-    messageBehavior: 'eaudiobookMessage',
+    messageBehavior: 'message',
+    message: '<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>',
     fields: {
       title: { mode: 'required', label: 'Title' },
       author: { mode: 'required', label: 'Author' },
       identifier: { mode: 'optional', label: 'Identifier number' },
-      agegroup: { mode: 'required', label: 'Age Group' },
       publication: { mode: 'required', label: 'Publication Timing' }
     }
   }
@@ -86,11 +81,9 @@ const defaultUiText = {
   barcodeLabel: 'Library Card',
   pinLabel: 'Pin',
   publicationOptions: defaultPublicationOptions,
-  ageGroups: defaultAgeGroups,
   formatRules: defaultFormatRules
 };
 let publicationOptions = defaultPublicationOptions.slice();
-let ageGroups = defaultAgeGroups.slice();
 let uiConfig = { ...defaultUiText };
 let formatRules = normalizeFormatRules(defaultFormatRules);
 let lastSelectedFormat = formatSelect.value;
@@ -385,7 +378,7 @@ function normalizeMode(value, fallback) {
 }
 
 function normalizeMessageBehavior(value, fallback) {
-  return ['none', 'ebookMessage', 'eaudiobookMessage'].includes(value) ? value : fallback || 'none';
+  return ['none', 'message', 'ebookMessage', 'eaudiobookMessage'].includes(value) ? value : fallback || 'none';
 }
 
 function normalizeFormatRules(rules) {
@@ -410,6 +403,7 @@ function normalizeFormatRules(rules) {
       });
     }
     normalized[format].messageBehavior = normalizeMessageBehavior(incomingFormat.messageBehavior, normalized[format].messageBehavior);
+    normalized[format].message = String(incomingFormat.message || normalized[format].message || '').trim();
     const incomingFields = incomingFormat.fields || {};
     fieldKeys.forEach(field => {
       const incomingField = incomingFields[field] || {};
@@ -443,7 +437,6 @@ function fieldElements(field) {
     title: { row: 'field-title', input: 'title', label: 'lbl-title' },
     author: { row: 'field-author', input: 'author', label: 'lbl-creator' },
     identifier: { row: 'field-identifier', input: 'isbn', label: 'lbl-identifier' },
-    agegroup: { row: 'field-agegroup', input: 'agegroup', label: 'lbl-agegroup' },
     publication: { row: 'field-publication', input: 'publication', label: 'lbl-publication' }
   }[field];
 
@@ -454,12 +447,16 @@ function fieldElements(field) {
   };
 }
 
-function messageHtmlForBehavior(behavior) {
+function messageHtmlForBehavior(behavior, formatKey) {
+  const rule = formatRules[formatKey] || {};
+  if (behavior === 'message') {
+    return rule.message || '';
+  }
   if (behavior === 'ebookMessage') {
-    return uiConfig.ebookMessage || '<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>';
+    return uiConfig.ebookMessage || rule.message || '<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>';
   }
   if (behavior === 'eaudiobookMessage') {
-    return uiConfig.eaudiobookMessage || '<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>';
+    return uiConfig.eaudiobookMessage || rule.message || '<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>';
   }
   return '';
 }
@@ -475,7 +472,7 @@ function updateFormatUI() {
     document.getElementById('submit-error').classList.add('hidden');
 
     const msgContainer = document.getElementById('econtent-msg-container');
-    msgContainer.innerHTML = sanitizeHtml(messageHtmlForBehavior(messageBehavior));
+    msgContainer.innerHTML = sanitizeHtml(messageHtmlForBehavior(messageBehavior, format));
 
     fieldKeys.forEach(field => {
       const els = fieldElements(field);
@@ -729,30 +726,6 @@ function normalizeAgeGroups(options) {
 
 function setPublicationOptions(options) {
   publicationOptions = normalizePublicationOptions(options);
-  ageGroups = normalizeAgeGroups(uiConfig.ageGroups);
-  
-  const pubSelect = document.getElementById('publication');
-  pubSelect.innerHTML = '';
-  publicationOptions.forEach(opt => {
-    const el = document.createElement('option');
-    el.value = opt;
-    el.textContent = opt;
-    pubSelect.appendChild(el);
-  });
-  
-  const ageSelect = document.getElementById('agegroup');
-  const selectedAgeGroup = agegroupInput.value;
-  ageSelect.innerHTML = '';
-  ageGroups.forEach(opt => {
-    const el = document.createElement('option');
-    el.value = opt;
-    el.textContent = opt;
-    ageSelect.appendChild(el);
-  });
-
-  const selected = publicationInput.value;
-  publicationInput.value = publicationOptions.includes(selected) ? selected : publicationOptions[0];
-  agegroupInput.value = ageGroups.includes(selectedAgeGroup) ? selectedAgeGroup : ageGroups[0];
 }
 
 formatSelect.addEventListener('change', () => {

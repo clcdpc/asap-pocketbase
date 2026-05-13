@@ -34,7 +34,6 @@ export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
     }
   }
   editFormat.value = fmt;
-  document.getElementById('edit-age').value = row.agegroup || 'adult';
   setSelectValue(document.getElementById('edit-publication'), row.publication || publicationOptions[0]);
   document.getElementById('edit-exact-publication-date').value = dateOnly(row.exactPublicationDate);
   document.getElementById('edit-autohold').checked = !!row.autohold;
@@ -63,10 +62,12 @@ export function renderEditClaimState(row) {
   const container = document.getElementById('edit-claim-state');
   if (!container) return;
   container.replaceChildren();
-  const label = document.createElement('div');
-  label.className = 'small font-weight-bold mb-1';
-  label.textContent = 'Claim';
+  const label = document.createElement('span');
+  label.className = 'edit-status-group-label';
+  label.textContent = 'Claim:';
   container.appendChild(label);
+  const valueWrap = document.createElement('span');
+  valueWrap.className = 'edit-status-group-value';
   const currentStaffId = String((pb.authStore.model && pb.authStore.model.id) || '').trim();
   const claimantId = String(row.claimedByStaffUserId || '').trim();
   const badge = document.createElement('span');
@@ -74,10 +75,7 @@ export function renderEditClaimState(row) {
   if (!claimantId) {
     badge.classList.add('claim-badge--unclaimed');
     badge.textContent = 'Unclaimed';
-    container.appendChild(badge);
-    return;
-  }
-  if (currentStaffId && claimantId === currentStaffId) {
+  } else if (currentStaffId && claimantId === currentStaffId) {
     badge.classList.add('claim-badge--mine');
     badge.textContent = 'Mine';
   } else {
@@ -85,11 +83,14 @@ export function renderEditClaimState(row) {
     badge.classList.add('claim-badge--claimed');
     badge.textContent = `Claimed by ${name}`;
   }
-  container.appendChild(badge);
-  const source = document.createElement('div');
-  source.className = 'small text-muted mt-1';
-  source.textContent = row.claimType === 'automatic_format_rule' ? 'Auto-assigned by format rule' : 'Manual claim';
-  container.appendChild(source);
+  valueWrap.appendChild(badge);
+  if (claimantId) {
+    const source = document.createElement('span');
+    source.className = 'text-muted';
+    source.textContent = row.claimType === 'automatic_format_rule' ? '(auto)' : '(manual)';
+    valueWrap.appendChild(source);
+  }
+  container.appendChild(valueWrap);
 }
 
 export function getExistingHistory(row) {
@@ -250,22 +251,90 @@ export function renderEditPatronContext(row) {
   const preferredPickupBranchName = row.preferredPickupBranchName || '—';
   const barcode = row.barcode || '—';
 
-  block.innerHTML = `
-    <div><strong>Patron:</strong> ${escapeAttr(patronName)}</div>
-    <div><strong>Email:</strong> ${escapeAttr(patronEmail)}</div>
-    <div><strong>Barcode:</strong> ${escapeAttr(barcode)}</div>
-    <div><strong>Library:</strong> ${escapeAttr(libraryOrgName)}</div>
-    <div><strong>Preferred pickup branch:</strong> ${escapeAttr(preferredPickupBranchName)}</div>
-  `;
+  block.replaceChildren();
+
+  // Summary toggle button
+  const summaryBtn = document.createElement('button');
+  summaryBtn.type = 'button';
+  summaryBtn.className = 'edit-patron-summary';
+  summaryBtn.setAttribute('aria-expanded', 'false');
+
+  const chevron = document.createElement('i');
+  chevron.className = 'fa fa-chevron-right edit-patron-summary-chevron';
+  chevron.setAttribute('aria-hidden', 'true');
+  summaryBtn.appendChild(chevron);
+
+  const summaryText = document.createElement('span');
+  const summaryParts = [patronName];
+  if (libraryOrgName !== '—') summaryParts.push(libraryOrgName);
+  summaryText.textContent = summaryParts.join(' · ');
+  summaryBtn.appendChild(summaryText);
+
+  const hint = document.createElement('span');
+  hint.className = 'edit-patron-summary-hint';
+  hint.textContent = 'Show details';
+  summaryBtn.appendChild(hint);
+
+  block.appendChild(summaryBtn);
+
+  // Detail rows (hidden by default)
+  const detailRows = document.createElement('div');
+  detailRows.className = 'edit-patron-detail-rows';
+
+  const fields = [
+    { label: 'Patron', value: patronName },
+    { label: 'Email', value: patronEmail },
+    { label: 'Barcode', value: barcode },
+    { label: 'Library', value: libraryOrgName },
+    { label: 'Preferred pickup branch', value: preferredPickupBranchName }
+  ];
+
+  fields.forEach(f => {
+    const div = document.createElement('div');
+    const strong = document.createElement('strong');
+    strong.textContent = f.label + ':';
+    div.appendChild(strong);
+    div.append(' ' + f.value);
+    detailRows.appendChild(div);
+  });
+
+  block.appendChild(detailRows);
+
+  // Toggle behavior
+  summaryBtn.addEventListener('click', () => {
+    const expanded = block.classList.toggle('edit-patron-context-expanded');
+    summaryBtn.setAttribute('aria-expanded', String(expanded));
+    hint.textContent = expanded ? 'Hide details' : 'Show details';
+  });
 }
 
 export function renderEditWorkflowTags(tags, row) {
   const container = document.getElementById('edit-workflow-tags');
   if (!container) return;
-  container.innerHTML = `
-    <div class="small font-weight-bold mb-1">Workflow flags</div>
-    ${renderWorkflowTags(tags, row)}
-  `;
+  container.replaceChildren();
+  const label = document.createElement('span');
+  label.className = 'edit-status-group-label';
+  label.textContent = 'Flags:';
+  container.appendChild(label);
+  const valueWrap = document.createElement('span');
+  valueWrap.className = 'edit-status-group-value';
+  // renderWorkflowTags returns verbose "No workflow flags" for empty state;
+  // use a compact "None" label for the inline status row
+  const tagHtml = renderWorkflowTags(tags, row);
+  if (tagHtml.includes('No workflow flags')) {
+    const none = document.createElement('span');
+    none.className = 'text-muted';
+    none.textContent = 'None';
+    valueWrap.appendChild(none);
+  } else {
+    const temp = document.createElement('div');
+    // Static developer-authored markup from renderWorkflowTags
+    temp.innerHTML = tagHtml;
+    while (temp.firstChild) {
+      valueWrap.appendChild(temp.firstChild);
+    }
+  }
+  container.appendChild(valueWrap);
 }
 
 export function renderEditMetadata(row) {
@@ -307,20 +376,20 @@ export function renderExternalSearchButton(title, identifier) {
   const container = document.getElementById('edit-external-search-container');
   if (!container) return;
 
-  const buttons = [];
-  const providers = [
-    { enabled: workflowSettings.externalSearch1Enabled, label: workflowSettings.externalSearch1Label, template: workflowSettings.externalSearch1UrlTemplate },
-    { enabled: workflowSettings.externalSearch2Enabled, label: workflowSettings.externalSearch2Label, template: workflowSettings.externalSearch2UrlTemplate },
-    { enabled: workflowSettings.externalSearch3Enabled, label: workflowSettings.externalSearch3Label, template: workflowSettings.externalSearch3UrlTemplate },
-    { enabled: workflowSettings.externalSearch4Enabled, label: workflowSettings.externalSearch4Label, template: workflowSettings.externalSearch4UrlTemplate }
-  ];
-
-  let cleanTitle = (title || '').split(' (')[0].trim();
-  const encodedTitle = encodeURIComponent(cleanTitle);
+  const encodedTitle = encodeURIComponent(title || '');
   const encodedId = encodeURIComponent(identifier || '');
+  const buttonClasses = ['btn-warning', 'btn-success', 'btn-primary', 'btn-info'];
 
-  const buttonClasses = ['btn-warning', 'btn-success', 'btn-primary'];
+  const providers = [];
+  for (let i = 1; i <= 4; i++) {
+    providers.push({
+      enabled: workflowSettings[`externalSearch${i}Enabled`],
+      label: workflowSettings[`externalSearch${i}Label`],
+      template: workflowSettings[`externalSearch${i}UrlTemplate`]
+    });
+  }
 
+  const nodes = [];
   providers.forEach((p, index) => {
     if (!p.enabled || !p.template || !/^https?:\/\//i.test(p.template)) return;
 
@@ -329,15 +398,21 @@ export function renderExternalSearchButton(title, identifier) {
     url = url.replace(/\{\{identifier\}\}/g, encodedId);
 
     const btnClass = buttonClasses[index] || 'btn-info';
-
-    buttons.push(`
-      <a href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer" class="btn btn-xs ${btnClass} mr-1 mb-1">
-        <i class="fa fa-external-link"></i> ${escapeAttr(p.label || 'Search')}
-      </a>
-    `);
+    const a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.className = `btn btn-xs ${btnClass} mr-1 mb-1`;
+    
+    const icon = document.createElement('i');
+    icon.className = 'fa fa-external-link';
+    icon.setAttribute('aria-hidden', 'true');
+    a.appendChild(icon);
+    a.append(' ' + (p.label || 'Search'));
+    nodes.push(a);
   });
 
-  container.innerHTML = buttons.join('');
+  container.replaceChildren(...nodes);
 }
 
 function polarisSearchModeLabel(mode) {
@@ -489,29 +564,39 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
     ? `${results.length} result${results.length === 1 ? '' : 's'} shown${data.totalMatches > results.length ? ' of ' + data.totalMatches : ''}.`
     : 'No Polaris matches found.';
 
-  els.results.innerHTML = results.map((result, index) => {
+  els.results.replaceChildren();
+  results.forEach((result, index) => {
     const title = result.title || '(No title returned)';
     const meta = polarisResultMeta(result);
-    return `
-      <div class="polaris-search-result">
-        <div class="polaris-search-result-title">${escapeAttr(title)}</div>
-        ${meta ? `<div class="polaris-search-result-meta">${escapeAttr(meta)}</div>` : ''}
-        <div class="polaris-search-result-actions">
-          <button type="button" class="btn btn-sm btn-primary polaris-search-select"
-            data-result-index="${index}"
-            ${result.bibId ? '' : 'disabled'}
-            aria-label="Use Polaris BIB ${escapeAttr(result.bibId || '')} for this request">
-            Use this BIB
-          </button>
-        </div>
-      </div>
-    `;
-  }).join('');
-
-  els.results.querySelectorAll('.polaris-search-select').forEach(button => {
-    button.addEventListener('click', async () => {
-      const result = results[parseInt(button.getAttribute('data-result-index') || '-1', 10)];
-      if (!result || !result.bibId) return;
+    
+    const div = document.createElement('div');
+    div.className = 'polaris-search-result';
+    
+    const titleDiv = document.createElement('div');
+    titleDiv.className = 'polaris-search-result-title';
+    titleDiv.textContent = title;
+    div.appendChild(titleDiv);
+    
+    if (meta) {
+      const metaDiv = document.createElement('div');
+      metaDiv.className = 'polaris-search-result-meta';
+      metaDiv.textContent = meta;
+      div.appendChild(metaDiv);
+    }
+    
+    const actionsDiv = document.createElement('div');
+    actionsDiv.className = 'polaris-search-result-actions';
+    
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-sm btn-primary polaris-search-select';
+    btn.setAttribute('data-result-index', index);
+    if (!result.bibId) btn.disabled = true;
+    btn.setAttribute('aria-label', `Use Polaris BIB ${result.bibId || ''} for this request`);
+    btn.textContent = 'Use this BIB';
+    
+    btn.addEventListener('click', async () => {
+      if (!result.bibId) return;
       els.dialog.close();
       if (options.source === 'edit') {
         const editModal = document.getElementById('editModal');
@@ -527,6 +612,10 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
       openEdit(row.id, row.status || currentStatus, 'Edit suggestion', '', 'Save');
       await lookupEditBibById({ bibId: result.bibId, button: null });
     });
+    
+    actionsDiv.appendChild(btn);
+    div.appendChild(actionsDiv);
+    els.results.appendChild(div);
   });
 }
 
@@ -740,7 +829,6 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
     identifier: document.getElementById('edit-identifier').value,
     bibid: bibid,
     format: nextFormatValue,
-    agegroup: document.getElementById('edit-age').value,
     publication: document.getElementById('edit-publication').value,
     exactPublicationDate: document.getElementById('edit-exact-publication-date').value,
     notes: getDraftCommentValue(),
@@ -821,7 +909,7 @@ export function setBibIdRequirement(nextStatus) {
     bibHint.classList.toggle('text-danger', isRequired);
     bibHint.classList.toggle('font-weight-bold', isRequired);
     bibHint.textContent = isRequired
-      ? 'Required to identify the item in the catalog and proceed with the request.'
+      ? 'Required before moving this suggestion to the Pending hold phase.'
       : 'Needed to link this request to a catalog record.';
   }
 }

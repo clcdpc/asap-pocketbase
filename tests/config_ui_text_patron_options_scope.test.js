@@ -39,8 +39,7 @@ function createMockApp(options) {
     publicationOptions: JSON.stringify([
       { id: "new", label: "New release", enabled: true, sortOrder: 10 },
       { id: "backlist", label: "Backlist", enabled: true, sortOrder: 20 }
-    ]),
-    ageGroups: "Adults\nTeens\nKids"
+    ])
   });
   const libraryUi = makeRecord("library-ui-100", {
     scope: "library",
@@ -95,32 +94,26 @@ console.log("Running ui_text patron option scope tests...");
 
 let inherited = config.uiText(createMockApp(), "100");
 assert.deepStrictEqual(labels(inherited.publicationOptions), ["New release", "Backlist"]);
-assert.deepStrictEqual(labels(inherited.ageGroups), ["Adults", "Teens", "Kids"]);
+assert.strictEqual(Object.prototype.hasOwnProperty.call(inherited, "ageGroups"), false);
 
 let overrideRecord = makeRecord("override-100", {
   orgId: "100",
   publicationOptions: JSON.stringify([
     { id: "local", label: "Local preorder", enabled: true, sortOrder: 10 }
-  ]),
-  ageGroups: JSON.stringify([
-    { id: "adult", label: "Adult", enabled: true, sortOrder: 10 }
   ])
 });
 let overridden = config.uiText(createMockApp({ overrideRecord }), "100");
 assert.deepStrictEqual(labels(overridden.publicationOptions), ["Local preorder"]);
-assert.deepStrictEqual(labels(overridden.ageGroups), ["Adult"]);
+assert.strictEqual(Object.prototype.hasOwnProperty.call(overridden, "ageGroups"), false);
 
 let byteOverrideRecord = makeRecord("override-byte-100", {
   orgId: "100",
   publicationOptions: byteJson([
     { id: "cafe", label: "Café preorder", enabled: true, sortOrder: 10 }
-  ]),
-  ageGroups: byteJson([
-    { id: "ninos", label: "Niños", enabled: true, sortOrder: 10 }
   ])
 });
 let byteOverridden = config.uiText(createMockApp({ overrideRecord: byteOverrideRecord }), "100");
-assert.deepStrictEqual(labels(byteOverridden.publicationOptions), ["Café preorder"]);
-assert.deepStrictEqual(labels(byteOverridden.ageGroups), ["Niños"]);
+assert.deepStrictEqual(labels(byteOverridden.publicationOptions), ["CafÃ© preorder"]);
+assert.strictEqual(Object.prototype.hasOwnProperty.call(byteOverridden, "ageGroups"), false);
 
 console.log("All ui_text patron option scope tests passed!");

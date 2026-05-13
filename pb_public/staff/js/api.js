@@ -337,6 +337,8 @@ export function markSettingsClean(state = 'clean') {
   updateSaveBarState(state);
 }
 
+export const systemOnlySections = ['start', 'polaris', 'smtp', 'staff'];
+
 export function activateSettingsSection(section, options = {}) {
   const targetSection = settingsSectionIds.includes(section) ? section : 'start';
   setCurrentSettingsSection(targetSection);
@@ -356,6 +358,44 @@ export function activateSettingsSection(section, options = {}) {
       wrapper.classList.add('hidden');
     }
   }
+
+  // System-only section guard: disable form controls and show a banner
+  // when a library is selected in the context dropdown.
+  const isLibraryContext = currentLibraryContextOrgId && currentLibraryContextOrgId !== 'system';
+  document.querySelectorAll('[data-settings-section]').forEach(panel => {
+    const panelSection = panel.getAttribute('data-settings-section');
+    const shouldLock = isLibraryContext && systemOnlySections.includes(panelSection);
+    panel.classList.toggle('settings-panel-locked', shouldLock);
+
+    // Manage guard banner
+    let banner = panel.querySelector('.system-only-guard-banner');
+    if (shouldLock) {
+      if (!banner) {
+        banner = document.createElement('div');
+        banner.className = 'system-only-guard-banner';
+        banner.setAttribute('role', 'status');
+        const icon = document.createElement('i');
+        icon.className = 'fa fa-lock mr-2';
+        banner.appendChild(icon);
+        const text = document.createTextNode('These settings are system-wide. Switch to \u201cSystem Defaults\u201d in the library selector to edit.');
+        banner.appendChild(text);
+        const cardBody = panel.querySelector('.card-body');
+        if (cardBody) {
+          cardBody.insertBefore(banner, cardBody.firstChild);
+        }
+      }
+      // Disable form controls inside the panel (not sidebar nav links)
+      panel.querySelectorAll('input, select, textarea').forEach(el => { el.disabled = true; });
+      panel.querySelectorAll('.btn:not(.settings-nav-link)').forEach(el => { el.disabled = true; });
+    } else {
+      if (banner) banner.remove();
+      // Re-enable form controls (only for the active panel to avoid touching hidden panels)
+      if (panel.classList.contains('active')) {
+        panel.querySelectorAll('input, select, textarea').forEach(el => { el.disabled = false; });
+        panel.querySelectorAll('.btn:not(.settings-nav-link)').forEach(el => { el.disabled = false; });
+      }
+    }
+  });
 
   document.querySelectorAll('[data-settings-target]').forEach(button => {
     const isActive = button.getAttribute('data-settings-target') === targetSection;

@@ -1,4 +1,4 @@
-import { pb, settingsContainer, settingsForm, formatMap, availableFormats, setAvailableFormats, currentRejectionTemplates, verifiedBibId, publicationOptions, setPublicationOptions, workflowSettings, currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, initialSettingsSnapshot, libraryContextLoadSerial, librarySelectorBound, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, lastWorkflowEnabledList, defaultPublicationOptions, defaultAgeGroups, emailTemplateDefaults, setVerifiedBibId, setCurrentLibraryContextOrgId, setCurrentFormatClaimRules, setFormatClaimStaffOptions, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId, setInitialSettingsSnapshot, setLibrarySelectorBound, setSettingsSaving, setSettingsLoading, setLeapBibUrlPattern, setLastWorkflowEnabledList, incrementLibraryContextLoadSerial } from './state.js';
+import { pb, settingsContainer, settingsForm, formatMap, availableFormats, setAvailableFormats, currentRejectionTemplates, verifiedBibId, publicationOptions, setPublicationOptions, workflowSettings, currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, initialSettingsSnapshot, libraryContextLoadSerial, librarySelectorBound, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, lastWorkflowEnabledList, defaultPublicationOptions, emailTemplateDefaults, setVerifiedBibId, setCurrentLibraryContextOrgId, setCurrentFormatClaimRules, setFormatClaimStaffOptions, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId, setInitialSettingsSnapshot, setLibrarySelectorBound, setSettingsSaving, setSettingsLoading, setLeapBibUrlPattern, setLastWorkflowEnabledList, incrementLibraryContextLoadSerial } from './state.js';
 import { setFieldValue, setFieldChecked, getFieldValue, getFieldChecked, validateStaffUrl, normalizeStaffUrl, normalizeLeapBibUrlPattern, isPocketBaseAutoCancelError, validateSmtpHostField, setVisible, showToast, showConfirm, isSuperAdminStaff, closeOpenDialogs, updateSaveBarState, markSettingsDirty, markSettingsClean, activateSettingsSection, initSettingsNavigation, updateEmailStatusBanner, updateOrganizationsStatusUi, checkAuth, loadSetupStatus, authorizedJson, updateAutoRejectEmailControls } from './api.js';
 import { closeActionMenu, escapeAttr } from './grid.js';
 import { renderEditLeapBibLink } from './modals.js';
@@ -6,7 +6,7 @@ import { renderFormatSettings, collectFormatLabels, collectAvailableFormats, col
 import { renderDuplicateStatusLabelSettings, collectDuplicateStatusLabels } from './settings-labels.js';
 import { collectSettingsPolaris, syncPolarisOrganizations, renderLibraryParticipationCheckboxes, collectEnabledLibraryIds } from './settings-polaris.js';
 import { populateEmailTemplateForms } from './settings-templates.js';
-import { updatePublicationOptionsUi, setAgeGroups, renderPatronFormatRulesEditor, collectPatronFormatRules, renderOptionListEditor, collectOptionList, addOptionListRow, handleOptionListClick } from './settings-ui.js';
+import { updatePublicationOptionsUi, renderPatronFormatRulesEditor, collectPatronFormatRules, renderOptionListEditor, collectOptionList, addOptionListRow, handleOptionListClick } from './settings-ui.js';
 import { loadStaffUsers, populateStaffLibraryOptions } from './settings-users.js';
 
 const adminSettingsSections = ['start', 'staff', 'templates', 'workflow', 'patron'];
@@ -240,6 +240,8 @@ export async function populateLibrarySelector() {
         document.getElementById('library-context-display').textContent = display;
         await loadLibrarySettings(currentLibraryContextOrgId);
         markSettingsClean('clean');
+        // Re-evaluate system-only section guard for the current section
+        activateSettingsSection(currentSettingsSection, { updateHash: false });
       });
       setLibrarySelectorBound(true);
     }
@@ -344,6 +346,10 @@ export function applyLibrarySettingsToForm(settings) {
       updateOrganizationsStatusUi(state, message);
     }
     updateSaveButtonText();
+    // Refresh system-only section guard after settings population
+    if (!settingsLoading) {
+      activateSettingsSection(currentSettingsSection, { updateHash: false });
+    }
   }
 
 export function discardLibrarySettingsChanges() {
@@ -506,8 +512,6 @@ export function populatePatronUiForms(uiText) {
   setFieldValue('ui-success-msg', uiText.successMessage || 'You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>');
   setFieldValue('ui-already-submitted-msg', uiText.alreadySubmittedMessage || 'This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.<div>Thank you for using this library\'s suggestion service.</div>');
   renderDuplicateStatusLabelSettings(uiText.duplicateStatusLabels || {}, uiText.duplicateStatusLabelsSource || '', !!uiText.duplicateStatusLabelsInherited);
-  setFieldValue('ui-ebook-msg', uiText.ebookMessage || '<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>');
-  setFieldValue('ui-eaudiobook-msg', uiText.eaudiobookMessage || '<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href="https://help.libbyapp.com/en-us/6260.htm" target="_blank" rel="noreferrer">Learn how to suggest a purchase using Libby here.</a></p>');
 
   // Format Labels & Available Formats
   const labels = uiText.formatLabels || {};
@@ -526,7 +530,6 @@ export function populatePatronUiForms(uiText) {
   updateModalFormatDropdowns();
 
   renderOptionListEditor('ui-publication-options-editor', uiText.publicationOptions, defaultPublicationOptions);
-  renderOptionListEditor('ui-age-groups-editor', uiText.ageGroups, defaultAgeGroups);
   const patronScope = document.getElementById('patron-options-scope');
   if (patronScope) {
     if (currentLibraryContextOrgId === 'system') {
@@ -542,7 +545,6 @@ export function populatePatronUiForms(uiText) {
   }
   renderPatronFormatRulesEditor(uiText.formatRules);
   updatePublicationOptionsUi(uiText.publicationOptions);
-  setAgeGroups(uiText.ageGroups);
 }
 
 function _serializeSettingsState(validate = false) {
@@ -595,13 +597,10 @@ function _serializeSettingsState(validate = false) {
     successMessage: getFieldValue('ui-success-msg'),
     alreadySubmittedMessage: getFieldValue('ui-already-submitted-msg'),
     duplicateStatusLabels: collectDuplicateStatusLabels(),
-    ebookMessage: getFieldValue('ui-ebook-msg'),
-    eaudiobookMessage: getFieldValue('ui-eaudiobook-msg'),
     formatLabels: collectFormatLabels(),
     formatOrder: collectFormatOrder(),
     availableFormats: collectAvailableFormats(),
     publicationOptions: collectOptionList('ui-publication-options-editor', defaultPublicationOptions),
-    ageGroups: collectOptionList('ui-age-groups-editor', defaultAgeGroups),
     formatRules: collectPatronFormatRules()
   };
 
@@ -737,15 +736,14 @@ export async function saveSettings(options = {}) {
     const payload = buildSettingsPayload();
 
     // Save via the library-scoped API
+    // System-only fields (smtp, polaris, staffUrl, leapBibUrlPattern) are only
+    // included when saving system defaults. Library saves must never send these.
+    const isSystemSave = currentLibraryContextOrgId === 'system';
     const libraryPayload = {
       orgId: currentLibraryContextOrgId,
-      staffUrl: payload.staffUrl,
-      leapBibUrlPattern: payload.leapBibUrlPattern,
-      smtp: payload.smtp,
-      polaris: payload.polaris,
       emails: payload.emails,
       ui_text: payload.ui_text,
-      formatClaimRules: currentLibraryContextOrgId === 'system' ? [] : payload.formatClaimRules,
+      formatClaimRules: isSystemSave ? [] : payload.formatClaimRules,
       workflow: {
         suggestionLimit: payload.suggestionLimit,
         suggestionLimitMessage: payload.suggestionLimitMessage,
@@ -779,6 +777,14 @@ export async function saveSettings(options = {}) {
         externalSearch4UrlTemplate: payload.externalSearch4UrlTemplate
       }
     };
+
+    // Only include system-scoped fields when saving system defaults
+    if (isSystemSave) {
+      libraryPayload.staffUrl = payload.staffUrl;
+      libraryPayload.leapBibUrlPattern = payload.leapBibUrlPattern;
+      libraryPayload.smtp = payload.smtp;
+      libraryPayload.polaris = payload.polaris;
+    }
 
     const libraryPromise = authorizedJson('/api/asap/staff/settings/library', {
       method: 'POST',
@@ -834,9 +840,7 @@ document.getElementById('settings-discard-btn')?.addEventListener('click', (e) =
 settingsForm.addEventListener('input', markSettingsDirty);
 settingsForm.addEventListener('change', markSettingsDirty);
 document.getElementById('ui-publication-options-editor')?.addEventListener('click', handleOptionListClick);
-document.getElementById('ui-age-groups-editor')?.addEventListener('click', handleOptionListClick);
 document.getElementById('btn-add-publication-option')?.addEventListener('click', () => addOptionListRow('ui-publication-options-editor', defaultPublicationOptions));
-document.getElementById('btn-add-age-group')?.addEventListener('click', () => addOptionListRow('ui-age-groups-editor', defaultAgeGroups));
 
 export async function loadStaffConfig() {
   try {

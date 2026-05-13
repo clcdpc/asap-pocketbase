@@ -25,7 +25,7 @@ function createMockApp() {
   const systemUi = makeRecord('ui-system', {
     scope: 'system',
     publicationOptions: JSON.stringify([{ id: 'new', label: 'New', enabled: true, sortOrder: 10 }]),
-    ageGroups: 'Adults\nTeens'
+
   });
   const libraryUi = makeRecord('ui-library', { scope: 'library', libraryOrganization: org.id });
   const workflowLibrary = makeRecord('wf-library', { scope: 'library', libraryOrganization: org.id });
@@ -84,8 +84,7 @@ staff.collection = () => ({ name: 'staff_users' });
 const result = staffRoutes.updateLibrarySettings(makeEvent(app, {
   orgId: '100',
   ui_text: {
-    publicationOptions: [{ id: 'local', label: 'Local preorder', enabled: true, sortOrder: 10 }],
-    ageGroups: [{ id: 'adult', label: 'Adult', enabled: true, sortOrder: 10 }]
+    publicationOptions: [{ id: 'local', label: 'Local preorder', enabled: true, sortOrder: 10 }]
   },
   smtp: { host: 'should-not-save.example.org', port: 2525 },
   staffUrl: 'https://example.org/staff'
@@ -95,7 +94,6 @@ assert.strictEqual(result.code, 200);
 const override = getPatronOverride();
 assert.ok(override, 'Expected a patron_settings_overrides record to be saved');
 assert.deepStrictEqual(override.get('publicationOptions'), [{ id: 'local', label: 'Local preorder', enabled: true, sortOrder: 10 }]);
-assert.deepStrictEqual(override.get('ageGroups'), [{ id: 'adult', label: 'Adult', enabled: true, sortOrder: 10 }]);
 assert.strictEqual(systemUi.get('publicationOptions'), JSON.stringify([{ id: 'new', label: 'New', enabled: true, sortOrder: 10 }]));
 assert.strictEqual(deleted.length, 4, 'Expected blank library email templates to clear template overrides');
 

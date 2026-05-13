@@ -30,7 +30,6 @@ test('normalizeFormatRules includes custom format keys from incoming rules', () 
         title: { mode: 'required', label: 'Game Title' },
         author: { mode: 'required', label: 'Developer' },
         identifier: { mode: 'hidden', label: 'SKU' },
-        agegroup: { mode: 'required', label: 'Rating' },
         publication: { mode: 'optional', label: 'Release window' }
       }
     }
@@ -47,7 +46,6 @@ test('custom format labels are preserved through normalization', () => {
         title: { mode: 'required', label: 'Game Title' },
         author: { mode: 'required', label: 'Developer' },
         identifier: { mode: 'hidden', label: 'SKU' },
-        agegroup: { mode: 'required', label: 'Rating' },
         publication: { mode: 'optional', label: 'Release window' }
       }
     }
@@ -55,7 +53,6 @@ test('custom format labels are preserved through normalization', () => {
   assert.strictEqual(rules.videogame.fields.title.label, 'Game Title');
   assert.strictEqual(rules.videogame.fields.author.label, 'Developer');
   assert.strictEqual(rules.videogame.fields.identifier.label, 'SKU');
-  assert.strictEqual(rules.videogame.fields.agegroup.label, 'Rating');
   assert.strictEqual(rules.videogame.fields.publication.label, 'Release window');
 });
 
@@ -67,7 +64,6 @@ test('custom format field modes are preserved through normalization', () => {
         title: { mode: 'required', label: 'Game Title' },
         author: { mode: 'optional', label: 'Developer' },
         identifier: { mode: 'hidden', label: 'SKU' },
-        agegroup: { mode: 'required', label: 'Rating' },
         publication: { mode: 'optional', label: 'Release window' }
       }
     }
@@ -75,7 +71,6 @@ test('custom format field modes are preserved through normalization', () => {
   assert.strictEqual(rules.videogame.fields.title.mode, 'required');
   assert.strictEqual(rules.videogame.fields.author.mode, 'optional');
   assert.strictEqual(rules.videogame.fields.identifier.mode, 'hidden');
-  assert.strictEqual(rules.videogame.fields.agegroup.mode, 'required');
   assert.strictEqual(rules.videogame.fields.publication.mode, 'optional');
 });
 
@@ -143,8 +138,7 @@ test('sanitizePatronSuggestion accepts custom format and applies its rules', () 
           title: { mode: 'required', label: 'Game Title' },
           author: { mode: 'optional', label: 'Developer' },
           identifier: { mode: 'hidden', label: 'SKU' },
-          agegroup: { mode: 'required', label: 'Rating' },
-          publication: { mode: 'optional', label: 'Release window' }
+            publication: { mode: 'optional', label: 'Release window' }
         }
       }
     }
@@ -154,7 +148,6 @@ test('sanitizePatronSuggestion accepts custom format and applies its rules', () 
     title: 'Elden Ring',
     author: 'FromSoftware',
     identifier: 'ABC123',
-    agegroup: 'Adult',
     publication: 'Already published'
   };
   const result = sanitizePatronSuggestion(data, uiText);
@@ -171,8 +164,7 @@ test('sanitizePatronSuggestion rejects custom format when required field is miss
           title: { mode: 'required', label: 'Game Title' },
           author: { mode: 'required', label: 'Developer' },
           identifier: { mode: 'optional', label: 'SKU' },
-          agegroup: { mode: 'required', label: 'Rating' },
-          publication: { mode: 'required', label: 'Release window' }
+            publication: { mode: 'required', label: 'Release window' }
         }
       }
     }
@@ -181,7 +173,6 @@ test('sanitizePatronSuggestion rejects custom format when required field is miss
     format: 'videogame',
     title: 'Elden Ring',
     author: '',  // required but empty
-    agegroup: 'Adult',
     publication: 'Already published'
   };
   try {
@@ -224,7 +215,6 @@ test('sanitizePatronSuggestion uses custom labels in error messages', () => {
           title: { mode: 'required', label: 'Game Title' },
           author: { mode: 'required', label: 'Developer' },
           identifier: { mode: 'optional', label: 'SKU' },
-          agegroup: { mode: 'required', label: 'ESRB Rating' },
           publication: { mode: 'required', label: 'Release window' }
         }
       }
@@ -234,7 +224,6 @@ test('sanitizePatronSuggestion uses custom labels in error messages', () => {
     format: 'videogame',
     title: 'Elden Ring',
     author: 'FromSoftware',
-    agegroup: '',  // required but empty
     publication: 'Already published'
   };
   try {

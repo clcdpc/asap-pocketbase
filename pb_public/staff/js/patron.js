@@ -100,7 +100,6 @@ document.getElementById('new-suggestion-form').addEventListener('submit', async 
     author: document.getElementById('new-author').value,
     identifier: document.getElementById('new-identifier').value,
     format: document.getElementById('new-format').value,
-    agegroup: document.getElementById('new-age').value,
     publication: document.getElementById('new-publication').value,
     exactPublicationDate: document.getElementById('new-exact-publication-date').value,
     notes: document.getElementById('new-notes').value,
@@ -219,7 +218,6 @@ export function clearNewSuggestionDetails() {
   document.getElementById('new-author').value = '';
   document.getElementById('new-identifier').value = '';
   document.getElementById('new-format').selectedIndex = 0;
-  document.getElementById('new-age').selectedIndex = 0;
   document.getElementById('new-publication').selectedIndex = 0;
   document.getElementById('new-exact-publication-date').value = '';
   document.getElementById('new-notes').value = '';

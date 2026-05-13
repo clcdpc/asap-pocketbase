@@ -58,7 +58,6 @@ export async function closeDuplicateRequest(id) {
         identifier: row.identifier || '',
         bibid: row.bibid || '',
         format: row.format || '',
-        agegroup: row.agegroup || '',
         publication: row.publication || '',
         exactPublicationDate: row.exactPublicationDate || '',
         notes: row.notes || '',

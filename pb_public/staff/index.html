@@ -422,9 +422,9 @@
                               <th>Username</th>
                               <th>Domain</th>
                               <th>Library</th>
-                              <th>Current name</th>
+                              <th title="Current name">Name</th>
                               <th>Role</th>
-                              <th>Auto-claimed formats</th>
+                              <th title="Auto-claimed formats">Auto-claims</th>
                               <th>Last Login</th>
                               <th>Action</th>
                             </tr>
@@ -804,22 +804,22 @@
                   </div>
                 </div>
                 <div class="form-group">
-                  <label for="ui-patron-page-title">Main Page Title (Patron Portal)</label>
-                  <input type="text" id="ui-patron-page-title" class="form-control" placeholder="Material Suggestion">
-                  <small class="form-text text-muted">The main heading displayed at the top of the patron
+                  <label for="ui-patron-page-title">Main Page Title (Patron Portal) <span class="text-danger" aria-hidden="true">*</span></label>
+                  <input type="text" id="ui-patron-page-title" class="form-control" placeholder="Material Suggestion" required aria-required="true" aria-describedby="ui-patron-page-title-hint">
+                  <small id="ui-patron-page-title-hint" class="form-text text-muted">The main heading displayed at the top of the patron
                     portal.</small>
                 </div>
                 <div class="row">
                   <div class="col-md-6">
                     <div class="form-group">
-                      <label for="ui-barcode-label">Barcode Label</label>
-                      <input type="text" id="ui-barcode-label" class="form-control" placeholder="Library Card">
+                      <label for="ui-barcode-label">Barcode Label <span class="text-danger" aria-hidden="true">*</span></label>
+                      <input type="text" id="ui-barcode-label" class="form-control" placeholder="Library Card" required aria-required="true">
                     </div>
                   </div>
                   <div class="col-md-6">
                     <div class="form-group">
-                      <label for="ui-pin-label">Pin Label</label>
-                      <input type="text" id="ui-pin-label" class="form-control" placeholder="Pin">
+                      <label for="ui-pin-label">Pin Label <span class="text-danger" aria-hidden="true">*</span></label>
+                      <input type="text" id="ui-pin-label" class="form-control" placeholder="Pin" required aria-required="true">
                     </div>
                   </div>
                 </div>
@@ -837,8 +837,8 @@
                 </div>
                 <div class="form-group">
                   <label for="ui-no-email-msg">No email warning message (supports HTML)</label>
-                  <textarea id="ui-no-email-msg" class="form-control" rows="3"></textarea>
-                  <small class="form-text text-muted">Shown to patrons who do not have an email address on file in
+                  <textarea id="ui-no-email-msg" class="form-control" rows="3" aria-describedby="ui-no-email-msg-hint"></textarea>
+                  <small id="ui-no-email-msg-hint" class="form-text text-muted">Shown to patrons who do not have an email address on file in
                     Polaris.</small>
                 </div>
                 <div class="form-row">
@@ -853,8 +853,8 @@
                 </div>
                 <div class="form-group">
                   <label for="ui-already-submitted-msg">Already submitted message (supports HTML)</label>
-                  <textarea id="ui-already-submitted-msg" class="form-control" rows="3"></textarea>
-                  <small class="form-text text-muted">Shown when a patron tries to submit a title they have already
+                  <textarea id="ui-already-submitted-msg" class="form-control" rows="3" aria-describedby="ui-already-submitted-msg-hint"></textarea>
+                  <small id="ui-already-submitted-msg-hint" class="form-text text-muted">Shown when a patron tries to submit a title they have already
                     requested. Available placeholders: <code>{{duplicate_date}}</code>,
                     <code>{{duplicate_status}}</code>, <code>{{duplicate_title}}</code>,
                     <code>{{duplicate_author}}</code>, <code>{{duplicate_format}}</code>, and
@@ -873,27 +873,11 @@
                     <div id="duplicate-status-labels-container" class="form-row"></div>
                   </div>
                 </div>
-                <div class="form-group">
-                  <label for="ui-ebook-msg">eBook Message (Supports HTML)</label>
-                  <textarea id="ui-ebook-msg" class="form-control" rows="3"></textarea>
-                  <small class="form-text text-muted">Shown to patrons when they select "eBook" as their format.</small>
-                </div>
-                <div class="form-group">
-                  <label for="ui-eaudiobook-msg">eAudiobook Message (Supports HTML)</label>
-                  <textarea id="ui-eaudiobook-msg" class="form-control" rows="3"></textarea>
-                  <small class="form-text text-muted">Shown to patrons when they select "eAudiobook" as their
-                    format.</small>
-                </div>
                 <div class="row">
                   <div class="form-group col-md-6">
                     <label>Publication timing options</label>
                     <div id="ui-publication-options-editor" class="option-list-editor" data-option-list="publicationOptions"></div>
                     <button type="button" id="btn-add-publication-option" class="btn btn-sm btn-outline-primary mt-2">Add option</button>
-                  </div>
-                  <div class="form-group col-md-6">
-                    <label>Age groups</label>
-                    <div id="ui-age-groups-editor" class="option-list-editor" data-option-list="ageGroups"></div>
-                    <button type="button" id="btn-add-age-group" class="btn btn-sm btn-outline-primary mt-2">Add option</button>
                   </div>
                 </div>
                 <small class="form-text text-muted">These patron form options apply to the selected library. If no
@@ -901,30 +885,16 @@
                   options that may already be used by existing suggestions.</small>
                 <p id="patron-options-scope" class="small mt-2 mb-0 text-muted"></p>
                 <div class="card mt-4">
-                  <div class="card-header">
+                  <div class="card-header d-flex justify-content-between align-items-center">
                     <strong>Format display names</strong>
+                    <button type="button" id="btn-open-add-format-modal" class="btn btn-sm btn-outline-primary">
+                      <i class="fa fa-plus mr-1"></i> Add format
+                    </button>
                   </div>
                   <div class="card-body">
                     <p class="text-muted small">Manage material formats shown to patrons. Enabled formats appear in the
                       patron portal dropdown. You can also add custom formats here.</p>
                     <div id="format-settings-container"></div>
-                    <div class="form-row align-items-end mt-3">
-                      <div class="form-group col-md-4 mb-2">
-                        <label for="new-format-key" class="small font-weight-bold">New format key</label>
-                        <input type="text" id="new-format-key" class="form-control form-control-sm"
-                          placeholder="videogame" aria-describedby="new-format-error">
-                      </div>
-                      <div class="form-group col-md-5 mb-2">
-                        <label for="new-format-label" class="small font-weight-bold">Patron-facing label</label>
-                        <input type="text" id="new-format-label" class="form-control form-control-sm"
-                          placeholder="Video game">
-                      </div>
-                      <div class="form-group col-md-3 mb-2">
-                        <button type="button" id="btn-add-format" class="btn btn-sm btn-outline-primary btn-block">Add
-                          format</button>
-                      </div>
-                    </div>
-                    <div id="new-format-error" class="small" aria-live="polite"></div>
                   </div>
                 </div>
                 <div class="card mt-4">
@@ -1143,14 +1113,15 @@
         <small id="edit-rejection-template-availability" class="form-text text-muted hidden"></small>
       </div>
 
-      <div id="edit-workflow-tags" class="edit-modal-tags">
-        <div class="small font-weight-bold mb-1">Workflow flags</div>
-        <div class="text-muted small">No workflow flags</div>
-      </div>
-
-      <div id="edit-claim-state" class="edit-claim-state mb-2">
-        <div class="small font-weight-bold mb-1">Claim</div>
-        <span class="claim-badge claim-badge--unclaimed">Unclaimed</span>
+      <div class="edit-status-row">
+        <div id="edit-workflow-tags" class="edit-status-group">
+          <span class="edit-status-group-label">Flags:</span>
+          <span class="edit-status-group-value"><span class="text-muted">None</span></span>
+        </div>
+        <div id="edit-claim-state" class="edit-status-group">
+          <span class="edit-status-group-label">Claim:</span>
+          <span class="edit-status-group-value"><span class="claim-badge claim-badge--unclaimed">Unclaimed</span></span>
+        </div>
       </div>
 
       <div class="form-group mb-2">
@@ -1209,7 +1180,7 @@
       </div>
 
       <div class="form-row">
-        <div class="form-group col-6 mb-2">
+        <div class="form-group col-5 mb-2">
           <label class="small font-weight-bold mb-1">Format</label>
           <select id="edit-format" class="form-control form-control-sm">
             <option value="book">Book</option>
@@ -1220,15 +1191,7 @@
             <option value="eaudiobook">eAudiobook</option>
           </select>
         </div>
-        <div class="form-group col-6 mb-2">
-          <label class="small font-weight-bold mb-1">Age group</label>
-          <select id="edit-age" class="form-control form-control-sm">
-          </select>
-        </div>
-      </div>
-
-      <div class="form-row">
-        <div class="form-group col-6 mb-2">
+        <div class="form-group col-4 mb-2">
           <label class="small font-weight-bold mb-1">Publication timing</label>
           <select id="edit-publication" class="form-control form-control-sm publication-options-select">
             <option value="Already published">Already published</option>
@@ -1236,7 +1199,7 @@
             <option value="Published a while back">Published a while back</option>
           </select>
         </div>
-        <div class="form-group col-6 mb-2">
+        <div class="form-group col-3 mb-2">
           <label class="small font-weight-bold mb-1">Exact date</label>
           <input type="date" id="edit-exact-publication-date" class="form-control form-control-sm">
         </div>
@@ -1375,11 +1338,6 @@
               <option value="eaudiobook">eAudiobook</option>
             </select>
           </div>
-          <div class="form-group col-6 mb-2">
-            <label class="small font-weight-bold mb-1">Age group</label>
-            <select id="new-age" class="form-control form-control-sm new-detail-field" disabled>
-            </select>
-          </div>
         </div>
 
         <div class="form-row">
@@ -1489,6 +1447,32 @@
     </div>
   </div>
 </dialog>
+<dialog id="addFormatModal" class="asap-dialog asap-dialog-small">
+  <form id="add-format-form">
+    <div class="asap-dialog-header">
+      <h5 class="asap-dialog-title">Add custom format</h5>
+      <button type="button" id="close-add-format-modal-x" class="asap-dialog-close" aria-label="Close dialog">&times;</button>
+    </div>
+    <div class="asap-dialog-body">
+      <div class="form-group">
+        <label for="new-format-key" class="font-weight-bold mb-1">New format key <span class="text-danger" aria-hidden="true">*</span></label>
+        <input type="text" id="new-format-key" class="form-control" placeholder="videogame" required>
+        <small class="form-text text-muted">Use a short key like <code>videogame</code>. Only letters, numbers, and underscores.</small>
+      </div>
+      <div class="form-group">
+        <label for="new-format-label" class="font-weight-bold mb-1">Patron-facing label <span class="text-danger" aria-hidden="true">*</span></label>
+        <input type="text" id="new-format-label" class="form-control" placeholder="Video game" required>
+        <small class="form-text text-muted">The label patrons see in the dropdown.</small>
+      </div>
+      <div id="new-format-error" class="alert alert-danger hidden py-2 px-3 small mt-3" aria-live="polite"></div>
+    </div>
+    <div class="asap-dialog-footer">
+      <button type="button" id="close-add-format-modal-btn" class="btn btn-secondary mr-2">Cancel</button>
+      <button type="submit" id="btn-add-format" class="btn btn-primary px-4">Add Format</button>
+    </div>
+  </form>
+</dialog>
+
 
 <script src="https://unpkg.com/pocketbase/dist/pocketbase.umd.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gridjs@6.2.0/dist/gridjs.umd.js"></script>
