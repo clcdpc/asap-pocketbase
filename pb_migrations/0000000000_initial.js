@@ -82,24 +82,8 @@ migrate((app) => {
       field("authorLabel", "text", { max: 128 }),
       field("identifierMode", "select", { maxSelect: 1, values: ["required", "optional", "hidden"] }),
       field("identifierLabel", "text", { max: 128 }),
-      field("audienceMode", "select", { maxSelect: 1, values: ["required", "optional", "hidden"] }),
-      field("audienceLabel", "text", { max: 128 }),
       field("publicationMode", "select", { maxSelect: 1, values: ["required", "optional", "hidden"] }),
       field("publicationLabel", "text", { max: 128 }),
-    ],
-    indexes: []
-  });
-
-  const audienceGroups = saveCollection(app, {
-    type: "base",
-    name: "audience_groups",
-    listRule: "",
-    viewRule: "",
-    fields: [
-      field("scope", "select", { maxSelect: 1, values: ["system", "library"] }),
-      field("code", "text", { required: true, max: 64 }),
-      field("label", "text", { required: true, max: 128 }),
-      field("sortOrder", "number", { required: true, onlyInt: true }),
     ],
     indexes: []
   });
@@ -137,10 +121,6 @@ migrate((app) => {
   materialFormats.fields.add(new Field(rel("libraryOrganization", organizations)));
   materialFormats.indexes = ["CREATE UNIQUE INDEX idx_material_formats_scope_org_code ON material_formats (scope, libraryOrganization, code)"];
   app.save(materialFormats);
-
-  audienceGroups.fields.add(new Field(rel("libraryOrganization", organizations)));
-  audienceGroups.indexes = ["CREATE UNIQUE INDEX idx_audience_groups_scope_org_code ON audience_groups (scope, libraryOrganization, code)"];
-  app.save(audienceGroups);
 
   const staffUsers = saveCollection(app, {
     type: "auth",
@@ -213,7 +193,6 @@ migrate((app) => {
       rel("staffLibraryOrganizationCreatedBy", organizations),
       rel("statusRef", requestStatuses, { required: true }),
       rel("formatRef", materialFormats),
-      rel("audienceGroup", audienceGroups),
       rel("closeReasonRef", closeReasons),
       field("barcode", "text", { required: true, max: 64 }),
       field("email", "email"),
@@ -232,7 +211,6 @@ migrate((app) => {
       field("exactPublicationDate", "date"),
       field("autohold", "bool"),
       field("status", "text", { required: true, max: 64 }),
-      field("agegroup", "text", { max: 64 }),
       field("format", "text", { max: 64 }),
       field("closeReason", "text", { max: 64 }),
       field("claimedByStaffUserId", "text", { max: 64 }),
@@ -480,7 +458,6 @@ migrate((app) => {
       field("ebookMessage", "editor", { maxSize: 10000, convertURLs: false }),
       field("eaudiobookMessage", "editor", { maxSize: 10000, convertURLs: false }),
       field("publicationOptions", "text"),
-      field("ageGroups", "text"),
     ],
     indexes: ["CREATE UNIQUE INDEX idx_ui_settings_scope ON ui_settings (scope, libraryOrganization)"]
   });
@@ -626,18 +603,12 @@ migrate((app) => {
   ]);
 
   seedLookup(app, materialFormats, [
-    { id: "fmtbook00000010", scope: "system", code: "book", label: "Book", enabled: true, sortOrder: 10, messageBehavior: "none", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Author", identifierMode: "optional", identifierLabel: "Identifier number", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
-    { id: "fmtaudiocd00200", scope: "system", code: "audiobook_cd", label: "Audiobook (Physical CD)", enabled: true, sortOrder: 20, messageBehavior: "none", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Author", identifierMode: "optional", identifierLabel: "Identifier number", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
-    { id: "fmtdvd000000300", scope: "system", code: "dvd", label: "DVD", enabled: true, sortOrder: 30, messageBehavior: "none", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Director/Actors/Producer", identifierMode: "hidden", identifierLabel: "UPC", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
-    { id: "fmtmusiccd00400", scope: "system", code: "music_cd", label: "Music CD", enabled: true, sortOrder: 40, messageBehavior: "none", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Artist", identifierMode: "hidden", identifierLabel: "UPC", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
-    { id: "fmtebook0000500", scope: "system", code: "ebook", label: "eBook", enabled: true, sortOrder: 50, messageBehavior: "ebookMessage", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Author", identifierMode: "optional", identifierLabel: "Identifier number", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
-    { id: "fmteaudio006000", scope: "system", code: "eaudiobook", label: "eAudiobook", enabled: true, sortOrder: 60, messageBehavior: "eaudiobookMessage", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Author", identifierMode: "optional", identifierLabel: "Identifier number", audienceMode: "required", audienceLabel: "Age Group", publicationMode: "required", publicationLabel: "Publication Timing" },
-  ]);
-
-  seedLookup(app, audienceGroups, [
-    { id: "audadult0000100", scope: "system", code: "adult", label: "Adult", sortOrder: 10 },
-    { id: "audteen00000200", scope: "system", code: "teen", label: "Young Adult / Teen", sortOrder: 20 },
-    { id: "audchild0000300", scope: "system", code: "children", label: "Children", sortOrder: 30 },
+    { id: "fmtbook00000010", scope: "system", code: "book", label: "Book", enabled: true, sortOrder: 10, messageBehavior: "none", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Author", identifierMode: "optional", identifierLabel: "Identifier number", publicationMode: "required", publicationLabel: "Publication Timing" },
+    { id: "fmtaudiocd00200", scope: "system", code: "audiobook_cd", label: "Audiobook (Physical CD)", enabled: true, sortOrder: 20, messageBehavior: "none", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Author", identifierMode: "optional", identifierLabel: "Identifier number", publicationMode: "required", publicationLabel: "Publication Timing" },
+    { id: "fmtdvd000000300", scope: "system", code: "dvd", label: "DVD", enabled: true, sortOrder: 30, messageBehavior: "none", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Director/Actors/Producer", identifierMode: "hidden", identifierLabel: "UPC", publicationMode: "required", publicationLabel: "Publication Timing" },
+    { id: "fmtmusiccd00400", scope: "system", code: "music_cd", label: "Music CD", enabled: true, sortOrder: 40, messageBehavior: "none", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Artist", identifierMode: "hidden", identifierLabel: "UPC", publicationMode: "required", publicationLabel: "Publication Timing" },
+    { id: "fmtebook0000500", scope: "system", code: "ebook", label: "eBook", enabled: true, sortOrder: 50, messageBehavior: "ebookMessage", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Author", identifierMode: "optional", identifierLabel: "Identifier number", publicationMode: "required", publicationLabel: "Publication Timing" },
+    { id: "fmteaudio006000", scope: "system", code: "eaudiobook", label: "eAudiobook", enabled: true, sortOrder: 60, messageBehavior: "eaudiobookMessage", titleMode: "required", titleLabel: "Title", authorMode: "required", authorLabel: "Author", identifierMode: "optional", identifierLabel: "Identifier number", publicationMode: "required", publicationLabel: "Publication Timing" },
   ]);
 
   seedLookup(app, workflowTags, [
@@ -737,7 +708,6 @@ migrate((app) => {
     ebookMessage: "<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
     eaudiobookMessage: "<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
     publicationOptions: "Already published\nComing soon\nPublished a while back",
-    ageGroups: "Adult\nYoung Adult / Teen\nChildren",
   });
 
   saveRecord(app, emailTemplates, "emailsubmit0010", { scope: "system", templateKey: "suggestion_submitted", name: "Submission confirmation", subject: "Suggestion received: {{title}}", body: "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format. Our collection development team has received your request and will review it.\n\nIf we add this item, we will place a hold for you automatically and send another update.\n\nThank you for helping us shape the library collection.", enabled: true });

@@ -24,7 +24,6 @@ migrate((app) => {
         field("orgId", "text", { required: true, max: 64 }),
         field("duplicateStatusLabels", "json"),
         field("publicationOptions", "json"),
-        field("ageGroups", "json"),
         field("patronFormatRules", "json"),
         field("ebookMessage", "editor", { maxSize: 10000, convertURLs: false }),
         field("eaudiobookMessage", "editor", { maxSize: 10000, convertURLs: false })

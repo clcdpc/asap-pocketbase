@@ -1,4 +1,4 @@
-import { defaultAgeGroups, defaultPublicationOptions, fieldKeys, formatKeys } from './state.js';
+import { defaultPublicationOptions, fieldKeys, formatKeys } from './state.js';
 import { loadPatronConfig } from './api.js';
 import { normalizeFormatRules } from './form-rules.js';
 
@@ -73,7 +73,6 @@ export const defaultUiText = {
 };
 
 export let publicationOptions = defaultPublicationOptions.slice();
-export let ageGroups = defaultAgeGroups.slice();
 export let uiConfig = { ...defaultUiText };
 export let formatRules = normalizeFormatRules(defaultFormatRules, defaultFormatRules, formatKeys, fieldKeys);
 
@@ -110,23 +109,9 @@ export function normalizePublicationOptions(options) {
   return cleaned.length ? Array.from(new Set(cleaned)) : defaultPublicationOptions.slice();
 }
 
-export function normalizeAgeGroups(options) {
-  const raw = Array.isArray(options) ? options : String(options || '').split(/\r?\n/);
-  const cleaned = raw
-    .filter(option => !(option && typeof option === 'object') || option.enabled !== false)
-    .map(option => String(option && typeof option === 'object' ? option.label : option || '').trim())
-    .filter(Boolean);
-  return cleaned.length ? Array.from(new Set(cleaned)) : defaultAgeGroups.slice();
-}
-
 export function setPublicationOptions(options) {
   const next = normalizePublicationOptions(options);
   publicationOptions.splice(0, publicationOptions.length, ...next);
-}
-
-export function setAgeGroups(options) {
-  const next = normalizeAgeGroups(options);
-  ageGroups.splice(0, ageGroups.length, ...next);
 }
 
 export function applyLoadedUiText(config) {
@@ -140,7 +125,6 @@ export function applyLoadedUiText(config) {
     uiConfig.formatRules = formatRules;
   }
   setPublicationOptions(uiConfig.publicationOptions);
-  if (uiConfig.ageGroups) setAgeGroups(uiConfig.ageGroups);
   return nextConfig;
 }
 

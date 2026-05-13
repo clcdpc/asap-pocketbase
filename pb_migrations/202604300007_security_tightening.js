@@ -5,7 +5,6 @@ migrate((app) => {
         "ui_settings",
         "workflow_settings",
         "material_formats",
-        "audience_groups",
         "email_templates"
     ];
 
@@ -37,7 +36,7 @@ migrate((app) => {
 
 }, (app) => {
     // Rollback: return to standard staff list permission for non-secret collections
-    const collections = ["system_settings", "ui_settings", "workflow_settings", "material_formats", "audience_groups", "email_templates"];
+    const collections = ["system_settings", "ui_settings", "workflow_settings", "material_formats", "email_templates"];
     collections.forEach((name) => {
         try {
             const collection = app.findCollectionByNameOrId(name);

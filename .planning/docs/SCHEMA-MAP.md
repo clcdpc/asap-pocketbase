@@ -19,8 +19,6 @@ The central collection for all material suggestions.
 | `identifier` | Text | ISBN, ISSN, or UPC. |
 | `format` | Text | Material format code (book, dvd, etc.). |
 | `formatRef` | Relation (material_formats) | Reference to the format lookup. |
-| `agegroup` | Text | Audience group code (adult, teen, children). |
-| `audienceGroup` | Relation (audience_groups) | Reference to the audience group lookup. |
 | `libraryOrgId` | Text | Polaris Organization ID for the library. |
 | `libraryOrganization` | Relation (polaris_organizations) | Reference to the library organization. |
 | `closeReason` | Text | Code for why a request was closed. |
@@ -68,7 +66,6 @@ Cached hierarchy of organizations from Polaris.
 ### Scoped Lookups
 The following collections support both "system" defaults and "library" specific overrides:
 - **material_formats**: Definitions of available formats (Book, DVD, etc.).
-- **audience_groups**: Age group categories.
 - **email_templates**: Templates for automated notifications.
 - **rejection_templates**: Selectable responses for declining a suggestion.
 
@@ -125,4 +122,4 @@ graph TD
 1. **Multi-Tenancy**: Scoping via `libraryOrgId` ensures staff only see requests for their own organization unless they have `super_admin` or `system` scope.
 2. **Weekly Limits**: Patrons are limited by a configurable number of suggestions per 7-day rolling window (enforced in `pb_hooks/lib/records.js`).
 3. **Duplicate Prevention**: The system checks for existing requests by the same patron with matching identifiers (ISBN) or Title/Format combinations.
-4. **Data Normalization**: `title_requests` uses both flat text codes (for performance/simplicity) and Relation fields (for referential integrity) for Status, Format, and Audience.
+4. **Data Normalization**: `title_requests` uses both flat text codes (for performance/simplicity) and Relation fields (for referential integrity) for Status and Format.

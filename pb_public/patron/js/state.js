@@ -15,7 +15,6 @@ export const titleInput = document.getElementById('title');
 export const publicationInput = document.getElementById('publication');
 
 export const defaultPublicationOptions = ['Already published', 'Coming soon', 'Published a while back'];
-export const defaultAgeGroups = ['Adult', 'Young Adult / Teen', 'Children'];
 export const formatKeys = ['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'];
 export const fieldKeys = ['title', 'author', 'identifier', 'publication'];
 

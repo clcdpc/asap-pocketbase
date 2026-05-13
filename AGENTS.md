@@ -69,16 +69,15 @@ When a screen manages global records with scoped fields:
 - add UI regression coverage near `tests/settings_staff_scope_banner.test.js` when changing settings navigation or scope banners
 
 ### Patron public option settings
-Publication timing and age groups are system defaults with library overrides.
+Publication timing is a system default with library overrides.
 
 Important paths:
 - system defaults live in `ui_settings`
 - library public-form overrides live in `patron_settings_overrides`
-- age-group lookup rows also live in `audience_groups`
 
 When resolving public-form options for a library, do not use a library `ui_settings` row as the default source. A library `ui_settings` row can exist only for branding or text overrides and may have blank option fields. Resolve option defaults from the system `ui_settings` row, then apply `patron_settings_overrides` for the selected library.
 
-PocketBase JSON fields may come back through hooks as byte arrays. Never pass raw JSON-field arrays directly to the settings editor or public form. Decode byte-array JSON, parse it, and normalize it into `{ id, label, enabled, sortOrder }` objects before rendering. If publication timing or age-group labels ever display as numbers such as `91`, `123`, or `34`, treat that as a failed normalization bug.
+PocketBase JSON fields may come back through hooks as byte arrays. Never pass raw JSON-field arrays directly to the settings editor or public form. Decode byte-array JSON, parse it, and normalize it into `{ id, label, enabled, sortOrder }` objects before rendering. If publication timing labels ever display as numbers such as `91`, `123`, or `34`, treat that as a failed normalization bug.
 
 When repopulating selects after a library/settings-context change, do not preserve invalid stale values for new suggestion fields. Preserving an old value is allowed only for edit flows where the existing record may contain a historical value.
 

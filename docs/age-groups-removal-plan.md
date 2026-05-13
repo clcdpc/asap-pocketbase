@@ -1,7 +1,7 @@
 # Age Groups Feature Removal Plan
 
 ## Goal
-Remove the **Age Groups** feature end-to-end (DB schema/data, backend, API payloads, UI, reports, and tests) without breaking patron suggestion workflows, staff workflows, or scoped settings behavior.
+Track the completed end-to-end removal of the **Age Groups** feature from DB schema/data, backend, API payloads, UI, reports, and tests without breaking patron suggestion workflows, staff workflows, or scoped settings behavior.
 
 ## Scope and terms
 Track and remove all related terms:
@@ -11,13 +11,13 @@ Track and remove all related terms:
 
 This is a cross-cutting feature, not a single field removal.
 
-## Key settings-scope constraints
-Age Groups currently follow **system default + library override** behavior:
+## Retired settings-scope model
+Before removal, Age Groups followed **system default + library override** behavior:
 - system defaults in `ui_settings`
 - library overrides in `patron_settings_overrides`
 - lookup rows in `audience_groups`
 
-Any removal must consistently update load, populate, save, and runtime-read paths.
+The removal updated load, populate, save, and runtime-read paths together so Publication Timing remains the only public option setting using the scoped fallback behavior.
 
 ## Phased rollout
 
@@ -99,4 +99,4 @@ If critical failures occur:
 - [ ] Repo search only finds intentional leftovers (migration history/release notes/tests)
 
 ## Notes
-Treat deletion as feature retirement across settings scope, request lifecycle, and reporting—not cosmetic label removal.
+This document is retained as historical context for the feature retirement across settings scope, request lifecycle, and reporting.

@@ -214,7 +214,6 @@ function runTests() {
     author: "A. Writer",
     identifier: "9781234567890",
     format: "book",
-    agegroup: "Adult",
     publication: "Coming soon",
     exactPublicationDate: "2026-06-01",
     bibid: "456789",

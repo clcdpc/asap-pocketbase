@@ -41,7 +41,7 @@ The staff interface is a single-page application built with modern JavaScript.
 The project maintains an extensive suite of tests located in the `tests/` directory:
 - **Unit Tests**: Coverage for core logic including crypto, identity, mail, and data normalization.
 - **Integration Tests**: Tests for PocketBase record operations and Polaris API interactions (mocked).
-- **Performance Benchmarks**: Dedicated scripts for benchmarking critical paths such as audience group lookups, organization relinking, and duplicate suggestion detection.
+- **Performance Benchmarks**: Dedicated scripts for benchmarking critical paths such as organization relinking and duplicate suggestion detection.
 
 ### Reliability and Security
 - **Data Redaction**: Sensitive patron data is automatically redacted from logs and internal notes using `redactPayload` in `polaris.js` and record hooks in `main.pb.js`.

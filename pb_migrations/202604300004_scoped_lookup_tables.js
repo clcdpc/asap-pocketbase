@@ -52,13 +52,10 @@ migrate((app) => {
   const organizations = app.findCollectionByNameOrId("polaris_organizations");
 
   ensureScopeFields(app, "material_formats", organizations);
-  ensureScopeFields(app, "audience_groups", organizations);
 
   setSystemScope(app, "material_formats");
-  setSystemScope(app, "audience_groups");
 
   setScopedIndexes(app, "material_formats", "idx_material_formats_scope_org_code");
-  setScopedIndexes(app, "audience_groups", "idx_audience_groups_scope_org_code");
 }, (app) => {
   return null;
 });
