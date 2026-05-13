@@ -690,6 +690,27 @@ body {
   padding: 14px;
 }
 
+/* System-only section guard — disables form controls when a library is selected */
+.settings-panel-locked input,
+.settings-panel-locked select,
+.settings-panel-locked textarea,
+.settings-panel-locked .btn:not(.settings-nav-link) {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.system-only-guard-banner {
+  background: #fff3cd;
+  border: 1px solid #ffc107;
+  border-left: 4px solid #e0a800;
+  border-radius: 0.375rem;
+  color: #664d03;
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  padding: 0.75rem 1rem;
+}
+
 .settings-save-bar {
   position: fixed;
   bottom: 0;
