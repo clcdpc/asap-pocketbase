@@ -1,7 +1,7 @@
 import { pb, loginContainer, setupContainer, appContainer, loginForm, setupForm, logoutBtn, profileBtn, grid, gridSearchInput, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, currentRejectionTemplates, setCurrentRejectionTemplates, statusStages, stageQueryMap, currentStatus, activeTagFilter, workflowSettings, bootstrapAdminMessage, setupRequired, currentEmailStatus, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, settingsSectionIds, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, currentLibraryContextOrgId, setCurrentStatus, setActiveTagFilter, setCurrentClaimFilter, setCurrentSimilarRequestFilter, setBootstrapAdminMessage, setSetupRequired, setOrganizationsStatusMessage, setCurrentSettingsSection, setSettingsDirty, setCurrentEmailStatus } from './state.js';
 import { loadTab, renderCurrentGrid, closeActionMenu, escapeAttr } from './grid.js';
 import { syncPolarisOrganizations } from './settings-polaris.js';
-import { loadSettings, checkSettingsDirty } from './settings.js';
+import { loadSettings, checkSettingsDirty, handleLibraryContextSwitch } from './settings.js';
 
 // --- DOM Field Helpers ---
 
@@ -349,7 +349,7 @@ export function activateSettingsSection(section, options = {}) {
     panel.setAttribute('aria-hidden', isActive ? 'false' : 'true');
   });
 
-  const overridableSections = ['workflow', 'patron', 'templates'];
+  const overridableSections = ['workflow', 'patron', 'templates', 'staff'];
   const wrapper = document.getElementById('library-context-wrapper');
   if (wrapper) {
     if (overridableSections.includes(targetSection)) {
@@ -377,8 +377,19 @@ export function activateSettingsSection(section, options = {}) {
         const icon = document.createElement('i');
         icon.className = 'fa fa-lock mr-2';
         banner.appendChild(icon);
-        const text = document.createTextNode('These settings are system-wide. Switch to \u201cSystem Defaults\u201d in the library selector to edit.');
+        const text = document.createTextNode('These settings are system-wide. ');
         banner.appendChild(text);
+        const switchBtn = document.createElement('button');
+        switchBtn.type = 'button';
+        switchBtn.className = 'btn btn-link btn-sm p-0 font-weight-bold system-only-switch-link';
+        switchBtn.textContent = 'Switch to System Defaults';
+        switchBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          handleLibraryContextSwitch('system');
+        });
+        banner.appendChild(switchBtn);
+        const suffix = document.createTextNode(' to edit.');
+        banner.appendChild(suffix);
         const cardBody = panel.querySelector('.card-body');
         if (cardBody) {
           cardBody.insertBefore(banner, cardBody.firstChild);
@@ -386,7 +397,7 @@ export function activateSettingsSection(section, options = {}) {
       }
       // Disable form controls inside the panel (not sidebar nav links)
       panel.querySelectorAll('input, select, textarea').forEach(el => { el.disabled = true; });
-      panel.querySelectorAll('.btn:not(.settings-nav-link)').forEach(el => { el.disabled = true; });
+      panel.querySelectorAll('.btn:not(.settings-nav-link):not(.system-only-switch-link)').forEach(el => { el.disabled = true; });
     } else {
       if (banner) banner.remove();
       // Re-enable form controls (only for the active panel to avoid touching hidden panels)
