@@ -7,7 +7,7 @@ wave: 1
 # Plan 6.2: Frontend Library Switcher and User Visibility
 
 ## Objective
-Enable the library context switcher (blue bar) for the Staff Access section and update the UI to show Super Admins how many users are in other libraries when a specific library context is active.
+Enable the library context switcher (blue bar) for the Staff Access section and update the UI to show Super Admins how many users are in other libraries. Also, ensure Super Admins can add staff to any library regardless of the current context.
 
 ## Context
 - .gsd/ROADMAP.md
@@ -48,6 +48,25 @@ Enable the library context switcher (blue bar) for the Staff Access section and 
   </done>
 </task>
 
+<task type="auto">
+  <name>Unlock library selection for Super Admins in Add Staff form</name>
+  <files>pb_public/staff/js/settings-users.js</files>
+  <action>
+    Modify `populateStaffLibraryOptions()` in `pb_public/staff/js/settings-users.js`:
+    - For Super Admins, do NOT hide the `select` element even if a library context is active.
+    - Instead, always show the full list of organizations in the `select`.
+    - If `currentLibraryContextOrgId` is a specific library, pre-select that library in the dropdown as a convenience, but keep it editable.
+    - Ensure the `context` display (the static text) is hidden for Super Admins so they see the interactive dropdown.
+  </action>
+  <verify>
+    As a Super Admin in a specific library context, confirm the "Library" dropdown in the "Add staff member" form is visible and allows selecting any library.
+  </verify>
+  <done>
+    Super Admins can add staff to any library regardless of the current context.
+  </done>
+</task>
+
 ## Success Criteria
 - [ ] Super Admins can switch library context while in the Staff Access section.
 - [ ] The staff list message includes the count of users in other libraries when a library context is active.
+- [ ] The "Add staff member" form allows Super Admins to select any library, even when scoped to a specific library.

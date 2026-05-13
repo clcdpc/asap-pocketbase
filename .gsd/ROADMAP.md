@@ -106,16 +106,18 @@
 
 ### Phase 6: Super Admin Library Switcher for Staff Access
 **Status**: ⬜ Not Started
-**Objective**: Enable the library context switcher for the Staff Access section and provide Super Admins with visibility into total system users when viewing a specific library.
+**Objective**: Enable the library context switcher for the Staff Access section and provide Super Admins with visibility into total system users. Ensure Super Admins can add staff to any library regardless of current context.
 **Depends on**: Phase 5
 
 **Tasks**:
 - [ ] Update `staffUsersList` in `lib/staff_routes.js` to return `totalAcrossSystem` count for Super Admins.
 - [ ] Add `'staff'` to `overridableSections` in `pb_public/staff/js/api.js` to show the library context switcher in the Staff Access section.
 - [ ] Update `loadStaffUsers` in `pb_public/staff/js/settings-users.js` to display the count of users in other libraries when a specific library context is selected.
+- [ ] Unlock the library selection dropdown for Super Admins in the "Add staff member" form so they can add staff to any library at any time.
 
 **Verification**:
 - [ ] Super Admin sees the library context switcher (blue bar) when navigating to "Staff Access".
 - [ ] Switching libraries in the context switcher updates the staff list.
 - [ ] When a library is selected, a message shows how many users exist in other libraries.
 - [ ] Switching back to "System Defaults" shows all users and removes the "other users" count.
+- [ ] "Add staff member" library dropdown is always available and interactive for Super Admins.
