@@ -736,15 +736,14 @@ export async function saveSettings(options = {}) {
     const payload = buildSettingsPayload();
 
     // Save via the library-scoped API
+    // System-only fields (smtp, polaris, staffUrl, leapBibUrlPattern) are only
+    // included when saving system defaults. Library saves must never send these.
+    const isSystemSave = currentLibraryContextOrgId === 'system';
     const libraryPayload = {
       orgId: currentLibraryContextOrgId,
-      staffUrl: payload.staffUrl,
-      leapBibUrlPattern: payload.leapBibUrlPattern,
-      smtp: payload.smtp,
-      polaris: payload.polaris,
       emails: payload.emails,
       ui_text: payload.ui_text,
-      formatClaimRules: currentLibraryContextOrgId === 'system' ? [] : payload.formatClaimRules,
+      formatClaimRules: isSystemSave ? [] : payload.formatClaimRules,
       workflow: {
         suggestionLimit: payload.suggestionLimit,
         suggestionLimitMessage: payload.suggestionLimitMessage,
@@ -778,6 +777,14 @@ export async function saveSettings(options = {}) {
         externalSearch4UrlTemplate: payload.externalSearch4UrlTemplate
       }
     };
+
+    // Only include system-scoped fields when saving system defaults
+    if (isSystemSave) {
+      libraryPayload.staffUrl = payload.staffUrl;
+      libraryPayload.leapBibUrlPattern = payload.leapBibUrlPattern;
+      libraryPayload.smtp = payload.smtp;
+      libraryPayload.polaris = payload.polaris;
+    }
 
     const libraryPromise = authorizedJson('/api/asap/staff/settings/library', {
       method: 'POST',
