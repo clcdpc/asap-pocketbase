@@ -9,4 +9,5 @@
 - Implemented `message` behavior in `lib/format_rules.js`.
 - Updated staff UI to toggle between message editor and fields table.
 - Hidden field configuration for eBook and eAudiobook formats.
-- Updated patron portal to use format-specific messages.
+- Fixed "providers is not defined" JS error in staff edit modal.
+- Resolved issue where clicking suggestion rows or the "Purchase" button failed to open the edit dialog.

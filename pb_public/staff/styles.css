@@ -868,6 +868,15 @@ body {
   text-decoration: underline;
 }
 
+.btn-primary {
+  background-color: var(--asap-color-primary) !important;
+  border-color: var(--asap-color-primary) !important;
+}
+
+.btn-primary:hover {
+  background-color: var(--asap-color-primary-dark) !important;
+}
+
 .btn-success {
   background-color: var(--asap-color-success) !important;
   border-color: var(--asap-color-success) !important;
@@ -876,11 +885,24 @@ body {
 .btn-success:hover {
   background-color: var(--asap-color-success-hover) !important;
 }
+
+.btn-warning {
+  background-color: var(--asap-color-warning) !important;
+  border-color: var(--asap-color-warning) !important;
+  color: var(--asap-color-warning-text) !important;
+}
+
+.btn-info {
+  background-color: #17a2b8 !important; /* Standard Info Teal */
+  border-color: #17a2b8 !important;
+  color: #ffffff !important;
+}
 .btn-xs {
-  padding: 0.125rem 0.35rem;
-  font-size: 0.7rem;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 700;
   line-height: 1.2;
-  border-radius: 0.2rem;
+  border-radius: var(--asap-radius-sm);
   position: relative; /* For hit area */
 }
 

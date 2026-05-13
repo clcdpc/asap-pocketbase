@@ -317,6 +317,19 @@ export function renderExternalSearchButton(title, identifier) {
   const container = document.getElementById('edit-external-search-container');
   if (!container) return;
 
+  const encodedTitle = encodeURIComponent(title || '');
+  const encodedId = encodeURIComponent(identifier || '');
+  const buttonClasses = ['btn-warning', 'btn-success', 'btn-primary', 'btn-info'];
+
+  const providers = [];
+  for (let i = 1; i <= 4; i++) {
+    providers.push({
+      enabled: workflowSettings[`externalSearch${i}Enabled`],
+      label: workflowSettings[`externalSearch${i}Label`],
+      template: workflowSettings[`externalSearch${i}UrlTemplate`]
+    });
+  }
+
   const nodes = [];
   providers.forEach((p, index) => {
     if (!p.enabled || !p.template || !/^https?:\/\//i.test(p.template)) return;
