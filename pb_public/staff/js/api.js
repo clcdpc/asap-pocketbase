@@ -337,7 +337,7 @@ export function markSettingsClean(state = 'clean') {
   updateSaveBarState(state);
 }
 
-export const systemOnlySections = ['start', 'polaris', 'smtp', 'staff'];
+export const systemOnlySections = ['start', 'polaris', 'smtp'];
 
 export function activateSettingsSection(section, options = {}) {
   const targetSection = settingsSectionIds.includes(section) ? section : 'start';

@@ -386,6 +386,7 @@ export async function loadLibrarySettings(orgId) {
     settings = result;
     rememberLastSavedLibrarySettings(settings);
     applyLibrarySettingsToForm(settings);
+    await loadStaffAccessSettings();
     captureSettingsBaseline();
     return settings;
 

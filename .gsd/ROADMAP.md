@@ -64,3 +64,22 @@
 - [x] Saving settings while in library context does not send SMTP, Polaris, or Getting Started data.
 - [x] Switching back to System Defaults re-enables editing on all system-only sections.
 - [x] Library-context saves preserve the correct system-level values in the database (no blanking).
+
+---
+
+### Phase 4: Refine Staff Access Context Guard and Filtering
+**Status**: ✅ Complete
+**Objective**: Allow library admins to manage their own staff by removing the "Staff Access" section from the system-only guard. Ensure that when a Super Admin views the staff list in a library context, they only see staff for that library, matching the behavior of library admins.
+**Depends on**: Phase 3
+
+**Tasks**:
+- [x] Remove `'staff'` from `systemOnlySections` in `api.js`.
+- [x] Update `loadStaffUsers()` in `settings-users.js` to pass `?orgId=${currentLibraryContextOrgId}` to the `/api/asap/staff/users` endpoint.
+- [x] Update `staffUsersList(e)` in `lib/staff_routes.js` to respect the `orgId` query parameter for Super Admins. If `orgId` is provided and is not `'system'`, filter by that library.
+- [x] Update the "Add Staff Member" form in `settings-users.js` to pre-select the current library context (if not `'system'`) and disable the dropdown for Super Admins when in a library context to prevent cross-library mistakes.
+
+**Verification**:
+- [x] Library admin can access the "Staff Access" section without a warning banner or disabled inputs.
+- [x] Super admin in "System Defaults" context sees ALL staff users.
+- [x] Super admin in a library context sees ONLY staff users for that library.
+- [x] Adding a staff member while in a library context defaults to that library.

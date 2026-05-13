@@ -1,14 +1,16 @@
-# GSD State
+# GSD State - ASAP Refine Patron Format Settings
+**Milestone**: 1
+**Phase**: 4 - Refine Staff Access Context Guard and Filtering
+**Status**: ✅ Complete
 
-## Current Position
-- **Phase**: 3
-- **Task**: Planning complete
-- **Status**: Ready for execution
+## Current Focus
+Completed hardening of settings and staff management context safety.
 
-## Last Session Summary
-Phase 3 planned with 2 plans across 2 waves:
-- Plan 3.1 (wave 1): System-only section guard UI — adds visual lock and disables inputs on Getting Started, Polaris, SMTP, and Staff Access when a library is selected
-- Plan 3.2 (wave 2): Audit and harden save payload scope safety — ensures library saves never send system-only fields, with manual verification
+## Progress
+- [x] Phase 1: Move eContent Messages to Format Rules
+- [x] Phase 2: Clarify BIB ID Role in Workflow Descriptions
+- [x] Phase 3: Guard System-Only Settings Sections Under Library Context
+- [x] Phase 4: Refine Staff Access Context Guard and Filtering
 
 ## Next Steps
-1. /execute 3
+1. /execute 4
