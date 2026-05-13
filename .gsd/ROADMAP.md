@@ -40,3 +40,27 @@
 **Verification**:
 - [x] Staff UI displays updated "Pending purchase" description.
 - [x] Edit modal displays updated BIB ID hint when "Pending hold" is selected.
+
+---
+
+### Phase 3: Guard System-Only Settings Sections Under Library Context
+**Status**: ⬜ Not Started
+**Objective**: When a super admin has a library selected in the settings context selector, system-only sections (Getting Started, Polaris, SMTP) should clearly show they are read-only / system-level and cannot be edited until the user switches back to "System Defaults." Library-context saves must never blank out system-level Getting Started, Polaris, or SMTP data.
+**Depends on**: Phase 2
+
+**Tasks**:
+- [ ] Add a `systemOnlySections` list in `api.js` (or `settings.js`) containing `['start', 'polaris', 'smtp']` and use it alongside the existing `overridableSections` check.
+- [ ] In `activateSettingsSection`, when the current library context is non-system and the target section is system-only, show a prominent "System-only" overlay or banner explaining the user must switch to System Defaults to edit, and disable all inputs/buttons inside that section panel.
+- [ ] When the user switches back to system context or navigates to an overridable section, re-enable the inputs.
+- [ ] Audit `_serializeSettingsState()` in `settings.js` to confirm SMTP, Polaris, Getting Started fields (staffUrl, leapBibUrlPattern, enabledLibraryOrgIds, systemNotEnabledMessage, misconfiguredMessage) are never sent to the save endpoint when `currentLibraryContextOrgId !== 'system'`.
+- [ ] Audit the `saveSettings()` payload assembly to confirm the `libraryPayload.smtp` and `libraryPayload.polaris` keys are excluded (or null) when not in system context, preventing accidental overwrite.
+- [ ] Add CSS for the system-only overlay/disabled state, including reduced opacity and pointer-events: none on form controls.
+- [ ] Add a test or manual verification checklist confirming that saving at library level does not alter SMTP, Polaris, or Getting Started values on the server.
+
+**Verification**:
+- [ ] Navigating to SMTP while a library is selected shows a clear "switch to System Defaults to edit" message and all fields are disabled.
+- [ ] Navigating to Polaris while a library is selected shows the same system-only guard.
+- [ ] Navigating to Getting Started while a library is selected shows the same system-only guard.
+- [ ] Saving settings while in library context does not send SMTP, Polaris, or Getting Started data.
+- [ ] Switching back to System Defaults re-enables editing on all system-only sections.
+- [ ] Library-context saves preserve the correct system-level values in the database (no blanking).
