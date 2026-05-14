@@ -1,22 +1,20 @@
-# Debug Session: Use & Place Hold - No Action on Request
+# Debug Session: Timing Column Shows Numbers
 
 ## Symptom
-When a staff member clicks "Use & Place Hold" (or "Use & Queue Hold") in the Polaris Search results modal, the original suggestion request in the grid does not update, even though the UI suggests an action was taken.
+The "Timing" column in the staff grid (specifically the "Hold placed" tab) displays numeric years (e.g., 2019, 2023) instead of the expected publication timing labels (e.g., "Already published").
 
-**When:** Selecting a BIB result from the Polaris Search modal and choosing a hold action.
-**Expected:** The original request should be updated with the BIB ID, status changed (e.g., to "Hold placed" or "Pending hold"), and the modal should close.
-**Actual:** "Nothing happened" to the original request according to the user.
+**When:** Viewing the "Hold placed" tab in the staff grid.
+**Expected:** Labels like "Already published", "Coming soon", etc.
+**Actual:** Numbers like 2019, 2023, 2018, 2012, 1888, 2008.
 
 ## Evidence
-- The user provided a screenshot showing the Polaris Search modal over the "Suggestions" grid.
-- Red arrow points to "History" (the original request).
-- The user clicked a button (likely "Use & Place Hold" on "Yummy : a history of desserts").
-- I need to check `renderPolarisSearchResults` and the `holdBtn.onclick` handler in `pb_public/staff/js/modals.js`.
+- Screenshot shows numeric values in the Timing column.
+- These look like publication years from the Polaris catalog.
 
 ## Hypotheses
 
 | # | Hypothesis | Likelihood | Status |
 |---|------------|------------|--------|
-| 1 | The `holdBtn.onclick` handler in `renderPolarisSearchResults` is missing the code to save/update the suggestion. | 60% | UNTESTED |
-| 2 | The update API call is failing but the error is swallowed or not visible. | 20% | UNTESTED |
-| 3 | The logic to refresh the grid after the update is missing or failing. | 20% | UNTESTED |
+| 1 | `formatPublication` in `grid.js` is returning the raw value if it doesn't match a known option, and Polaris search is overwriting the suggestion's `publication` field with the catalog year. | 80% | UNTESTED |
+| 2 | The grid column for "Timing" is using the wrong data field (e.g., `pubYear` instead of `publication`). | 10% | UNTESTED |
+| 3 | The labels in `state.js` or the mapping logic have a bug where they don't recognize standard strings. | 10% | UNTESTED |

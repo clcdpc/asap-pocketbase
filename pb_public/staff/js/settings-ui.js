@@ -677,6 +677,7 @@ export async function lookupEditBibById(options = {}) {
 
     text.textContent = infoText;
     setVerifiedBibId(bibId);
+    window.dispatchEvent(new CustomEvent('asap-bib-verified', { detail: { bibId, rowId: document.getElementById('edit-id').value } }));
     return data;
   } catch (err) {
     display.classList.remove('hidden', 'alert-info');
@@ -770,6 +771,7 @@ export function applySelectedPolarisResultToEditForm(result = {}) {
   }
 
   setVerifiedBibId(bibId);
+  window.dispatchEvent(new CustomEvent('asap-bib-verified', { detail: { bibId, rowId: document.getElementById('edit-id').value } }));
 }
 
 document.getElementById('btn-bib-lookup').addEventListener('click', async () => {

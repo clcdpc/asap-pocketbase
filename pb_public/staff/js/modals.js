@@ -113,23 +113,35 @@ export function getDraftCommentValue() {
 export function buildPendingAuditPreview(row, nextStatus, actionStr) {
   const username = (pb.authStore.model && pb.authStore.model.username) ? pb.authStore.model.username : 'staff';
   const actionDescriptions = {
-    alreadyOwn: 'This request will be marked Already own',
+    alreadyOwn: 'This request will be marked Already own and move directly to Closed',
     reject: 'This request will be rejected',
-    silentClose: 'This request will be closed silently',
-    purchase: 'This request will move to Pending purchase'
+    silentClose: 'This request will be closed silently and move directly to Closed',
+    purchase: 'This request will move to Pending purchase',
+    reassign: 'This request will be reassigned to the selected format'
   };
+
+  let preview = '';
   const actionText = actionDescriptions[actionStr];
   if (actionText) {
-    return `${actionText} by ${username}.`;
+    preview = `${actionText} by ${username}.`;
+  } else {
+    const currentStatus = row.status || '';
+    if (nextStatus && nextStatus !== currentStatus) {
+      preview = `This request will move from ${workflowStatusLabel(currentStatus)} to ${workflowStatusLabel(nextStatus)} by ${username}.`;
+    }
   }
 
-  const currentStatus = row.status || '';
-  if (nextStatus && nextStatus !== currentStatus) {
-    return `This request will move from ${workflowStatusLabel(currentStatus)} to ${workflowStatusLabel(nextStatus)} by ${username}.`;
+  // Detect format change
+  const editFormat = document.getElementById('edit-format');
+  if (editFormat && editFormat.value && editFormat.value !== (row.format || 'book')) {
+    const formatName = formatMap[editFormat.value] || editFormat.value;
+    const formatChangeText = `Format will be updated to ${formatName}.`;
+    preview = preview ? `${preview} ${formatChangeText}` : formatChangeText;
   }
 
-  return '';
+  return preview;
 }
+
 
 export function renderPendingAuditPreview(row, nextStatus, actionStr) {
   const container = document.getElementById('edit-pending-audit-preview');
@@ -916,7 +928,7 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
   const bibid = document.getElementById('edit-bibid').value.trim();
   const row = currentSuggestions.find(r => r.id === id) || allSuggestions.find(r => r.id === id);
   if (row && row.status === 'outstanding_purchase' && bibid && !row.autohold) {
-    const confirmed = await showConfirm('Do Not Auto Place Hold', 'This request is marked Do Not Auto Place Hold. Saving this BIB ID will close the request immediately and skip the hold-placement workflow.');
+    const confirmed = await showConfirm('Do Not Auto Queue Hold', 'This request is marked Do Not Auto Queue Hold. Saving this BIB ID will close the request immediately and skip the hold-queueing workflow.');
     if (!confirmed) return;
   }
   const nextFormatValue = document.getElementById('edit-format').value;
@@ -1120,4 +1132,46 @@ async function performImmediateStaffAction(id, payload) {
     await showAlert(err.message || 'Error updating suggestion');
   }
 }
+
+/**
+ * Audit Preview and Workflow Flag Cleanup Listeners
+ */
+export function reactiveCleanupWorkflowFlags(rowId) {
+  const row = currentSuggestions.find(r => r.id === rowId) || allSuggestions.find(r => r.id === rowId);
+  if (!row || !row.workflowTags) return;
+
+  const staleFlags = ['Hold failed', '! Hold failed', 'No holdable items'];
+  const originalTags = Array.isArray(row.workflowTags) ? row.workflowTags : (String(row.workflowTags || '').split(',').map(t => t.trim()).filter(Boolean));
+  
+  const nextTags = originalTags.filter(t => !staleFlags.includes(t));
+  
+  if (nextTags.length !== originalTags.length) {
+    row.workflowTags = nextTags;
+    renderEditWorkflowTags(nextTags, row);
+    console.log(`Cleaned up stale workflow flags for row ${rowId}`);
+  }
+}
+
+function refreshEditAuditPreview() {
+  const id = document.getElementById('edit-id').value;
+  const row = currentSuggestions.find(r => r.id === id) || allSuggestions.find(r => r.id === id);
+  const nextStatus = document.getElementById('edit-next-status').value;
+  const actionStr = document.getElementById('edit-action').value;
+  if (row) renderPendingAuditPreview(row, nextStatus, actionStr);
+}
+
+// Event listeners for Edit Form changes to refresh preview
+['edit-format', 'edit-publication', 'edit-autohold'].forEach(id => {
+  document.getElementById(id)?.addEventListener('change', refreshEditAuditPreview);
+});
+
+// Watch for BIB changes to refresh preview (and cleanup flags when verified)
+document.getElementById('edit-bibid')?.addEventListener('input', refreshEditAuditPreview);
+
+// Reactive flag cleanup when a BIB is verified
+window.addEventListener('asap-bib-verified', (e) => {
+  const { rowId } = e.detail;
+  reactiveCleanupWorkflowFlags(rowId);
+  refreshEditAuditPreview();
+});
 
