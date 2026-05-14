@@ -1,35 +1,22 @@
-# Debug Session: Staff Duplicate Error Message Cut Off
+# Debug Session: Use & Place Hold - No Action on Request
 
 ## Symptom
-The error message "This patron already has this suggestion." (or other API errors) in the "New suggestion" modal is partially cut off or poorly rendered.
+When a staff member clicks "Use & Place Hold" (or "Use & Queue Hold") in the Polaris Search results modal, the original suggestion request in the grid does not update, even though the UI suggests an action was taken.
 
-**When:** Submitting a duplicate suggestion on the staff side.
-**Expected:** The error message should be fully visible, ideally on its own line above the action buttons.
-**Actual:** The error message appears on the same line as the buttons and is clipped because the footer container (`asap-dialog-edit-footer`) does not allow wrapping.
+**When:** Selecting a BIB result from the Polaris Search modal and choosing a hold action.
+**Expected:** The original request should be updated with the BIB ID, status changed (e.g., to "Hold placed" or "Pending hold"), and the modal should close.
+**Actual:** "Nothing happened" to the original request according to the user.
 
 ## Evidence
-- `pb_public/staff/index.html` uses `.asap-dialog-edit-footer` for the `newSuggestionModal` footer.
-- `pb_public/staff/styles.css` defines `.asap-dialog-edit-footer` as `display: flex` but lacks `flex-wrap: wrap`.
-- `.asap-dialog-footer-error` has `flex: 1 0 100%`, which intended to take full width but fails without `flex-wrap` on the parent.
+- The user provided a screenshot showing the Polaris Search modal over the "Suggestions" grid.
+- Red arrow points to "History" (the original request).
+- The user clicked a button (likely "Use & Place Hold" on "Yummy : a history of desserts").
+- I need to check `renderPolarisSearchResults` and the `holdBtn.onclick` handler in `pb_public/staff/js/modals.js`.
 
 ## Hypotheses
 
 | # | Hypothesis | Likelihood | Status |
 |---|------------|------------|--------|
-| 1 | The `asap-dialog-edit-footer` class lacks `flex-wrap: wrap`, causing the full-width error element to collide with buttons. | 95% | CONFIRMED |
-| 2 | The error message container has insufficient padding or a fixed height. | 5% | ELIMINATED |
-
-## Attempts
-
-### Attempt 1
-**Testing:** H1 — Add `flex-wrap: wrap` and `gap` to `.asap-dialog-edit-footer`.
-**Action:** Modified `pb_public/staff/styles.css`.
-**Result:** SUCCESS. Adding `flex-wrap: wrap` allows the `flex: 1 0 100%` error summary to take its own line.
-**Conclusion:** CONFIRMED.
-
-## Resolution
-
-**Root Cause:** The flex container for the dialog footer was not configured to wrap, preventing the full-width error message from dropping to its own line as intended by its `flex: 1 0 100%` property.
-**Fix:** Added `flex-wrap: wrap` and `gap: 12px` to `.asap-dialog-edit-footer`. Also added `overflow-wrap: anywhere` to the error container for defensive robustness.
-**Verified:** Verified via code audit of the layout and comparison with the screenshot.
-**Regression Check:** Checked other modals using `asap-dialog-edit-footer` (Edit, etc.) to ensure their layout remains stable.
+| 1 | The `holdBtn.onclick` handler in `renderPolarisSearchResults` is missing the code to save/update the suggestion. | 60% | UNTESTED |
+| 2 | The update API call is failing but the error is swallowed or not visible. | 20% | UNTESTED |
+| 3 | The logic to refresh the grid after the update is missing or failing. | 20% | UNTESTED |

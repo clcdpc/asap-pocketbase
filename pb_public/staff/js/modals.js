@@ -557,11 +557,15 @@ function polarisSearchElements() {
     dialog: document.getElementById('polarisSearchDialog'),
     title: document.getElementById('polaris-search-title'),
     summary: document.getElementById('polaris-search-summary'),
-    modeSwitch: document.getElementById('polaris-search-mode-switch'),
+    modeSelect: document.getElementById('polaris-search-mode'),
     status: document.getElementById('polaris-search-status'),
     results: document.getElementById('polaris-search-results'),
     searchInput: document.getElementById('polaris-search-input'),
-    rerunBtn: document.getElementById('polaris-search-rerun-btn')
+    searchInputLabel: document.getElementById('polaris-search-input-label'),
+    authorGroup: document.getElementById('polaris-search-author-group'),
+    authorInput: document.getElementById('polaris-search-author'),
+    rerunBtn: document.getElementById('polaris-search-rerun-btn'),
+    addAuthorBtn: document.getElementById('polaris-search-add-author-btn')
   };
 }
 
@@ -655,7 +659,7 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
         selectedPolarisIdentifier: result.identifier,
         selectedPolarisPublication: result.publication,
         selectedPolarisFormat: result.format,
-        notes: '', 
+        notes: row.notes || '', 
         autohold: row.autohold !== false,
         editedBy: pb.authStore.model.username
       };
@@ -700,7 +704,7 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
           if (summary.otherLibraryCount > 0) {
             const otherBadge = document.createElement('span');
             otherBadge.className = 'polaris-badge polaris-badge-info';
-            otherBadge.textContent = `Owned by others (${summary.otherLibraryCount})`;
+            otherBadge.textContent = `Owned by consortium (${summary.consortiumCount})`;
             holdingsDiv.appendChild(otherBadge);
           }
 
@@ -715,13 +719,19 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
             warn.className = 'polaris-warning';
             warn.innerHTML = '<i class="fa fa-exclamation-triangle"></i> Not Holdable';
             holdingsDiv.appendChild(warn);
+            holdBtn.textContent = 'Use & Queue Hold';
+            holdBtn.className = 'btn btn-sm btn-outline-warning';
+            holdBtn.disabled = false;
           }
 
-          if (summary.myLibraryCount === 0 && summary.otherLibraryCount === 0) {
+          if (summary.consortiumCount === 0) {
             const none = document.createElement('span');
             none.className = 'text-muted small';
-            none.textContent = 'No copies found in consortium.';
+            none.textContent = 'No item records found.';
             holdingsDiv.appendChild(none);
+            holdBtn.textContent = 'Use & Queue Hold';
+            holdBtn.className = 'btn btn-sm btn-outline-warning';
+            holdBtn.disabled = false;
           }
         })
         .catch(err => {
@@ -767,26 +777,31 @@ export async function openPolarisSearch(row, mode, options = {}) {
   const originalTitle = options.title !== undefined ? String(options.title || '').trim() : polarisSearchValueForRow(row, 'title');
   const originalAuthor = options.author !== undefined ? String(options.author || '').trim() : polarisSearchValueForRow(row, 'author');
   const originalIdentifier = options.identifier !== undefined ? String(options.identifier || '').trim() : polarisSearchValueForRow(row, 'identifier');
-  const initialQuery = options.query !== undefined ? String(options.query || '').trim() : '';
+  
+  // Set initial mode and inputs
+  els.modeSelect.value = mode;
+  els.searchInput.value = (mode === 'identifier') ? originalIdentifier : (mode === 'author' ? originalAuthor : originalTitle);
+  els.authorInput.value = originalAuthor;
+  
+  const updateUiForMode = () => {
+    const currentMode = els.modeSelect.value;
+    const isIdentifier = currentMode === 'identifier';
+    const isTitleAuthor = currentMode === 'title_author';
+    const isAuthor = currentMode === 'author';
+    
+    els.searchInputLabel.textContent = isIdentifier ? 'Identifier (ISBN/UPC)' : (isAuthor ? 'Author Keywords' : 'Title Keywords');
+    els.authorGroup.classList.toggle('hidden', !isTitleAuthor);
+    els.addAuthorBtn.classList.toggle('hidden', isTitleAuthor || isIdentifier || isAuthor || !originalAuthor);
+  };
 
-  // Initialize input based on launch mode
-  if (initialQuery) {
-    els.searchInput.value = initialQuery;
-  } else if (mode === 'title') {
-    els.searchInput.value = originalTitle;
-  } else if (mode === 'author') {
-    els.searchInput.value = originalAuthor;
-  } else if (mode === 'identifier') {
-    els.searchInput.value = originalIdentifier;
-  } else if (mode === 'title_author') {
-    els.searchInput.value = `${originalTitle} ${originalAuthor}`.trim();
-  }
+  updateUiForMode();
 
   const runSearch = async () => {
-    const currentEls = polarisSearchElements();
-    const query = currentEls.searchInput.value.trim();
+    const currentMode = els.modeSelect.value;
+    const query = els.searchInput.value.trim();
+    const author = els.authorInput.value.trim();
 
-    if (!query) {
+    if (!query && currentMode !== 'author' && currentMode !== 'title_author') {
       showToast('Please enter search terms.', 'warning');
       return;
     }
@@ -796,55 +811,34 @@ export async function openPolarisSearch(row, mode, options = {}) {
     els.results.innerHTML = '';
 
     try {
-      // For keyword search, we send the same query for title/author context to the backend
-      const data = await fetchPolarisSearch(row, mode, query, { title: query, author: mode === 'author' ? query : '' });
-      renderPolarisSearchResults(row, mode, data, options);
+      const data = await fetchPolarisSearch(row, currentMode, query, { title: query, author: author });
+      renderPolarisSearchResults(row, currentMode, data, options);
     } catch (err) {
       els.status.className = 'alert alert-danger py-2 px-3 small';
       els.status.textContent = 'Error: ' + err.message;
     }
   };
 
-  els.title.textContent = 'Search Polaris';
-  els.summary.innerHTML = `
-    <div class="mb-1">This searches Polaris across keyword fields using the text below.</div>
-    <div class="text-muted small">Started from ${polarisSearchModeLabel(mode)}: "${els.searchInput.value || 'Unknown'}"</div>
-  `;
-  
-  // Only show "Add author" if we started from title and have an author available
-  els.modeSwitch.innerHTML = (mode === 'title' && originalAuthor)
-    ? '<button type="button" class="btn btn-sm btn-outline-secondary" id="polaris-search-add-author">Add author to search</button>'
-    : '';
+  // Event Listeners
+  els.rerunBtn.onclick = (e) => {
+    e.preventDefault();
+    runSearch();
+  };
 
-  const addAuthorBtn = document.getElementById('polaris-search-add-author');
-  if (addAuthorBtn) {
-    addAuthorBtn.addEventListener('click', () => {
-      const currentEls = polarisSearchElements();
-      const currentVal = currentEls.searchInput.value.trim();
-      currentEls.searchInput.value = `${currentVal} ${originalAuthor}`.trim();
-      addAuthorBtn.remove(); // Only add once
-      runSearch();
-    });
-  }
+  els.modeSelect.onchange = () => {
+    updateUiForMode();
+  };
 
-  // Handle rerun button
-  const newRerunBtn = els.rerunBtn.cloneNode(true);
-  els.rerunBtn.parentNode.replaceChild(newRerunBtn, els.rerunBtn);
-  els.rerunBtn = newRerunBtn;
-  els.rerunBtn.addEventListener('click', runSearch);
+  els.addAuthorBtn.onclick = (e) => {
+    e.preventDefault();
+    els.modeSelect.value = 'title_author';
+    updateUiForMode();
+    els.authorInput.focus();
+  };
 
-  // Handle Enter key in input
-  const newInp = els.searchInput.cloneNode(true);
-  els.searchInput.parentNode.replaceChild(newInp, els.searchInput);
-  
-  // Re-fetch els after clone
-  const updatedEls = polarisSearchElements();
-  updatedEls.searchInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      runSearch();
-    }
-  });
+  const onEnter = (e) => { if (e.key === 'Enter') runSearch(); };
+  els.searchInput.onkeypress = onEnter;
+  els.authorInput.onkeypress = onEnter;
 
   const returnDialog = options.returnDialog || null;
   const returnFocus = options.returnFocus || null;
@@ -1105,7 +1099,7 @@ async function performImmediateStaffAction(id, payload) {
         showToast('Purchase saved.', 'success');
       }
     } else if (nextStatus === 'pending_hold') {
-      showToast('Request moved to Ready for hold.', 'success');
+      showToast(`Request moved to Ready for hold (BIB ${payload.bibid || 'N/A'}).`, 'success');
     } else {
       showToast('Suggestion updated.', 'success');
     }
@@ -1126,8 +1120,12 @@ async function performImmediateStaffAction(id, payload) {
       await showAlert(`Note: This suggestion moved directly to "${statusNames[updatedRecord.status] || updatedRecord.status}" because ${reason}.`);
     }
 
-    if (typeof loadTab === 'function') loadTab(currentStatus);
+    if (typeof loadTab === 'function') {
+      console.log('Action complete, refreshing grid for status:', currentStatus);
+      loadTab(currentStatus);
+    }
   } catch (err) {
+    console.error('performImmediateStaffAction failed:', err);
     await showAlert(err.message || 'Error updating suggestion');
   }
 }
