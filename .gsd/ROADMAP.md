@@ -198,13 +198,14 @@
 **Depends on**: Phase 10
 
 **Tasks**:
-- [ ] Remove `timingColumn` from `Pending hold` and `Hold placed` grid configurations in `grid.js`.
-- [ ] Re-calculate and optimize column widths in `grid.js` to utilize the freed-up space.
-- [ ] Verify grid alignment and density across all tabs.
+- [x] Remove `timingColumn` from `Pending hold` and `Hold placed` grid configurations in `grid.js`.
+- [x] Re-calculate and optimize column widths in `grid.js` to utilize the freed-up space.
+- [x] Verify grid alignment and density across all tabs.
 
 **Verification**:
-- [ ] "Timing" column no longer appears in "Pending hold" and "Hold placed" tabs.
-- [ ] Suggestions and Closed tabs still show "Timing" (if relevant).
-- [ ] Grid layout feels balanced and information-dense without horizontal crowding.
+- [x] "Timing" column no longer appears in "Pending hold" and "Hold placed" tabs.
+- [x] Suggestions and Closed tabs still show "Timing" (if relevant).
+- [x] Grid layout feels balanced and information-dense without horizontal crowding.
+
 
 ---
