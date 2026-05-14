@@ -1150,7 +1150,7 @@ export function getRowActions(row) {
   if (status === 'outstanding_purchase') {
     const duplicateCloseAction = duplicateCloseActionForRow(row);
     return {
-      primary: { label: 'Ready for hold', className: 'btn-success', onClick: () => openEdit(row.id, 'pending_hold', 'Move to Pending hold', '', 'Ready for hold') },
+      primary: { label: 'Queue Hold', className: 'btn-success', onClick: () => openEdit(row.id, 'pending_hold', 'Queue for hold', '', 'Queue Hold') },
       secondary: [
         ...(duplicateCloseAction ? [duplicateCloseAction] : []),
         ...claimActionsForRow(row),

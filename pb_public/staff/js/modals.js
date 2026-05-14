@@ -665,27 +665,18 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
       };
     };
 
-    // "Use & Place Hold" Button
+    // "Use & Queue Hold" Button
     const holdBtn = document.createElement('button');
     holdBtn.type = 'button';
     holdBtn.className = 'btn btn-sm btn-success';
-    holdBtn.textContent = 'Use & Place Hold';
+    holdBtn.textContent = 'Use & Queue Hold';
     holdBtn.disabled = true; // Disabled until holdings check confirms holdable
     holdBtn.addEventListener('click', async () => {
       const payload = buildPayload('pending_hold', 'catalogFound');
       await performImmediateStaffAction(row.id, payload);
     });
 
-    // "Use & Purchase" Button
-    const purchaseBtn = document.createElement('button');
-    purchaseBtn.type = 'button';
-    purchaseBtn.className = 'btn btn-sm btn-primary';
-    purchaseBtn.textContent = 'Use & Purchase';
-    if (!result.bibId) purchaseBtn.disabled = true;
-    purchaseBtn.addEventListener('click', async () => {
-      const payload = buildPayload('outstanding_purchase', 'purchase');
-      await performImmediateStaffAction(row.id, payload);
-    });
+
 
     // Background Holdings Check
     if (result.bibId) {
@@ -712,14 +703,14 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
             holdBtn.disabled = false;
             if (summary.myLibraryCount > 0) {
               holdBtn.classList.add('font-weight-bold');
-              holdBtn.innerHTML = '<i class="fa fa-check mr-1"></i> Use & Place Hold';
+              holdBtn.innerHTML = '<i class="fa fa-check mr-1"></i> Use & Queue Hold';
             }
           } else if (result.bibId) {
             const warn = document.createElement('span');
             warn.className = 'polaris-warning';
             warn.innerHTML = '<i class="fa fa-exclamation-triangle"></i> Not Holdable';
             holdingsDiv.appendChild(warn);
-            holdBtn.textContent = 'Use & Queue Hold';
+            holdBtn.innerHTML = '<i class="fa fa-clock-o mr-1"></i> Use & Queue Hold';
             holdBtn.className = 'btn btn-sm btn-outline-warning';
             holdBtn.disabled = false;
           }
@@ -729,7 +720,7 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
             none.className = 'text-muted small';
             none.textContent = 'No item records found.';
             holdingsDiv.appendChild(none);
-            holdBtn.textContent = 'Use & Queue Hold';
+            holdBtn.innerHTML = '<i class="fa fa-clock-o mr-1"></i> Use & Queue Hold';
             holdBtn.className = 'btn btn-sm btn-outline-warning';
             holdBtn.disabled = false;
           }
@@ -745,7 +736,7 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
 
     actionsDiv.appendChild(holdBtn);
 
-    actionsDiv.appendChild(purchaseBtn);
+
     
     // Fallback: Legacy "Apply to Form" for when launched from Edit modal
     if (options.source === 'edit') {
@@ -1099,7 +1090,7 @@ async function performImmediateStaffAction(id, payload) {
         showToast('Purchase saved.', 'success');
       }
     } else if (nextStatus === 'pending_hold') {
-      showToast(`Request moved to Ready for hold (BIB ${payload.bibid || 'N/A'}).`, 'success');
+      showToast(`Request queued for hold (BIB ${payload.bibid || 'N/A'}).`, 'success');
     } else {
       showToast('Suggestion updated.', 'success');
     }
