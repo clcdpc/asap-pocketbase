@@ -171,7 +171,7 @@
 ---
 
 ## Milestone 2: Staff Workflow Hardening and UI Polish
-**Status**: 🚧 In Progress
+**Status**: ✅ Complete
 
 ### Phase 10: Consolidate Polaris Integration and UI Enhancements
 **Status**: ✅ Completed
@@ -209,3 +209,46 @@
 
 
 ---
+---
+
+### Phase 12: Refine Grid Column Widths for Identifiers
+**Status**: ✅ Complete
+**Objective**: Increase the width of Barcode and ISBN columns to prevent trimming, reallocating space from Title and Author columns.
+**Depends on**: Phase 11
+
+**Tasks**:
+- [x] Increase Barcode column width from 130px to 160px.
+- [x] Increase Identifier (ISBN) column width from 120px to 150px.
+- [x] Decrease Title column width from 410px to 380px.
+- [x] Decrease Author column width from 280px to 250px.
+
+**Verification**:
+- [x] Barcodes are fully visible without trimming in the staff grid.
+- [x] ISBNs/Identifiers are fully visible without trimming.
+- [x] Title and Author columns remain readable.
+
+---
+
+### Phase 13: Add ISBN Column to Suggestions Tab
+**Status**: ✅ Complete
+**Objective**: Include the ID/ISBN column in the Suggestions tab of the staff grid, rebalancing widths from Title and Author to make room while preserving Barcode width.
+**Depends on**: Phase 12
+
+**Tasks**:
+- [x] Add `identifier` (ID/ISBN) column to the `suggestion` status view in `grid.js`.
+- [x] Set `identifier` column width to 150px.
+- [x] Reduce Title column width from 380px to 310px (-70px).
+- [x] Reduce Author column width from 250px to 170px (-80px).
+- [x] Verify column visibility and alignment in the Suggestions tab.
+
+**Verification**:
+- [x] ID/ISBN column is visible in the Suggestions tab.
+- [x] Barcode column remains at 160px.
+- [x] Grid remains readable without horizontal scrolling if possible, or handles overflow gracefully.
+
+---
+
+## Milestone 3: Reporting and Advanced Analytics
+**Status**: ⬜ Not Started
+
+> Plan for Milestone 3 to be defined using /new-milestone or /discuss-phase.

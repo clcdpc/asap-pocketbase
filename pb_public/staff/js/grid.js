@@ -847,7 +847,7 @@ export function getGridColumns(status, rowById = new Map()) {
   const barcodeColumn = {
     id: 'barcode',
     name: 'Barcode',
-    width: '130px',
+    width: '160px',
     formatter: (cell, row) => renderBarcodeCell(rowFor(row.cells[0].data))
   };
 
@@ -855,7 +855,7 @@ export function getGridColumns(status, rowById = new Map()) {
   const titleColumn = {
     id: 'title',
     name: 'Title',
-    width: '410px',
+    width: '310px',
     formatter: (cell, row) => renderTitleCell(rowFor(row.cells[0].data))
   };
 
@@ -863,7 +863,7 @@ export function getGridColumns(status, rowById = new Map()) {
   const authorColumn = {
     id: 'author',
     name: 'Author',
-    width: '280px',
+    width: '170px',
     formatter: (cell, row) => renderAuthorCell(rowFor(row.cells[0].data))
   };
 
@@ -873,6 +873,14 @@ export function getGridColumns(status, rowById = new Map()) {
     name: 'Format',
     width: '100px',
     formatter: (cell, row) => escapeAttr(formatMap[rowFor(row.cells[0].data).format] || rowFor(row.cells[0].data).format || '')
+  };
+
+  const identifierColumn = {
+    id: 'identifier',
+    name: 'ID/ISBN',
+    width: '150px',
+    sort: false,
+    formatter: (cell, row) => escapeAttr(rowFor(row.cells[0].data).identifier || '')
   };
 
   const timingColumn = {
@@ -924,6 +932,7 @@ export function getGridColumns(status, rowById = new Map()) {
       barcodeColumn,
       titleColumn,
       authorColumn,
+      identifierColumn,
       formatColumn,
       timingColumn,
       submittedColumn,
@@ -958,13 +967,7 @@ export function getGridColumns(status, rowById = new Map()) {
     barcodeColumn,
     titleColumn,
     authorColumn,
-    {
-      id: 'identifier',
-      name: 'ID/ISBN',
-      width: '120px',
-      sort: false,
-      formatter: (cell, row) => escapeAttr(rowFor(row.cells[0].data).identifier || '')
-    },
+    identifierColumn,
 
     {
       id: 'bibid',
