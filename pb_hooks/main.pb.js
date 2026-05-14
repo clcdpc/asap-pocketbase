@@ -226,21 +226,35 @@ cronAdd("asap-isbn-check", $os.getenv("ASAP_ISBN_CHECK_CRON_SCHEDULE") || "*/5 *
 });
 
 onRecordViewRequest((e) => {
-  const authRecord = e.httpContext.get("authRecord");
-  if (authRecord && authRecord.collection().name === "patron_users") {
-    e.record.set("notes", "");
-    e.record.set("editedBy", "");
-    e.record.set("staffLibraryOrgIdCreatedBy", "");
+  e.next();
+  try {
+    const authRecord = e.httpContext.get("authRecord");
+    if (authRecord && authRecord.collection && authRecord.collection().name === "patron_users") {
+      if (e.record) {
+        e.record.set("notes", "");
+        e.record.set("editedBy", "");
+        e.record.set("staffLibraryOrgIdCreatedBy", "");
+      }
+    }
+  } catch (err) {
+    e.app.logger().error("Record view hook error", "error", String(err));
   }
 }, "title_requests");
 
 onRecordsListRequest((e) => {
-  const authRecord = e.httpContext.get("authRecord");
-  if (authRecord && authRecord.collection().name === "patron_users") {
-    e.records.forEach((record) => {
-      record.set("notes", "");
-      record.set("editedBy", "");
-      record.set("staffLibraryOrgIdCreatedBy", "");
-    });
+  e.next();
+  try {
+    const authRecord = e.httpContext.get("authRecord");
+    if (authRecord && authRecord.collection && authRecord.collection().name === "patron_users") {
+      (e.records || []).forEach((record) => {
+        if (record) {
+          record.set("notes", "");
+          record.set("editedBy", "");
+          record.set("staffLibraryOrgIdCreatedBy", "");
+        }
+      });
+    }
+  } catch (err) {
+    e.app.logger().error("Records list hook error", "error", String(err));
   }
 }, "title_requests");
