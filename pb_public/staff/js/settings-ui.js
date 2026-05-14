@@ -692,6 +692,57 @@ export async function lookupEditBibById(options = {}) {
   }
 }
 
+function mergeCatalogValue(catalogValue, oldValue) {
+  const catalog = String(catalogValue || '').trim();
+  const old = String(oldValue || '').trim();
+
+  if (!catalog) return old;
+  if (!old || old === catalog) return catalog;
+  if (old.indexOf(catalog + ' (') === 0) return old;
+
+  return `${catalog} (${old})`;
+}
+
+export function applySelectedPolarisResultToEditForm(result = {}) {
+  const bibId = String(result.bibId || '').trim();
+  const title = String(result.title || '').trim();
+  const author = String(result.author || '').trim();
+
+  const bibInput = document.getElementById('edit-bibid');
+  const titleInput = document.getElementById('edit-title');
+  const authorInput = document.getElementById('edit-author');
+  const display = document.getElementById('bib-info-display');
+  const text = document.getElementById('bib-info-text');
+
+  if (bibInput) {
+    bibInput.value = bibId;
+    bibInput.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  if (titleInput && title) {
+    titleInput.value = mergeCatalogValue(title, titleInput.value);
+  }
+
+  if (authorInput && author) {
+    authorInput.value = mergeCatalogValue(author, authorInput.value);
+  }
+
+  if (display && text) {
+    display.classList.remove('hidden', 'alert-danger', 'alert-warning');
+    display.classList.add('alert-info');
+
+    const parts = [];
+    if (title) parts.push(title);
+    if (author) parts.push('by ' + author);
+
+    text.textContent = parts.length
+      ? parts.join(' ')
+      : (bibId ? 'BIB ' + bibId + ' selected from Polaris search.' : 'Polaris result selected.');
+  }
+
+  setVerifiedBibId(bibId);
+}
+
 document.getElementById('btn-bib-lookup').addEventListener('click', async () => {
   await lookupEditBibById();
 });

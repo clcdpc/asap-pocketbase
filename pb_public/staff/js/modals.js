@@ -2,7 +2,7 @@ import { pb, formatMap, availableFormats, currentRejectionTemplates, currentStat
 import { leapBibUrl, openProfileDialog } from './api.js';
 import { showToast, showAlert, showConfirm } from './dialogs.js';
 import { loadTab, formatDateTime, renderWorkflowTags, escapeAttr } from './grid.js';
-import { setSelectValue, dateOnly, lookupEditBibById } from './settings-ui.js';
+import { setSelectValue, dateOnly, lookupEditBibById, applySelectedPolarisResultToEditForm } from './settings-ui.js';
 
 export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
   const row = currentSuggestions.find(r => r.id === id) || allSuggestions.find(r => r.id === id);
@@ -631,14 +631,18 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
         if (editModal && !editModal.open) {
           editModal.showModal();
         }
-        await lookupEditBibById({ bibId: result.bibId, button: null });
+
+        applySelectedPolarisResultToEditForm(result);
+
         const bibInput = document.getElementById('edit-bibid');
         if (bibInput) bibInput.focus();
+
         showToast('Polaris BIB applied to the edit form.', 'success');
         return;
       }
+
       openEdit(row.id, row.status || currentStatus, 'Edit suggestion', '', 'Save');
-      await lookupEditBibById({ bibId: result.bibId, button: null });
+      applySelectedPolarisResultToEditForm(result);
     });
     
     actionsDiv.appendChild(btn);
