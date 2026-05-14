@@ -832,7 +832,7 @@ export function renderBarcodeCell(row) {
   `);
 }
 
-const NOTES_COLUMN_WIDTH = '90px';
+const NOTES_COLUMN_WIDTH = '110px';
 
 
 export function getActionsColumnWidth(status) {
@@ -847,23 +847,26 @@ export function getGridColumns(status, rowById = new Map()) {
   const barcodeColumn = {
     id: 'barcode',
     name: 'Barcode',
-    width: '170px',
+    width: '130px',
     formatter: (cell, row) => renderBarcodeCell(rowFor(row.cells[0].data))
   };
 
+
   const titleColumn = {
     id: 'title',
-    name: 'Title (original)',
-    width: '320px',
+    name: 'Title',
+    width: '410px',
     formatter: (cell, row) => renderTitleCell(rowFor(row.cells[0].data))
   };
 
+
   const authorColumn = {
     id: 'author',
-    name: 'Author (original)',
-    width: '200px',
+    name: 'Author',
+    width: '280px',
     formatter: (cell, row) => renderAuthorCell(rowFor(row.cells[0].data))
   };
+
 
   const formatColumn = {
     id: 'format',
@@ -950,18 +953,19 @@ export function getGridColumns(status, rowById = new Map()) {
     ];
   }
 
-  return [
+  const baseCols = [
     idColumn,
     barcodeColumn,
     titleColumn,
     authorColumn,
     {
       id: 'identifier',
-      name: 'Identifier number',
-      width: '140px',
+      name: 'ID/ISBN',
+      width: '120px',
       sort: false,
       formatter: (cell, row) => escapeAttr(rowFor(row.cells[0].data).identifier || '')
     },
+
     {
       id: 'bibid',
       name: 'BIB ID',
@@ -969,13 +973,15 @@ export function getGridColumns(status, rowById = new Map()) {
       sort: false,
       formatter: (cell, row) => renderBibIdCell(rowFor(row.cells[0].data))
     },
-    formatColumn,
-    timingColumn,
-    submittedColumn,
-    claimedColumn,
-    notesColumnDef,
-    actionsColumn
+    formatColumn
   ];
+
+  if (status !== 'pending_hold' && status !== 'hold_placed') {
+    baseCols.push(timingColumn);
+  }
+
+  baseCols.push(submittedColumn, claimedColumn, notesColumnDef, actionsColumn);
+  return baseCols;
 }
 
 
