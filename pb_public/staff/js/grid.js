@@ -455,7 +455,13 @@ export function getIsbnCheckLabel(row) {
 }
 
 export function effectiveWorkflowFlagsForRow(row, tags = row?.workflowTags) {
-  const clean = cleanWorkflowTags(tags).filter(flag => !isSimilarRequestFlag(flag));
+  let clean = cleanWorkflowTags(tags).filter(flag => !isSimilarRequestFlag(flag));
+
+  // If hold is placed (status or tag), remove stale failure/warning badges
+  if (normalizeStatus(row.status) === 'hold_placed' || clean.includes('Hold placed')) {
+    clean = clean.filter(flag => flag !== 'No holdable items' && flag !== 'Hold failed' && flag !== '! Hold failed');
+  }
+
   const hasIdentifierFound = clean.includes('Identifier found');
   const hasIdentifierNotFound = clean.includes('Identifier number not found in system');
 
