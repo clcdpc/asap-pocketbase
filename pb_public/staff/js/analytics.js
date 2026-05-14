@@ -160,7 +160,7 @@ function renderSummaryCards(summary) {
       ${renderSummaryCard('New suggestions', formatCount(summary.newSuggestions), 'Created in selected period')}
       ${renderSummaryCard('Open requests', formatCount(summary.openRequests), 'Current non-closed requests')}
       ${renderSummaryCard('Closed requests', formatCount(summary.closedRequests), 'Closed and updated in selected period')}
-      ${renderSummaryCard('Avg days to close', formatDays(summary.averageDaysToClose), 'Created to latest closed update')}
+      ${renderSummaryCard('Avg days to hold', formatDays(summary.averageDaysToHold), 'Created to first Polaris hold placement')}
     </div>
   `;
 }
