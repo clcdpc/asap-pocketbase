@@ -142,4 +142,31 @@ const records = {
   assert.strictEqual(requestPhaseEntryFallback(pending), '2026-05-14T10:00:00.000Z');
 }
 
+{
+  const warnings = [];
+  const { preloadPhaseEntryTimesForRequests } = load({ records });
+  const titleRequests = [
+    makeRecord('pending-fallback', {
+      status: 'pending_hold',
+      statusRef: 'status-pending-hold',
+      created: '2026-05-01T10:00:00.000Z',
+      updated: '2026-05-14T10:00:00.000Z',
+    }),
+  ];
+  const app = {
+    findRecordsByFilter: () => {
+      throw new Error('simulated title_request_events failure');
+    },
+    logger: () => ({
+      warn: (...args) => warnings.push(args),
+    }),
+  };
+  const cache = {};
+
+  preloadPhaseEntryTimesForRequests(app, titleRequests, cache);
+
+  assert.strictEqual(cache['pending-fallback'], '2026-05-14T10:00:00.000Z');
+  assert.ok(warnings.some(args => String(args[0]).includes('Phase-entry preload failed')));
+}
+
 console.log('Staff phase-entry sort tests passed.');

@@ -35,6 +35,11 @@ function runTests() {
   assert.ok(modalJs.includes("author: options?.author || ''"));
   assert.ok(modalJs.includes("applySelectedPolarisResultToEditForm(result"));
   assert.ok(modalJs.includes("title_author"));
+  assert.ok(modalJs.includes("const launchedFromEditForm = options.source === 'edit'"));
+  assert.ok(modalJs.includes("Use BIB in Queue Form"));
+  assert.ok(modalJs.includes("Save to finish this action."));
+  assert.ok(modalJs.includes("Use BIB & Queue Now"));
+  assert.ok(modalJs.indexOf("const launchedFromEditForm = options.source === 'edit'") < modalJs.indexOf("performImmediateStaffAction(row.id, payload)"));
 
   const settingsUiJs = fileText("pb_public/staff/js/settings-ui.js");
   assert.ok(settingsUiJs.includes("export async function lookupEditBibById"));

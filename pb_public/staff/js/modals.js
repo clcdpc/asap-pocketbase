@@ -6,10 +6,27 @@ import { setSelectValue, dateOnly, lookupEditBibById, applySelectedPolarisResult
 
 function actionErrorMessage(status, data, raw) {
   if (data && data.code === 'duplicate_open_request') {
-    return data.message || 'This patron already has an open request for this BIB ID.';
+    return duplicateOpenRequestMessage(data);
   }
   const detail = (data && data.message) || String(raw || '').trim();
   return detail ? `Error updating suggestion (${status}): ${detail}` : `Error updating suggestion (${status})`;
+}
+
+function duplicateOpenRequestMessage(data) {
+  const duplicate = data && data.duplicate ? data.duplicate : {};
+  const message = String((data && data.message) || 'This patron already has an open request for this BIB ID.').trim();
+  const title = String(duplicate.title || '').trim();
+  const status = workflowStatusLabel(duplicate.status || '');
+  const lines = [message];
+
+  if (title) {
+    lines.push(`Existing request: ${title}${status ? ` - ${status}.` : '.'}`);
+  } else if (status) {
+    lines.push(`Existing request status: ${status}.`);
+  }
+
+  lines.push('This request was flagged. Choose another BIB, or close this request as duplicate if it should not continue.');
+  return lines.join('\n\n');
 }
 
 export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
@@ -677,18 +694,33 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
       };
     };
 
-    // "Use & Queue Hold" Button
-    const holdBtn = document.createElement('button');
-    holdBtn.type = 'button';
-    holdBtn.className = 'btn btn-sm btn-success';
-    holdBtn.textContent = 'Use & Queue Hold';
-    holdBtn.disabled = true; // Disabled until holdings check confirms holdable
-    holdBtn.addEventListener('click', async () => {
-      const payload = buildPayload('pending_hold', 'catalogFound');
-      await performImmediateStaffAction(row.id, payload);
-    });
-
-
+    const launchedFromEditForm = options.source === 'edit';
+    let holdBtn = null;
+    if (launchedFromEditForm) {
+      const applyBtn = document.createElement('button');
+      applyBtn.type = 'button';
+      applyBtn.className = 'btn btn-sm btn-primary';
+      applyBtn.textContent = document.getElementById('edit-next-status')?.value === 'pending_hold'
+        ? 'Use BIB in Queue Form'
+        : 'Apply to Edit Form';
+      applyBtn.addEventListener('click', () => {
+        applySelectedPolarisResultToEditForm(result);
+        els.dialog.close();
+        showToast('Polaris details applied to form. Save to finish this action.', 'success');
+      });
+      actionsDiv.appendChild(applyBtn);
+    } else {
+      holdBtn = document.createElement('button');
+      holdBtn.type = 'button';
+      holdBtn.className = 'btn btn-sm btn-success';
+      holdBtn.textContent = 'Use BIB & Queue Now';
+      holdBtn.disabled = true; // Disabled until holdings check confirms holdable
+      holdBtn.addEventListener('click', async () => {
+        const payload = buildPayload('pending_hold', 'catalogFound');
+        await performImmediateStaffAction(row.id, payload);
+      });
+      actionsDiv.appendChild(holdBtn);
+    }
 
     // Background Holdings Check
     if (result.bibId) {
@@ -712,19 +744,19 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
           }
 
           if (summary.isHoldable) {
-            holdBtn.disabled = false;
+            if (holdBtn) holdBtn.disabled = false;
             if (summary.myLibraryCount > 0) {
-              holdBtn.classList.add('font-weight-bold');
-              holdBtn.innerHTML = '<i class="fa fa-check mr-1"></i> Use & Queue Hold';
+              if (holdBtn) holdBtn.classList.add('font-weight-bold');
             }
           } else if (result.bibId) {
             const warn = document.createElement('span');
             warn.className = 'polaris-warning';
-            warn.innerHTML = '<i class="fa fa-exclamation-triangle"></i> Not Holdable';
+            warn.textContent = 'Not Holdable';
             holdingsDiv.appendChild(warn);
-            holdBtn.innerHTML = '<i class="fa fa-clock-o mr-1"></i> Use & Queue Hold';
-            holdBtn.className = 'btn btn-sm btn-outline-warning';
-            holdBtn.disabled = false;
+            if (holdBtn) {
+              holdBtn.className = 'btn btn-sm btn-outline-warning';
+              holdBtn.disabled = false;
+            }
           }
 
           if (summary.consortiumCount === 0) {
@@ -732,9 +764,10 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
             none.className = 'text-muted small';
             none.textContent = 'No item records found.';
             holdingsDiv.appendChild(none);
-            holdBtn.innerHTML = '<i class="fa fa-clock-o mr-1"></i> Use & Queue Hold';
-            holdBtn.className = 'btn btn-sm btn-outline-warning';
-            holdBtn.disabled = false;
+            if (holdBtn) {
+              holdBtn.className = 'btn btn-sm btn-outline-warning';
+              holdBtn.disabled = false;
+            }
           }
         })
         .catch(err => {
@@ -744,24 +777,6 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
           error.textContent = 'Holdings check failed.';
           holdingsDiv.appendChild(error);
         });
-    }
-
-    actionsDiv.appendChild(holdBtn);
-
-
-    
-    // Fallback: Legacy "Apply to Form" for when launched from Edit modal
-    if (options.source === 'edit') {
-      const applyBtn = document.createElement('button');
-      applyBtn.type = 'button';
-      applyBtn.className = 'btn btn-sm btn-outline-secondary';
-      applyBtn.textContent = 'Apply to Edit Form';
-      applyBtn.addEventListener('click', () => {
-        applySelectedPolarisResultToEditForm(result);
-        els.dialog.close();
-        showToast('Polaris details applied to form.', 'success');
-      });
-      actionsDiv.appendChild(applyBtn);
     }
 
     div.appendChild(actionsDiv);
@@ -1079,7 +1094,10 @@ async function performImmediateStaffAction(id, payload) {
       const raw = await res.text().catch(() => '');
       let data = {};
       try { data = raw ? JSON.parse(raw) : {}; } catch (e) {}
-      throw new Error(actionErrorMessage(res.status, data, raw));
+      const err = new Error(actionErrorMessage(res.status, data, raw));
+      err.status = res.status;
+      err.code = data.code || '';
+      throw err;
     }
     const updatedRecord = await res.json().catch(() => ({}));
     
@@ -1130,6 +1148,9 @@ async function performImmediateStaffAction(id, payload) {
   } catch (err) {
     console.error('performImmediateStaffAction failed:', err);
     await showAlert(err.message || 'Error updating suggestion');
+    if (err && err.code === 'duplicate_open_request' && typeof loadTab === 'function') {
+      loadTab(currentStatus);
+    }
   }
 }
 
@@ -1174,4 +1195,3 @@ window.addEventListener('asap-bib-verified', (e) => {
   reactiveCleanupWorkflowFlags(rowId);
   refreshEditAuditPreview();
 });
-

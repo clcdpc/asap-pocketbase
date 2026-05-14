@@ -20,7 +20,12 @@ function extractFunction(source, name) {
 }
 
 const source = fs.readFileSync(path.resolve(__dirname, '../pb_public/staff/js/modals.js'), 'utf8');
-const actionErrorMessage = new Function(`${extractFunction(source, 'actionErrorMessage')}; return actionErrorMessage;`)();
+const actionErrorMessage = new Function([
+  extractFunction(source, 'workflowStatusLabel'),
+  extractFunction(source, 'duplicateOpenRequestMessage'),
+  extractFunction(source, 'actionErrorMessage'),
+  'return actionErrorMessage;'
+].join('\n'))();
 
 {
   const msg = actionErrorMessage(
@@ -28,13 +33,37 @@ const actionErrorMessage = new Function(`${extractFunction(source, 'actionErrorM
     {
       code: 'duplicate_open_request',
       message: 'This patron already has an open request for this BIB ID.',
+      duplicate: {
+        title: 'Southpaw: music from and inspired by the motion picture.',
+        status: 'pending_hold'
+      }
     },
     '{"message":"This patron already has an open request for this BIB ID.","title":"Should not leak"}'
   );
 
-  assert.strictEqual(msg, 'This patron already has an open request for this BIB ID.');
+  assert.ok(msg.includes('This patron already has an open request for this BIB ID.'));
+  assert.ok(msg.includes('Existing request: Southpaw: music from and inspired by the motion picture. - Pending hold.'));
+  assert.ok(msg.includes('This request was flagged. Choose another BIB, or close this request as duplicate if it should not continue.'));
   assert.ok(!msg.includes('Error updating suggestion'));
   assert.ok(!msg.includes('Should not leak'));
+  assert.ok(!msg.includes('{'));
+}
+
+{
+  const msg = actionErrorMessage(
+    409,
+    {
+      code: 'duplicate_open_request',
+      message: ''
+    },
+    '{"duplicate":{"title":"Should not leak"}}'
+  );
+
+  assert.ok(msg.includes('This patron already has an open request for this BIB ID.'));
+  assert.ok(msg.includes('This request was flagged. Choose another BIB, or close this request as duplicate if it should not continue.'));
+  assert.ok(!msg.includes('Error updating suggestion'));
+  assert.ok(!msg.includes('Should not leak'));
+  assert.ok(!msg.includes('{'));
 }
 
 {
