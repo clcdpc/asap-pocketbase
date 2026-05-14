@@ -1,24 +1,22 @@
-# Project State
+# Current State - 2026-05-14
 
-## Objective
-Finalizing Milestone 2: Staff Workflow Hardening and UI Polish.
+## Recently Completed
+- **Phase 10: Staff Workflow Hardening & UI Polish**
+  - Expanded audit trail previews in `modals.js` to handle all action types with detailed SPEC-approved wording.
+  - Implemented reactive cleanup for stale workflow flags ("Hold failed", "No holdable items") when a BIB ID is verified.
+  - Standardized terminology across frontend and backend: "Place Hold" is now "Queue Hold" to accurately reflect the asynchronous process.
+  - Optimized staff grid layout for better information density and readability by adjusting column widths and shortening headers.
+  - Fixed accidental line numbers and corrupted formatting in `ROADMAP.md`.
 
-## Phase Progress
-- [x] Phase 1: Core Dashboard and Basic Status Mapping
-- [x] Phase 2: Enhanced Status Workflow and Action Buttons
-- [x] Phase 3: Tagging and Search Refinement
-- [x] Phase 4: Modal UX and Data Integrity
-- [x] Phase 5: Settings UI and Data Persistence
-- [x] Phase 6: Super Admin Library Switcher
-- [x] Phase 7: Refine Auto-Claims Scoping and Staff Management
-- [x] Phase 8: Library Override Indicators in Context Switcher
-- [x] Phase 9: Patron Text Placeholders for Barcode and PIN Labels
-- [ ] Phase 10: Consolidate Polaris Integration and UI Enhancements
-
-## Current Position
-- **Phase**: 10
-- **Task**: Planning complete
-- **Status**: Ready for execution
+## Active Milestone
+- **Milestone 2: Staff Workflow Hardening and UI Polish** (✅ Completed)
 
 ## Next Steps
-1. /execute 10
+1. /execute 11
+2. Run `/audit-milestone` to verify the completion of Milestone 2.
+
+
+
+## Notes
+- The Polaris integration is now much more robust, with clear communication to staff about the queueing process.
+- The UI feels significantly more premium and less crowded after the grid optimization.
