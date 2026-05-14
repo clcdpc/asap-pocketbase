@@ -1,5 +1,6 @@
 import { pb, currentRejectionTemplates, setCurrentRejectionTemplates, currentLibraryContextOrgId, setCurrentLibraryContextOrgId, emailTemplateDefaults, templateFieldIds } from './state.js';
-import { markSettingsDirty, updateAutoRejectEmailControls, getFieldChecked, getFieldValue, showAlert, showConfirm } from './api.js';
+import { markSettingsDirty, updateAutoRejectEmailControls, getFieldChecked, getFieldValue } from './api.js';
+import { showAlert, showConfirm } from './dialogs.js';
 import { escapeAttr } from './grid.js';
 
 let lastActiveTemplateField = null;

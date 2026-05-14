@@ -1,5 +1,7 @@
 import { duplicateStatusLabelDefaults, duplicateStatusLabelFields, currentLibraryContextOrgId, setCurrentLibraryContextOrgId } from './state.js';
-import { showToast, showConfirm, markSettingsClean, authorizedJson } from './api.js';
+import { markSettingsClean } from './api.js';
+import { authorizedJson } from './http.js';
+import { showToast, showConfirm } from './dialogs.js';
 import { escapeAttr } from './grid.js';
 import { loadLibrarySettings } from './settings.js';
 

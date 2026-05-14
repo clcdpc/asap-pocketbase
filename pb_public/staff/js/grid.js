@@ -2,7 +2,9 @@ import { pb, gridContainer, staffGridFilterBar, tagFilterSelect, claimFilterSele
 import { openEdit, openPolarisSearch, polarisSearchValueForRow, renderPolarisSearchButtonMarkup } from './modals.js';
 import { openNewSuggestionForPatron } from './patron.js';
 import { undoRow, deleteClosedRequest, closeDuplicateRequest } from './actions.js';
-import { leapBibUrl, showToast, showAlert, isSuperAdminStaff, isAdminStaff, getSettingsSectionFromHash, closeOpenDialogs, activateSettingsSection, authorizedJson } from './api.js';
+import { leapBibUrl, isSuperAdminStaff, isAdminStaff, getSettingsSectionFromHash, activateSettingsSection } from './api.js';
+import { authorizedJson } from './http.js';
+import { showToast, showAlert, closeOpenDialogs } from './dialogs.js';
 import { showSettingsAccessDenied, hideSettingsAccessDenied, loadSettings } from './settings.js';
 import { loadAnalytics } from './analytics.js';
 import { renderNoteActivity } from './note-activity.js';

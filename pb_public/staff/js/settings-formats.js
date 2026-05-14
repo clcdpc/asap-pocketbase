@@ -1,6 +1,7 @@
 import { formatMap, availableFormats, setAvailableFormats, currentFormatClaimRules, setCurrentFormatClaimRules, formatClaimStaffOptions, currentLibraryContextOrgId } from './state.js';
 
-import { setInlineStatus, showConfirm, markSettingsDirty, showToast } from './api.js';
+import { setInlineStatus, markSettingsDirty } from './api.js';
+import { showConfirm, showToast } from './dialogs.js';
 import { escapeAttr } from './grid.js';
 import { renderPatronFormatRulesEditor, collectPatronFormatRules } from './settings-ui.js';
 

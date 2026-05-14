@@ -16,7 +16,8 @@ state.setCurrentStatus(requestedStatusFromUrl() || 'suggestion');
 initStaffApp();
 
 
-import { openProfileDialog, closeOpenDialogs, setFieldChecked, setFieldValue } from './api.js';
+import { openProfileDialog, setFieldChecked, setFieldValue } from './api.js';
+import { closeOpenDialogs } from './dialogs.js';
 import { updateRejectionTemplate, removeRejectionTemplate } from './settings-templates.js';
 
 window.closeOpenDialogs = closeOpenDialogs;

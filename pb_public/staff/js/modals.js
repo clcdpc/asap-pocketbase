@@ -1,5 +1,6 @@
 import { pb, formatMap, availableFormats, currentRejectionTemplates, currentStatus, currentSuggestions, allSuggestions, verifiedBibId, publicationOptions, setVerifiedBibId, workflowSettings } from './state.js';
-import { leapBibUrl, showToast, showAlert, showConfirm, openProfileDialog } from './api.js';
+import { leapBibUrl, openProfileDialog } from './api.js';
+import { showToast, showAlert, showConfirm } from './dialogs.js';
 import { loadTab, formatDateTime, renderWorkflowTags, escapeAttr } from './grid.js';
 import { setSelectValue, dateOnly, lookupEditBibById } from './settings-ui.js';
 

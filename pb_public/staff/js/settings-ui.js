@@ -1,5 +1,6 @@
 import { pb, formatMap, patronFormatKeys, patronFormatFields, defaultPatronFormatRules, currentSuggestions, publicationOptions, setPublicationOptions, defaultPublicationOptions, setVerifiedBibId } from './state.js';
-import { isValidSmtpHost, validateSmtpHostField, showToast, markSettingsDirty } from './api.js';
+import { isValidSmtpHost, validateSmtpHostField, markSettingsDirty } from './api.js';
+import { showToast } from './dialogs.js';
 import { escapeAttr } from './grid.js';
 
 export function optionIdFromLabel(label, fallback = 'option') {

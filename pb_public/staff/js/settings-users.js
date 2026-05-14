@@ -1,5 +1,7 @@
 import { pb, canAssignSuperAdmin, setCanAssignSuperAdmin, formatMap, availableFormats, currentFormatClaimRules, setCurrentFormatClaimRules, currentLibraryContextOrgId } from './state.js';
-import { setFieldValue, getFieldValue, showAlert, showConfirm, isSuperAdminStaff, authorizedJson, markSettingsDirty } from './api.js';
+import { setFieldValue, getFieldValue, isSuperAdminStaff, markSettingsDirty } from './api.js';
+import { authorizedJson } from './http.js';
+import { showAlert, showConfirm } from './dialogs.js';
 import { escapeAttr } from './grid.js';
 import { updateFormatClaimRuleState } from './settings-formats.js';
 

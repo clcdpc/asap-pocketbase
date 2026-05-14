@@ -2,6 +2,10 @@ import { pb, loginContainer, setupContainer, appContainer, loginForm, setupForm,
 import { loadTab, renderCurrentGrid, closeActionMenu, escapeAttr } from './grid.js';
 import { syncPolarisOrganizations } from './settings-polaris.js';
 import { loadSettings, checkSettingsDirty, handleLibraryContextSwitch, refreshLibrarySelectorIndicators } from './settings.js';
+import { authorizedJson } from './http.js';
+import { showToast, showAlert, showConfirm, closeOpenDialogs } from './dialogs.js';
+
+export { authorizedJson, showToast, showAlert, showConfirm, closeOpenDialogs };
 
 
 // --- DOM Field Helpers ---
@@ -152,92 +156,6 @@ export function setInlineStatus(id, message, type) {
 
 // --- In-page Toast / Dialog Helpers ---
 
-export function showToast(message, type = 'success') {
-  const container = document.getElementById('toast-container');
-  if (!container) return;
-  const toast = document.createElement('div');
-  toast.className = `asap-toast asap-toast-${type}`;
-  toast.textContent = message;
-  container.appendChild(toast);
-  requestAnimationFrame(() => toast.classList.add('show'));
-  setTimeout(() => {
-    toast.classList.remove('show');
-    setTimeout(() => toast.remove(), 300);
-  }, 3500);
-}
-
-export function showAlert(message) {
-  return new Promise(resolve => {
-    const dialog = document.getElementById('alert-dialog');
-    if (!dialog) return resolve();
-    const previousFocus = document.activeElement;
-    document.getElementById('alert-dialog-message').textContent = message;
-    const okBtn = document.getElementById('alert-dialog-ok');
-    let settled = false;
-    function cleanup() {
-      if (settled) return;
-      settled = true;
-      if (dialog.open) dialog.close();
-      okBtn.removeEventListener('click', onOk);
-      dialog.removeEventListener('cancel', onCancel);
-      if (previousFocus && typeof previousFocus.focus === 'function') {
-        previousFocus.focus();
-      }
-      resolve();
-    }
-    function onOk() {
-      cleanup();
-    }
-    function onCancel(event) {
-      event.preventDefault();
-      cleanup();
-    }
-    okBtn.addEventListener('click', onOk);
-    dialog.addEventListener('cancel', onCancel);
-    dialog.showModal();
-    okBtn.focus();
-  });
-}
-
-export function showConfirm(titleOrMessage, maybeMessage) {
-  return new Promise(resolve => {
-    const dialog = document.getElementById('confirm-dialog');
-    if (!dialog) return resolve(false);
-    const previousFocus = document.activeElement;
-    const message = maybeMessage || titleOrMessage;
-    const title = maybeMessage ? titleOrMessage : 'Confirm action';
-    const titleEl = document.getElementById('confirm-dialog-title');
-    if (titleEl) titleEl.textContent = title;
-    document.getElementById('confirm-dialog-message').textContent = message;
-    const okBtn = document.getElementById('confirm-dialog-ok');
-    const cancelBtn = document.getElementById('confirm-dialog-cancel');
-    let settled = false;
-    function cleanup(result) {
-      if (settled) return;
-      settled = true;
-      if (dialog.open) dialog.close();
-      okBtn.removeEventListener('click', onOk);
-      cancelBtn.removeEventListener('click', onCancel);
-      dialog.removeEventListener('cancel', onDialogCancel);
-      if (previousFocus && typeof previousFocus.focus === 'function') {
-        previousFocus.focus();
-      }
-      resolve(result);
-    }
-    function onOk() { cleanup(true); }
-    function onCancel() { cleanup(false); }
-    function onDialogCancel(event) {
-      event.preventDefault();
-      cleanup(false);
-    }
-    okBtn.addEventListener('click', onOk);
-    cancelBtn.addEventListener('click', onCancel);
-    dialog.addEventListener('cancel', onDialogCancel);
-    dialog.showModal();
-    cancelBtn.focus();
-  });
-}
-
 export function staffRole() {
   return pb.authStore.model ? String(pb.authStore.model.role || '').toLowerCase() : '';
 }
@@ -269,14 +187,6 @@ export function updateSettingsSaveBarVisibility() {
   const bar = document.querySelector('.settings-save-bar');
   if (!bar) return;
   bar.classList.toggle('hidden', currentStatus !== 'settings');
-}
-
-export function closeOpenDialogs() {
-  document.querySelectorAll('dialog[open]').forEach(dialog => {
-    try {
-      dialog.close();
-    } catch (err) {}
-  });
 }
 
 export function activateStatusTab(status) {
@@ -634,34 +544,10 @@ export async function postPolarisTest(url, resultEl, payload, options = {}) {
   }
 }
 
-export async function authorizedJson(path, options = {}) {
-  const headers = { ...(options.headers || {}) };
-  if (pb.authStore.token) {
-    headers.Authorization = pb.authStore.token;
-  }
-  const method = (options.method || 'GET').toUpperCase();
-  if (options.json !== false && (options.body || (method !== 'GET' && method !== 'HEAD'))) {
-    headers['Content-Type'] = 'application/json';
-  }
-
-  const res = await fetch(path, {
-    method: options.method || 'GET',
-    headers,
-    body: options.body,
-    cache: options.cache || 'default'
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const err = new Error(data.message || 'Request failed.');
-    err.status = res.status;
-    throw err;
-  }
-  return data;
-}
-
 export function updateAutoRejectEmailControls() {
   const enabled = getFieldChecked('outstanding-timeout-enabled');
   const sendEmail = getFieldChecked('outstanding-timeout-send-email');
+
   const additionalTemplates = currentRejectionTemplates || [];
   const wrapper = document.getElementById('auto-reject-email-wrapper');
   const templateWrapper = document.getElementById('auto-reject-template-wrapper');

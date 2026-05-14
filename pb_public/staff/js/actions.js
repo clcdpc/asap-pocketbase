@@ -1,5 +1,7 @@
 import { pb, currentStatus, currentSuggestions, allSuggestions } from './state.js';
-import { showToast, showAlert, showConfirm, isAdminStaff, authorizedJson } from './api.js';
+import { isAdminStaff } from './api.js';
+import { authorizedJson } from './http.js';
+import { showToast, showAlert, showConfirm } from './dialogs.js';
 import { loadTab, escapeAttr } from './grid.js';
 
 export async function undoRow(id) {
