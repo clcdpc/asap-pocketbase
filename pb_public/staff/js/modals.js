@@ -883,7 +883,7 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
   }
 
   try {
-    const res = await fetch(`/api/asap/staff/title-requests/${id}/action`, {
+    const res = await fetch(`/api/asap/staff/title-requests/${encodeURIComponent(id)}/action`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -892,8 +892,13 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
       body: JSON.stringify(payload)
     });
     if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.message || 'Error updating suggestion');
+      const raw = await res.text().catch(() => '');
+      let data = {};
+      try {
+        data = raw ? JSON.parse(raw) : {};
+      } catch (parseErr) { }
+      const detail = data.message || raw.trim();
+      throw new Error(detail ? `Error updating suggestion (${res.status}): ${detail}` : `Error updating suggestion (${res.status})`);
     }
     const updatedRecord = await res.json().catch(() => ({}));
     document.getElementById('editModal').close();

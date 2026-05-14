@@ -1381,6 +1381,8 @@ code {
   background: #f8f9fa;
   border-radius: 0 0 8px 8px;
   display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
   justify-content: flex-end;
   flex-shrink: 0;
 }
@@ -1408,6 +1410,8 @@ code {
   min-width: 0;
   padding: 8px 10px;
   text-align: left;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .asap-dialog-actions {

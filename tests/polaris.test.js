@@ -202,7 +202,32 @@ try {
   failed++;
 }
 
-// Test 5c: holdability summary requires at least one holdable row
+// Test 5c: placeHold legacy boolean true must not create a hold
+try {
+  let calls = 0;
+  global.$http.send = function(args) {
+    calls++;
+    return { statusCode: 200, json: { StatusType: 3, StatusValue: 0, RequestGUID: "rg1" } };
+  };
+
+  assert.throws(
+    () => polaris.placeHold(null, 123, 456, true),
+    /test mode is not supported/
+  );
+  assert.strictEqual(calls, 0);
+  global.$http.send = function(args) {
+    httpSendArgs = args;
+    return httpSendResult;
+  };
+
+  console.log('✅ Test case 5c (legacy placeHold test mode is blocked) passed');
+  passed++;
+} catch (err) {
+  console.error('❌ Test case 5c failed:', err.stack);
+  failed++;
+}
+
+// Test 5d: holdability summary requires at least one holdable row
 try {
   let result = polaris.summarizeHoldability([
     { Barcode: "1", ItemsTotal: 1, ItemsIn: 0, Holdable: false },
@@ -214,10 +239,10 @@ try {
     { Barcode: "3", ItemsTotal: 1, ItemsIn: 0, Holdable: "true" }
   ]);
   assert.strictEqual(result.hasHoldableItems, true);
-  console.log('✅ Test case 5c (holdability summary) passed');
+  console.log('✅ Test case 5d (holdability summary) passed');
   passed++;
 } catch (err) {
-  console.error('❌ Test case 5c failed:', err.stack);
+  console.error('❌ Test case 5d failed:', err.stack);
   failed++;
 }
 
@@ -317,6 +342,67 @@ try {
   passed++;
 } catch (err) {
   console.error('❌ Test case 8 failed:', err.stack);
+  failed++;
+}
+
+// Test 9: BIB details never use MARC 830 series title as main title
+try {
+  httpSendResult = {
+    statusCode: 200,
+    json: {
+      BibGetRows: [
+        { ElementID: 830, Label: "Title:", Value: "--For dummies." },
+        { ElementID: 35, Label: "Title:", Value: "QuickBooks desktop all-in-one" },
+        { ElementID: 18, Label: "Author:", Value: "Nelson, Stephen L., 1959- author." }
+      ]
+    }
+  };
+
+  const result = polaris.getBib({ AccessToken: "mock_token", AccessSecret: "mock_secret" }, "4271674");
+
+  assert.strictEqual(result.title, "QuickBooks desktop all-in-one");
+  assert.strictEqual(result.author, "Nelson, Stephen L., 1959- author.");
+  assert.strictEqual(result.series, "--For dummies.");
+
+  console.log('✅ Test case 9 (MARC 830 is series, not title) passed');
+  passed++;
+} catch (err) {
+  console.error('❌ Test case 9 failed:', err.stack);
+  failed++;
+}
+
+// Test 10: reconcile uses selected search title when detail title is unusable
+try {
+  httpSendResult = {
+    statusCode: 200,
+    json: {
+      BibGetRows: [
+        { ElementID: 830, Label: "Title:", Value: "--For dummies." },
+        { ElementID: 18, Label: "Author:", Value: "Nelson, Stephen L., 1959- author." }
+      ]
+    }
+  };
+
+  const data = { title: "Computer", author: "Old Author" };
+  const record = {
+    get: (key) => data[key],
+    set: (key, value) => { data[key] = value; }
+  };
+  polaris.reconcileRecord(
+    { logger: () => ({ warn: () => {} }) },
+    { AccessToken: "mock_token", AccessSecret: "mock_secret" },
+    record,
+    "4271674",
+    { bibId: "4271674", title: "QuickBooks desktop all-in-one" }
+  );
+
+  assert.strictEqual(data.title, "QuickBooks desktop all-in-one (Computer)");
+  assert.strictEqual(data.author, "Nelson, Stephen L., 1959- author. (Old Author)");
+
+  console.log('✅ Test case 10 (selected title fallback during reconcile) passed');
+  passed++;
+} catch (err) {
+  console.error('❌ Test case 10 failed:', err.stack);
   failed++;
 }
 

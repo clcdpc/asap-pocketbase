@@ -376,6 +376,43 @@ try {
   failed++;
 }
 
+// Test 12: search row prefers display title over 830-ish title field
+try {
+  httpSendResult = {
+    statusCode: 200,
+    throwError: false,
+    json: {
+      TotalRecordsFound: 1,
+      BibSearchRows: [
+        {
+          Title: "--For dummies.",
+          DisplayTitle: "QuickBooks desktop all-in-one",
+          Author: "Nelson, Stephen L., 1959- author.",
+          PublicationDate: "2026",
+          Description: "xv, 590 pages : illustrations ; 24 cm",
+          ISBN: "9781394368853",
+          ControlNumber: "4271674"
+        }
+      ]
+    }
+  };
+
+  const staff = { AccessToken: "mock_token", AccessSecret: "mock_secret" };
+  const result = polaris.searchBibs(staff, { mode: "title", query: "QuickBooks desktop all-in-one", limit: 10 });
+
+  assert.strictEqual(result.results.length, 1);
+  assert.strictEqual(result.results[0].title, "QuickBooks desktop all-in-one");
+  assert.strictEqual(result.results[0].format, "");
+  assert.strictEqual(result.results[0].physicalDescription, "xv, 590 pages : illustrations ; 24 cm");
+  assert.strictEqual(result.results[0].bibId, "4271674");
+
+  console.log('✅ Test case 12 (DisplayTitle beats 830-ish Title) passed');
+  passed++;
+} catch (err) {
+  console.error('❌ Test case 12 failed:', err.stack);
+  failed++;
+}
+
 console.log(`\nTests finished: ${passed} passed, ${failed} failed.`);
 
 if (failed > 0) {
