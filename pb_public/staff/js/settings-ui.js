@@ -703,10 +703,27 @@ function mergeCatalogValue(catalogValue, oldValue) {
   return `${catalog} (${old})`;
 }
 
+function setHiddenEditValue(id, value) {
+  let input = document.getElementById(id);
+  if (!input) {
+    const editForm = document.getElementById('edit-form') || document.getElementById('editForm');
+    if (!editForm) return;
+    input = document.createElement('input');
+    input.type = 'hidden';
+    input.id = id;
+    input.name = id;
+    editForm.appendChild(input);
+  }
+  input.value = String(value || '').trim();
+}
+
 export function applySelectedPolarisResultToEditForm(result = {}) {
   const bibId = String(result.bibId || '').trim();
   const title = String(result.title || '').trim();
   const author = String(result.author || '').trim();
+  const identifier = String(result.identifier || '').trim();
+  const publication = String(result.publication || '').trim();
+  const format = String(result.format || '').trim();
 
   const bibInput = document.getElementById('edit-bibid');
   const titleInput = document.getElementById('edit-title');
@@ -726,6 +743,13 @@ export function applySelectedPolarisResultToEditForm(result = {}) {
   if (authorInput && author) {
     authorInput.value = mergeCatalogValue(author, authorInput.value);
   }
+
+  setHiddenEditValue('selectedPolarisBibId', bibId);
+  setHiddenEditValue('selectedPolarisTitle', title);
+  setHiddenEditValue('selectedPolarisAuthor', author);
+  setHiddenEditValue('selectedPolarisIdentifier', identifier);
+  setHiddenEditValue('selectedPolarisPublication', publication);
+  setHiddenEditValue('selectedPolarisFormat', format);
 
   if (display && text) {
     display.classList.remove('hidden', 'alert-danger', 'alert-warning');

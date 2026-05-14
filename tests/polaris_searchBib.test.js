@@ -310,6 +310,7 @@ try {
     author: "First Author",
     publication: "2026",
     format: "Book",
+    physicalDescription: "",
     identifier: ""
   });
   assert.ok(httpSendArgs.url.includes("q=first%20title"));
@@ -335,6 +336,43 @@ try {
   passed++;
 } catch (err) {
   console.error('❌ Test case 10 failed:', err.stack);
+  failed++;
+}
+
+// Test 11: search row keeps Description out of format
+try {
+  httpSendResult = {
+    statusCode: 200,
+    throwError: false,
+    json: {
+      TotalRecordsFound: 1,
+      BibSearchRows: [
+        {
+          Title: "Green is all around me!",
+          Author: "Connors, Kathleen, author.",
+          PublicationDate: "2026",
+          Description: "pages cm.",
+          ISBN: "9781482469578",
+          ControlNumber: "4230422",
+          TypeOfMaterial: "Book"
+        }
+      ]
+    }
+  };
+
+  const staff = { AccessToken: "mock_token", AccessSecret: "mock_secret" };
+  const result = polaris.searchBibs(staff, { mode: "title", query: "Green is all around me", limit: 10 });
+
+  assert.strictEqual(result.results.length, 1);
+  assert.strictEqual(result.results[0].title, "Green is all around me!");
+  assert.strictEqual(result.results[0].format, "Book");
+  assert.strictEqual(result.results[0].physicalDescription, "pages cm.");
+  assert.strictEqual(result.results[0].bibId, "4230422");
+
+  console.log('✅ Test case 11 (Description is physical description, not format) passed');
+  passed++;
+} catch (err) {
+  console.error('❌ Test case 11 failed:', err.stack);
   failed++;
 }
 

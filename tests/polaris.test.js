@@ -180,6 +180,47 @@ try {
   failed++;
 }
 
+// Test 5b: placeHold does not auto-reply to StatusValue 6
+try {
+  let calls = [];
+  global.$http.send = function(args) {
+    calls.push(args);
+    return { statusCode: 200, json: { StatusType: 3, StatusValue: 6, RequestGUID: "rg1" } };
+  };
+  const result = polaris.placeHold(null, 123, 456);
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.statusValue, 6);
+  assert.strictEqual(calls.length, 1);
+  global.$http.send = function(args) {
+    httpSendArgs = args;
+    return httpSendResult;
+  };
+  console.log('✅ Test case 5b (placeHold does not auto-reply to no-items conditional) passed');
+  passed++;
+} catch (err) {
+  console.error('❌ Test case 5b failed:', err.stack);
+  failed++;
+}
+
+// Test 5c: holdability summary requires at least one holdable row
+try {
+  let result = polaris.summarizeHoldability([
+    { Barcode: "1", ItemsTotal: 1, ItemsIn: 0, Holdable: false },
+    { Barcode: "2", ItemsTotal: 1, ItemsIn: 1, Holdable: "false" }
+  ]);
+  assert.strictEqual(result.hasHoldableItems, false);
+
+  result = polaris.summarizeHoldability([
+    { Barcode: "3", ItemsTotal: 1, ItemsIn: 0, Holdable: "true" }
+  ]);
+  assert.strictEqual(result.hasHoldableItems, true);
+  console.log('✅ Test case 5c (holdability summary) passed');
+  passed++;
+} catch (err) {
+  console.error('❌ Test case 5c failed:', err.stack);
+  failed++;
+}
+
 // Test 6: patron name search builds protected PATNF query and normalizes rows
 try {
   httpSendResult = {
@@ -248,6 +289,34 @@ try {
   passed++;
 } catch (err) {
   console.error('❌ Test case 7 failed:', err.stack);
+  failed++;
+}
+
+// Test 8: BIB details map title and series from correct ElementIDs
+try {
+  httpSendResult = {
+    statusCode: 200,
+    json: {
+      BibGetRows: [
+        { ElementID: 35, Label: "Title:", Value: "Green is all around me! / Kathleen Connors." },
+        { ElementID: 18, Label: "Author:", Value: "Connors, Kathleen, author." },
+        { ElementID: 19, Label: "Series:", Value: "Colors in my world" },
+        { ElementID: 3, Label: "Description:", Value: "pages cm." }
+      ]
+    }
+  };
+
+  const result = polaris.getBib({ AccessToken: "mock_token", AccessSecret: "mock_secret" }, "4230422");
+
+  assert.strictEqual(result.title, "Green is all around me! / Kathleen Connors.");
+  assert.strictEqual(result.author, "Connors, Kathleen, author.");
+  assert.strictEqual(result.series, "Colors in my world");
+  assert.strictEqual(result.description, "pages cm.");
+
+  console.log('✅ Test case 8 (BIB detail title/series parsing) passed');
+  passed++;
+} catch (err) {
+  console.error('❌ Test case 8 failed:', err.stack);
   failed++;
 }
 

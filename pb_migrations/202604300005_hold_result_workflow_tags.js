@@ -56,6 +56,7 @@ migrate((app) => {
     { code: "Multiple Polaris matches", label: "Multiple Polaris matches", description: "Identifier lookup found more than one Polaris bibliographic record." },
     { code: "Hold placed", label: "Hold placed", description: "Polaris hold placement succeeded." },
     { code: "Hold exists (same patron)", label: "Hold exists (same patron)", description: "Polaris reported an existing duplicate hold request for this patron." },
+    { code: "No holdable items", label: "No holdable items", description: "Polaris BIB exists, but no attached item is currently holdable for automatic hold placement." },
     { code: "Hold failed: patron", label: "Hold failed: patron", description: "Polaris hold placement failed because of patron data." },
     { code: "Hold failed: bib", label: "Hold failed: bib", description: "Polaris hold placement failed because of bibliographic record data." },
     { code: "Hold failed: pickup", label: "Hold failed: pickup", description: "Polaris hold placement failed because of pickup settings." },

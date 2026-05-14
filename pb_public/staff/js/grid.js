@@ -368,6 +368,10 @@ export const flagDisplayMap = {
     label: 'Patron already has hold',
     className: 'flag-success'
   },
+  'No holdable items': {
+    label: 'No holdable items',
+    className: 'flag-warning'
+  },
   'Hold placed': {
     label: 'Hold placed',
     className: 'flag-success'

@@ -617,6 +617,7 @@ migrate((app) => {
     { id: "tagmultmatch001", code: "Multiple Polaris matches", label: "Multiple Polaris matches", description: "Identifier lookup found more than one Polaris bibliographic record." },
     { id: "tagholdplaced01", code: "Hold placed", label: "Hold placed", description: "Polaris hold placement succeeded." },
     { id: "tagexistshold01", code: "Hold exists (same patron)", label: "Hold exists (same patron)", description: "Polaris reported an existing duplicate hold request for this patron." },
+    { id: "tagnoholditems1", code: "No holdable items", label: "No holdable items", description: "Polaris BIB exists, but no attached item is currently holdable for automatic hold placement." },
     { id: "tagfailpatron01", code: "Hold failed: patron", label: "Hold failed: patron", description: "Polaris hold placement failed because of patron data." },
     { id: "tagfailbib00001", code: "Hold failed: bib", label: "Hold failed: bib", description: "Polaris hold placement failed because of bibliographic record data." },
     { id: "tagfailpickup01", code: "Hold failed: pickup", label: "Hold failed: pickup", description: "Polaris hold placement failed because of pickup settings." },

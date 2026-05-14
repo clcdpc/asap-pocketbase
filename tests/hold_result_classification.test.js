@@ -11,8 +11,9 @@ function runTests() {
   assert.ok(result.note.includes('existing duplicate hold request'));
 
   result = jobs.classifyPolarisHoldResult({ ok: false, statusValue: 6, payload: {} });
-  assert.strictEqual(result.ok, true);
-  assert.strictEqual(result.tag, 'Hold exists (same patron)');
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(result.tag, 'No holdable items');
+  assert.ok(result.note.includes('no items linked'));
 
   result = jobs.classifyPolarisHoldResult({ ok: false, statusValue: -4006, payload: {} });
   assert.strictEqual(result.ok, false);

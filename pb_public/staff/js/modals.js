@@ -863,6 +863,12 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
     format: nextFormatValue,
     publication: document.getElementById('edit-publication').value,
     exactPublicationDate: document.getElementById('edit-exact-publication-date').value,
+    selectedPolarisBibId: document.getElementById('selectedPolarisBibId')?.value || '',
+    selectedPolarisTitle: document.getElementById('selectedPolarisTitle')?.value || '',
+    selectedPolarisAuthor: document.getElementById('selectedPolarisAuthor')?.value || '',
+    selectedPolarisIdentifier: document.getElementById('selectedPolarisIdentifier')?.value || '',
+    selectedPolarisPublication: document.getElementById('selectedPolarisPublication')?.value || '',
+    selectedPolarisFormat: document.getElementById('selectedPolarisFormat')?.value || '',
     notes: getDraftCommentValue(),
     autohold: document.getElementById('edit-autohold').checked,
     editedBy: pb.authStore.model.username
