@@ -566,24 +566,29 @@ function polarisSearchElements() {
 }
 
 async function fetchPolarisSearch(row, mode, query, options) {
+  const payload = {
+    mode,
+    query: query,
+    title: options?.title || '',
+    author: options?.author || '',
+    requestId: row.id || ''
+  };
+  if (options?.bibId) {
+    payload.bibId = options.bibId;
+  }
   const res = await fetch('/api/asap/staff/bib-lookup', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': pb.authStore.token
     },
-    body: JSON.stringify({
-      mode,
-      query: query,
-      title: options?.title || '',
-      author: options?.author || '',
-      requestId: row.id || ''
-    })
+    body: JSON.stringify(payload)
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.message || 'Polaris search failed');
   return data;
 }
+
 
 function renderPolarisSearchResults(row, mode, data, options = {}) {
   const els = polarisSearchElements();
@@ -619,58 +624,138 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
       metaDiv.textContent = meta;
       div.appendChild(metaDiv);
     }
+
+    // Holdings/Ownership Badge Container
+    const holdingsDiv = document.createElement('div');
+    holdingsDiv.className = 'polaris-holdings-container';
+    const holdingsLoading = document.createElement('span');
+    holdingsLoading.className = 'text-muted small italic';
+    holdingsLoading.textContent = 'Checking ownership...';
+    holdingsDiv.appendChild(holdingsLoading);
+    div.appendChild(holdingsDiv);
     
     const actionsDiv = document.createElement('div');
     actionsDiv.className = 'polaris-search-result-actions';
-    
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'btn btn-sm btn-primary polaris-search-select';
-    btn.setAttribute('data-result-index', index);
-    if (!result.bibId) btn.disabled = true;
-    btn.setAttribute('aria-label', `Use Polaris BIB ${result.bibId || ''} for this request`);
-    btn.textContent = 'Use this BIB';
-    
-    btn.addEventListener('click', async () => {
-      if (!result.bibId) return;
-      els.dialog.close();
-      if (options.source === 'edit') {
-        const editModal = document.getElementById('editModal');
-        if (editModal && !editModal.open) {
-          editModal.showModal();
-        }
 
-        applySelectedPolarisResultToEditForm(result);
+    // Helper for building action payload
+    const buildPayload = (nextStatus, action) => {
+      return {
+        action: action,
+        status: nextStatus,
+        title: result.title || row.title,
+        author: result.author || row.author,
+        identifier: result.identifier || row.identifier,
+        bibid: result.bibId,
+        format: result.format || row.format,
+        publication: result.publication || row.publication,
+        exactPublicationDate: row.exactPublicationDate || '',
+        selectedPolarisBibId: result.bibId,
+        selectedPolarisTitle: result.title,
+        selectedPolarisAuthor: result.author,
+        selectedPolarisIdentifier: result.identifier,
+        selectedPolarisPublication: result.publication,
+        selectedPolarisFormat: result.format,
+        notes: '', 
+        autohold: row.autohold !== false,
+        editedBy: pb.authStore.model.username
+      };
+    };
 
-        const bibInput = document.getElementById('edit-bibid');
-        if (bibInput) bibInput.focus();
-
-        showToast('Polaris BIB applied to the edit form.', 'success');
-        return;
-      }
-
-      const shouldPromoteToPendingHold =
-        String(row.status || currentStatus || '') === 'suggestion' &&
-        !!result.bibId;
-
-      openEdit(
-        row.id,
-        shouldPromoteToPendingHold ? 'pending_hold' : (row.status || currentStatus),
-        shouldPromoteToPendingHold ? 'Ready for hold' : 'Edit suggestion',
-        shouldPromoteToPendingHold ? 'catalogFound' : '',
-        shouldPromoteToPendingHold ? 'Move to Pending hold' : 'Save'
-      );
-      applySelectedPolarisResultToEditForm(result);
-      if (shouldPromoteToPendingHold) {
-        showToast('Polaris BIB applied. Save to move this request to Pending hold.', 'success');
-      }
+    // "Use & Place Hold" Button
+    const holdBtn = document.createElement('button');
+    holdBtn.type = 'button';
+    holdBtn.className = 'btn btn-sm btn-success';
+    holdBtn.textContent = 'Use & Place Hold';
+    holdBtn.disabled = true; // Disabled until holdings check confirms holdable
+    holdBtn.addEventListener('click', async () => {
+      const payload = buildPayload('pending_hold', 'catalogFound');
+      await performImmediateStaffAction(row.id, payload);
     });
+
+    // "Use & Purchase" Button
+    const purchaseBtn = document.createElement('button');
+    purchaseBtn.type = 'button';
+    purchaseBtn.className = 'btn btn-sm btn-primary';
+    purchaseBtn.textContent = 'Use & Purchase';
+    if (!result.bibId) purchaseBtn.disabled = true;
+    purchaseBtn.addEventListener('click', async () => {
+      const payload = buildPayload('outstanding_purchase', 'purchase');
+      await performImmediateStaffAction(row.id, payload);
+    });
+
+    // Background Holdings Check
+    if (result.bibId) {
+      fetchPolarisSearch(row, 'identifier', '', { bibId: result.bibId })
+        .then(details => {
+          holdingsDiv.replaceChildren();
+          const summary = details.holdingsSummary || {};
+          
+          if (summary.myLibraryCount > 0) {
+            const myBadge = document.createElement('span');
+            myBadge.className = 'polaris-badge polaris-badge-success';
+            myBadge.textContent = `Owned by you (${summary.myLibraryCount})`;
+            holdingsDiv.appendChild(myBadge);
+          }
+
+          if (summary.otherLibraryCount > 0) {
+            const otherBadge = document.createElement('span');
+            otherBadge.className = 'polaris-badge polaris-badge-info';
+            otherBadge.textContent = `Owned by others (${summary.otherLibraryCount})`;
+            holdingsDiv.appendChild(otherBadge);
+          }
+
+          if (summary.isHoldable) {
+            holdBtn.disabled = false;
+            if (summary.myLibraryCount > 0) {
+              holdBtn.classList.add('font-weight-bold');
+              holdBtn.innerHTML = '<i class="fa fa-check mr-1"></i> Use & Place Hold';
+            }
+          } else if (result.bibId) {
+            const warn = document.createElement('span');
+            warn.className = 'polaris-warning';
+            warn.innerHTML = '<i class="fa fa-exclamation-triangle"></i> Not Holdable';
+            holdingsDiv.appendChild(warn);
+          }
+
+          if (summary.myLibraryCount === 0 && summary.otherLibraryCount === 0) {
+            const none = document.createElement('span');
+            none.className = 'text-muted small';
+            none.textContent = 'No copies found in consortium.';
+            holdingsDiv.appendChild(none);
+          }
+        })
+        .catch(err => {
+          holdingsDiv.replaceChildren();
+          const error = document.createElement('span');
+          error.className = 'text-danger small';
+          error.textContent = 'Holdings check failed.';
+          holdingsDiv.appendChild(error);
+        });
+    }
+
+    actionsDiv.appendChild(holdBtn);
+
+    actionsDiv.appendChild(purchaseBtn);
     
-    actionsDiv.appendChild(btn);
+    // Fallback: Legacy "Apply to Form" for when launched from Edit modal
+    if (options.source === 'edit') {
+      const applyBtn = document.createElement('button');
+      applyBtn.type = 'button';
+      applyBtn.className = 'btn btn-sm btn-outline-secondary';
+      applyBtn.textContent = 'Apply to Edit Form';
+      applyBtn.addEventListener('click', () => {
+        applySelectedPolarisResultToEditForm(result);
+        els.dialog.close();
+        showToast('Polaris details applied to form.', 'success');
+      });
+      actionsDiv.appendChild(applyBtn);
+    }
+
     div.appendChild(actionsDiv);
     els.results.appendChild(div);
   });
 }
+
 
 export async function openPolarisSearch(row, mode, options = {}) {
   if (!row) return;
@@ -982,3 +1067,68 @@ export function setBibIdRequirement(nextStatus) {
       : 'Needed to link this request to a catalog record.';
   }
 }
+
+async function performImmediateStaffAction(id, payload) {
+  try {
+    const res = await fetch(`/api/asap/staff/title-requests/${encodeURIComponent(id)}/action`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': pb.authStore.token
+      },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const raw = await res.text().catch(() => '');
+      let data = {};
+      try { data = raw ? JSON.parse(raw) : {}; } catch (e) {}
+      throw new Error(actionErrorMessage(res.status, data, raw));
+    }
+    const updatedRecord = await res.json().catch(() => ({}));
+    
+    // Close search dialog
+    const searchDialog = document.getElementById('polarisSearchDialog');
+    if (searchDialog) searchDialog.close();
+    
+    // Close edit modal if open
+    const editModal = document.getElementById('editModal');
+    if (editModal) editModal.close();
+
+    const actionValue = payload.action;
+    const nextStatus = payload.status;
+    const reminder = updatedRecord && updatedRecord.purchaseReminderEmail;
+    
+    if (actionValue === 'purchase') {
+      if (reminder && reminder.requested && reminder.sent) {
+        showToast('Purchase saved and reminder email sent.', 'success');
+      } else {
+        showToast('Purchase saved.', 'success');
+      }
+    } else if (nextStatus === 'pending_hold') {
+      showToast('Request moved to Ready for hold.', 'success');
+    } else {
+      showToast('Suggestion updated.', 'success');
+    }
+
+    if (updatedRecord && updatedRecord.status && updatedRecord.status !== nextStatus) {
+      const statusNames = {
+        'outstanding_purchase': 'Pending purchase',
+        'pending_hold': 'Pending hold',
+        'hold_placed': 'Hold placed',
+        'closed': 'Closed'
+      };
+      let reason = 'it was detected as already being on hold or having a BIB ID';
+      if (updatedRecord.status === 'closed' && updatedRecord.closeReason === 'purchased_no_hold') {
+        reason = 'the patron has opted out of automatic hold placement';
+      } else if (updatedRecord.status === 'closed' && updatedRecord.closeReason === 'duplicate_hold') {
+        reason = 'a duplicate hold or request was detected for this patron';
+      }
+      await showAlert(`Note: This suggestion moved directly to "${statusNames[updatedRecord.status] || updatedRecord.status}" because ${reason}.`);
+    }
+
+    if (typeof loadTab === 'function') loadTab(currentStatus);
+  } catch (err) {
+    await showAlert(err.message || 'Error updating suggestion');
+  }
+}
+
