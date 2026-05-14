@@ -1,3 +1,13 @@
+/*
+ * Staff Stylesheet Map
+ * 1 tokens; 2 base; 3 header; 4 grid controls; 5 analytics; 6 filters/badges/tables;
+ * 7 staff grid; 8 app shell; 9 settings; 10 row actions; 11 responsive;
+ * 12 Bootstrap overrides; 13 toasts; 14 dialogs; 15 edit content; 16 notes;
+ * 17 dialog footers; 18 format/library tables; 19 workflow tags; 20 Polaris search;
+ * 21 option editors; 22 accordions; 23 templates; 24 focus/hardening.
+ */
+
+/* 1. Design Tokens */
 :root {
   /* Colors */
   --asap-color-primary: #007bff;
@@ -39,6 +49,7 @@
   --asap-shadow-interactive: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
 
+/* 2. Base Layout */
 body {
   padding: 20px;
   font-family: var(--asap-font-main);
@@ -49,6 +60,7 @@ body {
   display: none !important;
 }
 
+/* 3. Staff Header */
 .header-bar {
   display: flex;
   align-items: center;
@@ -78,6 +90,7 @@ body {
   font-size: 0.9rem;
 }
 
+/* 4. Grid Controls */
 #admin-actions-bar {
   display: flex;
   flex-shrink: 0;
@@ -154,6 +167,7 @@ body {
   display: none !important;
 }
 
+/* 5. Analytics */
 .analytics-shell {
   display: flex;
   flex-direction: column;
@@ -275,6 +289,7 @@ body {
   white-space: nowrap;
 }
 
+/* 6. Filters, Badges, and Staff Access Tables */
 #tag-filter,
 #claim-filter,
 #similar-request-filter {
@@ -472,6 +487,7 @@ body {
   font-size: 90%;
 }
 
+/* 7. Staff Grid */
 .table-responsive {
   position: relative;
   overflow-x: auto;
@@ -599,6 +615,7 @@ body {
   background: #c7dfff;
 }
 
+/* 8. Authentication and App Shell */
 #login-container,
 #setup-container {
   max-width: 560px;
@@ -616,6 +633,7 @@ body {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 
+/* 9. Settings Layout */
 .settings-shell {
   display: flex;
   gap: 24px;
@@ -763,6 +781,7 @@ body {
   justify-content: flex-end;
 }
 
+/* 10. Row Actions */
 .row-action-group {
   display: inline-flex;
   align-items: stretch;
@@ -832,6 +851,7 @@ body {
   margin: 0;
 }
 
+/* 11. Responsive Layout */
 @media (max-width: 900px) {
   .analytics-header {
     flex-direction: column;
@@ -895,6 +915,7 @@ body {
   }
 }
 
+/* 12. Bootstrap Overrides and Utilities */
 #logout-btn {
   color: var(--asap-color-primary-dark);
   font-weight: 600;
@@ -982,6 +1003,7 @@ code {
   font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
+/* 13. Toasts */
 #toast-container {
   position: fixed;
   top: 20px;
@@ -1037,6 +1059,7 @@ code {
   color: var(--asap-color-warning-text);
 }
 
+/* 14. Dialog Shells */
 .asap-dialog {
   padding: 0;
   border: none;
@@ -1157,6 +1180,7 @@ code {
   min-height: 0;
 }
 
+/* 15. Edit Dialog Content */
 /* Compact edit-modal density overrides */
 .asap-dialog-edit-body .form-group > label {
   margin-bottom: 2px;
@@ -1254,6 +1278,7 @@ code {
   display: block;
 }
 
+/* 16. Notes and Activity */
 .asap-dialog-note-content {
   padding: 18px 20px 20px;
   font-size: 14px;
@@ -1365,6 +1390,7 @@ code {
   padding-right: 0;
 }
 
+/* 17. Dialog Footers and Messages */
 .asap-dialog-footer {
   padding: 10px 15px;
   border-top: 1px solid #ddd;
@@ -1440,6 +1466,7 @@ code {
   line-height: 1.1;
 }
 
+/* 18. Format and Library Tables */
 .rejection-template-remove {
   top: 10px;
   right: 10px;
@@ -1494,6 +1521,7 @@ code {
   margin: 0 0 var(--asap-font-size-body);
 }
 
+/* 19. Workflow Tags and Duplicate Details */
 .workflow-tag-list {
   display: flex;
   flex-wrap: wrap;
@@ -1627,6 +1655,7 @@ code {
   border-style: dashed;
 }
 
+/* 20. Searchable Cells and Polaris Search */
 .searchable-cell {
   align-items: flex-start;
   display: flex;
@@ -1738,7 +1767,9 @@ code {
 .asap-dialog-polaris-search {
   max-width: 760px;
   width: min(760px, calc(100vw - 2rem));
-}.polaris-search-results {
+}
+
+.polaris-search-results {
   display: grid;
   gap: 0.75rem;
 }
@@ -1824,9 +1855,7 @@ code {
   padding-top: 0.25rem;
 }
 
-}
-
-
+/* 21. Option List Editors */
 .option-list-editor {
   display: grid;
   gap: 0.5rem;
@@ -1910,7 +1939,7 @@ code {
   min-width: 2rem;
 }
 
-/* ASAP Accordion Styles */
+/* 22. Accordions */
 .asap-accordion {
   border: 1px solid var(--asap-color-border);
   border-radius: var(--asap-radius-lg);
@@ -2076,7 +2105,7 @@ code {
   max-width: 720px;
 }
 
-/* Template Editor Enhancements */
+/* 23. Template Editor */
 .template-editor-textarea {
   min-height: 250px;
   max-height: 500px;
@@ -2154,6 +2183,7 @@ code {
   margin-top: 1rem;
 }
 
+/* 24. Focus and Hardening */
 /* Global Focus States */
 :focus-visible {
   outline: 3px solid var(--asap-color-primary);
