@@ -125,42 +125,30 @@
 ---
 
 ### Phase 7: Refine Auto-Claims Scoping and Staff Management
-**Status**: ⬜ Not Started
+**Status**: ✅ Complete
 **Objective**: Remove auto-claim settings from staff users view, ensure auto-claim rules are strictly library-scoped in Patron Experience settings, and enforce library context for super admins.
 
 **Tasks**:
-- [ ] Remove Auto-claims column and checkbox rendering from the Staff access list.
-- [ ] Remove save/update behavior for auto-claims from staff-user updates from the staff access list.
-- [ ] Update Patron Experience UI to show auto-claim settings only after resolving a specific library context.
-- [ ] Add regression tests proving that `formatClaimRules` cannot be saved under system scope and remain library-scoped.
+- [x] Remove Auto-claims column and checkbox rendering from the Staff access list.
+- [x] Remove save/update behavior for auto-claims from staff-user updates from the staff access list.
+- [x] Update Patron Experience UI to show auto-claim settings only after resolving a specific library context.
+- [x] Add regression tests proving that `formatClaimRules` cannot be saved under system scope and remain library-scoped.
 
-**Verification**:
-- [ ] Staff access list no longer shows Auto-claims column.
-- [ ] Staff user updates do not include auto-claim data.
-- [ ] Patron Experience auto-claim settings are hidden in System context.
-- [ ] Super admins are prompted to pick a library before editing Patron Experience.
-- [ ] Tests confirm `formatClaimRules` persistence scope.
+**Verification**: ✅ Verified in `settings-users.js`, `settings-formats.js`, and `tests/format_claim_rules_scope.test.js`. Auto-claims are now strictly library-only and staff roles can only be assigned to library contexts.
 
 ---
 
 ### Phase 8: Library Override Indicators in Context Switcher
-**Status**: ⬜ Not Started
-**Objective**: Provide visual indicators in the library context switcher for super admins to identify which libraries have overrides for the currently active settings section.
+**Status**: ✅ Complete
+**Objective**: Add visual indicators to the library selector to show which libraries have custom overrides for the active settings section.
 **Depends on**: Phase 7
 
 **Tasks**:
-- [ ] Create a backend API endpoint to fetch a summary of library overrides by section.
-- [ ] Implement logic in `settings.js` to fetch and cache the override summary.
-- [ ] Update `populateLibrarySelector` to apply indicators to the dropdown options.
-- [ ] Add logic to refresh indicators when the active settings section changes.
-- [ ] Ensure indicators distinguish between "inheriting from system" and "custom override".
+- [x] Implement backend endpoint `/api/asap/staff/settings/overrides-summary` to aggregate override status.
+- [x] Implement frontend `refreshLibrarySelectorIndicators` to apply visual dots to selector options.
+- [x] Add reactive update of indicators when switching settings sections or saving changes.
 
-**Verification**:
-- [ ] Switching between settings sections (e.g., Workflow vs Patron Experience) updates the indicators in the library selector.
-- [ ] Libraries with custom settings in the active section are clearly marked (e.g., with a dot or "Custom" label).
-- [ ] The indicators are only visible to super admins in the system settings context.
-
----
+**Verification**: ✅ Verified in `settings.js` (`refreshLibrarySelectorIndicators`) and `tests/settings_staff_scope_banner.test.js`. Super admins can now see indicators for libraries with custom overrides.
 
 ### Phase 9: Patron Text Placeholders for Barcode and PIN Labels
 **Status**: ✅ Complete
