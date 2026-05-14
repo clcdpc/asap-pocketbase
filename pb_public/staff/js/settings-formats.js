@@ -429,6 +429,7 @@ if (formatSettingsContainer) {
     if (e.target.classList.contains('format-enabled-check')) {
       syncFormatMapOrder();
       renderFormatSettings();
+      renderPatronFormatRulesEditor(collectPatronFormatRules());
       updateModalFormatDropdowns();
       markSettingsDirty();
     }

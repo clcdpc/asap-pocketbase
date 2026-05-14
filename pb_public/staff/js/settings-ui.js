@@ -1,4 +1,4 @@
-import { pb, formatMap, patronFormatKeys, patronFormatFields, defaultPatronFormatRules, currentSuggestions, publicationOptions, setPublicationOptions, defaultPublicationOptions, setVerifiedBibId } from './state.js';
+import { pb, formatMap, availableFormats, patronFormatKeys, patronFormatFields, defaultPatronFormatRules, currentSuggestions, publicationOptions, setPublicationOptions, defaultPublicationOptions, setVerifiedBibId } from './state.js';
 import { isValidSmtpHost, validateSmtpHostField, markSettingsDirty } from './api.js';
 import { showToast } from './dialogs.js';
 import { escapeAttr } from './grid.js';
@@ -192,8 +192,9 @@ export function renderPatronFormatRulesEditor(rules) {
     const rule = normalized[format] || { messageBehavior: 'none', fields: {} };
     const summaryText = getPatronFormatRuleSummary(rule);
 
+    const isHidden = !availableFormats.includes(format);
     const item = document.createElement('div');
-    item.className = 'asap-accordion-item';
+    item.className = 'asap-accordion-item' + (isHidden ? ' asap-accordion-item-hidden' : '');
     item.setAttribute('data-format', format);
     item.setAttribute('data-behavior', rule.messageBehavior);
 
@@ -209,7 +210,7 @@ export function renderPatronFormatRulesEditor(rules) {
 
     const summary = document.createElement('span');
     summary.className = 'asap-accordion-summary';
-    summary.textContent = summaryText;
+    summary.textContent = isHidden ? summaryText + ' (Hidden from patrons)' : summaryText;
 
     const chevron = document.createElement('i');
     chevron.className = 'fa fa-chevron-down asap-accordion-chevron';
@@ -220,6 +221,13 @@ export function renderPatronFormatRulesEditor(rules) {
     panel.id = `panel-format-${format}`;
     panel.className = 'asap-accordion-panel';
     panel.setAttribute('role', 'region');
+
+    if (isHidden) {
+      const warning = document.createElement('div');
+      warning.className = 'alert alert-warning format-hidden-warning';
+      warning.innerHTML = '<i class="fa fa-exclamation-triangle mr-2"></i> This format is currently hidden from patrons. Changes made here will take effect once the format is enabled in the <strong>Format Display Names</strong> section above.';
+      panel.appendChild(warning);
+    }
 
     const isEcontent = format === 'ebook' || format === 'eaudiobook';
 

@@ -2035,6 +2035,24 @@ code {
   box-shadow: none;
 }
 
+.asap-accordion-item-hidden .asap-accordion-header {
+  opacity: 0.65;
+  background-color: #f9fafb;
+}
+
+.asap-accordion-item-hidden .asap-accordion-title {
+  color: var(--asap-color-text-muted);
+}
+
+.format-hidden-warning {
+  margin: -24px -24px 24px -24px;
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  font-size: var(--asap-font-size-sm);
+}
+
 .branding-settings-layout {
   display: grid;
   grid-template-columns: minmax(220px, 32%) minmax(0, 1fr);
