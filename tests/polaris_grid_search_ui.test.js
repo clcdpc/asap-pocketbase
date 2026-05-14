@@ -33,7 +33,7 @@ function runTests() {
   assert.ok(modalJs.includes("query,"));
   assert.ok(modalJs.includes("title: options?.title || ''"));
   assert.ok(modalJs.includes("author: options?.author || ''"));
-  assert.ok(modalJs.includes("lookupEditBibById({ bibId: result.bibId"));
+  assert.ok(modalJs.includes("applySelectedPolarisResultToEditForm(result"));
   assert.ok(modalJs.includes("title_author"));
 
   const settingsUiJs = fileText("pb_public/staff/js/settings-ui.js");
