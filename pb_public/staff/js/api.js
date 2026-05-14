@@ -1,4 +1,4 @@
-import { pb, loginContainer, setupContainer, appContainer, loginForm, setupForm, logoutBtn, profileBtn, grid, gridSearchInput, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, currentRejectionTemplates, setCurrentRejectionTemplates, statusStages, stageQueryMap, currentStatus, activeTagFilter, workflowSettings, bootstrapAdminMessage, setupRequired, currentEmailStatus, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, settingsSectionIds, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, currentLibraryContextOrgId, setCurrentStatus, setActiveTagFilter, setCurrentClaimFilter, setCurrentSimilarRequestFilter, setBootstrapAdminMessage, setSetupRequired, setOrganizationsStatusMessage, setCurrentSettingsSection, setSettingsDirty, setCurrentEmailStatus } from './state.js';
+import { pb, loginContainer, setupContainer, appContainer, loginForm, setupForm, logoutBtn, profileBtn, grid, gridSearchInput, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, currentRejectionTemplates, setCurrentRejectionTemplates, statusStages, stageQueryMap, currentStatus, activeTagFilter, gridSearchKeyword, setGridSearchKeyword, workflowSettings, bootstrapAdminMessage, setupRequired, currentEmailStatus, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, settingsSectionIds, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, currentLibraryContextOrgId, setCurrentStatus, setActiveTagFilter, setCurrentClaimFilter, setCurrentSimilarRequestFilter, setBootstrapAdminMessage, setSetupRequired, setOrganizationsStatusMessage, setCurrentSettingsSection, setSettingsDirty, setCurrentEmailStatus } from './state.js';
 import { loadTab, renderCurrentGrid, closeActionMenu, escapeAttr } from './grid.js';
 import { syncPolarisOrganizations } from './settings-polaris.js';
 import { loadSettings, checkSettingsDirty, handleLibraryContextSwitch, refreshLibrarySelectorIndicators } from './settings.js';
@@ -807,6 +807,7 @@ document.querySelectorAll('#status-tabs .nav-link').forEach(link => {
     activateStatusTab(nextStatus);
     updateStageQuery(nextStatus);
     setActiveTagFilter('');
+    setGridSearchKeyword('');
     if (gridSearchInput) gridSearchInput.value = '';
     loadTab(currentStatus);
   });
@@ -814,11 +815,13 @@ document.querySelectorAll('#status-tabs .nav-link').forEach(link => {
 
 if (gridSearchInput) {
   gridSearchInput.addEventListener('input', event => {
+    const keyword = event.target.value;
+    setGridSearchKeyword(keyword);
     if (grid) {
       grid.updateConfig({
         search: {
           ...grid.config.search,
-          keyword: event.target.value
+          keyword: keyword
         }
       }).forceRender();
     }

@@ -51,6 +51,9 @@ export function setCurrentSuggestions(suggestions) { currentSuggestions = sugges
 export let activeTagFilter = '';
 export function setActiveTagFilter(filter) { activeTagFilter = filter; }
 
+export let gridSearchKeyword = '';
+export function setGridSearchKeyword(keyword) { gridSearchKeyword = keyword; }
+
 export let currentClaimFilter = 'all';
 export function setCurrentClaimFilter(filter) { currentClaimFilter = ['mine', 'unclaimed', 'mine_unclaimed'].includes(filter) ? filter : 'all'; }
 

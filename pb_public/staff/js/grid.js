@@ -1,4 +1,4 @@
-import { pb, gridContainer, staffGridFilterBar, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, settingsContainer, grid, formatMap, ageMap, closeReasonMap, descriptions, emptyStateMessages, statusStages, currentStatus, currentSuggestions, activeTagFilter, currentClaimFilter, currentSimilarRequestFilter, currentWorkflowOrgScopeId, allSuggestions, workflowSettings, currentSettingsSection, activeActionMenu, rowActionIdCounter, rowActionRegistry, setCurrentStatus, setCurrentSuggestions, setActiveTagFilter, setCurrentClaimFilter, setCurrentWorkflowOrgScopeId, setActiveActionMenu, setGrid, setAllSuggestions, incrementRowActionIdCounter } from './state.js';
+import { pb, gridContainer, staffGridFilterBar, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, gridSearchInput, settingsContainer, grid, formatMap, ageMap, closeReasonMap, descriptions, emptyStateMessages, statusStages, currentStatus, currentSuggestions, activeTagFilter, gridSearchKeyword, currentClaimFilter, currentSimilarRequestFilter, currentWorkflowOrgScopeId, allSuggestions, workflowSettings, currentSettingsSection, activeActionMenu, rowActionIdCounter, rowActionRegistry, setCurrentStatus, setCurrentSuggestions, setActiveTagFilter, setGridSearchKeyword, setCurrentClaimFilter, setCurrentWorkflowOrgScopeId, setActiveActionMenu, setGrid, setAllSuggestions, incrementRowActionIdCounter } from './state.js';
 import { openEdit, openPolarisSearch, polarisSearchValueForRow, renderPolarisSearchButtonMarkup } from './modals.js';
 import { openNewSuggestionForPatron } from './patron.js';
 import { undoRow, deleteClosedRequest, closeDuplicateRequest } from './actions.js';
@@ -10,6 +10,9 @@ import { loadAnalytics } from './analytics.js';
 import { renderNoteActivity } from './note-activity.js';
 
 export async function loadTab(status) {
+  if (status !== currentStatus) {
+    setGridSearchKeyword('');
+  }
   syncStatusTab(status);
   renderTabDescription(status);
   clearJobMessage();
@@ -697,6 +700,10 @@ export function toggleTagFilter(tagName) {
 export function renderCurrentGrid(status = currentStatus) {
   resetGrid();
 
+  if (gridSearchInput) {
+    gridSearchInput.value = gridSearchKeyword;
+  }
+
   const visibleRecords = applyClaimFilter(
     applySimilarRequestFilter(
       applyTagFilter(currentSuggestions)
@@ -715,7 +722,8 @@ export function renderCurrentGrid(status = currentStatus) {
     columns: getGridColumns(status, rowById),
     data: visibleRecords.map(row => getGridDataRow(row, status)),
     search: {
-      placeholder: 'Search...'
+      placeholder: 'Search...',
+      keyword: gridSearchKeyword
     },
     pagination: { limit: 25 },
     sort: true,
