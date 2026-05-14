@@ -700,6 +700,11 @@ function mergeCatalogValue(catalogValue, oldValue) {
   if (!old || old === catalog) return catalog;
   if (old.indexOf(catalog + ' (') === 0) return old;
 
+  const oldBase = old.replace(/\s+\([^()]*\)\s*$/, '').trim();
+  if (oldBase && (oldBase === catalog || oldBase.indexOf(catalog) === 0 || catalog.indexOf(oldBase) === 0)) {
+    return old;
+  }
+
   return `${catalog} (${old})`;
 }
 

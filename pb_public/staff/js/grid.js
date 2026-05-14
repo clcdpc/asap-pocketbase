@@ -631,6 +631,54 @@ export function applyClaimFilter(records, filter = currentClaimFilter, staffId =
   return records || [];
 }
 
+function normalizedSortText(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function dateSortValue(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return normalizedSortText(value);
+  return date.toISOString();
+}
+
+function bibSortValue(value) {
+  const text = String(value || '').trim();
+  const num = Number(text);
+  return Number.isFinite(num) ? String(num).padStart(20, '0') : normalizedSortText(text);
+}
+
+function claimSortValue(row) {
+  if (!row || !String(row.claimedByStaffUserId || '').trim()) return 'zz_unclaimed';
+  return normalizedSortText(row.claimedByDisplayName || 'claimed');
+}
+
+function getGridDataRow(row, status) {
+  const base = {
+    id: row.id,
+    barcode: normalizedSortText(row.barcode),
+    title: normalizedSortText(row.title),
+    author: normalizedSortText(row.author),
+    identifier: normalizedSortText(row.identifier),
+    bibid: bibSortValue(row.bibid),
+    format: normalizedSortText(formatMap[row.format] || row.format),
+    publication: normalizedSortText(formatPublication(row.publication)),
+    submitted: dateSortValue(row.created),
+    claimedBy: claimSortValue(row),
+    notes: normalizedSortText(row.notes),
+    actions: row.id
+  };
+
+  if (status === 'closed') {
+    base.closeReason = normalizedSortText(closeReasonMap[row.closeReason] || row.closeReason);
+  }
+
+  return base;
+}
+
 export function toggleTagFilter(tagName) {
   const nextTag = activeTagFilter === tagName ? '' : tagName;
   setActiveTagFilter(nextTag);
@@ -642,15 +690,24 @@ export function toggleTagFilter(tagName) {
 
 export function renderCurrentGrid(status = currentStatus) {
   resetGrid();
-  const visibleRecords = applyClaimFilter(applySimilarRequestFilter(applyTagFilter(currentSuggestions)));
+
+  const visibleRecords = applyClaimFilter(
+    applySimilarRequestFilter(
+      applyTagFilter(currentSuggestions)
+    )
+  );
+
   if (!visibleRecords.length) {
     gridContainer.innerHTML = `<div class="alert alert-light border">${escapeAttr(emptyFilteredGridMessage())}</div>`;
     return;
   }
 
+  const rowById = new Map();
+  visibleRecords.forEach(row => rowById.set(row.id, row));
+
   const g = new gridjs.Grid({
-    columns: getGridColumns(status),
-    data: visibleRecords.map(row => getGridRow(row, status)),
+    columns: getGridColumns(status, rowById),
+    data: visibleRecords.map(row => getGridDataRow(row, status)),
     search: {
       placeholder: 'Search...'
     },
@@ -658,6 +715,7 @@ export function renderCurrentGrid(status = currentStatus) {
     sort: true,
     width: '100%'
   });
+
   setGrid(g);
   g.render(gridContainer);
 }
@@ -770,9 +828,6 @@ export function renderBarcodeCell(row) {
 
 const NOTES_COLUMN_WIDTH = '90px';
 
-function notesColumn() {
-  return { name: 'Notes', width: NOTES_COLUMN_WIDTH, sort: false };
-}
 
 export function getActionsColumnWidth(status) {
   if (status === 'suggestion') return '180px';
@@ -780,49 +835,140 @@ export function getActionsColumnWidth(status) {
   return '100px';
 }
 
-export function getGridColumns(status) {
-  const actionsColumn = { name: 'Actions', width: getActionsColumnWidth(status), sort: false };
+export function getGridColumns(status, rowById = new Map()) {
+  const rowFor = (id) => rowById.get(id) || {};
+
+  const barcodeColumn = {
+    id: 'barcode',
+    name: 'Barcode',
+    width: '170px',
+    formatter: (cell, row) => renderBarcodeCell(rowFor(row.cells[0].data))
+  };
+
+  const titleColumn = {
+    id: 'title',
+    name: 'Title (original)',
+    width: '320px',
+    formatter: (cell, row) => renderTitleCell(rowFor(row.cells[0].data))
+  };
+
+  const authorColumn = {
+    id: 'author',
+    name: 'Author (original)',
+    width: '200px',
+    formatter: (cell, row) => renderAuthorCell(rowFor(row.cells[0].data))
+  };
+
+  const formatColumn = {
+    id: 'format',
+    name: 'Format',
+    width: '100px',
+    formatter: (cell, row) => escapeAttr(formatMap[rowFor(row.cells[0].data).format] || rowFor(row.cells[0].data).format || '')
+  };
+
+  const timingColumn = {
+    id: 'publication',
+    name: 'Timing',
+    width: '100px',
+    formatter: (cell, row) => escapeAttr(formatPublication(rowFor(row.cells[0].data).publication))
+  };
+
+  const submittedColumn = {
+    id: 'submitted',
+    name: 'Submitted',
+    width: '100px',
+    formatter: (cell, row) => escapeAttr(formatStandardDate(rowFor(row.cells[0].data).created))
+  };
+
+  const claimedColumn = {
+    id: 'claimedBy',
+    name: 'Claimed by',
+    width: '110px',
+    formatter: (cell, row) => renderClaimCell(rowFor(row.cells[0].data))
+  };
+
+  const notesColumnDef = {
+    id: 'notes',
+    name: 'Notes',
+    width: NOTES_COLUMN_WIDTH,
+    sort: false,
+    formatter: (cell, row) => formatNote(rowFor(row.cells[0].data))
+  };
+
+  const actionsColumn = {
+    id: 'actions',
+    name: 'Actions',
+    width: getActionsColumnWidth(status),
+    sort: false,
+    formatter: (cell, row) => gridjs.html(renderRowActions(rowFor(row.cells[0].data)))
+  };
+
+  const idColumn = {
+    id: 'id',
+    name: 'ID',
+    hidden: true
+  };
 
   if (status === 'suggestion') {
     return [
-      { name: 'Barcode', width: '170px' },
-      { name: 'Title (original)', width: '320px' },
-      { name: 'Author (original)', width: '200px' },
-      { name: 'Format', width: '100px' },
-      { name: 'Timing', width: '100px' },
-      { name: 'Submitted', width: '100px' },
-      { name: 'Claimed by', width: '110px' },
-      notesColumn(),
-      actionsColumn,
+      idColumn,
+      barcodeColumn,
+      titleColumn,
+      authorColumn,
+      formatColumn,
+      timingColumn,
+      submittedColumn,
+      claimedColumn,
+      notesColumnDef,
+      actionsColumn
     ];
   }
 
   if (status === 'closed') {
     return [
-      { name: 'Barcode', width: '170px' },
-      { name: 'Title (original)', width: '320px' },
-      { name: 'Author (original)', width: '200px' },
-      { name: 'Format', width: '100px' },
-      { name: 'Submitted', width: '100px' },
-      { name: 'Closed reason', width: '140px' },
-      { name: 'Claimed by', width: '110px' },
-      notesColumn(),
-      actionsColumn,
+      idColumn,
+      barcodeColumn,
+      titleColumn,
+      authorColumn,
+      formatColumn,
+      submittedColumn,
+      {
+        id: 'closeReason',
+        name: 'Closed reason',
+        width: '140px',
+        formatter: (cell, row) => escapeAttr(closeReasonMap[rowFor(row.cells[0].data).closeReason] || rowFor(row.cells[0].data).closeReason || '')
+      },
+      claimedColumn,
+      notesColumnDef,
+      actionsColumn
     ];
   }
 
   return [
-    { name: 'Barcode', width: '170px' },
-    { name: 'Title (original)', width: '320px' },
-    { name: 'Author (original)', width: '200px' },
-    { name: 'Identifier number', width: '140px' },
-    { name: 'BIB ID', width: '100px' },
-    { name: 'Format', width: '100px' },
-    { name: 'Timing', width: '100px' },
-    { name: 'Submitted', width: '100px' },
-    { name: 'Claimed by', width: '110px' },
-    notesColumn(),
-    actionsColumn,
+    idColumn,
+    barcodeColumn,
+    titleColumn,
+    authorColumn,
+    {
+      id: 'identifier',
+      name: 'Identifier number',
+      width: '140px',
+      sort: false,
+      formatter: (cell, row) => escapeAttr(rowFor(row.cells[0].data).identifier || '')
+    },
+    {
+      id: 'bibid',
+      name: 'BIB ID',
+      width: '100px',
+      sort: false,
+      formatter: (cell, row) => renderBibIdCell(rowFor(row.cells[0].data))
+    },
+    formatColumn,
+    timingColumn,
+    submittedColumn,
+    claimedColumn,
+    notesColumnDef,
+    actionsColumn
   ];
 }
 
@@ -975,49 +1121,6 @@ export function renderClaimCell(row) {
   return gridjs.html(`<div><span class="claim-badge claim-badge--claimed" title="Claimed by ${escapeAttr(name)}. ${escapeAttr(source)}">Claimed by ${escapeAttr(name)}</span><div class="small text-muted">${escapeAttr(source)}</div></div>`);
 }
 
-export function getGridRow(row, status) {
-  if (status === 'suggestion') {
-    return [
-      renderBarcodeCell(row),
-      renderTitleCell(row),
-      renderAuthorCell(row),
-      formatMap[row.format] || row.format,
-      formatPublication(row.publication),
-      formatStandardDate(row.created),
-      renderClaimCell(row),
-      formatNote(row),
-      gridjs.html(renderRowActions(row)),
-    ];
-  }
-
-  if (status === 'closed') {
-    return [
-      renderBarcodeCell(row),
-      renderTitleCell(row),
-      renderAuthorCell(row),
-      formatMap[row.format] || row.format,
-      formatStandardDate(row.created),
-      formatCloseReason(row),
-      renderClaimCell(row),
-      formatNote(row),
-      gridjs.html(renderRowActions(row)),
-    ];
-  }
-
-  return [
-    renderBarcodeCell(row),
-    renderTitleCell(row),
-    renderAuthorCell(row),
-    row.identifier,
-    renderBibIdCell(row),
-    formatMap[row.format] || row.format,
-    formatPublication(row.publication),
-    formatStandardDate(row.created),
-    renderClaimCell(row),
-    formatNote(row),
-    gridjs.html(renderRowActions(row)),
-  ];
-}
 
 export function formatCloseReason(row) {
   if (normalizeStatus(row.status) !== 'closed') {
@@ -1045,9 +1148,11 @@ export function getRowActions(row) {
   }
 
   if (status === 'outstanding_purchase') {
+    const duplicateCloseAction = duplicateCloseActionForRow(row);
     return {
       primary: { label: 'Ready for hold', className: 'btn-success', onClick: () => openEdit(row.id, 'pending_hold', 'Move to Pending hold', '', 'Ready for hold') },
       secondary: [
+        ...(duplicateCloseAction ? [duplicateCloseAction] : []),
         ...claimActionsForRow(row),
         { label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose', 'Silent close') },
         { label: 'Undo', onClick: () => undoRow(row.id) },
@@ -1058,8 +1163,9 @@ export function getRowActions(row) {
 
   if (status === 'pending_hold' || status === 'hold_placed' || status === 'closed') {
     const secondary = [];
-    if ((status === 'pending_hold' || status === 'hold_placed') && hasWorkflowTag(row, 'Hold exists (same patron)')) {
-      secondary.push({ label: 'Close duplicate', className: 'danger', onClick: () => closeDuplicateRequest(row.id) });
+    const duplicateCloseAction = duplicateCloseActionForRow(row);
+    if (duplicateCloseAction && status !== 'closed') {
+      secondary.push(duplicateCloseAction);
     }
     claimActionsForRow(row).forEach(action => secondary.push(action));
     if (status !== 'closed') secondary.push({ label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose', 'Silent close') });
@@ -1077,6 +1183,13 @@ export function getRowActions(row) {
     primary: { label: 'Edit', className: 'btn-secondary', onClick: () => openEdit(row.id, row.status, 'Edit', '', 'Save') },
     secondary: claimActionsForRow(row)
   };
+}
+
+function duplicateCloseActionForRow(row) {
+  if (!row || normalizeStatus(row.status) === 'closed' || !hasWorkflowTag(row, 'Hold exists (same patron)')) {
+    return null;
+  }
+  return { label: 'Close duplicate', className: 'danger', onClick: () => closeDuplicateRequest(row.id) };
 }
 
 export function claimActionsForRow(row) {

@@ -68,7 +68,7 @@ document.getElementById('btn-lookup-patron').addEventListener('click', async () 
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(data.message || 'No patron found. Try barcode, or first name then last name.');
+      throw new Error(data.message || 'No patron found. Try barcode, name, or first name then last name.');
     }
 
     if (data.status === 'multiple' && Array.isArray(data.results)) {
@@ -78,7 +78,7 @@ document.getElementById('btn-lookup-patron').addEventListener('click', async () 
 
     applySelectedPatron(data);
   } catch (err) {
-    showLookupResult(err.message || 'No patron found. Try barcode, or first name then last name.', 'danger');
+    showLookupResult(err.message || 'No patron found. Try barcode, name, or first name then last name.', 'danger');
     document.getElementById('new-barcode').focus();
   } finally {
     btn.disabled = false;

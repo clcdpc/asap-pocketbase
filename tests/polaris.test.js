@@ -406,6 +406,41 @@ try {
   failed++;
 }
 
+// Test 11: reconcile does not wrap a catalog title around itself
+try {
+  httpSendResult = {
+    statusCode: 200,
+    json: {
+      BibGetRows: [
+        { ElementID: 35, Label: "Title:", Value: "Minecraft. Heart of cobblestone. Volume 2 / written by Andrew Clemson ; art and cover by Jeremy Lawson ; lettered by Taylor Esposito." },
+        { ElementID: 18, Label: "Author:", Value: "Clemson, Andrew (Comics writer), author." }
+      ]
+    }
+  };
+
+  const title = "Minecraft. Heart of cobblestone. Volume 2 (Horse)";
+  const data = { title, author: "Clemson, Andrew (Comics writer), author." };
+  const record = {
+    get: (key) => data[key],
+    set: (key, value) => { data[key] = value; }
+  };
+  polaris.reconcileRecord(
+    { logger: () => ({ warn: () => {} }) },
+    { AccessToken: "mock_token", AccessSecret: "mock_secret" },
+    record,
+    "4282611",
+    { bibId: "4282611", title: "Minecraft. Heart of cobblestone. Volume 2" }
+  );
+
+  assert.strictEqual(data.title, title);
+
+  console.log('✅ Test case 11 (reconcile title merge is idempotent) passed');
+  passed++;
+} catch (err) {
+  console.error('❌ Test case 11 failed:', err.stack);
+  failed++;
+}
+
 console.log(`\nTests finished: ${passed} passed, ${failed} failed.`);
 
 if (failed > 0) {

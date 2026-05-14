@@ -4,6 +4,14 @@ import { showToast, showAlert, showConfirm } from './dialogs.js';
 import { loadTab, formatDateTime, renderWorkflowTags, escapeAttr } from './grid.js';
 import { setSelectValue, dateOnly, lookupEditBibById, applySelectedPolarisResultToEditForm } from './settings-ui.js';
 
+function actionErrorMessage(status, data, raw) {
+  if (data && data.code === 'duplicate_open_request') {
+    return data.message || 'This patron already has an open request for this BIB ID.';
+  }
+  const detail = (data && data.message) || String(raw || '').trim();
+  return detail ? `Error updating suggestion (${status}): ${detail}` : `Error updating suggestion (${status})`;
+}
+
 export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
   const row = currentSuggestions.find(r => r.id === id) || allSuggestions.find(r => r.id === id);
   if (!row) return;
@@ -641,8 +649,21 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
         return;
       }
 
-      openEdit(row.id, row.status || currentStatus, 'Edit suggestion', '', 'Save');
+      const shouldPromoteToPendingHold =
+        String(row.status || currentStatus || '') === 'suggestion' &&
+        !!result.bibId;
+
+      openEdit(
+        row.id,
+        shouldPromoteToPendingHold ? 'pending_hold' : (row.status || currentStatus),
+        shouldPromoteToPendingHold ? 'Ready for hold' : 'Edit suggestion',
+        shouldPromoteToPendingHold ? 'catalogFound' : '',
+        shouldPromoteToPendingHold ? 'Move to Pending hold' : 'Save'
+      );
       applySelectedPolarisResultToEditForm(result);
+      if (shouldPromoteToPendingHold) {
+        showToast('Polaris BIB applied. Save to move this request to Pending hold.', 'success');
+      }
     });
     
     actionsDiv.appendChild(btn);
@@ -897,8 +918,10 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
       try {
         data = raw ? JSON.parse(raw) : {};
       } catch (parseErr) { }
-      const detail = data.message || raw.trim();
-      throw new Error(detail ? `Error updating suggestion (${res.status}): ${detail}` : `Error updating suggestion (${res.status})`);
+      const err = new Error(actionErrorMessage(res.status, data, raw));
+      err.status = res.status;
+      err.code = data.code || '';
+      throw err;
     }
     const updatedRecord = await res.json().catch(() => ({}));
     document.getElementById('editModal').close();
@@ -934,6 +957,9 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
     loadTab(currentStatus);
   } catch (err) {
     await showAlert(err.message || 'Error updating suggestion');
+    if (err && err.code === 'duplicate_open_request') {
+      loadTab(currentStatus);
+    }
   }
 });
 
