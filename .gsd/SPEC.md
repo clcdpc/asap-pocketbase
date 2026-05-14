@@ -1,27 +1,27 @@
-# SPEC: Refine Auto-Claims Scoping and Staff Management
+# SPEC: Consolidate Polaris Integration and UI Enhancements
 
 ## Goal
-Remove auto-claim configuration exposure from the general staff access interface, restrict auto-claim rule settings to library-scoped patron experience configurations, and implement regression testing for persistence scope.
+Retroactively document and harden the recent Polaris integration improvements, expand the audit trail descriptions for staff actions, and ensure the UI maintains a "premium" aesthetic through reactive flag cleanup and layout optimization.
 
 ## Status: FINALIZED
 
 ## Requirements
-1. **Fix Missing Export**:
-   - Implement and export `handleLibraryContextSwitch` in `settings.js` to resolve the `SyntaxError` in `api.js`.
+1. **Audit Trail Expansion**:
+   - Update `buildPendingAuditPreview` in `pb_public/staff/js/modals.js` to support the following action strings:
+     - `alreadyOwn`: "This request will be marked Already own and move directly to Closed."
+     - `silentClose`: "This request will be closed silently and move directly to Closed."
+     - `reassign`: "This request will be reassigned to the selected format."
+   - Ensure the preview updates dynamically when these actions are selected or the modal state changes.
 
-2. **Staff Access List Refinement**:
-   - Remove "Auto-claims" column from the staff grid.
-   - Remove checkbox rendering and click-to-save logic for auto-claims in the staff list.
+2. **Reactive Flag Cleanup**:
+   - In `pb_public/staff/js/modals.js`, when a BIB ID is successfully verified or selected from Polaris search results, trigger a cleanup of the row's workflow flags.
+   - Specifically, remove "Hold failed" and "No holdable items" flags if they exist, as the new BIB ID represents a fresh state.
 
-3. **Patron Experience Auto-Claim Scoping**:
-   - Hide the "Auto-claim staff" column/selects in the "Material Formats" table *only* when the "System Defaults" context is active.
-   - Filter the staff options in the auto-claim dropdowns to only show staff members whose library affiliation matches the current active library context.
-   - Enforce that only one auto-claimant can be assigned per format type (handled by the table structure).
+3. **UI Polish & "WOW" Factor**:
+   - Perform a visual audit of the Staff Grid and Edit Modal.
+   - Resolve horizontal crowding in the grid (especially when many flags are present).
+   - Ensure "Queue Hold" buttons and other primary actions use consistent, high-contrast brand colors.
+   - Optimize micro-animations for modal transitions and flag updates.
 
-4. **Persistence Hardening**:
-   - Update the settings save payload to ensure `formatClaimRules` are strictly library-scoped and cannot be saved under a global system context.
-   - Ensure that `formatClaimRules` are only sent to the API when a library orgId is present and active (except for empty arrays in system saves).
-
-5. **Regression Testing**:
-   - Add tests to verify that `formatClaimRules` cannot be persisted under the system scope.
-   - Verify that library-level overrides for auto-claims work correctly and only show relevant staff.
+4. **Consistency Audit**:
+   - Verify that all recent reactive fixes (e.g., "Queue Hold" terminology) are applied consistently across all workflow tabs and tooltips.

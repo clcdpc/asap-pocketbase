@@ -167,3 +167,26 @@
 - [x] Library-specific labels render correctly in both inherited and library-specific messages.
 - [x] Existing placeholders (e.g., {{duplicate_date}}) still work.
 - [x] Security: Labels containing HTML-like text do not inject executable markup.
+170: 
+171: ---
+172: 
+173: ## Milestone 2: Staff Workflow Hardening and UI Polish
+174: **Status**: 🚧 In Progress
+175: 
+176: ### Phase 10: Consolidate Polaris Integration and UI Enhancements
+177: **Status**: 🚧 Planning
+178: **Objective**: Retroactively document and verify the recent surge in Polaris integration improvements (Queue Hold terminology, automated holdings check badges, contrast fixes) and ensure they are fully integrated into the audit trail.
+179: **Depends on**: Milestone 1
+180: 
+181: **Tasks**:
+182: - [ ] Update `SPEC.md` to reflect the current state of Polaris integration and UI polish requirements.
+183: - [ ] Expand `buildPendingAuditPreview` in `pb_public/staff/js/modals.js` to provide accurate descriptions for all status transitions (e.g., "Already Own", "Silent Close").
+184: - [ ] Implement generalized reactive flag cleanup in `modals.js` to clear stale "Hold failed" or "No holdable items" badges when a new BIB ID is verified.
+185: - [ ] Perform a "WOW" design audit using `impeccable` skill to ensure premium aesthetics and resolve horizontal crowding in the staff grid.
+186: 
+187: **Verification**:
+188: - [ ] Audit trail previews accurately reflect the intended action for every button in the edit modal.
+189: - [ ] Selecting or verifying a BIB ID removes any existing "warning" badges from the row preview.
+190: - [ ] Staff grid remains legible and "premium" feeling across all viewports.
+191: 
+192: ---
