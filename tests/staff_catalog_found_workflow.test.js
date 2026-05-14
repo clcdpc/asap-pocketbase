@@ -100,7 +100,7 @@ function load(env) {
   assert.strictEqual(updated.get('bibid'), '4271674');
   assert.ok(tagsFor(updated).includes('Identifier found'));
   assert.ok(!tagsFor(updated).includes('Identifier number not found in system'));
-  assert.ok(notesFor(updated).some(note => note.includes('ready for hold')));
+  assert.ok(notesFor(updated).some(note => note.includes('hold placement')));
   assert.strictEqual(calls.canonicalRefs, 1);
   assert.strictEqual(calls.saves, 1);
 }

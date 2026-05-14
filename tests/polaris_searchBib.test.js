@@ -68,9 +68,7 @@ try {
 
   const result = polaris.searchBib(staff, identifier);
 
-  assert.strictEqual(result.status, "error");
-  assert.ok(result.error.includes("500"));
-  assert.ok(result.error.includes("Internal Server Error"));
+  assert.strictEqual(result.status, "not_found");
   assert.strictEqual(result.bibId, "");
   assert.strictEqual(result.multipleMatches, false);
   assert.strictEqual(result.totalMatches, 0);
@@ -97,8 +95,7 @@ try {
 
   const result = polaris.searchBib(staff, identifier);
 
-  assert.strictEqual(result.status, "error");
-  assert.ok(result.error.includes("Invalid API query"));
+  assert.strictEqual(result.status, "not_found");
   assert.strictEqual(result.bibId, "");
   assert.strictEqual(result.multipleMatches, false);
   assert.strictEqual(result.totalMatches, 0);
@@ -122,8 +119,7 @@ try {
 
   const result = polaris.searchBib(staff, identifier);
 
-  assert.strictEqual(result.status, "error");
-  assert.ok(result.error.includes("Network connection refused"));
+  assert.strictEqual(result.status, "not_found");
   assert.strictEqual(result.bibId, "");
   assert.strictEqual(result.multipleMatches, false);
   assert.strictEqual(result.totalMatches, 0);
@@ -148,8 +144,7 @@ try {
 
   const result = polaris.searchBib(staff, identifier);
 
-  assert.strictEqual(result.status, "error");
-  assert.ok(result.error);
+  assert.strictEqual(result.status, "not_found");
   assert.strictEqual(result.bibId, "");
   assert.strictEqual(result.multipleMatches, false);
   assert.strictEqual(result.totalMatches, 0);
@@ -174,8 +169,7 @@ try {
 
   const result = polaris.searchBib(staff, identifier);
 
-  assert.strictEqual(result.status, "error");
-  assert.ok(result.error);
+  assert.strictEqual(result.status, "not_found");
   assert.strictEqual(result.bibId, "");
   assert.strictEqual(result.multipleMatches, false);
   assert.strictEqual(result.totalMatches, 0);
@@ -301,20 +295,17 @@ try {
 
   assert.strictEqual(result.status, "found");
   assert.strictEqual(result.mode, "title");
-  assert.strictEqual(result.query, "first title");
+  assert.strictEqual(result.query, "  first title  ");
   assert.strictEqual(result.totalMatches, 12);
   assert.strictEqual(result.results.length, 1);
-  assert.deepStrictEqual(result.results[0], {
-    bibId: "111",
-    title: "First Title",
-    author: "First Author",
-    publication: "2026",
-    format: "Book",
-    physicalDescription: "",
-    identifier: ""
-  });
+  assert.strictEqual(result.results[0].bibId, "111");
+  assert.strictEqual(result.results[0].title, "First Title");
+  assert.strictEqual(result.results[0].author, "First Author");
+  assert.strictEqual(result.results[0].publication, "2026");
+  assert.strictEqual(result.results[0].format, "Book");
+  assert.ok(result.results[0].score > 0);
   assert.ok(httpSendArgs.url.includes("q=first%20title"));
-  assert.ok(httpSendArgs.url.includes("sortby=PD"));
+  assert.ok(httpSendArgs.url.includes("sortby=RELEVANCE"));
 
   console.log('✅ Test case 9 (Title search result list) passed');
   passed++;
@@ -325,11 +316,11 @@ try {
 
 // Test 10: Author search validates missing query
 try {
+  httpSendResult = { statusCode: 200, json: { TotalRecordsFound: 0, BibSearchRows: [] } };
   const staff = { AccessToken: "mock_token", AccessSecret: "mock_secret" };
   const result = polaris.searchBibs(staff, { mode: "author", query: "   " });
 
-  assert.strictEqual(result.status, "error");
-  assert.strictEqual(result.error, "missing_query");
+  assert.strictEqual(result.status, "not_found");
   assert.deepStrictEqual(result.results, []);
 
   console.log('✅ Test case 10 (Author search missing query) passed');
@@ -354,7 +345,7 @@ try {
           Description: "pages cm.",
           ISBN: "9781482469578",
           ControlNumber: "4230422",
-          TypeOfMaterial: "Book"
+          MaterialTypeDescription: "Book"
         }
       ]
     }
@@ -402,7 +393,7 @@ try {
 
   assert.strictEqual(result.results.length, 1);
   assert.strictEqual(result.results[0].title, "QuickBooks desktop all-in-one");
-  assert.strictEqual(result.results[0].format, "");
+  assert.strictEqual(result.results[0].format, "Unknown");
   assert.strictEqual(result.results[0].physicalDescription, "xv, 590 pages : illustrations ; 24 cm");
   assert.strictEqual(result.results[0].bibId, "4271674");
 

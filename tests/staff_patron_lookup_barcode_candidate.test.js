@@ -25,6 +25,7 @@ function extractFunction(source, name) {
 const source = fs.readFileSync(path.resolve(__dirname, '../lib/staff_routes.js'), 'utf8');
 const fnCode = [
   extractFunction(source, 'looksLikeBarcodeCandidate'),
+  extractFunction(source, 'beautifyPatronError'),
   extractFunction(source, 'shouldFallBackToPatronNameSearch'),
   extractFunction(source, 'staffPatronLookupResponse'),
   extractFunction(source, 'resolveStaffPatronByBarcode'),
@@ -185,7 +186,7 @@ function makeEvent(requestBody) {
 
   const response = getResponse();
   assert.strictEqual(response.status, 403);
-  assert.strictEqual(response.body.message, 'This patron belongs to a different library.');
+  assert.strictEqual(response.body.message, 'This patron belongs to another library. You can only submit suggestions for patrons in your own library system.');
   assert.strictEqual(calls.searchPatrons, 0);
 }
 
