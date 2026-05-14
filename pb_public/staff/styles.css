@@ -580,6 +580,12 @@ body {
   vertical-align: middle;
 }
 
+#grid-container .gridjs-td:has(.truncate-note) {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
 .truncate-note:hover,
 .truncate-note:focus {
   background: #d7e9ff;

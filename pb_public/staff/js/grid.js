@@ -764,6 +764,12 @@ export function renderBarcodeCell(row) {
   `);
 }
 
+const NOTES_COLUMN_WIDTH = '90px';
+
+function notesColumn() {
+  return { name: 'Notes', width: NOTES_COLUMN_WIDTH, sort: false };
+}
+
 export function getActionsColumnWidth(status) {
   if (status === 'suggestion') return '180px';
   if (status === 'outstanding_purchase') return '160px';
@@ -782,7 +788,7 @@ export function getGridColumns(status) {
       { name: 'Timing', width: '100px' },
       { name: 'Submitted', width: '100px' },
       { name: 'Claimed by', width: '110px' },
-      { name: 'Notes', width: '60px' },
+      notesColumn(),
       actionsColumn,
     ];
   }
@@ -796,7 +802,7 @@ export function getGridColumns(status) {
       { name: 'Submitted', width: '100px' },
       { name: 'Closed reason', width: '140px' },
       { name: 'Claimed by', width: '110px' },
-      { name: 'Notes', width: '60px' },
+      notesColumn(),
       actionsColumn,
     ];
   }
@@ -811,7 +817,7 @@ export function getGridColumns(status) {
     { name: 'Timing', width: '100px' },
     { name: 'Submitted', width: '100px' },
     { name: 'Claimed by', width: '110px' },
-    { name: 'Notes', width: '60px' },
+    notesColumn(),
     actionsColumn,
   ];
 }
