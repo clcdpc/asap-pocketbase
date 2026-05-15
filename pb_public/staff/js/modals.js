@@ -1029,7 +1029,10 @@ export async function openPolarisSearch(row, mode, options = {}) {
     els.dialog.showModal();
   }
 
-  runSearch();
+  await runSearch();
+  if (els.dialog.open) {
+    els.searchInput.focus();
+  }
 }
 
 function closePolarisSearchDialog() {
