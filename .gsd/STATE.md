@@ -1,31 +1,27 @@
-# Current State - 2026-05-14
+# Current State - 2026-05-15
 
 ## Current Position
-- **Phase**: Milestone 2 complete
-- **Task**: Audit complete
-- **Status**: ✅ Milestone 2 Finalized
+- **Phase**: 15
+- **Task**: Planning complete
+- **Status**: Ready for execution
 
 ## Recently Completed
+- **Phase 14: Add Filters to Additional Copy Tab**
+  - Added Search, Claim, and Flag filters to Additional Copies tab.
+  - Implemented Open/Closed status toggle for Additional Copies.
 - **Phase 13: Add ISBN Column to Suggestions Tab**
   - Added ID/ISBN column to the Suggestions tab grid.
-  - Rebalanced Title and Author widths to make room for the new column while preserving Barcode width (160px).
-- **Phase 12: Refine Grid Column Widths for Identifiers**
-  - Increased Barcode width (130px -> 160px) and ISBN/Identifier width (120px -> 150px).
-  - Reduced Title (410px -> 380px) and Author (280px -> 250px) widths to optimize space.
-- **Phase 11: Grid Column Optimization**
-  - Removed redundant "Timing" column from "Pending hold" and "Hold placed" tabs.
-  - Increased Title column width to 410px and Author column width to 280px to improve readability.
-- **Phase 10: Staff Workflow Hardening & UI Polish**
-  - Expanded audit trail previews in `modals.js` with detailed action wording.
-  - Implemented reactive cleanup for stale workflow flags.
-  - Standardized "Queue Hold" terminology stack-wide.
+- **Post-Milestone 2 Extensions (May 15)**
+  - Implemented Additional Copy workflow (claiming, cascading, status).
+  - Fixed Polaris Consortium Holdings over-counting.
+  - Implemented Polaris Material Type server-side caching.
 
 ## Active Milestone
-- **Milestone 2: Staff Workflow Hardening and UI Polish** (✅ Completed)
+- **Milestone 3: Reporting and Advanced Analytics** (⏳ In Progress)
+- [x] **Phase 14: Add Filters to Additional Copy Tab**
+- [ ] **Phase 15: Add Additional Copies to Analytics**
+- [ ] **Phase 16: Auto-Close Setting for Additional Copies**
 
 ## Next Steps
-1. Run `/complete-milestone` to archive Milestone 2 and prepare for the next cycle.
-2. Discuss objectives for Milestone 3 (e.g., Reporting, Email Notifications, or Advanced Filtering).
-
-## Notes
-- The Polaris integration is robust, and the staff grid is now highly optimized for both space and readability.
+1. Run `/execute 15` to implement analytics for Additional Copies.
+2. Run `/execute 16` to implement the auto-close workflow setting.

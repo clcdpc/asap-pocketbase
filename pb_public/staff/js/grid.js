@@ -1,4 +1,4 @@
-import { pb, gridContainer, staffGridFilterBar, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, gridSearchInput, settingsContainer, grid, formatMap, ageMap, closeReasonMap, descriptions, emptyStateMessages, statusStages, currentStatus, currentSuggestions, activeTagFilter, gridSearchKeyword, currentClaimFilter, currentSimilarRequestFilter, currentWorkflowOrgScopeId, allSuggestions, workflowSettings, currentSettingsSection, activeActionMenu, rowActionIdCounter, rowActionRegistry, setCurrentStatus, setCurrentSuggestions, setActiveTagFilter, setGridSearchKeyword, setCurrentClaimFilter, setCurrentWorkflowOrgScopeId, setActiveActionMenu, setGrid, setAllSuggestions, incrementRowActionIdCounter } from './state.js';
+import { pb, gridContainer, staffGridFilterBar, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, additionalCopyStatusFilterSelect, gridSearchInput, settingsContainer, grid, formatMap, ageMap, closeReasonMap, descriptions, emptyStateMessages, statusStages, currentStatus, currentSuggestions, activeTagFilter, gridSearchKeyword, currentClaimFilter, currentSimilarRequestFilter, currentAdditionalCopyStatus, currentWorkflowOrgScopeId, allSuggestions, workflowSettings, currentSettingsSection, activeActionMenu, rowActionIdCounter, rowActionRegistry, setCurrentStatus, setCurrentSuggestions, setActiveTagFilter, setGridSearchKeyword, setCurrentClaimFilter, setCurrentWorkflowOrgScopeId, setActiveActionMenu, setGrid, setAllSuggestions, incrementRowActionIdCounter } from './state.js';
 import { openEdit, openPolarisSearch, polarisSearchValueForRow, renderPolarisSearchButtonMarkup } from './modals.js';
 import { openNewSuggestionForPatron } from './patron.js';
 import { undoRow, deleteClosedRequest, closeDuplicateRequest } from './actions.js';
@@ -36,22 +36,24 @@ export async function loadTab(status) {
 
   try {
     if (status === 'additional_copies') {
-      const scopedResult = await safeFetchAdditionalCopies('open');
-      const records = Array.isArray(scopedResult.items) ? scopedResult.items : [];
+      const openResult = await safeFetchAdditionalCopies('open');
+      const openRecords = Array.isArray(openResult.items) ? openResult.items : [];
+      
+      const closedResult = await safeFetchAdditionalCopies('closed');
+      const closedRecords = Array.isArray(closedResult.items) ? closedResult.items : [];
+      
       const titleResult = await safeFetchTitleRequests();
       const titleRecords = Array.isArray(titleResult.items) ? titleResult.items : [];
       
-      const closedAdditionalResult = await safeFetchAdditionalCopies('closed');
-      const closedAdditionalRecords = Array.isArray(closedAdditionalResult.items) ? closedAdditionalResult.items : [];
-      const closedAdditionalCount = closedAdditionalRecords.length;
-      
-      updateWorkflowScopeControl(scopedResult);
+      updateWorkflowScopeControl(currentAdditionalCopyStatus === 'closed' ? closedResult : openResult);
       
       // allSuggestions should include EVERYTHING for duplicate detection to work
-      setAllSuggestions([...titleRecords, ...records, ...closedAdditionalRecords]);
+      setAllSuggestions([...titleRecords, ...openRecords, ...closedRecords]);
       
-      updateTabCounts(titleRecords, records.length, closedAdditionalCount);
-      renderAdditionalCopiesGrid(records);
+      updateTabCounts(titleRecords, openRecords.length, closedRecords.length);
+      
+      const recordsToRender = currentAdditionalCopyStatus === 'closed' ? closedRecords : openRecords;
+      renderAdditionalCopiesGrid(recordsToRender);
       announceTabLoaded(status);
       return;
     }
@@ -319,8 +321,12 @@ function renderStatusGrid(status, records) {
 
 function renderAdditionalCopiesGrid(records) {
   setCurrentSuggestions(records);
-  hideTagFilter();
-  hideClaimFilter();
+  updateTagFilter(records);
+  updateClaimFilter();
+  if (additionalCopyStatusFilterSelect) {
+    additionalCopyStatusFilterSelect.classList.remove('hidden');
+    additionalCopyStatusFilterSelect.value = currentAdditionalCopyStatus;
+  }
   if (!records.length) {
     gridContainer.textContent = '';
     const empty = document.createElement('div');
@@ -683,6 +689,9 @@ export function hideTagFilter() {
     tagFilterSelect.classList.add('hidden');
     tagFilterSelect.innerHTML = '';
   }
+  if (additionalCopyStatusFilterSelect) {
+    additionalCopyStatusFilterSelect.classList.add('hidden');
+  }
   if (staffGridFilterBar) {
     staffGridFilterBar.classList.add('hidden');
   }
@@ -854,13 +863,11 @@ export function renderCurrentGrid(status = currentStatus) {
     gridSearchInput.value = gridSearchKeyword;
   }
 
-  const visibleRecords = status === 'additional_copies'
-    ? currentSuggestions
-    : applyClaimFilter(
-      applySimilarRequestFilter(
-        applyTagFilter(currentSuggestions)
-      )
-    );
+  const visibleRecords = applyClaimFilter(
+    applySimilarRequestFilter(
+      applyTagFilter(currentSuggestions)
+    )
+  );
 
   if (!visibleRecords.length) {
     gridContainer.innerHTML = `<div class="alert alert-light border">${escapeAttr(emptyFilteredGridMessage())}</div>`;

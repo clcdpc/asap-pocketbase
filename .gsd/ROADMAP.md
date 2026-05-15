@@ -168,7 +168,7 @@
 - [x] Existing placeholders (e.g., {{duplicate_date}}) still work.
 - [x] Security: Labels containing HTML-like text do not inject executable markup.
 
----
+
 
 ## Milestone 2: Staff Workflow Hardening and UI Polish
 **Status**: ✅ Complete
@@ -245,6 +245,42 @@
 - [x] ID/ISBN column is visible in the Suggestions tab.
 - [x] Barcode column remains at 160px.
 - [x] Grid remains readable without horizontal scrolling if possible, or handles overflow gracefully.
+
+---
+
+### Phase 14: Add Filters to Additional Copy Tab
+**Status**: ✅ Complete
+**Objective**: Add any missing copy filters to the additional copy tab. Search, Claim and Flag filters should be present.
+**Depends on**: Phase 13
+
+**Tasks**:
+- TBD
+
+---
+
+### Phase 15: Add Additional Copies to Analytics
+**Status**: ⬜ Not Started
+**Objective**: Include additional-copy request metrics in the staff analytics dashboard to provide a complete overview of all request types.
+**Depends on**: Phase 14
+
+**Tasks**:
+- [ ] TBD (run /plan 15 to create)
+
+**Verification**:
+- TBD
+
+---
+
+### Phase 16: Auto-Close Setting for Additional Copies
+**Status**: ⬜ Not Started
+**Objective**: Implement a library-scoped setting and background job to automatically close additional-copy requests after a configurable number of days.
+**Depends on**: Phase 15
+
+**Tasks**:
+- [ ] TBD (run /plan 16 to create)
+
+**Verification**:
+- TBD
 
 ---
 

@@ -1,4 +1,4 @@
-import { pb, loginContainer, setupContainer, appContainer, loginForm, setupForm, logoutBtn, profileBtn, grid, gridSearchInput, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, currentRejectionTemplates, setCurrentRejectionTemplates, statusStages, stageQueryMap, currentStatus, activeTagFilter, gridSearchKeyword, setGridSearchKeyword, workflowSettings, bootstrapAdminMessage, setupRequired, currentEmailStatus, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, settingsSectionIds, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, currentLibraryContextOrgId, setCurrentStatus, setActiveTagFilter, setCurrentClaimFilter, setCurrentSimilarRequestFilter, setBootstrapAdminMessage, setSetupRequired, setOrganizationsStatusMessage, setCurrentSettingsSection, setSettingsDirty, setCurrentEmailStatus } from './state.js';
+import { pb, loginContainer, setupContainer, appContainer, loginForm, setupForm, logoutBtn, profileBtn, grid, gridSearchInput, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, additionalCopyStatusFilterSelect, currentRejectionTemplates, setCurrentRejectionTemplates, statusStages, stageQueryMap, currentStatus, activeTagFilter, gridSearchKeyword, setGridSearchKeyword, workflowSettings, bootstrapAdminMessage, setupRequired, currentEmailStatus, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, settingsSectionIds, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, currentLibraryContextOrgId, setCurrentStatus, setActiveTagFilter, setCurrentClaimFilter, setCurrentSimilarRequestFilter, setCurrentAdditionalCopyStatus, setBootstrapAdminMessage, setSetupRequired, setOrganizationsStatusMessage, setCurrentSettingsSection, setSettingsDirty, setCurrentEmailStatus } from './state.js';
 import { loadTab, renderCurrentGrid, closeActionMenu, escapeAttr } from './grid.js';
 import { syncPolarisOrganizations } from './settings-polaris.js';
 import { loadSettings, checkSettingsDirty, handleLibraryContextSwitch, refreshLibrarySelectorIndicators } from './settings.js';
@@ -846,5 +846,12 @@ if (claimFilterSelect) {
   claimFilterSelect.addEventListener('change', event => {
     setCurrentClaimFilter(event.target.value || 'all');
     renderCurrentGrid(currentStatus);
+  });
+}
+
+if (additionalCopyStatusFilterSelect) {
+  additionalCopyStatusFilterSelect.addEventListener('change', event => {
+    setCurrentAdditionalCopyStatus(event.target.value || 'open');
+    loadTab(currentStatus);
   });
 }
