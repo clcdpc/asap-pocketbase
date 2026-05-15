@@ -19,7 +19,7 @@ function extractFunction(source, name) {
   throw new Error(`Could not parse ${name}`);
 }
 
-const source = fs.readFileSync(path.resolve(__dirname, '../lib/staff_routes.js'), 'utf8');
+const source = fs.readFileSync(path.resolve(__dirname, '../lib/staff/title_requests.js'), 'utf8');
 const fnCode = [
   extractFunction(source, 'handleDuplicateBibRequest'),
   extractFunction(source, 'markDuplicateClose'),

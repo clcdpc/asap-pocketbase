@@ -72,7 +72,7 @@ const result = staffRoutes.updateLibrarySettings({
   json(code, payload) { return { code, payload }; }
 });
 
-assert.strictEqual(result.code, 200);
+console.log('RESULT', result); assert.strictEqual(result.code, 200);
 assert.ok(savedRows.length > 0, 'Expected a format claim rule row to be saved');
 assert.strictEqual(savedRows[0].get('format'), 'videogame');
 

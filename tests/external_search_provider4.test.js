@@ -67,7 +67,7 @@ function runTests() {
   assert.strictEqual(configured.externalSearch4Label, "Search Local Catalog");
   assert.strictEqual(configured.externalSearch4UrlTemplate, "https://catalog.example.test/search?q={{title}}");
 
-  const staffRoutes = fileText("lib/staff_routes.js");
+  const staffRoutes = fileText("lib/staff/settings.js");
   assert.ok(staffRoutes.includes('"externalSearch4Enabled"'));
   assert.ok(staffRoutes.includes('"externalSearch4Label"'));
   assert.ok(staffRoutes.includes('"externalSearch4UrlTemplate"'));
