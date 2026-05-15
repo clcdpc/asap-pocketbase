@@ -99,6 +99,26 @@ if (syncOrganizationsBtn) {
   });
 }
 
+const syncMaterialTypesBtn = document.getElementById('btn-sync-material-types');
+if (syncMaterialTypesBtn) {
+  syncMaterialTypesBtn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    const resultEl = document.getElementById('material-types-sync-result');
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    setInlineResult(resultEl, 'Syncing material types...', 'ml-2 text-muted');
+
+    try {
+      const result = await authorizedJson('/api/asap/staff/material-types/sync', { method: 'POST' });
+      setInlineResult(resultEl, `Synced ${result.count || 0} material types.`, 'ml-2 text-success font-weight-bold');
+    } catch (err) {
+      setInlineResult(resultEl, 'Error: ' + (err.message || 'Sync failed.'), 'ml-2 text-danger font-weight-bold');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
 document.getElementById('btn-run-hold-check').addEventListener('click', async () => {
   const btn = document.getElementById('btn-run-hold-check');
   const msg = document.getElementById('job-msg');

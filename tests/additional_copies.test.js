@@ -1,0 +1,111 @@
+const assert = require("assert");
+
+global.__hooks = __dirname + "/../pb_hooks";
+
+class MockRecord {
+  constructor(collectionOrData, maybeData) {
+    this.collection = collectionOrData && collectionOrData.name ? collectionOrData.name : "";
+    this.data = maybeData || (collectionOrData && !collectionOrData.name ? collectionOrData : {});
+    this.id = this.data.id || "";
+  }
+  get(key) {
+    return this.data[key];
+  }
+  getBool(key) {
+    return !!this.data[key];
+  }
+  set(key, value) {
+    this.data[key] = value;
+  }
+}
+
+global.Record = MockRecord;
+
+const additionalCopies = require("../lib/additional_copies.js");
+
+function makeStaff(data) {
+  return new MockRecord(Object.assign({
+    id: "staff1",
+    username: "selector",
+    role: "staff",
+    libraryOrgId: "10",
+    libraryOrgName: "Main"
+  }, data || {}));
+}
+
+function makeApp() {
+  const saved = [];
+  const source = new MockRecord({
+    id: "req1",
+    libraryOrgId: "10",
+    libraryOrgName: "Main",
+    title: "Source Title",
+    author: "Source Author",
+    format: "book",
+    identifier: "9781",
+    publication: "Already published",
+    status: "pending_hold"
+  });
+  const taskRows = [
+    new MockRecord({ id: "task1", status: "open", libraryOrgId: "10", bibid: "111", title: "Mine", created: "2026-05-05" }),
+    new MockRecord({ id: "task2", status: "open", libraryOrgId: "20", bibid: "222", title: "Other", created: "2026-05-06" }),
+    new MockRecord({ id: "task3", status: "closed", libraryOrgId: "10", bibid: "333", title: "Closed", created: "2026-05-07" }),
+  ];
+  return {
+    saved,
+    source,
+    findCollectionByNameOrId(name) {
+      return { name };
+    },
+    findFirstRecordByData(collection, field, value) {
+      if (collection === "polaris_organizations" && field === "organizationId" && value === "10") {
+        return new MockRecord({ id: "orgpb1", organizationId: "10" });
+      }
+      throw new Error("not found");
+    },
+    findRecordById(collection, id) {
+      if (collection === "title_requests" && id === "req1") return source;
+      throw new Error("not found");
+    },
+    findRecordsByFilter(collection, filter, sort, limit, offset, params) {
+      assert.strictEqual(collection, "additional_copy_requests");
+      let rows = taskRows.filter(row => row.get("status") === params.status);
+      if (params.libraryOrgId) rows = rows.filter(row => row.get("libraryOrgId") === params.libraryOrgId);
+      return rows.slice(offset, offset + limit);
+    },
+    save(record) {
+      if (!record.id) record.id = "saved" + (saved.length + 1);
+      saved.push(record);
+    }
+  };
+}
+
+const app = makeApp();
+const task = additionalCopies.createFromTitleRequest(app, app.source, makeStaff(), {
+  bibid: "999",
+  selectedPolarisTitle: "Catalog Title",
+  selectedPolarisAuthor: "Catalog Author"
+});
+
+assert.strictEqual(task.get("sourceTitleRequest"), "req1");
+assert.strictEqual(task.get("libraryOrgId"), "10");
+assert.strictEqual(task.get("bibid"), "999");
+assert.strictEqual(task.get("title"), "Catalog Title");
+assert.strictEqual(task.get("status"), "open");
+assert.match(task.get("notes"), /Created from request req1 by selector/);
+assert.strictEqual(app.source.get("status"), "pending_hold");
+
+const libraryList = additionalCopies.listForStaff(app, makeStaff(), { status: "open" });
+assert.deepStrictEqual(libraryList.items.map(item => item.id), ["task1"]);
+
+const superList = additionalCopies.listForStaff(app, makeStaff({ role: "super_admin", libraryOrgId: "" }), { status: "open", scope: "all" });
+assert.deepStrictEqual(superList.items.map(item => item.id), ["task1", "task2"]);
+
+const closeTarget = new MockRecord({ id: "task4", status: "open", libraryOrgId: "10" });
+additionalCopies.closeTask(app, closeTarget, makeStaff());
+assert.strictEqual(closeTarget.get("status"), "closed");
+assert.strictEqual(closeTarget.get("closedByUsername"), "selector");
+assert.ok(closeTarget.get("closedAt"));
+assert.strictEqual(app.source.get("status"), "pending_hold");
+
+console.log("Additional-copy helper tests passed.");

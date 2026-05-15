@@ -63,6 +63,22 @@ export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
   setSelectValue(document.getElementById('edit-publication'), row.publication || publicationOptions[0]);
   document.getElementById('edit-exact-publication-date').value = dateOnly(row.exactPublicationDate);
   document.getElementById('edit-autohold').checked = !!row.autohold;
+
+  const isAdditionalCopy = row.type === 'additional_copy';
+  const autoholdContainer = document.getElementById('edit-autohold')?.closest('.custom-control');
+  if (autoholdContainer) {
+    autoholdContainer.classList.toggle('hidden', isAdditionalCopy);
+  }
+
+  const bibHint = document.getElementById('edit-bibid-hint');
+  if (bibHint) {
+    if (isAdditionalCopy) {
+      bibHint.textContent = 'Required for all additional-copy tasks. Use Lookup to verify.';
+    } else {
+      bibHint.textContent = 'Required for Pending hold. Use Lookup to verify.';
+    }
+  }
+
   renderEditPatronContext(row);
   renderEditWorkflowTags(row.workflowTags, row);
   renderEditClaimState(row);
@@ -365,9 +381,24 @@ export function renderPatronContext(row, options = {}) {
 }
 
 export function renderEditPatronContext(row) {
+  const isAdditionalCopy = row.type === 'additional_copy';
+  const blockId = 'edit-patron-context';
+  const block = document.getElementById(blockId);
+
+  if (isAdditionalCopy) {
+    if (block) {
+      block.classList.add('hidden');
+    }
+    return;
+  }
+
+  if (block) {
+    block.classList.remove('hidden');
+  }
+
   renderPatronContext(row, {
     containerSelector: '#editModal .asap-dialog-edit-body',
-    blockId: 'edit-patron-context',
+    blockId: blockId,
     expanded: false,
     anchorSelector: '#edit-rejection-template-container'
   });
@@ -609,19 +640,101 @@ async function fetchPolarisSearch(row, mode, query, options) {
   if (options?.bibId) {
     payload.bibId = options.bibId;
   }
-  const res = await fetch('/api/asap/staff/bib-lookup', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': pb.authStore.token
-    },
-    body: JSON.stringify(payload)
-  });
+  let res;
+  try {
+    res = await fetch('/api/asap/staff/bib-lookup', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': pb.authStore.token
+      },
+      body: JSON.stringify(payload)
+    });
+  } catch (err) {
+    err.networkError = true;
+    throw err;
+  }
   const data = await res.json();
   if (!res.ok) throw new Error(data.message || 'Polaris search failed');
   return data;
 }
 
+function confirmAdditionalCopyAction(result) {
+  return new Promise(resolve => {
+    const previousFocus = document.activeElement;
+    const dialog = document.createElement('dialog');
+    dialog.className = 'asap-dialog asap-dialog-small';
+
+    const body = document.createElement('div');
+    body.className = 'asap-dialog-small-body';
+
+    const title = document.createElement('h2');
+    title.className = 'h5 mb-3';
+    title.textContent = 'Buy another copy + Queue Now';
+
+    const message = document.createElement('p');
+    message.className = 'dialog-message';
+    const bibId = result && result.bibId ? String(result.bibId) : '';
+    message.textContent = bibId
+      ? `Create an additional-copy task for BIB ${bibId} and queue the patron hold on this same BIB?`
+      : 'Create an additional-copy task and queue the patron hold on this same BIB?';
+
+    const checkboxGroup = document.createElement('div');
+    checkboxGroup.className = 'custom-control custom-checkbox mb-4';
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.id = 'confirm-additional-copy-reminder';
+    checkbox.className = 'custom-control-input';
+    checkbox.checked = !!(pb.authStore.model && pb.authStore.model.purchase_reminder_default);
+
+    const label = document.createElement('label');
+    label.className = 'custom-control-label font-weight-bold';
+    label.setAttribute('for', 'confirm-additional-copy-reminder');
+    label.textContent = 'Email me a purchase reminder';
+
+    checkboxGroup.append(checkbox, label);
+
+    const actions = document.createElement('div');
+    actions.className = 'asap-dialog-actions';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'btn btn-sm btn-secondary';
+    cancelBtn.textContent = 'Cancel';
+
+    const okBtn = document.createElement('button');
+    okBtn.type = 'button';
+    okBtn.className = 'btn btn-sm btn-success';
+    okBtn.textContent = 'Confirm';
+
+    actions.append(cancelBtn, okBtn);
+
+    body.append(title, message, checkboxGroup, actions);
+    dialog.append(body);
+    document.body.appendChild(dialog);
+
+    let settled = false;
+    function cleanup(resultValue) {
+      if (settled) return;
+      settled = true;
+      if (dialog.open) dialog.close();
+      dialog.remove();
+      if (previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
+      resolve(resultValue);
+    }
+    cancelBtn.addEventListener('click', () => cleanup({ confirmed: false, emailPurchaseReminder: false }));
+    okBtn.addEventListener('click', () => cleanup({ confirmed: true, emailPurchaseReminder: checkbox.checked }));
+    dialog.addEventListener('cancel', event => {
+      event.preventDefault();
+      cleanup({ confirmed: false, emailPurchaseReminder: false });
+    });
+    dialog.showModal();
+    cancelBtn.focus();
+  });
+}
+
+let holdingsLookupUnavailable = false;
 
 function renderPolarisSearchResults(row, mode, data, options = {}) {
   const els = polarisSearchElements();
@@ -696,6 +809,7 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
 
     const launchedFromEditForm = options.source === 'edit';
     let holdBtn = null;
+    let additionalCopyBtn = null;
     if (launchedFromEditForm) {
       const applyBtn = document.createElement('button');
       applyBtn.type = 'button';
@@ -720,10 +834,25 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
         await performImmediateStaffAction(row.id, payload);
       });
       actionsDiv.appendChild(holdBtn);
+
+      additionalCopyBtn = document.createElement('button');
+      additionalCopyBtn.type = 'button';
+      additionalCopyBtn.className = 'btn btn-sm btn-outline-success hidden';
+      additionalCopyBtn.textContent = 'Buy another copy + Queue Now';
+      additionalCopyBtn.disabled = true;
+      additionalCopyBtn.addEventListener('click', async () => {
+        const confirmResult = await confirmAdditionalCopyAction(result);
+        if (!confirmResult.confirmed) return;
+        const payload = buildPayload('pending_hold', 'additionalCopy');
+        payload.emailPurchaseReminder = confirmResult.emailPurchaseReminder;
+        payload.autohold = true;
+        await performImmediateStaffAction(row.id, payload);
+      });
+      actionsDiv.appendChild(additionalCopyBtn);
     }
 
     // Background Holdings Check
-    if (result.bibId) {
+    if (result.bibId && !holdingsLookupUnavailable) {
       fetchPolarisSearch(row, 'identifier', '', { bibId: result.bibId })
         .then(details => {
           holdingsDiv.replaceChildren();
@@ -769,14 +898,36 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
               holdBtn.disabled = false;
             }
           }
+
+          if (additionalCopyBtn && result.bibId && Number(summary.consortiumCount || 0) > 0) {
+            additionalCopyBtn.classList.remove('hidden');
+            additionalCopyBtn.disabled = false;
+          }
         })
         .catch(err => {
+          if (err && err.networkError) {
+            holdingsLookupUnavailable = true;
+          }
           holdingsDiv.replaceChildren();
           const error = document.createElement('span');
           error.className = 'text-danger small';
           error.textContent = 'Holdings check failed.';
           holdingsDiv.appendChild(error);
+          if (holdBtn) {
+            holdBtn.className = 'btn btn-sm btn-outline-warning';
+            holdBtn.disabled = false;
+          }
         });
+    } else if (result.bibId) {
+      holdingsDiv.replaceChildren();
+      const skipped = document.createElement('span');
+      skipped.className = 'text-muted small';
+      skipped.textContent = 'Holdings check unavailable.';
+      holdingsDiv.appendChild(skipped);
+      if (holdBtn) {
+        holdBtn.className = 'btn btn-sm btn-outline-warning';
+        holdBtn.disabled = false;
+      }
     }
 
     div.appendChild(actionsDiv);
@@ -1118,6 +1269,14 @@ async function performImmediateStaffAction(id, payload) {
         showToast('Purchase saved and reminder email sent.', 'success');
       } else {
         showToast('Purchase saved.', 'success');
+      }
+    } else if (actionValue === 'additionalCopy') {
+      if (reminder && reminder.requested && reminder.sent) {
+        showToast('Additional-copy task created, request queued, and reminder email sent.', 'success');
+      } else if (reminder && reminder.requested) {
+        showToast(reminder.message || 'Additional-copy task created, but the reminder email could not be sent.', 'warning');
+      } else {
+        showToast('Additional-copy task created and request queued.', 'success');
       }
     } else if (nextStatus === 'pending_hold') {
       showToast(`Request queued for hold (BIB ${payload.bibid || 'N/A'}).`, 'success');

@@ -39,6 +39,10 @@ function runTests() {
   assert.ok(modalJs.includes("Use BIB in Queue Form"));
   assert.ok(modalJs.includes("Save to finish this action."));
   assert.ok(modalJs.includes("Use BIB & Queue Now"));
+  assert.ok(modalJs.includes("Buy another copy + Queue Now"));
+  assert.ok(modalJs.includes("summary.consortiumCount"));
+  assert.ok(modalJs.includes("buildPayload('pending_hold', 'additionalCopy')"));
+  assert.ok(modalJs.includes("payload.emailPurchaseReminder = confirmResult.emailPurchaseReminder"));
   assert.ok(modalJs.indexOf("const launchedFromEditForm = options.source === 'edit'") < modalJs.indexOf("performImmediateStaffAction(row.id, payload)"));
 
   const settingsUiJs = fileText("pb_public/staff/js/settings-ui.js");

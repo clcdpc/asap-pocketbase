@@ -4,30 +4,51 @@ import { authorizedJson } from './http.js';
 import { showToast, showAlert, showConfirm } from './dialogs.js';
 import { loadTab, escapeAttr } from './grid.js';
 
+export function undoConfirmMessage(type) {
+  if (type === 'additional_copy') {
+    return 'Undo action and return this request to Additional Copies?';
+  }
+  return 'Undo action and return this suggestion to Suggestions?';
+}
+
 export async function undoRow(id) {
-  if (!await showConfirm('Undo action', 'Undo action and return this suggestion to Suggestions?')) return;
-  const row = currentSuggestions.find(r => r.id === id);
+  const row = currentSuggestions.find(r => r.id === id) || allSuggestions.find(r => r.id === id);
   if (!row) return;
+
+  if (!await showConfirm('Undo action', undoConfirmMessage(row.type))) return;
+
   try {
-    const res = await fetch(`/api/asap/staff/title-requests/${id}/action`, {
+    let url;
+    let body;
+
+    if (row.type === 'additional_copy') {
+      url = `/api/asap/staff/additional-copies/${encodeURIComponent(id)}/reopen`;
+      body = JSON.stringify({});
+    } else {
+      url = `/api/asap/staff/title-requests/${encodeURIComponent(id)}/action`;
+      body = JSON.stringify({
+        ...row,
+        status: 'suggestion',
+        editedBy: pb.authStore.model.username
+      });
+    }
+
+    const res = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': pb.authStore.token
       },
-      body: JSON.stringify({
-        ...row,
-        status: 'suggestion',
-        editedBy: pb.authStore.model.username
-      })
+      body: body
     });
+
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      throw new Error(data.message || 'Error undoing suggestion');
+      throw new Error(data.message || 'Error undoing action');
     }
     loadTab(currentStatus);
   } catch (err) {
-    await showAlert(err.message || 'Error undoing suggestion');
+    await showAlert(err.message || 'Error undoing action');
   }
 }
 

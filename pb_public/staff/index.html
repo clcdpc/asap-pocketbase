@@ -10,7 +10,7 @@
     integrity="sha384-MCw98/SFnGE8fJT3GXwEOngsV7Zt27NXFoaoApmYm81iuXoPkFOJwJ8ERdknLPMO" crossorigin="anonymous">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridjs@6.2.0/dist/theme/mermaid.min.css">
-  <link rel="stylesheet" href="/staff/styles.css?v=20260513-patron-accordion">
+  <link rel="stylesheet" href="/staff/styles.css?v=20260515-additional-copies">
 </head>
 
 <body>
@@ -136,6 +136,9 @@
             aria-label="0 records">0</span></a></li>
       <li class="nav-item" role="presentation"><a class="nav-link" data-status="hold_placed" role="tab"
           aria-selected="false">Hold placed <span class="badge badge-secondary tab-count"
+            aria-label="0 records">0</span></a></li>
+      <li class="nav-item" role="presentation"><a class="nav-link" data-status="additional_copies" role="tab"
+          aria-selected="false">Additional copies <span class="badge badge-secondary tab-count"
             aria-label="0 records">0</span></a></li>
       <li class="nav-item" role="presentation"><a class="nav-link" data-status="closed" role="tab"
           aria-selected="false">Closed <span class="badge badge-secondary tab-count" aria-label="0 records">0</span></a>
@@ -364,6 +367,13 @@
                     <button type="button" id="btn-sync-organizations" class="btn btn-outline-info btn-sm">Sync Polaris
                       organizations now</button>
                     <span id="organizations-sync-result" class="ml-2"></span>
+                  </div>
+                  <div class="settings-maintenance mt-4 border-top pt-3">
+                    <div class="font-weight-bold mb-1">Material type cache</div>
+                    <p class="small text-muted mb-2">ASAP caches Polaris material types to show human-readable format labels in search results. Use this sync to refresh the cache if new material types are added to Polaris.</p>
+                    <button type="button" id="btn-sync-material-types" class="btn btn-outline-info btn-sm">Sync Polaris
+                      material types now</button>
+                    <span id="material-types-sync-result" class="ml-2"></span>
                   </div>
                 </div>
               </div>
@@ -1528,7 +1538,7 @@
 
 <script src="https://unpkg.com/pocketbase/dist/pocketbase.umd.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gridjs@6.2.0/dist/gridjs.umd.js"></script>
-<script type="module" src="./js/app.js?v=20260513-patron-accordion"></script>
+<script type="module" src="./js/app.js?v=20260515-additional-copies"></script>
 </body>
 
 </html>

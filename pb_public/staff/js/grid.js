@@ -4,7 +4,7 @@ import { openNewSuggestionForPatron } from './patron.js';
 import { undoRow, deleteClosedRequest, closeDuplicateRequest } from './actions.js';
 import { leapBibUrl, isSuperAdminStaff, isAdminStaff, getSettingsSectionFromHash, activateSettingsSection } from './api.js';
 import { authorizedJson } from './http.js';
-import { showToast, showAlert, closeOpenDialogs } from './dialogs.js';
+import { showToast, showAlert, showConfirm, closeOpenDialogs } from './dialogs.js';
 import { showSettingsAccessDenied, hideSettingsAccessDenied, loadSettings } from './settings.js';
 import { loadAnalytics } from './analytics.js';
 import { renderNoteActivity } from './note-activity.js';
@@ -35,11 +35,47 @@ export async function loadTab(status) {
   }
 
   try {
+    if (status === 'additional_copies') {
+      const scopedResult = await safeFetchAdditionalCopies('open');
+      const records = Array.isArray(scopedResult.items) ? scopedResult.items : [];
+      const titleResult = await safeFetchTitleRequests();
+      const titleRecords = Array.isArray(titleResult.items) ? titleResult.items : [];
+      
+      const closedAdditionalResult = await safeFetchAdditionalCopies('closed');
+      const closedAdditionalRecords = Array.isArray(closedAdditionalResult.items) ? closedAdditionalResult.items : [];
+      const closedAdditionalCount = closedAdditionalRecords.length;
+      
+      updateWorkflowScopeControl(scopedResult);
+      
+      // allSuggestions should include EVERYTHING for duplicate detection to work
+      setAllSuggestions([...titleRecords, ...records, ...closedAdditionalRecords]);
+      
+      updateTabCounts(titleRecords, records.length, closedAdditionalCount);
+      renderAdditionalCopiesGrid(records);
+      announceTabLoaded(status);
+      return;
+    }
+
     const scopedResult = await fetchTitleRequests();
-    const records = Array.isArray(scopedResult.items) ? scopedResult.items : [];
+    let records = Array.isArray(scopedResult.items) ? scopedResult.items : [];
     updateWorkflowScopeControl(scopedResult);
-    setAllSuggestions(records);
-    updateTabCounts(records);
+
+    const openAdditionalResult = await safeFetchAdditionalCopies('open');
+    const openAdditionalRecords = Array.isArray(openAdditionalResult.items) ? openAdditionalResult.items : [];
+    const openAdditionalCount = openAdditionalRecords.length;
+
+    const closedAdditionalResult = await safeFetchAdditionalCopies('closed');
+    const closedAdditionalRecords = Array.isArray(closedAdditionalResult.items) ? closedAdditionalResult.items : [];
+    const closedAdditionalCount = closedAdditionalRecords.length;
+
+    // allSuggestions should always include EVERYTHING for duplicate detection to work
+    setAllSuggestions([...records, ...openAdditionalRecords, ...closedAdditionalRecords]);
+
+    if (status === 'closed') {
+      records = records.concat(closedAdditionalRecords);
+    }
+
+    updateTabCounts(records, openAdditionalCount, closedAdditionalCount);
 
     if (!renderStatusGrid(status, records)) {
       return;
@@ -189,6 +225,34 @@ async function fetchTitleRequests() {
   return authorizedJson('/api/asap/staff/title-requests?' + params.toString(), { cache: 'no-store' });
 }
 
+async function fetchAdditionalCopies(status = 'open') {
+  const params = new URLSearchParams();
+  if (isSuperAdminStaff()) {
+    params.set('scope', currentWorkflowOrgScopeId || 'all');
+  }
+  params.set('status', status);
+  params.set('_', String(Date.now()));
+  return authorizedJson('/api/asap/staff/additional-copies?' + params.toString(), { cache: 'no-store' });
+}
+
+async function safeFetchTitleRequests() {
+  try {
+    return await fetchTitleRequests();
+  } catch (err) {
+    console.warn('Title-request count refresh failed.', err);
+    return { items: [] };
+  }
+}
+
+async function safeFetchAdditionalCopies(status = 'open') {
+  try {
+    return await fetchAdditionalCopies(status);
+  } catch (err) {
+    console.warn('Additional-copy refresh failed.', err);
+    return { items: [] };
+  }
+}
+
 function updateWorkflowScopeControl(data) {
   const wrapper = document.getElementById('workflow-library-scope-label');
   const select = document.getElementById('workflow-library-scope');
@@ -253,6 +317,40 @@ function renderStatusGrid(status, records) {
   return true;
 }
 
+function renderAdditionalCopiesGrid(records) {
+  setCurrentSuggestions(records);
+  hideTagFilter();
+  hideClaimFilter();
+  if (!records.length) {
+    gridContainer.textContent = '';
+    const empty = document.createElement('div');
+    empty.className = 'alert alert-light border';
+    empty.textContent = emptyStateMessages.additional_copies;
+    gridContainer.appendChild(empty);
+    return;
+  }
+  renderCurrentGrid('additional_copies');
+}
+
+async function renderAdditionalCopiesLoadError(err) {
+  hideTagFilter();
+  hideClaimFilter();
+  const titleResult = await safeFetchTitleRequests();
+  const titleRecords = Array.isArray(titleResult.items) ? titleResult.items : [];
+  updateTabCounts(titleRecords, 0);
+  gridContainer.replaceChildren();
+
+  const alert = document.createElement('div');
+  alert.className = 'alert alert-warning border';
+  const title = document.createElement('div');
+  title.className = 'font-weight-bold mb-1';
+  title.textContent = 'Additional copies could not load.';
+  const detail = document.createElement('div');
+  detail.textContent = err && err.message ? err.message : 'The additional-copy queue endpoint returned an error.';
+  alert.append(title, detail);
+  gridContainer.appendChild(alert);
+}
+
 function announceTabLoaded(status) {
   const announcer = document.getElementById('status-announcer');
   announcer.textContent = "Loaded " + status + " tab.";
@@ -292,20 +390,47 @@ const duplicateStatusNames = {
   outstanding_purchase: 'Pending purchase',
   pending_hold: 'Pending hold',
   hold_placed: 'Hold placed',
+  additional_copies: 'Additional copies',
   closed: 'Closed'
 };
 
+function normalizeMatchText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\([^)]*\)\s*$/, '') // Strip trailing parentheses
+    .replace(/[^\w\s]/g, ' ')     // Replace remaining punctuation with space
+    .replace(/\s+/g, ' ')          // Collapse spaces
+    .trim();
+}
+
+function normalizeMatchIdentifier(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '') // Strip everything except alphanumeric
+    .trim();
+}
+
 function duplicateMatchReasons(row, candidate) {
   const reasons = [];
-  if (candidate.identifier && row.identifier && candidate.identifier.trim().toLowerCase() === row.identifier.trim().toLowerCase()) {
+
+  const rowId = normalizeMatchIdentifier(row.identifier);
+  const candId = normalizeMatchIdentifier(candidate.identifier);
+  if (rowId && candId && rowId === candId) {
     reasons.push('identifier');
   }
-  if (candidate.bibid && row.bibid && candidate.bibid.trim().toLowerCase() === row.bibid.trim().toLowerCase()) {
+
+  const rowBib = normalizeMatchIdentifier(row.bibid);
+  const candBib = normalizeMatchIdentifier(candidate.bibid);
+  if (rowBib && candBib && rowBib === candBib) {
     reasons.push('BIB ID');
   }
-  if (candidate.title && row.title && candidate.title.trim().toLowerCase() === row.title.trim().toLowerCase()) {
+
+  const rowTitle = normalizeMatchText(row.polarisSearchTitle || row.title);
+  const candTitle = normalizeMatchText(candidate.polarisSearchTitle || candidate.title);
+  if (rowTitle && candTitle && rowTitle === candTitle) {
     reasons.push('title');
   }
+
   return reasons;
 }
 
@@ -314,7 +439,7 @@ export function getDuplicateSummary(row) {
 
   const matches = allSuggestions.map(r => {
     if (r.id === row.id) return false;
-    if (r.libraryOrgId !== row.libraryOrgId) return false;
+    // We now allow cross-library duplicates to be flagged
     const reasons = duplicateMatchReasons(row, r);
     return reasons.length ? { row: r, reasons } : null;
   }).filter(Boolean);
@@ -325,8 +450,17 @@ export function getDuplicateSummary(row) {
   const statusCounts = {};
   const reasonSet = new Set();
   matches.forEach(match => {
-    const s = normalizeStatus(match.row.status);
-    statusCounts[s] = (statusCounts[s] || 0) + 1;
+    let s = normalizeStatus(match.row.status);
+    if (match.row.type === 'additional_copy' && s === 'open') {
+      s = 'additional_copies';
+    }
+    
+    let statusLabel = duplicateStatusNames[s] || s;
+    if (match.row.libraryOrgId !== row.libraryOrgId && match.row.libraryOrgName) {
+      statusLabel += ` (${match.row.libraryOrgName})`;
+    }
+    
+    statusCounts[statusLabel] = (statusCounts[statusLabel] || 0) + 1;
     match.reasons.forEach(reason => reasonSet.add(reason));
   });
 
@@ -666,6 +800,22 @@ function claimSortValue(row) {
 }
 
 function getGridDataRow(row, status) {
+  if (status === 'additional_copies') {
+    return {
+      id: row.id,
+      title: normalizedSortText(row.title),
+      author: normalizedSortText(row.author),
+      bibid: bibSortValue(row.bibid),
+      format: normalizedSortText(formatMap[row.format] || row.format),
+      sourceTitleRequest: normalizedSortText(row.sourceTitleRequest),
+      sourceStatus: normalizedSortText(row.sourceStatus),
+      createdBy: normalizedSortText(row.createdByUsername),
+      created: dateSortValue(row.created),
+      notes: normalizedSortText(row.notes),
+      actions: row.id
+    };
+  }
+
   const base = {
     id: row.id,
     barcode: normalizedSortText(row.barcode),
@@ -704,11 +854,13 @@ export function renderCurrentGrid(status = currentStatus) {
     gridSearchInput.value = gridSearchKeyword;
   }
 
-  const visibleRecords = applyClaimFilter(
-    applySimilarRequestFilter(
-      applyTagFilter(currentSuggestions)
-    )
-  );
+  const visibleRecords = status === 'additional_copies'
+    ? currentSuggestions
+    : applyClaimFilter(
+      applySimilarRequestFilter(
+        applyTagFilter(currentSuggestions)
+      )
+    );
 
   if (!visibleRecords.length) {
     gridContainer.innerHTML = `<div class="alert alert-light border">${escapeAttr(emptyFilteredGridMessage())}</div>`;
@@ -759,14 +911,24 @@ function emptyFilteredGridMessage() {
   return 'No suggestions found.';
 }
 
-export function updateTabCounts(records) {
+export function updateTabCounts(records, openAdditionalCount = 0, closedAdditionalCount = 0) {
   const counts = Object.fromEntries(statusStages.map(status => [status, 0]));
   records.forEach(row => {
+    // Only count title requests from the main records list to avoid double-counting 
+    // when additional copies are merged into the same list (like in the Closed tab)
+    if (row.type !== 'title_request' && row.type !== undefined) return;
+    
     const status = normalizeStatus(row.status);
     if (Object.prototype.hasOwnProperty.call(counts, status)) {
       counts[status] += 1;
     }
   });
+  
+  // Add additional copy counts to their respective tabs
+  counts.additional_copies = openAdditionalCount;
+  if (counts.closed !== undefined) {
+    counts.closed += closedAdditionalCount;
+  }
 
   document.querySelectorAll('#status-tabs .nav-link[data-status]').forEach(link => {
     const status = link.getAttribute('data-status');
@@ -844,6 +1006,7 @@ const NOTES_COLUMN_WIDTH = '110px';
 
 
 export function getActionsColumnWidth(status) {
+  if (status === 'additional_copies') return '100px';
   if (status === 'suggestion') return '180px';
   if (status === 'outstanding_purchase') return '160px';
   return '100px';
@@ -934,6 +1097,31 @@ export function getGridColumns(status, rowById = new Map()) {
     hidden: true
   };
 
+  if (status === 'additional_copies') {
+    return [
+      idColumn,
+      titleColumn,
+      authorColumn,
+      {
+        id: 'bibid',
+        name: 'BIB ID',
+        width: '100px',
+        sort: false,
+        formatter: (cell, row) => renderBibIdCell(rowFor(row.cells[0].data))
+      },
+      formatColumn,
+      claimedColumn,
+      {
+        id: 'createdBy',
+        name: 'Created by',
+        width: '120px',
+        formatter: (cell, row) => escapeAttr(rowFor(row.cells[0].data).createdByUsername || '')
+      },
+      notesColumnDef,
+      actionsColumn
+    ];
+  }
+
   if (status === 'suggestion') {
     return [
       idColumn,
@@ -953,6 +1141,18 @@ export function getGridColumns(status, rowById = new Map()) {
   if (status === 'closed') {
     return [
       idColumn,
+      {
+        id: 'type',
+        name: 'Type',
+        width: '120px',
+        formatter: (cell, row) => {
+          const r = rowFor(row.cells[0].data);
+          if (r.type === 'additional_copy') {
+            return gridjs.html('<span class="badge badge-info" style="background-color: #17a2b8; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em;">Additional Copy</span>');
+          }
+          return gridjs.html('<span class="badge badge-secondary" style="background-color: #6c757d; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em;">Patron Suggestion</span>');
+        }
+      },
       barcodeColumn,
       titleColumn,
       authorColumn,
@@ -993,6 +1193,26 @@ export function getGridColumns(status, rowById = new Map()) {
 
   baseCols.push(submittedColumn, claimedColumn, notesColumnDef, actionsColumn);
   return baseCols;
+}
+
+function renderAdditionalCopySourceCell(row) {
+  const sourceId = String(row?.sourceTitleRequest || '').trim();
+  if (!sourceId) return '';
+  const url = new URL(window.location.href);
+  url.searchParams.set('stage', row.sourceStatus || 'pending_hold');
+  url.searchParams.set('request', sourceId);
+  const label = sourceId.slice(0, 8);
+  const statusText = row.sourceStatus ? ` (${row.sourceStatus.replace(/_/g, ' ')})` : '';
+  const wrapper = document.createElement('div');
+  const link = document.createElement('a');
+  link.href = url.pathname + url.search;
+  link.dataset.noRowEdit = 'true';
+  link.textContent = label;
+  const status = document.createElement('div');
+  status.className = 'small text-muted';
+  status.textContent = statusText;
+  wrapper.append(link, status);
+  return wrapper;
 }
 
 
@@ -1153,6 +1373,15 @@ export function formatCloseReason(row) {
 }
 
 export function getRowActions(row) {
+  if (currentStatus === 'additional_copies') {
+    return {
+      primary: { label: 'Close', className: 'btn-outline-secondary', onClick: () => closeAdditionalCopyRequest(row.id) },
+      secondary: [
+        ...claimActionsForRow(row)
+      ]
+    };
+  }
+
   const status = normalizeStatus(row.status);
 
   if (status === 'suggestion') {
@@ -1208,6 +1437,17 @@ export function getRowActions(row) {
   };
 }
 
+async function closeAdditionalCopyRequest(id) {
+  const confirmed = await showConfirm('Close additional-copy task?', 'Closing this task will not change the original patron suggestion.');
+  if (!confirmed) return;
+  await authorizedJson(`/api/asap/staff/additional-copies/${encodeURIComponent(id)}/close`, {
+    method: 'POST',
+    body: JSON.stringify({})
+  });
+  showToast('Additional-copy task closed.', 'success');
+  await loadTab(currentStatus);
+}
+
 function duplicateCloseActionForRow(row) {
   if (!row || normalizeStatus(row.status) === 'closed' || !hasWorkflowTag(row, 'Hold exists (same patron)')) {
     return null;
@@ -1237,8 +1477,12 @@ export async function unclaimRequest(requestId) {
 }
 
 async function mutateRequestClaim(requestId, action, successMessage) {
+  const row = currentSuggestions.find(r => r.id === requestId) || allSuggestions.find(r => r.id === requestId);
+  if (!row) return;
+
   try {
-    await authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(requestId)}/${action}`, {
+    const endpointPrefix = row.type === 'additional_copy' ? 'additional-copies' : 'title-requests';
+    await authorizedJson(`/api/asap/staff/${endpointPrefix}/${encodeURIComponent(requestId)}/${action}`, {
       method: 'POST',
       body: JSON.stringify({})
     });
@@ -1435,7 +1679,10 @@ function openSuggestionEditFromRow(recordId) {
   }
 
   const status = normalizeStatus(row.status);
-  openEdit(row.id, status || currentStatus, status === 'suggestion' ? 'Edit suggestion' : 'Edit', '', 'Save');
+  const isAdditionalCopy = row.type === 'additional_copy';
+  const defaultTitle = isAdditionalCopy ? 'Edit additional-copy task' : (status === 'suggestion' ? 'Edit suggestion' : 'Edit');
+  
+  openEdit(row.id, status || currentStatus, defaultTitle, '', 'Save');
 }
 
 gridContainer.addEventListener('click', (e) => {

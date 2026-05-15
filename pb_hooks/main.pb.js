@@ -97,6 +97,26 @@ routerAdd("GET", "/api/asap/staff/title-requests", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffTitleRequestsList(e);
 });
 
+routerAdd("GET", "/api/asap/staff/additional-copies", (e) => {
+  return require(`${__hooks}/../lib/staff_routes.js`).staffAdditionalCopiesList(e);
+});
+
+routerAdd("POST", "/api/asap/staff/additional-copies/{id}/close", (e) => {
+  return require(`${__hooks}/../lib/staff_routes.js`).staffAdditionalCopyClose(e);
+});
+
+routerAdd("POST", "/api/asap/staff/additional-copies/{id}/reopen", (e) => {
+  return require(`${__hooks}/../lib/staff_routes.js`).staffAdditionalCopyReopen(e);
+});
+
+routerAdd("POST", "/api/asap/staff/additional-copies/{id}/claim", (e) => {
+  return require(`${__hooks}/../lib/staff_routes.js`).staffAdditionalCopyClaim(e);
+});
+
+routerAdd("POST", "/api/asap/staff/additional-copies/{id}/unclaim", (e) => {
+  return require(`${__hooks}/../lib/staff_routes.js`).staffAdditionalCopyUnclaim(e);
+});
+
 routerAdd("GET", "/api/asap/staff/analytics", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffAnalytics(e);
 });
@@ -123,6 +143,32 @@ routerAdd("POST", "/api/asap/staff/requests/delete-closed", (e) => {
 
 routerAdd("POST", "/api/asap/staff/organizations/sync", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffSyncOrganizations(e);
+});
+
+routerAdd("POST", "/api/asap/staff/material-types/sync", function (e) {
+  try {
+    const routeUtils = require(`${__hooks}/../lib/route_utils.js`);
+    const polaris = require(`${__hooks}/../lib/polaris.js`);
+    if (!routeUtils.requireSuperAdminStaff(e)) {
+      return e.json(403, { success: false, message: "Super admin access required" });
+    }
+    var auth = polaris.adminStaffAuth();
+    var map = polaris.getMARCTypeOfMaterials(auth);
+    if (map && Object.keys(map).length > 0) {
+      var settings = e.app.findRecordById("polaris_settings", "polaris00000010");
+      settings.set("materialTypesCache", map);
+      settings.set("materialTypesCacheUpdated", new Date().toISOString());
+      e.app.save(settings);
+      return e.json(200, { success: true, count: Object.keys(map).length });
+    }
+    return e.json(400, { success: false, message: "No material types returned from Polaris." });
+  } catch (err) {
+    return e.json(400, { success: false, message: err.message || String(err) });
+  }
+});
+
+routerAdd("GET", "/api/asap/staff/material-types/sync", function (e) {
+  return e.json(405, { message: "Method Not Allowed. Use POST to sync material types." });
 });
 
 routerAdd("POST", "/api/asap/jobs/hold-check", (e) => {
