@@ -279,6 +279,37 @@ try {
   failed++;
 }
 
+console.log('\nRunning tests for findOrganization...');
+
+try {
+  const app = createMockApp({
+    '100': { organizationId: '100', name: 'Test Org' }
+  });
+  const org = orgsWithMock.findOrganization(app, '100');
+  assert.notStrictEqual(org, null, 'Should return the record');
+  assert.strictEqual(org.get('organizationId'), '100', 'Should have correct ID');
+  console.log('✅ findOrganization success case passed');
+  passed++;
+} catch (err) {
+  console.error(`❌ findOrganization success case failed: ${err.message}`);
+  failed++;
+}
+
+try {
+  const app = {
+    findFirstRecordByData: function() {
+      throw new Error('Database error');
+    }
+  };
+  const org = orgsWithMock.findOrganization(app, '100');
+  assert.strictEqual(org, null, 'Should return null on database error');
+  console.log('✅ findOrganization error handling passed');
+  passed++;
+} catch (err) {
+  console.error(`❌ findOrganization error handling failed: ${err.message}`);
+  failed++;
+}
+
 // Restore original require just in case
 require('module').prototype.require = originalRequire;
 
