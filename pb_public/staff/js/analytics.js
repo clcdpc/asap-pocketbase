@@ -11,7 +11,8 @@ const stageLabels = {
   outstanding_purchase: 'Pending purchase',
   pending_hold: 'Pending hold',
   hold_placed: 'Hold placed',
-  closed: 'Closed'
+  closed: 'Closed',
+  additional_copies: 'Additional copies'
 };
 
 const reasonLabels = {
