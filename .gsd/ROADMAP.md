@@ -259,7 +259,7 @@
 ---
 
 ### Phase 15: Add Additional Copies to Analytics
-**Status**: ⬜ Not Started
+**Status**: ✅ Complete
 **Objective**: Include additional-copy request metrics in the staff analytics dashboard to provide a complete overview of all request types.
 **Depends on**: Phase 14
 
