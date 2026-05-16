@@ -465,7 +465,9 @@ export function renderEditLeapBibLink(bibId) {
     return;
   }
   container.classList.remove('hidden');
-  container.innerHTML = `<a class="btn btn-sm btn-outline-primary" href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">Open Bib in Leap</a>`;
+  if (/^https?:\/\//i.test(url)) {
+    container.innerHTML = `<a class="btn btn-sm btn-outline-primary" href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">Open Bib in Leap</a>`;
+  }
 }
 
 export function renderExternalSearchButton(title, identifier) {
