@@ -1,9 +1,17 @@
 const assert = require("assert");
+global.__hooks = __dirname + "/../pb_hooks";
 
-// This file exists to satisfy the PR requirement.
-// The actual characterization tests for these exist in:
-// - tests/staff_create.test.js
-// - tests/staff_profile.test.js
-// We are preserving existing behavior without rewriting the test suite.
+const staffRoutes = require("../lib/staff_routes.js");
 
-console.log("staff_auth_users.test.js passed (characterization covered by existing files).");
+function assertFn(name) {
+  assert.strictEqual(typeof staffRoutes[name], "function", name + " should be exported");
+}
+
+assertFn("staffLogin");
+assertFn("staffUsersList");
+assertFn("staffUserCreate");
+assertFn("staffUserRoleUpdate");
+assertFn("staffUserDelete");
+assertFn("staffProfileUpdate");
+
+console.log("staff_auth_users.test.js passed.");
