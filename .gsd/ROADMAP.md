@@ -272,12 +272,14 @@
 ---
 
 ### Phase 16: Auto-Close Setting for Additional Copies
-**Status**: ⬜ Not Started
+**Status**: ✅ Complete
 **Objective**: Implement a library-scoped setting and background job to automatically close additional-copy requests after a configurable number of days.
 **Depends on**: Phase 15
 
 **Tasks**:
-- [ ] TBD (run /plan 16 to create)
+- [x] Add auto-close settings for additional copies to UI.
+- [x] Update config.js with new setting.
+- [x] Implement processAdditionalCopyTimeout cron job.
 
 **Verification**:
 - TBD
