@@ -284,6 +284,19 @@
 
 ---
 
+### Phase 17: Clickable Reference Number for Additional Copies
+**Status**: ⬜ Not Started
+**Objective**: Make the reference number of the original suggestion clickable in the Additional Copies tab, linking it back to the original patron request.
+**Depends on**: Phase 16
+
+**Tasks**:
+- [ ] TBD (run /plan 17 to create)
+
+**Verification**:
+- TBD
+
+---
+
 ## Milestone 3: Reporting and Advanced Analytics
 **Status**: ⬜ Not Started
 
