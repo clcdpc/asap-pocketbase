@@ -1,5 +1,8 @@
 {
   "dependencies": {
     "jsdom": "^29.1.1"
+  },
+  "scripts": {
+    "test": "node tests/staff_profile.test.js && node tests/staff_claims.test.js && node tests/staff_reconcile_payload.test.js && node tests/library_settings_save_scope.test.js && node tests/validate_material_formats_deletion.test.js"
   }
 }
