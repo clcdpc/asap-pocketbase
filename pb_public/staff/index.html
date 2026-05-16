@@ -173,7 +173,7 @@
       <label for="tag-filter" class="sr-only">Filter by workflow flag</label>
       <select id="tag-filter" class="form-control form-control-sm hidden" aria-label="Filter by workflow flag"></select>
       <label for="similar-request-filter" class="sr-only">Filter by similar request presence</label>
-      <select id="similar-request-filter" class="form-control form-control-sm" aria-label="Filter by similar request presence">
+      <select id="similar-request-filter" class="form-control form-control-sm hidden" aria-label="Filter by similar request presence">
         <option value="all">All requests</option>
         <option value="similar">Similar requests</option>
         <option value="unique">Unique requests</option>
@@ -182,6 +182,12 @@
       <select id="additional-copy-status-filter" class="form-control form-control-sm hidden" aria-label="Filter additional copies by status">
         <option value="open">Open copies</option>
         <option value="closed">Closed copies</option>
+      </select>
+      <label for="closed-type-filter" class="sr-only">Filter closed requests by type</label>
+      <select id="closed-type-filter" class="form-control form-control-sm hidden" aria-label="Filter closed requests by type">
+        <option value="all">All types</option>
+        <option value="suggestion">Patron suggestions</option>
+        <option value="additional_copy">Additional copies</option>
       </select>
       <label for="claim-filter" class="sr-only">Filter by claim state</label>
       <select id="claim-filter" class="form-control form-control-sm hidden" aria-label="Filter by claim state">

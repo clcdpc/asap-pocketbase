@@ -16,6 +16,7 @@ export const tagFilterSelect = document.getElementById('tag-filter');
 export const claimFilterSelect = document.getElementById('claim-filter');
 export const similarRequestFilterSelect = document.getElementById('similar-request-filter');
 export const additionalCopyStatusFilterSelect = document.getElementById('additional-copy-status-filter');
+export const closedTypeFilterSelect = document.getElementById('closed-type-filter');
 export const settingsContainer = document.getElementById('settings-container');
 export const settingsForm = document.getElementById('settings-form');
 export let grid = undefined;
@@ -63,6 +64,9 @@ export function setCurrentSimilarRequestFilter(filter) { currentSimilarRequestFi
 
 export let currentAdditionalCopyStatus = 'open';
 export function setCurrentAdditionalCopyStatus(status) { currentAdditionalCopyStatus = ['open', 'closed'].includes(status) ? status : 'open'; }
+
+export let currentClosedTypeFilter = 'all';
+export function setCurrentClosedTypeFilter(filter) { currentClosedTypeFilter = ['all', 'suggestion', 'additional_copy'].includes(filter) ? filter : 'all'; }
 
 export let currentWorkflowOrgScopeId = 'all';
 export function setCurrentWorkflowOrgScopeId(scopeId) { currentWorkflowOrgScopeId = String(scopeId || 'all').trim() || 'all'; }

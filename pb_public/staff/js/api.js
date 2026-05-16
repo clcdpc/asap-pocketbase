@@ -1,4 +1,4 @@
-import { pb, loginContainer, setupContainer, appContainer, loginForm, setupForm, logoutBtn, profileBtn, grid, gridSearchInput, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, additionalCopyStatusFilterSelect, currentRejectionTemplates, setCurrentRejectionTemplates, statusStages, stageQueryMap, currentStatus, activeTagFilter, gridSearchKeyword, setGridSearchKeyword, workflowSettings, bootstrapAdminMessage, setupRequired, currentEmailStatus, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, settingsSectionIds, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, currentLibraryContextOrgId, setCurrentStatus, setActiveTagFilter, setCurrentClaimFilter, setCurrentSimilarRequestFilter, setCurrentAdditionalCopyStatus, setBootstrapAdminMessage, setSetupRequired, setOrganizationsStatusMessage, setCurrentSettingsSection, setSettingsDirty, setCurrentEmailStatus } from './state.js';
+import { pb, loginContainer, setupContainer, appContainer, loginForm, setupForm, logoutBtn, profileBtn, grid, gridSearchInput, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, additionalCopyStatusFilterSelect, closedTypeFilterSelect, currentRejectionTemplates, setCurrentRejectionTemplates, statusStages, stageQueryMap, currentStatus, activeTagFilter, gridSearchKeyword, setGridSearchKeyword, workflowSettings, bootstrapAdminMessage, setupRequired, currentEmailStatus, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, settingsSectionIds, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, currentLibraryContextOrgId, setCurrentStatus, setActiveTagFilter, setCurrentClaimFilter, setCurrentSimilarRequestFilter, setCurrentAdditionalCopyStatus, setCurrentClosedTypeFilter, setBootstrapAdminMessage, setSetupRequired, setOrganizationsStatusMessage, setCurrentSettingsSection, setSettingsDirty, setCurrentEmailStatus } from './state.js';
 import { loadTab, renderCurrentGrid, closeActionMenu, escapeAttr } from './grid.js';
 import { syncPolarisOrganizations } from './settings-polaris.js';
 import { loadSettings, checkSettingsDirty, handleLibraryContextSwitch, refreshLibrarySelectorIndicators } from './settings.js';
@@ -83,6 +83,15 @@ export function requestedStatusFromUrl() {
     const params = new URLSearchParams(window.location.search || '');
     const raw = String(params.get('stage') || params.get('status') || '').trim();
     return stageQueryMap[raw] || '';
+  } catch (err) {
+    return '';
+  }
+}
+
+export function requestedRequestIdFromUrl() {
+  try {
+    const params = new URLSearchParams(window.location.search || '');
+    return String(params.get('request') || '').trim();
   } catch (err) {
     return '';
   }
@@ -852,6 +861,13 @@ if (claimFilterSelect) {
 if (additionalCopyStatusFilterSelect) {
   additionalCopyStatusFilterSelect.addEventListener('change', event => {
     setCurrentAdditionalCopyStatus(event.target.value || 'open');
+    loadTab(currentStatus);
+  });
+}
+
+if (closedTypeFilterSelect) {
+  closedTypeFilterSelect.addEventListener('change', event => {
+    setCurrentClosedTypeFilter(event.target.value || 'all');
     loadTab(currentStatus);
   });
 }

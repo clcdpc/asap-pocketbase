@@ -1,8 +1,8 @@
-import { pb, gridContainer, staffGridFilterBar, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, additionalCopyStatusFilterSelect, gridSearchInput, settingsContainer, grid, formatMap, ageMap, closeReasonMap, descriptions, emptyStateMessages, statusStages, currentStatus, currentSuggestions, activeTagFilter, gridSearchKeyword, currentClaimFilter, currentSimilarRequestFilter, currentAdditionalCopyStatus, currentWorkflowOrgScopeId, allSuggestions, workflowSettings, currentSettingsSection, activeActionMenu, rowActionIdCounter, rowActionRegistry, setCurrentStatus, setCurrentSuggestions, setActiveTagFilter, setGridSearchKeyword, setCurrentClaimFilter, setCurrentWorkflowOrgScopeId, setActiveActionMenu, setGrid, setAllSuggestions, incrementRowActionIdCounter } from './state.js';
+import { pb, gridContainer, staffGridFilterBar, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, additionalCopyStatusFilterSelect, closedTypeFilterSelect, gridSearchInput, settingsContainer, grid, formatMap, ageMap, closeReasonMap, descriptions, emptyStateMessages, statusStages, currentStatus, currentSuggestions, activeTagFilter, gridSearchKeyword, currentClaimFilter, currentSimilarRequestFilter, currentAdditionalCopyStatus, currentClosedTypeFilter, currentWorkflowOrgScopeId, allSuggestions, workflowSettings, currentSettingsSection, activeActionMenu, rowActionIdCounter, rowActionRegistry, setCurrentStatus, setCurrentSuggestions, setActiveTagFilter, setGridSearchKeyword, setCurrentClaimFilter, setCurrentWorkflowOrgScopeId, setCurrentClosedTypeFilter, setActiveActionMenu, setGrid, setAllSuggestions, incrementRowActionIdCounter } from './state.js';
 import { openEdit, openPolarisSearch, polarisSearchValueForRow, renderPolarisSearchButtonMarkup } from './modals.js';
 import { openNewSuggestionForPatron } from './patron.js';
 import { undoRow, deleteClosedRequest, closeDuplicateRequest } from './actions.js';
-import { leapBibUrl, isSuperAdminStaff, isAdminStaff, getSettingsSectionFromHash, activateSettingsSection } from './api.js';
+import { leapBibUrl, isSuperAdminStaff, isAdminStaff, getSettingsSectionFromHash, activateSettingsSection, requestedRequestIdFromUrl } from './api.js';
 import { authorizedJson } from './http.js';
 import { showToast, showAlert, showConfirm, closeOpenDialogs } from './dialogs.js';
 import { showSettingsAccessDenied, hideSettingsAccessDenied, loadSettings } from './settings.js';
@@ -29,6 +29,7 @@ export async function loadTab(status) {
     hideWorkflowScopeControl();
     hideTagFilter();
     hideClaimFilter();
+    if (staffGridFilterBar) staffGridFilterBar.classList.add('hidden');
     await loadAnalytics(gridContainer);
     announceTabLoaded(status);
     return;
@@ -45,15 +46,14 @@ export async function loadTab(status) {
       const titleResult = await safeFetchTitleRequests();
       const titleRecords = Array.isArray(titleResult.items) ? titleResult.items : [];
       
-      updateWorkflowScopeControl(currentAdditionalCopyStatus === 'closed' ? closedResult : openResult);
+      updateWorkflowScopeControl(openResult);
       
       // allSuggestions should include EVERYTHING for duplicate detection to work
       setAllSuggestions([...titleRecords, ...openRecords, ...closedRecords]);
       
       updateTabCounts(titleRecords, openRecords.length, closedRecords.length);
       
-      const recordsToRender = currentAdditionalCopyStatus === 'closed' ? closedRecords : openRecords;
-      renderAdditionalCopiesGrid(recordsToRender);
+      renderAdditionalCopiesGrid(openRecords);
       announceTabLoaded(status);
       return;
     }
@@ -214,6 +214,7 @@ function loadSettingsTab() {
 function prepareGridView() {
   gridContainer.classList.remove('hidden');
   settingsContainer.classList.add('hidden');
+  if (staffGridFilterBar) staffGridFilterBar.classList.remove('hidden');
   hideSettingsAccessDenied();
   resetGrid();
 }
@@ -324,8 +325,7 @@ function renderAdditionalCopiesGrid(records) {
   updateTagFilter(records);
   updateClaimFilter();
   if (additionalCopyStatusFilterSelect) {
-    additionalCopyStatusFilterSelect.classList.remove('hidden');
-    additionalCopyStatusFilterSelect.value = currentAdditionalCopyStatus;
+    additionalCopyStatusFilterSelect.classList.add('hidden');
   }
   if (!records.length) {
     gridContainer.textContent = '';
@@ -364,6 +364,20 @@ function announceTabLoaded(status) {
   // Manage focus for screen readers when tab changes
   const firstHeader = document.getElementById('tab-desc');
   if (firstHeader) firstHeader.focus();
+
+  // Auto-open requested record if parameter is present
+  const requestId = requestedRequestIdFromUrl();
+  if (requestId) {
+    const row = allSuggestions.find(r => r.id === requestId);
+    if (row) {
+      // Clear the parameter from URL to prevent re-opening
+      const url = new URL(window.location.href);
+      url.searchParams.delete('request');
+      window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+
+      openEdit(row.id, row.status, 'Edit', '', 'Save');
+    }
+  }
 }
 
 function handleLoadTabError(err) {
@@ -692,9 +706,6 @@ export function hideTagFilter() {
   if (additionalCopyStatusFilterSelect) {
     additionalCopyStatusFilterSelect.classList.add('hidden');
   }
-  if (staffGridFilterBar) {
-    staffGridFilterBar.classList.add('hidden');
-  }
 }
 
 export function hideClaimFilter() {
@@ -731,9 +742,21 @@ export function updateClaimFilter() {
   if (!claimFilterSelect || !staffGridFilterBar) return;
   claimFilterSelect.value = currentClaimFilter;
   claimFilterSelect.classList.remove('hidden');
+  
   if (similarRequestFilterSelect) {
     similarRequestFilterSelect.value = currentSimilarRequestFilter;
+    const showSimilar = currentStatus === 'suggestion';
+    similarRequestFilterSelect.classList.toggle('hidden', !showSimilar);
   }
+  
+  if (closedTypeFilterSelect) {
+    const isClosedTab = currentStatus === 'closed';
+    closedTypeFilterSelect.classList.toggle('hidden', !isClosedTab);
+    if (isClosedTab) {
+      closedTypeFilterSelect.value = currentClosedTypeFilter;
+    }
+  }
+
   staffGridFilterBar.classList.remove('hidden');
 }
 
@@ -856,6 +879,19 @@ export function toggleTagFilter(tagName) {
   renderCurrentGrid(currentStatus);
 }
 
+export function applyTypeFilter(records) {
+  if (currentStatus !== 'closed' || currentClosedTypeFilter === 'all') return records || [];
+  return (records || []).filter(record => {
+    if (currentClosedTypeFilter === 'suggestion') {
+      return record.type !== 'additional_copy';
+    }
+    if (currentClosedTypeFilter === 'additional_copy') {
+      return record.type === 'additional_copy';
+    }
+    return true;
+  });
+}
+
 export function renderCurrentGrid(status = currentStatus) {
   resetGrid();
 
@@ -865,7 +901,9 @@ export function renderCurrentGrid(status = currentStatus) {
 
   const visibleRecords = applyClaimFilter(
     applySimilarRequestFilter(
-      applyTagFilter(currentSuggestions)
+      applyTypeFilter(
+        applyTagFilter(currentSuggestions)
+      )
     )
   );
 
@@ -991,10 +1029,13 @@ export function renderBarcodeCell(row) {
   const barcode = escapeAttr(row.barcode || '');
   const name = [row.nameFirst, row.nameLast].filter(Boolean).join(' ').trim();
   const nameHtml = name ? `<div class="barcode-patron-name text-muted small">${escapeAttr(name)}</div>` : '';
+  const isAdditionalCopy = row.type === 'additional_copy';
+  const typeBadge = isAdditionalCopy ? '<div class="flag-badge flag-info mb-1" style="font-size: var(--asap-font-size-xs); cursor: default;">Additional Copy</div>' : '';
   
   return gridjs.html(`
     <div class="barcode-cell">
       <div class="barcode-content">
+        ${typeBadge}
         <div class="barcode-text">${barcode}</div>
         ${nameHtml}
       </div>
@@ -1148,18 +1189,6 @@ export function getGridColumns(status, rowById = new Map()) {
   if (status === 'closed') {
     return [
       idColumn,
-      {
-        id: 'type',
-        name: 'Type',
-        width: '120px',
-        formatter: (cell, row) => {
-          const r = rowFor(row.cells[0].data);
-          if (r.type === 'additional_copy') {
-            return gridjs.html('<span class="badge badge-info" style="background-color: #17a2b8; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em;">Additional Copy</span>');
-          }
-          return gridjs.html('<span class="badge badge-secondary" style="background-color: #6c757d; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em;">Patron Suggestion</span>');
-        }
-      },
       barcodeColumn,
       titleColumn,
       authorColumn,
@@ -1394,7 +1423,10 @@ export function getRowActions(row) {
   if (status === 'suggestion') {
     return {
       visible: [
-        { label: 'Purchase', className: 'btn-primary', onClick: () => openEdit(row.id, 'outstanding_purchase', 'Approve for purchase', 'purchase', 'Purchase') },
+        { label: 'Purchase', className: 'btn-primary', onClick: () => {
+          const hasBib = String(row.bibid || '').trim().length > 0;
+          openEdit(row.id, hasBib ? 'pending_hold' : 'outstanding_purchase', 'Approve for purchase', 'purchase', 'Purchase');
+        }},
         { label: 'Reject', className: 'btn-outline-danger', onClick: () => openEdit(row.id, 'closed', 'Reject', 'reject', 'Reject') }
       ],
       secondary: [
@@ -1727,6 +1759,19 @@ gridContainer.addEventListener('click', (e) => {
       return;
     }
     content.replaceChildren(renderNoteActivity(row.notes));
+
+    if (row.type === 'additional_copy' && row.sourceTitleRequest) {
+      const sourceWrapper = document.createElement('div');
+      sourceWrapper.className = 'mb-3 pb-3 border-bottom';
+      const strong = document.createElement('strong');
+      strong.textContent = 'Original task: ';
+      sourceWrapper.style.display = 'flex';
+      sourceWrapper.style.alignItems = 'baseline';
+      sourceWrapper.style.gap = '8px';
+      sourceWrapper.append(strong, renderAdditionalCopySourceCell(row));
+      content.prepend(sourceWrapper);
+    }
+
     dialog.showModal();
     document.getElementById('noteDialogCloseBtn')?.focus();
     return;

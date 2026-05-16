@@ -254,7 +254,11 @@
 **Depends on**: Phase 13
 
 **Tasks**:
-- TBD
+- [x] Update `loadTab` to call `updateTagFilter` and `updateClaimFilter` for the additional copies tab.
+- [x] Fix filter bar visibility logic to ensure search and status filters remain visible when no tags exist.
+
+**Verification**:
+- [x] Search, Claim, and Flag filters are functional on the Additional Copies tab.
 
 ---
 
@@ -264,10 +268,12 @@
 **Depends on**: Phase 14
 
 **Tasks**:
-- [ ] TBD (run /plan 15 to create)
+- [x] Update `staffAnalytics` in `lib/staff_routes.js` to fetch records from the `additional_copy_requests` collection.
+- [x] Update `loadStageCounts` and `loadAgingMetrics` to include the `additional_copies` stage.
+- [x] Update `analytics.js` to include `additional_copies` in the stage labels.
 
 **Verification**:
-- TBD
+- [x] Additional copy counts and aging metrics appear in the Analytics dashboard.
 
 ---
 
@@ -282,20 +288,130 @@
 - [x] Implement processAdditionalCopyTimeout cron job.
 
 **Verification**:
-- TBD
+- [x] Staff can configure auto-close days per library.
+- [x] Background job correctly closes expired additional copy requests.
 
 ---
 
 ### Phase 17: Clickable Reference Number for Additional Copies
-**Status**: ⬜ Not Started
+**Status**: ✅ Complete
 **Objective**: Make the reference number of the original suggestion clickable in the Additional Copies tab, linking it back to the original patron request.
 **Depends on**: Phase 16
 
 **Tasks**:
-- [ ] TBD (run /plan 17 to create)
+- [x] Prepend "Original task" link to the notes dialog content for additional-copy requests in `grid.js`.
 
 **Verification**:
-- TBD
+- [x] Clicking the notes icon on an additional-copy request displays a clickable link to the original suggestion at the top of the modal.
+
+---
+
+### Phase 18: Consolidate Request Type Indicator
+**Status**: ✅ Complete
+**Objective**: Remove the dedicated "Type" column in the Closed tab and integrate an "Additional Copy" badge into the Barcode column to save horizontal space.
+**Depends on**: Phase 17
+
+**Tasks**:
+- [x] Update `renderBarcodeCell` in `grid.js` to include the "Additional Copy" badge.
+- [x] Remove `type` column from the `closed` status grid definition in `grid.js`.
+
+**Verification**:
+- [x] "Type" column is gone from the Closed tab.
+- [x] Additional copy requests show the badge in the Barcode column.
+
+---
+
+### Phase 19: UI Polish and Cleanup
+**Status**: ✅ Complete
+**Objective**: Address remaining UI todos and clean up tracking documents.
+**Depends on**: Phase 18
+
+**Tasks**:
+- [x] Fix Additional Copy status filter dropdown width in `styles.css`.
+- [x] Fix filter bar visibility logic in `grid.js` to prevent accidental hiding of search input.
+- [x] Clear `TODO.md` and finalize `ROADMAP.md`.
+
+**Verification**:
+- [x] Additional copy status filter has consistent width.
+- [x] Search input is visible on all workflow tabs.
+
+---
+
+### Phase 20: Refine Workflow Filters for Additional Copies
+**Status**: ✅ Complete
+**Objective**: Simplify the Additional Copies tab by removing the "Open/Closed" toggle and adding a "Type" filter to the Closed tab.
+**Depends on**: Phase 19
+
+**Tasks**:
+- [x] Add `closed-type-filter` to `index.html`.
+- [x] Implement state tracking and filtering logic for the new filter.
+- [x] Simplify Additional Copies tab to only show open requests.
+- [x] Update styling for the new filter.
+
+**Verification**:
+- [x] Additional Copies tab no longer shows the status toggle.
+- [x] Closed tab shows the new Type filter.
+- [x] Filtering by type in the Closed tab works as expected.
+
+---
+
+### Phase 21: Remove Redundant Similar Requests Filter from Additional Copies
+**Status**: ✅ Complete
+**Objective**: Remove the "Similar requests" filter from the Additional Copies tab while ensuring that the informational Duplicate badges remain visible.
+**Depends on**: Phase 20
+
+**Tasks**:
+- [x] Hide `similar-request-filter` by default in `index.html`.
+- [x] Update `updateClaimFilter` in `grid.js` to only show the Similar Requests filter on the Suggestions tab.
+
+**Verification**:
+- [x] "Similar requests" filter is hidden on the Additional Copies tab.
+- [x] "Similar requests" filter is visible on the Suggestions tab.
+- [x] Duplicate badges/tags remain visible on all tabs.
+
+---
+
+### Phase 23: Enable Deletion of Additional Copies from Closed Tab
+**Status**: ✅ Complete
+**Objective**: Allow staff to delete additional-copy requests from the "Closed" tab, mirroring the existing functionality for patron suggestions.
+**Depends on**: Phase 21
+
+**Tasks**:
+- [x] Implement `deleteAdditionalCopyRequestWithAudit` in `lib/records.js`.
+- [x] Update `staffDeleteClosedRequest` in `lib/staff_routes.js` to handle both `title_requests` and `additional_copy_requests`.
+
+**Verification**:
+- [x] "Delete" action appears for closed additional copies.
+- [x] Deletion successfully removes the record and creates a deletion audit log.
+
+---
+
+### Phase 24: Bulk Deletion for Additional Copies
+**Status**: ✅ Complete
+**Objective**: Update the "Delete all closed" functionality to also remove closed additional-copy requests, ensuring the bulk cleanup action is comprehensive.
+**Depends on**: Phase 23
+
+**Tasks**:
+- [x] Extend `deleteClosedRequestsBulk` in `lib/records.js` to process both `title_requests` and `additional_copy_requests`.
+
+**Verification**:
+- [x] "Delete all closed" button successfully removes both types of requests and creates audit logs.
+
+---
+
+### Phase 25: Direct Transition to Pending Hold for Suggestions with BIB ID
+**Status**: ✅ Complete
+**Objective**: Streamline the approval process for suggestions that already have a BIB ID. When "Purchase" is selected, move the request directly to "Pending hold" and notify the patron immediately.
+**Depends on**: Phase 24
+
+**Tasks**:
+- [x] Update frontend "Purchase" button logic in `grid.js` to detect BIB ID and set next status to `pending_hold`.
+- [x] Update backend action handler in `staff_routes.js` to trigger a notification when this transition occurs.
+- [x] Add audit trail system note for the direct transition.
+
+**Verification**:
+- [x] Suggestions with BIB IDs bypass "Pending purchase" and go directly to "Pending hold" upon approval.
+- [x] Patron receives an immediate notification upon this approval.
 
 ---
 
