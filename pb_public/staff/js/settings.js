@@ -483,6 +483,8 @@ export function populateWorkflowForms(wf) {
   setFieldValue('hold-pickup-timeout-days', wf.holdPickupTimeoutDays !== undefined ? wf.holdPickupTimeoutDays : '14');
   document.getElementById('pending-hold-timeout-enabled').checked = !!wf.pendingHoldTimeoutEnabled;
   setFieldValue('pending-hold-timeout-days', wf.pendingHoldTimeoutDays !== undefined ? wf.pendingHoldTimeoutDays : '14');
+  document.getElementById('additional-copy-timeout-enabled').checked = !!wf.additionalCopyTimeoutEnabled;
+  setFieldValue('additional-copy-timeout-days', wf.additionalCopyTimeoutDays !== undefined ? wf.additionalCopyTimeoutDays : '14');
 
   // Cache for checkbox renderer
   setLastWorkflowEnabledList((wf.enabledLibraryOrgIds || '').split(',').map(s => s.trim()).filter(s => s.length > 0));
@@ -499,6 +501,7 @@ export function populateWorkflowForms(wf) {
   updateAutoRejectEmailControls();
   toggleHoldPickupTimeoutGroup();
   togglePendingHoldTimeoutGroup();
+  toggleAdditionalCopyTimeoutGroup();
 
   setFieldValue('wf-common-authors-label', wf.commonAuthorsLabel || 'Popular Creators');
   setFieldValue('wf-common-authors-help', wf.commonAuthorsHelp || 'See if this is a creator we already collect.');
@@ -724,6 +727,8 @@ function _serializeSettingsState(validate = false) {
     holdPickupTimeoutDays: positiveInt('hold-pickup-timeout-days', 14, 'Auto-close unpicked-up holds days'),
     pendingHoldTimeoutEnabled: getFieldChecked('pending-hold-timeout-enabled'),
     pendingHoldTimeoutDays: positiveInt('pending-hold-timeout-days', 14, 'Auto-close pending holds days'),
+    additionalCopyTimeoutEnabled: getFieldChecked('additional-copy-timeout-enabled'),
+    additionalCopyTimeoutDays: positiveInt('additional-copy-timeout-days', 14, 'Auto-close additional copies days'),
     commonAuthorsEnabled: getFieldChecked('wf-common-authors-enabled'),
     commonAuthorsLabel: getFieldValue('wf-common-authors-label').trim() || 'Popular Creators',
     commonAuthorsHelp: getFieldValue('wf-common-authors-help').trim() || 'See if this is a creator we already collect.',
@@ -826,6 +831,8 @@ export async function saveSettings(options = {}) {
         holdPickupTimeoutDays: payload.holdPickupTimeoutDays,
         pendingHoldTimeoutEnabled: payload.pendingHoldTimeoutEnabled,
         pendingHoldTimeoutDays: payload.pendingHoldTimeoutDays,
+        additionalCopyTimeoutEnabled: payload.additionalCopyTimeoutEnabled,
+        additionalCopyTimeoutDays: payload.additionalCopyTimeoutDays,
         enabledLibraryOrgIds: payload.enabledLibraryOrgIds,
         commonAuthorsEnabled: payload.commonAuthorsEnabled,
         commonAuthorsLabel: payload.commonAuthorsLabel,
@@ -982,6 +989,16 @@ export function togglePendingHoldTimeoutGroup() {
   }
 }
 
+export function toggleAdditionalCopyTimeoutGroup() {
+  const group = document.getElementById('additional-copy-timeout-group');
+  const enabled = document.getElementById('additional-copy-timeout-enabled').checked;
+  if (enabled) {
+    group.classList.remove('hidden');
+  } else {
+    group.classList.add('hidden');
+  }
+}
+
 export function toggleCommonAuthorsGroup() {
   const group = document.getElementById('common-authors-config-group');
   const enabled = document.getElementById('wf-common-authors-enabled').checked;
@@ -1011,6 +1028,7 @@ export function sortAuthorsByLastName(authorsListStr) {
 
 document.getElementById('hold-pickup-timeout-enabled').addEventListener('change', toggleHoldPickupTimeoutGroup);
 document.getElementById('pending-hold-timeout-enabled').addEventListener('change', togglePendingHoldTimeoutGroup);
+document.getElementById('additional-copy-timeout-enabled').addEventListener('change', toggleAdditionalCopyTimeoutGroup);
 document.getElementById('wf-common-authors-enabled').addEventListener('change', toggleCommonAuthorsGroup);
 
 document.getElementById('edit-bibid').addEventListener('keydown', (e) => {

@@ -649,6 +649,28 @@
                     </div>
                   </div>
 
+                  <!-- Stage 5: Additional copies -->
+                  <div class="form-row align-items-center mb-2">
+                    <div class="col-auto">
+                      <div class="custom-control custom-checkbox">
+                        <input type="checkbox" class="custom-control-input" id="additional-copy-timeout-enabled">
+                        <label class="custom-control-label font-weight-bold"
+                          for="additional-copy-timeout-enabled">Auto-close stale additional copies</label>
+                      </div>
+                    </div>
+                  </div>
+                  <div id="additional-copy-timeout-group" class="mb-4 hidden">
+                    <div class="form-row align-items-center">
+                      <div class="col-auto">
+                        <input type="number" id="additional-copy-timeout-days" class="form-control settings-number-sm">
+                      </div>
+                      <div class="col">
+                        <label for="additional-copy-timeout-days" class="mb-0 mr-2">Days before auto-close</label>
+                        <small class="text-muted">Automatically close additional copy requests that have not been processed after this many days. <strong>No email sent.</strong></small>
+                      </div>
+                    </div>
+                  </div>
+
                   <hr class="my-4">
 
                   <!-- Common Creator Notification -->
