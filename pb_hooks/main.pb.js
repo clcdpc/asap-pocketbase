@@ -145,26 +145,8 @@ routerAdd("POST", "/api/asap/staff/organizations/sync", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffSyncOrganizations(e);
 });
 
-routerAdd("POST", "/api/asap/staff/material-types/sync", function (e) {
-  try {
-    const routeUtils = require(`${__hooks}/../lib/route_utils.js`);
-    const polaris = require(`${__hooks}/../lib/polaris.js`);
-    if (!routeUtils.requireSuperAdminStaff(e)) {
-      return e.json(403, { success: false, message: "Super admin access required" });
-    }
-    var auth = polaris.adminStaffAuth();
-    var map = polaris.getMARCTypeOfMaterials(auth);
-    if (map && Object.keys(map).length > 0) {
-      var settings = e.app.findRecordById("polaris_settings", "polaris00000010");
-      settings.set("materialTypesCache", map);
-      settings.set("materialTypesCacheUpdated", new Date().toISOString());
-      e.app.save(settings);
-      return e.json(200, { success: true, count: Object.keys(map).length });
-    }
-    return e.json(400, { success: false, message: "No material types returned from Polaris." });
-  } catch (err) {
-    return e.json(400, { success: false, message: err.message || String(err) });
-  }
+routerAdd("POST", "/api/asap/staff/material-types/sync", (e) => {
+  return require(`${__hooks}/../lib/staff_routes.js`).staffMaterialTypesSync(e);
 });
 
 routerAdd("GET", "/api/asap/staff/material-types/sync", function (e) {

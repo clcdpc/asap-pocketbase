@@ -291,7 +291,7 @@ try {
   };
 
   const staff = { AccessToken: "mock_token", AccessSecret: "mock_secret" };
-  const result = polaris.searchBibs(staff, { mode: "title", query: "  first title  ", limit: 1 });
+  const result = polaris.searchBibs(null, staff, { mode: "title", query: "  first title  ", limit: 1 });
 
   assert.strictEqual(result.status, "found");
   assert.strictEqual(result.mode, "title");
