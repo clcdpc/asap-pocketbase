@@ -17,3 +17,4 @@ dist/
 # OS/editor artifacts.
 .DS_Store
 stat_log.txt
+.py

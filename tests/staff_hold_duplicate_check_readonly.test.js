@@ -2,7 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const source = fs.readFileSync(path.resolve(__dirname, '../lib/staff_routes.js'), 'utf8');
+const source = fs.readFileSync(path.resolve(__dirname, '../lib/staff/title_request_bib_actions.js'), 'utf8') + fs.readFileSync(path.resolve(__dirname, '../lib/staff/lookup_routes.js'), 'utf8');
 
 assert.ok(
   source.includes('polaris.patronHasHoldForBib(staffAuth, barcode, bibid)'),

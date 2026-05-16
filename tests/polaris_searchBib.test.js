@@ -291,21 +291,21 @@ try {
   };
 
   const staff = { AccessToken: "mock_token", AccessSecret: "mock_secret" };
-  const result = polaris.searchBibs(staff, { mode: "title", query: "  first title  ", limit: 1 });
+  const result = polaris.searchBibs(null, staff, { mode: "title", query: "  first title  ", limit: 1 });
 
-//   assert.strictEqual(result.status, "found");
-//   assert.strictEqual(result.mode, "title");
-//   assert.strictEqual(result.query, "  first title  ");
-//   assert.strictEqual(result.totalMatches, 12);
-//   assert.strictEqual(result.results.length, 1);
-//   assert.strictEqual(result.results[0].bibId, "111");
-//   assert.strictEqual(result.results[0].title, "First Title");
-//   assert.strictEqual(result.results[0].author, "First Author");
-//   assert.strictEqual(result.results[0].publication, "2026");
-//   assert.strictEqual(result.results[0].format, "Book");
-//   assert.ok(result.results[0].score > 0);
-//   assert.ok(httpSendArgs.url.includes("q=first%20title"));
-//   assert.ok(httpSendArgs.url.includes("sortby=RELEVANCE"));
+  assert.strictEqual(result.status, "found");
+  assert.strictEqual(result.mode, "title");
+  assert.strictEqual(result.query, "  first title  ");
+  assert.strictEqual(result.totalMatches, 12);
+  assert.strictEqual(result.results.length, 1);
+  assert.strictEqual(result.results[0].bibId, "111");
+  assert.strictEqual(result.results[0].title, "First Title");
+  assert.strictEqual(result.results[0].author, "First Author");
+  assert.strictEqual(result.results[0].publication, "2026");
+  assert.strictEqual(result.results[0].format, "Book");
+  assert.ok(result.results[0].score > 0);
+  assert.ok(httpSendArgs.url.includes("q=first%20title"));
+  assert.ok(httpSendArgs.url.includes("sortby=RELEVANCE"));
 
   console.log('✅ Test case 9 (Title search result list) passed');
   passed++;

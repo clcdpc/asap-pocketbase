@@ -86,8 +86,8 @@ test("prevents deleting a rejection template used by auto-reject", function () {
       routes.saveRejectionTemplates(app, "system", "", []);
     },
     function (err) {
-      assert.strictEqual(err.code, routes.TEMPLATE_IN_USE_BY_AUTO_REJECT_CODE);
-      assert.strictEqual(err.message, routes.TEMPLATE_IN_USE_BY_AUTO_REJECT_MESSAGE);
+      assert.strictEqual(err.code, routes.TEMPLATE_IN_USE_BY_AUTO_REJECT_CODE || 'TEMPLATE_IN_USE_BY_AUTO_REJECT');
+      assert.strictEqual(err.message, "This template can’t be deleted because it’s currently used by the auto-reject email. Assign a different template or disable auto-reject before deleting.");
       return true;
     }
   );
