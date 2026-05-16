@@ -1,9 +1,14 @@
 const assert = require("assert");
+global.__hooks = __dirname + "/../pb_hooks";
 
-// This file exists to satisfy the PR requirement.
-// The actual characterization tests for parts of staffTitleRequestAction exist in:
-// - tests/staff_reconcile_payload.test.js
-// - tests/staff_catalog_found_workflow.test.js
-// - tests/staff_duplicate_bib_conflict.test.js
+const staffRoutes = require("../lib/staff_routes.js");
+const actions = require("../lib/staff/title_request_actions.js");
 
-console.log("staff_title_request_action.test.js passed (characterization covered by existing files).");
+function assertFn(name) {
+  assert.strictEqual(typeof staffRoutes[name], "function", name + " should be exported");
+}
+
+assertFn("staffTitleRequestAction");
+assert.strictEqual(typeof actions.applyCatalogFoundWorkflow, "function", "applyCatalogFoundWorkflow should be exported from actions");
+
+console.log("staff_title_request_action.test.js passed.");

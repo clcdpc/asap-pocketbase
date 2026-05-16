@@ -731,7 +731,7 @@ function setHiddenEditValue(id, value) {
   input.value = String(value || '').trim();
 }
 
-export function applySelectedPolarisResultToEditForm(result = {}) {
+export function applySelectedPolarisResultToEditForm(result = {}, context = 'edit') {
   const bibId = String(result.bibId || '').trim();
   const title = String(result.title || '').trim();
   const author = String(result.author || '').trim();
@@ -739,11 +739,11 @@ export function applySelectedPolarisResultToEditForm(result = {}) {
   const publication = String(result.publication || '').trim();
   const format = String(result.format || '').trim();
 
-  const bibInput = document.getElementById('edit-bibid');
-  const titleInput = document.getElementById('edit-title');
-  const authorInput = document.getElementById('edit-author');
-  const display = document.getElementById('bib-info-display');
-  const text = document.getElementById('bib-info-text');
+  const bibInput = document.getElementById(`${context}-bibid`);
+  const titleInput = document.getElementById(`${context}-title`);
+  const authorInput = document.getElementById(`${context}-author`);
+  const display = document.getElementById(`${context}-bib-info-display`) || document.getElementById('bib-info-display');
+  const text = document.getElementById(`${context}-bib-info-text`) || document.getElementById('bib-info-text');
 
   if (bibInput) {
     bibInput.value = bibId;
@@ -756,6 +756,12 @@ export function applySelectedPolarisResultToEditForm(result = {}) {
 
   if (authorInput && author) {
     authorInput.value = mergeCatalogValue(author, authorInput.value);
+  }
+
+  // Update identifier if empty or if it's a new form
+  const idInput = document.getElementById(`${context}-identifier`);
+  if (idInput && (context === 'new' || !idInput.value.trim())) {
+    idInput.value = identifier;
   }
 
   setHiddenEditValue('selectedPolarisBibId', bibId);
@@ -778,9 +784,13 @@ export function applySelectedPolarisResultToEditForm(result = {}) {
       : (bibId ? 'BIB ' + bibId + ' selected from Polaris search.' : 'Polaris result selected.');
   }
 
-  setVerifiedBibId(bibId);
-  window.dispatchEvent(new CustomEvent('asap-bib-verified', { detail: { bibId, rowId: document.getElementById('edit-id').value } }));
+  if (bibId) {
+    setVerifiedBibId(bibId);
+    const rowId = document.getElementById('edit-id')?.value || '';
+    window.dispatchEvent(new CustomEvent('asap-bib-verified', { detail: { bibId, rowId } }));
+  }
 }
+
 
 document.getElementById('btn-bib-lookup').addEventListener('click', async () => {
   await lookupEditBibById();

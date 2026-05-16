@@ -812,18 +812,20 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
     const launchedFromEditForm = options.source === 'edit';
     let holdBtn = null;
     let additionalCopyBtn = null;
+
     if (launchedFromEditForm) {
       const applyBtn = document.createElement('button');
       applyBtn.type = 'button';
       applyBtn.className = 'btn btn-sm btn-primary';
-      applyBtn.textContent = document.getElementById('edit-next-status')?.value === 'pending_hold'
-        ? 'Use BIB in Queue Form'
-        : 'Apply to Edit Form';
+      applyBtn.textContent = (options.source === 'new' || document.getElementById('edit-next-status')?.value !== 'pending_hold')
+        ? 'Apply to Form'
+        : 'Use BIB in Queue Form';
       applyBtn.addEventListener('click', () => {
-        applySelectedPolarisResultToEditForm(result);
+        applySelectedPolarisResultToEditForm(result, options.source || 'edit');
         els.dialog.close();
-        showToast('Polaris details applied to form. Save to finish this action.', 'success');
+        showToast('Polaris details applied to form.', 'success');
       });
+
       actionsDiv.appendChild(applyBtn);
     } else {
       holdBtn = document.createElement('button');
@@ -836,22 +838,24 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
         await performImmediateStaffAction(row.id, payload);
       });
       actionsDiv.appendChild(holdBtn);
-
-      additionalCopyBtn = document.createElement('button');
-      additionalCopyBtn.type = 'button';
-      additionalCopyBtn.className = 'btn btn-sm btn-outline-success hidden';
-      additionalCopyBtn.textContent = 'Buy another copy + Queue Now';
-      additionalCopyBtn.disabled = true;
-      additionalCopyBtn.addEventListener('click', async () => {
-        const confirmResult = await confirmAdditionalCopyAction(result);
-        if (!confirmResult.confirmed) return;
-        const payload = buildPayload('pending_hold', 'additionalCopy');
-        payload.emailPurchaseReminder = confirmResult.emailPurchaseReminder;
-        payload.autohold = true;
-        await performImmediateStaffAction(row.id, payload);
-      });
-      actionsDiv.appendChild(additionalCopyBtn);
     }
+
+    // Always create additionalCopyBtn if we have a BIB ID, but hide it by default
+    additionalCopyBtn = document.createElement('button');
+    additionalCopyBtn.type = 'button';
+    additionalCopyBtn.className = 'btn btn-sm btn-outline-success hidden';
+    additionalCopyBtn.textContent = 'Buy another copy + Queue Now';
+    additionalCopyBtn.disabled = true;
+    additionalCopyBtn.addEventListener('click', async () => {
+      const confirmResult = await confirmAdditionalCopyAction(result);
+      if (!confirmResult.confirmed) return;
+      const payload = buildPayload('pending_hold', 'additionalCopy');
+      payload.emailPurchaseReminder = confirmResult.emailPurchaseReminder;
+      payload.autohold = true;
+      await performImmediateStaffAction(row.id, payload);
+    });
+    actionsDiv.appendChild(additionalCopyBtn);
+
 
     // Background Holdings Check
     if (result.bibId && !holdingsLookupUnavailable) {
@@ -1042,7 +1046,21 @@ function closePolarisSearchDialog() {
   if (dialog) dialog.close();
 }
 
-function currentEditPolarisSearchRow() {
+function currentEditPolarisSearchRow(context = 'edit') {
+  if (context === 'new') {
+    const title = document.getElementById('new-title')?.value || '';
+    const author = document.getElementById('new-author')?.value || '';
+    const identifier = document.getElementById('new-identifier')?.value || '';
+    return {
+      id: '',
+      title,
+      author,
+      identifier,
+      polarisSearchTitle: fallbackPolarisSearchValue(title),
+      polarisSearchAuthor: fallbackPolarisSearchValue(author)
+    };
+  }
+
   const id = document.getElementById('edit-id')?.value || '';
   const existing = currentSuggestions.find(r => r.id === id) || allSuggestions.find(r => r.id === id) || {};
   const title = document.getElementById('edit-title')?.value || '';
@@ -1058,15 +1076,15 @@ function currentEditPolarisSearchRow() {
   });
 }
 
-function editPolarisSearchInputForMode(mode) {
-  if (mode === 'author') return document.getElementById('edit-author');
-  if (mode === 'identifier') return document.getElementById('edit-identifier');
-  return document.getElementById('edit-title');
+function editPolarisSearchInputForMode(mode, context = 'edit') {
+  if (mode === 'author') return document.getElementById(`${context}-author`);
+  if (mode === 'identifier') return document.getElementById(`${context}-identifier`);
+  return document.getElementById(`${context}-title`);
 }
 
-function launchEditPolarisSearch(mode, button) {
-  const input = editPolarisSearchInputForMode(mode);
-  const row = currentEditPolarisSearchRow();
+function launchEditPolarisSearch(mode, button, context = 'edit') {
+  const input = editPolarisSearchInputForMode(mode, context);
+  const row = currentEditPolarisSearchRow(context);
   const query = mode === 'identifier'
     ? String(input?.value || '').trim()
     : polarisSearchValueForRow(row, mode);
@@ -1076,21 +1094,27 @@ function launchEditPolarisSearch(mode, button) {
     return;
   }
   openPolarisSearch(row, mode, {
-    source: 'edit',
+    source: context,
     query,
     title: polarisSearchValueForRow(row, 'title'),
     author: polarisSearchValueForRow(row, 'author'),
-    identifier: document.getElementById('edit-identifier')?.value || '',
-    returnDialog: document.getElementById('editModal'),
+    identifier: document.getElementById(`${context}-identifier`)?.value || '',
+    returnDialog: document.getElementById(context === 'edit' ? 'editModal' : 'newSuggestionModal'),
     returnFocus: button || input
   });
 }
 
+
 document.getElementById('close-polaris-search-x')?.addEventListener('click', closePolarisSearchDialog);
 document.getElementById('close-polaris-search-btn')?.addEventListener('click', closePolarisSearchDialog);
-document.getElementById('edit-title-polaris-search')?.addEventListener('click', (e) => launchEditPolarisSearch('title', e.currentTarget));
-document.getElementById('edit-author-polaris-search')?.addEventListener('click', (e) => launchEditPolarisSearch('author', e.currentTarget));
-document.getElementById('edit-identifier-polaris-search')?.addEventListener('click', (e) => launchEditPolarisSearch('identifier', e.currentTarget));
+document.getElementById('edit-title-polaris-search')?.addEventListener('click', (e) => launchEditPolarisSearch('title', e.currentTarget, 'edit'));
+document.getElementById('edit-author-polaris-search')?.addEventListener('click', (e) => launchEditPolarisSearch('author', e.currentTarget, 'edit'));
+document.getElementById('edit-identifier-polaris-search')?.addEventListener('click', (e) => launchEditPolarisSearch('identifier', e.currentTarget, 'edit'));
+
+document.getElementById('new-title-polaris-search')?.addEventListener('click', (e) => launchEditPolarisSearch('title', e.currentTarget, 'new'));
+document.getElementById('new-author-polaris-search')?.addEventListener('click', (e) => launchEditPolarisSearch('author', e.currentTarget, 'new'));
+document.getElementById('new-identifier-polaris-search')?.addEventListener('click', (e) => launchEditPolarisSearch('identifier', e.currentTarget, 'new'));
+
 
 document.getElementById('edit-form').addEventListener('submit', async (e) => {
   e.preventDefault();
