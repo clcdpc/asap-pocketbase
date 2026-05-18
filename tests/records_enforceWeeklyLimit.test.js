@@ -9,14 +9,14 @@ const originalRequire = Module.prototype.require;
 let mockSuggestionLimit = {};
 
 Module.prototype.require = function(moduleName) {
-  if (moduleName.includes("lib/config.js")) {
+  if (moduleName.includes("config.js")) {
     return {
       suggestionLimit: function(app, libraryOrgId) {
         return mockSuggestionLimit;
       }
     };
   }
-  if (moduleName.includes("lib/identity.js")) {
+  if (moduleName.includes("identity.js")) {
     return {};
   }
   return originalRequire.apply(this, arguments);

@@ -8,6 +8,10 @@ import { showToast, showAlert, showConfirm, closeOpenDialogs } from './dialogs.j
 import { showSettingsAccessDenied, hideSettingsAccessDenied, loadSettings } from './settings.js';
 import { loadAnalytics } from './analytics.js';
 import { renderNoteActivity } from './note-activity.js';
+import { normalizeLabel, flagDisplayMap, getFlagDisplay, getIsbnCheckLabel, effectiveWorkflowFlagsForRow, getFilterableLabelsForRow, normalizeWorkflowTagLabel, cleanWorkflowTags, tagCountsForRecords, normalizeStatus } from './grid-policy.mjs';
+import { buildRowActions } from './grid-row-actions.mjs';
+
+export { normalizeLabel, flagDisplayMap, getFlagDisplay, getIsbnCheckLabel, effectiveWorkflowFlagsForRow, getFilterableLabelsForRow, normalizeWorkflowTagLabel, cleanWorkflowTags, tagCountsForRecords, normalizeStatus } from './grid-policy.mjs';
 
 export async function loadTab(status) {
   if (status !== currentStatus) {
@@ -392,19 +396,6 @@ export function resetGrid() {
   gridContainer.innerHTML = '';
 }
 
-export function normalizeLabel(label) {
-  const clean = String(label || '').trim();
-  if (!clean) return '';
-  const lower = clean.toLowerCase();
-  if (lower === 'dupe found in polaris' || lower === 'identifier found' || lower === 'identifier number found') {
-    return 'Identifier found';
-  }
-  if (lower === 'isbn not found in system' || lower === 'identifier number not found in system' || lower === 'identifier number not found') {
-    return 'Identifier number not found in system';
-  }
-  return clean;
-}
-
 const duplicateStatusNames = {
   suggestion: 'Suggestions',
   outstanding_purchase: 'Pending purchase',
@@ -502,199 +493,6 @@ export function getDuplicateLabels(row) {
     labels.push(text);
   }
   return labels;
-}
-
-export const flagDisplayMap = {
-  'Dup (Suggestion)': {
-    label: 'Also in Suggestions',
-    className: 'flag-related'
-  },
-  'Duplicate suggestion': {
-    label: 'Also in Suggestions',
-    className: 'flag-related'
-  },
-  'Dup (Closed)': {
-    label: 'Also in Closed',
-    className: 'flag-related'
-  },
-  'Dup (Closed x2)': {
-    label: 'Also in Closed x2',
-    className: 'flag-related'
-  },
-  'Hold exists (same patron)': {
-    label: 'Patron already has hold',
-    className: 'flag-success'
-  },
-  'No holdable items': {
-    label: 'No holdable items',
-    className: 'flag-warning'
-  },
-  'Hold placed': {
-    label: 'Hold placed',
-    className: 'flag-success'
-  },
-  'Hold failed': {
-    label: 'Hold failed',
-    className: 'flag-error'
-  },
-  '! Hold failed': {
-    label: 'Hold failed',
-    className: 'flag-error'
-  },
-  'Identifier found': {
-    label: 'Identifier present',
-    className: 'flag-info'
-  },
-  'Identifier number found': {
-    label: 'Identifier present',
-    className: 'flag-info'
-  },
-  'Identifier number not found in system': {
-    label: 'Identifier not found in catalog',
-    className: 'flag-warning'
-  },
-  'Identifier number not found': {
-    label: 'Identifier not found in catalog',
-    className: 'flag-warning'
-  },
-  'No hold requested': {
-    label: 'No auto-hold',
-    className: 'flag-muted'
-  }
-};
-
-export function getFlagDisplay(rawFlag) {
-  const raw = String(rawFlag || '').trim();
-  if (flagDisplayMap[raw]) return flagDisplayMap[raw];
-
-  const duplicateMatch = raw.match(/^Dup \((.+)\)$/);
-  if (duplicateMatch) {
-    return {
-      label: `Also in ${duplicateMatch[1].trim()}`,
-      className: 'flag-related'
-    };
-  }
-
-  if (/^!?\s*Hold failed/i.test(raw)) {
-    return {
-      label: 'Hold failed',
-      className: 'flag-error'
-    };
-  }
-
-  return {
-    label: raw,
-    className: 'flag-info'
-  };
-}
-
-function isSimilarRequestFlag(flag) {
-  const raw = String(flag || '').trim();
-  return raw === 'Duplicate suggestion' || /^Dup \(/.test(raw);
-}
-
-export function getIsbnCheckLabel(row) {
-  const status = typeof row?.isbnCheckStatus === 'string' ? row.isbnCheckStatus : '';
-  const isbnStatusLabels = {
-    pending: 'New / identifier number check in progress',
-    found: 'Identifier number found',
-    not_found: 'Identifier number not found',
-    error_max_retries: 'Identifier number check retry limit reached'
-  };
-  const label = isbnStatusLabels[status];
-  if (!label) return '';
-
-  // Suppress if the effective workflow flags already include this identifier state.
-  if (status === 'found' && effectiveWorkflowFlagsForRow(row).includes('Identifier found')) return '';
-  if (status === 'not_found' && effectiveWorkflowFlagsForRow(row).includes('Identifier number not found in system')) return '';
-
-  return label;
-}
-
-export function effectiveWorkflowFlagsForRow(row, tags = row?.workflowTags) {
-  let clean = cleanWorkflowTags(tags).filter(flag => !isSimilarRequestFlag(flag));
-
-  // If hold is placed (status or tag), remove stale failure/warning badges
-  if (normalizeStatus(row.status) === 'hold_placed' || clean.includes('Hold placed')) {
-    clean = clean.filter(flag => flag !== 'No holdable items' && flag !== 'Hold failed' && flag !== '! Hold failed');
-  }
-
-  const hasIdentifierFound = clean.includes('Identifier found');
-  const hasIdentifierNotFound = clean.includes('Identifier number not found in system');
-
-  if (!hasIdentifierFound && !hasIdentifierNotFound) {
-    return clean;
-  }
-
-  const flags = clean.filter(flag => flag !== 'Identifier found' && flag !== 'Identifier number not found in system');
-  const status = typeof row?.isbnCheckStatus === 'string' ? row.isbnCheckStatus : '';
-  const bibid = String(row?.bibid || '').trim();
-
-  if (bibid || status === 'found' || (hasIdentifierFound && status !== 'not_found')) {
-    flags.push('Identifier found');
-  } else {
-    flags.push('Identifier number not found in system');
-  }
-
-  return flags;
-}
-
-/**
- * Canonical source for all visible badges/labels for a row.
- * Used for both rendering and filtering.
- */
-export function getFilterableLabelsForRow(row) {
-  const flags = new Set();
-  
-  // 1. Stored workflow flags
-  effectiveWorkflowFlagsForRow(row).forEach(flag => flags.add(normalizeLabel(flag)));
-
-  // 2. Autohold preference
-  if (row.autohold === false) {
-    flags.add("No hold requested");
-  }
-
-  // 3. Computed identifier check label
-  const isbnLabel = getIsbnCheckLabel(row);
-  if (isbnLabel) flags.add(normalizeLabel(isbnLabel));
-  
-  // Return as sorted array of raw flag values used by filtering.
-  return Array.from(flags).filter(Boolean).sort((a, b) => {
-    const aDisplay = getFlagDisplay(a).label;
-    const bDisplay = getFlagDisplay(b).label;
-    return aDisplay.localeCompare(bDisplay) || a.localeCompare(b);
-  });
-}
-
-export function normalizeWorkflowTagLabel(tag) {
-  return normalizeLabel(tag);
-}
-
-export function cleanWorkflowTags(tags) {
-  if (!Array.isArray(tags)) return [];
-  const seen = new Set();
-  const clean = [];
-  tags.forEach(tag => {
-    const label = normalizeWorkflowTagLabel(tag);
-    if (!label || /^\d+$/.test(label) || seen.has(label)) return;
-    seen.add(label);
-    clean.push(label);
-  });
-  return clean;
-}
-
-export function tagCountsForRecords(records) {
-  const counts = new Map();
-  (records || []).forEach(record => {
-    getFilterableLabelsForRow(record).forEach(flag => {
-      counts.set(flag, (counts.get(flag) || 0) + 1);
-    });
-  });
-  return Array.from(counts.entries()).sort((a, b) => {
-    const aDisplay = getFlagDisplay(a[0]).label;
-    const bDisplay = getFlagDisplay(b[0]).label;
-    return aDisplay.localeCompare(bDisplay) || a[0].localeCompare(b[0]);
-  });
 }
 
 export function hideTagFilter() {
@@ -996,10 +794,6 @@ export function formatDateTime(value) {
   if (!value) return '';
   const date = new Date(value);
   return formatStandardDate(date) + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
-export function normalizeStatus(value) {
-  return String(value || '').trim();
 }
 
 export function formatPublication(value) {
@@ -1409,75 +1203,85 @@ export function formatCloseReason(row) {
 }
 
 export function getRowActions(row) {
-  if (currentStatus === 'additional_copies') {
-    return {
-      primary: { label: 'Close', className: 'btn-outline-secondary', onClick: () => closeAdditionalCopyRequest(row.id) },
-      secondary: [
-        ...claimActionsForRow(row)
-      ]
-    };
-  }
+  const descriptors = buildRowActions(row, {
+    currentStatus,
+    currentStaffId: currentStaffId(),
+    isAdmin: isAdminStaff()
+  });
+  return materializeRowActions(row, descriptors);
+}
 
-  const status = normalizeStatus(row.status);
-
-  if (status === 'suggestion') {
-    return {
-      visible: [
-        { label: 'Purchase', className: 'btn-primary', onClick: () => {
-          const hasBib = String(row.bibid || '').trim().length > 0;
-          openEdit(row.id, hasBib ? 'pending_hold' : 'outstanding_purchase', 'Approve for purchase', 'purchase', 'Purchase');
-        }},
-        { label: 'Reject', className: 'btn-outline-danger', onClick: () => openEdit(row.id, 'closed', 'Reject', 'reject', 'Reject') }
-      ],
-      secondary: [
-        { label: 'Already own', onClick: () => openEdit(row.id, 'pending_hold', 'Already own', 'alreadyOwn', 'Already own') },
-        ...claimActionsForRow(row),
-        { label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose', 'Silent close') },
-        { label: 'Edit', onClick: () => openEdit(row.id, 'suggestion', 'Edit suggestion', '', 'Save') },
-      ]
-    };
-  }
-
-  if (status === 'outstanding_purchase') {
-    const duplicateCloseAction = duplicateCloseActionForRow(row);
-    return {
-      primary: { label: 'Queue Hold', className: 'btn-success', onClick: () => openEdit(row.id, 'pending_hold', 'Queue for hold', '', 'Queue Hold') },
-      secondary: [
-        ...(duplicateCloseAction ? [duplicateCloseAction] : []),
-        ...claimActionsForRow(row),
-        { label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose', 'Silent close') },
-        { label: 'Undo', onClick: () => undoRow(row.id) },
-        { label: 'Edit', onClick: () => openEdit(row.id, 'outstanding_purchase', 'Edit', '', 'Save') },
-      ]
-    };
-  }
-
-  if (status === 'pending_hold' || status === 'hold_placed' || status === 'closed') {
-    const secondary = [];
-    const duplicateCloseAction = duplicateCloseActionForRow(row);
-    if (duplicateCloseAction && status !== 'closed') {
-      secondary.push(duplicateCloseAction);
-    }
-    const additionalCopyAction = additionalCopyActionForRow(row);
-    if (additionalCopyAction) {
-      secondary.push(additionalCopyAction);
-    }
-    claimActionsForRow(row).forEach(action => secondary.push(action));
-    if (status !== 'closed') secondary.push({ label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose', 'Silent close') });
-    secondary.push({ label: 'Edit', onClick: () => openEdit(row.id, row.status, 'Edit', '', 'Save') });
-    if (status === 'closed' && isAdminStaff()) {
-      secondary.push({ label: 'Delete', className: 'danger', onClick: () => deleteClosedRequest(row.id) });
-    }
-    return {
-      primary: { label: 'Undo', className: 'btn-outline-secondary', onClick: () => undoRow(row.id) },
-      secondary
-    };
-  }
-
+function materializeRowActions(row, actions) {
   return {
-    primary: { label: 'Edit', className: 'btn-secondary', onClick: () => openEdit(row.id, row.status, 'Edit', '', 'Save') },
-    secondary: claimActionsForRow(row)
+    ...actions,
+    visible: actions.visible?.map(action => materializeRowAction(row, action)),
+    primary: actions.primary ? materializeRowAction(row, actions.primary) : undefined,
+    secondary: actions.secondary?.map(action => materializeRowAction(row, action)) || []
   };
+}
+
+function materializeRowAction(row, action) {
+  return {
+    ...action,
+    onClick: () => runRowActionDescriptor(row, action)
+  };
+}
+
+async function runRowActionDescriptor(row, action) {
+  if (action.key === 'purchase') {
+    const hasBib = String(row.bibid || '').trim().length > 0;
+    openEdit(row.id, hasBib ? 'pending_hold' : 'outstanding_purchase', 'Approve for purchase', 'purchase', 'Purchase');
+    return;
+  }
+  if (action.key === 'reject') {
+    openEdit(row.id, 'closed', 'Reject', 'reject', 'Reject');
+    return;
+  }
+  if (action.key === 'alreadyOwn') {
+    openEdit(row.id, 'pending_hold', 'Already own', 'alreadyOwn', 'Already own');
+    return;
+  }
+  if (action.key === 'silentClose') {
+    openEdit(row.id, 'closed', 'Silent close', 'silentClose', 'Silent close');
+    return;
+  }
+  if (action.key === 'queueHold') {
+    openEdit(row.id, 'pending_hold', 'Queue for hold', '', 'Queue Hold');
+    return;
+  }
+  if (action.key === 'undo') {
+    await undoRow(row.id);
+    return;
+  }
+  if (action.key === 'edit') {
+    const status = normalizeStatus(row.status);
+    const title = status === 'suggestion' ? 'Edit suggestion' : 'Edit';
+    openEdit(row.id, row.status, title, '', 'Save');
+    return;
+  }
+  if (action.key === 'delete') {
+    await deleteClosedRequest(row.id);
+    return;
+  }
+  if (action.key === 'closeDuplicate') {
+    await closeDuplicateRequest(row.id);
+    return;
+  }
+  if (action.key === 'buyAnotherCopy') {
+    await buyAnotherCopyForRow(row);
+    return;
+  }
+  if (action.key === 'closeAdditionalCopy') {
+    await closeAdditionalCopyRequest(row.id);
+    return;
+  }
+  if (action.key === 'claim') {
+    await claimRequest(row.id);
+    return;
+  }
+  if (action.key === 'unclaim' || action.key === 'clearClaim') {
+    await unclaimRequest(row.id);
+  }
 }
 
 async function closeAdditionalCopyRequest(id) {

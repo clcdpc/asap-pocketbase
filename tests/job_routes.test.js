@@ -27,6 +27,12 @@ Module.prototype.require = function (moduleName) {
           throw new Error('processOutstandingPurchases mocked error');
         }
         result.promoted = 1;
+      },
+      runScheduledHoldCheck: function(app) {
+        if (app.throwError) {
+          throw new Error('runScheduledHoldCheck mocked error');
+        }
+        return { promoted: 5, holdsPlaced: 2, timedOut: 0, checkoutClosures: 0 };
       }
     };
   }
@@ -92,6 +98,26 @@ runTest("staffRunPromoterCheck returns 400 on error from jobs", () => {
 
   assert.strictEqual(res.code, 400);
   assert.strictEqual(res.body.message, "processOutstandingPurchases mocked error");
+});
+
+runTest("runHoldCheck returns 403 if not super admin", () => {
+  const e = createMockE();
+  e.notAdmin = true;
+
+  const res = jobRoutes.runHoldCheck(e);
+
+  assert.strictEqual(res.code, 403);
+  assert.strictEqual(res.body.message, "Super admin access required");
+});
+
+runTest("runHoldCheck returns 200 on success with job result", () => {
+  const e = createMockE();
+
+  const res = jobRoutes.runHoldCheck(e);
+
+  assert.strictEqual(res.code, 200);
+  assert.strictEqual(res.body.promoted, 5);
+  assert.strictEqual(res.body.holdsPlaced, 2);
 });
 
 console.log('All tests passed.');
