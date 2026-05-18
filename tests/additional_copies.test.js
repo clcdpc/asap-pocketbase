@@ -86,13 +86,15 @@ const app = makeApp();
 const task = additionalCopies.createFromTitleRequest(app, app.source, makeStaff(), {
   bibid: "999",
   selectedPolarisTitle: "Catalog Title",
-  selectedPolarisAuthor: "Catalog Author"
+  selectedPolarisAuthor: "Catalog Author",
+  selectedPolarisPublication: "2022"
 });
 
 assert.strictEqual(task.get("sourceTitleRequest"), "req1");
 assert.strictEqual(task.get("libraryOrgId"), "10");
 assert.strictEqual(task.get("bibid"), "999");
 assert.strictEqual(task.get("title"), "Catalog Title");
+assert.strictEqual(task.get("publication"), "Already published");
 assert.strictEqual(task.get("status"), "open");
 assert.match(task.get("notes"), /Created from request req1 by selector/);
 assert.strictEqual(app.source.get("status"), "pending_hold");

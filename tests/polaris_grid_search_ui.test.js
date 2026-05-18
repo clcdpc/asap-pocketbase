@@ -45,12 +45,20 @@ function runTests() {
   assert.ok(modalJs.includes("export function confirmAdditionalCopyAction"));
   assert.ok(modalJs.includes("summary.consortiumCount"));
   assert.ok(modalJs.includes("buildPayload('pending_hold', 'additionalCopy')"));
+  assert.ok(modalJs.includes("const isAdditionalCopyAction = action === 'additionalCopy'"));
+  assert.ok(modalJs.includes("selectedPolarisPublication: isAdditionalCopyAction ? '' : result.publication"));
+  assert.ok(modalJs.includes("function normalizedAdditionalCopyPublication"));
   assert.ok(modalJs.includes("payload.emailPurchaseReminder = confirmResult.emailPurchaseReminder"));
   assert.ok(modalJs.indexOf("const launchedFromEditForm = options.source === 'edit'") < modalJs.indexOf("performImmediateStaffAction(row.id, payload)"));
 
   const settingsUiJs = fileText("pb_public/staff/js/settings-ui.js");
   assert.ok(settingsUiJs.includes("export async function lookupEditBibById"));
   assert.ok(settingsUiJs.includes("body: JSON.stringify({ bibId, barcode })"));
+
+  const titleRequestActionsJs = fileText("lib/staff/title_request_actions.js");
+  assert.ok(titleRequestActionsJs.includes('context.action === "additionalCopy"'));
+  assert.ok(titleRequestActionsJs.includes('context.data.publication = context.record.get("publication")'));
+  assert.ok(titleRequestActionsJs.includes('context.data.selectedPolarisPublication = ""'));
 
   const html = fileText("pb_public/staff/index.html");
   assert.ok(html.includes("polarisSearchDialog"));

@@ -32,6 +32,7 @@ function duplicateOpenRequestMessage(data) {
 export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
   const row = currentSuggestions.find(r => r.id === id) || allSuggestions.find(r => r.id === id);
   if (!row) return;
+  const isAdditionalCopy = row.type === 'additional_copy';
 
   document.getElementById('editModalLabel').textContent = dialogTitle;
   document.getElementById('edit-id').value = row.id;
@@ -60,11 +61,11 @@ export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
     }
   }
   editFormat.value = fmt;
-  setSelectValue(document.getElementById('edit-publication'), row.publication || publicationOptions[0]);
+  const publicationValue = normalizedAdditionalCopyPublication(row.publication, isAdditionalCopy);
+  setSelectValue(document.getElementById('edit-publication'), publicationValue || publicationOptions[0]);
   document.getElementById('edit-exact-publication-date').value = dateOnly(row.exactPublicationDate);
   document.getElementById('edit-autohold').checked = !!row.autohold;
 
-  const isAdditionalCopy = row.type === 'additional_copy';
   const autoholdContainer = document.getElementById('edit-autohold')?.closest('.custom-control');
   if (autoholdContainer) {
     autoholdContainer.classList.toggle('hidden', isAdditionalCopy);
@@ -98,6 +99,19 @@ export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
 
   document.getElementById('editModal').showModal();
   document.getElementById('close-modal-btn').focus();
+}
+
+function looksLikeCatalogPublicationDate(value) {
+  value = String(value || '').trim();
+  return /^\d{4}$/.test(value) || /^\d{4}[-/]\d{1,2}([-/]\d{1,2})?$/.test(value);
+}
+
+function normalizedAdditionalCopyPublication(value, isAdditionalCopy) {
+  value = String(value || '').trim();
+  if (isAdditionalCopy && value && !publicationOptions.includes(value) && looksLikeCatalogPublicationDate(value)) {
+    return publicationOptions[0] || '';
+  }
+  return value;
 }
 
 export function renderEditClaimState(row) {
@@ -793,6 +807,10 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
 
     // Helper for building action payload
     const buildPayload = (nextStatus, action) => {
+      const isAdditionalCopyAction = action === 'additionalCopy';
+      const workflowPublication = isAdditionalCopyAction
+        ? (row.publication || publicationOptions[0] || '')
+        : (result.publication || row.publication);
       return {
         action: action,
         status: nextStatus,
@@ -801,13 +819,13 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
         identifier: result.identifier || row.identifier,
         bibid: result.bibId,
         format: result.format || row.format,
-        publication: result.publication || row.publication,
+        publication: workflowPublication,
         exactPublicationDate: row.exactPublicationDate || '',
         selectedPolarisBibId: result.bibId,
         selectedPolarisTitle: result.title,
         selectedPolarisAuthor: result.author,
         selectedPolarisIdentifier: result.identifier,
-        selectedPolarisPublication: result.publication,
+        selectedPolarisPublication: isAdditionalCopyAction ? '' : result.publication,
         selectedPolarisFormat: result.format,
         notes: row.notes || '', 
         autohold: row.autohold !== false,
