@@ -133,6 +133,14 @@ routerAdd("POST", "/api/asap/staff/title-requests/{id}/action", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffTitleRequestAction(e);
 });
 
+routerAdd("GET", "/api/asap/staff/title-requests/{id}/additional-copy", (e) => {
+  return require(`${__hooks}/../lib/staff_routes.js`).staffTitleRequestAdditionalCopyPreview(e);
+});
+
+routerAdd("POST", "/api/asap/staff/title-requests/{id}/additional-copy", (e) => {
+  return require(`${__hooks}/../lib/staff_routes.js`).staffTitleRequestAdditionalCopyCreate(e);
+});
+
 routerAdd("DELETE", "/api/asap/staff/requests/{id}", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffDeleteClosedRequest(e);
 });

@@ -661,7 +661,7 @@ async function fetchPolarisSearch(row, mode, query, options) {
   return data;
 }
 
-function confirmAdditionalCopyAction(result) {
+export function confirmAdditionalCopyAction(result, options = {}) {
   return new Promise(resolve => {
     const previousFocus = document.activeElement;
     const dialog = document.createElement('dialog');
@@ -677,9 +677,13 @@ function confirmAdditionalCopyAction(result) {
     const message = document.createElement('p');
     message.className = 'dialog-message';
     const bibId = result && result.bibId ? String(result.bibId) : '';
-    message.textContent = bibId
-      ? `Create an additional-copy task for BIB ${bibId} and queue the patron hold on this same BIB?`
-      : 'Create an additional-copy task and queue the patron hold on this same BIB?';
+    if (options.message) {
+      message.textContent = options.message;
+    } else {
+      message.textContent = bibId
+        ? `Create an additional-copy task for BIB ${bibId} and queue the patron hold on this same BIB?`
+        : 'Create an additional-copy task and queue the patron hold on this same BIB?';
+    }
 
     const checkboxGroup = document.createElement('div');
     checkboxGroup.className = 'custom-control custom-checkbox mb-4';
@@ -688,7 +692,9 @@ function confirmAdditionalCopyAction(result) {
     checkbox.type = 'checkbox';
     checkbox.id = 'confirm-additional-copy-reminder';
     checkbox.className = 'custom-control-input';
-    checkbox.checked = !!(pb.authStore.model && pb.authStore.model.purchase_reminder_default);
+    checkbox.checked = Object.prototype.hasOwnProperty.call(options, 'emailPurchaseReminderDefault')
+      ? !!options.emailPurchaseReminderDefault
+      : !!(pb.authStore.model && pb.authStore.model.purchase_reminder_default);
 
     const label = document.createElement('label');
     label.className = 'custom-control-label font-weight-bold';

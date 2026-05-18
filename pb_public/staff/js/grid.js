@@ -1,5 +1,5 @@
 import { pb, gridContainer, staffGridFilterBar, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, additionalCopyStatusFilterSelect, closedTypeFilterSelect, gridSearchInput, settingsContainer, grid, formatMap, ageMap, closeReasonMap, descriptions, emptyStateMessages, statusStages, currentStatus, currentSuggestions, activeTagFilter, gridSearchKeyword, currentClaimFilter, currentSimilarRequestFilter, currentAdditionalCopyStatus, currentClosedTypeFilter, currentWorkflowOrgScopeId, allSuggestions, workflowSettings, currentSettingsSection, activeActionMenu, rowActionIdCounter, rowActionRegistry, setCurrentStatus, setCurrentSuggestions, setActiveTagFilter, setGridSearchKeyword, setCurrentClaimFilter, setCurrentWorkflowOrgScopeId, setCurrentClosedTypeFilter, setActiveActionMenu, setGrid, setAllSuggestions, incrementRowActionIdCounter } from './state.js';
-import { openEdit, openPolarisSearch, polarisSearchValueForRow, renderPolarisSearchButtonMarkup } from './modals.js';
+import { openEdit, openPolarisSearch, polarisSearchValueForRow, renderPolarisSearchButtonMarkup, confirmAdditionalCopyAction } from './modals.js';
 import { openNewSuggestionForPatron } from './patron.js';
 import { undoRow, deleteClosedRequest, closeDuplicateRequest } from './actions.js';
 import { leapBibUrl, isSuperAdminStaff, isAdminStaff, getSettingsSectionFromHash, activateSettingsSection, requestedRequestIdFromUrl } from './api.js';
@@ -1458,6 +1458,10 @@ export function getRowActions(row) {
     if (duplicateCloseAction && status !== 'closed') {
       secondary.push(duplicateCloseAction);
     }
+    const additionalCopyAction = additionalCopyActionForRow(row);
+    if (additionalCopyAction) {
+      secondary.push(additionalCopyAction);
+    }
     claimActionsForRow(row).forEach(action => secondary.push(action));
     if (status !== 'closed') secondary.push({ label: 'Silent close', className: 'danger', onClick: () => openEdit(row.id, 'closed', 'Silent close', 'silentClose', 'Silent close') });
     secondary.push({ label: 'Edit', onClick: () => openEdit(row.id, row.status, 'Edit', '', 'Save') });
@@ -1484,6 +1488,45 @@ async function closeAdditionalCopyRequest(id) {
     body: JSON.stringify({})
   });
   showToast('Additional-copy task closed.', 'success');
+  await loadTab(currentStatus);
+}
+
+function additionalCopyActionForRow(row) {
+  const status = normalizeStatus(row && row.status);
+  const bibid = String(row && row.bibid || '').trim();
+  if ((status !== 'pending_hold' && status !== 'hold_placed') || !bibid || row.type === 'additional_copy') {
+    return null;
+  }
+  return { label: 'Buy another copy', onClick: () => buyAnotherCopyForRow(row) };
+}
+
+function additionalCopyConfirmMessage(bibid, count) {
+  if (count === 1) {
+    return `There is already 1 open additional-copy task for this BIB. Create another?`;
+  }
+  if (count > 1) {
+    return `There are already ${count} open additional-copy tasks for this BIB. Create another?`;
+  }
+  return bibid ? `Create an additional-copy task for BIB ${bibid}?` : 'Create an additional-copy task for this BIB?';
+}
+
+async function buyAnotherCopyForRow(row) {
+  const id = row && row.id;
+  if (!id) return;
+  const preview = await authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(id)}/additional-copy`, { cache: 'no-store' });
+  const bibid = String(preview.bibid || row.bibid || '').trim();
+  const openCount = Number(preview.openCount || 0);
+  const confirmed = await confirmAdditionalCopyAction({ bibId: bibid }, {
+    message: additionalCopyConfirmMessage(bibid, openCount),
+    emailPurchaseReminderDefault: preview.emailPurchaseReminderDefault
+  });
+  if (!confirmed || !confirmed.confirmed) return;
+  const response = await authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(id)}/additional-copy`, {
+    method: 'POST',
+    body: JSON.stringify({ emailPurchaseReminder: confirmed.emailPurchaseReminder })
+  });
+  const afterCount = Number(response && response.openCountAfter || openCount + 1);
+  showToast(`Additional-copy task created. Open tasks for this BIB: ${afterCount}.`, 'success');
   await loadTab(currentStatus);
 }
 

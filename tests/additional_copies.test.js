@@ -48,8 +48,9 @@ function makeApp() {
   });
   const taskRows = [
     new MockRecord({ id: "task1", status: "open", libraryOrgId: "10", bibid: "111", title: "Mine", created: "2026-05-05" }),
+    new MockRecord({ id: "task1b", status: "open", libraryOrgId: "10", bibid: "111", title: "Mine 2", created: "2026-05-05" }),
     new MockRecord({ id: "task2", status: "open", libraryOrgId: "20", bibid: "222", title: "Other", created: "2026-05-06" }),
-    new MockRecord({ id: "task3", status: "closed", libraryOrgId: "10", bibid: "333", title: "Closed", created: "2026-05-07" }),
+    new MockRecord({ id: "task3", status: "closed", libraryOrgId: "10", bibid: "111", title: "Closed", created: "2026-05-07" }),
   ];
   return {
     saved,
@@ -71,6 +72,7 @@ function makeApp() {
       assert.strictEqual(collection, "additional_copy_requests");
       let rows = taskRows.filter(row => row.get("status") === params.status);
       if (params.libraryOrgId) rows = rows.filter(row => row.get("libraryOrgId") === params.libraryOrgId);
+      if (params.bibid) rows = rows.filter(row => row.get("bibid") === params.bibid);
       return rows.slice(offset, offset + limit);
     },
     save(record) {
@@ -96,10 +98,13 @@ assert.match(task.get("notes"), /Created from request req1 by selector/);
 assert.strictEqual(app.source.get("status"), "pending_hold");
 
 const libraryList = additionalCopies.listForStaff(app, makeStaff(), { status: "open" });
-assert.deepStrictEqual(libraryList.items.map(item => item.id), ["task1"]);
+assert.deepStrictEqual(libraryList.items.map(item => item.id), ["task1", "task1b"]);
 
 const superList = additionalCopies.listForStaff(app, makeStaff({ role: "super_admin", libraryOrgId: "" }), { status: "open", scope: "all" });
-assert.deepStrictEqual(superList.items.map(item => item.id), ["task1", "task2"]);
+assert.deepStrictEqual(superList.items.map(item => item.id), ["task1", "task1b", "task2"]);
+
+assert.strictEqual(additionalCopies.countOpenForLibraryBib(app, "10", "111"), 2);
+assert.strictEqual(additionalCopies.countOpenForLibraryBib(app, "20", "111"), 0);
 
 const closeTarget = new MockRecord({ id: "task4", status: "open", libraryOrgId: "10" });
 additionalCopies.closeTask(app, closeTarget, makeStaff());
