@@ -4,8 +4,17 @@ const path = require("path");
 const cp = require("child_process");
 
 const testDir = __dirname;
+const filterArg = process.argv[2] ? process.argv[2].toLowerCase() : "";
+
 const files = fs.readdirSync(testDir)
-  .filter((name) => name.endsWith(".test.js") && name !== "run_all.js")
+  .filter((name) => {
+    const isTest = name.endsWith(".test.js") && name !== "run_all.js";
+    if (!isTest) return false;
+    if (filterArg) {
+      return name.toLowerCase().includes(filterArg);
+    }
+    return true;
+  })
   .sort();
 
 var failCount = 0;

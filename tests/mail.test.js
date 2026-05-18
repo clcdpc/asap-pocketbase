@@ -1,7 +1,5 @@
 const assert = require("assert");
-
-// Mock __hooks globally
-global.__hooks = __dirname + "/../pb_hooks";
+const { MockRecord, createMockApp, interceptRequire } = require("./helpers/mock_pb.js");
 
 // Mock configuration
 const mockConfig = {
@@ -73,41 +71,27 @@ const mockPolaris = {
   }
 };
 
-// Override require to intercept config.js
-const Module = require('module');
-const originalRequire = Module.prototype.require;
-Module.prototype.require = function(moduleName) {
-  if (moduleName.includes("lib/config.js")) {
-    return mockConfig;
-  }
-  if (moduleName.includes("lib/polaris.js")) {
-    return mockPolaris;
-  }
-  return originalRequire.apply(this, arguments);
-};
+// Use standard mock interceptor
+interceptRequire({
+  "lib/config.js": mockConfig,
+  "lib/polaris.js": mockPolaris
+});
 
 const mail = require("../lib/mail.js");
 
-// Mock PocketBase app
+// Mock PocketBase app using our unified builder
 let sentMessages = [];
 let savedRecords = [];
-const mockApp = {
-  settings: function() {
-    return { meta: { senderAddress: "default@library.org", senderName: "Default Library" } };
-  },
-  logger: function() {
-    return { warn: function() {} };
-  },
-  save: function(record) {
+const mockApp = createMockApp({
+  onSave: function(record) {
     savedRecords.push(record);
   },
-  newMailClient: function() {
-    return {
-      send: function(message) {
-        sentMessages.push(message);
-      }
-    };
+  onMailSend: function(message) {
+    sentMessages.push(message);
   }
+});
+mockApp.settings = function() {
+  return { meta: { senderAddress: "default@library.org", senderName: "Default Library" } };
 };
 
 // Mock MailerMessage globally
@@ -116,19 +100,6 @@ global.MailerMessage = class MailerMessage {
     Object.assign(this, data);
   }
 };
-
-// Mock Record
-class MockRecord {
-  constructor(data) {
-    this.data = data;
-  }
-  get(key) {
-    return this.data[key];
-  }
-  set(key, value) {
-    this.data[key] = value;
-  }
-}
 
 function runTests() {
   console.log("Running mail.js tests...");

@@ -5,7 +5,7 @@ global.__hooks = require('path').resolve(__dirname, '../pb_hooks');
 // Mock dependencies for polaris.js
 const originalRequire = require('module').prototype.require;
 require('module').prototype.require = function(moduleName) {
-  if (moduleName.includes('lib/config.js')) {
+  if (moduleName.includes('config.js')) {
     return {
       polaris: function() {
         return {
@@ -19,7 +19,7 @@ require('module').prototype.require = function(moduleName) {
       }
     };
   }
-  if (moduleName.includes('lib/crypto.js')) {
+  if (moduleName.includes('crypto.js')) {
     return {
       hmacSha1Base64: function(key, msg) {
         return "mock_signature";
