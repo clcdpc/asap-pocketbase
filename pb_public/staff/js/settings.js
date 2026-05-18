@@ -181,6 +181,8 @@ function updateWorkflowSettingsSummary(settings) {
   const workflow = (settings && settings.workflow) || {};
   workflowSettings.outstandingTimeoutEnabled = !!workflow.outstandingTimeoutEnabled;
   workflowSettings.outstandingTimeoutDays = parseInt(workflow.outstandingTimeoutDays || '30', 10) || 30;
+  workflowSettings.additionalCopyTimeoutEnabled = !!workflow.additionalCopyTimeoutEnabled;
+  workflowSettings.additionalCopyTimeoutDays = parseInt(workflow.additionalCopyTimeoutDays || '14', 10) || 14;
   workflowSettings.autoPromote = !!workflow.autoPromote;
 }
 
@@ -372,6 +374,8 @@ export function applyLibrarySettingsToForm(settings) {
   populateWorkflowForms(settings.workflow || {});
   workflowSettings.outstandingTimeoutEnabled = !!((settings.workflow || {}).outstandingTimeoutEnabled);
   workflowSettings.outstandingTimeoutDays = parseInt(((settings.workflow || {}).outstandingTimeoutDays) || '30', 10) || 30;
+  workflowSettings.additionalCopyTimeoutEnabled = !!((settings.workflow || {}).additionalCopyTimeoutEnabled);
+  workflowSettings.additionalCopyTimeoutDays = parseInt(((settings.workflow || {}).additionalCopyTimeoutDays) || '14', 10) || 14;
   workflowSettings.autoPromote = !!(settings.workflow || {}).autoPromote;
     updateEmailStatusBanner(settings.emailStatus);
     if (settings.organizationSync) {
@@ -485,6 +489,8 @@ export function populateWorkflowForms(wf) {
   setFieldValue('pending-hold-timeout-days', wf.pendingHoldTimeoutDays !== undefined ? wf.pendingHoldTimeoutDays : '14');
   document.getElementById('additional-copy-timeout-enabled').checked = !!wf.additionalCopyTimeoutEnabled;
   setFieldValue('additional-copy-timeout-days', wf.additionalCopyTimeoutDays !== undefined ? wf.additionalCopyTimeoutDays : '14');
+  workflowSettings.additionalCopyTimeoutEnabled = !!wf.additionalCopyTimeoutEnabled;
+  workflowSettings.additionalCopyTimeoutDays = parseInt(wf.additionalCopyTimeoutDays || '14', 10) || 14;
 
   // Cache for checkbox renderer
   setLastWorkflowEnabledList((wf.enabledLibraryOrgIds || '').split(',').map(s => s.trim()).filter(s => s.length > 0));

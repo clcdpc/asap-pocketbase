@@ -83,7 +83,7 @@ export function setVerifiedBibId(id) { verifiedBibId = id; }
 export let publicationOptions = defaultPublicationOptions.slice();
 export function setPublicationOptions(opts) { publicationOptions = opts; }
 
-export let workflowSettings = { autoPromote: false, allowPatronAutoholdOptOut: false, outstandingTimeoutEnabled: false, outstandingTimeoutDays: 30, outstandingTimeoutSendEmail: false, outstandingTimeoutRejectionTemplateId: '', holdPickupTimeoutEnabled: false, holdPickupTimeoutDays: 14, pendingHoldTimeoutEnabled: false, pendingHoldTimeoutDays: 14,
+export let workflowSettings = { autoPromote: false, allowPatronAutoholdOptOut: false, outstandingTimeoutEnabled: false, outstandingTimeoutDays: 30, outstandingTimeoutSendEmail: false, outstandingTimeoutRejectionTemplateId: '', holdPickupTimeoutEnabled: false, holdPickupTimeoutDays: 14, pendingHoldTimeoutEnabled: false, pendingHoldTimeoutDays: 14, additionalCopyTimeoutEnabled: false, additionalCopyTimeoutDays: 14,
     externalSearch1Enabled: true,
     externalSearch1Label: 'Search Amazon',
     externalSearch1UrlTemplate: 'https://www.amazon.com/s?k={{title}}',

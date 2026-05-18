@@ -34,6 +34,7 @@ function createMockApp() {
 
   return {
     systemUi,
+    workflowLibrary,
     getPatronOverride: () => patronOverride,
     deleted,
     app: {
@@ -77,7 +78,7 @@ function makeEvent(app, body, staff) {
 
 console.log('Running library settings save scope tests...');
 
-const { app, systemUi, getPatronOverride, deleted } = createMockApp();
+const { app, systemUi, workflowLibrary, getPatronOverride, deleted } = createMockApp();
 const staff = makeRecord('staff-1', { role: 'admin', libraryOrgId: '100' });
 staff.collection = () => ({ name: 'staff_users' });
 
@@ -85,6 +86,10 @@ const result = staffRoutes.updateLibrarySettings(makeEvent(app, {
   orgId: '100',
   ui_text: {
     publicationOptions: [{ id: 'local', label: 'Local preorder', enabled: true, sortOrder: 10 }]
+  },
+  workflow: {
+    additionalCopyTimeoutEnabled: true,
+    additionalCopyTimeoutDays: 21
   },
   smtp: { host: 'should-not-save.example.org', port: 2525 },
   staffUrl: 'https://example.org/staff'
@@ -95,6 +100,8 @@ const override = getPatronOverride();
 assert.ok(override, 'Expected a patron_settings_overrides record to be saved');
 assert.deepStrictEqual(override.get('publicationOptions'), [{ id: 'local', label: 'Local preorder', enabled: true, sortOrder: 10 }]);
 assert.strictEqual(systemUi.get('publicationOptions'), JSON.stringify([{ id: 'new', label: 'New', enabled: true, sortOrder: 10 }]));
+assert.strictEqual(workflowLibrary.get('additionalCopyTimeoutEnabled'), true);
+assert.strictEqual(workflowLibrary.get('additionalCopyTimeoutDays'), 21);
 assert.strictEqual(deleted.length, 4, 'Expected blank library email templates to clear template overrides');
 
 console.log('All library settings save scope tests passed!');
