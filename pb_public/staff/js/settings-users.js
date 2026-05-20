@@ -321,7 +321,12 @@ if (addStaffBtn) {
       identityInput.value = '';
 
       if (msgEl) {
-        msgEl.innerHTML = '<i class="fa fa-check-circle"></i> Staff record created or updated. This user still signs in with their Polaris credentials.';
+        msgEl.textContent = '';
+        const icon = document.createElement('i');
+        icon.className = 'fa fa-check-circle';
+        const txt = document.createTextNode(' Staff record created or updated. This user still signs in with their Polaris credentials.');
+        msgEl.appendChild(icon);
+        msgEl.appendChild(txt);
         msgEl.className = 'mb-2 text-success font-weight-bold';
       }
 

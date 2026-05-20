@@ -301,12 +301,20 @@ export async function renderLibraryParticipationCheckboxes() {
   if (!container || container.getAttribute('data-loaded') === 'true') return;
 
   if (organizationsStatus === 'loading') {
-    container.innerHTML = '<div class="p-3 text-muted">Organizations loading...</div>';
+    container.textContent = '';
+    const div = document.createElement('div');
+    div.className = 'p-3 text-muted';
+    div.textContent = 'Organizations loading...';
+    container.appendChild(div);
     return;
   }
 
   if (organizationsStatus === 'error') {
-    container.innerHTML = '<div class="p-3 text-warning">Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.</div>';
+    container.textContent = '';
+    const div = document.createElement('div');
+    div.className = 'p-3 text-warning';
+    div.textContent = 'Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.';
+    container.appendChild(div);
     return;
   }
 
@@ -318,40 +326,80 @@ export async function renderLibraryParticipationCheckboxes() {
     });
 
     if (!orgs.length) {
+      container.textContent = '';
+      const div = document.createElement('div');
+      div.className = 'p-3 text-muted';
       if (organizationsStatus === 'not_loaded') {
-        container.innerHTML = '<div class="p-3 text-muted">Organizations have not been synced yet. Use Settings > Polaris > Sync Polaris Organizations Now.</div>';
+        div.textContent = 'Organizations have not been synced yet. Use Settings > Polaris > Sync Polaris Organizations Now.';
       } else {
-        container.innerHTML = '<div class="p-3 text-muted">Organization sync completed, but no library organizations were returned.</div>';
+        div.textContent = 'Organization sync completed, but no library organizations were returned.';
       }
+      container.appendChild(div);
       return;
     }
 
     updateOrganizationsStatusUi('loaded', `Polaris organizations loaded. ${orgs.length} library organization${orgs.length === 1 ? '' : 's'} available. Leave all libraries unchecked to enable all organizations.`);
-    container.innerHTML = `
-      <table class="table table-sm table-hover mb-0">
-        <thead class="bg-white library-table-head">
-          <tr>
-            <th class="library-enable-col">Enable</th>
-            <th>Library name</th>
-            <th class="library-id-col">ID</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${orgs.map(org => `
-            <tr>
-              <td class="align-middle">
-                <div class="custom-control custom-checkbox">
-                  <input type="checkbox" class="custom-control-input lib-participation-cb" id="lib-p-${org.organizationId}" value="${org.organizationId}">
-                  <label class="custom-control-label" for="lib-p-${org.organizationId}"></label>
-                </div>
-              </td>
-              <td class="align-middle font-weight-bold">${escapeAttr(org.displayName || org.name)}</td>
-              <td class="align-middle text-muted small">${org.organizationId}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    `;
+
+    container.textContent = '';
+    const table = document.createElement('table');
+    table.className = 'table table-sm table-hover mb-0';
+
+    const thead = document.createElement('thead');
+    thead.className = 'bg-white library-table-head';
+    const trHead = document.createElement('tr');
+
+    const thEnable = document.createElement('th');
+    thEnable.className = 'library-enable-col';
+    thEnable.textContent = 'Enable';
+
+    const thName = document.createElement('th');
+    thName.textContent = 'Library name';
+
+    const thId = document.createElement('th');
+    thId.className = 'library-id-col';
+    thId.textContent = 'ID';
+
+    trHead.appendChild(thEnable);
+    trHead.appendChild(thName);
+    trHead.appendChild(thId);
+    thead.appendChild(trHead);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    orgs.forEach(org => {
+      const tr = document.createElement('tr');
+
+      const tdCb = document.createElement('td');
+      tdCb.className = 'align-middle';
+      const divCb = document.createElement('div');
+      divCb.className = 'custom-control custom-checkbox';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.className = 'custom-control-input lib-participation-cb';
+      input.id = `lib-p-${org.organizationId}`;
+      input.value = org.organizationId;
+      const label = document.createElement('label');
+      label.className = 'custom-control-label';
+      label.setAttribute('for', `lib-p-${org.organizationId}`);
+      divCb.appendChild(input);
+      divCb.appendChild(label);
+      tdCb.appendChild(divCb);
+
+      const tdName = document.createElement('td');
+      tdName.className = 'align-middle font-weight-bold';
+      tdName.textContent = org.displayName || org.name;
+
+      const tdId = document.createElement('td');
+      tdId.className = 'align-middle text-muted small';
+      tdId.textContent = org.organizationId;
+
+      tr.appendChild(tdCb);
+      tr.appendChild(tdName);
+      tr.appendChild(tdId);
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    container.appendChild(table);
 
     container.setAttribute('data-loaded', 'true');
 

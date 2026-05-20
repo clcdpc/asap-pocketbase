@@ -186,22 +186,39 @@ function openPatronSearchDialog(query, results) {
   els.status.className = 'alert alert-light border py-2 px-3 small';
   els.status.textContent = `${results.length} result${results.length === 1 ? '' : 's'} shown.`;
 
-  els.results.innerHTML = results.map((result, index) => {
+  els.results.textContent = '';
+  results.forEach((result, index) => {
     const name = patronLookupName(result) || result.name || 'Patron';
     const barcode = result.barcode || '';
     const library = result.libraryOrgName || 'Library not returned';
-    return `
-      <div class="polaris-search-result">
-        <div class="polaris-search-result-title">${escapeAttr(name)}</div>
-        <div class="polaris-search-result-meta">Barcode: ${escapeAttr(barcode)} | Library: ${escapeAttr(library)}</div>
-        <div class="polaris-search-result-actions">
-          <button type="button" class="btn btn-sm btn-primary patron-search-select" data-result-index="${escapeAttr(String(index))}">
-            Use this patron
-          </button>
-        </div>
-      </div>
-    `;
-  }).join('');
+
+    const div = document.createElement('div');
+    div.className = 'polaris-search-result';
+
+    const titleDiv = document.createElement('div');
+    titleDiv.className = 'polaris-search-result-title';
+    titleDiv.textContent = name;
+
+    const metaDiv = document.createElement('div');
+    metaDiv.className = 'polaris-search-result-meta';
+    metaDiv.textContent = `Barcode: ${barcode} | Library: ${library}`;
+
+    const actionsDiv = document.createElement('div');
+    actionsDiv.className = 'polaris-search-result-actions';
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-sm btn-primary patron-search-select';
+    btn.setAttribute('data-result-index', String(index));
+    btn.textContent = 'Use this patron';
+
+    actionsDiv.appendChild(btn);
+    div.appendChild(titleDiv);
+    div.appendChild(metaDiv);
+    div.appendChild(actionsDiv);
+
+    els.results.appendChild(div);
+  });
 
   els.results.querySelectorAll('.patron-search-select').forEach(button => {
     button.addEventListener('click', () => {

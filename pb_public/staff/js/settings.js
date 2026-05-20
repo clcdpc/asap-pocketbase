@@ -334,11 +334,29 @@ export function applyLibrarySettingsToForm(settings) {
     }
     if (isOverride) {
       if (statusAlert) statusAlert.className = 'alert alert-info mb-3 d-flex justify-content-between align-items-center';
-      if (overrideMsg) overrideMsg.innerHTML = '<i class="fa fa-check-circle mr-1"></i> Editing: <strong>' + escapeAttr(document.getElementById('library-context-display').textContent || 'selected library') + '</strong>. This library has custom settings.';
+      if (overrideMsg) {
+        overrideMsg.textContent = '';
+        const icon = document.createElement('i');
+        icon.className = 'fa fa-check-circle mr-1';
+        const txt1 = document.createTextNode(' Editing: ');
+        const str = document.createElement('strong');
+        str.textContent = document.getElementById('library-context-display').textContent || 'selected library';
+        const txt2 = document.createTextNode('. This library has custom settings.');
+        overrideMsg.append(icon, txt1, str, txt2);
+      }
       if (resetBtn) resetBtn.classList.remove('hidden');
     } else {
       if (statusAlert) statusAlert.className = 'alert alert-warning mb-3 d-flex justify-content-between align-items-center';
-      if (overrideMsg) overrideMsg.innerHTML = '<i class="fa fa-info-circle mr-1"></i> Editing: <strong>' + escapeAttr(document.getElementById('library-context-display').textContent || 'selected library') + '</strong>. This library is using system defaults. Saving will create a library-specific override.';
+      if (overrideMsg) {
+        overrideMsg.textContent = '';
+        const icon = document.createElement('i');
+        icon.className = 'fa fa-info-circle mr-1';
+        const txt1 = document.createTextNode(' Editing: ');
+        const str = document.createElement('strong');
+        str.textContent = document.getElementById('library-context-display').textContent || 'selected library';
+        const txt2 = document.createTextNode('. This library is using system defaults. Saving will create a library-specific override.');
+        overrideMsg.append(icon, txt1, str, txt2);
+      }
       if (resetBtn) resetBtn.classList.add('hidden');
     }
     updateLibraryOverrideStatusVisibility(currentSettingsSection);
