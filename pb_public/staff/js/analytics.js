@@ -81,7 +81,11 @@ export async function loadAnalytics(container) {
     analyticsScope = data.scope && data.scope.mode === 'all' ? 'all' : (data.scope && data.scope.libraryOrgId) || analyticsScope;
     renderAnalytics(container, data);
   } catch (err) {
-    container.innerHTML = `<div class="alert alert-danger">${escapeHtml(err.message || 'Analytics could not be loaded.')}</div>`;
+    container.innerHTML = '';
+    const errDiv = document.createElement('div');
+    errDiv.className = 'alert alert-danger';
+    errDiv.textContent = err.message || 'Analytics could not be loaded.';
+    container.appendChild(errDiv);
   }
 }
 
