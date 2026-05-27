@@ -46,14 +46,23 @@ function runTests() {
 
     routeRegistry.registerRoutes([
       { method: "GET", path: "/one", module: "setup_routes.js", handler: "setupStatus" },
-      { method: "POST", path: "/two", module: "patron_routes.js", handler: "patronLogin" }
+      { method: "POST", path: "/two", module: "patron_routes.js", handler: "patronLogin" },
+      {
+        method: "GET",
+        path: "/custom",
+        customHandler(e) {
+          return e.json(405, { message: "custom" });
+        }
+      }
     ]);
 
-    assert.strictEqual(calls.length, 2);
+    assert.strictEqual(calls.length, 3);
     assert.strictEqual(calls[0].method, "GET");
     assert.strictEqual(calls[0].routePath, "/one");
     assert.strictEqual(calls[1].method, "POST");
     assert.strictEqual(calls[1].routePath, "/two");
+    assert.strictEqual(calls[2].method, "GET");
+    assert.strictEqual(calls[2].routePath, "/custom");
 
     const event = {
       json(code, payload) {
@@ -62,8 +71,10 @@ function runTests() {
     };
     const resultOne = calls[0].handlerFn(event);
     const resultTwo = calls[1].handlerFn(event);
+    const resultCustom = calls[2].handlerFn(event);
     assert.deepStrictEqual(resultOne, { code: 200, payload: { route: "one" } });
     assert.deepStrictEqual(resultTwo, { code: 200, payload: { route: "two" } });
+    assert.deepStrictEqual(resultCustom, { code: 405, payload: { message: "custom" } });
   } finally {
     delete global.routerAdd;
     if (originalSetupCache) require.cache[setupRoutesPath] = originalSetupCache;
