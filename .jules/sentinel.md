@@ -18,3 +18,8 @@
 **Vulnerability:** Similar to role updates, a standard `admin` user could delete a `super_admin`'s account because the `staffUserDelete` endpoint only verified that at least one super admin remains, rather than strictly requiring `super_admin` privileges to delete a `super_admin` account.
 **Learning:** Role-based access control (RBAC) must check both the user *performing* the action and the *target* user of the action. Modifying or deleting elevated roles requires elevated authorization.
 **Prevention:** Ensure all endpoints that perform state-changing operations on user accounts strictly validate the actor's privileges against the target object's sensitivity tier.
+
+## 2024-05-24 - Unauthenticated Diagnostic Endpoints Exposed Internal Data
+**Vulnerability:** The `/api/asap/diag/*` endpoints in `pb_hooks/diagnostic.pb.js` were completely unauthenticated. They leaked internal application state (Polaris API configuration metadata), allowed triggering background jobs (hold checks), and leaked stack traces in error responses (`err.stack`).
+**Learning:** Even diagnostic or "internal" endpoints must be authenticated and secured. Developers sometimes create `/diag` or `/debug` endpoints during development and forget to lock them down or remove them before deployment, inadvertently exposing the internal architecture, configuration details, and administrative functions. Stack trace leaks further assist attackers by revealing file paths and underlying library versions.
+**Prevention:** Always enforce strict role-based access control (e.g., Super Admin access) for all `/diag`, `/admin`, or `/debug` endpoints. Ensure error handlers default to generic messages and never expose raw stack traces in the HTTP response.
