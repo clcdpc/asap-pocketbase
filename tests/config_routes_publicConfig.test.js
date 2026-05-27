@@ -124,4 +124,19 @@ function runTests() {
   console.log("config_routes publicConfig behavior tests passed.");
 }
 
-runTests();
+const originalConfigCache = require.cache[configPath];
+const originalOrgsCache = require.cache[orgsPath];
+const originalConfigRoutesCache = require.cache[configRoutesPath];
+
+try {
+  runTests();
+} finally {
+  if (originalConfigCache) require.cache[configPath] = originalConfigCache;
+  else delete require.cache[configPath];
+
+  if (originalOrgsCache) require.cache[orgsPath] = originalOrgsCache;
+  else delete require.cache[orgsPath];
+
+  if (originalConfigRoutesCache) require.cache[configRoutesPath] = originalConfigRoutesCache;
+  else delete require.cache[configRoutesPath];
+}
