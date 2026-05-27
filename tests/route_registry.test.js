@@ -1,0 +1,81 @@
+const assert = require("assert");
+const path = require("path");
+
+global.__hooks = path.resolve(__dirname, "../pb_hooks");
+
+const routeRegistryPath = path.resolve(__dirname, "../lib/route_registry.js");
+const setupRoutesPath = path.resolve(__dirname, "../lib/setup_routes.js");
+const patronRoutesPath = path.resolve(__dirname, "../lib/patron_routes.js");
+
+function runTests() {
+  const calls = [];
+  global.routerAdd = function (method, routePath, handlerFn) {
+    calls.push({ method, routePath, handlerFn });
+  };
+
+  const setupMock = {
+    setupStatus(e) {
+      return e.json(200, { route: "one" });
+    }
+  };
+  const patronMock = {
+    patronLogin(e) {
+      return e.json(200, { route: "two" });
+    }
+  };
+
+  const originalSetupCache = require.cache[setupRoutesPath];
+  const originalPatronCache = require.cache[patronRoutesPath];
+  const originalRouteRegistryCache = require.cache[routeRegistryPath];
+
+  try {
+    require.cache[setupRoutesPath] = {
+      id: setupRoutesPath,
+      filename: setupRoutesPath,
+      loaded: true,
+      exports: setupMock
+    };
+    require.cache[patronRoutesPath] = {
+      id: patronRoutesPath,
+      filename: patronRoutesPath,
+      loaded: true,
+      exports: patronMock
+    };
+    delete require.cache[routeRegistryPath];
+    const routeRegistry = require(routeRegistryPath);
+
+    routeRegistry.registerRoutes([
+      { method: "GET", path: "/one", module: "setup_routes.js", handler: "setupStatus" },
+      { method: "POST", path: "/two", module: "patron_routes.js", handler: "patronLogin" }
+    ]);
+
+    assert.strictEqual(calls.length, 2);
+    assert.strictEqual(calls[0].method, "GET");
+    assert.strictEqual(calls[0].routePath, "/one");
+    assert.strictEqual(calls[1].method, "POST");
+    assert.strictEqual(calls[1].routePath, "/two");
+
+    const event = {
+      json(code, payload) {
+        return { code, payload };
+      }
+    };
+    const resultOne = calls[0].handlerFn(event);
+    const resultTwo = calls[1].handlerFn(event);
+    assert.deepStrictEqual(resultOne, { code: 200, payload: { route: "one" } });
+    assert.deepStrictEqual(resultTwo, { code: 200, payload: { route: "two" } });
+  } finally {
+    delete global.routerAdd;
+    if (originalSetupCache) require.cache[setupRoutesPath] = originalSetupCache;
+    else delete require.cache[setupRoutesPath];
+    if (originalPatronCache) require.cache[patronRoutesPath] = originalPatronCache;
+    else delete require.cache[patronRoutesPath];
+
+    if (originalRouteRegistryCache) require.cache[routeRegistryPath] = originalRouteRegistryCache;
+    else delete require.cache[routeRegistryPath];
+  }
+
+  console.log("route_registry tests passed.");
+}
+
+runTests();

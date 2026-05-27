@@ -6,25 +6,13 @@ routerAdd("POST", "/api/asap/staff/login", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffLogin(e);
 });
 
-routerAdd("GET", "/api/asap/setup/status", (e) => {
-  return require(`${__hooks}/../lib/setup_routes.js`).setupStatus(e);
-});
-
-routerAdd("POST", "/api/asap/setup", (e) => {
-  return require(`${__hooks}/../lib/setup_routes.js`).initialSetup(e);
-});
-
-routerAdd("POST", "/api/asap/setup/test-polaris", (e) => {
-  return require(`${__hooks}/../lib/setup_routes.js`).setupTestPolaris(e);
-});
-
-routerAdd("POST", "/api/asap/patron/login", (e) => {
-  return require(`${__hooks}/../lib/patron_routes.js`).patronLogin(e);
-});
-
-routerAdd("POST", "/api/asap/patron/suggestions", (e) => {
-  return require(`${__hooks}/../lib/patron_routes.js`).createSuggestion(e);
-});
+require(`${__hooks}/../lib/route_registry.js`).registerRoutes([
+  { method: "GET", path: "/api/asap/setup/status", module: "setup_routes.js", handler: "setupStatus" },
+  { method: "POST", path: "/api/asap/setup", module: "setup_routes.js", handler: "initialSetup" },
+  { method: "POST", path: "/api/asap/setup/test-polaris", module: "setup_routes.js", handler: "setupTestPolaris" },
+  { method: "POST", path: "/api/asap/patron/login", module: "patron_routes.js", handler: "patronLogin" },
+  { method: "POST", path: "/api/asap/patron/suggestions", module: "patron_routes.js", handler: "createSuggestion" }
+]);
 
 routerAdd("POST", "/api/asap/staff/suggestions", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffCreateSuggestion(e);
