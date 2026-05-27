@@ -5,6 +5,7 @@ global.__hooks = path.resolve(__dirname, "../pb_hooks");
 
 const routeRegistryPath = path.resolve(__dirname, "../lib/route_registry.js");
 const setupRoutesPath = path.resolve(__dirname, "../lib/setup_routes.js");
+const patronRoutesPath = path.resolve(__dirname, "../lib/patron_routes.js");
 
 function runTests() {
   const calls = [];
@@ -14,11 +15,17 @@ function runTests() {
 
   const setupMock = {
     setupStatus(e) {
-      return e.json(200, { ok: true });
+      return e.json(200, { route: "one" });
+    }
+  };
+  const patronMock = {
+    patronLogin(e) {
+      return e.json(200, { route: "two" });
     }
   };
 
   const originalSetupCache = require.cache[setupRoutesPath];
+  const originalPatronCache = require.cache[patronRoutesPath];
   const originalRouteRegistryCache = require.cache[routeRegistryPath];
 
   try {
@@ -28,27 +35,41 @@ function runTests() {
       loaded: true,
       exports: setupMock
     };
+    require.cache[patronRoutesPath] = {
+      id: patronRoutesPath,
+      filename: patronRoutesPath,
+      loaded: true,
+      exports: patronMock
+    };
     delete require.cache[routeRegistryPath];
     const routeRegistry = require(routeRegistryPath);
 
     routeRegistry.registerRoutes([
-      { method: "GET", path: "/api/asap/setup/status", module: "setup_routes.js", handler: "setupStatus" }
+      { method: "GET", path: "/one", module: "setup_routes.js", handler: "setupStatus" },
+      { method: "POST", path: "/two", module: "patron_routes.js", handler: "patronLogin" }
     ]);
 
-    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(calls.length, 2);
     assert.strictEqual(calls[0].method, "GET");
-    assert.strictEqual(calls[0].routePath, "/api/asap/setup/status");
+    assert.strictEqual(calls[0].routePath, "/one");
+    assert.strictEqual(calls[1].method, "POST");
+    assert.strictEqual(calls[1].routePath, "/two");
 
-    const result = calls[0].handlerFn({
+    const event = {
       json(code, payload) {
         return { code, payload };
       }
-    });
-    assert.deepStrictEqual(result, { code: 200, payload: { ok: true } });
+    };
+    const resultOne = calls[0].handlerFn(event);
+    const resultTwo = calls[1].handlerFn(event);
+    assert.deepStrictEqual(resultOne, { code: 200, payload: { route: "one" } });
+    assert.deepStrictEqual(resultTwo, { code: 200, payload: { route: "two" } });
   } finally {
     delete global.routerAdd;
     if (originalSetupCache) require.cache[setupRoutesPath] = originalSetupCache;
     else delete require.cache[setupRoutesPath];
+    if (originalPatronCache) require.cache[patronRoutesPath] = originalPatronCache;
+    else delete require.cache[patronRoutesPath];
 
     if (originalRouteRegistryCache) require.cache[routeRegistryPath] = originalRouteRegistryCache;
     else delete require.cache[routeRegistryPath];
