@@ -77,17 +77,8 @@ cronAdd("asap-weekly-staff-action-summary", $os.getenv("ASAP_WEEKLY_STAFF_ACTION
 cronAdd("asap-isbn-check", $os.getenv("ASAP_ISBN_CHECK_CRON_SCHEDULE") || "*/5 * * * *", () => {
   const jobs = require(`${__hooks}/../lib/jobs.js`);
   const polaris = require(`${__hooks}/../lib/polaris.js`);
-  const result = {
-    holdsPlaced: 0,
-    checkoutClosures: 0,
-    holdPickupTimeouts: 0,
-    promoted: 0,
-    timedOut: 0,
-    skipped: 0,
-    isbnChecksFound: 0,
-    isbnChecksNotFound: 0,
-    errors: 0,
-  };
+  const jobResults = require(`${__hooks}/../lib/job_results.js`);
+  const result = jobResults.createIsbnCheckResult();
   jobs.processPendingSuggestionIsbnChecks($app, polaris.adminStaffAuth(), result);
 });
 
