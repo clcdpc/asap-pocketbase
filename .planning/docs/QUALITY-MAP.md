@@ -1,51 +1,44 @@
 <!-- generated-by: gsd-doc-writer -->
 # Quality Map
 
-This document outlines the coding standards, technical debt, and quality metrics for the Suggest-a-Purchase project.
+This document summarizes quality standards, current debt, and verification practices for ASAP.
 
 ## Coding Standards
 
-### Backend (PocketBase Hooks)
-The backend logic is implemented in JavaScript (running in the PocketBase `goja` environment).
+### Backend (PocketBase Hooks + Root `lib/`)
 
-- **Module System**: Uses CommonJS-style `require` and `module.exports`.
-- **JS Version**: Follows ES5 standards for compatibility with the embedded JS engine.
-- **Naming Conventions**:
-  - Constants: `UPPER_SNAKE_CASE`
-  - Functions and Variables: `camelCase`
-  - Collections and Fields: `snake_case` (matching PocketBase schema)
-- **Data Normalization**: Centralized in `pb_hooks/lib/records.js` to ensure consistent data types across the system.
-- **Error Handling**: Uses `try...catch` blocks with custom error codes (e.g., 409 for duplicates, 406 for limits).
-- **Audit Logging**: All destructive or significant state changes are audited via `auditDeletedRequest` and `recordEvent`.
+- **Runtime target:** JavaScript compatible with PocketBase hooks and shared with Node test execution.
+- **Architecture:** `pb_hooks/main.pb.js` delegates to root `lib/` modules; route registration is centralized in `lib/route_registry.js`.
+- **Module boundaries:** facade modules (`*_routes.js`) expose installers; feature code lives in domain folders (`lib/staff`, `lib/config`, `lib/jobs`, `lib/polaris`, `lib/records`).
+- **Naming:** `camelCase` for functions/variables, `UPPER_SNAKE_CASE` for constants, `snake_case` for collection fields.
+- **DOM safety:** new frontend rendering should prefer DOM APIs over dynamic `innerHTML` with runtime data.
 
-### Frontend (Staff UI)
-The staff interface is a single-page application built with modern JavaScript.
+### Frontend (Staff + Patron SPAs)
 
-- **Module System**: Uses ES6 `import/export`.
-- **JS Version**: Uses ES6+ features including `async/await`, template literals, and arrow functions.
-- **Modularity**: Logic is split into specialized modules (e.g., `api.js`, `grid.js`, `modals.js`) using standard ES6 imports/exports.
-- **State Management**: Leverages PocketBase's `authStore` for authentication and user context.
+- **Module system:** native ES modules for browser code.
+- **State and scope correctness:** selected system/library context must be a single source of truth across load, form-populate, save, and runtime read paths.
+- **UI reliability:** route/view switches should preserve valid scoped values and avoid stale cross-library leakage.
 
-## Technical Debt
+## Current Technical Debt
 
-### Identified Debt
-- **Manual Implementations**: Due to the limited environment of PocketBase hooks, several low-level utilities (HMAC-SHA1, UTF-8 byte counting, XML escaping) are manually implemented in `pb_hooks/lib/crypto.js` and `pb_hooks/lib/polaris.js`.
-- **Sync Logic**: Organization synchronization and ISBN checking rely on multiple cron jobs and manual triggers, which may lead to race conditions if not carefully monitored.
+1. Some legacy docs and comments still refer to older `pb_hooks/lib` layouts.
+2. Manual low-level helpers (crypto/signing, XML plumbing, normalization guards) require disciplined test coverage.
+3. Scope-heavy settings flows require ongoing regression coverage for system vs library behavior.
 
-### Refactoring Priorities
-1. **Centralized Testing**: Implement a unified test runner or CI integration for the Node.js-based unit tests.
+## Quality Metrics and Verification
 
-## Quality Metrics
+### Automated Tests
 
-### Testing Coverage
-The project maintains an extensive suite of tests located in the `tests/` directory:
-- **Unit Tests**: Coverage for core logic including crypto, identity, mail, and data normalization.
-- **Integration Tests**: Tests for PocketBase record operations and Polaris API interactions (mocked).
-- **Performance Benchmarks**: Dedicated scripts for benchmarking critical paths such as organization relinking and duplicate suggestion detection.
+- Extensive Node-based test suite in `tests/` covering config scoping, route registration, staff workflows, Polaris integration behavior, and UI module behavior.
+- Benchmark scripts validate performance-sensitive paths (workflow tagging, relinking, publication option resolution, etc.).
 
-### Reliability and Security
-- **Data Redaction**: Sensitive patron data is automatically redacted from logs and internal notes using `redactPayload` in `polaris.js` and record hooks in `main.pb.js`.
-- **Input Validation**: Strict normalization of identifiers (ISBN/ISSN) and barcodes before processing.
-- **API Resilience**: Detailed error handling for the Polaris API, including retry-safe signature generation and status code mapping.
-- **XSS Prevention**: Centralized XML and HTML escaping utilities to prevent injection attacks.
-- **Auditing**: Comprehensive audit trail for deleted requests, capturing snapshots of the data before removal.
+### Reliability and Security Focus
+
+- Input normalization for IDs, formats, and options before persistence/use.
+- Scoped authorization checks in route and data layers (including analytics scope behavior).
+- Redaction and safe rendering patterns to prevent sensitive-data leakage and injection issues.
+
+### Execution Standard
+
+- Use the repository test runner (`node tests/run_all.js`) as the default verification command.
+- Run targeted tests for touched areas when making scoped behavior changes.
