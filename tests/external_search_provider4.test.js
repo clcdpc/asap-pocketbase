@@ -72,10 +72,10 @@ function runTests() {
   assert.ok(staffRoutes.includes('"externalSearch4Label"'));
   assert.ok(staffRoutes.includes('"externalSearch4UrlTemplate"'));
 
-  const mainHook = fileText("pb_hooks/main.pb.js");
-  assert.ok(mainHook.includes("response.externalSearch4Enabled"));
-  assert.ok(mainHook.includes("response.externalSearch4Label"));
-  assert.ok(mainHook.includes("response.externalSearch4UrlTemplate"));
+  const configRouteSource = fileText("lib/config_routes.js");
+  assert.ok(configRouteSource.includes("response.externalSearch4Enabled"));
+  assert.ok(configRouteSource.includes("response.externalSearch4Label"));
+  assert.ok(configRouteSource.includes("response.externalSearch4UrlTemplate"));
 
   const settingsJs = fileText("pb_public/staff/js/settings.js");
   assert.ok(settingsJs.includes("wf-external-search-4-enabled"));
