@@ -59,6 +59,19 @@ In a consortia environment, ASAP allows each member library to maintain its own 
 
 ---
 
+
+## 🧪 Running Tests
+
+Run the full Node test suite with:
+
+```sh
+node tests/run_all.js
+```
+
+You can still run any individual test file directly (for example `node tests/polaris.test.js`).
+
+---
+
 ## ✨ Key Features
 
 - **Polaris Integration**: Real-time patron authentication, BIB/Hold lookups, and automated hold placement via Polaris API (PAPI).

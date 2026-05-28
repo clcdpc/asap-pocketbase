@@ -6,227 +6,56 @@ routerAdd("POST", "/api/asap/staff/login", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffLogin(e);
 });
 
-routerAdd("GET", "/api/asap/setup/status", (e) => {
-  return require(`${__hooks}/../lib/setup_routes.js`).setupStatus(e);
-});
-
-routerAdd("POST", "/api/asap/setup", (e) => {
-  return require(`${__hooks}/../lib/setup_routes.js`).initialSetup(e);
-});
-
-routerAdd("POST", "/api/asap/setup/test-polaris", (e) => {
-  return require(`${__hooks}/../lib/setup_routes.js`).setupTestPolaris(e);
-});
-
-routerAdd("POST", "/api/asap/patron/login", (e) => {
-  return require(`${__hooks}/../lib/patron_routes.js`).patronLogin(e);
-});
-
-routerAdd("POST", "/api/asap/patron/suggestions", (e) => {
-  return require(`${__hooks}/../lib/patron_routes.js`).createSuggestion(e);
-});
-
-routerAdd("POST", "/api/asap/staff/suggestions", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffCreateSuggestion(e);
-});
-
-routerAdd("POST", "/api/asap/staff/patron-lookup", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffLookupPatron(e);
-});
-
-routerAdd("POST", "/api/asap/staff/bib-lookup", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffBibLookup(e);
-});
-
-routerAdd("POST", "/api/asap/staff/test-polaris", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffTestPolaris(e);
-});
-
-routerAdd("POST", "/api/asap/staff/test-smtp", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffTestSmtp(e);
-});
-
-routerAdd("POST", "/api/asap/staff/profile", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffProfileUpdate(e);
-});
-
-routerAdd("GET", "/api/asap/staff/email-status", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffEmailStatus(e);
-});
-
-routerAdd("GET", "/api/asap/staff/users", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffUsersList(e);
-});
-
-
-
-routerAdd("POST", "/api/asap/staff/users", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffUserCreate(e);
-});
-
-routerAdd("POST", "/api/asap/staff/users/{id}/role", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffUserRoleUpdate(e);
-});
-
-routerAdd("DELETE", "/api/asap/staff/users/{id}", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffUserDelete(e);
-});
-
-routerAdd("GET", "/api/asap/staff/settings/library", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).getLibrarySettings(e);
-});
-
-routerAdd("POST", "/api/asap/staff/settings/library", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).updateLibrarySettings(e);
-});
-
-routerAdd("GET", "/api/asap/staff/settings/overrides-summary", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).getLibraryOverridesSummary(e);
-});
-
-
-routerAdd("POST", "/api/asap/staff/settings/logo", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffSaveLogo(e);
-});
-
-routerAdd("DELETE", "/api/asap/staff/settings/logo", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffResetLogo(e);
-});
-
-routerAdd("GET", "/api/asap/staff/title-requests", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffTitleRequestsList(e);
-});
-
-routerAdd("GET", "/api/asap/staff/additional-copies", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffAdditionalCopiesList(e);
-});
-
-routerAdd("POST", "/api/asap/staff/additional-copies/{id}/close", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffAdditionalCopyClose(e);
-});
-
-routerAdd("POST", "/api/asap/staff/additional-copies/{id}/reopen", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffAdditionalCopyReopen(e);
-});
-
-routerAdd("POST", "/api/asap/staff/additional-copies/{id}/claim", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffAdditionalCopyClaim(e);
-});
-
-routerAdd("POST", "/api/asap/staff/additional-copies/{id}/unclaim", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffAdditionalCopyUnclaim(e);
-});
-
-routerAdd("GET", "/api/asap/staff/analytics", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffAnalytics(e);
-});
-
-routerAdd("POST", "/api/asap/staff/title-requests/{id}/claim", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffClaimTitleRequest(e);
-});
-
-routerAdd("POST", "/api/asap/staff/title-requests/{id}/unclaim", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffUnclaimTitleRequest(e);
-});
-
-routerAdd("POST", "/api/asap/staff/title-requests/{id}/action", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffTitleRequestAction(e);
-});
-
-routerAdd("GET", "/api/asap/staff/title-requests/{id}/additional-copy", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffTitleRequestAdditionalCopyPreview(e);
-});
-
-routerAdd("POST", "/api/asap/staff/title-requests/{id}/additional-copy", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffTitleRequestAdditionalCopyCreate(e);
-});
-
-routerAdd("DELETE", "/api/asap/staff/requests/{id}", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffDeleteClosedRequest(e);
-});
-
-routerAdd("POST", "/api/asap/staff/requests/delete-closed", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffDeleteClosedRequestsBulk(e);
-});
-
-routerAdd("POST", "/api/asap/staff/organizations/sync", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffSyncOrganizations(e);
-});
-
-routerAdd("POST", "/api/asap/staff/material-types/sync", (e) => {
-  return require(`${__hooks}/../lib/staff_routes.js`).staffMaterialTypesSync(e);
-});
-
-routerAdd("GET", "/api/asap/staff/material-types/sync", function (e) {
-  return e.json(405, { message: "Method Not Allowed. Use POST to sync material types." });
-});
-
-routerAdd("POST", "/api/asap/jobs/hold-check", (e) => {
-  return require(`${__hooks}/../lib/job_routes.js`).runHoldCheck(e);
-});
-
-routerAdd("POST", "/api/asap/jobs/promoter-check", (e) => {
-  return require(`${__hooks}/../lib/job_routes.js`).staffRunPromoterCheck(e);
-});
-
-routerAdd("POST", "/api/asap/jobs/weekly-staff-action-summary", (e) => {
-  return require(`${__hooks}/../lib/job_routes.js`).runWeeklyStaffActionSummary(e);
-});
-
-routerAdd("GET", "/api/asap/config", (e) => {
-  try {
-    const config = require(`${__hooks}/../lib/config.js`);
-    const routeUtils = require(`${__hooks}/../lib/route_utils.js`);
-    const orgId = routeUtils.queryValue(e, "libraryOrgId") || "";
-    var settings = orgId ? config.librarySettings(e.app, orgId) : config.getSettings();
-    
-    var response = settings.ui_text || {};
-    var wf = settings.workflow || settings;
-    
-    response.commonAuthorsEnabled = !!wf.commonAuthorsEnabled;
-    response.commonAuthorsList = wf.commonAuthorsList || "";
-    response.commonAuthorsLabel = wf.commonAuthorsLabel || "Popular Creators";
-    response.commonAuthorsHelp = wf.commonAuthorsHelp || "See if this is a creator we already collect.";
-    response.commonAuthorsMessage = wf.commonAuthorsMessage || "We automatically purchase all upcoming titles by this creator. Please check the catalog to place a hold on 'On Order' items.";
-    response.externalSearch1Enabled = !!wf.externalSearch1Enabled;
-    response.externalSearch1Label = wf.externalSearch1Label || "Search Amazon";
-    response.externalSearch1UrlTemplate = wf.externalSearch1UrlTemplate || "https://www.amazon.com/s?k={{title}}";
-    response.externalSearch2Enabled = !!wf.externalSearch2Enabled;
-    response.externalSearch2Label = wf.externalSearch2Label || "Search Goodreads";
-    response.externalSearch2UrlTemplate = wf.externalSearch2UrlTemplate || "https://www.goodreads.com/search?q={{title}}";
-    response.externalSearch3Enabled = !!wf.externalSearch3Enabled;
-    response.externalSearch3Label = wf.externalSearch3Label || "Search WorldCat";
-    response.externalSearch3UrlTemplate = wf.externalSearch3UrlTemplate || "https://www.worldcat.org/search?q={{title}}";
-    response.externalSearch4Enabled = !!wf.externalSearch4Enabled;
-    response.externalSearch4Label = wf.externalSearch4Label || "";
-    response.externalSearch4UrlTemplate = wf.externalSearch4UrlTemplate || "";
-    
-    // Participation check
-    if (orgId) {
-      var appSettings = config.getSettings();
-      var enabledLibraries = String(appSettings.enabledLibraryOrgIds || "").trim();
-      if (enabledLibraries) {
-        var enabledList = enabledLibraries.split(",").map(function (id) { return id.trim(); }).filter(function (id) { return id.length > 0; });
-        if (enabledList.length > 0 && enabledList.indexOf(orgId) < 0) {
-          response.systemNotEnabled = true;
-          var msg = response.systemNotEnabledMessage || "{{library}} does not currently participate in this suggestion service.";
-          var org = require(`${__hooks}/../lib/orgs.js`).findOrganization(e.app, orgId);
-          var libraryName = org ? String(org.get("displayName") || org.get("name") || "Your library") : "Your library";
-          msg = msg.replace(/\{\{library\}\}/g, libraryName);
-          if (msg.indexOf("Your library") >= 0) {
-            msg = msg.replace("Your library", libraryName);
-          }
-          response.systemNotEnabledMessage = msg;
-        }
-      }
+require(`${__hooks}/../lib/route_registry.js`).registerRoutes([
+  { method: "GET", path: "/api/asap/setup/status", module: "setup_routes.js", handler: "setupStatus" },
+  { method: "POST", path: "/api/asap/setup", module: "setup_routes.js", handler: "initialSetup" },
+  { method: "POST", path: "/api/asap/setup/test-polaris", module: "setup_routes.js", handler: "setupTestPolaris" },
+  { method: "POST", path: "/api/asap/patron/login", module: "patron_routes.js", handler: "patronLogin" },
+  { method: "POST", path: "/api/asap/patron/suggestions", module: "patron_routes.js", handler: "createSuggestion" },
+  { method: "POST", path: "/api/asap/staff/suggestions", module: "staff_routes.js", handler: "staffCreateSuggestion" },
+  { method: "POST", path: "/api/asap/staff/patron-lookup", module: "staff_routes.js", handler: "staffLookupPatron" },
+  { method: "POST", path: "/api/asap/staff/bib-lookup", module: "staff_routes.js", handler: "staffBibLookup" },
+  { method: "POST", path: "/api/asap/staff/test-polaris", module: "staff_routes.js", handler: "staffTestPolaris" },
+  { method: "POST", path: "/api/asap/staff/test-smtp", module: "staff_routes.js", handler: "staffTestSmtp" },
+  { method: "POST", path: "/api/asap/staff/profile", module: "staff_routes.js", handler: "staffProfileUpdate" },
+  { method: "GET", path: "/api/asap/staff/email-status", module: "staff_routes.js", handler: "staffEmailStatus" },
+  { method: "GET", path: "/api/asap/staff/users", module: "staff_routes.js", handler: "staffUsersList" },
+  { method: "POST", path: "/api/asap/staff/users", module: "staff_routes.js", handler: "staffUserCreate" },
+  { method: "POST", path: "/api/asap/staff/users/{id}/role", module: "staff_routes.js", handler: "staffUserRoleUpdate" },
+  { method: "DELETE", path: "/api/asap/staff/users/{id}", module: "staff_routes.js", handler: "staffUserDelete" },
+  { method: "GET", path: "/api/asap/staff/settings/library", module: "staff_routes.js", handler: "getLibrarySettings" },
+  { method: "POST", path: "/api/asap/staff/settings/library", module: "staff_routes.js", handler: "updateLibrarySettings" },
+  { method: "GET", path: "/api/asap/staff/settings/overrides-summary", module: "staff_routes.js", handler: "getLibraryOverridesSummary" },
+  { method: "POST", path: "/api/asap/staff/settings/logo", module: "staff_routes.js", handler: "staffSaveLogo" },
+  { method: "DELETE", path: "/api/asap/staff/settings/logo", module: "staff_routes.js", handler: "staffResetLogo" },
+  { method: "GET", path: "/api/asap/staff/title-requests", module: "staff_routes.js", handler: "staffTitleRequestsList" },
+  { method: "GET", path: "/api/asap/staff/additional-copies", module: "staff_routes.js", handler: "staffAdditionalCopiesList" },
+  { method: "POST", path: "/api/asap/staff/additional-copies/{id}/close", module: "staff_routes.js", handler: "staffAdditionalCopyClose" },
+  { method: "POST", path: "/api/asap/staff/additional-copies/{id}/reopen", module: "staff_routes.js", handler: "staffAdditionalCopyReopen" },
+  { method: "POST", path: "/api/asap/staff/additional-copies/{id}/claim", module: "staff_routes.js", handler: "staffAdditionalCopyClaim" },
+  { method: "POST", path: "/api/asap/staff/additional-copies/{id}/unclaim", module: "staff_routes.js", handler: "staffAdditionalCopyUnclaim" },
+  { method: "GET", path: "/api/asap/staff/analytics", module: "staff_routes.js", handler: "staffAnalytics" },
+  { method: "POST", path: "/api/asap/staff/title-requests/{id}/claim", module: "staff_routes.js", handler: "staffClaimTitleRequest" },
+  { method: "POST", path: "/api/asap/staff/title-requests/{id}/unclaim", module: "staff_routes.js", handler: "staffUnclaimTitleRequest" },
+  { method: "POST", path: "/api/asap/staff/title-requests/{id}/action", module: "staff_routes.js", handler: "staffTitleRequestAction" },
+  { method: "GET", path: "/api/asap/staff/title-requests/{id}/additional-copy", module: "staff_routes.js", handler: "staffTitleRequestAdditionalCopyPreview" },
+  { method: "POST", path: "/api/asap/staff/title-requests/{id}/additional-copy", module: "staff_routes.js", handler: "staffTitleRequestAdditionalCopyCreate" },
+  { method: "DELETE", path: "/api/asap/staff/requests/{id}", module: "staff_routes.js", handler: "staffDeleteClosedRequest" },
+  { method: "POST", path: "/api/asap/staff/requests/delete-closed", module: "staff_routes.js", handler: "staffDeleteClosedRequestsBulk" },
+  { method: "POST", path: "/api/asap/staff/organizations/sync", module: "staff_routes.js", handler: "staffSyncOrganizations" },
+  { method: "POST", path: "/api/asap/staff/material-types/sync", module: "staff_routes.js", handler: "staffMaterialTypesSync" },
+  {
+    method: "GET",
+    path: "/api/asap/staff/material-types/sync",
+    customHandler: function (e) {
+      return e.json(405, { message: "Method Not Allowed. Use POST to sync material types." });
     }
-
-    return e.json(200, response);
-  } catch (err) {
-    e.app.logger().error("Config API Error", "error", String(err));
-    return e.json(400, { message: String(err) });
-  }
-});
+  },
+  { method: "POST", path: "/api/asap/jobs/hold-check", module: "job_routes.js", handler: "runHoldCheck" },
+  { method: "POST", path: "/api/asap/jobs/promoter-check", module: "job_routes.js", handler: "staffRunPromoterCheck" },
+  { method: "POST", path: "/api/asap/jobs/weekly-staff-action-summary", module: "job_routes.js", handler: "runWeeklyStaffActionSummary" },
+  { method: "GET", path: "/api/asap/config", module: "config_routes.js", handler: "publicConfig" }
+]);
 
 onBootstrap((e) => {
   e.next();
@@ -248,17 +77,8 @@ cronAdd("asap-weekly-staff-action-summary", $os.getenv("ASAP_WEEKLY_STAFF_ACTION
 cronAdd("asap-isbn-check", $os.getenv("ASAP_ISBN_CHECK_CRON_SCHEDULE") || "*/5 * * * *", () => {
   const jobs = require(`${__hooks}/../lib/jobs.js`);
   const polaris = require(`${__hooks}/../lib/polaris.js`);
-  const result = {
-    holdsPlaced: 0,
-    checkoutClosures: 0,
-    holdPickupTimeouts: 0,
-    promoted: 0,
-    timedOut: 0,
-    skipped: 0,
-    isbnChecksFound: 0,
-    isbnChecksNotFound: 0,
-    errors: 0,
-  };
+  const jobResults = require(`${__hooks}/../lib/job_results.js`);
+  const result = jobResults.createIsbnCheckResult();
   jobs.processPendingSuggestionIsbnChecks($app, polaris.adminStaffAuth(), result);
 });
 
