@@ -32,12 +32,8 @@ migrate((app) => {
   app.save(workflowSettings);
 
   const patronUsers = app.findCollectionByNameOrId("patron_users");
-  addField(patronUsers, field("experienceLibraryOrgId", "text", { max: 32 }));
-  addField(patronUsers, field("experienceLibraryOrgName", "text", { max: 256 }));
   addField(patronUsers, field("patronHomeLibraryOrgId", "text", { max: 32 }));
   addField(patronUsers, field("patronHomeLibraryOrgName", "text", { max: 256 }));
-  addField(patronUsers, field("effectiveLibraryOrgId", "text", { max: 32 }));
-  addField(patronUsers, field("effectiveLibraryOrgName", "text", { max: 256 }));
   app.save(patronUsers);
 
   try {
@@ -72,12 +68,8 @@ migrate((app) => {
   app.save(workflowSettings);
 
   const patronUsers = app.findCollectionByNameOrId("patron_users");
-  removeField(patronUsers, "experienceLibraryOrgId");
-  removeField(patronUsers, "experienceLibraryOrgName");
   removeField(patronUsers, "patronHomeLibraryOrgId");
   removeField(patronUsers, "patronHomeLibraryOrgName");
-  removeField(patronUsers, "effectiveLibraryOrgId");
-  removeField(patronUsers, "effectiveLibraryOrgName");
   app.save(patronUsers);
 
   try {

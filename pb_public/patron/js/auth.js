@@ -90,7 +90,7 @@ export async function handleLoginSubmit(event) {
     setAuthToken(result.token);
     storePatronContextId(result.patronContextId || '');
 
-    storePatronExperienceLibraryOrgId(result.effectiveLibraryOrgId || (result.record && result.record.effectiveLibraryOrgId) || (result.record && result.record.libraryOrgId));
+    storePatronExperienceLibraryOrgId(result.effectiveLibraryOrgId || (result.record && result.record.libraryOrgId));
 
     if (result.ui_text) {
       applyLoadedUiText(result);

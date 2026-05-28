@@ -143,13 +143,14 @@ const app = {
 };
 global.Record = function() { this.values = {}; this.id = `r${savedRecords.length + 1}`; this.set = (k, v) => { this.values[k] = v; }; this.get = k => this.values[k] || ''; };
 workflowByOrg['10'] = { suggestionLimit: 1, allowPatronAutoholdOptOut: true };
-const patron = mockRecord({ barcode: 'b1', nameFirst: 'Pat', nameLast: 'Ron', patronOrgId: 'po1', libraryOrgId: '20', libraryOrgName: 'Home B', effectiveLibraryOrgId: '10', effectiveLibraryOrgName: 'Library 10' });
-const createdSuggestion = suggestionRecords.createSuggestion(app, patron, { title: 'First', format: 'book' });
+const patron = mockRecord({ barcode: 'b1', nameFirst: 'Pat', nameLast: 'Ron', patronOrgId: 'po1', libraryOrgId: '20', libraryOrgName: 'Home B', effectiveLibraryOrgId: 'stale', effectiveLibraryOrgName: 'Stale Library' });
+const effectiveOptions = { effectiveLibraryOrgId: '10', effectiveLibraryOrgName: 'Library 10' };
+const createdSuggestion = suggestionRecords.createSuggestion(app, patron, { title: 'First', format: 'book' }, effectiveOptions);
 assert.strictEqual(createdSuggestion.get('libraryOrgId'), '10', 'suggestion belongs to effective library');
 assert.strictEqual(createdSuggestion.get('libraryOrgName'), 'Library 10', 'suggestion library name is effective library name');
 assert.strictEqual(createdSuggestion.get('patronOrgId'), 'po1', 'patron identity remains actual patron');
 assert.strictEqual(createdSuggestion.get('nameFirst'), 'Pat', 'patron name remains actual patron');
 assert.strictEqual(weeklyLimitOrgId, '10', 'weekly limit uses effective library');
-assert.throws(() => suggestionRecords.createSuggestion(app, patron, { title: 'Second', format: 'book' }), err => err && err.code === 406, 'second suggestion is blocked by effective library weekly limit');
+assert.throws(() => suggestionRecords.createSuggestion(app, patron, { title: 'Second', format: 'book' }, effectiveOptions), err => err && err.code === 406, 'second suggestion is blocked by effective library weekly limit');
 
 console.log('allowAnyRegisteredCardLogin tests passed.');
