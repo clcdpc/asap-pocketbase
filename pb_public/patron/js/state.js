@@ -23,6 +23,11 @@ export function setAuthToken(token) {
   authToken = token || '';
 }
 
+export let patronContextId = '';
+export function setPatronContextId(id) {
+  patronContextId = id || '';
+}
+
 export let lastSelectedFormat = formatSelect ? formatSelect.value : 'book';
 export function setLastSelectedFormat(format) {
   lastSelectedFormat = format || 'book';
