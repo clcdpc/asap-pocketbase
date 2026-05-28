@@ -169,6 +169,8 @@ migrate((app) => {
       field("patronOrgId", "text", { max: 32 }),
       field("libraryOrgId", "text", { max: 32 }),
       field("libraryOrgName", "text", { max: 256 }),
+      field("patronHomeLibraryOrgId", "text", { max: 32 }),
+      field("patronHomeLibraryOrgName", "text", { max: 256 }),
       field("preferredPickupBranchId", "text", { max: 32 }),
       field("preferredPickupBranchName", "text", { max: 256 }),
       rel("patronOrganization", organizations),
@@ -178,6 +180,30 @@ migrate((app) => {
     indexes: [
       "CREATE UNIQUE INDEX idx_patron_users_barcode ON patron_users (barcode)",
       "CREATE INDEX idx_patron_users_library_org ON patron_users (libraryOrgId)"
+    ]
+  });
+
+  const patronSessionContexts = saveCollection(app, {
+    type: "base",
+    name: "patron_session_contexts",
+    listRule: "@request.auth.collectionName = 'staff_users' && @request.auth.role = 'super_admin'",
+    viewRule: "@request.auth.collectionName = 'staff_users' && @request.auth.role = 'super_admin'",
+    fields: [
+      rel("patron", patronUsers, { required: true }),
+      field("patronUserId", "text", { max: 64 }),
+      field("experienceLibraryOrgId", "text", { max: 32 }),
+      field("experienceLibraryOrgName", "text", { max: 256 }),
+      field("effectiveLibraryOrgId", "text", { required: true, max: 32 }),
+      field("effectiveLibraryOrgName", "text", { max: 256 }),
+      field("patronHomeLibraryOrgId", "text", { max: 32 }),
+      field("patronHomeLibraryOrgName", "text", { max: 256 }),
+      field("expiresAt", "date"),
+      field("created", "date"),
+      field("updated", "date"),
+    ],
+    indexes: [
+      "CREATE INDEX idx_patron_session_contexts_patron_user ON patron_session_contexts (patronUserId)",
+      "CREATE INDEX idx_patron_session_contexts_effective_library ON patron_session_contexts (effectiveLibraryOrgId)"
     ]
   });
 
@@ -422,6 +448,7 @@ migrate((app) => {
       field("commonAuthorsEnabled", "bool"),
       field("commonAuthorsList", "text"),
       field("commonAuthorsMessage", "text"),
+      field("allowAnyRegisteredCardLogin", "bool"),
     ],
     indexes: ["CREATE UNIQUE INDEX idx_workflow_settings_scope ON workflow_settings (scope, libraryOrganization)"]
   });

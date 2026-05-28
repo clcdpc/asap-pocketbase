@@ -1,4 +1,4 @@
-import { suggestionForm } from './state.js';
+import { suggestionForm, patronContextId } from './state.js';
 import { submitSuggestion } from './api.js';
 import { applySuccessConfig, defaultUiText, uiConfig } from './config.js';
 import { renderConflictMessage, renderSuccessMessage } from './form-ui.js';
@@ -29,6 +29,8 @@ export function collectSuggestionPayload() {
   if (autoholdCheckbox) {
     data.autohold = autoholdCheckbox.checked;
   }
+  const contextId = patronContextId || sessionStorage.getItem('asap_patron_context_id') || '';
+  if (contextId) data.patronContextId = contextId;
   return data;
 }
 

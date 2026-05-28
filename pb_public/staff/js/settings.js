@@ -184,6 +184,7 @@ function updateWorkflowSettingsSummary(settings) {
   workflowSettings.additionalCopyTimeoutEnabled = !!workflow.additionalCopyTimeoutEnabled;
   workflowSettings.additionalCopyTimeoutDays = parseInt(workflow.additionalCopyTimeoutDays || '14', 10) || 14;
   workflowSettings.autoPromote = !!workflow.autoPromote;
+  workflowSettings.allowAnyRegisteredCardLogin = !!workflow.allowAnyRegisteredCardLogin;
 }
 
 function populateSystemSettingsForms(settings) {
@@ -377,6 +378,7 @@ export function applyLibrarySettingsToForm(settings) {
   workflowSettings.additionalCopyTimeoutEnabled = !!((settings.workflow || {}).additionalCopyTimeoutEnabled);
   workflowSettings.additionalCopyTimeoutDays = parseInt(((settings.workflow || {}).additionalCopyTimeoutDays) || '14', 10) || 14;
   workflowSettings.autoPromote = !!(settings.workflow || {}).autoPromote;
+  workflowSettings.allowAnyRegisteredCardLogin = !!(settings.workflow || {}).allowAnyRegisteredCardLogin;
     updateEmailStatusBanner(settings.emailStatus);
     if (settings.organizationSync) {
       const state = settings.organizationSync.status || 'not_loaded';
@@ -518,7 +520,9 @@ export function populateWorkflowForms(wf) {
 
   setFieldChecked('polaris-auto-promote', !!wf.autoPromote);
   setFieldChecked('allow-patron-autohold-opt-out', !!wf.allowPatronAutoholdOptOut);
+  setFieldChecked('allow-any-registered-card-login', !!wf.allowAnyRegisteredCardLogin);
   workflowSettings.autoPromote = !!wf.autoPromote;
+  workflowSettings.allowAnyRegisteredCardLogin = !!wf.allowAnyRegisteredCardLogin;
   setFieldChecked('wf-external-search-1-enabled', !!wf.externalSearch1Enabled);
   setFieldValue('wf-external-search-1-label', wf.externalSearch1Label || 'Search Amazon');
   setFieldValue('wf-external-search-1-url-template', wf.externalSearch1UrlTemplate || 'https://www.amazon.com/s?k={{title}}');
@@ -742,6 +746,7 @@ function _serializeSettingsState(validate = false) {
     commonAuthorsMessage: getFieldValue('wf-common-authors-message'),
     autoPromote: getFieldChecked('polaris-auto-promote'),
     allowPatronAutoholdOptOut: getFieldChecked('allow-patron-autohold-opt-out'),
+    allowAnyRegisteredCardLogin: getFieldChecked('allow-any-registered-card-login'),
     externalSearch1Enabled: getFieldChecked('wf-external-search-1-enabled'),
     externalSearch1Label: getFieldValue('wf-external-search-1-label').trim() || 'Search Amazon',
     externalSearch1UrlTemplate: externalSearch1UrlTemplate,
@@ -847,6 +852,7 @@ export async function saveSettings(options = {}) {
         commonAuthorsMessage: payload.commonAuthorsMessage,
         autoPromote: payload.autoPromote,
         allowPatronAutoholdOptOut: payload.allowPatronAutoholdOptOut,
+        allowAnyRegisteredCardLogin: payload.allowAnyRegisteredCardLogin,
         externalSearch1Enabled: payload.externalSearch1Enabled,
         externalSearch1Label: payload.externalSearch1Label,
         externalSearch1UrlTemplate: payload.externalSearch1UrlTemplate,

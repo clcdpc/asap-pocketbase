@@ -57,15 +57,20 @@ function makeApp(initialRequests) {
     findRecordsByFilter(collection, filter, sort, limit, offset, params) {
       if (collection !== "title_requests") return [];
       const requests = rows.title_requests;
-      if (filter.includes("barcode = {:barcode} && identifier = {:identifier}")) {
-        return requests.filter(record => record.get("barcode") === params.barcode && record.get("identifier") === params.identifier).slice(0, limit);
+      if (filter.includes("barcode = {:barcode}") && filter.includes("identifier = {:identifier}")) {
+        return requests.filter(record => {
+          if (record.get("barcode") !== params.barcode || record.get("identifier") !== params.identifier) return false;
+          if (params.libraryOrgId && record.get("libraryOrgId") !== params.libraryOrgId) return false;
+          return true;
+        }).slice(0, limit);
       }
       if (filter.includes("identifier = {:identifier} && barcode != {:barcode}")) {
         return requests.filter(record => record.get("identifier") === params.identifier && record.get("barcode") !== params.barcode && record.id !== params.id).slice(0, limit);
       }
-      if (filter.includes("barcode = {:barcode} && ((title = {:title} && format = {:format})")) {
+      if (filter.includes("barcode = {:barcode}") && filter.includes("((title = {:title} && format = {:format})")) {
         return requests.filter(record => {
           if (record.get("barcode") !== params.barcode) return false;
+          if (params.libraryOrgId && record.get("libraryOrgId") !== params.libraryOrgId) return false;
           if (record.get("title") === params.title && record.get("format") === params.format) return true;
           return params.bibid && record.get("bibid") === params.bibid;
         }).slice(0, limit);
@@ -88,11 +93,13 @@ function makeApp(initialRequests) {
   };
 }
 
-function patron(barcode) {
+function patron(barcode, libraryOrgId) {
   return new MockRecord({ name: "patron_users" }, {
     id: "patron_" + barcode,
     barcode,
     email: barcode + "@example.test",
+    libraryOrgId: libraryOrgId || "",
+    libraryOrgName: libraryOrgId ? "Library " + libraryOrgId : "",
   });
 }
 
@@ -161,6 +168,62 @@ console.log("Running duplicate suggestion tests...");
   assert.strictEqual(warnCalled, true, "logger.warn should have been called");
   assert.strictEqual(created.get("identifier"), "978");
   assert.strictEqual(app.rows.workflow_tags.length, 0);
+}
+
+
+{
+  const existing = new MockRecord({ name: "title_requests" }, {
+    barcode: "300",
+    identifier: "978",
+    title: "Existing",
+    format: "book",
+    libraryOrgId: "B",
+  });
+  const app = makeApp([existing]);
+  const created = records.createSuggestion(app, patron("300", "A"), { title: "New", identifier: "978", format: "book" }, { skipLimits: true, effectiveLibraryOrgId: "A", effectiveLibraryOrgName: "Library A" });
+  assert.strictEqual(created.get("libraryOrgId"), "A");
+}
+
+{
+  const existing = new MockRecord({ name: "title_requests" }, {
+    barcode: "301",
+    identifier: "978",
+    title: "Existing",
+    format: "book",
+    libraryOrgId: "A",
+  });
+  const app = makeApp([existing]);
+  assert.throws(
+    () => records.createSuggestion(app, patron("301", "A"), { title: "New", identifier: "978", format: "book" }, { skipLimits: true, effectiveLibraryOrgId: "A" }),
+    err => err && err.code === 409
+  );
+}
+
+{
+  const existing = new MockRecord({ name: "title_requests" }, {
+    barcode: "302",
+    title: "Same Title",
+    format: "book",
+    libraryOrgId: "B",
+  });
+  const app = makeApp([existing]);
+  const created = records.createSuggestion(app, patron("302", "A"), { title: "Same Title", format: "book" }, { skipLimits: true, effectiveLibraryOrgId: "A" });
+  assert.strictEqual(created.get("libraryOrgId"), "A");
+}
+
+{
+  const existing = new MockRecord({ name: "title_requests" }, {
+    barcode: "303",
+    identifier: "978",
+    title: "Existing",
+    format: "book",
+    libraryOrgId: "B",
+  });
+  const app = makeApp([existing]);
+  assert.throws(
+    () => records.createSuggestion(app, patron("303"), { title: "New", identifier: "978", format: "book" }, { skipLimits: true }),
+    err => err && err.code === 409
+  );
 }
 
 console.log("Duplicate suggestion tests passed.");
