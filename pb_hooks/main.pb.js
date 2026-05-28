@@ -176,7 +176,8 @@ routerAdd("POST", "/api/asap/jobs/weekly-staff-action-summary", (e) => {
 routerAdd("GET", "/api/asap/config", (e) => {
   try {
     const config = require(`${__hooks}/../lib/config.js`);
-    const orgId = e.request.url.query().get("libraryOrgId") || "";
+    const routeUtils = require(`${__hooks}/../lib/route_utils.js`);
+    const orgId = routeUtils.queryValue(e, "libraryOrgId") || "";
     var settings = orgId ? config.librarySettings(e.app, orgId) : config.getSettings();
     
     var response = settings.ui_text || {};
