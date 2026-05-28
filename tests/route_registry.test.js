@@ -55,16 +55,31 @@ function runTests() {
         }
       }
     ]);
+    // Regression: route callbacks must not depend on an outer `route` variable
+    // or mutable route object fields at execution time.
+    const mutableRoute = { method: "GET", path: "/mutable", module: "setup_routes.js", handler: "setupStatus" };
+    routeRegistry.registerRoutes([mutableRoute]);
+    mutableRoute.module = "patron_routes.js";
+    mutableRoute.handler = "patronLogin";
 
-    assert.strictEqual(calls.length, 3);
+    assert.strictEqual(calls.length, 4);
     assert.strictEqual(calls[0].method, "GET");
     assert.strictEqual(calls[0].routePath, "/one");
     assert.strictEqual(calls[1].method, "POST");
     assert.strictEqual(calls[1].routePath, "/two");
     assert.strictEqual(calls[2].method, "GET");
     assert.strictEqual(calls[2].routePath, "/custom");
+    assert.strictEqual(calls[3].method, "GET");
+    assert.strictEqual(calls[3].routePath, "/mutable");
 
     const event = {
+      app: {
+        logger() {
+          return {
+            error() {}
+          };
+        }
+      },
       json(code, payload) {
         return { code, payload };
       }
@@ -72,9 +87,11 @@ function runTests() {
     const resultOne = calls[0].handlerFn(event);
     const resultTwo = calls[1].handlerFn(event);
     const resultCustom = calls[2].handlerFn(event);
+    const resultMutable = calls[3].handlerFn(event);
     assert.deepStrictEqual(resultOne, { code: 200, payload: { route: "one" } });
     assert.deepStrictEqual(resultTwo, { code: 200, payload: { route: "two" } });
     assert.deepStrictEqual(resultCustom, { code: 405, payload: { message: "custom" } });
+    assert.deepStrictEqual(resultMutable, { code: 200, payload: { route: "one" } });
   } finally {
     delete global.routerAdd;
     if (originalSetupCache) require.cache[setupRoutesPath] = originalSetupCache;
