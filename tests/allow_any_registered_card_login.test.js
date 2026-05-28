@@ -7,7 +7,8 @@ const originalRequire = Module.prototype.require;
 
 let enabled = '10';
 let workflowByOrg = {};
-let savedPatronOptions = null;
+let sessionContexts = {};
+let contextCounter = 0;
 let patronAuthResult = {};
 let createdOptions = null;
 let weeklyLimitOrgId = null;
@@ -36,24 +37,28 @@ Module.prototype.require = function(moduleName) {
   if (moduleName.includes('lib/orgs.js')) return { attachPatronScope: (app, patron) => patron, findOrganization: (app, id) => ({ get: key => key === 'displayName' ? `Library ${id}` : '' }) };
   if (moduleName.includes('lib/polaris.js')) return { adminStaffAuth: () => ({}), authenticatePatron: () => patronAuthResult };
   if (moduleName.includes('lib/records.js')) return {
-    upsertPatronUser: (app, patron, options) => {
-      savedPatronOptions = options;
-      return mockRecord({
-        barcode: patron.Barcode,
-        nameFirst: patron.NameFirst,
-        nameLast: patron.NameLast,
-        patronOrgId: patron.PatronOrgID,
-        libraryOrgId: patron.LibraryOrgID,
-        libraryOrgName: patron.LibraryOrgName,
-        patronHomeLibraryOrgId: options.patronHomeLibraryOrgId,
-        patronHomeLibraryOrgName: options.patronHomeLibraryOrgName,
-        experienceLibraryOrgId: options.experienceLibraryOrgId,
-        experienceLibraryOrgName: options.experienceLibraryOrgName,
-        effectiveLibraryOrgId: options.effectiveLibraryOrgId,
-        effectiveLibraryOrgName: options.effectiveLibraryOrgName,
-      });
-    },
+    upsertPatronUser: (app, patron) => mockRecord({
+      id: 'patron-record',
+      barcode: patron.Barcode,
+      nameFirst: patron.NameFirst,
+      nameLast: patron.NameLast,
+      patronOrgId: patron.PatronOrgID,
+      libraryOrgId: patron.LibraryOrgID,
+      libraryOrgName: patron.LibraryOrgName,
+    }),
     createSuggestion: (app, patron, data, options) => { createdOptions = options; return { id: 'req1' }; },
+  };
+  if (moduleName.includes('lib/patron_session_contexts.js')) return {
+    createPatronSessionContext: (app, patronRecord, context) => {
+      const id = 'ctx' + (++contextCounter);
+      sessionContexts[id] = Object.assign({ id, patronUserId: patronRecord.id }, context);
+      return { id };
+    },
+    getPatronSessionContext: (app, patronRecord, contextId) => {
+      const context = sessionContexts[contextId];
+      if (!context || context.patronUserId !== patronRecord.id) { const err = new Error('Bad context'); err.code = 403; throw err; }
+      return context;
+    },
   };
   if (moduleName.includes('lib/route_utils.js')) return { body: e => e.requestBody || {}, requireAuth: e => e.auth, applyIsbnCheckStatusForCreate: () => {}, runImmediateSubmissionIdentifierLookup: (e, record) => record };
   return originalRequire.apply(this, arguments);
@@ -72,7 +77,7 @@ function event(body, auth) {
 }
 
 function reset() {
-  enabled = '10'; workflowByOrg = {}; savedPatronOptions = null; createdOptions = null; weeklyLimitOrgId = null;
+  enabled = '10'; workflowByOrg = {}; sessionContexts = {}; contextCounter = 0; createdOptions = null; weeklyLimitOrgId = null;
   patronAuthResult = { PatronID: 'p1', Barcode: 'b1', PatronOrgID: 'po1', LibraryOrgID: '20', LibraryOrgName: 'Home B', NameFirst: 'Pat', NameLast: 'Ron' };
 }
 
@@ -83,8 +88,7 @@ patronRoutes.patronLogin(t.e);
 assert.strictEqual(t.response().status, 200, 'normal login without libraryOrgId succeeds');
 assert.strictEqual(t.response().payload.effectiveLibraryOrgId, '20');
 assert.strictEqual(t.response().payload.crossLibraryLogin, false);
-assert.strictEqual(savedPatronOptions.experienceLibraryOrgId, '');
-assert.strictEqual(savedPatronOptions.effectiveLibraryOrgId, '20');
+assert.ok(t.response().payload.patronContextId, 'login returns patronContextId');
 
 reset();
 t = event({ barcode: 'b1', pin: '123', libraryOrgId: '10' });
@@ -100,7 +104,7 @@ assert.strictEqual(t.response().payload.effectiveLibraryOrgId, '10');
 assert.strictEqual(t.response().payload.experienceLibraryOrgId, '10');
 assert.strictEqual(t.response().payload.patronHomeLibraryOrgId, '20');
 assert.strictEqual(t.response().payload.crossLibraryLogin, true);
-assert.strictEqual(savedPatronOptions.effectiveLibraryOrgId, '10');
+assert.ok(t.response().payload.patronContextId, 'cross-library login returns patronContextId');
 
 reset();
 workflowByOrg['10'] = { allowAnyRegisteredCardLogin: true };
@@ -116,11 +120,19 @@ patronRoutes.patronLogin(t.e);
 assert.strictEqual(t.response().status, 403, 'experience library must participate');
 
 reset();
-const auth = mockRecord({ barcode: 'b1', nameFirst: 'Pat', nameLast: 'Ron', patronOrgId: 'po1', libraryOrgId: '20', libraryOrgName: 'Home B', effectiveLibraryOrgId: '10', effectiveLibraryOrgName: 'Library 10' });
-t = event({ title: 'Test', format: 'book' }, auth);
+const auth = mockRecord({ id: 'patron-record', barcode: 'b1', nameFirst: 'Pat', nameLast: 'Ron', patronOrgId: 'po1', libraryOrgId: '20', libraryOrgName: 'Home B', effectiveLibraryOrgId: 'stale', effectiveLibraryOrgName: 'Stale Library' });
+sessionContexts.ctxA = { id: 'ctxA', patronUserId: 'patron-record', effectiveLibraryOrgId: '10', effectiveLibraryOrgName: 'Library 10' };
+t = event({ title: 'Test', format: 'book', patronContextId: 'ctxA' }, auth);
 patronRoutes.createSuggestion(t.e);
 assert.strictEqual(t.response().payload.successTitle, 'Success 10', 'success text uses effective library');
 assert.strictEqual(createdOptions.effectiveLibraryOrgId, '10', 'patron route passes effective library to suggestion creation');
+sessionContexts.ctxB = { id: 'ctxB', patronUserId: 'patron-record', effectiveLibraryOrgId: '30', effectiveLibraryOrgName: 'Library 30' };
+t = event({ title: 'Test', format: 'book', patronContextId: 'ctxB' }, auth);
+patronRoutes.createSuggestion(t.e);
+assert.strictEqual(createdOptions.effectiveLibraryOrgId, '30', 'second session context owns its own submission');
+t = event({ title: 'Legacy', format: 'book' }, auth);
+patronRoutes.createSuggestion(t.e);
+assert.strictEqual(createdOptions.effectiveLibraryOrgId, '20', 'legacy fallback ignores stale patron effective library');
 
 reset();
 let savedRecords = [];

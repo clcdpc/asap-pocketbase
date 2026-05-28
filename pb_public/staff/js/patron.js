@@ -1,5 +1,5 @@
 import { pb, verifiedNewSuggestionBarcode, setVerifiedNewSuggestionBarcode, currentWorkflowOrgScopeId } from './state.js';
-import { setFieldChecked, getFieldChecked } from './api.js';
+import { setFieldChecked, getFieldChecked, isSuperAdminStaff } from './api.js';
 import { loadTab, escapeAttr } from './grid.js';
 import { renderPatronContext } from './modals.js';
 
@@ -100,6 +100,11 @@ document.getElementById('new-suggestion-form').addEventListener('submit', async 
     return;
   }
 
+  if (staffSuggestionRequiresLibrarySelection()) {
+    showNewSuggestionError('Select a library before creating a staff suggestion.');
+    return;
+  }
+
   const payload = staffSuggestionLibraryPayload({
     barcode: barcode,
     title: document.getElementById('new-title').value,
@@ -142,6 +147,11 @@ document.getElementById('new-suggestion-form').addEventListener('submit', async 
     btn.textContent = 'Submit';
   }
 });
+
+function staffSuggestionRequiresLibrarySelection() {
+  const scopeId = String(currentWorkflowOrgScopeId || '').trim();
+  return isSuperAdminStaff() && (!scopeId || scopeId === 'all' || scopeId === 'system');
+}
 
 function staffSuggestionLibraryPayload(payload) {
   const next = Object.assign({}, payload || {});
@@ -285,7 +295,10 @@ export function setNewSuggestionDetailsEnabled(enabled) {
   document.querySelectorAll('.new-detail-field').forEach(field => {
     field.disabled = !enabled;
   });
-  document.getElementById('btn-submit-new').disabled = !enabled;
+  document.getElementById('btn-submit-new').disabled = !enabled || staffSuggestionRequiresLibrarySelection();
+  if (enabled && staffSuggestionRequiresLibrarySelection()) {
+    showNewSuggestionError('Select a library before creating a staff suggestion.');
+  }
 }
 
 export function showLookupResult(message, type) {

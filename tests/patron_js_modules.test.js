@@ -36,6 +36,12 @@ assert.match(indexHtml, /<script\s+src="app\.js\?v=[^"]+"\s+type="module"><\/scr
 
 const authSource = fs.readFileSync(path.join(jsDir, 'auth.js'), 'utf8');
 assert.ok(authSource.includes('result.effectiveLibraryOrgId || (result.record && result.record.effectiveLibraryOrgId) || (result.record && result.record.libraryOrgId)'), 'patron auth should store effective library context before falling back to patron home library');
+assert.ok(authSource.includes('storePatronContextId(result.patronContextId'), 'patron auth should store the session-bound patron context id after login');
+assert.ok(authSource.includes("storePatronContextId('')"), 'patron logout should clear the session-bound patron context id');
+
+
+const submitSource = fs.readFileSync(path.join(jsDir, 'submit.js'), 'utf8');
+assert.ok(submitSource.includes('data.patronContextId = contextId'), 'patron submissions should include the session-bound patron context id');
 
 const formRules = fs.readFileSync(path.join(jsDir, 'form-rules.js'), 'utf8');
 assert.ok(!/\b(document|window|fetch|localStorage)\b/.test(formRules), 'form-rules.js should stay pure');

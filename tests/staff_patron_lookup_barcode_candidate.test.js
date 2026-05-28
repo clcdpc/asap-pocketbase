@@ -41,6 +41,18 @@ const fnCode = [
 function load(env) {
   env.config = env.config || { workflowSettings: () => ({ allowAnyRegisteredCardLogin: false }) };
   env.orgs = env.orgs || {};
+  env.effectiveLibrary = env.effectiveLibrary || {
+    resolveEffectiveStaffLibraryContext: (e, staff, data) => {
+      const staffLibraryOrgId = String(staff.get('libraryOrgId') || '').trim();
+      const role = String(staff.get('role') || '').toLowerCase();
+      const requestedOrgId = String((data && (data.libraryOrgId || data.effectiveLibraryOrgId)) || '').trim();
+      const libraryOrgId = role === 'super_admin' && requestedOrgId ? requestedOrgId : staffLibraryOrgId;
+      return { libraryOrgId, libraryOrgName: staff.get('libraryOrgName') || '' };
+    },
+    allowCrossLibraryPatronLookup: (e, orgId) => !!env.config.workflowSettings(e.app, orgId).allowAnyRegisteredCardLogin,
+    patronMatchesStaffLookupScope: (staff, patronData, orgId, allowAny) => allowAny || String((patronData && patronData.LibraryOrgID) || '').trim() === String(orgId || staff.get('libraryOrgId') || '').trim(),
+    staffPatronLookupScopeMeta: (e, orgId, name, allowAny) => ({ patronSearchScope: allowAny ? 'system' : 'library', patronSearchLimitedToLibrary: !allowAny, effectiveLibraryOrgId: String(orgId || ''), effectiveLibraryOrgName: String(name || '') })
+  };
   return new Function('env', `with (env) { ${fnCode}; return { looksLikeBarcodeCandidate, staffLookupPatron }; }`)(env);
 }
 

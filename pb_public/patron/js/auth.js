@@ -1,6 +1,6 @@
 import { loginForm, suggestionForm } from './state.js';
 import { loginPatron, SessionExpiredError } from './api.js';
-import { setAuthToken } from './state.js';
+import { setAuthToken, setPatronContextId } from './state.js';
 import { applyLoadedUiText, uiConfig } from './config.js';
 import { applyUiConfig, updateFormatUI } from './form-ui.js';
 import { showLoginStep, showSuggestionStep } from './steps.js';
@@ -27,6 +27,16 @@ export function storePatronExperienceLibraryOrgId(orgId) {
   const clean = String(orgId || '').trim();
   if (!clean) return;
   localStorage.setItem('asap_patron_library_org_id', clean);
+}
+
+export function storePatronContextId(id) {
+  const clean = String(id || '').trim();
+  setPatronContextId(clean);
+  if (clean) {
+    sessionStorage.setItem('asap_patron_context_id', clean);
+  } else {
+    sessionStorage.removeItem('asap_patron_context_id');
+  }
 }
 
 export function setLoginBusy(isBusy) {
@@ -78,6 +88,7 @@ export async function handleLoginSubmit(event) {
 
     const result = await loginPatron(data);
     setAuthToken(result.token);
+    storePatronContextId(result.patronContextId || '');
 
     storePatronExperienceLibraryOrgId(result.effectiveLibraryOrgId || (result.record && result.record.effectiveLibraryOrgId) || (result.record && result.record.libraryOrgId));
 
@@ -96,6 +107,7 @@ export async function handleLoginSubmit(event) {
 
 export function logout() {
   setAuthToken('');
+  storePatronContextId('');
   if (loginForm) loginForm.reset();
   if (suggestionForm) suggestionForm.reset();
   setLoginBusy(false);
