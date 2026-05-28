@@ -4,6 +4,7 @@ const assert = require('assert');
 
 const root = path.resolve(__dirname, '..');
 const targets = [
+  path.join(root, 'lib', 'config_routes.js'),
   path.join(root, 'lib', 'staff', 'users_routes.js'),
   path.join(root, 'pb_hooks', 'main.pb.js')
 ];

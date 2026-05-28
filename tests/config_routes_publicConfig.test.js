@@ -26,23 +26,19 @@ function loadConfigRoutesWithMocks(configMock, orgsMock) {
 
 function makeEvent(libraryOrgId) {
   const responseState = { code: null, payload: null };
+  const app = {
+    logger() {
+      return { error() {} };
+    }
+  };
   return {
-    app: {
-      logger() {
-        return { error() {} };
-      }
-    },
-    request: {
-      url: {
-        query() {
-          return {
-            get(key) {
-              if (key !== "libraryOrgId") return "";
-              return libraryOrgId || "";
-            }
-          };
+    app: app,
+    requestInfo() {
+      return {
+        query: {
+          libraryOrgId: libraryOrgId || ""
         }
-      }
+      };
     },
     json(code, payload) {
       responseState.code = code;
@@ -78,7 +74,8 @@ function runTests() {
   };
 
   const configMock = {
-    getSettings() {
+    getSettings(app) {
+      assert.ok(app, "getSettings should receive the current app instance");
       return systemSettings;
     },
     librarySettings(app, orgId) {

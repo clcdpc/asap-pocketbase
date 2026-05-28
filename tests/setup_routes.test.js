@@ -62,7 +62,10 @@ function runTest(name, testFn) {
 
 // 1. Test scenario where there are no staff users and Polaris is not configured.
 runTest('no staff users, Polaris not configured', () => {
-  configMock.polaris = () => ({ host: '', accessId: '', apiKey: '' });
+  configMock.polaris = (app) => {
+    assert.strictEqual(app, 'mock_app');
+    return { host: '', accessId: '', apiKey: '' };
+  };
   recordsMock.hasStaffUsers = (app) => {
     assert.strictEqual(app, 'mock_app');
     return false;
@@ -93,7 +96,10 @@ runTest('no staff users, Polaris not configured', () => {
 
 // 2. Test scenario where there are staff users and Polaris is configured.
 runTest('staff users exist, Polaris is configured', () => {
-  configMock.polaris = () => ({ host: 'http://example.com', accessId: 'id', apiKey: 'key' });
+  configMock.polaris = (app) => {
+    assert.strictEqual(app, 'mock_app');
+    return { host: 'http://example.com', accessId: 'id', apiKey: 'key' };
+  };
   recordsMock.hasStaffUsers = (app) => {
     assert.strictEqual(app, 'mock_app');
     return true;
@@ -124,7 +130,10 @@ runTest('staff users exist, Polaris is configured', () => {
 
 // 3. Test scenario with partial Polaris configuration (e.g. missing apiKey).
 runTest('staff users exist, Polaris partially configured (missing apiKey)', () => {
-  configMock.polaris = () => ({ host: 'http://example.com', accessId: 'id', apiKey: '' });
+  configMock.polaris = (app) => {
+    assert.strictEqual(app, 'mock_app');
+    return { host: 'http://example.com', accessId: 'id', apiKey: '' };
+  };
   recordsMock.hasStaffUsers = (app) => {
     assert.strictEqual(app, 'mock_app');
     return true;

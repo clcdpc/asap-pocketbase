@@ -1,6 +1,24 @@
 ## Settings scope: system vs library
 One of the easiest ways to introduce bugs in this project is to add a new setting without handling its scope correctly.
 
+## PocketBase route and hook refactors
+The May 2026 route-registry refactor broke production by replacing literal `routerAdd(...)` calls in `pb_hooks/main.pb.js` with a dynamic registry helper. In PocketBase's JS hook runtime, those registered callbacks failed before reaching the real handlers with `ReferenceError: method is not defined`, which made public boot endpoints such as `/api/asap/setup/status` and `/api/asap/config` return generic 400 responses.
+
+Do not reintroduce a dynamic route registry for PocketBase hooks unless it has been proven in the actual PocketBase runtime, not only Node tests.
+
+### Route refactor rules
+- Keep `pb_hooks/main.pb.js` routes as explicit `routerAdd(method, path, (e) => { return require(...).handler(e); })` registrations.
+- Do not replace literal route registrations with loop-generated callbacks, closure-based registries, or generic dispatch wrappers unless a PocketBase runtime smoke test covers the changed routes.
+- Do not rely on Node-only tests for hook entrypoint behavior. PocketBase's embedded JS runtime can differ from Node in callback and closure behavior.
+- After changing `pb_hooks/main.pb.js`, start PocketBase with the project hooks and migrations directories and verify the affected routes with real HTTP requests.
+- At minimum, smoke test `GET /api/asap/setup/status` and `GET /api/asap/config` after route or boot-handler changes.
+- If a public boot endpoint returns `{"message":"Something went wrong while processing your request.","status":400}`, check PocketBase server logs first; the browser response may hide the real hook exception.
+
+### Query and app-context rules
+- Use `routeUtils.queryValue(e, "name")` instead of `e.request.url.query().get("name")` in hook route code.
+- Pass `e.app` into config helpers from route handlers, for example `config.getSettings(e.app)` and `config.polaris(e.app)`.
+- Avoid adding new route-time dependencies on implicit global `$app` when the handler already receives `e.app`.
+
 Before implementing any new setting, decide and document which of these models it uses:
 - system-only: one value for the whole installation
 - library-only: each library has its own value

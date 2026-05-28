@@ -32,7 +32,7 @@ routerAdd("GET", "/api/asap/diag/hmac", (e) => {
 
 routerAdd("GET", "/api/asap/diag/polaris", (e) => {
     const config = require(`${__hooks}/../lib/config.js`);
-    const polaris = config.polaris();
+    const polaris = config.polaris(e.app);
     return e.json(200, {
         host: polaris.host,
         accessId: polaris.accessId,
