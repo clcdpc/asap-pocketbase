@@ -1,4 +1,4 @@
-import { pb, verifiedNewSuggestionBarcode, setVerifiedNewSuggestionBarcode } from './state.js';
+import { pb, verifiedNewSuggestionBarcode, setVerifiedNewSuggestionBarcode, currentWorkflowOrgScopeId } from './state.js';
 import { setFieldChecked, getFieldChecked } from './api.js';
 import { loadTab, escapeAttr } from './grid.js';
 import { renderPatronContext } from './modals.js';
@@ -64,20 +64,25 @@ document.getElementById('btn-lookup-patron').addEventListener('click', async () 
         'Content-Type': 'application/json',
         'Authorization': pb.authStore.token
       },
-      body: JSON.stringify({ query: patronQuery })
+      body: JSON.stringify(staffSuggestionLibraryPayload({ query: patronQuery }))
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(data.message || 'No patron found. Try barcode, name, or first name then last name.');
+      const error = new Error(data.message || 'No patron found. Try barcode, name, or first name then last name.');
+      error.lookupResponse = data;
+      throw error;
     }
 
     if (data.status === 'multiple' && Array.isArray(data.results)) {
-      openPatronSearchDialog(patronQuery, data.results);
+      updatePatronSearchScopeNotice(data);
+      openPatronSearchDialog(patronQuery, data.results, data);
       return;
     }
 
+    updatePatronSearchScopeNotice(data);
     applySelectedPatron(data);
   } catch (err) {
+    updatePatronSearchScopeNotice(err.lookupResponse || null);
     showLookupResult(err.message || 'No patron found. Try barcode, name, or first name then last name.', 'danger');
     document.getElementById('new-barcode').focus();
   } finally {
@@ -95,7 +100,7 @@ document.getElementById('new-suggestion-form').addEventListener('submit', async 
     return;
   }
 
-  const payload = {
+  const payload = staffSuggestionLibraryPayload({
     barcode: barcode,
     title: document.getElementById('new-title').value,
     author: document.getElementById('new-author').value,
@@ -106,7 +111,7 @@ document.getElementById('new-suggestion-form').addEventListener('submit', async 
     notes: document.getElementById('new-notes').value,
     autohold: getFieldChecked('new-autohold'),
     emailPatronConfirmation: getFieldChecked('staff-new-suggestion-email-patron')
-  };
+  });
 
   clearNewSuggestionError();
   const btn = document.getElementById('btn-submit-new');
@@ -137,6 +142,31 @@ document.getElementById('new-suggestion-form').addEventListener('submit', async 
     btn.textContent = 'Submit';
   }
 });
+
+function staffSuggestionLibraryPayload(payload) {
+  const next = Object.assign({}, payload || {});
+  const scopeId = String(currentWorkflowOrgScopeId || '').trim();
+  if (scopeId && scopeId !== 'all' && scopeId !== 'system') {
+    next.libraryOrgId = scopeId;
+  }
+  return next;
+}
+
+function updatePatronSearchScopeNotice(data) {
+  const notice = document.getElementById('new-patron-search-scope-notice');
+  if (!notice) return;
+  if (!data || typeof data.patronSearchLimitedToLibrary !== 'boolean') {
+    notice.textContent = '';
+    notice.classList.add('hidden');
+    return;
+  }
+  notice.textContent = data.patronSearchLimitedToLibrary
+    ? 'Patron search is limited to patrons registered at your library.'
+    : 'Patron search includes any registered Polaris card. Suggestions will be created for your library.';
+  notice.className = data.patronSearchLimitedToLibrary
+    ? 'mt-2 alert alert-light border py-2 small'
+    : 'mt-2 alert alert-info py-2 small';
+}
 
 function applySelectedPatron(data) {
   const barcode = String(data.barcode || '').trim();
@@ -178,30 +208,39 @@ function patronSearchElements() {
   };
 }
 
-function openPatronSearchDialog(query, results) {
+function openPatronSearchDialog(query, results, meta) {
   const els = patronSearchElements();
   if (!els.dialog) return;
 
   els.summary.textContent = `Multiple patrons matched "${query}". Choose the correct patron.`;
   els.status.className = 'alert alert-light border py-2 px-3 small';
   els.status.textContent = `${results.length} result${results.length === 1 ? '' : 's'} shown.`;
+  updatePatronSearchScopeNotice(meta || null);
 
-  els.results.innerHTML = results.map((result, index) => {
+  els.results.replaceChildren();
+  results.forEach((result, index) => {
     const name = patronLookupName(result) || result.name || 'Patron';
     const barcode = result.barcode || '';
     const library = result.libraryOrgName || 'Library not returned';
-    return `
-      <div class="polaris-search-result">
-        <div class="polaris-search-result-title">${escapeAttr(name)}</div>
-        <div class="polaris-search-result-meta">Barcode: ${escapeAttr(barcode)} | Library: ${escapeAttr(library)}</div>
-        <div class="polaris-search-result-actions">
-          <button type="button" class="btn btn-sm btn-primary patron-search-select" data-result-index="${escapeAttr(String(index))}">
-            Use this patron
-          </button>
-        </div>
-      </div>
-    `;
-  }).join('');
+    const row = document.createElement('div');
+    row.className = 'polaris-search-result';
+    const title = document.createElement('div');
+    title.className = 'polaris-search-result-title';
+    title.textContent = name;
+    const metaLine = document.createElement('div');
+    metaLine.className = 'polaris-search-result-meta';
+    metaLine.textContent = `Barcode: ${barcode} | Library: ${library}`;
+    const actions = document.createElement('div');
+    actions.className = 'polaris-search-result-actions';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-sm btn-primary patron-search-select';
+    button.setAttribute('data-result-index', String(index));
+    button.textContent = 'Use this patron';
+    actions.appendChild(button);
+    row.append(title, metaLine, actions);
+    els.results.appendChild(row);
+  });
 
   els.results.querySelectorAll('.patron-search-select').forEach(button => {
     button.addEventListener('click', () => {
@@ -225,6 +264,7 @@ export function resetStaffPatronLookup() {
   setNewSuggestionDetailsEnabled(false);
   document.getElementById('new-lookup-result').className = 'mt-2 hidden';
   document.getElementById('new-lookup-result').textContent = '';
+  updatePatronSearchScopeNotice(null);
   const ctx = document.getElementById('new-patron-context');
   if (ctx) ctx.remove();
 }

@@ -169,6 +169,12 @@ migrate((app) => {
       field("patronOrgId", "text", { max: 32 }),
       field("libraryOrgId", "text", { max: 32 }),
       field("libraryOrgName", "text", { max: 256 }),
+      field("experienceLibraryOrgId", "text", { max: 32 }),
+      field("experienceLibraryOrgName", "text", { max: 256 }),
+      field("patronHomeLibraryOrgId", "text", { max: 32 }),
+      field("patronHomeLibraryOrgName", "text", { max: 256 }),
+      field("effectiveLibraryOrgId", "text", { max: 32 }),
+      field("effectiveLibraryOrgName", "text", { max: 256 }),
       field("preferredPickupBranchId", "text", { max: 32 }),
       field("preferredPickupBranchName", "text", { max: 256 }),
       rel("patronOrganization", organizations),
@@ -422,6 +428,7 @@ migrate((app) => {
       field("commonAuthorsEnabled", "bool"),
       field("commonAuthorsList", "text"),
       field("commonAuthorsMessage", "text"),
+      field("allowAnyRegisteredCardLogin", "bool"),
     ],
     indexes: ["CREATE UNIQUE INDEX idx_workflow_settings_scope ON workflow_settings (scope, libraryOrganization)"]
   });

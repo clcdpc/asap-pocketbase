@@ -27,6 +27,11 @@ const fnCode = [
   extractFunction(source, 'looksLikeBarcodeCandidate'),
   extractFunction(source, 'beautifyPatronError'),
   extractFunction(source, 'shouldFallBackToPatronNameSearch'),
+  extractFunction(source, 'resolveEffectiveStaffLibraryContext'),
+  extractFunction(source, 'allowCrossLibraryPatronLookup'),
+  extractFunction(source, 'patronMatchesStaffLookupScope'),
+  extractFunction(source, 'staffPatronLookupScopeMeta'),
+  extractFunction(source, 'withScopeMeta'),
   extractFunction(source, 'staffPatronLookupResponse'),
   extractFunction(source, 'resolveStaffPatronByBarcode'),
   extractFunction(source, 'filterPatronSearchResultsForStaffLibrary'),
@@ -34,6 +39,8 @@ const fnCode = [
 ].join('\n');
 
 function load(env) {
+  env.config = env.config || { workflowSettings: () => ({ allowAnyRegisteredCardLogin: false }) };
+  env.orgs = env.orgs || {};
   return new Function('env', `with (env) { ${fnCode}; return { looksLikeBarcodeCandidate, staffLookupPatron }; }`)(env);
 }
 
@@ -188,6 +195,68 @@ function makeEvent(requestBody) {
   assert.strictEqual(response.status, 403);
   assert.strictEqual(response.body.message, 'This patron belongs to another library. You can only submit suggestions for patrons in your own library system.');
   assert.strictEqual(calls.searchPatrons, 0);
+}
+
+{
+  const { staffLookupPatron } = load({
+    routeUtils: {
+      requireAuth: () => ({ get: key => ({ libraryOrgId: '9', role: 'admin', libraryOrgName: 'Library A' })[key] || '' }),
+      body: e => e.requestBody,
+      sameLibrary: () => false,
+    },
+    config: { workflowSettings: () => ({ allowAnyRegisteredCardLogin: true }) },
+    polaris: {
+      adminStaffAuth: () => ({ token: 'staff' }),
+      lookupPatron: () => ({ PatronID: 'patron-3', Barcode: 'ABC123', NameFirst: 'Cross', NameLast: 'Patron', LibraryOrgID: '10', LibraryOrgName: 'Library B' }),
+      searchPatrons: () => { throw new Error('name search should not run for enabled barcode hit'); },
+    },
+    orgs: {
+      attachPatronScope: (app, patron) => patron,
+      findOrganization: () => ({ get: () => 'Library A' }),
+    },
+    records: {
+      upsertPatronUser: (app, patron) => ({
+        get: key => ({ barcode: patron.Barcode, nameFirst: patron.NameFirst, nameLast: patron.NameLast, notificationEmail: '', patronOrgId: '', libraryOrgId: patron.LibraryOrgID, libraryOrgName: patron.LibraryOrgName })[key] || '',
+        email: () => '',
+      }),
+    },
+  });
+  const { e, getResponse } = makeEvent({ query: 'ABC123' });
+  staffLookupPatron(e);
+  const response = getResponse();
+  assert.strictEqual(response.status, 200);
+  assert.strictEqual(response.body.status, 'selected');
+  assert.strictEqual(response.body.libraryOrgId, '10');
+  assert.strictEqual(response.body.patronHomeLibraryOrgId, '10');
+  assert.strictEqual(response.body.patronSearchLimitedToLibrary, false);
+}
+
+{
+  const { staffLookupPatron } = load({
+    routeUtils: {
+      requireAuth: () => ({ get: key => ({ libraryOrgId: '9', role: 'admin', libraryOrgName: 'Library A' })[key] || '' }),
+      body: e => e.requestBody,
+      sameLibrary: () => false,
+    },
+    config: { workflowSettings: () => ({ allowAnyRegisteredCardLogin: true }) },
+    polaris: {
+      adminStaffAuth: () => ({ token: 'staff' }),
+      lookupPatron: (staffAuth, barcode) => ({ PatronID: barcode, Barcode: barcode, NameFirst: barcode, NameLast: 'Patron', LibraryOrgID: barcode === 'A' ? '9' : '10', LibraryOrgName: barcode === 'A' ? 'Library A' : 'Library B' }),
+      searchPatrons: () => ({ status: 'ok', results: [{ barcode: 'A' }, { barcode: 'B' }] }),
+    },
+    orgs: {
+      attachPatronScope: (app, patron) => patron,
+      findOrganization: () => ({ get: () => 'Library A' }),
+    },
+    records: {},
+  });
+  const { e, getResponse } = makeEvent({ query: 'Jane Smith' });
+  staffLookupPatron(e);
+  const response = getResponse();
+  assert.strictEqual(response.status, 200);
+  assert.strictEqual(response.body.status, 'multiple');
+  assert.deepStrictEqual(response.body.results.map(r => r.libraryOrgId), ['9', '10']);
+  assert.strictEqual(response.body.patronSearchLimitedToLibrary, false);
 }
 
 console.log('Staff patron lookup barcode candidate tests passed.');

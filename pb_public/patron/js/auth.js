@@ -7,6 +7,28 @@ import { showLoginStep, showSuggestionStep } from './steps.js';
 import { byId, setText, setVisible } from './dom.js';
 import { applyPatronTextPlaceholders } from './html.js';
 
+
+export function patronContextCookieValue() {
+  const cookie = document.cookie || '';
+  const prefix = 'asap_patron_library_org_id=';
+  const parts = cookie.split(';').map(part => part.trim());
+  for (const part of parts) {
+    if (part.indexOf(prefix) === 0) return decodeURIComponent(part.slice(prefix.length));
+  }
+  return '';
+}
+
+export function getPatronExperienceLibraryOrgId() {
+  const params = new URLSearchParams(window.location.search);
+  return params.get('libraryOrgId') || patronContextCookieValue() || localStorage.getItem('asap_patron_library_org_id') || '';
+}
+
+export function storePatronExperienceLibraryOrgId(orgId) {
+  const clean = String(orgId || '').trim();
+  if (!clean) return;
+  localStorage.setItem('asap_patron_library_org_id', clean);
+}
+
 export function setLoginBusy(isBusy) {
   const btn = byId('login-btn');
   if (!btn) return;
@@ -51,16 +73,13 @@ export async function handleLoginSubmit(event) {
   try {
     const fd = new FormData(loginForm);
     const data = Object.fromEntries(fd.entries());
-    const params = new URLSearchParams(window.location.search);
-    const orgId = params.get('libraryOrgId') || localStorage.getItem('asap_patron_library_org_id') || '';
+    const orgId = getPatronExperienceLibraryOrgId();
     if (orgId) data.libraryOrgId = orgId;
 
     const result = await loginPatron(data);
     setAuthToken(result.token);
 
-    if (result.record && result.record.libraryOrgId) {
-      localStorage.setItem('asap_patron_library_org_id', result.record.libraryOrgId);
-    }
+    storePatronExperienceLibraryOrgId(result.effectiveLibraryOrgId || (result.record && result.record.effectiveLibraryOrgId) || (result.record && result.record.libraryOrgId));
 
     if (result.ui_text) {
       applyLoadedUiText(result);

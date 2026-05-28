@@ -611,6 +611,17 @@
                     </div>
                   </div>
 
+                  <!-- Patron Experience: Cross-library registered-card login -->
+                  <div class="form-row align-items-center mb-4">
+                    <div class="col-auto">
+                      <div class="custom-control custom-checkbox">
+                        <input type="checkbox" class="custom-control-input" id="allow-any-registered-card-login">
+                        <label class="custom-control-label font-weight-bold" for="allow-any-registered-card-login">Allow login from any registered Polaris card</label>
+                      </div>
+                      <small class="form-text text-muted">When enabled, patrons may log in to this library’s patron experience using any valid Polaris card in the system. Suggestions submitted through this patron experience will use this library’s settings and workflow, even if the patron’s card belongs to another library.</small>
+                    </div>
+                  </div>
+
                   <!-- Stage 3: Pending hold -->
                   <div class="form-row align-items-center mb-2">
                     <div class="col-auto">
@@ -1403,6 +1414,7 @@
           </div>
         </div>
         <small class="form-text text-muted">Enter barcode, name, or first name then last name.</small>
+        <div id="new-patron-search-scope-notice" class="mt-2 alert alert-light border py-2 small hidden" aria-live="polite"></div>
         <div id="new-lookup-result" class="mt-2 hidden" aria-live="polite"></div>
       </div>
 

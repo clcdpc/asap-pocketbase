@@ -33,6 +33,10 @@ assert.ok(appJs.split(/\r?\n/).length <= 5, 'entrypoint should remain small');
 const indexHtml = fs.readFileSync(path.join(patronDir, 'index.html'), 'utf8');
 assert.match(indexHtml, /<script\s+src="app\.js\?v=[^"]+"\s+type="module"><\/script>/);
 
+
+const authSource = fs.readFileSync(path.join(jsDir, 'auth.js'), 'utf8');
+assert.ok(authSource.includes('result.effectiveLibraryOrgId || (result.record && result.record.effectiveLibraryOrgId) || (result.record && result.record.libraryOrgId)'), 'patron auth should store effective library context before falling back to patron home library');
+
 const formRules = fs.readFileSync(path.join(jsDir, 'form-rules.js'), 'utf8');
 assert.ok(!/\b(document|window|fetch|localStorage)\b/.test(formRules), 'form-rules.js should stay pure');
 
