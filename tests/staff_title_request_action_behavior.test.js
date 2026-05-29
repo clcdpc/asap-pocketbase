@@ -420,6 +420,96 @@ function testAutoClaimSkipsAssignmentAction() {
   assert.strictEqual(result.payload.claimedByStaffUserId, ""); // remains empty
 }
 
+
+function testPurchaseReminderResponseUsesFinalPersistedStatus() {
+  const calls = { updateTitleRequest: 0, purchaseReminder: 0, sideEffects: 0, reminderStatus: "" };
+  const staff = makeStaff({ id: "staff1", username: "tester", displayName: "Tester", weekly_action_summary_email: "selector@example.org" });
+  const startingRecord = makeRecord({ id: "req1", status: "outstanding_purchase", claimedByStaffUserId: "staff1" });
+  const persistedRecord = makeRecord({ id: "req1", status: "pending_hold", claimedByStaffUserId: "staff1" });
+
+  const recordsMock = {
+    STATUS: { PENDING_HOLD: "pending_hold", OUTSTANDING_PURCHASE: "outstanding_purchase" },
+    updateTitleRequest(app, id, data) {
+      calls.updateTitleRequest += 1;
+      assert.strictEqual(data.status, "pending_hold");
+      return persistedRecord;
+    },
+    titleRequestToJson(rec) {
+      return { id: rec.id, status: rec.get("status") };
+    },
+    normalizeStatus(value) {
+      return String(value || "");
+    },
+    appendSystemNote() {},
+    recordEvent() {}
+  };
+
+  const context = {
+    response: null,
+    id: "req1",
+    action: "purchase",
+    nextStatus: "outstanding_purchase",
+    data: { action: "purchase", status: "outstanding_purchase", bibid: "12345", emailPurchaseReminder: true },
+    record: startingRecord,
+    staff,
+    formatChanged: false,
+    originalFormat: "book"
+  };
+
+  const { staffTitleRequestAction } = loadWithMocks({
+    records: recordsMock,
+    additionalCopies: { createFromTitleRequest() { throw new Error("not expected"); }, toJson() { return {}; } },
+    formatClaimRules: {
+      applyFormatClaimRule() {},
+      setManualClaim() { throw new Error("not expected"); },
+      claimDisplayName() { return "Tester"; }
+    },
+    contextModule: { titleRequestActionContext() { return context; } },
+    bibActions: {
+      finalizeTitleRequestCloseReason() {},
+      prepareTitleRequestBibAction() {
+        context.nextStatus = "pending_hold";
+        context.data.status = "pending_hold";
+        return null;
+      }
+    },
+    sideEffects: {
+      handleAlreadyOwnOrRejectSideEffects(app, ctx) {
+        calls.sideEffects += 1;
+        assert.strictEqual(ctx.record, persistedRecord);
+        assert.strictEqual(ctx.record.get("status"), "pending_hold");
+      },
+      sendPurchaseReminderIfRequested(app, ctx) {
+        calls.reminderStatus = ctx.record.get("status");
+        assert.strictEqual(ctx.action, "purchase");
+        assert.strictEqual(ctx.record, persistedRecord);
+        if (ctx.action === "purchase" && ctx.record.get("status") === "outstanding_purchase" && ctx.data.emailPurchaseReminder === true) {
+          calls.purchaseReminder += 1;
+          return { requested: true, sent: true, message: "Purchase saved and reminder email sent." };
+        }
+        return {
+          requested: ctx.data.emailPurchaseReminder === true,
+          sent: false,
+          message: "Purchase reminder not sent because this request skipped the purchase queue."
+        };
+      },
+      maybeRunImmediatePromoter() {}
+    }
+  });
+
+  const result = staffTitleRequestAction(makeEvent());
+
+  assert.strictEqual(result.code, 200);
+  assert.strictEqual(calls.updateTitleRequest, 1);
+  assert.strictEqual(calls.sideEffects, 1);
+  assert.strictEqual(calls.purchaseReminder, 0);
+  assert.strictEqual(calls.reminderStatus, "pending_hold");
+  assert.strictEqual(result.payload.status, "pending_hold");
+  assert.strictEqual(result.payload.purchaseReminderEmail.requested, true);
+  assert.strictEqual(result.payload.purchaseReminderEmail.sent, false);
+  assert.strictEqual(result.payload.purchaseReminderEmail.message, "Purchase reminder not sent because this request skipped the purchase queue.");
+}
+
 const originalCaches = {
   modulePath: require.cache[modulePath],
   recordsPath: require.cache[recordsPath],
@@ -437,6 +527,7 @@ try {
   testAutoClaimTransfer();
   testAutoClaimDoesNotDuplicate();
   testAutoClaimSkipsAssignmentAction();
+  testPurchaseReminderResponseUsesFinalPersistedStatus();
   console.log("staff_title_request_action_behavior.test.js passed.");
 } finally {
   if (originalCaches.modulePath) require.cache[modulePath] = originalCaches.modulePath;

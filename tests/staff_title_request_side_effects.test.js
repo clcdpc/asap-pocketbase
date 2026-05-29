@@ -163,9 +163,25 @@ function testPurchaseToPendingHoldSuppressesReminderAndPatronEmail() {
   assert.strictEqual(calls.rejected, 0);
   assert.strictEqual(calls.holdPlaced, 0);
   assert.strictEqual(calls.lookupPatron, 0);
-  assert.strictEqual(result.requested, false);
+  assert.strictEqual(result.requested, true);
   assert.strictEqual(result.sent, false);
   assert.strictEqual(result.message, "Purchase reminder not sent because this request skipped the purchase queue.");
+}
+
+function testPurchaseToPendingHoldUncheckedReminderStaysQuiet() {
+  const calls = {};
+  const sideEffects = withSideEffects(calls);
+  const result = sideEffects.sendPurchaseReminderIfRequested(makeApp(), {
+    action: "purchase",
+    data: { emailPurchaseReminder: false, bibid: "12345" },
+    record: makeRecord({ id: "req1", status: "pending_hold", barcode: "b1" }),
+    staff: makeStaff({ weekly_action_summary_email: "selector@example.org" })
+  });
+
+  assert.strictEqual(calls.purchaseReminder, 0);
+  assert.strictEqual(result.requested, false);
+  assert.strictEqual(result.sent, false);
+  assert.strictEqual(result.message, "");
 }
 
 function testPurchaseToHoldPlacedSuppressesReminderAndSendsOnePatronOutcomeEmail() {
@@ -188,7 +204,8 @@ function testPurchaseToHoldPlacedSuppressesReminderAndSendsOnePatronOutcomeEmail
   assert.strictEqual(calls.rejected, 0);
   assert.strictEqual(calls.holdPlaced, 0);
   assert.strictEqual(calls.placeHold, 0);
-  assert.strictEqual(result.requested, false);
+  assert.strictEqual(calls.lookupPatron, 1);
+  assert.strictEqual(result.requested, true);
   assert.strictEqual(result.sent, false);
   assert.strictEqual(result.message, "Purchase reminder not sent because this request skipped the purchase queue.");
 }
@@ -204,9 +221,26 @@ function testPurchaseToClosedSuppressesReminder() {
   });
 
   assert.strictEqual(calls.purchaseReminder, 0);
-  assert.strictEqual(result.requested, false);
+  assert.strictEqual(result.requested, true);
   assert.strictEqual(result.sent, false);
   assert.strictEqual(result.message, "Purchase reminder not sent because this request skipped the purchase queue.");
+}
+
+function testAdditionalCopyReminderStillSendsForHoldWorkflowStatus() {
+  const calls = {};
+  const sideEffects = withSideEffects(calls);
+  const result = sideEffects.sendPurchaseReminderIfRequested(makeApp(), {
+    action: "additionalCopy",
+    data: { emailPurchaseReminder: true },
+    record: makeRecord({ id: "req1", status: "pending_hold" }),
+    staff: makeStaff({ weekly_action_summary_email: "selector@example.org" })
+  });
+
+  assert.strictEqual(calls.additionalCopyReminder, 1);
+  assert.strictEqual(calls.purchaseReminder, 0);
+  assert.strictEqual(result.requested, true);
+  assert.strictEqual(result.sent, true);
+  assert.strictEqual(result.message, "Additional copy saved and reminder email sent.");
 }
 
 const originalCaches = {
@@ -223,8 +257,10 @@ const originalCaches = {
 try {
   testPurchaseToOutstandingPurchaseSendsReminder();
   testPurchaseToPendingHoldSuppressesReminderAndPatronEmail();
+  testPurchaseToPendingHoldUncheckedReminderStaysQuiet();
   testPurchaseToHoldPlacedSuppressesReminderAndSendsOnePatronOutcomeEmail();
   testPurchaseToClosedSuppressesReminder();
+  testAdditionalCopyReminderStillSendsForHoldWorkflowStatus();
   console.log("staff_title_request_side_effects.test.js passed.");
 } finally {
   const cachePaths = {
