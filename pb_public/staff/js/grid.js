@@ -1368,7 +1368,8 @@ export async function openAssignDialog(row) {
       cleanup();
       await loadTab(currentStatus);
     } catch (err) {
-      await showAlert(err.message || 'Assignment failed.');
+      const message = err && err.message ? err.message : 'Assignment failed.';
+      await showAlert(message);
       confirmBtn.disabled = false;
       confirmBtn.textContent = 'Assign';
     }
