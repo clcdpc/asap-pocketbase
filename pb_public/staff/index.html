@@ -1549,6 +1549,25 @@
   </form>
 </dialog>
 
+<!-- Assign Suggestion Dialog -->
+<dialog id="assign-dialog" class="asap-dialog asap-dialog-small">
+  <div class="asap-dialog-small-body">
+    <h2 class="h5 mb-3">Assign Suggestion</h2>
+    <p class="small text-muted mb-3" id="assign-dialog-context"></p>
+    <div class="form-group mb-4">
+      <label for="assign-staff-select" class="font-weight-bold">Select staff member</label>
+      <select id="assign-staff-select" class="form-control">
+        <option value="">Select staff...</option>
+      </select>
+      <small class="form-text text-muted">The assigned staff member will receive an email notification if they have an email address on file.</small>
+    </div>
+    <div class="asap-dialog-actions">
+      <button type="button" id="assign-cancel" class="btn btn-sm btn-secondary">Cancel</button>
+      <button type="button" id="assign-confirm" class="btn btn-sm btn-primary">Assign</button>
+    </div>
+  </div>
+</dialog>
+
 <!-- Profile Dialog -->
 <dialog id="profile-dialog" class="asap-dialog asap-dialog-small">
   <form id="profile-form" class="asap-dialog-small-body">

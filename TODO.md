@@ -5,7 +5,7 @@
 [x] buy another copy read same profile option for emailing the purchase reminder. for sending that.
 [x] additional copy automation hint
 [x] always goes settings, why.
-[] should issue auto claim when purchase?
+[x] should issue auto claim when purchase?
 [] can we include the tom for the format.
 [x] make the placeholders sticky. **and bold.**
 [] email issue for patron, waiting and pickup at the same time -- wes has example, maybe because it jumped?

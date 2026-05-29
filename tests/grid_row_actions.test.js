@@ -17,7 +17,7 @@ async function runTests() {
   });
 
   assert.deepStrictEqual(suggestion.visible.map(action => action.label), ["Purchase", "Reject"]);
-  assert.deepStrictEqual(suggestion.secondary.map(action => action.label), ["Already own", "Unclaim", "Silent close", "Edit"]);
+  assert.deepStrictEqual(suggestion.secondary.map(action => action.label), ["Already own", "Unclaim", "Assign to...", "Silent close", "Edit"]);
 
   const pendingHold = buildRowActions({
     id: "req2",
@@ -35,6 +35,7 @@ async function runTests() {
     "Close duplicate",
     "Buy another copy",
     "Claim",
+    "Assign to...",
     "Silent close",
     "Edit"
   ]);
@@ -50,7 +51,7 @@ async function runTests() {
   });
 
   assert.strictEqual(additionalCopy.primary.label, "Close");
-  assert.deepStrictEqual(additionalCopy.secondary.map(action => action.label), ["Claim"]);
+  assert.deepStrictEqual(additionalCopy.secondary.map(action => action.label), ["Claim", "Assign to..."]);
 
   console.log("Grid row action tests passed.");
 }

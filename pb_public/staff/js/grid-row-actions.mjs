@@ -10,16 +10,21 @@ function isClaimedByCurrentUser(row, currentStaffId) {
 }
 
 function claimActionDescriptors(row, context = {}) {
+  const actions = [];
   if (isUnclaimed(row)) {
-    return [{ key: 'claim', label: 'Claim' }];
+    actions.push({ key: 'claim', label: 'Claim' });
+  } else if (isClaimedByCurrentUser(row, context.currentStaffId)) {
+    actions.push({ key: 'unclaim', label: 'Unclaim' });
+  } else if (context.isAdmin) {
+    actions.push({ key: 'clearClaim', label: 'Clear claim', className: 'danger' });
   }
-  if (isClaimedByCurrentUser(row, context.currentStaffId)) {
-    return [{ key: 'unclaim', label: 'Unclaim' }];
+  
+  // Always allow assignment if staff is logged in and suggestion is not closed
+  if (context.currentStaffId && normalizeStatus(row?.status) !== 'closed') {
+    actions.push({ key: 'assign', label: 'Assign to...' });
   }
-  if (context.isAdmin) {
-    return [{ key: 'clearClaim', label: 'Clear claim', className: 'danger' }];
-  }
-  return [];
+  
+  return actions;
 }
 
 function hasDuplicateHold(row) {
