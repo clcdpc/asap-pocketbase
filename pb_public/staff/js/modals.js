@@ -1,9 +1,22 @@
 import { pb, formatMap, availableFormats, currentRejectionTemplates, currentStatus, currentSuggestions, allSuggestions, verifiedBibId, publicationOptions, setVerifiedBibId, workflowSettings } from './state.js';
 import { leapBibUrl, openProfileDialog } from './api.js';
+import { closeDuplicateRequest } from './actions.js';
 import { showToast, showAlert, showConfirm } from './dialogs.js';
 import { loadTab, formatDateTime, renderWorkflowTags, escapeAttr } from './grid.js';
 import { setSelectValue, dateOnly, lookupEditBibById, applySelectedPolarisResultToEditForm } from './settings-ui.js';
-import { rememberRecentSuggestion, renderRecentSuggestionsSwitcher } from './recent-suggestions.js';
+import { rememberRecentSuggestion, renderRecentSuggestionsSwitcher, updateRecentSuggestion } from './recent-suggestions.js';
+
+export async function confirmDuplicateOpenRequestClose(err, id) {
+  const confirmed = await showConfirm(
+    'Duplicate request found',
+    'This patron already has an open request or hold for this BIB ID. Close this request as a duplicate, or keep editing and choose another BIB.'
+  );
+  if (confirmed) {
+    await closeDuplicateRequest(id);
+    showToast('Duplicate request closed.', 'success');
+  }
+  return confirmed;
+}
 
 function actionErrorMessage(status, data, raw) {
   if (data && data.code === 'duplicate_open_request') {
@@ -1256,6 +1269,7 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
     document.getElementById('editModal').close();
     
     rememberRecentSuggestion(updatedRecord);
+    updateRecentSuggestion(updatedRecord);
     renderRecentSuggestionsSwitcher();
 
     const reminder = updatedRecord && updatedRecord.purchaseReminderEmail;
@@ -1289,10 +1303,15 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
 
     loadTab(currentStatus);
   } catch (err) {
-    await showAlert(err.message || 'Error updating suggestion');
     if (err && err.code === 'duplicate_open_request') {
-      loadTab(currentStatus);
+      const confirmed = await confirmDuplicateOpenRequestClose(err, id);
+      if (confirmed) {
+        document.getElementById('editModal').close();
+        loadTab(currentStatus);
+        return;
+      }
     }
+    await showAlert(err.message || 'Error updating suggestion');
   }
 });
 
@@ -1336,6 +1355,10 @@ async function performImmediateStaffAction(id, payload) {
       throw err;
     }
     const updatedRecord = await res.json().catch(() => ({}));
+    
+    rememberRecentSuggestion(updatedRecord);
+    updateRecentSuggestion(updatedRecord);
+    renderRecentSuggestionsSwitcher();
     
     // Close search dialog
     const searchDialog = document.getElementById('polarisSearchDialog');
@@ -1391,10 +1414,14 @@ async function performImmediateStaffAction(id, payload) {
     }
   } catch (err) {
     console.error('performImmediateStaffAction failed:', err);
-    await showAlert(err.message || 'Error updating suggestion');
-    if (err && err.code === 'duplicate_open_request' && typeof loadTab === 'function') {
-      loadTab(currentStatus);
+    if (err && err.code === 'duplicate_open_request') {
+      const confirmed = await confirmDuplicateOpenRequestClose(err, id);
+      if (confirmed) {
+        if (typeof loadTab === 'function') loadTab(currentStatus);
+        return;
+      }
     }
+    await showAlert(err.message || 'Error updating suggestion');
   }
 }
 

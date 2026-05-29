@@ -523,6 +523,13 @@ export function populateWorkflowForms(wf) {
   setFieldChecked('polaris-auto-promote', !!wf.autoPromote);
   setFieldChecked('allow-patron-autohold-opt-out', !!wf.allowPatronAutoholdOptOut);
   setFieldChecked('allow-any-registered-card-login', !!wf.allowAnyRegisteredCardLogin);
+  const orgId = currentLibraryContextOrgId;
+  const loginUrl = `${window.location.origin}/patron/?libraryOrgId=${encodeURIComponent(orgId)}`;
+  const linkEl = document.getElementById('any-card-login-url');
+  if (linkEl) {
+    linkEl.href = loginUrl;
+    linkEl.textContent = loginUrl;
+  }
   workflowSettings.autoPromote = !!wf.autoPromote;
   workflowSettings.allowAnyRegisteredCardLogin = !!wf.allowAnyRegisteredCardLogin;
   setFieldChecked('wf-external-search-1-enabled', !!wf.externalSearch1Enabled);

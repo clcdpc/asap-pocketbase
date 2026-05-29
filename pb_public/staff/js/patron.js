@@ -2,8 +2,57 @@ import { pb, verifiedNewSuggestionBarcode, setVerifiedNewSuggestionBarcode, curr
 import { setFieldChecked, getFieldChecked, isSuperAdminStaff } from './api.js';
 import { loadTab, escapeAttr } from './grid.js';
 import { renderPatronContext } from './modals.js';
+import { populateLibrarySelector } from './settings.js';
 
-document.getElementById('btn-new-suggestion').addEventListener('click', () => {
+async function populateNewSuggestionLibrarySelector() {
+  const select = document.getElementById('new-suggestion-library');
+  const group = document.getElementById('new-suggestion-library-group');
+  if (!select || !group) return;
+
+  if (!isSuperAdminStaff()) {
+    group.classList.add('hidden');
+    return;
+  }
+
+  group.classList.remove('hidden');
+  select.innerHTML = '<option value="">Select a library...</option>';
+
+  try {
+    const orgs = await pb.collection('polaris_organizations').getFullList({
+      filter: 'organizationCodeId = "2"',
+      sort: 'displayName',
+      requestKey: 'polaris-orgs-suggestion-modal'
+    });
+
+    orgs.forEach(org => {
+      const opt = document.createElement('option');
+      opt.value = org.organizationId;
+      opt.textContent = `${org.displayName || org.name} (ID ${org.organizationId})`;
+      select.appendChild(opt);
+    });
+
+    if (currentWorkflowOrgScopeId && currentWorkflowOrgScopeId !== 'all' && currentWorkflowOrgScopeId !== 'system') {
+      select.value = currentWorkflowOrgScopeId;
+    }
+
+    if (!select.dataset.suggestionLibraryBound) {
+      select.addEventListener('change', () => {
+        const btn = document.getElementById('btn-submit-new');
+        if (btn) btn.disabled = staffSuggestionRequiresLibrarySelection();
+        if (!staffSuggestionRequiresLibrarySelection()) {
+          clearNewSuggestionError();
+        } else {
+          showNewSuggestionError('Select a servicing library before creating a staff suggestion.');
+        }
+      });
+      select.dataset.suggestionLibraryBound = 'true';
+    }
+  } catch (err) {
+    console.error('Failed to load libraries for suggestion modal:', err);
+  }
+}
+
+document.getElementById('btn-new-suggestion').addEventListener('click', async () => {
   document.getElementById('new-suggestion-form').reset();
   setFieldChecked('new-autohold', true);
   setFieldChecked('staff-new-suggestion-email-patron', false);
@@ -101,7 +150,7 @@ document.getElementById('new-suggestion-form').addEventListener('submit', async 
   }
 
   if (staffSuggestionRequiresLibrarySelection()) {
-    showNewSuggestionError('Select a library before creating a staff suggestion.');
+    showNewSuggestionError('Select a servicing library before creating a staff suggestion.');
     return;
   }
 
@@ -149,15 +198,24 @@ document.getElementById('new-suggestion-form').addEventListener('submit', async 
 });
 
 function staffSuggestionRequiresLibrarySelection() {
+  const select = document.getElementById('new-suggestion-library');
+  if (select && !select.classList.contains('hidden') && !select.value) {
+    return true;
+  }
   const scopeId = String(currentWorkflowOrgScopeId || '').trim();
-  return isSuperAdminStaff() && (!scopeId || scopeId === 'all' || scopeId === 'system');
+  return isSuperAdminStaff() && (!scopeId || scopeId === 'all' || scopeId === 'system') && (!select || select.classList.contains('hidden') || !select.value);
 }
 
 function staffSuggestionLibraryPayload(payload) {
   const next = Object.assign({}, payload || {});
-  const scopeId = String(currentWorkflowOrgScopeId || '').trim();
-  if (scopeId && scopeId !== 'all' && scopeId !== 'system') {
-    next.libraryOrgId = scopeId;
+  const select = document.getElementById('new-suggestion-library');
+  if (select && !select.classList.contains('hidden') && select.value) {
+    next.libraryOrgId = select.value;
+  } else {
+    const scopeId = String(currentWorkflowOrgScopeId || '').trim();
+    if (scopeId && scopeId !== 'all' && scopeId !== 'system') {
+      next.libraryOrgId = scopeId;
+    }
   }
   return next;
 }
@@ -294,14 +352,19 @@ export function clearNewSuggestionDetails() {
   setFieldChecked('new-autohold', true);
 }
 
-export function setNewSuggestionDetailsEnabled(enabled) {
+export async function setNewSuggestionDetailsEnabled(enabled) {
   document.getElementById('new-suggestion-details').classList.toggle('hidden', !enabled);
   document.querySelectorAll('.new-detail-field').forEach(field => {
     field.disabled = !enabled;
   });
+  
+  if (enabled) {
+    await populateNewSuggestionLibrarySelector();
+  }
+
   document.getElementById('btn-submit-new').disabled = !enabled || staffSuggestionRequiresLibrarySelection();
   if (enabled && staffSuggestionRequiresLibrarySelection()) {
-    showNewSuggestionError('Select a library before creating a staff suggestion.');
+    showNewSuggestionError('Select a servicing library before creating a staff suggestion.');
   }
 }
 

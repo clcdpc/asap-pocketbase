@@ -162,6 +162,17 @@ function testRecentSuggestions() {
   firstItem.dispatchEvent(new global.MouseEvent("click"));
   assert.strictEqual(eventDispatched, true);
 
+  // 9. Update existing record
+  global.localStorage.clear();
+  rememberRecentSuggestion({ id: "req1", title: "Old Title", author: "Old Author" });
+  if (typeof updateRecentSuggestion === 'function') {
+      updateRecentSuggestion({ id: "req1", title: "New Title", author: "New Author" });
+      suggestions = getRecentSuggestions();
+      assert.strictEqual(suggestions.length, 1);
+      assert.strictEqual(suggestions[0].title, "New Title");
+      assert.strictEqual(suggestions[0].author, "New Author");
+  }
+
   console.log("recent_suggestions_ui.test.js passed.");
 }
 

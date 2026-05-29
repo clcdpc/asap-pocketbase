@@ -1,3 +1,4 @@
+(async () => {
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
@@ -71,4 +72,33 @@ const actionErrorMessage = new Function([
   assert.strictEqual(msg, 'Error updating suggestion (400): BIB ID is required.');
 }
 
+{
+  // Test confirmDuplicateOpenRequestClose logic
+  const source = fs.readFileSync(path.resolve(__dirname, '../pb_public/staff/js/modals.js'), 'utf8');
+  
+  // Mock dependencies for the test
+  let showConfirmCalled = false;
+  let closeDuplicateRequestCalled = false;
+  const mockShowConfirm = async (title, msg) => {
+    showConfirmCalled = true;
+    return true; // Simulate confirmation
+  };
+  const mockCloseDuplicateRequest = async (id) => {
+    closeDuplicateRequestCalled = true;
+  };
+  const mockShowToast = (msg, type) => {};
+
+  const confirmDuplicateOpenRequestClose = new Function(
+    'showConfirm', 'closeDuplicateRequest', 'showToast',
+    'return async (err, id) => ' + extractFunction(source, 'confirmDuplicateOpenRequestClose').slice(extractFunction(source, 'confirmDuplicateOpenRequestClose').indexOf('{'))
+  )(mockShowConfirm, mockCloseDuplicateRequest, mockShowToast);
+
+  const confirmed = await confirmDuplicateOpenRequestClose(null, 'test-id');
+  
+  assert.strictEqual(confirmed, true);
+  assert.strictEqual(showConfirmCalled, true);
+  assert.strictEqual(closeDuplicateRequestCalled, true);
+}
+
 console.log('Staff modal duplicate error tests passed.');
+})();

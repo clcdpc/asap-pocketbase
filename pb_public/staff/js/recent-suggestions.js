@@ -43,6 +43,37 @@ export function rememberRecentSuggestion(row) {
   }
 }
 
+export function updateRecentSuggestion(row, options = {}) {
+  if (!row || !row.id) return;
+
+  const storageKey = getStorageKey();
+  if (!storageKey) return;
+
+  let recent = getRecentSuggestions();
+  const index = recent.findIndex(r => r.id === row.id);
+  if (index < 0) return;
+
+  const existing = recent[index];
+  recent[index] = Object.assign({}, existing, {
+    type: row.type || existing.type || 'title_request',
+    title: row.title || existing.title || 'Unknown Title',
+    author: row.author || existing.author || '',
+    status: row.status || existing.status
+  });
+
+  if (options.bump) {
+    const [item] = recent.splice(index, 1);
+    item.accessedAt = new Date().toISOString();
+    recent.unshift(item);
+  }
+
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(recent));
+  } catch (e) {
+    console.warn("Failed to update recent suggestions in localStorage", e);
+  }
+}
+
 export function getRecentSuggestions() {
   const storageKey = getStorageKey();
   if (!storageKey) return [];

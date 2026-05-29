@@ -682,45 +682,7 @@
                     </div>
                   </div>
 
-                  <hr class="my-4">
 
-                  <!-- Common Creator Notification -->
-                  <h5 class="mb-3">Popular creator notifications</h5>
-                  <p class="text-muted small">Prevent redundant suggestions for popular creators that your library already acquires automatically.</p>
-
-                  <div class="form-row align-items-center mb-3">
-                    <div class="col-auto">
-                      <div class="custom-control custom-checkbox">
-                        <input type="checkbox" class="custom-control-input" id="wf-common-authors-enabled">
-                        <label class="custom-control-label font-weight-bold" for="wf-common-authors-enabled">Enable Popular Creator Workflow</label>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div id="common-authors-config-group" class="hidden">
-                    <div class="form-group">
-                      <label for="wf-common-authors-label" class="font-weight-bold mb-1">Section label</label>
-                      <input id="wf-common-authors-label" class="form-control" placeholder="Popular Creators">
-                      <small class="form-text text-muted">Libraries can customize the label patrons see for this dropdown.</small>
-                    </div>
-                    <div class="form-group">
-                      <label for="wf-common-authors-help" class="font-weight-bold mb-1">Section help text</label>
-                      <input id="wf-common-authors-help" class="form-control" placeholder="See if this is a creator we already collect.">
-                      <small class="form-text text-muted">Libraries can customize the explanatory text shown under the dropdown.</small>
-                    </div>
-                    <div class="form-group">
-                      <label for="wf-common-authors-list" class="font-weight-bold mb-1">Creators</label>
-                      <textarea id="wf-common-authors-list" class="form-control" rows="5" placeholder="Patterson, James&#10;Grisham, John&#10;Steel, Danielle"></textarea>
-                      <small class="form-text text-muted">Enter one creator per line. The list will be automatically sorted by last name when saved.</small>
-                    </div>
-                    <div class="form-group">
-                      <label for="wf-common-authors-message" class="font-weight-bold mb-1">Patron Notification Message (Supports HTML)</label>
-                      <textarea id="wf-common-authors-message" class="form-control" rows="3"></textarea>
-                      <small class="form-text text-muted">This message is shown to patrons when they select a creator from the list.</small>
-                    </div>
-                  </div>
-
-                  <hr class="my-4">
 
                   <!-- External Search -->
                   <h5 class="mb-3">External search providers</h5>
@@ -897,22 +859,65 @@
                         <h3 class="h6">Behavior options</h3>
                         <div class="form-row align-items-center mb-3">
                           <div class="col-12">
-                            <div class="custom-control custom-checkbox">
-                              <input type="checkbox" class="custom-control-input" id="allow-any-registered-card-login">
-                              <label class="custom-control-label font-weight-bold" for="allow-any-registered-card-login">Allow login from any registered Polaris card</label>
-                            </div>
-                            <small class="form-text text-muted">When enabled, patrons may log in to this library’s patron experience using any valid Polaris card in the system. Suggestions submitted through this patron experience will use this library’s settings and workflow, even if the patron’s card belongs to another library.</small>
+                             <div class="custom-control custom-checkbox">
+                               <input type="checkbox" class="custom-control-input" id="allow-any-registered-card-login">
+                               <label class="custom-control-label font-weight-bold" for="allow-any-registered-card-login">Allow login from any registered Polaris card</label>
+                             </div>
+                             <small class="form-text text-muted">When enabled, patrons may log in to this library’s patron experience using any valid Polaris card in the system. Suggestions submitted through this patron experience will use this library’s settings and workflow, even if the patron’s card belongs to another library. Use this link on your library website: <a id="any-card-login-url" href="#" target="_blank">loading...</a></small>
+                           </div>
+                          </div>
+                          <div class="form-row align-items-center mb-3">
+                           <div class="col-12">
+                             <div class="custom-control custom-checkbox">
+                               <input type="checkbox" class="custom-control-input" id="allow-patron-autohold-opt-out">
+                               <label class="custom-control-label font-weight-bold" for="allow-patron-autohold-opt-out">Allow patron autohold opt-out</label>
+                             </div>
+                             <small class="form-text text-muted">Let patrons choose to decline automatic hold placement when submitting a suggestion. If unchecked, all suggestions default to automatic holds.</small>
+                           </div>
+                          </div>
+
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="asap-accordion-item" id="accordion-patron-popular-creators">
+                    <button type="button" class="asap-accordion-header" aria-expanded="false" aria-controls="panel-patron-popular-creators">
+                      <span class="asap-accordion-title">Popular Creator Notifications</span>
+                      <span class="asap-accordion-summary">Manage popular creator workflow settings</span>
+                      <i class="fa fa-chevron-down asap-accordion-chevron"></i>
+                    </button>
+                    <div id="panel-patron-popular-creators" class="asap-accordion-panel" role="region" aria-labelledby="accordion-patron-popular-creators">
+                      <p class="text-muted small">Prevent redundant suggestions for popular creators that your library already acquires automatically.</p>
+
+                      <div class="form-row align-items-center mb-3">
+                        <div class="col-auto">
+                          <div class="custom-control custom-checkbox">
+                            <input type="checkbox" class="custom-control-input" id="wf-common-authors-enabled">
+                            <label class="custom-control-label font-weight-bold" for="wf-common-authors-enabled">Enable Popular Creator Workflow</label>
                           </div>
                         </div>
+                      </div>
 
-                        <div class="form-row align-items-center mb-0">
-                          <div class="col-12">
-                            <div class="custom-control custom-checkbox">
-                              <input type="checkbox" class="custom-control-input" id="allow-patron-autohold-opt-out">
-                              <label class="custom-control-label font-weight-bold" for="allow-patron-autohold-opt-out">Allow patron autohold opt-out</label>
-                            </div>
-                            <small class="form-text text-muted">Let patrons choose to decline automatic hold placement when submitting a suggestion. If unchecked, all suggestions default to automatic holds.</small>
-                          </div>
+                      <div id="common-authors-config-group" class="hidden">
+                        <div class="form-group">
+                          <label for="wf-common-authors-label" class="font-weight-bold mb-1">Section label</label>
+                          <input id="wf-common-authors-label" class="form-control" placeholder="Popular Creators">
+                          <small class="form-text text-muted">Libraries can customize the label patrons see for this dropdown.</small>
+                        </div>
+                        <div class="form-group">
+                          <label for="wf-common-authors-help" class="font-weight-bold mb-1">Section help text</label>
+                          <input id="wf-common-authors-help" class="form-control" placeholder="See if this is a creator we already collect.">
+                          <small class="form-text text-muted">Libraries can customize the explanatory text shown under the dropdown.</small>
+                        </div>
+                        <div class="form-group">
+                          <label for="wf-common-authors-list" class="font-weight-bold mb-1">Creators</label>
+                          <textarea id="wf-common-authors-list" class="form-control" rows="5" placeholder="Patterson, James&#10;Grisham, John&#10;Steel, Danielle"></textarea>
+                          <small class="form-text text-muted">Enter one creator per line. The list will be automatically sorted by last name when saved.</small>
+                        </div>
+                        <div class="form-group">
+                          <label for="wf-common-authors-message" class="font-weight-bold mb-1">Patron Notification Message (Supports HTML)</label>
+                          <textarea id="wf-common-authors-message" class="form-control" rows="3"></textarea>
+                          <small class="form-text text-muted">This message is shown to patrons when they select a creator from the list.</small>
                         </div>
                       </div>
                     </div>
@@ -1444,6 +1449,10 @@
 
       <div id="new-suggestion-details" class="hidden">
         
+        <div class="form-group hidden" id="new-suggestion-library-group">
+          <label class="small font-weight-bold mb-1" for="new-suggestion-library">Servicing Library *</label>
+          <select id="new-suggestion-library" class="form-control form-control-sm new-detail-field" required></select>
+        </div>
         <div class="form-group mb-2">
           <label class="small font-weight-bold mb-1">Title (original) *</label>
           <div class="field-with-action">
