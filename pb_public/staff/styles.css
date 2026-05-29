@@ -2266,6 +2266,21 @@ code {
   flex: 0 0 auto;
 }
 
+.polaris-search-result-title {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.polaris-search-result-title-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.polaris-search-result-title-text {
+  min-width: 0;
+}
+
 .asap-format-label {
   line-height: 1;
 }

@@ -783,10 +783,10 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
     
     const titleDiv = document.createElement('div');
     titleDiv.className = 'polaris-search-result-title';
-    
+
     if (result.formatIconUrl) {
       const icon = document.createElement('img');
-      icon.className = 'asap-format-icon mr-2';
+      icon.className = 'asap-format-icon polaris-search-result-title-icon';
       icon.src = result.formatIconUrl;
       icon.alt = '';
       icon.setAttribute('aria-hidden', 'true');
@@ -794,10 +794,13 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
       icon.onerror = () => icon.remove();
       titleDiv.appendChild(icon);
     }
-    
-    titleDiv.appendChild(document.createTextNode(title));
+
+    const titleText = document.createElement('span');
+    titleText.className = 'polaris-search-result-title-text';
+    titleText.textContent = title;
+    titleDiv.appendChild(titleText);
+
     div.appendChild(titleDiv);
-    
     if (meta) {
       const metaDiv = document.createElement('div');
       metaDiv.className = 'polaris-search-result-meta';
