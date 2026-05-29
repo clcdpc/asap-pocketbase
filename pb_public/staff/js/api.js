@@ -626,10 +626,12 @@ loginForm.addEventListener('submit', async (e) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
-    }).then(r => {
+    }).then(async r => {
       if (!r.ok) {
-        const err = new Error('invalid');
+        const data = await r.json().catch(() => ({}));
+        const err = new Error(data.message || 'invalid');
         err.response = r;
+        err.data = data;
         throw err;
       }
       return r.json();
@@ -646,6 +648,7 @@ loginForm.addEventListener('submit', async (e) => {
       checkAuth();
       return;
     }
+    errDiv.textContent = err.message !== 'invalid' ? err.message : 'Invalid login';
     errDiv.classList.remove('hidden');
   }
 });

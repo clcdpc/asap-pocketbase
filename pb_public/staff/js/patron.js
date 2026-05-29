@@ -1,4 +1,4 @@
-import { pb, verifiedNewSuggestionBarcode, setVerifiedNewSuggestionBarcode, currentWorkflowOrgScopeId } from './state.js';
+import { pb, verifiedNewSuggestionBarcode, setVerifiedNewSuggestionBarcode, currentWorkflowOrgScopeId, workflowSettings } from './state.js';
 import { setFieldChecked, getFieldChecked, isSuperAdminStaff } from './api.js';
 import { loadTab, escapeAttr } from './grid.js';
 import { renderPatronContext } from './modals.js';
@@ -165,17 +165,21 @@ function staffSuggestionLibraryPayload(payload) {
 function updatePatronSearchScopeNotice(data) {
   const notice = document.getElementById('new-patron-search-scope-notice');
   if (!notice) return;
-  if (!data || typeof data.patronSearchLimitedToLibrary !== 'boolean') {
-    notice.textContent = '';
-    notice.classList.add('hidden');
+
+  const isLimited = data && typeof data.patronSearchLimitedToLibrary === 'boolean'
+    ? data.patronSearchLimitedToLibrary
+    : !((workflowSettings || {}).allowAnyRegisteredCardLogin);
+
+  if (isLimited) {
+    notice.textContent = 'Patron search is limited to patrons registered at your library because of your login settings.';
+    notice.className = 'mt-2 alert alert-light border py-2 small';
+    notice.classList.remove('hidden');
     return;
   }
-  notice.textContent = data.patronSearchLimitedToLibrary
-    ? 'Patron search is limited to patrons registered at your library.'
-    : 'Patron search includes any registered Polaris card. Suggestions will be created for your library.';
-  notice.className = data.patronSearchLimitedToLibrary
-    ? 'mt-2 alert alert-light border py-2 small'
-    : 'mt-2 alert alert-info py-2 small';
+
+  notice.textContent = 'Patron search includes any registered Polaris card. Suggestions will be created for your library.';
+  notice.className = 'mt-2 alert alert-info py-2 small';
+  notice.classList.remove('hidden');
 }
 
 function applySelectedPatron(data) {

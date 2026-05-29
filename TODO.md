@@ -1,5 +1,5 @@
-[] in claiming allows being able to assign someone else...
-[] do you get a notificaiton when you've claimed or been assigned something.
+[x] in claiming allows being able to assign someone else...
+[x] do you get a notificaiton when you've claimed or been assigned something.
 [] should issue auto claim when purchase?
 [] staff emaail shouldn't send pending purcahse emaill
 [] searching by patron patron name --- reminder that it limits by owning.
