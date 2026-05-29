@@ -198,6 +198,39 @@ function runTests() {
   assert.ok(sentMessages[0].text.includes("Staff member: Collection Selector"));
   assert.ok(sentMessages[0].text.includes("Open in ASAP: https://asap.example.org/staff/?stage=outstanding_purchase&request=abc"));
 
+  // Test sendAssignmentNotification with HTML escaping
+  sentMessages = [];
+  const assignee = new MockRecord({
+    username: "assignee",
+    displayName: "Jane Assignee",
+    email: "assignee@example.com"
+  });
+  const actor = new MockRecord({
+    username: "actor",
+    displayName: "John Actor <script>alert(1)</script>"
+  });
+  const complexRecord = new MockRecord({
+    title: "Title & More <img src=x onerror=alert(2)>",
+    author: "Author ' Quote",
+    format: "book"
+  });
+
+  mail.sendAssignmentNotification(mockApp, assignee, complexRecord, actor);
+  assert.strictEqual(sentMessages.length, 1);
+  assert.strictEqual(sentMessages[0].subject, "Assigned suggestion: Title & More <img src=x onerror=alert(2)>");
+  assert.ok(sentMessages[0].html.includes("Hello Jane Assignee"), "HTML should include recipient name");
+  assert.ok(sentMessages[0].html.includes("John Actor &lt;script&gt;alert(1)&lt;/script&gt;"), "HTML should escape actor name");
+  assert.ok(sentMessages[0].html.includes("Title &amp; More &lt;img src=x onerror=alert(2)&gt;"), "HTML should escape title");
+  assert.ok(sentMessages[0].html.includes("Author &#39; Quote"), "HTML should escape author quotes");
+  assert.ok(sentMessages[0].text.includes("John Actor <script>alert(1)</script>"), "Plaintext should not escape actor name");
+
+  // Test sendAssignmentNotification for additional copy
+  sentMessages = [];
+  mail.sendAssignmentNotification(mockApp, assignee, complexRecord, actor, { type: "additional_copy" });
+  assert.strictEqual(sentMessages.length, 1);
+  assert.strictEqual(sentMessages[0].subject, "Assigned additional-copy task: Title & More <img src=x onerror=alert(2)>");
+  assert.ok(sentMessages[0].html.includes("assigned an open additional-copy task to you"), "HTML should specify additional-copy type");
+
   console.log("All mail.js tests passed!");
 }
 

@@ -1,0 +1,114 @@
+const assert = require("assert");
+const fs = require("fs");
+const path = require("path");
+
+// Mock environment for settings.js logic testing
+const source = fs.readFileSync(path.join(__dirname, "../pb_public/staff/js/settings.js"), "utf8")
+  .replace(/\bexport\s+/g, "");
+
+function extractFunction(name) {
+  const start = source.indexOf("function " + name + "(");
+  if (start < 0) throw new Error("Could not find function " + name);
+  const bodyStart = source.indexOf("{", start);
+  let depth = 0;
+  for (let i = bodyStart; i < source.length; i++) {
+    if (source[i] === "{") depth++;
+    if (source[i] === "}") depth--;
+    if (depth === 0) return source.slice(start, i + 1);
+  }
+  throw new Error("Could not extract function " + name);
+}
+
+function loadSettingsLogic() {
+  const mocks = `
+    const currentLibraryContextOrgId = 'system';
+    const leapBibUrlPattern = '';
+    const currentRejectionTemplates = [];
+    const defaultPublicationOptions = [];
+    const lastWorkflowEnabledList = [];
+    const formatMap = {};
+    const availableFormats = [];
+    
+    function isSuperAdminStaff() { return true; }
+    function getFieldValue(id, fallback) { return fallback || ''; }
+    function getFieldChecked(id) { return false; }
+    function setFieldValue(id, val) {}
+    function setFieldChecked(id, val) {}
+    function setLastWorkflowEnabledList(l) {}
+    function toggleTimeoutGroup() {}
+    function updateAutoRejectEmailControls() {}
+    function toggleHoldPickupTimeoutGroup() {}
+    function togglePendingHoldTimeoutGroup() {}
+    function toggleAdditionalCopyTimeoutGroup() {}
+    function toggleCommonAuthorsGroup() {}
+    function validateStaffUrl(url) { return null; }
+    function normalizeStaffUrl(url) { return url; }
+    function normalizeLeapBibUrlPattern(p) { return p; }
+    function normalizeExternalSearchUrlTemplate(t) { return t; }
+    function collectDuplicateStatusLabels() { return {}; }
+    function collectFormatLabels() { return {}; }
+    function collectFormatOrder() { return []; }
+    function collectAvailableFormats() { return []; }
+    function collectOptionList() { return []; }
+    function collectPatronFormatRules() { return {}; }
+    function collectFormatClaimRules() { return []; }
+    function sortAuthorsByLastName(l) { return l; }
+    function collectSettingsPolaris() { return {}; }
+    function collectEnabledLibraryIds() { return []; }
+    function renderFormatSettings() {}
+    function updateModalFormatDropdowns() {}
+    function renderOptionListEditor() {}
+    function renderPatronFormatRulesEditor() {}
+    function updatePublicationOptionsUi() {}
+    function renderDuplicateStatusLabelSettings() {}
+    
+    const workflowSettings = {};
+    const document = {
+      getElementById: (id) => ({ 
+        id, 
+        checked: false, 
+        classList: { 
+          add: () => {}, 
+          remove: () => {}, 
+          toggle: () => {} 
+        },
+        querySelectorAll: () => [] 
+      }),
+      querySelector: () => ({ 
+        classList: { 
+          add: () => {}, 
+          remove: () => {}, 
+          toggle: () => {} 
+        } 
+      })
+    };
+  `;
+
+  const fnSource = mocks + "\n" + 
+    extractFunction("_serializeSettingsState") + "\n" +
+    extractFunction("populateWorkflowForms") + "\n" +
+    extractFunction("populatePatronUiForms") + "\n" +
+    "return { _serializeSettingsState, populateWorkflowForms, populatePatronUiForms };";
+  return new Function(fnSource)();
+}
+
+console.log("Running settings logic tests...");
+
+try {
+  const logic = loadSettingsLogic();
+  
+  console.log("  Testing _serializeSettingsState...");
+  const payload1 = logic._serializeSettingsState(false);
+  assert.ok(payload1 && typeof payload1 === 'object');
+
+  console.log("  Testing populateWorkflowForms...");
+  logic.populateWorkflowForms({});
+
+  console.log("  Testing populatePatronUiForms...");
+  logic.populatePatronUiForms({});
+
+  console.log("PASS: Settings logic is sound.");
+} catch (err) {
+  console.error("FAIL: Settings logic error:", err);
+  process.exit(1);
+}

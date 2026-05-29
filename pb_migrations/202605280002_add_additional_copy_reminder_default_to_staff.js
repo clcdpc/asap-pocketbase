@@ -1,24 +1,20 @@
-migrate((db) => {
-  const dao = new Dao(db);
-  const collection = dao.findCollectionByNameOrId("staff_users");
+function field(name, type, options) {
+  options = options || {};
+  options.name = name;
+  options.type = type;
+  return options;
+}
 
-  collection.schema.addField(new SchemaField({
-    "system": false,
-    "id": "additional_copy_reminder_default",
-    "name": "additional_copy_reminder_default",
-    "type": "bool",
-    "required": false,
-    "presentable": false,
-    "unique": false,
-    "options": {}
-  }));
+migrate((app) => {
+  const collection = app.findCollectionByNameOrId("staff_users");
 
-  return dao.saveCollection(collection);
-}, (db) => {
-  const dao = new Dao(db);
-  const collection = dao.findCollectionByNameOrId("staff_users");
+  collection.fields.add(new Field(field("additional_copy_reminder_default", "bool", { required: false })));
 
-  collection.schema.removeField("additional_copy_reminder_default");
+  return app.save(collection);
+}, (app) => {
+  const collection = app.findCollectionByNameOrId("staff_users");
 
-  return dao.saveCollection(collection);
+  collection.fields.removeByName("additional_copy_reminder_default");
+
+  return app.save(collection);
 })

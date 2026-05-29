@@ -58,6 +58,10 @@ routerAdd("GET", "/api/asap/staff/users", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffUsersList(e);
 });
 
+routerAdd("GET", "/api/asap/staff/assignable-users", (e) => {
+  return require(`${__hooks}/../lib/staff_routes.js`).staffAssignableUsersList(e);
+});
+
 routerAdd("POST", "/api/asap/staff/users", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffUserCreate(e);
 });
@@ -114,6 +118,10 @@ routerAdd("POST", "/api/asap/staff/additional-copies/{id}/unclaim", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffAdditionalCopyUnclaim(e);
 });
 
+routerAdd("POST", "/api/asap/staff/additional-copies/{id}/assign", (e) => {
+  return require(`${__hooks}/../lib/staff_routes.js`).staffAssignAdditionalCopy(e);
+});
+
 routerAdd("GET", "/api/asap/staff/analytics", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffAnalytics(e);
 });
@@ -124,6 +132,10 @@ routerAdd("POST", "/api/asap/staff/title-requests/{id}/claim", (e) => {
 
 routerAdd("POST", "/api/asap/staff/title-requests/{id}/unclaim", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffUnclaimTitleRequest(e);
+});
+
+routerAdd("POST", "/api/asap/staff/title-requests/{id}/assign", (e) => {
+  return require(`${__hooks}/../lib/staff_routes.js`).staffAssignTitleRequest(e);
 });
 
 routerAdd("POST", "/api/asap/staff/title-requests/{id}/action", (e) => {

@@ -79,8 +79,15 @@ class FakeElement {
     return null;
   }
   querySelector(selector) {
-    if (selector !== ".asap-accordion-header") return null;
-    return this.findByClass("asap-accordion-header");
+    if (selector === ".asap-accordion-header") return this.findByClass("asap-accordion-header");
+    return null;
+  }
+  querySelectorAll(selector) {
+    // Simple mock for ":scope > .asap-accordion-item"
+    if (selector === ":scope > .asap-accordion-item") {
+      return this.children.filter(c => c.classList.contains("asap-accordion-item"));
+    }
+    return [];
   }
   findByClass(className) {
     for (const child of this.children) {

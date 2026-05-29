@@ -1296,6 +1296,86 @@ async function runRowActionDescriptor(row, action) {
   if (action.key === 'unclaim' || action.key === 'clearClaim') {
     await unclaimRequest(row.id);
   }
+
+  if (action.key === 'assign') {
+    await openAssignDialog(row);
+  }
+}
+
+export async function openAssignDialog(row) {
+  const dialog = document.getElementById('assign-dialog');
+  const staffSelect = document.getElementById('assign-staff-select');
+  const contextText = document.getElementById('assign-dialog-context');
+  const confirmBtn = document.getElementById('assign-confirm');
+  const cancelBtn = document.getElementById('assign-cancel');
+
+  if (!dialog || !staffSelect || !contextText || !confirmBtn || !cancelBtn) return;
+
+  // Reset dialog state
+  confirmBtn.textContent = 'Assign';
+  confirmBtn.disabled = true;
+  contextText.textContent = `Assigning: ${row.title || 'Untitled suggestion'}`;
+  staffSelect.innerHTML = '<option value="">Loading staff members...</option>';
+  staffSelect.value = '';
+
+  try {
+    const type = row.type === 'additional_copy' ? 'additional_copy' : 'title_request';
+    const res = await authorizedJson(`/api/asap/staff/assignable-users?type=${encodeURIComponent(type)}&id=${encodeURIComponent(row.id)}`);
+    const users = res.users || [];
+
+    staffSelect.innerHTML = '<option value="">Select staff member...</option>';
+    if (users.length === 0) {
+      staffSelect.innerHTML = '<option value="">No active staff members found</option>';
+    } else {
+      users.forEach(u => {
+        const opt = document.createElement('option');
+        opt.value = u.id;
+        opt.textContent = u.displayName || u.username;
+        staffSelect.appendChild(opt);
+      });
+    }
+  } catch (err) {
+    staffSelect.innerHTML = '<option value="">Error loading staff</option>';
+    console.error('Failed to load staff users', err);
+  }
+
+  staffSelect.onchange = () => {
+    confirmBtn.disabled = !staffSelect.value;
+  };
+
+  const cleanup = () => {
+    confirmBtn.onclick = null;
+    cancelBtn.onclick = null;
+    if (dialog.open) dialog.close();
+  };
+
+  cancelBtn.onclick = cleanup;
+  confirmBtn.onclick = async () => {
+    const assigneeId = staffSelect.value;
+    if (!assigneeId) return;
+
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Assigning...';
+
+    try {
+      const endpointPrefix = row.type === 'additional_copy' ? 'additional-copies' : 'title-requests';
+      await authorizedJson(`/api/asap/staff/${endpointPrefix}/${encodeURIComponent(row.id)}/assign`, {
+        method: 'POST',
+        body: JSON.stringify({ assigneeId })
+      });
+      const typeLabel = row.type === 'additional_copy' ? 'Additional-copy task' : 'Claim';
+      showToast(`${typeLabel} assigned.`, 'success');
+      cleanup();
+      await loadTab(currentStatus);
+    } catch (err) {
+      const message = err && err.message ? err.message : 'Assignment failed.';
+      await showAlert(message);
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = 'Assign';
+    }
+  };
+
+  dialog.showModal();
 }
 
 async function closeAdditionalCopyRequest(id) {
