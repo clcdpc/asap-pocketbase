@@ -2281,6 +2281,30 @@ code {
   min-width: 0;
 }
 
-.asap-format-label {
-  line-height: 1;
+/* Recent Suggestions Switcher */
+.staff-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.recent-suggestions-switcher {
+  display: inline-block;
+  position: relative;
+}
+
+.recent-suggestions-menu {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 1000;
+  min-width: 18rem;
+  max-width: 24rem;
+}
+
+.recent-suggestion-item {
+  white-space: normal;
+  text-align: left;
 }

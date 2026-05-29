@@ -3,6 +3,7 @@ import { leapBibUrl, openProfileDialog } from './api.js';
 import { showToast, showAlert, showConfirm } from './dialogs.js';
 import { loadTab, formatDateTime, renderWorkflowTags, escapeAttr } from './grid.js';
 import { setSelectValue, dateOnly, lookupEditBibById, applySelectedPolarisResultToEditForm } from './settings-ui.js';
+import { rememberRecentSuggestion, renderRecentSuggestionsSwitcher } from './recent-suggestions.js';
 
 function actionErrorMessage(status, data, raw) {
   if (data && data.code === 'duplicate_open_request') {
@@ -33,6 +34,9 @@ export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
   const row = currentSuggestions.find(r => r.id === id) || allSuggestions.find(r => r.id === id);
   if (!row) return;
   const isAdditionalCopy = row.type === 'additional_copy';
+
+  rememberRecentSuggestion(row);
+  renderRecentSuggestionsSwitcher();
 
   document.getElementById('editModalLabel').textContent = dialogTitle;
   document.getElementById('edit-id').value = row.id;
@@ -200,7 +204,7 @@ export function renderPendingAuditPreview(row, nextStatus, actionStr) {
   container.classList.toggle('hidden', !preview);
 }
 
-function workflowStatusLabel(status) {
+export function workflowStatusLabel(status) {
   const labels = {
     suggestion: 'Suggestions',
     outstanding_purchase: 'Pending purchase',
@@ -1250,6 +1254,10 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
     }
     const updatedRecord = await res.json().catch(() => ({}));
     document.getElementById('editModal').close();
+    
+    rememberRecentSuggestion(updatedRecord);
+    renderRecentSuggestionsSwitcher();
+
     const reminder = updatedRecord && updatedRecord.purchaseReminderEmail;
     if (actionValue === 'purchase') {
       if (reminder && reminder.requested && reminder.sent) {

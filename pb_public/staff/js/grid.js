@@ -1803,3 +1803,9 @@ document.addEventListener('click', (e) => {
     if (dialog) dialog.close();
   }
 });
+
+document.addEventListener('asap:recent-suggestion-selected', async event => {
+  const { id, status } = event.detail || {};
+  await loadTab(status || 'suggestion');
+  openSuggestionEditFromRow(id);
+});

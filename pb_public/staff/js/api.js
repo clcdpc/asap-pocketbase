@@ -4,6 +4,7 @@ import { syncPolarisOrganizations } from './settings-polaris.js';
 import { loadSettings, checkSettingsDirty, handleLibraryContextSwitch, refreshLibrarySelectorIndicators } from './settings.js';
 import { authorizedJson } from './http.js';
 import { showToast, showAlert, showConfirm, closeOpenDialogs } from './dialogs.js';
+import { renderRecentSuggestionsSwitcher, initRecentSuggestionsDropdown } from './recent-suggestions.js';
 
 export { authorizedJson, showToast, showAlert, showConfirm, closeOpenDialogs };
 
@@ -479,6 +480,7 @@ export function checkAuth() {
     showBootstrapAdminMessage();
     loadEmailStatus();
     applyProfileClaimFilterDefault();
+    renderRecentSuggestionsSwitcher();
 
     const requestedSettingsSection = getSettingsSectionFromHash();
     const requestedStatus = requestedStatusFromUrl();
@@ -886,3 +888,6 @@ if (closedTypeFilterSelect) {
     loadTab(currentStatus);
   });
 }
+
+// Initialize Dropdown
+initRecentSuggestionsDropdown();
