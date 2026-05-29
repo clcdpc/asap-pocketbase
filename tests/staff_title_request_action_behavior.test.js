@@ -26,6 +26,7 @@ function makeRecord(fields) {
 
 function makeStaff(fields) {
   return {
+    id: fields.id,
     get(key) {
       return fields[key];
     },
@@ -185,6 +186,240 @@ function testBibActionShortCircuits() {
   assert.strictEqual(calls.sideEffects, 0);
 }
 
+function testAutoClaimUnclaimedSuggestion() {
+  const calls = { setManualClaim: 0, save: 0, recordEvent: 0, updateTitleRequest: 0, sideEffects: 0 };
+  const staff = makeStaff({ id: "staff1", username: "tester", displayName: "Tester" });
+  const record = makeRecord({ id: "req1", status: "new", claimedByStaffUserId: "" });
+
+  const recordsMock = {
+    STATUS: { PENDING_HOLD: "pending_hold" },
+    updateTitleRequest() {
+      calls.updateTitleRequest += 1;
+      return record;
+    },
+    titleRequestToJson(rec) {
+      return { id: "req1", claimedByStaffUserId: rec.get("claimedByStaffUserId") };
+    },
+    recordEvent(app, rec, eventType, message, meta) {
+      calls.recordEvent += 1;
+      assert.strictEqual(eventType, "claim_manual_assigned");
+    }
+  };
+
+  const context = {
+    response: null,
+    id: "req1",
+    action: "purchase",
+    nextStatus: "new",
+    data: {},
+    record,
+    staff,
+    formatChanged: false,
+    originalFormat: "book"
+  };
+
+  const { staffTitleRequestAction } = loadWithMocks({
+    records: recordsMock,
+    additionalCopies: { createFromTitleRequest() { throw new Error("not expected"); }, toJson() { return {}; } },
+    formatClaimRules: {
+      applyFormatClaimRule() {},
+      setManualClaim(rec, stf) {
+        calls.setManualClaim += 1;
+        rec.set("claimedByStaffUserId", stf.get("id"));
+      },
+      claimDisplayName() { return "Tester"; }
+    },
+    contextModule: { titleRequestActionContext() { return context; } },
+    bibActions: {
+      finalizeTitleRequestCloseReason() {},
+      prepareTitleRequestBibAction() { return null; }
+    },
+    sideEffects: {
+      handleAlreadyOwnOrRejectSideEffects() { calls.sideEffects += 1; },
+      sendPurchaseReminderIfRequested() { calls.sideEffects += 1; return null; },
+      maybeRunImmediatePromoter() { calls.sideEffects += 1; }
+    }
+  });
+
+  const event = makeEvent();
+  const result = staffTitleRequestAction(event);
+
+  assert.strictEqual(result.code, 200);
+  assert.strictEqual(calls.setManualClaim, 1);
+  assert.strictEqual(calls.recordEvent, 1);
+  assert.ok(event.app.saveCalls.includes(record));
+  assert.strictEqual(result.payload.claimedByStaffUserId, "staff1");
+}
+
+function testAutoClaimTransfer() {
+  const calls = { setManualClaim: 0, recordEvent: 0 };
+  const staff = makeStaff({ id: "staff1", username: "tester", displayName: "Tester" });
+  const record = makeRecord({ id: "req1", status: "new", claimedByStaffUserId: "staff2" });
+
+  const recordsMock = {
+    STATUS: { PENDING_HOLD: "pending_hold" },
+    updateTitleRequest() { return record; },
+    titleRequestToJson(rec) { return { id: "req1", claimedByStaffUserId: rec.get("claimedByStaffUserId") }; },
+    recordEvent(app, rec, eventType, message, meta) {
+      calls.recordEvent += 1;
+      assert.strictEqual(eventType, "claim_manual_transferred");
+    }
+  };
+
+  const context = {
+    response: null,
+    id: "req1",
+    action: "purchase",
+    nextStatus: "new",
+    data: {},
+    record,
+    staff,
+    formatChanged: false,
+    originalFormat: "book"
+  };
+
+  const { staffTitleRequestAction } = loadWithMocks({
+    records: recordsMock,
+    additionalCopies: { createFromTitleRequest() { throw new Error("not expected"); }, toJson() { return {}; } },
+    formatClaimRules: {
+      applyFormatClaimRule() {},
+      setManualClaim(rec, stf) {
+        calls.setManualClaim += 1;
+        rec.set("claimedByStaffUserId", stf.get("id"));
+      },
+      claimDisplayName() { return "Tester"; }
+    },
+    contextModule: { titleRequestActionContext() { return context; } },
+    bibActions: {
+      finalizeTitleRequestCloseReason() {},
+      prepareTitleRequestBibAction() { return null; }
+    },
+    sideEffects: {
+      handleAlreadyOwnOrRejectSideEffects() {},
+      sendPurchaseReminderIfRequested() { return null; },
+      maybeRunImmediatePromoter() {}
+    }
+  });
+
+  const event = makeEvent();
+  const result = staffTitleRequestAction(event);
+
+  assert.strictEqual(result.code, 200);
+  assert.strictEqual(calls.setManualClaim, 1);
+  assert.strictEqual(calls.recordEvent, 1);
+  assert.strictEqual(result.payload.claimedByStaffUserId, "staff1");
+}
+
+function testAutoClaimDoesNotDuplicate() {
+  const calls = { setManualClaim: 0, recordEvent: 0 };
+  const staff = makeStaff({ id: "staff1", username: "tester", displayName: "Tester" });
+  const record = makeRecord({ id: "req1", status: "new", claimedByStaffUserId: "staff1" });
+
+  const recordsMock = {
+    STATUS: { PENDING_HOLD: "pending_hold" },
+    updateTitleRequest() { return record; },
+    titleRequestToJson(rec) { return { id: "req1", claimedByStaffUserId: rec.get("claimedByStaffUserId") }; },
+    recordEvent(app, rec, eventType, message, meta) {
+      calls.recordEvent += 1;
+    }
+  };
+
+  const context = {
+    response: null,
+    id: "req1",
+    action: "purchase",
+    nextStatus: "new",
+    data: {},
+    record,
+    staff,
+    formatChanged: false,
+    originalFormat: "book"
+  };
+
+  const { staffTitleRequestAction } = loadWithMocks({
+    records: recordsMock,
+    additionalCopies: { createFromTitleRequest() { throw new Error("not expected"); }, toJson() { return {}; } },
+    formatClaimRules: {
+      applyFormatClaimRule() {},
+      setManualClaim(rec, stf) { calls.setManualClaim += 1; },
+      claimDisplayName() { return "Tester"; }
+    },
+    contextModule: { titleRequestActionContext() { return context; } },
+    bibActions: {
+      finalizeTitleRequestCloseReason() {},
+      prepareTitleRequestBibAction() { return null; }
+    },
+    sideEffects: {
+      handleAlreadyOwnOrRejectSideEffects() {},
+      sendPurchaseReminderIfRequested() { return null; },
+      maybeRunImmediatePromoter() {}
+    }
+  });
+
+  const event = makeEvent();
+  const result = staffTitleRequestAction(event);
+
+  assert.strictEqual(result.code, 200);
+  assert.strictEqual(calls.setManualClaim, 0);
+  assert.strictEqual(calls.recordEvent, 0); // Should not call recordEvent for claim if already claimed by actor
+  assert.strictEqual(result.payload.claimedByStaffUserId, "staff1");
+}
+
+function testAutoClaimSkipsAssignmentAction() {
+  const calls = { setManualClaim: 0, recordEvent: 0 };
+  const staff = makeStaff({ id: "staff1", username: "tester", displayName: "Tester" });
+  const record = makeRecord({ id: "req1", status: "new", claimedByStaffUserId: "" });
+
+  const recordsMock = {
+    STATUS: { PENDING_HOLD: "pending_hold" },
+    updateTitleRequest() { return record; },
+    titleRequestToJson(rec) { return { id: "req1", claimedByStaffUserId: rec.get("claimedByStaffUserId") }; },
+    recordEvent(app, rec, eventType, message, meta) {
+      calls.recordEvent += 1;
+    }
+  };
+
+  const context = {
+    response: null,
+    id: "req1",
+    action: "assign", // The action that skips
+    nextStatus: "new",
+    data: {},
+    record,
+    staff,
+    formatChanged: false,
+    originalFormat: "book"
+  };
+
+  const { staffTitleRequestAction } = loadWithMocks({
+    records: recordsMock,
+    additionalCopies: { createFromTitleRequest() { throw new Error("not expected"); }, toJson() { return {}; } },
+    formatClaimRules: {
+      applyFormatClaimRule() {},
+      setManualClaim(rec, stf) { calls.setManualClaim += 1; },
+      claimDisplayName() { return "Tester"; }
+    },
+    contextModule: { titleRequestActionContext() { return context; } },
+    bibActions: {
+      finalizeTitleRequestCloseReason() {},
+      prepareTitleRequestBibAction() { return null; }
+    },
+    sideEffects: {
+      handleAlreadyOwnOrRejectSideEffects() {},
+      sendPurchaseReminderIfRequested() { return null; },
+      maybeRunImmediatePromoter() {}
+    }
+  });
+
+  const event = makeEvent();
+  const result = staffTitleRequestAction(event);
+
+  assert.strictEqual(result.code, 200);
+  assert.strictEqual(calls.setManualClaim, 0);
+  assert.strictEqual(calls.recordEvent, 0); // Skipped assignment action
+  assert.strictEqual(result.payload.claimedByStaffUserId, ""); // remains empty
+}
+
 const originalCaches = {
   modulePath: require.cache[modulePath],
   recordsPath: require.cache[recordsPath],
@@ -198,6 +433,10 @@ const originalCaches = {
 try {
   testPendingHoldRequiresBibId();
   testBibActionShortCircuits();
+  testAutoClaimUnclaimedSuggestion();
+  testAutoClaimTransfer();
+  testAutoClaimDoesNotDuplicate();
+  testAutoClaimSkipsAssignmentAction();
   console.log("staff_title_request_action_behavior.test.js passed.");
 } finally {
   if (originalCaches.modulePath) require.cache[modulePath] = originalCaches.modulePath;
