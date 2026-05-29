@@ -2,7 +2,7 @@
 [] do you get a notificaiton when you've claimed or been assigned something.
 [] staff emaail shouldn't send pending purcahse emaill
 [x] auto close pending holds enabled but HINTS.... hint in pending hold says disabled.
-[] buy another copy read same profile option for emailing the purchase reminder. for sending that.
+[x] buy another copy read same profile option for emailing the purchase reminder. for sending that.
 [x] additional copy automation hint
 [x] always goes settings, why.
 [] should issue auto claim when purchase?

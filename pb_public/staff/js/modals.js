@@ -708,7 +708,7 @@ export function confirmAdditionalCopyAction(result, options = {}) {
     checkbox.className = 'custom-control-input';
     checkbox.checked = Object.prototype.hasOwnProperty.call(options, 'emailPurchaseReminderDefault')
       ? !!options.emailPurchaseReminderDefault
-      : !!(pb.authStore.model && pb.authStore.model.purchase_reminder_default);
+      : !!(pb.authStore.model && pb.authStore.model.additional_copy_reminder_default);
 
     const label = document.createElement('label');
     label.className = 'custom-control-label font-weight-bold';

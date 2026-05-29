@@ -737,7 +737,9 @@ export function openProfileDialog() {
   }
   setFieldChecked('profile-weekly-action-summary', !!(pb.authStore.model && pb.authStore.model.weekly_action_summary_enabled));
   setFieldChecked('profile-purchase-reminder-default', !!(pb.authStore.model && pb.authStore.model.purchase_reminder_default));
+  setFieldChecked('profile-additional-copy-reminder-default', !!(pb.authStore.model && pb.authStore.model.additional_copy_reminder_default));
   setFieldChecked('profile-default-mine-unclaimed-filter', !!(pb.authStore.model && pb.authStore.model.default_mine_unclaimed_filter));
+
   setFieldValue('profile-weekly-action-summary-email', (pb.authStore.model && pb.authStore.model.weekly_action_summary_email) || '');
   dialog.showModal();
 }
@@ -771,6 +773,7 @@ if (profileForm) {
     try {
       const summaryEnabled = getFieldChecked('profile-weekly-action-summary');
       const reminderDefault = getFieldChecked('profile-purchase-reminder-default');
+      const additionalCopyReminderDefault = getFieldChecked('profile-additional-copy-reminder-default');
       const mineUnclaimedDefault = getFieldChecked('profile-default-mine-unclaimed-filter');
       const email = getFieldValue('profile-weekly-action-summary-email').trim();
       if (summaryEnabled && !email) {
@@ -781,10 +784,12 @@ if (profileForm) {
         body: JSON.stringify({
           weekly_action_summary_enabled: summaryEnabled,
           purchase_reminder_default: reminderDefault,
+          additional_copy_reminder_default: additionalCopyReminderDefault,
           default_mine_unclaimed_filter: mineUnclaimedDefault,
           weekly_action_summary_email: email
         })
       });
+
       pb.authStore.save(pb.authStore.token, Object.assign({}, pb.authStore.model || {}, updated));
       applyProfileClaimFilterDefault({ force: true });
       if (!['settings', 'analytics'].includes(currentStatus)) {
