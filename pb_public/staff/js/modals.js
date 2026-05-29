@@ -478,7 +478,7 @@ export function renderEditMetadata(row) {
 
   const lastChecked = row.lastPromoterCheck ? formatDateTime(row.lastPromoterCheck) : null;
   if (lastChecked) {
-    block.innerHTML = `Auto-promoter last checked: ${escapeAttr(lastChecked)}`;
+    block.textContent = `Auto-promoter last checked: ${escapeAttr(lastChecked)}`;
     block.classList.remove('hidden');
   } else {
     block.innerHTML = '';

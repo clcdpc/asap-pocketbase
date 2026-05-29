@@ -26,12 +26,23 @@ export function renderDuplicateStatusLabelSettings(labels = {}, source = '', inh
       scopeEl.className = 'small mb-3 text-info';
     }
   }
-  container.innerHTML = duplicateStatusLabelFields.map(([key, label]) => `
-    <div class="form-group col-md-6">
-      <label for="duplicate-status-${escapeAttr(key)}" class="small font-weight-bold">${escapeAttr(label)}</label>
-      <input type="text" id="duplicate-status-${escapeAttr(key)}" class="form-control form-control-sm duplicate-status-label-input" data-key="${escapeAttr(key)}" value="${escapeAttr(normalized[key] || '')}">
-    </div>
-  `).join('');
+  container.replaceChildren(...duplicateStatusLabelFields.map(([key, label]) => {
+    const div = document.createElement('div');
+    div.className = 'form-group col-md-6';
+    const lbl = document.createElement('label');
+    lbl.setAttribute('for', `duplicate-status-${escapeAttr(key)}`);
+    lbl.className = 'small font-weight-bold';
+    lbl.textContent = label;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.id = `duplicate-status-${escapeAttr(key)}`;
+    input.className = 'form-control form-control-sm duplicate-status-label-input';
+    input.dataset.key = key;
+    input.value = normalized[key] || '';
+    div.appendChild(lbl);
+    div.appendChild(input);
+    return div;
+  }));
 }
 
 export function collectDuplicateStatusLabels() {

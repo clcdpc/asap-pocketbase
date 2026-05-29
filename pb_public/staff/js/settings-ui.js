@@ -324,7 +324,10 @@ export function renderPatronFormatRulesEditor(rules) {
       strong.textContent = fieldInfo.label;
       const storage = document.createElement('div');
       storage.className = 'small text-muted';
-      storage.innerHTML = `Saves to <code>${escapeAttr(fieldInfo.storage)}</code>`;
+      const storageLabel = document.createTextNode('Saves to ');
+      const code = document.createElement('code');
+      code.textContent = fieldInfo.storage;
+      storage.append(storageLabel, code);
       col1.append(strong, storage);
 
       const col2 = document.createElement('td');

@@ -336,11 +336,25 @@ export function applyLibrarySettingsToForm(settings) {
     }
     if (isOverride) {
       if (statusAlert) statusAlert.className = 'alert alert-info mb-3 d-flex justify-content-between align-items-center';
-      if (overrideMsg) overrideMsg.innerHTML = '<i class="fa fa-check-circle mr-1"></i> Editing: <strong>' + escapeAttr(document.getElementById('library-context-display').textContent || 'selected library') + '</strong>. This library has custom settings.';
+      if (overrideMsg) {
+        overrideMsg.replaceChildren(
+          Object.assign(document.createElement('i'), { className: 'fa fa-check-circle mr-1' }),
+          document.createTextNode(' Editing: '),
+          Object.assign(document.createElement('strong'), { textContent: document.getElementById('library-context-display').textContent || 'selected library' }),
+          document.createTextNode('. This library has custom settings.')
+        );
+      }
       if (resetBtn) resetBtn.classList.remove('hidden');
     } else {
       if (statusAlert) statusAlert.className = 'alert alert-warning mb-3 d-flex justify-content-between align-items-center';
-      if (overrideMsg) overrideMsg.innerHTML = '<i class="fa fa-info-circle mr-1"></i> Editing: <strong>' + escapeAttr(document.getElementById('library-context-display').textContent || 'selected library') + '</strong>. This library is using system defaults. Saving will create a library-specific override.';
+      if (overrideMsg) {
+        overrideMsg.replaceChildren(
+          Object.assign(document.createElement('i'), { className: 'fa fa-info-circle mr-1' }),
+          document.createTextNode(' Editing: '),
+          Object.assign(document.createElement('strong'), { textContent: document.getElementById('library-context-display').textContent || 'selected library' }),
+          document.createTextNode('. This library is using system defaults. Saving will create a library-specific override.')
+        );
+      }
       if (resetBtn) resetBtn.classList.add('hidden');
     }
     updateLibraryOverrideStatusVisibility(currentSettingsSection);
