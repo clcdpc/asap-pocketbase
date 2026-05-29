@@ -58,6 +58,10 @@ routerAdd("GET", "/api/asap/staff/users", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffUsersList(e);
 });
 
+routerAdd("GET", "/api/asap/staff/assignable-users", (e) => {
+  return require(`${__hooks}/../lib/staff_routes.js`).staffAssignableUsersList(e);
+});
+
 routerAdd("POST", "/api/asap/staff/users", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffUserCreate(e);
 });

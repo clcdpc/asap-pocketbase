@@ -322,6 +322,7 @@ export function applyLibrarySettingsToForm(settings) {
     }
     setFieldValue('system-staff-url', settings.staffUrl || '');
     setFieldValue('leap-bib-url-pattern', leapBibUrlPattern);
+    setFieldValue('format-icon-url-pattern', settings.formatIconUrlPattern || '');
     if (document.getElementById('system-enabled-libraries-group')) {
       document.getElementById('system-enabled-libraries-group').classList.remove('hidden');
       renderLibraryParticipationCheckboxes();
@@ -774,6 +775,7 @@ function _serializeSettingsState(validate = false) {
     payload.staffUrl = staffUrl;
     payload.leapBibUrlPattern = nextLeapBibUrlPattern;
     payload.enabledLibraryOrgIds = collectEnabledLibraryIds();
+    payload.formatIconUrlPattern = getFieldValue('format-icon-url-pattern').trim();
   }
 
   return payload;

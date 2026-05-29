@@ -1309,21 +1309,23 @@ export async function openAssignDialog(row) {
   const confirmBtn = document.getElementById('assign-confirm');
   const cancelBtn = document.getElementById('assign-cancel');
 
-  if (!dialog || !staffSelect || !confirmBtn) return;
+  if (!dialog || !staffSelect || !contextText || !confirmBtn || !cancelBtn) return;
 
+  // Reset dialog state
+  confirmBtn.textContent = 'Assign';
+  confirmBtn.disabled = true;
   contextText.textContent = `Assigning: ${row.title || 'Untitled suggestion'}`;
   staffSelect.innerHTML = '<option value="">Loading staff members...</option>';
-  confirmBtn.disabled = true;
+  staffSelect.value = '';
 
   try {
-    // Fetch staff users for the library that owns this request
-    const orgId = row.libraryOrgId || '';
-    const res = await authorizedJson(`/api/asap/staff/users?orgId=${encodeURIComponent(orgId)}`);
-    const users = (res.users || []).filter(u => u.active && u.id !== pb.authStore.model?.id);
+    const type = row.type === 'additional_copy' ? 'additional_copy' : 'title_request';
+    const res = await authorizedJson(`/api/asap/staff/assignable-users?type=${encodeURIComponent(type)}&id=${encodeURIComponent(row.id)}`);
+    const users = res.users || [];
 
     staffSelect.innerHTML = '<option value="">Select staff member...</option>';
     if (users.length === 0) {
-      staffSelect.innerHTML = '<option value="">No other active staff members found</option>';
+      staffSelect.innerHTML = '<option value="">No active staff members found</option>';
     } else {
       users.forEach(u => {
         const opt = document.createElement('option');
@@ -1361,7 +1363,8 @@ export async function openAssignDialog(row) {
         method: 'POST',
         body: JSON.stringify({ assigneeId })
       });
-      showToast('Suggestion assigned.', 'success');
+      const typeLabel = row.type === 'additional_copy' ? 'Additional-copy task' : 'Claim';
+      showToast(`${typeLabel} assigned.`, 'success');
       cleanup();
       await loadTab(currentStatus);
     } catch (err) {

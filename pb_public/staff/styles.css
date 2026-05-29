@@ -2249,3 +2249,23 @@ code {
   border-color: var(--asap-color-warning) !important;
   color: var(--asap-color-warning-text) !important;
 }
+
+/* Format Icons */
+.asap-format-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.asap-format-icon {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+
+.asap-format-label {
+  line-height: 1;
+}

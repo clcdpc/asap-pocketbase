@@ -103,6 +103,9 @@ export function updateStageQuery(status) {
     if (statusStages.includes(status)) {
       url.searchParams.set('stage', status === 'suggestion' ? 'submitted' : status);
     }
+    if (status !== 'settings' && url.hash.startsWith('#settings-')) {
+      url.hash = '';
+    }
     window.history.replaceState(null, '', url.pathname + url.search + url.hash);
   } catch (err) {}
 }
@@ -478,11 +481,15 @@ export function checkAuth() {
     applyProfileClaimFilterDefault();
 
     const requestedSettingsSection = getSettingsSectionFromHash();
-    if (requestedSettingsSection) {
+    const requestedStatus = requestedStatusFromUrl();
+    if (requestedSettingsSection && (!requestedStatus || requestedStatus === 'settings')) {
       activateStatusTab('settings');
       updateStageQuery('settings');
     } else {
       updateSettingsSaveBarVisibility();
+      if (requestedSettingsSection) {
+        updateStageQuery(currentStatus);
+      }
     }
 
     if (isAdmin && currentStatus !== 'settings') {

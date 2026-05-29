@@ -783,13 +783,34 @@ function renderPolarisSearchResults(row, mode, data, options = {}) {
     
     const titleDiv = document.createElement('div');
     titleDiv.className = 'polaris-search-result-title';
-    titleDiv.textContent = title;
+    
+    if (result.formatIconUrl) {
+      const icon = document.createElement('img');
+      icon.className = 'asap-format-icon mr-2';
+      icon.src = result.formatIconUrl;
+      icon.alt = '';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.loading = 'lazy';
+      icon.onerror = () => icon.remove();
+      titleDiv.appendChild(icon);
+    }
+    
+    titleDiv.appendChild(document.createTextNode(title));
     div.appendChild(titleDiv);
     
     if (meta) {
       const metaDiv = document.createElement('div');
       metaDiv.className = 'polaris-search-result-meta';
-      metaDiv.textContent = meta;
+      
+      const metaParts = [
+        result.author ? 'Author: ' + result.author : '',
+        result.publication ? 'Publication: ' + result.publication : '',
+        result.format ? 'Format: ' + result.format : '',
+        result.identifier ? 'Identifier: ' + result.identifier : '',
+        result.bibid || result.bibId ? 'BIB: ' + (result.bibid || result.bibId) : ''
+      ];
+
+      metaDiv.textContent = metaParts.filter(p => !!p).join(' | ');
       div.appendChild(metaDiv);
     }
 

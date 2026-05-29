@@ -6,7 +6,7 @@
 [x] additional copy automation hint
 [x] always goes settings, why.
 [x] should issue auto claim when purchase?
-[] can we include the tom for the format.
+[x] can we include the tom for the format.
 [x] make the placeholders sticky. **and bold.**
 [] email issue for patron, waiting and pickup at the same time -- wes has example, maybe because it jumped?
 [x] indicator arouond rejection templates
