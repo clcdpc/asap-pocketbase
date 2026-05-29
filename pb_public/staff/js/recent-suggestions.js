@@ -141,7 +141,7 @@ export function renderRecentSuggestionsSwitcher() {
 
   recent.forEach(r => {
     const item = document.createElement('a');
-    item.className = 'dropdown-item recent-suggestion-item border-bottom py-2';
+    item.className = 'dropdown-item recent-suggestion-item py-2';
     item.href = '#';
     
     // Status label formatting

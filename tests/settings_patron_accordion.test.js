@@ -19,7 +19,7 @@ assert.ok(
   "accordion-patron-suggestion-messages",
   "accordion-patron-publication-options",
   "accordion-patron-format-display",
-  "accordion-patron-format-rules"
+  "accordion-format-rules"
 ].forEach(id => {
   assert.ok(html.includes(`id="${id}"`), `${id} should exist`);
 });
