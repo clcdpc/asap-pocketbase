@@ -373,6 +373,7 @@ export function applyLibrarySettingsToForm(settings) {
   populateEmailTemplateForms(emails);
   populatePatronUiForms(settings.ui_text || {});
   populateWorkflowForms(settings.workflow || {});
+  workflowSettings.isOverride = isOverride;
   workflowSettings.outstandingTimeoutEnabled = !!((settings.workflow || {}).outstandingTimeoutEnabled);
   workflowSettings.outstandingTimeoutDays = parseInt(((settings.workflow || {}).outstandingTimeoutDays) || '30', 10) || 30;
   workflowSettings.additionalCopyTimeoutEnabled = !!((settings.workflow || {}).additionalCopyTimeoutEnabled);

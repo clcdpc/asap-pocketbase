@@ -183,8 +183,8 @@ export function toggleAccordion(item) {
   const isExpanded = header.getAttribute('aria-expanded') === 'true';
 
   if (!allowMultiple && accordion) {
-    Array.from(accordion.children).forEach(i => {
-      if (!i.classList || !i.classList.contains('asap-accordion-item') || i === item) return;
+    Array.from(accordion.querySelectorAll(':scope > .asap-accordion-item')).forEach(i => {
+      if (i === item) return;
       const siblingHeader = accordionHeaderForItem(i);
       i.classList.remove('active');
       if (siblingHeader) siblingHeader.setAttribute('aria-expanded', 'false');
@@ -249,19 +249,23 @@ export async function removeRejectionTemplate(index) {
 
 // Event Listeners
 const emailTemplatesAccordion = document.getElementById('email-templates-accordion');
-if (emailTemplatesAccordion) {
-  emailTemplatesAccordion.addEventListener('focusin', (e) => {
+const rejectionTemplatesAccordion = document.getElementById('rejection-templates-accordion');
+
+function bindTemplateAccordionListeners(accordion) {
+  if (!accordion) return;
+  accordion.addEventListener('focusin', (e) => {
     trackActiveTemplateField(e.target);
   });
-
-  emailTemplatesAccordion.addEventListener('keyup', (e) => {
+  accordion.addEventListener('keyup', (e) => {
     trackActiveTemplateField(e.target);
   });
-
-  emailTemplatesAccordion.addEventListener('click', (e) => {
+  accordion.addEventListener('click', (e) => {
     trackActiveTemplateField(e.target);
   });
 }
+
+bindTemplateAccordionListeners(emailTemplatesAccordion);
+bindTemplateAccordionListeners(rejectionTemplatesAccordion);
 
 const settingsTemplatesPanel = document.getElementById('settings-templates');
 if (settingsTemplatesPanel) {

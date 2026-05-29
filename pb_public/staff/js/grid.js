@@ -109,6 +109,8 @@ function renderTabDescription(status) {
   tabDesc.replaceChildren();
   tabDesc.textContent = descriptions[status] || '';
 
+  const libraryName = workflowSettings.isOverride ? (pb.authStore.model?.libraryOrgName || 'Library') : 'System Defaults';
+
   const addSuffix = (strongText, plainText) => {
     tabDesc.appendChild(document.createTextNode(' '));
     const strong = document.createElement('strong');
@@ -129,10 +131,11 @@ function renderTabDescription(status) {
 
   // Add auto-rejection info for Suggestions
   if (status === 'suggestion') {
+    workflowSettings.outstandingTimeoutDays = parseInt(workflowSettings.outstandingTimeoutDays || '30', 10) || 30;
     if (workflowSettings.outstandingTimeoutEnabled) {
-      addSuffix('Auto-reject enabled:', ` Stalled suggestions will be auto-rejected after ${workflowSettings.outstandingTimeoutDays} days. (`);
+      addSuffix(`${libraryName} auto-reject enabled (${workflowSettings.outstandingTimeoutDays} days):`, ' Stalled suggestions will be auto-rejected. (');
     } else {
-      addSuffix('Auto-reject disabled:', ' Stalled suggestions will not be auto-rejected. (');
+      addSuffix(`${libraryName} auto-reject disabled:`, ' (');
     }
   }
 
@@ -140,18 +143,19 @@ function renderTabDescription(status) {
   if (status === 'outstanding_purchase') {
     tabDesc.textContent = 'Pending purchase contains approved suggestions that are waiting to appear in Polaris. Staff can add a BIB ID to move a suggestion to the Pending hold phase.';
     if (workflowSettings.autoPromote) {
-      addSuffix('Auto-promoter enabled:', ' ASAP will check Polaris automatically. (');
+      addSuffix(`${libraryName} auto-promoter enabled:`, ' ASAP will check Polaris automatically. (');
     } else {
-      addSuffix('Auto-promoter disabled:', ' ASAP will not check Polaris automatically. (');
+      addSuffix(`${libraryName} auto-promoter disabled:`, ' (');
     }
   }
 
   // Add auto-close info for Hold placed
   if (status === 'hold_placed') {
+    workflowSettings.holdPickupTimeoutDays = parseInt(workflowSettings.holdPickupTimeoutDays || '14', 10) || 14;
     if (workflowSettings.holdPickupTimeoutEnabled) {
-      addSuffix('Auto-close unpicked-up holds enabled:', ` Holds will auto-close after checkout, or after ${workflowSettings.holdPickupTimeoutDays} days if the item is never picked up. (`);
+      addSuffix(`${libraryName} auto-close enabled (${workflowSettings.holdPickupTimeoutDays} days):`, ' Unpicked-up holds will auto-close. (');
     } else {
-      addSuffix('Auto-close unpicked-up holds disabled:', ' Holds will only move to Closed when the patron checks out the item. (');
+      addSuffix(`${libraryName} auto-close disabled:`, ' (');
     }
   }
 
@@ -159,9 +163,19 @@ function renderTabDescription(status) {
   if (status === 'pending_hold') {
     workflowSettings.pendingHoldTimeoutDays = parseInt(workflowSettings.pendingHoldTimeoutDays || '14', 10) || 14;
     if (workflowSettings.pendingHoldTimeoutEnabled) {
-      addSuffix('Auto-close pending holds enabled:', ` Items will auto-close after ${workflowSettings.pendingHoldTimeoutDays} days if they are not processed. (`);
+      addSuffix(`${libraryName} auto-close enabled (${workflowSettings.pendingHoldTimeoutDays} days):`, ' Unprocessed items will auto-close. (');
     } else {
-      addSuffix('Auto-close pending holds disabled:', ' Items will remain here indefinitely until processed. (');
+      addSuffix(`${libraryName} auto-close disabled:`, ' (');
+    }
+  }
+
+  // Add auto-close info for Additional copies
+  if (status === 'additional_copies') {
+    workflowSettings.additionalCopyTimeoutDays = parseInt(workflowSettings.additionalCopyTimeoutDays || '14', 10) || 14;
+    if (workflowSettings.additionalCopyTimeoutEnabled) {
+      addSuffix(`${libraryName} auto-close enabled (${workflowSettings.additionalCopyTimeoutDays} days):`, ' Stale tasks will auto-close. (');
+    } else {
+      addSuffix(`${libraryName} auto-close disabled:`, ' (');
     }
   }
 }

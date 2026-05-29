@@ -600,28 +600,6 @@
                     </div>
                   </div>
 
-                  <!-- Automation: Autohold Opt-out -->
-                  <div class="form-row align-items-center mb-4">
-                    <div class="col-auto">
-                      <div class="custom-control custom-checkbox">
-                        <input type="checkbox" class="custom-control-input" id="allow-patron-autohold-opt-out">
-                        <label class="custom-control-label font-weight-bold" for="allow-patron-autohold-opt-out">Allow patron autohold opt-out</label>
-                      </div>
-                      <small class="form-text text-muted">Let patrons choose to decline automatic hold placement when submitting a suggestion. If unchecked, all suggestions default to automatic holds.</small>
-                    </div>
-                  </div>
-
-                  <!-- Patron Experience: Cross-library registered-card login -->
-                  <div class="form-row align-items-center mb-4">
-                    <div class="col-auto">
-                      <div class="custom-control custom-checkbox">
-                        <input type="checkbox" class="custom-control-input" id="allow-any-registered-card-login">
-                        <label class="custom-control-label font-weight-bold" for="allow-any-registered-card-login">Allow login from any registered Polaris card</label>
-                      </div>
-                      <small class="form-text text-muted">When enabled, patrons may log in to this library’s patron experience using any valid Polaris card in the system. Suggestions submitted through this patron experience will use this library’s settings and workflow, even if the patron’s card belongs to another library.</small>
-                    </div>
-                  </div>
-
                   <!-- Stage 3: Pending hold -->
                   <div class="form-row align-items-center mb-2">
                     <div class="col-auto">
@@ -863,8 +841,8 @@
 
                   <div class="asap-accordion-item active" id="accordion-patron-login-text">
                     <button type="button" class="asap-accordion-header" aria-expanded="true" aria-controls="panel-patron-login-text">
-                      <span class="asap-accordion-title">Login / Portal Text</span>
-                      <span class="asap-accordion-summary">Title, barcode/PIN labels, and login copy</span>
+                      <span class="asap-accordion-title">Login &amp; Portal Behavior</span>
+                      <span class="asap-accordion-summary">Title, login labels, cross-library access, and autohold options</span>
                       <i class="fa fa-chevron-down asap-accordion-chevron"></i>
                     </button>
                     <div id="panel-patron-login-text" class="asap-accordion-panel" role="region" aria-labelledby="accordion-patron-login-text">
@@ -893,10 +871,33 @@
                         <textarea id="ui-login-prompt" class="form-control" rows="2" aria-describedby="ui-login-prompt-hint"></textarea>
                         <small id="ui-login-prompt-hint" class="form-text text-muted">Available placeholders: <code>{{barcode_label}}</code>, <code>{{pin_label}}</code>.</small>
                       </div>
-                      <div class="form-group mb-0">
+                      <div class="form-group mb-4">
                         <label for="ui-login-note">Login requirement note (supports HTML)</label>
                         <textarea id="ui-login-note" class="form-control" rows="3" aria-describedby="ui-login-note-hint"></textarea>
                         <small id="ui-login-note-hint" class="form-text text-muted">Available placeholders: <code>{{barcode_label}}</code>, <code>{{pin_label}}</code>.</small>
+                      </div>
+
+                      <div class="settings-subsection mb-0">
+                        <h3 class="h6">Behavior options</h3>
+                        <div class="form-row align-items-center mb-3">
+                          <div class="col-12">
+                            <div class="custom-control custom-checkbox">
+                              <input type="checkbox" class="custom-control-input" id="allow-any-registered-card-login">
+                              <label class="custom-control-label font-weight-bold" for="allow-any-registered-card-login">Allow login from any registered Polaris card</label>
+                            </div>
+                            <small class="form-text text-muted">When enabled, patrons may log in to this library’s patron experience using any valid Polaris card in the system. Suggestions submitted through this patron experience will use this library’s settings and workflow, even if the patron’s card belongs to another library.</small>
+                          </div>
+                        </div>
+
+                        <div class="form-row align-items-center mb-0">
+                          <div class="col-12">
+                            <div class="custom-control custom-checkbox">
+                              <input type="checkbox" class="custom-control-input" id="allow-patron-autohold-opt-out">
+                              <label class="custom-control-label font-weight-bold" for="allow-patron-autohold-opt-out">Allow patron autohold opt-out</label>
+                            </div>
+                            <small class="form-text text-muted">Let patrons choose to decline automatic hold placement when submitting a suggestion. If unchecked, all suggestions default to automatic holds.</small>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1110,29 +1111,36 @@
                     </div>
                   </div>
 
-                  <!-- Rejected Default -->
-                  <div class="asap-accordion-item" id="accordion-rejected">
-                    <button type="button" class="asap-accordion-header" aria-expanded="false" aria-controls="panel-rejected">
-                      <span class="asap-accordion-title">Rejected (default)</span>
-                      <span class="asap-accordion-summary" id="summary-rejected"></span>
-                      <i class="fa fa-chevron-down asap-accordion-chevron"></i>
-                    </button>
-                    <div id="panel-rejected" class="asap-accordion-panel" role="region">
-                      <div class="form-group">
-                        <label for="email-rejected-subject" class="template-editor-label">Subject</label>
-                        <input type="text" id="email-rejected-subject" class="form-control">
-                      </div>
-                      <div class="form-group mb-0">
-                        <label for="email-rejected-body" class="template-editor-label">Body</label>
-                        <textarea id="email-rejected-body" class="form-control template-editor-textarea" rows="8"></textarea>
+                  <!-- Rejection Templates Group -->
+                  <div class="mt-4">
+                    <div class="small text-uppercase text-muted font-weight-bold mb-2 ml-1">Rejection Templates</div>
+                    <div class="border border-dark rounded shadow-sm bg-white overflow-hidden">
+                      <div class="asap-accordion" id="rejection-templates-accordion">
+                        <!-- Rejected Default -->
+                        <div class="asap-accordion-item" id="accordion-rejected">
+                          <button type="button" class="asap-accordion-header" aria-expanded="false" aria-controls="panel-rejected">
+                            <span class="asap-accordion-title">Rejected (default)</span>
+                            <span class="asap-accordion-summary" id="summary-rejected"></span>
+                            <i class="fa fa-chevron-down asap-accordion-chevron"></i>
+                          </button>
+                          <div id="panel-rejected" class="asap-accordion-panel" role="region">
+                            <div class="form-group">
+                              <label for="email-rejected-subject" class="template-editor-label">Subject</label>
+                              <input type="text" id="email-rejected-subject" class="form-control">
+                            </div>
+                            <div class="form-group mb-0">
+                              <label for="email-rejected-body" class="template-editor-label">Body</label>
+                              <textarea id="email-rejected-body" class="form-control template-editor-textarea" rows="8"></textarea>
+                            </div>
+                          </div>
+                        </div>
+
+                        <!-- Dynamic Rejection Templates -->
+                        <div id="rejection-templates-accordion-container"></div>
                       </div>
                     </div>
                   </div>
 
-                  <!-- Dynamic Rejection Templates -->
-                  <div id="rejection-templates-accordion-container"></div>
-
-                </div>
 
                 <div class="mt-4 text-center">
                   <button type="button" id="btn-add-rejection-template" class="btn btn-outline-primary">
