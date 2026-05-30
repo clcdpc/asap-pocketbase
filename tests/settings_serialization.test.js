@@ -29,6 +29,14 @@ function loadSettingsLogic() {
     const formatMap = {};
     const availableFormats = [];
     
+    const window = {
+      location: { origin: 'https://example.org' },
+      localStorage: {
+        getItem: () => null,
+        setItem: () => {}
+      }
+    };
+    
     function isSuperAdminStaff() { return true; }
     function getFieldValue(id, fallback) { return fallback || ''; }
     function getFieldChecked(id) { return false; }
