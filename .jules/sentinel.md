@@ -18,3 +18,7 @@
 **Vulnerability:** Similar to role updates, a standard `admin` user could delete a `super_admin`'s account because the `staffUserDelete` endpoint only verified that at least one super admin remains, rather than strictly requiring `super_admin` privileges to delete a `super_admin` account.
 **Learning:** Role-based access control (RBAC) must check both the user *performing* the action and the *target* user of the action. Modifying or deleting elevated roles requires elevated authorization.
 **Prevention:** Ensure all endpoints that perform state-changing operations on user accounts strictly validate the actor's privileges against the target object's sensitivity tier.
+## 2024-05-31 - Prevent Hardcoded Backdoor Passwords
+**Vulnerability:** The application's initial migration script and default system configuration hardcoded the `overridePassword` (an emergency bypass for staff authentication) to the string `"admin"`. This created a critical backdoor that would allow an attacker to bypass Polaris staff authentication on any fresh installation by simply entering `"admin"`.
+**Learning:** Hardcoding default passwords for high-privileged bypass mechanisms, even for testing or recovery purposes, inevitably exposes real deployments to critical risk because administrators frequently fail to change or disable them.
+**Prevention:** Always default security override mechanisms to an inactive, blank, or randomly generated, highly-entropic state to ensure the system is secure-by-default out of the box.
