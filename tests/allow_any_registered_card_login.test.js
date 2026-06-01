@@ -12,6 +12,7 @@ let contextCounter = 0;
 let patronAuthResult = {};
 let createdOptions = null;
 let weeklyLimitOrgId = null;
+let pickupBuildOptionsSeen = [];
 
 const mockRecord = values => ({
   id: values.id || 'patron-record',
@@ -42,7 +43,9 @@ Module.prototype.require = function(moduleName) {
     updatePatronPreferredPickupBranch: () => ({ success: true })
   };
   if (moduleName.includes('lib/polaris/pickup_preference_context.js')) return {
-    buildPickupPreferenceContext: () => ({
+    buildPickupPreferenceContext: (app, staffAuth, patron, options) => {
+      pickupBuildOptionsSeen.push(options || {});
+      return {
       pickupBranches: [{ id: '10', label: 'Main' }],
       pickupBranchesRefreshedAt: '',
       currentPreferredPickupBranchId: '10',
@@ -51,7 +54,8 @@ Module.prototype.require = function(moduleName) {
       selectedPickupBranchName: 'Main',
       currentPreferenceAllowed: true,
       pickupBranchWarning: ''
-    }),
+      };
+    },
     validateSelectedPickupBranch: () => ({ id: '10', label: 'Main' }),
     currentPreferredId: () => '10'
   };
@@ -96,7 +100,7 @@ function event(body, auth) {
 }
 
 function reset() {
-  enabled = '10'; workflowByOrg = {}; sessionContexts = {}; contextCounter = 0; createdOptions = null; weeklyLimitOrgId = null;
+  enabled = '10'; workflowByOrg = {}; sessionContexts = {}; contextCounter = 0; createdOptions = null; weeklyLimitOrgId = null; pickupBuildOptionsSeen = [];
   patronAuthResult = { PatronID: 'p1', Barcode: 'b1', PatronOrgID: 'po1', LibraryOrgID: '20', LibraryOrgName: 'Home B', NameFirst: 'Pat', NameLast: 'Ron' };
 }
 
@@ -144,6 +148,7 @@ sessionContexts.ctxA = { id: 'ctxA', patronUserId: 'patron-record', effectiveLib
 t = event({ title: 'Test', format: 'book', patronContextId: 'ctxA', preferredPickupBranchId: '10' }, auth);
 patronRoutes.createSuggestion(t.e);
 assert.strictEqual(t.response().payload.successTitle, 'Success 10', 'success text uses effective library');
+assert.strictEqual(!!(pickupBuildOptionsSeen[0] && pickupBuildOptionsSeen[0].forceRefresh), false, 'create should not force refresh on first validation pass');
 assert.strictEqual(createdOptions.effectiveLibraryOrgId, '10', 'patron route passes effective library to suggestion creation');
 sessionContexts.ctxB = { id: 'ctxB', patronUserId: 'patron-record', effectiveLibraryOrgId: '30', effectiveLibraryOrgName: 'Library 30' };
 t = event({ title: 'Test', format: 'book', patronContextId: 'ctxB', preferredPickupBranchId: '10' }, auth);

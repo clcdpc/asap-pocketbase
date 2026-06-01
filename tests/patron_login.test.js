@@ -20,6 +20,18 @@ let polarisMock = {
   adminStaffAuth: () => ({}),
   authenticatePatron: (barcode, password, staffAuth) => ({})
 };
+let pickupContextMock = {
+  buildPickupPreferenceContext: () => ({
+    pickupBranches: [],
+    pickupBranchesRefreshedAt: "",
+    currentPreferredPickupBranchId: "",
+    currentPreferredPickupBranchName: "",
+    selectedPickupBranchId: "",
+    selectedPickupBranchName: "",
+    currentPreferenceAllowed: false,
+    pickupBranchWarning: ""
+  })
+};
 
 let orgsMock = {
   attachPatronScope: (app, patron, staffAuth, logger) => patron
@@ -46,21 +58,20 @@ Module.prototype.require = function(moduleName) {
     return polarisMock;
   }
   if (moduleName.includes("lib/records.js")) {
-    return {};
-  }
-  if (moduleName.includes("lib/polaris/pickup_preference_context.js")) {
     return {
-      buildPickupPreferenceContext: () => ({
-        pickupBranches: [],
-        pickupBranchesRefreshedAt: "",
-        currentPreferredPickupBranchId: "",
-        currentPreferredPickupBranchName: "",
-        selectedPickupBranchId: "",
-        selectedPickupBranchName: "",
-        currentPreferenceAllowed: false,
-        pickupBranchWarning: ""
+      upsertPatronUser: () => ({
+        id: "patron1",
+        newAuthToken: () => "token"
       })
     };
+  }
+  if (moduleName.includes("lib/patron_session_contexts.js")) {
+    return {
+      createPatronSessionContext: () => ({ id: "ctx1" })
+    };
+  }
+  if (moduleName.includes("lib/polaris/pickup_preference_context.js")) {
+    return pickupContextMock;
   }
   if (moduleName.includes("lib/route_utils.js")) {
     return routeUtilsMock;
@@ -176,6 +187,36 @@ runTest('participation warning falls back to "Your library" if name is missing',
   const { status, payload } = getResponse();
   assert.strictEqual(status, 403);
   assert.strictEqual(payload.message, "Your library does not currently participate in this suggestion service.");
+});
+
+runTest('pickup context load failure does not block valid login', () => {
+  polarisMock.authenticatePatron = () => ({
+    LibraryOrgID: 2,
+    LibraryOrgName: "Anytown Library",
+    PatronOrgID: "2"
+  });
+  configMock.getSettings = () => ({ enabledLibraryOrgIds: "2,3" });
+  pickupContextMock.buildPickupPreferenceContext = () => {
+    throw new Error("cache unavailable");
+  };
+
+  const { e, getResponse } = createEventMock({ barcode: '123', pin: '456' });
+  patronRoutes.patronLogin(e);
+  const { status, payload } = getResponse();
+  assert.strictEqual(status, 200);
+  assert.ok(Array.isArray(payload.pickupBranches));
+  assert.strictEqual(payload.currentPreferenceAllowed, false);
+
+  pickupContextMock.buildPickupPreferenceContext = () => ({
+    pickupBranches: [],
+    pickupBranchesRefreshedAt: "",
+    currentPreferredPickupBranchId: "",
+    currentPreferredPickupBranchName: "",
+    selectedPickupBranchId: "",
+    selectedPickupBranchName: "",
+    currentPreferenceAllowed: false,
+    pickupBranchWarning: ""
+  });
 });
 
 console.log(`\nTests finished: ${passed} passed, ${failed} failed.`);

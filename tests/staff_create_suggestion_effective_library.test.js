@@ -11,6 +11,7 @@ let polarisLookupCalls = 0;
 let createdOptions = null;
 let isbnUiText = null;
 let enabledLibraries = '10,20';
+let pickupContextCalls = [];
 
 function record(values) {
   return {
@@ -49,10 +50,13 @@ Module.prototype.require = function(moduleName) {
   if (moduleName.includes('lib/additional_copies.js')) return {};
   if (moduleName.includes('lib/format_claim_rules.js')) return { applyFormatClaimRule: () => {} };
   if (moduleName.includes('lib/polaris/pickup_preference_context.js')) return {
-    buildPickupPreferenceContext: () => ({
+    buildPickupPreferenceContext: (app, staffAuth, patronData, options) => {
+      pickupContextCalls.push(options || {});
+      return {
       pickupBranches: [{ id: '20', label: 'Library 20' }],
       selectedPickupBranchId: '20'
-    }),
+      };
+    },
     validateSelectedPickupBranch: () => ({ id: '20', label: 'Library 20' }),
     currentPreferredId: () => '20'
   };
@@ -73,6 +77,7 @@ function event() {
 staffUser = { get: key => ({ role: 'super_admin', libraryOrgId: '', username: 'root' })[key] || '' };
 body = { barcode: 'b1', title: 'Title', format: 'book', identifier: '978' };
 polarisLookupCalls = 0;
+pickupContextCalls = [];
 let t = event();
 adminRoutes.staffCreateSuggestion(t.e);
 assert.strictEqual(t.response().status, 400);
@@ -81,9 +86,11 @@ assert.strictEqual(polarisLookupCalls, 0);
 
 staffUser = { get: key => ({ role: 'super_admin', libraryOrgId: '', username: 'root' })[key] || '' };
 body = { barcode: 'b1', title: 'Title', format: 'book', identifier: '978', libraryOrgId: '10', preferredPickupBranchId: '20' };
+pickupContextCalls = [];
 t = event();
 adminRoutes.staffCreateSuggestion(t.e);
 assert.strictEqual(t.response().status, 201);
+assert.strictEqual(!!(pickupContextCalls[0] && pickupContextCalls[0].forceRefresh), false);
 assert.strictEqual(createdOptions.effectiveLibraryOrgId, '10');
 assert.strictEqual(isbnUiText.orgId, '10');
 assert.strictEqual(body.isbnCheckStatus, 'pending');
