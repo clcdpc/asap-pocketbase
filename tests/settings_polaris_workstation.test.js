@@ -1,0 +1,57 @@
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+
+const settingsSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/settings.js'), 'utf8');
+const polarisSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/settings-polaris.js'), 'utf8');
+const htmlSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/index.html'), 'utf8');
+
+function extractFunction(source, name) {
+  const marker = 'function ' + name + '(';
+  const start = source.indexOf(marker);
+  if (start < 0) throw new Error('Could not find ' + name);
+  let depth = 0;
+  let opened = false;
+  for (let i = start; i < source.length; i++) {
+    if (source[i] === '{') { depth++; opened = true; }
+    if (source[i] === '}') { depth--; if (opened && depth === 0) return source.slice(start, i + 1); }
+  }
+  throw new Error('Could not extract ' + name);
+}
+
+assert.ok(htmlSource.includes('id="polaris-workstation-id-group"'), 'workstation field group should be present');
+assert.ok(settingsSource.includes("setFieldValue('polaris-workstation-id', polaris.workstationId || '1');"), 'settings load paths should populate workstation ID with fallback');
+assert.ok(polarisSource.includes("workstationId: getFieldValue('polaris-workstation-id') || \"1\""), 'collector should read workstation field');
+assert.ok(!polarisSource.includes('workstationId: "1",'), 'collector should not hardcode workstation ID');
+
+let values = {};
+const collectSource = polarisSource
+  .replace(/import[^;]+;\n/g, '')
+  .replace('export function collectSettingsPolaris()', 'function collectSettingsPolaris()')
+  .split("document.getElementById('btn-test-polaris')")[0];
+const collectHarness = new Function('values', `
+  function getFieldValue(id) { return values[id] || ''; }
+  ${collectSource}
+  return collectSettingsPolaris;
+`)(values);
+
+values['polaris-workstation-id'] = '88';
+assert.strictEqual(collectHarness().workstationId, '88');
+values['polaris-workstation-id'] = '';
+assert.strictEqual(collectHarness().workstationId, '1');
+
+const populateHarness = new Function(`
+  const calls = [];
+  function setFieldValue(id, value) { calls.push([id, value]); }
+  ${extractFunction(settingsSource, 'populatePolarisSettingsForm')}
+  populatePolarisSettingsForm({ workstationId: '77' });
+  populatePolarisSettingsForm({});
+  return calls;
+`)();
+assert.ok(populateHarness.some(([id, value]) => id === 'polaris-workstation-id' && value === '77'));
+assert.ok(populateHarness.some(([id, value]) => id === 'polaris-workstation-id' && value === '1'));
+
+assert.ok(settingsSource.includes('const isSystemSave = currentLibraryContextOrgId === \'system\';'));
+assert.ok(settingsSource.includes('if (isSystemSave)') && settingsSource.includes('libraryPayload.polaris = payload.polaris;'), 'library save path should not include global Polaris payload keys');
+
+console.log('Settings Polaris workstation tests passed.');
