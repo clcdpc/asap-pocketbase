@@ -12,6 +12,8 @@ let createdOptions = null;
 let isbnUiText = null;
 let enabledLibraries = '10,20';
 let pickupContextCalls = [];
+let polarisUpdateCalls = 0;
+let configuredPolarisUserId = '999';
 
 function record(values) {
   return {
@@ -31,13 +33,13 @@ Module.prototype.require = function(moduleName) {
   if (moduleName.includes('lib/polaris.js')) return {
     adminStaffAuth: () => ({}),
     lookupPatron: () => { polarisLookupCalls++; return { PatronID: 'p1', Barcode: body.barcode, PatronOrgID: 'po1', LibraryOrgID: '20', LibraryOrgName: 'Library 20', NameFirst: 'Pat', NameLast: 'Ron', EmailAddress: 'p@example.test' }; },
-    updatePatronPreferredPickupBranch: () => ({ success: true }),
+    updatePatronPreferredPickupBranch: () => { polarisUpdateCalls++; return { success: true }; },
   };
   if (moduleName.includes('lib/config.js')) return {
     getSettings: () => ({ enabledLibraryOrgIds: enabledLibraries }),
     workflowSettings: () => ({ allowAnyRegisteredCardLogin: true }),
     uiText: (app, orgId) => ({ orgId, formatRules: { book: { identifierMode: orgId === '10' ? 'required' : 'hidden' } } }),
-    polaris: () => ({ userId: '999' }),
+    polaris: () => ({ userId: configuredPolarisUserId }),
   };
   if (moduleName.includes('lib/records.js')) return {
     upsertPatronUser: () => record({ id: 'patron1', barcode: body.barcode, nameFirst: 'Pat', nameLast: 'Ron', patronOrgId: 'po1', libraryOrgId: '20', libraryOrgName: 'Library 20' }),
@@ -110,5 +112,16 @@ t = event();
 adminRoutes.staffCreateSuggestion(t.e);
 assert.strictEqual(t.response().status, 403);
 assert.strictEqual(t.response().payload.message, 'Selected library does not currently participate in ASAP.');
+
+staffUser = { get: key => ({ role: 'super_admin', libraryOrgId: '', username: 'root' })[key] || '' };
+body = { barcode: 'b1', title: 'Title', format: 'book', identifier: '978', libraryOrgId: '10', preferredPickupBranchId: '20' };
+enabledLibraries = '10,20';
+configuredPolarisUserId = '';
+polarisUpdateCalls = 0;
+t = event();
+adminRoutes.staffCreateSuggestion(t.e);
+assert.strictEqual(t.response().status, 403);
+assert.strictEqual(t.response().payload.message, 'Configured Polaris system user ID is missing. Add a Polaris user ID to your staff account or configure the system user ID.');
+assert.strictEqual(polarisUpdateCalls, 0);
 
 console.log('staff create suggestion effective library tests passed.');
