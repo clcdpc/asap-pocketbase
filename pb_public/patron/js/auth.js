@@ -4,7 +4,7 @@ import { setAuthToken, setPatronContextId } from './state.js';
 import { applyLoadedUiText, uiConfig } from './config.js';
 import { applyUiConfig, updateFormatUI } from './form-ui.js';
 import { showLoginStep, showSuggestionStep } from './steps.js';
-import { byId, setText, setVisible } from './dom.js';
+import { byId, setText, setVisible, setDisabled } from './dom.js';
 import { applyPatronTextPlaceholders } from './html.js';
 
 
@@ -67,11 +67,53 @@ export function populatePatronIdentity(result, submittedBarcode) {
     setVisible('no-email-msg', true);
   }
 
-  if (result.preferredPickupBranchName) {
-    setText('display-pickup-branch', result.preferredPickupBranchName);
-    setVisible('pickup-branch-container', true);
-  } else {
-    setVisible('pickup-branch-container', false);
+  populatePickupSelector(result);
+}
+
+function populatePickupSelector(result) {
+  const container = byId('pickup-branch-container');
+  const select = byId('preferred-pickup-branch');
+  const warning = byId('pickup-branch-warning');
+  const submitBtn = byId('submit-btn');
+  if (!container || !select) return;
+
+  const branches = Array.isArray(result.pickupBranches) ? result.pickupBranches : [];
+  const selectedId = String(result.selectedPickupBranchId || '');
+  const warningText = String(result.pickupBranchWarning || '');
+
+  select.replaceChildren();
+  const blank = document.createElement('option');
+  blank.value = '';
+  blank.textContent = 'Select a pickup location...';
+  select.appendChild(blank);
+
+  branches.forEach((branch) => {
+    const option = document.createElement('option');
+    option.value = String(branch.id || '');
+    option.textContent = String(branch.label || branch.name || branch.id || '');
+    select.appendChild(option);
+  });
+
+  select.value = selectedId;
+  setVisible(container, true);
+  setDisabled(select, branches.length === 0);
+
+  const hasValidSelection = !!select.value;
+  if (warning) {
+    const message = warningText || (branches.length === 0 ? 'No pickup locations are currently available for this account. Please contact staff.' : '');
+    warning.textContent = message;
+    warning.classList.toggle('hidden', !message);
+  }
+  if (submitBtn) {
+    submitBtn.disabled = !hasValidSelection || branches.length === 0;
+  }
+
+  if (!select.dataset.pickupBound) {
+    select.addEventListener('change', () => {
+      const ok = !!select.value;
+      if (submitBtn) submitBtn.disabled = !ok;
+    });
+    select.dataset.pickupBound = 'true';
   }
 }
 

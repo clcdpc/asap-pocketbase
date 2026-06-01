@@ -41,6 +41,18 @@ const fnCode = [
 function load(env) {
   env.config = env.config || { workflowSettings: () => ({ allowAnyRegisteredCardLogin: false }) };
   env.orgs = env.orgs || {};
+  env.pickupPreference = env.pickupPreference || {
+    buildPickupPreferenceContext: () => ({
+      pickupBranches: [],
+      pickupBranchesRefreshedAt: '',
+      currentPreferredPickupBranchId: '',
+      currentPreferredPickupBranchName: '',
+      selectedPickupBranchId: '',
+      selectedPickupBranchName: '',
+      currentPreferenceAllowed: false,
+      pickupBranchWarning: ''
+    })
+  };
   env.effectiveLibrary = env.effectiveLibrary || {
     resolveEffectiveStaffLibraryContext: (e, staff, data) => {
       const staffLibraryOrgId = String(staff.get('libraryOrgId') || '').trim();

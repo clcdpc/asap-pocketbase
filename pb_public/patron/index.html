@@ -91,9 +91,11 @@
         </div>
       </div>
       <div id="pickup-branch-container" class="form-group row hidden">
-        <label for="display-pickup-branch" class="col-5 col-form-label">Pickup Location</label>
-        <div class="col-7" style="display: flex; align-items: center;">
-          <span id="display-pickup-branch"></span>
+        <label for="preferred-pickup-branch" class="col-5 col-form-label">Preferred pickup location <span aria-hidden="true">*</span></label>
+        <div class="col-7">
+          <select id="preferred-pickup-branch" name="preferredPickupBranchId" class="custom-select" required aria-required="true"></select>
+          <small class="form-text text-muted">Changing this updates your preferred pickup location in Polaris.</small>
+          <div id="pickup-branch-warning" class="text-warning small mt-1 hidden"></div>
         </div>
       </div>
       <div class="form-group row reqAuth">

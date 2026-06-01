@@ -55,6 +55,11 @@ export function renderConflict(result, fallbackMessage) {
 
 export async function handleSuggestionSubmit(event) {
   event.preventDefault();
+  const pickupSelect = byId('preferred-pickup-branch');
+  if (pickupSelect && !pickupSelect.value) {
+    showSubmitError('Choose a preferred pickup location before submitting.');
+    return;
+  }
   setSubmitBusy(true);
   setVisible('submit-error', false);
 
