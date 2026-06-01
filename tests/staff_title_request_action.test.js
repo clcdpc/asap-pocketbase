@@ -13,6 +13,8 @@ function assertFn(name) {
 assertFn("staffTitleRequestAction");
 assertFn("staffTitleRequestAdditionalCopyPreview");
 assertFn("staffTitleRequestAdditionalCopyCreate");
+assertFn("staffTitleRequestPickupOptions");
+assertFn("staffTitleRequestPickupPreferenceUpdate");
 assert.strictEqual(typeof actions.applyCatalogFoundWorkflow, "function", "applyCatalogFoundWorkflow should be exported from actions");
 assert.strictEqual(typeof actions.autoClaimTitleRequestAction, "function", "autoClaimTitleRequestAction should be exported from actions");
 
@@ -20,5 +22,9 @@ const mainHook = fs.readFileSync(path.resolve(__dirname, "../pb_hooks/main.pb.js
 assert.ok(mainHook.includes('"/api/asap/staff/title-requests/{id}/additional-copy"'));
 assert.ok(mainHook.includes(".staffTitleRequestAdditionalCopyPreview(e)"));
 assert.ok(mainHook.includes(".staffTitleRequestAdditionalCopyCreate(e)"));
+assert.ok(mainHook.includes('"/api/asap/staff/title-requests/{id}/pickup-options"'));
+assert.ok(mainHook.includes(".staffTitleRequestPickupOptions(e)"));
+assert.ok(mainHook.includes('"/api/asap/staff/title-requests/{id}/pickup-preference"'));
+assert.ok(mainHook.includes(".staffTitleRequestPickupPreferenceUpdate(e)"));
 
 console.log("staff_title_request_action.test.js passed.");

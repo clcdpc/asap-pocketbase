@@ -4,6 +4,7 @@ import { initStaffApp } from './settings.js';
 import { install as installUiHelpers } from './ui-helpers.js';
 import './actions.js';
 import './modals.js';
+import './edit-pickup.js';
 import './patron.js';
 
 try {

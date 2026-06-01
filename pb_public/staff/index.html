@@ -1253,6 +1253,17 @@
         </div>
       </div>
 
+      <div class="form-group mb-2" id="edit-pickup-branch-group">
+        <label class="small font-weight-bold mb-1" for="edit-pickup-branch">Preferred pickup location</label>
+        <div class="d-flex align-items-center" style="gap: .5rem;">
+          <select id="edit-pickup-branch" class="form-control form-control-sm" disabled></select>
+          <button type="button" id="edit-pickup-save-btn" class="btn btn-sm btn-outline-primary" disabled>Save pickup</button>
+        </div>
+        <small id="edit-pickup-help" class="form-text text-muted">This shows the patron's current Polaris preferred pickup location. Changes update Polaris immediately.</small>
+        <div id="edit-pickup-warning" class="text-warning small mt-1 hidden"></div>
+        <div id="edit-pickup-status" class="text-muted small mt-1" aria-live="polite"></div>
+      </div>
+
       <div class="form-group mb-2">
         <label class="small font-weight-bold mb-1">Title (original)</label>
         <div class="field-with-action">
