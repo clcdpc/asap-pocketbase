@@ -92,6 +92,35 @@ try {
   assert.strictEqual(cache.invalidatePickupBranchCache(app, '20'), true);
   assert.deepStrictEqual(app.rows.map((record) => record.get('patronOrgId')), ['21']);
 
+  // Verify branch name mapping lookup
+  const appForMapping = makeApp([]);
+  appForMapping.findFirstRecordByData = function(collection, field, value) {
+    if (collection === "polaris_organizations" && field === "organizationId" && value === "10") {
+      return {
+        get(f) {
+          if (f === "displayName") return "Synced Main Branch";
+          return "";
+        }
+      };
+    }
+    return null;
+  };
+  const mockBranches = cache.normalizeBranchList([{ id: '10', label: 'Branch 10' }], appForMapping);
+  assert.strictEqual(mockBranches[0].label, 'Synced Main Branch');
+
+  // Verify branch name sorting is alphabetical
+  const unsorted = [
+    { id: '3', label: 'Z Branch' },
+    { id: '1', label: 'A Branch' },
+    { id: '2', label: 'M Branch' },
+  ];
+  const sorted = cache.normalizeBranchList(unsorted);
+  assert.deepStrictEqual(sorted, [
+    { id: '1', label: 'A Branch' },
+    { id: '2', label: 'M Branch' },
+    { id: '3', label: 'Z Branch' },
+  ]);
+
   console.log('Pickup branch cache tests passed.');
 } finally {
   if (originalPolarisCache) require.cache[polarisPath] = originalPolarisCache;

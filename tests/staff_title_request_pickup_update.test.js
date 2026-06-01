@@ -152,7 +152,98 @@ function testHoldPlacedRejected() {
   assert.strictEqual(t.calls.save, 0);
 }
 
+function testEmptyCacheTriggersForcedRefresh() {
+  const t = baseSetup("pending_hold");
+
+  var buildCount = 0;
+  var refreshedWithForce = false;
+
+  t.pickup.buildPickupPreferenceContext = function (appArg, staffAuthArg, patronArg, options) {
+    buildCount++;
+    options = options || {};
+    if (options.forceRefresh) {
+      refreshedWithForce = true;
+      return {
+        pickupBranches: [{ id: "9", label: "Fairfield County Main Library" }],
+        selectedPickupBranchId: "9",
+        pickupBranchWarning: ""
+      };
+    }
+    return {
+      pickupBranches: [],
+      selectedPickupBranchId: "",
+      pickupBranchWarning: "Your current Polaris preferred pickup location is not available for this form."
+    };
+  };
+
+  const mod = loadWithMocks(t);
+  const res = mod.staffTitleRequestPickupOptions(makeEvent(t.app, "req1", {}));
+
+  assert.strictEqual(res.code, 200);
+  assert.strictEqual(buildCount, 2);
+  assert.strictEqual(refreshedWithForce, true);
+  assert.strictEqual(res.payload.pickupBranches.length, 1);
+  assert.strictEqual(res.payload.pickupBranches[0].id, "9");
+  assert.strictEqual(res.payload.pickupOptionsUnavailable, false);
+}
+
+function testEmptyCacheStillEmptyAfterForcedRefresh() {
+  const t = baseSetup("pending_hold");
+
+  var buildCount = 0;
+
+  t.pickup.buildPickupPreferenceContext = function (appArg, staffAuthArg, patronArg, options) {
+    buildCount++;
+    return {
+      pickupBranches: [],
+      selectedPickupBranchId: "",
+      pickupBranchWarning: "Pickup locations could not be loaded for this patron. Refresh pickup locations or try again later."
+    };
+  };
+
+  const mod = loadWithMocks(t);
+  const res = mod.staffTitleRequestPickupOptions(makeEvent(t.app, "req1", {}));
+
+  assert.strictEqual(res.code, 200);
+  assert.strictEqual(buildCount, 2);
+  assert.strictEqual(res.payload.pickupBranches.length, 0);
+  assert.strictEqual(res.payload.pickupOptionsUnavailable, true);
+  assert.ok(res.payload.pickupBranchWarning.includes("could not be loaded"));
+}
+
+function testUpdateEndpointRetriesStaleEmptyCache() {
+  const t = baseSetup("pending_hold");
+
+  var buildCount = 0;
+
+  t.pickup.buildPickupPreferenceContext = function (appArg, staffAuthArg, patronArg, options) {
+    buildCount++;
+    options = options || {};
+    if (options.forceRefresh) {
+      return {
+        pickupBranches: [{ id: "20", label: "New Branch" }]
+      };
+    }
+    return {
+      pickupBranches: []
+    };
+  };
+
+  const mod = loadWithMocks(t);
+  const res = mod.staffTitleRequestPickupPreferenceUpdate(makeEvent(t.app, "req1", {
+    preferredPickupBranchId: "20",
+    currentPreferredPickupBranchIdAtLoad: "10"
+  }));
+
+  assert.strictEqual(res.code, 200);
+  assert.strictEqual(t.calls.polarisUpdate, 1);
+  assert.strictEqual(t.record.get("preferredPickupBranchId"), "20");
+}
+
 testChangedPickupWritesMetadata();
 testPolarisFailureBlocksSnapshotSave();
 testHoldPlacedRejected();
+testEmptyCacheTriggersForcedRefresh();
+testEmptyCacheStillEmptyAfterForcedRefresh();
+testUpdateEndpointRetriesStaleEmptyCache();
 console.log("staff_title_request_pickup_update.test.js passed.");
