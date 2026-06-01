@@ -56,6 +56,19 @@ Module.prototype.require = function(moduleName) {
       pickupBranchWarning: ''
       };
     },
+    buildAvailablePickupPreferenceContext: (app, staffAuth, patron, options) => {
+      pickupBuildOptionsSeen.push(options || {});
+      return {
+      pickupBranches: [{ id: '10', label: 'Main' }],
+      pickupBranchesRefreshedAt: '',
+      currentPreferredPickupBranchId: '10',
+      currentPreferredPickupBranchName: 'Main',
+      selectedPickupBranchId: '10',
+      selectedPickupBranchName: 'Main',
+      currentPreferenceAllowed: true,
+      pickupBranchWarning: ''
+      };
+    },
     validateSelectedPickupBranch: () => ({ id: '10', label: 'Main' }),
     currentPreferredId: () => '10'
   };

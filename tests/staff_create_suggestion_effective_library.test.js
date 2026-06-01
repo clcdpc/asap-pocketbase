@@ -59,6 +59,13 @@ Module.prototype.require = function(moduleName) {
       selectedPickupBranchId: '20'
       };
     },
+    buildAvailablePickupPreferenceContext: (app, staffAuth, patronData, options) => {
+      pickupContextCalls.push(options || {});
+      return {
+      pickupBranches: [{ id: '20', label: 'Library 20' }],
+      selectedPickupBranchId: '20'
+      };
+    },
     validateSelectedPickupBranch: () => ({ id: '20', label: 'Library 20' }),
     currentPreferredId: () => '20'
   };

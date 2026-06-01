@@ -45,4 +45,87 @@ Module.prototype.require = originalRequire;
   assert.strictEqual(ctx.pickupBranchesRefreshedAt, "2026-06-01T12:00:00.000Z");
 }
 
+{
+  let calls = [];
+  cacheMock.getCachedPickupBranchesWithMeta = (app, staff, patronOrgId) => {
+    calls.push(String(patronOrgId || ""));
+    if (String(patronOrgId) === "9") {
+      return { branches: [], refreshedAt: "2026-06-01T12:00:00.000Z" };
+    }
+    if (String(patronOrgId) === "8") {
+      return {
+        branches: [{ id: "12", label: "Fairfield County Bremen Branch" }],
+        refreshedAt: "2026-06-01T13:00:00.000Z"
+      };
+    }
+    return { branches: [], refreshedAt: "" };
+  };
+
+  const ctx = pickup.buildPickupPreferenceContext({}, {}, {
+    PatronOrgID: "9",
+    LibraryOrgID: "8",
+    CurrentPreferredPickupBranchID: "12"
+  });
+
+  assert.deepStrictEqual(calls, ["9", "8"]);
+  assert.strictEqual(ctx.selectedPickupBranchId, "12");
+  assert.strictEqual(ctx.currentPreferenceAllowed, true);
+  assert.strictEqual(ctx.pickupBranchWarning, "");
+  assert.strictEqual(ctx.pickupBranchesRefreshedAt, "2026-06-01T13:00:00.000Z");
+}
+
+{
+  let calls = [];
+  cacheMock.getCachedPickupBranchesWithMeta = (app, staff, patronOrgId) => {
+    calls.push(String(patronOrgId || ""));
+    if (String(patronOrgId) === "9") {
+      throw new Error("upstream org lookup failed");
+    }
+    if (String(patronOrgId) === "8") {
+      return {
+        branches: [{ id: "12", label: "Fairfield County Bremen Branch" }],
+        refreshedAt: "2026-06-01T14:00:00.000Z"
+      };
+    }
+    return { branches: [], refreshedAt: "" };
+  };
+
+  const ctx = pickup.buildPickupPreferenceContext({}, {}, {
+    PatronOrgID: "9",
+    LibraryOrgID: "8",
+    CurrentPreferredPickupBranchID: "12"
+  });
+
+  assert.deepStrictEqual(calls, ["9", "8"]);
+  assert.strictEqual(ctx.selectedPickupBranchId, "12");
+  assert.strictEqual(ctx.currentPreferenceAllowed, true);
+  assert.strictEqual(ctx.pickupBranchWarning, "");
+  assert.strictEqual(ctx.pickupBranchesRefreshedAt, "2026-06-01T14:00:00.000Z");
+}
+
+{
+  let calls = [];
+  cacheMock.getCachedPickupBranchesWithMeta = (app, staff, patronOrgId) => {
+    calls.push(String(patronOrgId || ""));
+    if (String(patronOrgId) === "8") {
+      return {
+        branches: [{ id: "12", label: "Fairfield County Bremen Branch" }],
+        refreshedAt: "2026-06-01T15:00:00.000Z"
+      };
+    }
+    return { branches: [], refreshedAt: "" };
+  };
+
+  const ctx = pickup.buildPickupPreferenceContext({}, {}, {
+    PatronOrgID: "po1",
+    LibraryOrgID: "8",
+    CurrentPreferredPickupBranchID: "12"
+  });
+
+  assert.deepStrictEqual(calls, ["8"]);
+  assert.strictEqual(ctx.selectedPickupBranchId, "12");
+  assert.strictEqual(ctx.currentPreferenceAllowed, true);
+  assert.strictEqual(ctx.pickupBranchWarning, "");
+}
+
 console.log("pickup preference context tests passed.");

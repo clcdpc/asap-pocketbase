@@ -95,6 +95,14 @@ function baseSetup(status) {
   const orgs = { attachPatronScope(appArg, patron) { return patron; } };
   const pickup = {
     buildPickupPreferenceContext() { return { pickupBranches: [{ id: "10", label: "Old Branch" }, { id: "20", label: "New Branch" }] }; },
+    buildAvailablePickupPreferenceContext(appArg, staffAuthArg, patronArg, options) {
+      options = options || {};
+      let ctx = this.buildPickupPreferenceContext(appArg, staffAuthArg, patronArg, options);
+      if (!options.forceRefresh && !(ctx.pickupBranches || []).length) {
+        ctx = this.buildPickupPreferenceContext(appArg, staffAuthArg, patronArg, Object.assign({}, options, { forceRefresh: true }));
+      }
+      return ctx;
+    },
     validateSelectedPickupBranch(ctx, id) {
       const b = (ctx.pickupBranches || []).find((x) => x.id === id);
       if (!b) throw new Error("invalid");

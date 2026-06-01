@@ -81,7 +81,7 @@ try {
   httpSendArgs = null;
   polaris.updatePatronPreferredPickupBranch({ AccessToken: 'token', AccessSecret: 'secret' }, '2900', '55', { polarisUserId: 'actor7' });
   assert.strictEqual(httpSendArgs.method, 'PUT');
-  assert.ok(httpSendArgs.url.includes('/protected/v1/1033/100/1/token/patron/2900/registration'));
+  assert.ok(httpSendArgs.url.includes('/public/v1/1033/100/1/patron/2900'));
   assert.ok(httpSendArgs.body.includes('<LogonBranchID>1</LogonBranchID>'));
   assert.ok(httpSendArgs.body.includes('<LogonUserID>actor7</LogonUserID>'));
   assert.ok(httpSendArgs.body.includes('<LogonWorkstationID>99</LogonWorkstationID>'));
