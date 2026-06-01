@@ -150,6 +150,14 @@ routerAdd("POST", "/api/asap/staff/title-requests/{id}/additional-copy", (e) => 
   return require(`${__hooks}/../lib/staff_routes.js`).staffTitleRequestAdditionalCopyCreate(e);
 });
 
+routerAdd("POST", "/api/asap/staff/title-requests/{id}/pickup-options", (e) => {
+  return require(`${__hooks}/../lib/staff_routes.js`).staffTitleRequestPickupOptions(e);
+});
+
+routerAdd("POST", "/api/asap/staff/title-requests/{id}/pickup-preference", (e) => {
+  return require(`${__hooks}/../lib/staff_routes.js`).staffTitleRequestPickupPreferenceUpdate(e);
+});
+
 routerAdd("DELETE", "/api/asap/staff/requests/{id}", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffDeleteClosedRequest(e);
 });

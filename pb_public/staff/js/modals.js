@@ -5,6 +5,7 @@ import { showToast, showAlert, showConfirm } from './dialogs.js';
 import { loadTab, formatDateTime, renderWorkflowTags, escapeAttr } from './grid.js';
 import { setSelectValue, dateOnly, lookupEditBibById, applySelectedPolarisResultToEditForm } from './settings-ui.js';
 import { rememberRecentSuggestion, renderRecentSuggestionsSwitcher, updateRecentSuggestion } from './recent-suggestions.js';
+import { loadEditPickupForRequest } from './edit-pickup.js';
 
 export async function confirmDuplicateOpenRequestClose(err, id) {
   const confirmed = await showConfirm(
@@ -104,6 +105,7 @@ export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
   renderExternalSearchButton(row.title, row.identifier);
   renderPurchaseReminderOption(actionStr);
   renderEditMetadata(row);
+  loadEditPickupForRequest(row);
 
   document.getElementById('edit-notes').value = getExistingHistory(row);
   renderPendingAuditPreview(row, nextStatus, actionStr);
