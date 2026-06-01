@@ -114,6 +114,8 @@ function updateRequestInMemory(updated) {
 export async function loadEditPickupForRequest(row) {
   resetEditPickupUi();
   const els = pickupEls();
+  const requestedId = String((row && row.id) || '').trim();
+  editPickupRequestId = requestedId;
 
   if (!row || row.type === 'additional_copy') {
     if (els.group) els.group.classList.add('hidden');
@@ -121,13 +123,16 @@ export async function loadEditPickupForRequest(row) {
   }
   if (els.group) els.group.classList.remove('hidden');
 
-  editPickupRequestId = String(row.id || '').trim();
-  if (!editPickupRequestId) return;
+  if (!requestedId) return;
 
   try {
-    const context = await fetchEditPickupOptions(editPickupRequestId);
+    const context = await fetchEditPickupOptions(requestedId);
+    if (editPickupRequestId !== requestedId) return;
+    if (String((document.getElementById('edit-id') || {}).value || '').trim() !== requestedId) return;
     renderEditPickupOptions(context || {});
   } catch (err) {
+    if (editPickupRequestId !== requestedId) return;
+    if (String((document.getElementById('edit-id') || {}).value || '').trim() !== requestedId) return;
     if (els.warning) {
       els.warning.textContent = err.message || 'Could not load pickup locations.';
       els.warning.classList.remove('hidden');
@@ -146,7 +151,8 @@ export async function loadEditPickupForRequest(row) {
 
 async function handleEditPickupSave() {
   const els = pickupEls();
-  if (!editPickupRequestId || !els.select || !els.select.value) return;
+  const activeId = String(editPickupRequestId || '').trim();
+  if (!activeId || !els.select || !els.select.value) return;
 
   if (els.save) {
     els.save.disabled = true;
@@ -155,7 +161,7 @@ async function handleEditPickupSave() {
 
   try {
     const result = await saveEditPickupPreference(
-      editPickupRequestId,
+      activeId,
       els.select.value,
       editPickupContext && editPickupContext.currentPreferredPickupBranchId
     );
@@ -165,11 +171,15 @@ async function handleEditPickupSave() {
       updateRecentSuggestion(updated);
     }
     showToast(result && result.pickupChanged ? 'Pickup preference updated.' : 'Pickup preference saved.', 'success');
-    await loadEditPickupForRequest(updated || { id: editPickupRequestId });
+    if (String(editPickupRequestId || '').trim() === activeId) {
+      await loadEditPickupForRequest(updated || { id: activeId });
+    }
   } catch (err) {
     if (err.status === 409) {
       await showAlert(err.message || 'Pickup preference changed in Polaris. Reloading pickup options.');
-      await loadEditPickupForRequest({ id: editPickupRequestId });
+      if (String(editPickupRequestId || '').trim() === activeId) {
+        await loadEditPickupForRequest({ id: activeId });
+      }
       return;
     }
     await showAlert(err.message || 'Could not save pickup preference.');
