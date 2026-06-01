@@ -19,7 +19,7 @@ export function collectSettingsPolaris() {
     orgId: "1",
     pickupOrgId: "0",
     requestingOrgId: "3",
-    workstationId: "1",
+    workstationId: getFieldValue('polaris-workstation-id') || "1",
     userId: "1"
   };
 }

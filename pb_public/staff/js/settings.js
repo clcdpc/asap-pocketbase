@@ -218,6 +218,7 @@ function populatePolarisSettingsForm(polaris) {
   setFieldValue('polaris-admin-user', polaris.adminUser || '');
   setFieldValue('polaris-admin-pass', polaris.adminPassword || '');
   setFieldValue('polaris-override-pass', polaris.overridePassword || '');
+  setFieldValue('polaris-workstation-id', polaris.workstationId || '1');
 }
 
 function showSettingsForm() {
@@ -380,6 +381,7 @@ export function applyLibrarySettingsToForm(settings) {
     setFieldValue('polaris-admin-user', polaris.adminUser || '');
     setFieldValue('polaris-admin-pass', polaris.adminPassword || '');
     setFieldValue('polaris-override-pass', polaris.overridePassword || '');
+    setFieldValue('polaris-workstation-id', polaris.workstationId || '1');
 
   }
   const fileInput = document.getElementById('ui-logo-file');

@@ -35,7 +35,7 @@ function makeRecord(initial) {
 }
 
 function makeEnv(record, polarisOverrides = {}) {
-  const calls = { tags: [], notes: [], saves: 0, placeHold: 0, replyToHold: 0 };
+  const calls = { tags: [], notes: [], saves: 0, placeHold: 0, replyToHold: 0, placeHoldOptions: [] };
   const env = {
     processPagedQueue: (app, result, opts, each) => each(record),
     records: {
@@ -47,11 +47,11 @@ function makeEnv(record, polarisOverrides = {}) {
     },
     polaris: {
       searchBib: () => ({ status: 'found', bibId: 'b1' }),
-      lookupPatron: () => ({ PatronID: 'p1' }),
+      lookupPatron: () => ({ PatronID: 'p1', PatronOrgID: '10', RequestPickupBranchID: '20' }),
       patronHasHoldForBib: () => false,
       getBibHoldings: () => [{ BibID: 'b1', ItemsTotal: 1, Holdable: true }],
       summarizeHoldability: (rows) => ({ hasHoldableItems: rows.some((row) => row.Holdable === true) }),
-      placeHold: () => { calls.placeHold++; return { ok: true, statusValue: 0, payload: {} }; },
+      placeHold: (staff, bibId, patronId, options) => { calls.placeHold++; calls.placeHoldOptions.push(options); return { ok: true, statusValue: 0, payload: {} }; },
       replyToHold: () => { calls.replyToHold++; },
       reconcileRecord: () => {},
       ...polarisOverrides,
@@ -99,8 +99,9 @@ function load(env) {
 {
   const record = makeRecord({ bibid: 'b1', barcode: '2900', autohold: true });
   const env = makeEnv(record, {
-    placeHold: () => {
+    placeHold: (staff, bibId, patronId, options) => {
       env.calls.placeHold++;
+      env.calls.placeHoldOptions.push(options);
       return { ok: true, statusValue: 5, payload: { RequestGUID: 'rg1' } };
     },
   });
@@ -111,6 +112,44 @@ function load(env) {
   assert.deepStrictEqual(env.calls.tags, ['Hold placed']);
   assert.strictEqual(record.get('status'), 'hold_placed');
   assert.strictEqual(result.holdsPlaced, 1);
+}
+
+
+{
+  const record = makeRecord({ bibid: 'b1', barcode: '2900', autohold: true });
+  const env = makeEnv(record, {
+    lookupPatron: () => ({ PatronID: '123', PatronOrgID: '10', RequestPickupBranchID: '20' }),
+  });
+  const result = { skipped: 0, holdsPlaced: 0, errors: 0 };
+  load(env)(env.app, {}, result);
+  assert.strictEqual(env.calls.placeHold, 1);
+  assert.deepStrictEqual(env.calls.placeHoldOptions[0], { pickupOrgId: '20', noAutoReply: true });
+  assert.strictEqual(result.holdsPlaced, 1);
+}
+
+{
+  const record = makeRecord({ bibid: 'b1', barcode: '2900', autohold: true });
+  const env = makeEnv(record, {
+    lookupPatron: () => ({ PatronID: '123', PatronOrgID: '10', RequestPickupBranchID: '' }),
+  });
+  const result = { skipped: 0, holdsPlaced: 0, errors: 0 };
+  load(env)(env.app, {}, result);
+  assert.strictEqual(env.calls.placeHold, 1);
+  assert.deepStrictEqual(env.calls.placeHoldOptions[0], { pickupOrgId: '10', noAutoReply: true });
+  assert.strictEqual(result.holdsPlaced, 1);
+}
+
+{
+  const record = makeRecord({ bibid: 'b1', barcode: '2900', autohold: true });
+  const env = makeEnv(record, {
+    lookupPatron: () => ({ PatronID: '123', PatronOrgID: '', RequestPickupBranchID: '' }),
+  });
+  const result = { skipped: 0, holdsPlaced: 0, errors: 0 };
+  load(env)(env.app, {}, result);
+  assert.strictEqual(env.calls.placeHold, 0);
+  assert.deepStrictEqual(env.calls.tags, ['Hold failed: pickup']);
+  assert.ok(env.calls.notes[0].includes('RequestPickupBranchID or PatronOrgID'));
+  assert.strictEqual(result.skipped, 1);
 }
 
 console.log('Pending hold placement tests passed.');
