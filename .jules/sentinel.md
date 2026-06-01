@@ -18,3 +18,7 @@
 **Vulnerability:** Similar to role updates, a standard `admin` user could delete a `super_admin`'s account because the `staffUserDelete` endpoint only verified that at least one super admin remains, rather than strictly requiring `super_admin` privileges to delete a `super_admin` account.
 **Learning:** Role-based access control (RBAC) must check both the user *performing* the action and the *target* user of the action. Modifying or deleting elevated roles requires elevated authorization.
 **Prevention:** Ensure all endpoints that perform state-changing operations on user accounts strictly validate the actor's privileges against the target object's sensitivity tier.
+## 2024-05-18 - Prevent XSS in HTML rendering of dynamically sourced messages
+**Vulnerability:** The `recent-suggestions.js` module in `pb_public/staff/js` was using `.innerHTML` to insert dynamic suggestion title and author without escaping.
+**Learning:** Always use a proper escaping function (e.g. `escapeAttr` or `escapeHtml`) when dynamically setting elements in the DOM via `.innerHTML` to prevent Cross-Site Scripting (XSS).
+**Prevention:** Ensure dynamic values inserted via `.innerHTML` template literals are wrapped in an `escapeAttr()` call.

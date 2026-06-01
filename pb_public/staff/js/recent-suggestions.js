@@ -1,5 +1,6 @@
 import { pb } from './state.js';
 import { workflowStatusLabel } from './modals.js';
+import { escapeAttr } from './ui-helpers.js';
 
 function getStorageKey() {
   const userId = pb.authStore.model?.id;
@@ -148,9 +149,9 @@ export function renderRecentSuggestionsSwitcher() {
     let statusDisplay = workflowStatusLabel(r.status) || r.status;
     
     item.innerHTML = `
-      <div class="font-weight-bold text-truncate" title="${r.title}">${r.title}</div>
+      <div class="font-weight-bold text-truncate" title="${escapeAttr(r.title)}">${escapeAttr(r.title)}</div>
       <div class="small text-muted text-truncate">
-        ${r.author ? `${r.author} &middot; ` : ''}${statusDisplay}
+        ${r.author ? `${escapeAttr(r.author)} &middot; ` : ''}${escapeAttr(statusDisplay)}
       </div>
     `;
 

@@ -93,6 +93,7 @@ eval(transformed);
 
 // Override the internal dependencies that were imported
 const pb = mockPb;
+const escapeAttr = str => String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 const workflowStatusLabel = mockApi.workflowStatusLabel;
 
 function testRecentSuggestions() {
