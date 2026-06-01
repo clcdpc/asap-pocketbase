@@ -35,7 +35,26 @@ Module.prototype.require = function(moduleName) {
   if (moduleName.includes('lib/format_claim_rules.js')) return { applyFormatClaimRule: () => {} };
   if (moduleName.includes('lib/mail.js')) return { suggestionSubmitted: () => true };
   if (moduleName.includes('lib/orgs.js')) return { attachPatronScope: (app, patron) => patron, findOrganization: (app, id) => ({ get: key => key === 'displayName' ? `Library ${id}` : '' }) };
-  if (moduleName.includes('lib/polaris.js')) return { adminStaffAuth: () => ({}), authenticatePatron: () => patronAuthResult };
+  if (moduleName.includes('lib/polaris.js')) return {
+    adminStaffAuth: () => ({}),
+    authenticatePatron: () => patronAuthResult,
+    lookupPatron: () => ({ PatronID: 'p1', Barcode: 'b1', PatronOrgID: 'po1', LibraryOrgID: '20', LibraryOrgName: 'Home B', RequestPickupBranchID: '10', PreferredPickupBranchID: '10', PreferredPickupBranchName: 'Main' }),
+    updatePatronPreferredPickupBranch: () => ({ success: true })
+  };
+  if (moduleName.includes('lib/polaris/pickup_preference_context.js')) return {
+    buildPickupPreferenceContext: () => ({
+      pickupBranches: [{ id: '10', label: 'Main' }],
+      pickupBranchesRefreshedAt: '',
+      currentPreferredPickupBranchId: '10',
+      currentPreferredPickupBranchName: 'Main',
+      selectedPickupBranchId: '10',
+      selectedPickupBranchName: 'Main',
+      currentPreferenceAllowed: true,
+      pickupBranchWarning: ''
+    }),
+    validateSelectedPickupBranch: () => ({ id: '10', label: 'Main' }),
+    currentPreferredId: () => '10'
+  };
   if (moduleName.includes('lib/records.js')) return {
     upsertPatronUser: (app, patron) => mockRecord({
       id: 'patron-record',
@@ -122,15 +141,15 @@ assert.strictEqual(t.response().status, 403, 'experience library must participat
 reset();
 const auth = mockRecord({ id: 'patron-record', barcode: 'b1', nameFirst: 'Pat', nameLast: 'Ron', patronOrgId: 'po1', libraryOrgId: '20', libraryOrgName: 'Home B', effectiveLibraryOrgId: 'stale', effectiveLibraryOrgName: 'Stale Library' });
 sessionContexts.ctxA = { id: 'ctxA', patronUserId: 'patron-record', effectiveLibraryOrgId: '10', effectiveLibraryOrgName: 'Library 10' };
-t = event({ title: 'Test', format: 'book', patronContextId: 'ctxA' }, auth);
+t = event({ title: 'Test', format: 'book', patronContextId: 'ctxA', preferredPickupBranchId: '10' }, auth);
 patronRoutes.createSuggestion(t.e);
 assert.strictEqual(t.response().payload.successTitle, 'Success 10', 'success text uses effective library');
 assert.strictEqual(createdOptions.effectiveLibraryOrgId, '10', 'patron route passes effective library to suggestion creation');
 sessionContexts.ctxB = { id: 'ctxB', patronUserId: 'patron-record', effectiveLibraryOrgId: '30', effectiveLibraryOrgName: 'Library 30' };
-t = event({ title: 'Test', format: 'book', patronContextId: 'ctxB' }, auth);
+t = event({ title: 'Test', format: 'book', patronContextId: 'ctxB', preferredPickupBranchId: '10' }, auth);
 patronRoutes.createSuggestion(t.e);
 assert.strictEqual(createdOptions.effectiveLibraryOrgId, '30', 'second session context owns its own submission');
-t = event({ title: 'Legacy', format: 'book' }, auth);
+t = event({ title: 'Legacy', format: 'book', preferredPickupBranchId: '10' }, auth);
 patronRoutes.createSuggestion(t.e);
 assert.strictEqual(createdOptions.effectiveLibraryOrgId, '20', 'legacy fallback ignores stale patron effective library');
 

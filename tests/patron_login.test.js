@@ -48,6 +48,20 @@ Module.prototype.require = function(moduleName) {
   if (moduleName.includes("lib/records.js")) {
     return {};
   }
+  if (moduleName.includes("lib/polaris/pickup_preference_context.js")) {
+    return {
+      buildPickupPreferenceContext: () => ({
+        pickupBranches: [],
+        pickupBranchesRefreshedAt: "",
+        currentPreferredPickupBranchId: "",
+        currentPreferredPickupBranchName: "",
+        selectedPickupBranchId: "",
+        selectedPickupBranchName: "",
+        currentPreferenceAllowed: false,
+        pickupBranchWarning: ""
+      })
+    };
+  }
   if (moduleName.includes("lib/route_utils.js")) {
     return routeUtilsMock;
   }

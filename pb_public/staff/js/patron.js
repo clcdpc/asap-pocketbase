@@ -3,6 +3,7 @@ import { setFieldChecked, getFieldChecked, isSuperAdminStaff } from './api.js';
 import { loadTab, escapeAttr } from './grid.js';
 import { renderPatronContext } from './modals.js';
 import { populateLibrarySelector } from './settings.js';
+let selectedStaffPatronPickupContext = null;
 
 async function populateNewSuggestionLibrarySelector() {
   const select = document.getElementById('new-suggestion-library');
@@ -15,7 +16,11 @@ async function populateNewSuggestionLibrarySelector() {
   }
 
   group.classList.remove('hidden');
-  select.innerHTML = '<option value="">Select a library...</option>';
+  select.replaceChildren();
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Select a library...';
+  select.appendChild(placeholder);
 
   try {
     const orgs = await pb.collection('polaris_organizations').getFullList({
@@ -38,7 +43,7 @@ async function populateNewSuggestionLibrarySelector() {
     if (!select.dataset.suggestionLibraryBound) {
       select.addEventListener('change', () => {
         const btn = document.getElementById('btn-submit-new');
-        if (btn) btn.disabled = staffSuggestionRequiresLibrarySelection();
+        if (btn) btn.disabled = staffSuggestionRequiresLibrarySelection() || !document.getElementById('new-pickup-branch').value;
         if (!staffSuggestionRequiresLibrarySelection()) {
           clearNewSuggestionError();
         } else {
@@ -161,11 +166,16 @@ document.getElementById('new-suggestion-form').addEventListener('submit', async 
     identifier: document.getElementById('new-identifier').value,
     format: document.getElementById('new-format').value,
     publication: document.getElementById('new-publication').value,
+    preferredPickupBranchId: document.getElementById('new-pickup-branch').value,
     exactPublicationDate: document.getElementById('new-exact-publication-date').value,
     notes: document.getElementById('new-notes').value,
     autohold: getFieldChecked('new-autohold'),
     emailPatronConfirmation: getFieldChecked('staff-new-suggestion-email-patron')
   });
+  if (!payload.preferredPickupBranchId) {
+    showNewSuggestionError('Choose a preferred pickup location before submitting.');
+    return;
+  }
 
   clearNewSuggestionError();
   const btn = document.getElementById('btn-submit-new');
@@ -251,6 +261,7 @@ function applySelectedPatron(data) {
   setVerifiedNewSuggestionBarcode(barcode);
   document.getElementById('new-barcode').value = barcode;
   setNewSuggestionDetailsEnabled(true);
+  populateStaffPickupSelector(data);
 
   // Match the layout of the edit modal, but expanded by default
   renderPatronContext(data, {
@@ -315,12 +326,17 @@ function openPatronSearchDialog(query, results, meta) {
   });
 
   els.results.querySelectorAll('.patron-search-select').forEach(button => {
-    button.addEventListener('click', () => {
+    button.addEventListener('click', async () => {
       const index = parseInt(button.getAttribute('data-result-index') || '-1', 10);
       const result = results[index];
       if (!result || !result.barcode) return;
-      els.dialog.close();
-      applySelectedPatron(result);
+      try {
+        const selected = await fetchSelectedPatronByBarcode(result.barcode);
+        els.dialog.close();
+        applySelectedPatron(selected);
+      } catch (err) {
+        showLookupResult(err.message || 'No patron found. Try barcode, name, or first name then last name.', 'danger');
+      }
     });
   });
 
@@ -330,6 +346,7 @@ function openPatronSearchDialog(query, results, meta) {
 }
 
 export function resetStaffPatronLookup() {
+  selectedStaffPatronPickupContext = null;
   setVerifiedNewSuggestionBarcode('');
   clearNewSuggestionError();
   clearNewSuggestionDetails();
@@ -339,6 +356,7 @@ export function resetStaffPatronLookup() {
   updatePatronSearchScopeNotice(null);
   const ctx = document.getElementById('new-patron-context');
   if (ctx) ctx.remove();
+  resetPickupSelector();
 }
 
 export function clearNewSuggestionDetails() {
@@ -362,9 +380,79 @@ export async function setNewSuggestionDetailsEnabled(enabled) {
     await populateNewSuggestionLibrarySelector();
   }
 
-  document.getElementById('btn-submit-new').disabled = !enabled || staffSuggestionRequiresLibrarySelection();
+  document.getElementById('btn-submit-new').disabled = !enabled || staffSuggestionRequiresLibrarySelection() || !document.getElementById('new-pickup-branch').value;
   if (enabled && staffSuggestionRequiresLibrarySelection()) {
     showNewSuggestionError('Select a servicing library before creating a staff suggestion.');
+  }
+}
+
+async function fetchSelectedPatronByBarcode(barcode) {
+  const res = await fetch('/api/asap/staff/patron-lookup', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': pb.authStore.token
+    },
+    body: JSON.stringify(staffSuggestionLibraryPayload({ barcode: String(barcode || '').trim() }))
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.message || 'Could not load selected patron.');
+  }
+  return data;
+}
+
+function resetPickupSelector() {
+  const select = document.getElementById('new-pickup-branch');
+  const warning = document.getElementById('new-pickup-branch-warning');
+  if (!select) return;
+  select.replaceChildren();
+  const blank = document.createElement('option');
+  blank.value = '';
+  blank.textContent = 'Select a pickup location...';
+  select.appendChild(blank);
+  select.value = '';
+  select.disabled = true;
+  if (warning) {
+    warning.textContent = '';
+    warning.classList.add('hidden');
+  }
+}
+
+function populateStaffPickupSelector(data) {
+  const select = document.getElementById('new-pickup-branch');
+  const warning = document.getElementById('new-pickup-branch-warning');
+  const submit = document.getElementById('btn-submit-new');
+  if (!select) return;
+
+  selectedStaffPatronPickupContext = data || null;
+  resetPickupSelector();
+
+  const branches = Array.isArray(data.pickupBranches) ? data.pickupBranches : [];
+  branches.forEach((branch) => {
+    const option = document.createElement('option');
+    option.value = String(branch.id || '');
+    option.textContent = String(branch.label || branch.name || branch.id || '');
+    select.appendChild(option);
+  });
+  select.disabled = branches.length === 0;
+  select.value = String(data.selectedPickupBranchId || '');
+
+  const message = String(data.pickupBranchWarning || (branches.length === 0 ? 'No pickup locations are currently available for this patron.' : ''));
+  if (warning) {
+    warning.textContent = message;
+    warning.classList.toggle('hidden', !message);
+  }
+
+  if (submit) {
+    submit.disabled = !select.value || staffSuggestionRequiresLibrarySelection();
+  }
+
+  if (!select.dataset.pickupBranchBound) {
+    select.addEventListener('change', () => {
+      if (submit) submit.disabled = !select.value || staffSuggestionRequiresLibrarySelection();
+    });
+    select.dataset.pickupBranchBound = 'true';
   }
 }
 
