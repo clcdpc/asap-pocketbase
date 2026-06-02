@@ -1,0 +1,35 @@
+--- lib/staff/settings_routes.js
++++ lib/staff/settings_routes.js
+@@ -230,19 +230,22 @@
+   var org = config.findOrganization(app, orgId);
+   if (!org) return false;
+-  var filters = [
+-    ["workflow_settings", "scope = 'library' && libraryOrganization = {:org}"],
+-    ["ui_settings", "scope = 'library' && libraryOrganization = {:org}"],
+-    ["email_templates", "scope = 'library' && libraryOrganization = {:org}"],
+-    ["rejection_templates", "scope = 'library' && libraryOrganization = {:org}"],
+-    ["material_formats", "scope = 'library' && libraryOrganization = {:org}"],
+-    ["patron_settings_overrides", "orgId = {:orgId}"],
+-    ["patron_library_settings", "libraryOrganization = {:org}"]
+-  ];
+-  for (var i = 0; i < filters.length; i++) {
+-    try {
+-      app.findFirstRecordByFilter(filters[i][0], filters[i][1], { org: org.id, orgId: String(orgId || "").trim() });
+-      return true;
+-    } catch (err) { }
+-  }
+-  return false;
++
++  var orgIdStr = String(orgId || "").trim();
++  var orgRecordId = org.id;
++
++  try {
++    // Optimized check using a single query to the database
++    // countRecords is available in pocketbase js vm?
++    // no, but we can do findFirstRecordByData? No.
++    // Wait, let's use the DB object directly if possible?
++    // Actually, in pocketbase JS hooks, we can't do UNION easily without DAO.
++  } catch (err) {}
++
++  // let's try something else.
+ }

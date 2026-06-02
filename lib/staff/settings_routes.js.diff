@@ -1,0 +1,96 @@
+<<<<<<< SEARCH
+function hasLibraryOverride(app, orgId) {
+  var org = config.findOrganization(app, orgId);
+  if (!org) return false;
+  var filters = [
+    ["workflow_settings", "scope = 'library' && libraryOrganization = {:org}"],
+    ["ui_settings", "scope = 'library' && libraryOrganization = {:org}"],
+    ["email_templates", "scope = 'library' && libraryOrganization = {:org}"],
+    ["rejection_templates", "scope = 'library' && libraryOrganization = {:org}"],
+    ["material_formats", "scope = 'library' && libraryOrganization = {:org}"],
+    ["patron_settings_overrides", "orgId = {:orgId}"],
+    ["patron_library_settings", "libraryOrganization = {:org}"]
+  ];
+  for (var i = 0; i < filters.length; i++) {
+    try {
+      var records = app.findRecordsByFilter(filters[i][0], filters[i][1], "", 1, 0, { org: org.id, orgId: String(orgId || "").trim() });
+      if (records && records.length > 0) {
+        return true;
+      }
+    } catch (err) {
+      if (app && app.logger) {
+        app.logger().warn("Swallowed error in hasLibraryOverride", "error", String(err));
+      }
+    }
+  }
+  return false;
+}
+=======
+function hasLibraryOverride(app, orgId) {
+  var org = config.findOrganization(app, orgId);
+  if (!org) return false;
+
+  var orgIdStr = String(orgId || "").trim();
+
+  try {
+    var db = null;
+    if (typeof app.db === "function") {
+      db = app.db();
+    } else if (typeof app.dao === "function" && typeof app.dao().db === "function") {
+      db = app.dao().db();
+    }
+
+    if (db && typeof db.newQuery === "function") {
+      var query = db.newQuery(`
+        SELECT 1 FROM (
+          SELECT 1 FROM workflow_settings WHERE scope = 'library' AND libraryOrganization = {:orgId} LIMIT 1
+          UNION ALL
+          SELECT 1 FROM ui_settings WHERE scope = 'library' AND libraryOrganization = {:orgId} LIMIT 1
+          UNION ALL
+          SELECT 1 FROM email_templates WHERE scope = 'library' AND libraryOrganization = {:orgId} LIMIT 1
+          UNION ALL
+          SELECT 1 FROM rejection_templates WHERE scope = 'library' AND libraryOrganization = {:orgId} LIMIT 1
+          UNION ALL
+          SELECT 1 FROM material_formats WHERE scope = 'library' AND libraryOrganization = {:orgId} LIMIT 1
+          UNION ALL
+          SELECT 1 FROM patron_settings_overrides WHERE orgId = {:orgIdStr} LIMIT 1
+          UNION ALL
+          SELECT 1 FROM patron_library_settings WHERE libraryOrganization = {:orgId} LIMIT 1
+        ) LIMIT 1
+      `);
+      query.bind({ orgId: org.id, orgIdStr: orgIdStr });
+      var result = [];
+      query.all(result);
+      return result.length > 0;
+    }
+  } catch (err) {
+    if (app && app.logger) {
+      app.logger().warn("Optimized query failed, falling back", "error", String(err));
+    }
+  }
+
+  // Fallback to sequential filter check (avoiding exceptions)
+  var filters = [
+    ["workflow_settings", "scope = 'library' && libraryOrganization = {:org}"],
+    ["ui_settings", "scope = 'library' && libraryOrganization = {:org}"],
+    ["email_templates", "scope = 'library' && libraryOrganization = {:org}"],
+    ["rejection_templates", "scope = 'library' && libraryOrganization = {:org}"],
+    ["material_formats", "scope = 'library' && libraryOrganization = {:org}"],
+    ["patron_settings_overrides", "orgId = {:orgId}"],
+    ["patron_library_settings", "libraryOrganization = {:org}"]
+  ];
+  for (var i = 0; i < filters.length; i++) {
+    try {
+      var records = app.findRecordsByFilter(filters[i][0], filters[i][1], "", 1, 0, { org: org.id, orgId: orgIdStr });
+      if (records && records.length > 0) {
+        return true;
+      }
+    } catch (err) {
+      if (app && app.logger) {
+        app.logger().warn("Swallowed error in hasLibraryOverride loop", "error", String(err));
+      }
+    }
+  }
+  return false;
+}
+>>>>>>> REPLACE
