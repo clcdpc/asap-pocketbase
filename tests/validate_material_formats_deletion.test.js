@@ -116,7 +116,7 @@ runTest('format is deleted and IS in use', () => {
       ];
     },
     findFirstRecordByFilter: (collection, filter, params) => {
-      if (collection === "title_requests" && filter.includes("format = {:p0}")) {
+      if (collection === "title_requests" && filter === "format ?= {:formats}") {
         // Return a mock request that uses 'dvd'
         return new MockRecord({ id: "req1", format: "dvd" });
       }
