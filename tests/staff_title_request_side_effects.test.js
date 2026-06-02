@@ -77,6 +77,9 @@ function withSideEffects(calls) {
       };
       return map[String(value)] || "suggestion";
     },
+    cachedPolarisPatronIdForTitleRequest() {
+      return calls.cachedPolarisPatronId || "";
+    },
     appendSystemNote() {}
   };
 
@@ -115,8 +118,16 @@ function withSideEffects(calls) {
   } };
   require.cache[polarisPath] = { id: polarisPath, filename: polarisPath, loaded: true, exports: {
     adminStaffAuth() { return { token: "staff" }; },
-    lookupPatron() { calls.lookupPatron += 1; return { PatronID: "patron1", EmailAddress: "patron@example.org" }; },
-    placeHold() { calls.placeHold += 1; return true; },
+    lookupPatron() {
+      calls.lookupPatron += 1;
+      if (calls.lookupPatronThrows) throw new Error("lookup failed");
+      return { PatronID: "patron1", EmailAddress: "patron@example.org" };
+    },
+    placeHold(staff, bibid, patronId) {
+      calls.placeHold += 1;
+      calls.placeHoldPatronId = patronId;
+      return true;
+    },
     reconcileRecord() { calls.reconcileRecord += 1; }
   } };
   require.cache[mailPath] = { id: mailPath, filename: mailPath, loaded: true, exports: mailMock };
@@ -243,6 +254,25 @@ function testAdditionalCopyReminderStillSendsForHoldWorkflowStatus() {
   assert.strictEqual(result.message, "Additional copy saved and reminder email sent.");
 }
 
+function testAlreadyOwnUsesCachedPatronIdWhenRefreshFails() {
+  const calls = { lookupPatronThrows: true, cachedPolarisPatronId: "cached-patron-1" };
+  const sideEffects = withSideEffects(calls);
+  const app = makeApp();
+  const context = {
+    action: "alreadyOwn",
+    data: { bibid: "12345" },
+    record: makeRecord({ id: "req1", status: "hold_placed", barcode: "old-barcode", patron: "patron-record-1", autohold: true }),
+    staff: makeStaff({})
+  };
+
+  sideEffects.handleAlreadyOwnOrRejectSideEffects(app, context);
+
+  assert.strictEqual(calls.lookupPatron, 1);
+  assert.strictEqual(calls.placeHold, 1);
+  assert.strictEqual(calls.placeHoldPatronId, "cached-patron-1");
+  assert.strictEqual(calls.alreadyOwned, 1);
+}
+
 const originalCaches = {
   sideEffectsPath: require.cache[sideEffectsPath],
   routeUtilsPath: require.cache[routeUtilsPath],
@@ -261,6 +291,7 @@ try {
   testPurchaseToHoldPlacedSuppressesReminderAndSendsOnePatronOutcomeEmail();
   testPurchaseToClosedSuppressesReminder();
   testAdditionalCopyReminderStillSendsForHoldWorkflowStatus();
+  testAlreadyOwnUsesCachedPatronIdWhenRefreshFails();
   console.log("staff_title_request_side_effects.test.js passed.");
 } finally {
   const cachePaths = {

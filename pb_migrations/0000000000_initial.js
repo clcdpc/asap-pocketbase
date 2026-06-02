@@ -163,6 +163,7 @@ migrate((app) => {
     passwordAuth: { enabled: false, identityFields: ["email"] },
     fields: [
       field("barcode", "text", { required: true, max: 64 }),
+      field("polarisPatronId", "text", { max: 64 }),
       field("nameFirst", "text", { max: 128 }),
       field("nameLast", "text", { max: 128 }),
       field("lastPolarisLogin", "date"),
@@ -369,6 +370,7 @@ migrate((app) => {
       field("allowedStaffUsers", "text"),
       field("staffUrl", "text", { max: 2048 }),
       field("leapBibUrlPattern", "text", { max: 2048 }),
+      field("leapPatronUrlPattern", "text", { max: 2048 }),
       rel("enabledLibraries", organizations, { maxSelect: 999 }),
       field("organizationsSyncStatus", "select", { maxSelect: 1, values: ["not_loaded", "loading", "loaded", "error"] }),
       field("organizationsLastSynced", "date"),

@@ -1,5 +1,5 @@
 import { pb, formatMap, availableFormats, currentRejectionTemplates, currentStatus, currentSuggestions, allSuggestions, verifiedBibId, publicationOptions, setVerifiedBibId, workflowSettings } from './state.js';
-import { leapBibUrl, openProfileDialog } from './api.js';
+import { leapBibUrl, leapPatronUrl, openProfileDialog } from './api.js';
 import { closeDuplicateRequest } from './actions.js';
 import { showToast, showAlert, showConfirm } from './dialogs.js';
 import { loadTab, formatDateTime, renderWorkflowTags, escapeAttr } from './grid.js';
@@ -349,6 +349,7 @@ export function renderPatronContext(row, options = {}) {
   const libraryOrgName = row.libraryOrgName || row.libraryOrgId || '—';
   const preferredPickupBranchName = row.preferredPickupBranchName || '—';
   const barcode = row.barcode || '—';
+  const patronUrl = leapPatronUrl(row.polarisPatronId || '');
 
   block.replaceChildren();
 
@@ -396,6 +397,17 @@ export function renderPatronContext(row, options = {}) {
     div.append(' ' + f.value);
     detailRows.appendChild(div);
   });
+
+  if (patronUrl && /^https?:\/\//i.test(patronUrl)) {
+    const linkRow = document.createElement('div');
+    const link = document.createElement('a');
+    link.href = patronUrl;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = 'Open Patron in Leap';
+    linkRow.appendChild(link);
+    detailRows.appendChild(linkRow);
+  }
 
   block.appendChild(detailRows);
 

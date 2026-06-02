@@ -21,6 +21,16 @@ This file provides Gemini-specific integration. For the complete methodology, se
 3. **Context Is Limited** — Prevent degradation through hygiene
 4. **Verify Empirically** — No "trust me, it works"
 
+## Project Data Access Rule
+
+Never write or execute raw SQL for this project unless the user explicitly asks for a one-off forensic SQL query.
+
+Use PocketBase record and collection APIs instead, such as `app.findRecordById`, `app.findFirstRecordByFilter`, `app.findRecordsByFilter`, `app.save`, `app.delete`, migration collection field APIs, and existing project helpers.
+
+Do not use raw SQL strings through database handles, query builders, shell commands, SQLite CLIs, or ad hoc scripts to read or mutate project data. Raw SQL bypasses PocketBase record rules, relation handling, hook behavior, JSON normalization expectations, and project migration conventions.
+
+If a task seems to require SQL, first translate it into PocketBase API calls. If that is not possible, document why and ask before proceeding.
+
 ---
 
 ## Quick Reference
@@ -64,4 +74,3 @@ Key recommendations:
 *GSD Methodology adapted for Google Antigravity*
 *Canonical rules: [PROJECT_RULES.md](../PROJECT_RULES.md)*
 *Source: https://github.com/glittercowboy/get-shit-done*
-

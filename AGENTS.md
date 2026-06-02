@@ -19,6 +19,22 @@ Do not reintroduce a dynamic route registry for PocketBase hooks unless it has b
 - Pass `e.app` into config helpers from route handlers, for example `config.getSettings(e.app)` and `config.polaris(e.app)`.
 - Avoid adding new route-time dependencies on implicit global `$app` when the handler already receives `e.app`.
 
+### PocketBase data access rules
+Do not write or execute raw SQL for application data access, schema updates, migrations, tests, or repair scripts unless the user explicitly asks for a one-off forensic SQL query.
+
+Use PocketBase APIs instead:
+- `app.findRecordById`
+- `app.findFirstRecordByFilter`
+- `app.findRecordsByFilter`
+- `app.save`
+- `app.delete`
+- collection field APIs in migrations
+- existing project helpers that wrap PocketBase records
+
+Do not use raw SQL strings through database handles, query builders, shell commands, SQLite CLIs, or ad hoc scripts to read or mutate project data. Raw SQL bypasses PocketBase record rules, relation handling, hook behavior, JSON normalization expectations, and migration conventions.
+
+If a task seems to require SQL, stop and first translate it into PocketBase record/collection API calls. If that is not possible, document why and ask before proceeding.
+
 Before implementing any new setting, decide and document which of these models it uses:
 - system-only: one value for the whole installation
 - library-only: each library has its own value
