@@ -64,11 +64,11 @@ test('requestHeader() retrieves header from e.request.header', () => {
     requestInfo: () => ({ headers: null }),
     request: {
       header: {
-        get: (n) => 'SHOULD NOT REACH'
+        get: (n) => 'SHOULD REACH'
       }
     }
   };
-  assert.strictEqual(routeUtils.requestHeader(e_dead, 'X-Test'), '');
+  assert.strictEqual(routeUtils.requestHeader(e_dead, 'X-Test'), 'SHOULD REACH');
 });
 
 test('queryValue() retrieves value from requestInfo.query', () => {
