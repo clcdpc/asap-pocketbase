@@ -92,6 +92,26 @@ test('queryValue() falls back to parsing URL', () => {
   assert.strictEqual(routeUtils.queryValue(e, 'foo'), 'baz');
 });
 
+test('queryValue() falls back to parsing e.request.url', () => {
+  const e = {
+    requestInfo: () => ({}),
+    request: {
+      url: 'http://example.com?foo=qux'
+    }
+  };
+  assert.strictEqual(routeUtils.queryValue(e, 'foo'), 'qux');
+});
+
+test('queryValue() falls back to parsing e.request.URL', () => {
+  const e = {
+    requestInfo: () => ({}),
+    request: {
+      URL: 'http://example.com?foo=quux'
+    }
+  };
+  assert.strictEqual(routeUtils.queryValue(e, 'foo'), 'quux');
+});
+
 test('queryValueFromUrl() parses query parameters', () => {
   assert.strictEqual(routeUtils.queryValueFromUrl('http://example.com?a=1&b=2', 'a'), '1');
   assert.strictEqual(routeUtils.queryValueFromUrl('http://example.com?a=1&b=2', 'b'), '2');
