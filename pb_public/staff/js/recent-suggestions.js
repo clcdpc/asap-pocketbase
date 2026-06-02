@@ -143,16 +143,22 @@ export function renderRecentSuggestionsSwitcher() {
     const item = document.createElement('a');
     item.className = 'dropdown-item recent-suggestion-item py-2';
     item.href = '#';
-    
-    // Status label formatting
-    let statusDisplay = workflowStatusLabel(r.status) || r.status;
-    
-    item.innerHTML = `
-      <div class="font-weight-bold text-truncate" title="${r.title}">${r.title}</div>
-      <div class="small text-muted text-truncate">
-        ${r.author ? `${r.author} &middot; ` : ''}${statusDisplay}
-      </div>
-    `;
+
+    const title = String(r.title || 'Unknown Title');
+    const author = String(r.author || '');
+    const statusDisplay = String(workflowStatusLabel(r.status) || r.status || '');
+
+    const titleLine = document.createElement('div');
+    titleLine.className = 'font-weight-bold text-truncate';
+    titleLine.title = title;
+    titleLine.textContent = title;
+
+    const metaLine = document.createElement('div');
+    metaLine.className = 'small text-muted text-truncate';
+    metaLine.textContent = author ? `${author} - ${statusDisplay}` : statusDisplay;
+
+    item.appendChild(titleLine);
+    item.appendChild(metaLine);
 
     item.addEventListener('click', (e) => {
       e.preventDefault();
