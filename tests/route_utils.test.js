@@ -206,6 +206,38 @@ test('firstValue() returns first non-null/undefined value', () => {
   assert.strictEqual(routeUtils.firstValue(source, ['x', 'y'], 10), 10);
 });
 
+test('firstValue() handles edge cases correctly', () => {
+  const source = {
+    emptyStr: "",
+    zero: 0,
+    falseVal: false,
+    nullVal: null,
+    undefVal: undefined,
+    nanVal: NaN
+  };
+
+  const cases = [
+    { names: ['emptyStr'], expected: "" },
+    { names: ['zero'], expected: 0 },
+    { names: ['falseVal'], expected: false },
+    { names: ['nullVal', 'zero'], expected: 0 },
+    { names: ['undefVal', 'emptyStr'], expected: "" },
+    { names: ['nanVal'], expected: NaN },
+    { names: ['missing'], expected: 'default' },
+    { names: [], expected: 'default' },
+    { names: ['nullVal', 'undefVal', 'missing'], expected: 'default' }
+  ];
+
+  cases.forEach(c => {
+    const result = routeUtils.firstValue(source, c.names, 'default');
+    if (Number.isNaN(c.expected)) {
+      assert.ok(Number.isNaN(result));
+    } else {
+      assert.strictEqual(result, c.expected);
+    }
+  });
+});
+
 test('boolValue() parses various boolean-like values', () => {
   assert.strictEqual(routeUtils.boolValue('true', false), true);
   assert.strictEqual(routeUtils.boolValue('1', false), true);
