@@ -150,7 +150,12 @@ function testRecentSuggestions() {
   assert.strictEqual(menu.children.length, 5);
   
   const firstItem = menu.children[0];
-  assert.ok(firstItem.innerHTML.includes("Unknown Title")); // fallback for missing title is Unknown Title
+  assert.strictEqual(firstItem.children[0].textContent, "Unknown Title");
+  assert.strictEqual(firstItem.children[1].textContent, "");
+
+  const lastItem = menu.children[4];
+  assert.strictEqual(lastItem.children[0].textContent, "Book A");
+  assert.strictEqual(lastItem.children[1].textContent, "Author A - outstanding_purchase");
   
   // 8. Event dispatching
   let eventDispatched = false;
