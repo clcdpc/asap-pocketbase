@@ -68,6 +68,12 @@ function createMockApp(options) {
       }
       return [];
     },
+    findRecordsByIds: function(collection, ids) {
+      if (options.onFindRecordsByIds) {
+        return options.onFindRecordsByIds(collection, ids);
+      }
+      return [];
+    },
     newMailClient: function() {
       return {
         send: function(message) {
