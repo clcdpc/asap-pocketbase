@@ -161,6 +161,9 @@ export let rowActionRegistry = new Map();
 export let leapBibUrlPattern = '';
 export function setLeapBibUrlPattern(pattern) { leapBibUrlPattern = pattern; }
 
+export let leapPatronUrlPattern = '';
+export function setLeapPatronUrlPattern(pattern) { leapPatronUrlPattern = pattern; }
+
 export let lastWorkflowEnabledList = [];
 export function setLastWorkflowEnabledList(list) { lastWorkflowEnabledList = list; }
 

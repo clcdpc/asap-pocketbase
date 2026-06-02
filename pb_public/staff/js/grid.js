@@ -2,7 +2,7 @@ import { pb, gridContainer, staffGridFilterBar, tagFilterSelect, claimFilterSele
 import { openEdit, openPolarisSearch, polarisSearchValueForRow, renderPolarisSearchButtonMarkup, confirmAdditionalCopyAction } from './modals.js';
 import { openNewSuggestionForPatron } from './patron.js';
 import { undoRow, deleteClosedRequest, closeDuplicateRequest } from './actions.js';
-import { leapBibUrl, isSuperAdminStaff, isAdminStaff, getSettingsSectionFromHash, activateSettingsSection, requestedRequestIdFromUrl } from './api.js';
+import { leapBibUrl, leapPatronUrl, isSuperAdminStaff, isAdminStaff, getSettingsSectionFromHash, activateSettingsSection, requestedRequestIdFromUrl } from './api.js';
 import { authorizedJson } from './http.js';
 import { showToast, showAlert, showConfirm, closeOpenDialogs } from './dialogs.js';
 import { showSettingsAccessDenied, hideSettingsAccessDenied, loadSettings } from './settings.js';
@@ -835,6 +835,10 @@ export function rowMarker(row) {
 
 export function renderBarcodeCell(row) {
   const barcode = escapeAttr(row.barcode || '');
+  const patronUrl = leapPatronUrl(row.polarisPatronId || '');
+  const barcodeMarkup = patronUrl && /^https?:\/\//i.test(patronUrl)
+    ? `<a href="${escapeAttr(patronUrl)}" target="_blank" rel="noopener noreferrer" data-no-row-edit="true">${barcode}</a>`
+    : barcode;
   const name = [row.nameFirst, row.nameLast].filter(Boolean).join(' ').trim();
   const nameHtml = name ? `<div class="barcode-patron-name text-muted small">${escapeAttr(name)}</div>` : '';
   const isAdditionalCopy = row.type === 'additional_copy';
@@ -844,7 +848,7 @@ export function renderBarcodeCell(row) {
     <div class="barcode-cell">
       <div class="barcode-content">
         ${typeBadge}
-        <div class="barcode-text">${barcode}</div>
+        <div class="barcode-text">${barcodeMarkup}</div>
         ${nameHtml}
       </div>
       <button type="button" class="btn btn-link btn-sm p-0 ml-1 quick-new-suggestion" 

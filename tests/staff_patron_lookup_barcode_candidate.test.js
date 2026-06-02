@@ -51,6 +51,16 @@ function load(env) {
       selectedPickupBranchName: '',
       currentPreferenceAllowed: false,
       pickupBranchWarning: ''
+    }),
+    buildAvailablePickupPreferenceContext: () => ({
+      pickupBranches: [],
+      pickupBranchesRefreshedAt: '',
+      currentPreferredPickupBranchId: '',
+      currentPreferredPickupBranchName: '',
+      selectedPickupBranchId: '',
+      selectedPickupBranchName: '',
+      currentPreferenceAllowed: false,
+      pickupBranchWarning: ''
     })
   };
   env.effectiveLibrary = env.effectiveLibrary || {

@@ -322,6 +322,12 @@
                       <small class="form-text text-muted">Optional. Use <code>{{bibid}}</code> where the Polaris Bib ID should be inserted.</small>
                     </div>
                     <div class="form-group">
+                      <label for="leap-patron-url-pattern">Leap patron record URL pattern</label>
+                      <input type="url" id="leap-patron-url-pattern" class="form-control"
+                        placeholder="https://leap-sso.example.org/LeapWebApp/staff/default#patrons/{{patron-id}}/checkout">
+                      <small class="form-text text-muted">Optional system-level link. Use <code>{{patron-id}}</code> where the Polaris Patron ID should be inserted.</small>
+                    </div>
+                    <div class="form-group">
                       <label for="format-icon-url-pattern">Format icon URL pattern</label>
                       <input type="text" id="format-icon-url-pattern" class="form-control"
                         placeholder="https://catalog.example.org/polaris/themes/shared/formats/formatid{MARCTypeOfMaterialID2}.gif">

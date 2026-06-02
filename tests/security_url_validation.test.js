@@ -16,6 +16,7 @@ function extractFunction(filePath, functionName) {
 // Extract functions
 const renderEditLeapBibLinkSource = extractFunction(path.join(__dirname, '../pb_public/staff/js/modals.js'), 'renderEditLeapBibLink');
 const renderBibIdCellSource = extractFunction(path.join(__dirname, '../pb_public/staff/js/grid.js'), 'renderBibIdCell');
+const renderBarcodeCellSource = extractFunction(path.join(__dirname, '../pb_public/staff/js/grid.js'), 'renderBarcodeCell');
 
 // Mock escapeAttr (simplified version for testing)
 function escapeAttr(value) {
@@ -96,6 +97,20 @@ function runTests() {
     // Case 6: No BIB ID
     const cell3 = testRenderBibIdCell({}, () => 'https://leap.example.com/', mockGridjs, escapeAttr);
     assert.strictEqual(cell3, '', 'Should return empty string for missing BIB ID');
+
+    // Test renderBarcodeCell
+    const testRenderBarcodeCell = new Function('row', 'leapPatronUrl', 'gridjs', 'escapeAttr', `
+        ${renderBarcodeCellSource}
+        return renderBarcodeCell(row);
+    `);
+
+    const patronCell1 = testRenderBarcodeCell({ barcode: '2900', polarisPatronId: 'p1' }, () => 'https://leap.example.com/patrons/p1', mockGridjs, escapeAttr);
+    assert.strictEqual(typeof patronCell1, 'object', 'Should return gridjs.html object for barcode cell');
+    assert.ok(patronCell1.__html.includes('href="https://leap.example.com/patrons/p1"'), 'Barcode cell should link safe patron URL');
+
+    const patronCell2 = testRenderBarcodeCell({ barcode: '2900', polarisPatronId: 'p1' }, () => 'javascript:alert(1)', mockGridjs, escapeAttr);
+    assert.ok(!patronCell2.__html.includes('javascript:alert'), 'Barcode cell should not render unsafe patron URL');
+    assert.ok(patronCell2.__html.includes('<div class="barcode-text">2900</div>'), 'Barcode cell should fall back to plain barcode');
 
     console.log('All security URL validation tests passed!');
 }

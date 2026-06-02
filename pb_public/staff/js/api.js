@@ -1,4 +1,4 @@
-import { pb, loginContainer, setupContainer, appContainer, loginForm, setupForm, logoutBtn, profileBtn, grid, gridSearchInput, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, additionalCopyStatusFilterSelect, closedTypeFilterSelect, currentRejectionTemplates, setCurrentRejectionTemplates, statusStages, stageQueryMap, currentStatus, activeTagFilter, gridSearchKeyword, setGridSearchKeyword, workflowSettings, bootstrapAdminMessage, setupRequired, currentEmailStatus, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, settingsSectionIds, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, currentLibraryContextOrgId, setCurrentStatus, setActiveTagFilter, setCurrentClaimFilter, setCurrentSimilarRequestFilter, setCurrentAdditionalCopyStatus, setCurrentClosedTypeFilter, setBootstrapAdminMessage, setSetupRequired, setOrganizationsStatusMessage, setCurrentSettingsSection, setSettingsDirty, setCurrentEmailStatus } from './state.js';
+import { pb, loginContainer, setupContainer, appContainer, loginForm, setupForm, logoutBtn, profileBtn, grid, gridSearchInput, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, additionalCopyStatusFilterSelect, closedTypeFilterSelect, currentRejectionTemplates, setCurrentRejectionTemplates, statusStages, stageQueryMap, currentStatus, activeTagFilter, gridSearchKeyword, setGridSearchKeyword, workflowSettings, bootstrapAdminMessage, setupRequired, currentEmailStatus, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, settingsSectionIds, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, leapPatronUrlPattern, currentLibraryContextOrgId, setCurrentStatus, setActiveTagFilter, setCurrentClaimFilter, setCurrentSimilarRequestFilter, setCurrentAdditionalCopyStatus, setCurrentClosedTypeFilter, setBootstrapAdminMessage, setSetupRequired, setOrganizationsStatusMessage, setCurrentSettingsSection, setSettingsDirty, setCurrentEmailStatus } from './state.js';
 import { loadTab, renderCurrentGrid, closeActionMenu, escapeAttr } from './grid.js';
 import { syncPolarisOrganizations } from './settings-polaris.js';
 import { loadSettings, checkSettingsDirty, handleLibraryContextSwitch, refreshLibrarySelectorIndicators } from './settings.js';
@@ -67,6 +67,18 @@ export function normalizeLeapBibUrlPattern(value) {
   return text;
 }
 
+export function normalizeLeapPatronUrlPattern(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (!/^https?:\/\//i.test(text)) {
+    throw new Error('Leap Patron URL pattern must begin with http:// or https://.');
+  }
+  if (!text.includes('{{patron-id}}') && !text.includes('{{patronId}}')) {
+    throw new Error('Leap Patron URL pattern must include {{patron-id}}.');
+  }
+  return text;
+}
+
 export function leapBibUrl(bibId) {
   const pattern = String(leapBibUrlPattern || '').trim();
   const cleanBibId = String(bibId || '').trim();
@@ -77,6 +89,20 @@ export function leapBibUrl(bibId) {
     return '';
   }
   return pattern.split('{{bibid}}').join(encodeURIComponent(cleanBibId));
+}
+
+export function leapPatronUrl(patronId) {
+  const pattern = String(leapPatronUrlPattern || '').trim();
+  const cleanPatronId = String(patronId || '').trim();
+  if (!pattern || !cleanPatronId || (!pattern.includes('{{patron-id}}') && !pattern.includes('{{patronId}}'))) {
+    return '';
+  }
+  if (!/^https?:\/\//i.test(pattern)) {
+    return '';
+  }
+  return pattern
+    .split('{{patron-id}}').join(encodeURIComponent(cleanPatronId))
+    .split('{{patronId}}').join(encodeURIComponent(cleanPatronId));
 }
 
 export function requestedStatusFromUrl() {

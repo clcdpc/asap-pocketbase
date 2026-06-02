@@ -23,6 +23,7 @@ function loadSettingsLogic() {
   const mocks = `
     const currentLibraryContextOrgId = 'system';
     const leapBibUrlPattern = '';
+    const leapPatronUrlPattern = '';
     const currentRejectionTemplates = [];
     const defaultPublicationOptions = [];
     const lastWorkflowEnabledList = [];
@@ -52,6 +53,7 @@ function loadSettingsLogic() {
     function validateStaffUrl(url) { return null; }
     function normalizeStaffUrl(url) { return url; }
     function normalizeLeapBibUrlPattern(p) { return p; }
+    function normalizeLeapPatronUrlPattern(p) { return p; }
     function normalizeExternalSearchUrlTemplate(t) { return t; }
     function collectDuplicateStatusLabels() { return {}; }
     function collectFormatLabels() { return {}; }

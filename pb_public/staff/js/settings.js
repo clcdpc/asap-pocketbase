@@ -1,6 +1,6 @@
-import { pb, settingsContainer, settingsForm, formatMap, availableFormats, setAvailableFormats, currentRejectionTemplates, verifiedBibId, publicationOptions, setPublicationOptions, workflowSettings, currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, initialSettingsSnapshot, libraryContextLoadSerial, librarySelectorBound, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, lastWorkflowEnabledList, defaultPublicationOptions, emailTemplateDefaults, setVerifiedBibId, setCurrentLibraryContextOrgId, setCurrentFormatClaimRules, setFormatClaimStaffOptions, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId, setInitialSettingsSnapshot, setLibrarySelectorBound, setSettingsSaving, setSettingsLoading, setLeapBibUrlPattern, setLastWorkflowEnabledList, incrementLibraryContextLoadSerial, libraryOverridesSummary, setLibraryOverridesSummary } from './state.js';
+import { pb, settingsContainer, settingsForm, formatMap, availableFormats, setAvailableFormats, currentRejectionTemplates, verifiedBibId, publicationOptions, setPublicationOptions, workflowSettings, currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, initialSettingsSnapshot, libraryContextLoadSerial, librarySelectorBound, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, leapPatronUrlPattern, lastWorkflowEnabledList, defaultPublicationOptions, emailTemplateDefaults, setVerifiedBibId, setCurrentLibraryContextOrgId, setCurrentFormatClaimRules, setFormatClaimStaffOptions, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId, setInitialSettingsSnapshot, setLibrarySelectorBound, setSettingsSaving, setSettingsLoading, setLeapBibUrlPattern, setLeapPatronUrlPattern, setLastWorkflowEnabledList, incrementLibraryContextLoadSerial, libraryOverridesSummary, setLibraryOverridesSummary } from './state.js';
 
-import { setFieldValue, setFieldChecked, getFieldValue, getFieldChecked, validateStaffUrl, normalizeStaffUrl, normalizeLeapBibUrlPattern, isPocketBaseAutoCancelError, validateSmtpHostField, setVisible, isSuperAdminStaff, updateSaveBarState, markSettingsDirty, markSettingsClean, activateSettingsSection, initSettingsNavigation, updateEmailStatusBanner, updateOrganizationsStatusUi, checkAuth, loadSetupStatus, updateAutoRejectEmailControls, updateLibraryOverrideStatusVisibility } from './api.js';
+import { setFieldValue, setFieldChecked, getFieldValue, getFieldChecked, validateStaffUrl, normalizeStaffUrl, normalizeLeapBibUrlPattern, normalizeLeapPatronUrlPattern, isPocketBaseAutoCancelError, validateSmtpHostField, setVisible, isSuperAdminStaff, updateSaveBarState, markSettingsDirty, markSettingsClean, activateSettingsSection, initSettingsNavigation, updateEmailStatusBanner, updateOrganizationsStatusUi, checkAuth, loadSetupStatus, updateAutoRejectEmailControls, updateLibraryOverrideStatusVisibility } from './api.js';
 import { authorizedJson } from './http.js';
 import { showToast, showConfirm, closeOpenDialogs } from './dialogs.js';
 import { closeActionMenu, escapeAttr } from './grid.js';
@@ -310,6 +310,7 @@ export function applyLibrarySettingsToForm(settings) {
   setCurrentFormatClaimRules(settings.formatClaimRules || []);
   setFormatClaimStaffOptions(settings.formatClaimStaffOptions || []);
   setLeapBibUrlPattern(settings.leapBibUrlPattern || '');
+  setLeapPatronUrlPattern(settings.leapPatronUrlPattern || '');
 
   const resetBtn = document.getElementById('btn-reset-library-settings');
   const statusAlert = document.getElementById('library-override-status');
@@ -323,6 +324,7 @@ export function applyLibrarySettingsToForm(settings) {
     }
     setFieldValue('system-staff-url', settings.staffUrl || '');
     setFieldValue('leap-bib-url-pattern', leapBibUrlPattern);
+    setFieldValue('leap-patron-url-pattern', leapPatronUrlPattern);
     setFieldValue('format-icon-url-pattern', settings.formatIconUrlPattern || '');
     if (document.getElementById('system-enabled-libraries-group')) {
       document.getElementById('system-enabled-libraries-group').classList.remove('hidden');
@@ -674,6 +676,7 @@ function _serializeSettingsState(validate = false) {
 
   let staffUrl = '';
   let nextLeapBibUrlPattern = leapBibUrlPattern || '';
+  let nextLeapPatronUrlPattern = leapPatronUrlPattern || '';
   if (isSystemContext) {
     staffUrl = getFieldValue('system-staff-url').trim();
     if (validate) {
@@ -688,6 +691,11 @@ function _serializeSettingsState(validate = false) {
     if (validate) {
       nextLeapBibUrlPattern = normalizeLeapBibUrlPattern(nextLeapBibUrlPattern);
       setFieldValue('leap-bib-url-pattern', nextLeapBibUrlPattern);
+    }
+    nextLeapPatronUrlPattern = getFieldValue('leap-patron-url-pattern').trim();
+    if (validate) {
+      nextLeapPatronUrlPattern = normalizeLeapPatronUrlPattern(nextLeapPatronUrlPattern);
+      setFieldValue('leap-patron-url-pattern', nextLeapPatronUrlPattern);
     }
   }
 
@@ -797,6 +805,7 @@ function _serializeSettingsState(validate = false) {
     payload.polaris = collectSettingsPolaris();
     payload.staffUrl = staffUrl;
     payload.leapBibUrlPattern = nextLeapBibUrlPattern;
+    payload.leapPatronUrlPattern = nextLeapPatronUrlPattern;
     payload.enabledLibraryOrgIds = collectEnabledLibraryIds();
     payload.formatIconUrlPattern = getFieldValue('format-icon-url-pattern').trim();
   }
@@ -849,7 +858,7 @@ export async function saveSettings(options = {}) {
     const payload = buildSettingsPayload();
 
     // Save via the library-scoped API
-    // System-only fields (smtp, polaris, staffUrl, leapBibUrlPattern) are only
+    // System-only fields (smtp, polaris, staffUrl, Leap URL patterns) are only
     // included when saving system defaults. Library saves must never send these.
     const isSystemSave = currentLibraryContextOrgId === 'system';
     const libraryPayload = {
@@ -898,6 +907,7 @@ export async function saveSettings(options = {}) {
     if (isSystemSave) {
       libraryPayload.staffUrl = payload.staffUrl;
       libraryPayload.leapBibUrlPattern = payload.leapBibUrlPattern;
+      libraryPayload.leapPatronUrlPattern = payload.leapPatronUrlPattern;
       libraryPayload.smtp = payload.smtp;
       libraryPayload.polaris = payload.polaris;
     }
