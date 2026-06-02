@@ -435,6 +435,61 @@ function stripAndValidateTemplates(value) {
   return { stripped: out, unsafe };
 }
 
+function isEntireSanitizerCall(value) {
+  const match = value.match(/^(escapeAttr|escapeHtml|sanitizeHtml)\s*\(/);
+  if (!match) return false;
+
+  let cursor = match[0].length;
+  let depth = 1;
+  let quote = '';
+  let escaped = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  while (cursor < value.length) {
+    const ch = value[cursor];
+    const next = value[cursor + 1];
+
+    if (inLineComment) {
+      if (ch === '\n') inLineComment = false;
+    } else if (inBlockComment) {
+      if (ch === '*' && next === '/') {
+        cursor++;
+        inBlockComment = false;
+      }
+    } else if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === quote) {
+        quote = '';
+      }
+    } else {
+      if (ch === '/' && next === '/') {
+        inLineComment = true;
+        cursor++;
+      } else if (ch === '/' && next === '*') {
+        inBlockComment = true;
+        cursor++;
+      } else if (ch === '"' || ch === "'" || ch === '`') {
+        quote = ch;
+      } else if (ch === '(') {
+        depth++;
+      } else if (ch === ')') {
+        depth--;
+        if (depth === 0) {
+          return value.slice(cursor + 1).trim() === '';
+        }
+      }
+    }
+
+    cursor++;
+  }
+
+  return false;
+}
+
 function isUnsafeInnerHtmlAssignment(rhs) {
   const trimmed = rhs.trim().replace(/;\s*$/, '').trim();
   if (!trimmed) return false;
@@ -442,8 +497,7 @@ function isUnsafeInnerHtmlAssignment(rhs) {
   // Static literals are fine when explicitly allowed by the nearby comment.
   if (/^[`'"][\s\S]*[`'"]$/.test(trimmed) && !trimmed.includes('${')) return false;
 
-  const entirelySanitized = /^(escapeAttr|escapeHtml|sanitizeHtml)\s*\([\s\S]*\)$/.test(trimmed);
-  if (entirelySanitized) return false;
+  if (isEntireSanitizerCall(trimmed)) return false;
 
   const cleaned = stripSanitizerCalls(trimmed);
   const templateScan = stripAndValidateTemplates(cleaned);
@@ -463,6 +517,7 @@ function isUnsafeInnerHtmlAssignment(rhs) {
 assert.strictEqual(isUnsafeInnerHtmlAssignment('escapeHtml(message);'), false);
 assert.strictEqual(isUnsafeInnerHtmlAssignment('sanitizeHtml(html);'), false);
 assert.strictEqual(isUnsafeInnerHtmlAssignment('escapeHtml(title) + row.untrustedHtml;'), true);
+assert.strictEqual(isUnsafeInnerHtmlAssignment('escapeHtml(title) + String(message);'), true);
 assert.strictEqual(isUnsafeInnerHtmlAssignment('sanitizeHtml(html) + message;'), true);
 assert.strictEqual(isUnsafeInnerHtmlAssignment('`${escapeHtml(title)} ${message}`;'), true);
 
