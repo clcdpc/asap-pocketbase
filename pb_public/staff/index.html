@@ -336,8 +336,8 @@
                     <div class="form-group">
                       <label for="patron-embed-allowed-origins">Allowed patron embed domains</label>
                       <textarea id="patron-embed-allowed-origins" class="form-control" rows="4"
-                        placeholder="https://www.library.org&#10;https://*.library.org"></textarea>
-                      <small class="form-text text-muted">System-level security setting. Enter one website origin per line. Use HTTPS domains, with localhost allowed for development. These domains may embed the patron form in an iframe.</small>
+                        placeholder="https://www.library.org&#10;https://*.library.org&#10;https://sites.google.com&#10;https://*.googleusercontent.com"></textarea>
+                      <small class="form-text text-muted">System-level security setting. Enter one website origin per line. Use HTTPS domains, with localhost allowed for development. Google Sites embeds may also need <code>https://sites.google.com</code> and <code>https://*.googleusercontent.com</code>.</small>
                     </div>
 
                   </div>

@@ -27,6 +27,24 @@ assert.strictEqual(
   "Expected CSP frame-ancestors to include normalized origins"
 );
 
+assert.strictEqual(
+  embedSecurity.frameAncestorsCspForRequest(
+    "https://sites.google.com\nhttps://*.googleusercontent.com",
+    "https://189220427-atari-embeds.googleusercontent.com/"
+  ),
+  "frame-ancestors 'self' https://sites.google.com https://*.googleusercontent.com https://189220427-atari-embeds.googleusercontent.com",
+  "Expected matching generated Google Sites embed origins to be echoed explicitly"
+);
+
+assert.strictEqual(
+  embedSecurity.frameAncestorsCspForRequest(
+    "https://sites.google.com\nhttps://*.googleusercontent.com",
+    "https://attacker.example.org/"
+  ),
+  "frame-ancestors 'self' https://sites.google.com https://*.googleusercontent.com",
+  "Expected non-matching referrers to be ignored"
+);
+
 assert.throws(
   () => embedSecurity.normalizeEmbedAllowedOrigins("http://www.library.org"),
   /https/,
