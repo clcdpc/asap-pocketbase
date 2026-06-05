@@ -44,7 +44,8 @@ console.log('Running system settings save payload test...');
 
 const payload = {
   staffUrl: 'https://example.org/staff',
-  formatIconUrlPattern: 'https://example.org/icons/{format}.png'
+  formatIconUrlPattern: 'https://example.org/icons/{format}.png',
+  patronEmbedAllowedOrigins: 'https://www.library.org'
 };
 
 // Act
@@ -53,5 +54,6 @@ settingsSave.saveSystemSettingsPayload(mockApp, payload);
 // Assert
 assert.ok(savedSystemSettings, 'Expected saveSystemSettings to be called');
 assert.strictEqual(savedSystemSettings.formatIconUrlPattern, 'https://example.org/icons/{format}.png', 'Expected formatIconUrlPattern to be saved');
+assert.strictEqual(savedSystemSettings.patronEmbedAllowedOrigins, 'https://www.library.org', 'Expected patronEmbedAllowedOrigins to be saved');
 
 console.log('System settings save payload test passed!');

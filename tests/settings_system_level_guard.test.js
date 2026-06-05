@@ -121,7 +121,8 @@ assert.ok(
 assert.ok(
   settingsSource.includes('if (isSystemSave)') &&
     settingsSource.includes('libraryPayload.smtp = payload.smtp;') &&
-    settingsSource.includes('libraryPayload.polaris = payload.polaris;'),
+    settingsSource.includes('libraryPayload.polaris = payload.polaris;') &&
+    settingsSource.includes('libraryPayload.patronEmbedAllowedOrigins = payload.patronEmbedAllowedOrigins;'),
   'System-only payload keys should only be included for system-context saves'
 );
 

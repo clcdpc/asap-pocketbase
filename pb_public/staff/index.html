@@ -333,6 +333,12 @@
                         placeholder="https://catalog.example.org/polaris/themes/shared/formats/formatid{MARCTypeOfMaterialID2}.gif">
                       <small class="form-text text-muted">Used to build format icons for Polaris search results. Supports <code>{MARCTypeOfMaterialID}</code>, <code>{MARCTypeOfMaterialID2}</code>, <code>{id}</code>, <code>{id2}</code>, and <code>{SearchCode}</code>.</small>
                     </div>
+                    <div class="form-group">
+                      <label for="patron-embed-allowed-origins">Allowed patron embed domains</label>
+                      <textarea id="patron-embed-allowed-origins" class="form-control" rows="4"
+                        placeholder="https://www.library.org&#10;https://*.library.org"></textarea>
+                      <small class="form-text text-muted">System-level security setting. Enter one website origin per line. Use HTTPS domains, with localhost allowed for development. These domains may embed the patron form in an iframe.</small>
+                    </div>
 
                   </div>
 
@@ -887,6 +893,42 @@
                            </div>
                           </div>
 
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="asap-accordion-item" id="accordion-patron-website-embed">
+                    <button type="button" class="asap-accordion-header" aria-expanded="false" aria-controls="panel-patron-website-embed">
+                      <span class="asap-accordion-title">Website Embed</span>
+                      <span class="asap-accordion-summary">Copy library-specific public form snippets</span>
+                      <i class="fa fa-chevron-down asap-accordion-chevron"></i>
+                    </button>
+                    <div id="panel-patron-website-embed" class="asap-accordion-panel" role="region" aria-labelledby="accordion-patron-website-embed">
+                      <div id="patron-embed-library-panel">
+                        <div id="patron-embed-warning" class="alert alert-warning small hidden" role="status"></div>
+                        <div class="form-group">
+                          <label for="patron-embed-direct-url" class="font-weight-bold">Public form URL</label>
+                          <div class="input-group">
+                            <input id="patron-embed-direct-url" class="form-control" readonly>
+                            <div class="input-group-append">
+                              <button type="button" class="btn btn-outline-secondary patron-copy-btn" data-copy-target="patron-embed-direct-url">Copy</button>
+                            </div>
+                          </div>
+                        </div>
+                        <div class="form-group">
+                          <label for="patron-embed-iframe-code" class="font-weight-bold">Iframe embed code</label>
+                          <textarea id="patron-embed-iframe-code" class="form-control embed-code-field" rows="5" readonly></textarea>
+                          <button type="button" class="btn btn-outline-secondary btn-sm mt-2 patron-copy-btn" data-copy-target="patron-embed-iframe-code">Copy iframe code</button>
+                        </div>
+                        <div class="form-group mb-0">
+                          <label for="patron-embed-loader-code" class="font-weight-bold">Auto-resizing embed code</label>
+                          <textarea id="patron-embed-loader-code" class="form-control embed-code-field" rows="6" readonly></textarea>
+                          <button type="button" class="btn btn-outline-secondary btn-sm mt-2 patron-copy-btn" data-copy-target="patron-embed-loader-code">Copy auto-resizing code</button>
+                        </div>
+                        <small class="form-text text-muted mt-3">A super admin controls which external domains may embed the patron form from the system-level allowed embed domains setting.</small>
+                      </div>
+                      <div id="patron-embed-system-panel" class="alert alert-info small hidden mb-0">
+                        Select a library context to generate website embed code.
                       </div>
                     </div>
                   </div>

@@ -221,6 +221,59 @@ function populatePolarisSettingsForm(polaris) {
   setFieldValue('polaris-workstation-id', polaris.workstationId || '1');
 }
 
+function patronPortalUrl(orgId, embed) {
+  const url = new URL('/patron/', window.location.origin);
+  if (orgId && orgId !== 'system') url.searchParams.set('libraryOrgId', orgId);
+  if (embed) url.searchParams.set('embed', '1');
+  return url.toString();
+}
+
+function buildIframeEmbedCode(url) {
+  return [
+    '<iframe',
+    '  src="' + url + '"',
+    '  title="Suggest a purchase"',
+    '  style="width:100%; min-height:720px; border:0;"',
+    '  loading="lazy">',
+    '</iframe>'
+  ].join('\n');
+}
+
+function buildLoaderEmbedCode(orgId) {
+  return [
+    '<div',
+    '  data-asap-suggestions',
+    '  data-src="' + window.location.origin + '"',
+    '  data-library-org-id="' + orgId + '">',
+    '</div>',
+    '<script src="' + window.location.origin + '/patron/embed.js" async></script>'
+  ].join('\n');
+}
+
+function updatePatronEmbedSnippet(settings) {
+  const isSystem = currentLibraryContextOrgId === 'system';
+  setVisible('patron-embed-library-panel', !isSystem);
+  setVisible('patron-embed-system-panel', isSystem);
+  if (isSystem) return;
+
+  const directUrl = patronPortalUrl(currentLibraryContextOrgId, false);
+  const embedUrl = patronPortalUrl(currentLibraryContextOrgId, true);
+  setFieldValue('patron-embed-direct-url', directUrl);
+  setFieldValue('patron-embed-iframe-code', buildIframeEmbedCode(embedUrl));
+  setFieldValue('patron-embed-loader-code', buildLoaderEmbedCode(currentLibraryContextOrgId));
+
+  const warning = document.getElementById('patron-embed-warning');
+  if (!warning) return;
+  const frameAncestors = String(settings && settings.patronEmbedFrameAncestors || '').trim();
+  if (!frameAncestors || frameAncestors === "frame-ancestors 'self'") {
+    warning.textContent = 'External embedding is not enabled yet. A super admin must add this library website origin to the system-level allowed patron embed domains.';
+    warning.classList.remove('hidden');
+  } else {
+    warning.textContent = '';
+    warning.classList.add('hidden');
+  }
+}
+
 function showSettingsForm() {
   hideSettingsAccessDenied();
   const formEl = document.getElementById('settings-form');
@@ -326,6 +379,7 @@ export function applyLibrarySettingsToForm(settings) {
     setFieldValue('leap-bib-url-pattern', leapBibUrlPattern);
     setFieldValue('leap-patron-url-pattern', leapPatronUrlPattern);
     setFieldValue('format-icon-url-pattern', settings.formatIconUrlPattern || '');
+    setFieldValue('patron-embed-allowed-origins', settings.patronEmbedAllowedOrigins || '');
     if (document.getElementById('system-enabled-libraries-group')) {
       document.getElementById('system-enabled-libraries-group').classList.remove('hidden');
       renderLibraryParticipationCheckboxes();
@@ -362,6 +416,7 @@ export function applyLibrarySettingsToForm(settings) {
     }
     updateLibraryOverrideStatusVisibility(currentSettingsSection);
   }
+  updatePatronEmbedSnippet(settings);
 
   // Only populate global fields (SMTP/Polaris) when in system context.
   // When viewing a library, these fields are hidden and should not be overwritten
@@ -808,6 +863,7 @@ function _serializeSettingsState(validate = false) {
     payload.leapPatronUrlPattern = nextLeapPatronUrlPattern;
     payload.enabledLibraryOrgIds = collectEnabledLibraryIds();
     payload.formatIconUrlPattern = getFieldValue('format-icon-url-pattern').trim();
+    payload.patronEmbedAllowedOrigins = getFieldValue('patron-embed-allowed-origins').trim();
   }
 
   return payload;
@@ -858,8 +914,8 @@ export async function saveSettings(options = {}) {
     const payload = buildSettingsPayload();
 
     // Save via the library-scoped API
-    // System-only fields (smtp, polaris, staffUrl, Leap URL patterns) are only
-    // included when saving system defaults. Library saves must never send these.
+    // System-only fields are only included when saving system defaults.
+    // Library saves must never send these.
     const isSystemSave = currentLibraryContextOrgId === 'system';
     const libraryPayload = {
       orgId: currentLibraryContextOrgId,
@@ -910,6 +966,7 @@ export async function saveSettings(options = {}) {
       libraryPayload.leapPatronUrlPattern = payload.leapPatronUrlPattern;
       libraryPayload.smtp = payload.smtp;
       libraryPayload.polaris = payload.polaris;
+      libraryPayload.patronEmbedAllowedOrigins = payload.patronEmbedAllowedOrigins;
     }
 
     const libraryPromise = authorizedJson('/api/asap/staff/settings/library', {
@@ -967,6 +1024,20 @@ settingsForm.addEventListener('input', markSettingsDirty);
 settingsForm.addEventListener('change', markSettingsDirty);
 document.getElementById('ui-publication-options-editor')?.addEventListener('click', handleOptionListClick);
 document.getElementById('btn-add-publication-option')?.addEventListener('click', () => addOptionListRow('ui-publication-options-editor', defaultPublicationOptions));
+document.querySelectorAll('.patron-copy-btn').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const target = document.getElementById(btn.getAttribute('data-copy-target'));
+    const text = target ? String(target.value || '') : '';
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('Copied embed code.', 'success');
+    } catch (err) {
+      if (target && typeof target.select === 'function') target.select();
+      showToast('Select the field text and copy it.', 'info');
+    }
+  });
+});
 
 export async function loadStaffConfig() {
   try {

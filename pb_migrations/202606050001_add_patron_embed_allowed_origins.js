@@ -1,0 +1,22 @@
+/// <reference path="../pb_data/types.d.ts" />
+
+function field(name, type, options) {
+  options = options || {};
+  options.name = name;
+  options.type = type;
+  return options;
+}
+
+migrate((app) => {
+  const systemSettings = app.findCollectionByNameOrId("system_settings");
+  try {
+    systemSettings.fields.add(new Field(field("patronEmbedAllowedOrigins", "text", { max: 4096 })));
+    app.save(systemSettings);
+  } catch (err) {}
+}, (app) => {
+  const systemSettings = app.findCollectionByNameOrId("system_settings");
+  try {
+    systemSettings.fields.removeByName("patronEmbedAllowedOrigins");
+    app.save(systemSettings);
+  } catch (err) {}
+});

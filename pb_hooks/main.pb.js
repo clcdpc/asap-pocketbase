@@ -2,6 +2,27 @@
 // Note: Library files are located in ../lib/ to prevent the macOS file watcher
 // from triggering infinite restart loops on every require() access.
 
+routerUse((e) => {
+  try {
+    const path = e.request && e.request.url ? String(e.request.url.path || "") : "";
+    if (path.indexOf("/patron/") === 0) {
+      const csp = require(`${__hooks}/../lib/config.js`).patronEmbedFrameAncestors(e.app);
+      e.response.header().set("Content-Security-Policy", csp);
+    }
+  } catch (err) {
+    e.app.logger().warn("Patron embed CSP header skipped", "error", String(err));
+  }
+  return e.next();
+});
+
+routerAdd("GET", "/patron", (e) => {
+  return require(`${__hooks}/../lib/patron_embed_routes.js`).patronIndex(e);
+});
+
+routerAdd("GET", "/patron/", (e) => {
+  return require(`${__hooks}/../lib/patron_embed_routes.js`).patronIndex(e);
+});
+
 routerAdd("POST", "/api/asap/staff/login", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffLogin(e);
 });
