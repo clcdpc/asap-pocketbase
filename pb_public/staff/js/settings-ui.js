@@ -398,7 +398,13 @@ export function renderPatronFormatRulesEditor(rules) {
       modeTd.appendChild(select);
 
       const labelTd = document.createElement('td');
-      labelTd.textContent = def.helpText || '';
+      const labelInput = document.createElement('input');
+      labelInput.type = 'text';
+      labelInput.className = 'form-control form-control-sm format-rule-custom-field-label';
+      labelInput.setAttribute('data-format', format);
+      labelInput.setAttribute('data-field', def.key);
+      labelInput.value = (customFieldRules[def.key] && customFieldRules[def.key].label) || def.label || '';
+      labelTd.appendChild(labelInput);
       tr.append(nameTd, modeTd, labelTd);
       tbody.appendChild(tr);
     });
@@ -458,7 +464,12 @@ export function collectPatronFormatRules() {
     const field = select.getAttribute('data-field');
     if (!rules[format]) return;
     if (!rules[format].customFields) rules[format].customFields = {};
+    const labelInput = editor.querySelector(`.format-rule-custom-field-label[data-format="${format}"][data-field="${field}"]`);
+    const label = labelInput ? labelInput.value.trim() : '';
     rules[format].customFields[field] = { mode: select.value || 'hidden' };
+    if (label) {
+      rules[format].customFields[field].label = label;
+    }
   });
 
   return rules;
@@ -467,7 +478,7 @@ export function collectPatronFormatRules() {
 // Update accordion summary when rules change
 document.addEventListener('input', (e) => {
   const target = e.target;
-  if (target.classList.contains('format-rule-mode') || target.classList.contains('format-rule-label') || target.classList.contains('format-rule-custom-message') || target.classList.contains('format-rule-custom-field-mode')) {
+  if (target.classList.contains('format-rule-mode') || target.classList.contains('format-rule-label') || target.classList.contains('format-rule-custom-message') || target.classList.contains('format-rule-custom-field-mode') || target.classList.contains('format-rule-custom-field-label')) {
     const format = target.getAttribute('data-format');
     if (!format) return;
     

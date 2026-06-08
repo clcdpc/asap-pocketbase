@@ -5,14 +5,15 @@ export function renderCustomFields(definitions, rules) {
   if (!container) return;
   const nodes = [];
   (definitions || []).forEach(def => {
-    const mode = rules && rules[def.key] ? rules[def.key].mode : 'hidden';
+    const rule = rules && rules[def.key] ? rules[def.key] : {};
+    const mode = rule.mode || 'hidden';
     if (mode === 'hidden' || def.enabled === false) return;
-    nodes.push(renderField(def, mode === 'required'));
+    nodes.push(renderField(def, mode === 'required', rule.label));
   });
   container.replaceChildren(...nodes);
 }
 
-function renderField(def, required) {
+function renderField(def, required, labelOverride) {
   const row = document.createElement('div');
   row.className = 'form-group row reqAuth custom-field-row';
   row.setAttribute('data-custom-field-key', def.key);
@@ -20,7 +21,7 @@ function renderField(def, required) {
   const label = document.createElement('label');
   label.className = 'col-5 col-form-label';
   label.setAttribute('for', `custom-field-${def.key}`);
-  label.textContent = def.label + (required ? ' *' : '');
+  label.textContent = (labelOverride || def.label) + (required ? ' *' : '');
 
   const col = document.createElement('div');
   col.className = 'col-7';

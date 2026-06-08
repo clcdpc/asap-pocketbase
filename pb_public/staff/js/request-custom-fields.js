@@ -21,17 +21,14 @@ export function renderEditCustomFields(row, definitions, rules) {
 }
 
 function renderEditCustomField(def, required, historical) {
-  const row = document.createElement('div');
-  row.className = 'form-group row custom-field-row';
-  row.setAttribute('data-custom-field-key', def.key);
+  const group = document.createElement('div');
+  group.className = 'form-group mb-2';
 
   const label = document.createElement('label');
-  label.className = 'col-5 col-form-label small font-weight-bold';
+  label.className = 'small font-weight-bold mb-1';
   label.setAttribute('for', inputId(def.key));
   label.textContent = def.label + (required ? ' *' : '');
 
-  const col = document.createElement('div');
-  col.className = 'col-7';
   let input;
   if (def.type === 'textarea') {
     input = document.createElement('textarea');
@@ -46,28 +43,30 @@ function renderEditCustomField(def, required, historical) {
     input.type = 'text';
   }
   input.id = inputId(def.key);
-  input.className = def.type === 'select' ? 'custom-select custom-field-input' : 'form-control custom-field-input';
+  input.className = 'form-control form-control-sm custom-field-input';
   input.setAttribute('data-custom-field-key', def.key);
   input.required = required;
   input.setAttribute('aria-required', required ? 'true' : 'false');
   input.value = historical ? String(historical.value || '') : '';
-  col.appendChild(input);
 
-  row.append(label, col);
-  return row;
+  group.append(label, input);
+  return group;
 }
 
 function renderHistoricalCustomField(key, value) {
-  const row = document.createElement('div');
-  row.className = 'form-group row custom-field-row custom-field-historical';
+  const group = document.createElement('div');
+  group.className = 'form-group mb-2 custom-field-historical';
+
   const label = document.createElement('div');
-  label.className = 'col-5 col-form-label small font-weight-bold';
+  label.className = 'small font-weight-bold mb-1';
   label.textContent = value && value.label ? value.label : key;
-  const col = document.createElement('div');
-  col.className = 'col-7 small text-muted';
-  col.textContent = value && value.displayValue ? value.displayValue : String(value && value.value || '');
-  row.append(label, col);
-  return row;
+
+  const valueText = document.createElement('div');
+  valueText.className = 'small text-muted';
+  valueText.textContent = value && value.displayValue ? value.displayValue : String(value && value.value || '');
+
+  group.append(label, valueText);
+  return group;
 }
 
 export function collectEditCustomFieldValues() {

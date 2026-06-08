@@ -1941,6 +1941,40 @@ code {
   min-width: 2rem;
 }
 
+
+
+#additional-fields-body .additional-field-drag-handle {
+  cursor: grab;
+  font-size: 1.1rem;
+  user-select: none;
+  padding: 8px 12px;
+  margin: -8px 0;
+}
+
+#additional-fields-body .additional-field-enabled-col {
+  width: 50px;
+}
+
+#additional-fields-body .additional-field-row-dragging {
+  opacity: 0.4;
+}
+
+#additional-fields-body .additional-field-row-drop-target {
+  border-top: 2px solid var(--asap-color-primary);
+}
+
+#additional-fields-body .additional-field-options {
+  min-height: 32px;
+}
+
+#additional-fields-body .additional-field-option-row .form-control-sm {
+  min-width: 0;
+}
+
+#additional-fields-body .additional-field-options-row td {
+  padding-left: 60px;
+}
+
 /* 22. Accordions */
 .asap-accordion {
   border: 1px solid var(--asap-color-border);

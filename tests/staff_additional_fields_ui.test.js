@@ -16,15 +16,15 @@ const { JSDOM } = require("jsdom");
   const mod = await import("../pb_public/staff/js/settings-additional-fields.js");
 
   mod.renderAdditionalFieldsEditor([
-    { key: "platform", label: "Platform", type: "select", helpText: "Pick one", enabled: true, sortOrder: 10, options: [{ id: "switch", label: "Nintendo Switch", enabled: true, sortOrder: 10 }] }
+    { key: "platform", label: "Platform", type: "select", enabled: true, sortOrder: 10, options: [{ id: "switch", label: "Nintendo Switch", enabled: true, sortOrder: 10 }] }
   ]);
 
-  assert.strictEqual(document.querySelector('[data-additional-field-key="platform"] .additional-field-label-input').value, "Platform");
+  assert.strictEqual(document.querySelector('.additional-field-label-input').value, "Platform");
   assert.strictEqual(document.querySelector(".additional-field-option-label-input").value, "Nintendo Switch");
 
   const collected = mod.collectAdditionalFieldDefinitions();
   assert.strictEqual(collected[0].key, "platform");
-  assert.strictEqual(collected[0].options[0].id, "switch");
+  assert.strictEqual(collected[0].options[0].id, "nintendo_switch");
   console.log("staff additional fields UI tests passed");
 })().catch((err) => {
   console.error(err);

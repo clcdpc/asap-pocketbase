@@ -62,6 +62,11 @@ function makeEvent() {
 }
 
 function loadWithMocks(mocks) {
+  mocks.records.CLOSE_REASON = {
+    REJECTED: "rejected", HOLD_COMPLETED: "hold_completed", HOLD_NOT_PICKED_UP: "hold_not_picked_up",
+    HOLD_UNCLAIMED: "hold_unclaimed", HOLD_CANCELLED: "hold_cancelled", HOLD_EXPIRED: "hold_expired",
+    DUPLICATE_HOLD: "duplicate_hold", MANUAL: "manual", PURCHASED_NO_HOLD: "purchased_no_hold"
+  };
   require.cache[recordsPath] = { id: recordsPath, filename: recordsPath, loaded: true, exports: mocks.records };
   require.cache[additionalCopiesPath] = { id: additionalCopiesPath, filename: additionalCopiesPath, loaded: true, exports: mocks.additionalCopies };
   require.cache[formatClaimRulesPath] = { id: formatClaimRulesPath, filename: formatClaimRulesPath, loaded: true, exports: mocks.formatClaimRules };

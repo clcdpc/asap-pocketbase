@@ -2,8 +2,9 @@ import { pb } from './state.js';
 
 const dateRangeLabels = {
   last30: 'Last 30 days',
-  thisMonth: 'This month',
-  last90: 'Last 90 days'
+  last90: 'Last 90 days',
+  lastMonth: 'Last month',
+  thisMonth: 'This month'
 };
 
 const stageLabels = {
@@ -26,7 +27,7 @@ const reasonLabels = {
 };
 
 let analyticsScope = '';
-let analyticsRange = 'last30';
+let analyticsRange = 'lastMonth';
 
 function escapeHtml(value) {
   return String(value || '').replace(/[&<>"']/g, ch => ({
@@ -36,6 +37,12 @@ function escapeHtml(value) {
     '"': '&quot;',
     "'": '&#39;'
   })[ch]);
+}
+
+function formatAnalyticsDate(iso) {
+  if (!iso) return '';
+  var d = new Date(iso);
+  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 function formatCount(value) {
@@ -91,7 +98,7 @@ function renderAnalytics(container, data) {
       <div class="analytics-header">
         <div>
           <h2 id="analytics-title" class="h4 mb-1">Analytics</h2>
-          <p class="text-muted mb-0">Operational summary for ${escapeHtml(data.scope.label)} and ${escapeHtml(dateRangeLabels[data.dateRange.key] || data.dateRange.key)}.</p>
+          <p class="text-muted mb-0">Operational summary for ${escapeHtml(data.scope.label)}: ${escapeHtml(formatAnalyticsDate(data.dateRange.start))} through ${escapeHtml(formatAnalyticsDate(data.dateRange.end))}</p>
         </div>
         <div class="analytics-controls">
           ${renderScopeControl(data)}
@@ -253,7 +260,7 @@ function bindAnalyticsControls(container) {
   const rangeSelect = container.querySelector('#analytics-date-range');
   if (rangeSelect) {
     rangeSelect.addEventListener('change', () => {
-      analyticsRange = rangeSelect.value || 'last30';
+      analyticsRange = rangeSelect.value || 'lastMonth';
       loadAnalytics(container);
     });
   }
