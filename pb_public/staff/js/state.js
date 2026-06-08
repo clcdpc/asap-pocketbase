@@ -83,6 +83,9 @@ export function setVerifiedBibId(id) { verifiedBibId = id; }
 export let publicationOptions = defaultPublicationOptions.slice();
 export function setPublicationOptions(opts) { publicationOptions = opts; }
 
+export let additionalFieldDefinitions = [];
+export function setAdditionalFieldDefinitions(definitions) { additionalFieldDefinitions = Array.isArray(definitions) ? definitions : []; }
+
 export let workflowSettings = { isOverride: false, autoPromote: false, allowPatronAutoholdOptOut: false, allowAnyRegisteredCardLogin: false, outstandingTimeoutEnabled: false, outstandingTimeoutDays: 30, outstandingTimeoutSendEmail: false, outstandingTimeoutRejectionTemplateId: '', holdPickupTimeoutEnabled: false, holdPickupTimeoutDays: 14, pendingHoldTimeoutEnabled: false, pendingHoldTimeoutDays: 14, additionalCopyTimeoutEnabled: false, additionalCopyTimeoutDays: 14,
     externalSearch1Enabled: true,
     externalSearch1Label: 'Search Amazon',

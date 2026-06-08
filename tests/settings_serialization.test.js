@@ -61,6 +61,7 @@ function loadSettingsLogic() {
     function collectAvailableFormats() { return []; }
     function collectOptionList() { return []; }
     function collectPatronFormatRules() { return {}; }
+    function collectAdditionalFieldDefinitions() { return []; }
     function collectFormatClaimRules() { return []; }
     function sortAuthorsByLastName(l) { return l; }
     function collectSettingsPolaris() { return {}; }
@@ -69,6 +70,8 @@ function loadSettingsLogic() {
     function updateModalFormatDropdowns() {}
     function renderOptionListEditor() {}
     function renderPatronFormatRulesEditor() {}
+    function renderAdditionalFieldsEditor() {}
+    function setAdditionalFieldDefinitions() {}
     function updatePublicationOptionsUi() {}
     function renderDuplicateStatusLabelSettings() {}
     
