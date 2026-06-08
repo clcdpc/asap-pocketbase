@@ -81,8 +81,19 @@ function testRequiredValueError() {
   );
 }
 
+function testSelectValuesMustMatchExactOptionIdOrLabel() {
+  const defs = customFields.normalizeDefinitions([
+    { key: "platform", label: "Platform", type: "select", options: [{ id: "switch", label: "Nintendo Switch" }] }
+  ]);
+  assert.throws(
+    () => customFields.sanitizeSubmittedValues({ platform: "SWITCH" }, defs, { platform: { mode: "required" } }),
+    (err) => err && err.code === 400 && /Platform is required/.test(err.message)
+  );
+}
+
 testNormalizeDefinitions();
 testNormalizeFormatCustomFieldRules();
 testSanitizeSubmittedValues();
 testRequiredValueError();
+testSelectValuesMustMatchExactOptionIdOrLabel();
 console.log("custom_fields tests passed");
