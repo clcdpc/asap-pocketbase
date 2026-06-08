@@ -9,6 +9,7 @@ pb_data_test/
 .env.*
 logs/
 db_data/
+.worktrees/
 
 # Build/dependency output.
 node_modules/
