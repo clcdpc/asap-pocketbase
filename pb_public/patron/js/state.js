@@ -18,6 +18,11 @@ export const defaultPublicationOptions = ['Already published', 'Coming soon', 'P
 export const formatKeys = ['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'];
 export const fieldKeys = ['title', 'author', 'identifier', 'publication'];
 
+export let additionalFieldDefinitions = [];
+export function setAdditionalFieldDefinitions(definitions) {
+  additionalFieldDefinitions = Array.isArray(definitions) ? definitions : [];
+}
+
 export let authToken = '';
 export function setAuthToken(token) {
   authToken = token || '';

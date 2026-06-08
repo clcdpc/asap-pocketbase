@@ -9,7 +9,8 @@ export function normalizeMessageBehavior(value, fallback) {
 export function normalizeFormatRule(formatKey, rawRule, defaultRule, bookDefaultRule, fieldKeys) {
   const normalized = {
     messageBehavior: 'none',
-    fields: {}
+    fields: {},
+    customFields: {}
   };
   const incomingRule = rawRule && typeof rawRule === 'object' ? rawRule : {};
   const fallbackRule = defaultRule || bookDefaultRule || { messageBehavior: 'none', fields: {} };
@@ -28,6 +29,15 @@ export function normalizeFormatRule(formatKey, rawRule, defaultRule, bookDefault
       label: String(incomingField.label || fallbackField.label || field).trim() || fallbackField.label || field
     };
   });
+
+  if (incomingRule.customFields && typeof incomingRule.customFields === 'object') {
+    Object.keys(incomingRule.customFields).forEach(key => {
+      const incomingCustom = incomingRule.customFields[key] || {};
+      normalized.customFields[key] = {
+        mode: normalizeMode(incomingCustom.mode, 'hidden')
+      };
+    });
+  }
 
   return normalized;
 }

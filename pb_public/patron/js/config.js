@@ -1,4 +1,4 @@
-import { defaultPublicationOptions, fieldKeys, formatKeys } from './state.js';
+import { defaultPublicationOptions, fieldKeys, formatKeys, setAdditionalFieldDefinitions } from './state.js';
 import { loadPatronConfig } from './api.js';
 import { normalizeFormatRules } from './form-rules.js';
 
@@ -124,6 +124,7 @@ export function applyLoadedUiText(config) {
     Object.assign(formatRules, nextRules);
     uiConfig.formatRules = formatRules;
   }
+  setAdditionalFieldDefinitions(Array.isArray(uiConfig.additionalFieldDefinitions) ? uiConfig.additionalFieldDefinitions : []);
   setPublicationOptions(uiConfig.publicationOptions);
   return nextConfig;
 }

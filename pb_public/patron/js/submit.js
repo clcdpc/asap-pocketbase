@@ -6,6 +6,7 @@ import { showConflictStep, showSuccessStep } from './steps.js';
 import { byId, setText, setVisible } from './dom.js';
 import { escapeHtml, sanitizeHtml, applyPatronTextPlaceholders } from './html.js';
 import { handleSessionExpired } from './auth.js';
+import { collectCustomFieldValues } from './custom-fields.js';
 
 export function setSubmitBusy(isBusy) {
   const btn = byId('submit-btn');
@@ -29,6 +30,7 @@ export function collectSuggestionPayload() {
   if (autoholdCheckbox) {
     data.autohold = autoholdCheckbox.checked;
   }
+  data.customFields = collectCustomFieldValues();
   const contextId = patronContextId || sessionStorage.getItem('asap_patron_context_id') || '';
   if (contextId) data.patronContextId = contextId;
   return data;

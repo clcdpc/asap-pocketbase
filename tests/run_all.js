@@ -10,7 +10,8 @@ const registeredTests = [
   "custom_fields_schema.test.js",
   "config_custom_fields_scope.test.js",
   "records_custom_fields.test.js",
-  "staff_additional_fields_ui.test.js"
+  "staff_additional_fields_ui.test.js",
+  "patron_custom_fields_ui.test.js"
 ];
 
 const files = Array.from(new Set(registeredTests.concat(fs.readdirSync(testDir))))
