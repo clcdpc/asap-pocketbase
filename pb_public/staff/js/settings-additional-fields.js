@@ -53,13 +53,13 @@ export function renderAdditionalFieldsEditor(definitions = additionalFieldDefini
     const tr = document.createElement('tr');
     tr.className = 'additional-field-row';
     tr.setAttribute('data-index', index);
+    tr.draggable = true;
 
     const dragTd = document.createElement('td');
-    dragTd.className = 'format-drag-col';
+    dragTd.className = 'format-drag-col align-middle';
     const dragHandle = document.createElement('span');
     dragHandle.className = 'text-muted additional-field-drag-handle';
     dragHandle.textContent = '\u2195';
-    dragHandle.draggable = true;
     dragTd.appendChild(dragHandle);
     tr.appendChild(dragTd);
 
@@ -91,7 +91,7 @@ export function renderAdditionalFieldsEditor(definitions = additionalFieldDefini
     const typeTd = document.createElement('td');
     const select = document.createElement('select');
     select.className = 'form-control form-control-sm additional-field-type-select';
-    ['text', 'textarea', 'select'].forEach(type => select.appendChild(option(type, type)));
+    [['text', 'Text'], ['textarea', 'Paragraph'], ['select', 'Drop-down']].forEach(([value, label]) => select.appendChild(option(value, label)));
     select.value = def.type || 'text';
     typeTd.appendChild(select);
     tr.appendChild(typeTd);
@@ -112,8 +112,12 @@ export function renderAdditionalFieldsEditor(definitions = additionalFieldDefini
       optionsTr.className = 'additional-field-options-row';
       optionsTr.setAttribute('data-parent-index', index);
 
+      const spacerTd = document.createElement('td');
+      spacerTd.colSpan = 2;
+      optionsTr.appendChild(spacerTd);
+
       const optionsTd = document.createElement('td');
-      optionsTd.colSpan = 5;
+      optionsTd.colSpan = 3;
       optionsTd.className = 'pb-2';
 
       const options = document.createElement('div');
@@ -233,36 +237,55 @@ document.addEventListener('dragend', () => {
 });
 
 document.addEventListener('dragover', event => {
-  const target = event.target.closest('#additional-fields-body > tr.additional-field-row');
-  if (!target || target === draggingFieldRow) return;
+  const tbody = document.getElementById('additional-fields-body');
+  if (!tbody) return;
+  const target = event.target.closest('#additional-fields-body > tr');
+  if (!target || !draggingFieldRow || target === draggingFieldRow) return;
+  
+  // If target is an options row, check if it belongs to the dragging row
+  if (target.classList.contains('additional-field-options-row') && 
+      target.getAttribute('data-parent-index') === draggingFieldRow.getAttribute('data-index')) {
+    return;
+  }
+
   event.preventDefault();
   event.dataTransfer.dropEffect = 'move';
-  document.querySelectorAll('#additional-fields-body > tr').forEach(r => r.classList.remove('additional-field-row-drop-target'));
-  target.classList.add('additional-field-row-drop-target');
+  tbody.querySelectorAll('tr').forEach(r => r.classList.remove('additional-field-row-drop-target'));
+  
+  // Highlight the target field row (if targeting options, highlight parent field)
+  const targetField = target.classList.contains('additional-field-row') ? 
+                      target : 
+                      tbody.querySelector(`.additional-field-row[data-index="${target.getAttribute('data-parent-index')}"]`);
+  if (targetField && targetField !== draggingFieldRow) {
+    targetField.classList.add('additional-field-row-drop-target');
+  }
 });
 
 document.addEventListener('drop', event => {
   event.preventDefault();
-  const target = event.target.closest('#additional-fields-body > tr.additional-field-row');
-  if (!target || !draggingFieldRow || target === draggingFieldRow) return;
-  document.querySelectorAll('#additional-fields-body > tr').forEach(r => r.classList.remove('additional-field-row-drop-target'));
   const tbody = document.getElementById('additional-fields-body');
-  if (!tbody) return;
+  if (!tbody || !draggingFieldRow) return;
+
+  const target = event.target.closest('#additional-fields-body > tr');
+  if (!target || target === draggingFieldRow) return;
+
+  tbody.querySelectorAll('tr').forEach(r => r.classList.remove('additional-field-row-drop-target'));
+  
+  // Determine target field row
+  const targetField = target.classList.contains('additional-field-row') ? 
+                      target : 
+                      tbody.querySelector(`.additional-field-row[data-index="${target.getAttribute('data-parent-index')}"]`);
+  if (!targetField || targetField === draggingFieldRow) return;
+
   syncFromDom();
-  if (!tbody.contains(draggingFieldRow) || !tbody.contains(target)) return;
-
-  const draggedIndex = parseInt(draggingFieldRow.getAttribute('data-index'), 10);
-  const targetIndex = parseInt(target.getAttribute('data-index'), 10);
+  
+  const draggedIndex = draggingFieldRow.getAttribute('data-index');
   const draggedOptions = tbody.querySelector(`.additional-field-options-row[data-parent-index="${draggedIndex}"]`);
-  const targetOptions = tbody.querySelector(`.additional-field-options-row[data-parent-index="${targetIndex}"]`);
 
-  if (targetOptions) {
-    tbody.insertBefore(draggingFieldRow, targetOptions.nextSibling);
-    if (draggedOptions) tbody.insertBefore(draggedOptions, targetOptions.nextSibling);
-  } else {
-    const targetNext = target.nextSibling;
-    tbody.insertBefore(draggingFieldRow, targetNext);
-    if (draggedOptions) tbody.insertBefore(draggedOptions, targetNext);
+  // Move in DOM: insert before the target field
+  tbody.insertBefore(draggingFieldRow, targetField);
+  if (draggedOptions) {
+    tbody.insertBefore(draggedOptions, draggingFieldRow.nextSibling);
   }
 
   setAdditionalFieldDefinitions(collectAdditionalFieldDefinitions());

@@ -1972,7 +1972,7 @@ code {
 }
 
 #additional-fields-body .additional-field-options-row td {
-  padding-left: 60px;
+  padding-left: 0;
 }
 
 /* 22. Accordions */
