@@ -42,7 +42,7 @@ function testNormalizeFormatCustomFieldRules() {
 
   assert.deepStrictEqual(rules, {
     platform: { mode: "required" },
-    content_note: { mode: "optional" },
+    content_note: { mode: "hidden" },
     disabled_field: { mode: "hidden" }
   });
 }
