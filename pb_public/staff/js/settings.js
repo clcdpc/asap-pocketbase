@@ -778,7 +778,7 @@ function _serializeSettingsState(validate = false) {
     availableFormats: collectAvailableFormats(),
     publicationOptions: collectOptionList('ui-publication-options-editor', defaultPublicationOptions),
     formatRules: collectPatronFormatRules(),
-    additionalFieldDefinitions: isSystemContext ? undefined : collectAdditionalFieldDefinitions()
+    ...(isSystemContext ? {} : { additionalFieldDefinitions: collectAdditionalFieldDefinitions() })
   };
 
   const emails = {
