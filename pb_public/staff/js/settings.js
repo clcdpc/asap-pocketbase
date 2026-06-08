@@ -1061,6 +1061,10 @@ export async function loadStaffConfig() {
         document.getElementById('nav-logo').alt = config.logoAlt;
       }
       updatePublicationOptionsUi(config.publicationOptions);
+      if (currentLibraryContextOrgId === 'system') {
+        setAdditionalFieldDefinitions(config.additionalFieldDefinitions || []);
+        setCurrentPatronFieldConfig(config.additionalFieldDefinitions || [], config.formatRules || {});
+      }
     }
   } catch (err) {
     console.error('Failed to load global config');
