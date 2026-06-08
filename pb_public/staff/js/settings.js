@@ -699,6 +699,7 @@ export function populatePatronUiForms(uiText) {
   renderOptionListEditor('ui-publication-options-editor', uiText.publicationOptions, defaultPublicationOptions);
   setAdditionalFieldDefinitions(uiText.additionalFieldDefinitions || []);
   renderAdditionalFieldsEditor(uiText.additionalFieldDefinitions || []);
+  setCurrentPatronFieldConfig(uiText.additionalFieldDefinitions || [], uiText.formatRules || {});
   const patronScope = document.getElementById('patron-options-scope');
   if (patronScope) {
     if (currentLibraryContextOrgId === 'system') {
@@ -713,7 +714,6 @@ export function populatePatronUiForms(uiText) {
     }
   }
   renderPatronFormatRulesEditor(uiText.formatRules);
-  setCurrentPatronFieldConfig(uiText.additionalFieldDefinitions || [], uiText.formatRules || {});
   updatePublicationOptionsUi(uiText.publicationOptions);
 }
 
