@@ -5,7 +5,7 @@ const cp = require("child_process");
 
 const testDir = __dirname;
 const filterArg = process.argv[2] ? process.argv[2].toLowerCase() : "";
-const registeredTests = ["custom_fields.test.js"];
+const registeredTests = ["custom_fields.test.js", "custom_fields_schema.test.js"];
 
 const files = Array.from(new Set(registeredTests.concat(fs.readdirSync(testDir))))
   .filter((name) => {
