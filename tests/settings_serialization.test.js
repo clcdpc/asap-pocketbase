@@ -72,6 +72,7 @@ function loadSettingsLogic() {
     function renderPatronFormatRulesEditor() {}
     function renderAdditionalFieldsEditor() {}
     function setAdditionalFieldDefinitions() {}
+    function setCurrentPatronFieldConfig() {}
     function updatePublicationOptionsUi() {}
     function renderDuplicateStatusLabelSettings() {}
     
