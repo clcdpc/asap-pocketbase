@@ -106,7 +106,7 @@ If a library has no additional field definitions, public behavior is unchanged.
 
 ## Staff Settings
 
-Add an "Additional Fields" editor in the library patron/form settings area, after the existing format display/rules controls.
+Add an "Additional Fields" editor as its own accordion in the Patron Experience settings area, positioned above the format rules section.
 
 The editor supports:
 
