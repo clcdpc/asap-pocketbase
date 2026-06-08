@@ -1,4 +1,4 @@
-import { pb, settingsContainer, settingsForm, formatMap, availableFormats, setAvailableFormats, currentRejectionTemplates, verifiedBibId, publicationOptions, setPublicationOptions, workflowSettings, currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, initialSettingsSnapshot, libraryContextLoadSerial, librarySelectorBound, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, leapPatronUrlPattern, lastWorkflowEnabledList, defaultPublicationOptions, emailTemplateDefaults, setVerifiedBibId, setCurrentLibraryContextOrgId, setCurrentFormatClaimRules, setFormatClaimStaffOptions, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId, setInitialSettingsSnapshot, setLibrarySelectorBound, setSettingsSaving, setSettingsLoading, setLeapBibUrlPattern, setLeapPatronUrlPattern, setLastWorkflowEnabledList, incrementLibraryContextLoadSerial, libraryOverridesSummary, setLibraryOverridesSummary } from './state.js';
+import { pb, settingsContainer, settingsForm, formatMap, availableFormats, setAvailableFormats, currentRejectionTemplates, verifiedBibId, publicationOptions, setPublicationOptions, workflowSettings, currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, initialSettingsSnapshot, libraryContextLoadSerial, librarySelectorBound, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, leapPatronUrlPattern, lastWorkflowEnabledList, defaultPublicationOptions, emailTemplateDefaults, setVerifiedBibId, setCurrentLibraryContextOrgId, setCurrentFormatClaimRules, setFormatClaimStaffOptions, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId, setInitialSettingsSnapshot, setLibrarySelectorBound, setSettingsSaving, setSettingsLoading, setLeapBibUrlPattern, setLeapPatronUrlPattern, setLastWorkflowEnabledList, incrementLibraryContextLoadSerial, libraryOverridesSummary, setLibraryOverridesSummary, setAdditionalFieldDefinitions, setCurrentPatronFieldConfig } from './state.js';
 
 import { setFieldValue, setFieldChecked, getFieldValue, getFieldChecked, validateStaffUrl, normalizeStaffUrl, normalizeLeapBibUrlPattern, normalizeLeapPatronUrlPattern, isPocketBaseAutoCancelError, validateSmtpHostField, setVisible, isSuperAdminStaff, updateSaveBarState, markSettingsDirty, markSettingsClean, activateSettingsSection, initSettingsNavigation, updateEmailStatusBanner, updateOrganizationsStatusUi, checkAuth, loadSetupStatus, updateAutoRejectEmailControls, updateLibraryOverrideStatusVisibility } from './api.js';
 import { authorizedJson } from './http.js';
@@ -10,6 +10,7 @@ import { renderDuplicateStatusLabelSettings, collectDuplicateStatusLabels } from
 import { collectSettingsPolaris, syncPolarisOrganizations, renderLibraryParticipationCheckboxes, collectEnabledLibraryIds } from './settings-polaris.js';
 import { populateEmailTemplateForms } from './settings-templates.js';
 import { updatePublicationOptionsUi, renderPatronFormatRulesEditor, collectPatronFormatRules, renderOptionListEditor, collectOptionList, addOptionListRow, handleOptionListClick } from './settings-ui.js';
+import { renderAdditionalFieldsEditor, collectAdditionalFieldDefinitions } from './settings-additional-fields.js';
 import { loadStaffUsers, populateStaffLibraryOptions } from './settings-users.js';
 
 const adminSettingsSections = ['start', 'staff', 'templates', 'workflow', 'patron'];
@@ -696,6 +697,9 @@ export function populatePatronUiForms(uiText) {
   updateModalFormatDropdowns();
 
   renderOptionListEditor('ui-publication-options-editor', uiText.publicationOptions, defaultPublicationOptions);
+  setAdditionalFieldDefinitions(uiText.additionalFieldDefinitions || []);
+  renderAdditionalFieldsEditor(uiText.additionalFieldDefinitions || []);
+  setCurrentPatronFieldConfig(uiText.additionalFieldDefinitions || [], uiText.formatRules || {});
   const patronScope = document.getElementById('patron-options-scope');
   if (patronScope) {
     if (currentLibraryContextOrgId === 'system') {
@@ -773,7 +777,8 @@ function _serializeSettingsState(validate = false) {
     formatOrder: collectFormatOrder(),
     availableFormats: collectAvailableFormats(),
     publicationOptions: collectOptionList('ui-publication-options-editor', defaultPublicationOptions),
-    formatRules: collectPatronFormatRules()
+    formatRules: collectPatronFormatRules(),
+    ...(isSystemContext ? {} : { additionalFieldDefinitions: collectAdditionalFieldDefinitions() })
   };
 
   const emails = {
@@ -1056,6 +1061,10 @@ export async function loadStaffConfig() {
         document.getElementById('nav-logo').alt = config.logoAlt;
       }
       updatePublicationOptionsUi(config.publicationOptions);
+      if (currentLibraryContextOrgId === 'system') {
+        setAdditionalFieldDefinitions(config.additionalFieldDefinitions || []);
+        setCurrentPatronFieldConfig(config.additionalFieldDefinitions || [], config.formatRules || {});
+      }
     }
   } catch (err) {
     console.error('Failed to load global config');

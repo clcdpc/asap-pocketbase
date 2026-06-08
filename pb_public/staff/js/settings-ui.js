@@ -1,4 +1,4 @@
-import { pb, formatMap, availableFormats, patronFormatKeys, patronFormatFields, defaultPatronFormatRules, currentSuggestions, publicationOptions, setPublicationOptions, defaultPublicationOptions, setVerifiedBibId } from './state.js';
+import { pb, formatMap, availableFormats, patronFormatKeys, patronFormatFields, defaultPatronFormatRules, currentSuggestions, publicationOptions, setPublicationOptions, defaultPublicationOptions, setVerifiedBibId, additionalFieldDefinitions } from './state.js';
 import { isValidSmtpHost, validateSmtpHostField, markSettingsDirty } from './api.js';
 import { showToast } from './dialogs.js';
 import { escapeAttr } from './grid.js';
@@ -153,6 +153,17 @@ export function normalizePatronFormatRules(rules) {
         mode,
         label: String(incomingField.label || defaultField.label || fieldInfo.label).trim() || defaultField.label || fieldInfo.label
       };
+    });
+
+    const incomingCustomFields = incomingFormat.customFields || {};
+    normalized[format].customFields = {};
+    additionalFieldDefinitions.forEach(def => {
+      if (!def || !def.key) return;
+      const incomingRule = incomingCustomFields[def.key] || {};
+      let mode = String(incomingRule.mode || 'hidden').trim();
+      if (!['required', 'optional', 'hidden'].includes(mode)) mode = 'hidden';
+      if (def.enabled === false) mode = 'hidden';
+      normalized[format].customFields[def.key] = { mode };
     });
   });
 
@@ -364,6 +375,34 @@ export function renderPatronFormatRulesEditor(rules) {
       tbody.appendChild(tr);
     });
 
+    const customFieldRules = rule.customFields || {};
+    additionalFieldDefinitions.forEach(def => {
+      if (!def || !def.key) return;
+      const tr = document.createElement('tr');
+
+      const nameTd = document.createElement('td');
+      const strong = document.createElement('strong');
+      strong.textContent = def.label || def.key;
+      const storage = document.createElement('div');
+      storage.className = 'small text-muted';
+      storage.textContent = `Additional ${def.type || 'text'} field`;
+      nameTd.append(strong, storage);
+
+      const modeTd = document.createElement('td');
+      const select = document.createElement('select');
+      select.className = 'form-control form-control-sm format-rule-custom-field-mode';
+      select.setAttribute('data-format', format);
+      select.setAttribute('data-field', def.key);
+      ['required', 'optional', 'hidden'].forEach(mode => select.appendChild(new Option(mode.charAt(0).toUpperCase() + mode.slice(1), mode)));
+      select.value = (customFieldRules[def.key] && customFieldRules[def.key].mode) || 'hidden';
+      modeTd.appendChild(select);
+
+      const labelTd = document.createElement('td');
+      labelTd.textContent = def.helpText || '';
+      tr.append(nameTd, modeTd, labelTd);
+      tbody.appendChild(tr);
+    });
+
     table.append(thead, tbody);
     tableWrap.appendChild(table);
     if (rule.messageBehavior !== 'none') tableWrap.classList.add('hidden');
@@ -414,13 +453,21 @@ export function collectPatronFormatRules() {
     }
   });
 
+  editor.querySelectorAll('.format-rule-custom-field-mode').forEach(select => {
+    const format = select.getAttribute('data-format');
+    const field = select.getAttribute('data-field');
+    if (!rules[format]) return;
+    if (!rules[format].customFields) rules[format].customFields = {};
+    rules[format].customFields[field] = { mode: select.value || 'hidden' };
+  });
+
   return rules;
 }
 
 // Update accordion summary when rules change
 document.addEventListener('input', (e) => {
   const target = e.target;
-  if (target.classList.contains('format-rule-mode') || target.classList.contains('format-rule-label') || target.classList.contains('format-rule-custom-message')) {
+  if (target.classList.contains('format-rule-mode') || target.classList.contains('format-rule-label') || target.classList.contains('format-rule-custom-message') || target.classList.contains('format-rule-custom-field-mode')) {
     const format = target.getAttribute('data-format');
     if (!format) return;
     
@@ -436,7 +483,7 @@ document.addEventListener('input', (e) => {
     const messageArea = item.querySelector('.format-rule-custom-message');
     if (messageArea) rule.message = messageArea.value;
 
-    const modes = item.querySelectorAll(`.format-rule-mode[data-format="${format}"]`);
+    const modes = item.querySelectorAll(`.format-rule-mode[data-format="${format}"], .format-rule-custom-field-mode[data-format="${format}"]`);
     modes.forEach(sel => {
       const field = sel.getAttribute('data-field');
       rule.fields[field] = { mode: sel.value };

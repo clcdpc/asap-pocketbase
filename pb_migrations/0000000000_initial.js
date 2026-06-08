@@ -235,6 +235,7 @@ migrate((app) => {
       field("author", "text", { max: 256 }),
       field("identifier", "text", { max: 64 }),
       field("publication", "text", { max: 128 }),
+      field("customFields", "json"),
       field("exactPublicationDate", "date"),
       field("autohold", "bool"),
       field("status", "text", { required: true, max: 64 }),

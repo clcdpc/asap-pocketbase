@@ -5,7 +5,8 @@ import {
   physicalFields,
   econtentFields,
   setLastSelectedFormat,
-  suggestionForm
+  suggestionForm,
+  additionalFieldDefinitions
 } from './state.js';
 import {
   defaultFormatRules,
@@ -19,6 +20,7 @@ import { getFieldRule } from './form-rules.js';
 import { byId, optionNode, replaceChildren, setLabel, setText, setVisible } from './dom.js';
 import { sanitizeHtml, applyPatronTextPlaceholders } from './html.js';
 import { showSuggestionStep } from './steps.js';
+import { renderCustomFields } from './custom-fields.js';
 
 export function fieldElements(field) {
   const ids = {
@@ -86,6 +88,7 @@ export function updateFormatUI() {
         els.input.disabled = true;
       }
     });
+    renderCustomFields([], {});
     return;
   }
 
@@ -95,6 +98,7 @@ export function updateFormatUI() {
   fieldKeys.forEach(field => {
     updateFieldRuleUi(field, getFieldRule(formatRules, format, field, defaultFormatRules));
   });
+  renderCustomFields(additionalFieldDefinitions, rule.customFields || {});
 }
 
 export function populatePublicationOptions(options) {

@@ -1,4 +1,4 @@
-import { pb, formatMap, availableFormats, currentRejectionTemplates, currentStatus, currentSuggestions, allSuggestions, verifiedBibId, publicationOptions, setVerifiedBibId, workflowSettings } from './state.js';
+import { pb, formatMap, availableFormats, currentRejectionTemplates, currentStatus, currentSuggestions, allSuggestions, verifiedBibId, publicationOptions, setVerifiedBibId, workflowSettings, currentAdditionalFieldDefinitions, currentFormatRules } from './state.js';
 import { leapBibUrl, leapPatronUrl, openProfileDialog } from './api.js';
 import { closeDuplicateRequest } from './actions.js';
 import { showToast, showAlert, showConfirm } from './dialogs.js';
@@ -6,6 +6,7 @@ import { loadTab, formatDateTime, renderWorkflowTags, escapeAttr } from './grid.
 import { setSelectValue, dateOnly, lookupEditBibById, applySelectedPolarisResultToEditForm } from './settings-ui.js';
 import { rememberRecentSuggestion, renderRecentSuggestionsSwitcher, updateRecentSuggestion } from './recent-suggestions.js';
 import { loadEditPickupForRequest } from './edit-pickup.js';
+import { renderEditCustomFields, collectEditCustomFieldValues } from './request-custom-fields.js';
 
 export async function confirmDuplicateOpenRequestClose(err, id) {
   const confirmed = await showConfirm(
@@ -106,6 +107,7 @@ export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
   renderPurchaseReminderOption(actionStr);
   renderEditMetadata(row);
   loadEditPickupForRequest(row);
+  renderEditCustomFieldsForCurrentFormat(row);
 
   document.getElementById('edit-notes').value = getExistingHistory(row);
   renderPendingAuditPreview(row, nextStatus, actionStr);
@@ -118,6 +120,13 @@ export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
 
   document.getElementById('editModal').showModal();
   document.getElementById('close-modal-btn').focus();
+}
+
+function renderEditCustomFieldsForCurrentFormat(row) {
+  const editFormat = document.getElementById('edit-format');
+  const format = (editFormat && editFormat.value) || (row && row.format) || 'book';
+  const formatRule = currentFormatRules[format] || {};
+  renderEditCustomFields(row, currentAdditionalFieldDefinitions, formatRule.customFields || {});
 }
 
 function looksLikeCatalogPublicationDate(value) {
@@ -1247,6 +1256,7 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
     selectedPolarisPublication: document.getElementById('selectedPolarisPublication')?.value || '',
     selectedPolarisFormat: document.getElementById('selectedPolarisFormat')?.value || '',
     notes: getDraftCommentValue(),
+    customFields: collectEditCustomFieldValues(),
     autohold: document.getElementById('edit-autohold').checked,
     editedBy: pb.authStore.model.username
   };
@@ -1466,10 +1476,17 @@ function refreshEditAuditPreview() {
   if (row) renderPendingAuditPreview(row, nextStatus, actionStr);
 }
 
+function refreshEditCustomFields() {
+  const id = document.getElementById('edit-id').value;
+  const row = currentSuggestions.find(r => r.id === id) || allSuggestions.find(r => r.id === id);
+  if (row) renderEditCustomFieldsForCurrentFormat(row);
+}
+
 // Event listeners for Edit Form changes to refresh preview
 ['edit-format', 'edit-publication', 'edit-autohold'].forEach(id => {
   document.getElementById(id)?.addEventListener('change', refreshEditAuditPreview);
 });
+document.getElementById('edit-format')?.addEventListener('change', refreshEditCustomFields);
 
 // Watch for BIB changes to refresh preview (and cleanup flags when verified)
 document.getElementById('edit-bibid')?.addEventListener('input', refreshEditAuditPreview);

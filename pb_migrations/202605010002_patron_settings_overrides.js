@@ -25,6 +25,7 @@ migrate((app) => {
         field("duplicateStatusLabels", "json"),
         field("publicationOptions", "json"),
         field("patronFormatRules", "json"),
+        field("additionalFieldDefinitions", "json"),
         field("ebookMessage", "editor", { maxSize: 10000, convertURLs: false }),
         field("eaudiobookMessage", "editor", { maxSize: 10000, convertURLs: false })
       ],
