@@ -12,10 +12,13 @@ async function populateNewSuggestionLibrarySelector() {
 
   if (!isSuperAdminStaff()) {
     group.classList.add('hidden');
+    select.value = '';
+    select.disabled = true;
     return;
   }
 
   group.classList.remove('hidden');
+  select.disabled = false;
   select.replaceChildren();
   const placeholder = document.createElement('option');
   placeholder.value = '';
@@ -208,22 +211,29 @@ document.getElementById('new-suggestion-form').addEventListener('submit', async 
 });
 
 function staffSuggestionRequiresLibrarySelection() {
+  if (!isSuperAdminStaff()) return false;
   const select = document.getElementById('new-suggestion-library');
-  if (select && !select.classList.contains('hidden') && !select.value) {
+  if (staffSuggestionLibrarySelectorVisible() && !select.value) {
     return true;
   }
   const scopeId = String(currentWorkflowOrgScopeId || '').trim();
-  return isSuperAdminStaff() && (!scopeId || scopeId === 'all' || scopeId === 'system') && (!select || select.classList.contains('hidden') || !select.value);
+  return (!scopeId || scopeId === 'all' || scopeId === 'system') && (!staffSuggestionLibrarySelectorVisible() || !select.value);
+}
+
+function staffSuggestionLibrarySelectorVisible() {
+  const select = document.getElementById('new-suggestion-library');
+  const group = document.getElementById('new-suggestion-library-group');
+  return !!(select && group && !group.classList.contains('hidden'));
 }
 
 function staffSuggestionLibraryPayload(payload) {
   const next = Object.assign({}, payload || {});
   const select = document.getElementById('new-suggestion-library');
-  if (select && !select.classList.contains('hidden') && select.value) {
+  if (isSuperAdminStaff() && staffSuggestionLibrarySelectorVisible() && select.value) {
     next.libraryOrgId = select.value;
   } else {
     const scopeId = String(currentWorkflowOrgScopeId || '').trim();
-    if (scopeId && scopeId !== 'all' && scopeId !== 'system') {
+    if (isSuperAdminStaff() && scopeId && scopeId !== 'all' && scopeId !== 'system') {
       next.libraryOrgId = scopeId;
     }
   }
