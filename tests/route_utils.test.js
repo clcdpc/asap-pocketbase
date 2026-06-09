@@ -281,6 +281,31 @@ test('isIsbnCapableFormat() checks format rules', () => {
   assert.strictEqual(routeUtils.isIsbnCapableFormat('book', uiText), true);
 });
 
+test('noteSkippedEmail() delegates to mail.noteSkipped', () => {
+  const mail = require('../lib/mail.js');
+  const originalNoteSkipped = mail.noteSkipped;
+
+  let calledApp = null;
+  let calledRecord = null;
+
+  mail.noteSkipped = (app, record) => {
+    calledApp = app;
+    calledRecord = record;
+  };
+
+  try {
+    const mockApp = { id: 'test_app' };
+    const mockRecord = { id: 'test_record' };
+
+    routeUtils.noteSkippedEmail(mockApp, mockRecord);
+
+    assert.strictEqual(calledApp, mockApp);
+    assert.strictEqual(calledRecord, mockRecord);
+  } finally {
+    mail.noteSkipped = originalNoteSkipped;
+  }
+});
+
 test('applyIsbnCheckStatusForCreate() sets status', () => {
   const data = { format: 'book', isbn: '123' };
   const uiText = {
