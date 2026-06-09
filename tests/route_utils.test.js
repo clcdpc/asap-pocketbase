@@ -11,6 +11,8 @@ global.UnauthorizedError = class UnauthorizedError extends Error {
   }
 };
 
+const config = require('../lib/config.js');
+const records = require('../lib/records.js');
 const routeUtils = require('../lib/route_utils.js');
 
 console.log('Running tests for lib/route_utils.js...');
@@ -292,6 +294,34 @@ test('applyIsbnCheckStatusForCreate() sets status', () => {
   const data2 = { format: 'book' };
   routeUtils.applyIsbnCheckStatusForCreate(data2, uiText);
   assert.strictEqual(data2.isbnCheckStatus, 'skipped_no_isbn');
+});
+
+test('staffRequestUrl() returns correct staff URL with query params', () => {
+  const oldStaffUrl = config.staffUrl;
+  const oldNormalizeStatus = records.normalizeStatus;
+
+  try {
+    config.staffUrl = (app) => 'http://staff.test';
+    records.normalizeStatus = (status) => 'test_stage';
+
+    const mockApp = {};
+    const mockRecord = {
+      id: 'req123',
+      get: (field) => field === 'status' ? 'raw_status' : null
+    };
+
+    const url = routeUtils.staffRequestUrl(mockApp, mockRecord);
+    assert.strictEqual(url, 'http://staff.test?stage=test_stage&request=req123');
+
+    // Test with existing query params in staffUrl
+    config.staffUrl = (app) => 'http://staff.test?existing=param';
+    const url2 = routeUtils.staffRequestUrl(mockApp, mockRecord);
+    assert.strictEqual(url2, 'http://staff.test?existing=param&stage=test_stage&request=req123');
+
+  } finally {
+    config.staffUrl = oldStaffUrl;
+    records.normalizeStatus = oldNormalizeStatus;
+  }
 });
 
 console.log(`\nTests finished: ${passed} passed, ${failed} failed.`);
