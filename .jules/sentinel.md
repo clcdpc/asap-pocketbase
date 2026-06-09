@@ -18,3 +18,8 @@
 **Vulnerability:** Similar to role updates, a standard `admin` user could delete a `super_admin`'s account because the `staffUserDelete` endpoint only verified that at least one super admin remains, rather than strictly requiring `super_admin` privileges to delete a `super_admin` account.
 **Learning:** Role-based access control (RBAC) must check both the user *performing* the action and the *target* user of the action. Modifying or deleting elevated roles requires elevated authorization.
 **Prevention:** Ensure all endpoints that perform state-changing operations on user accounts strictly validate the actor's privileges against the target object's sensitivity tier.
+
+## 2026-05-18 - Prevent Information Disclosure in Login Errors
+**Vulnerability:** The `staffLogin` route in `lib/staff/auth_routes.js` lacked a top-level try...catch block. If `polaris.staffAuth` or another service threw an unexpected error, it bubbled up to the PocketBase router which would return the raw error message to the client, leaking internal details.
+**Learning:** Error messages returned to users should be generic to prevent information disclosure. Detailed error information should be logged on the server for staff troubleshooting.
+**Prevention:** Wrap all complex authentication endpoints with a global try/catch to sanitize error responses by providing user-friendly, non-descriptive messages while ensuring the full error context is captured in the system logs.
