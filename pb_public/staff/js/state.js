@@ -179,6 +179,8 @@ export function setLastWorkflowEnabledList(list) { lastWorkflowEnabledList = lis
 export const templateFieldIds = [
   'email-submit-subject',
   'email-submit-body',
+  'email-purchase-approved-subject',
+  'email-purchase-approved-body',
   'email-owned-subject',
   'email-owned-body',
   'email-rejected-subject',
@@ -192,6 +194,10 @@ export const emailTemplateDefaults = {
     subject: 'Suggestion received: {{title}}',
     body: 'Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format. Our collection development team has received your request and will review it.\n\nIf we add this item, we will place a hold for you automatically and send another update.\n\nThank you for helping us shape the library collection.'
   },
+  purchase_approved: {
+    subject: 'Purchase approved: {{title}}',
+    body: 'Hello {{name}},\n\nGood news. The library has approved your suggestion for purchase: {{title}} by {{author}} in {{format}} format.\n\nThis request is now awaiting ordering and cataloging. Once the item is available in the catalog, ASAP will place a hold automatically when possible and send another update.\n\nThank you for your suggestion.'
+  },
   already_owned: {
     subject: '{{title}} is already available',
     body: 'Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format.\n\nThe library already owns this title or has it on order. We have placed a hold on card {{barcode}} so you will be notified when it is ready.\n\nThank you for using the library\'s suggestion service.'
@@ -202,7 +208,7 @@ export const emailTemplateDefaults = {
   },
   hold_placed: {
     subject: 'Hold placed: {{title}}',
-    body: 'Hello {{name}},\n\nGood news! We have decided to purchase {{title}} by {{author}} and have placed a hold on it for you (card {{barcode}}). You will receive another notification when it is ready to be picked up.\n\nThank you for using the library\'s suggestion service.'
+    body: 'Hello {{name}},\n\n{{title}} by {{author}} in {{format}} format is now available in the catalog.\n\nWe have placed a hold on card {{barcode}}. You will receive the usual pickup notice when the item is ready.\n\nThank you for your suggestion.'
   }
 };
 

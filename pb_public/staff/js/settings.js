@@ -662,7 +662,7 @@ export function populatePatronUiForms(uiText) {
   setFieldValue('ui-pin-label', uiText.pinLabel || '');
   setFieldValue('ui-login-prompt', uiText.loginPrompt || 'Please enter your information below to start the suggestion process.');
   setFieldValue('ui-login-note', uiText.loginNote || 'Use of this service requires a valid library card. Contact your library if you need assistance with your card or PIN.');
-  setFieldValue('ui-suggestion-note', uiText.suggestionFormNote || 'If the library decides to purchase your suggestion, we will automatically place a hold on it and send a confirmation email. Make sure to check your spam folder if you don\'t see the email.');
+  setFieldValue('ui-suggestion-note', uiText.suggestionFormNote || 'If the library approves your suggestion for purchase, we will email you while it is awaiting ordering and cataloging. Once the item is available in the catalog, we will automatically place a hold when possible and send another update.');
   setFieldValue('ui-no-email-msg', uiText.noEmailMessage || 'No email is specified on your library account, which means we won\'t be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.');
   const participationGroup = document.getElementById('ui-system-not-enabled-group');
   if (participationGroup) {
@@ -787,6 +787,10 @@ function _serializeSettingsState(validate = false) {
     suggestion_submitted: {
       subject: getFieldValue('email-submit-subject'),
       body: getFieldValue('email-submit-body')
+    },
+    purchase_approved: {
+      subject: getFieldValue('email-purchase-approved-subject'),
+      body: getFieldValue('email-purchase-approved-body')
     },
     already_owned: {
       subject: getFieldValue('email-owned-subject'),

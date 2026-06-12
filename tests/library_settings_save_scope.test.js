@@ -102,6 +102,6 @@ assert.deepStrictEqual(override.get('publicationOptions'), [{ id: 'local', label
 assert.strictEqual(systemUi.get('publicationOptions'), JSON.stringify([{ id: 'new', label: 'New', enabled: true, sortOrder: 10 }]));
 assert.strictEqual(workflowLibrary.get('additionalCopyTimeoutEnabled'), true);
 assert.strictEqual(workflowLibrary.get('additionalCopyTimeoutDays'), 21);
-assert.strictEqual(deleted.length, 4, 'Expected blank library email templates to clear template overrides');
+assert.strictEqual(deleted.length, 5, 'Expected blank library email templates to clear template overrides');
 
 console.log('All library settings save scope tests passed!');

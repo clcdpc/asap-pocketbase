@@ -52,6 +52,7 @@ function makeApp() {
 function withSideEffects(calls) {
   calls.purchaseReminder = 0;
   calls.additionalCopyReminder = 0;
+  calls.purchaseApproved = 0;
   calls.alreadyOwned = 0;
   calls.rejected = 0;
   calls.holdPlaced = 0;
@@ -90,6 +91,10 @@ function withSideEffects(calls) {
     },
     additionalCopyReminder() {
       calls.additionalCopyReminder += 1;
+      return true;
+    },
+    purchaseApproved() {
+      calls.purchaseApproved += 1;
       return true;
     },
     alreadyOwned() {
@@ -154,6 +159,44 @@ function testPurchaseToOutstandingPurchaseSendsReminder() {
   assert.strictEqual(result.message, "Purchase saved and reminder email sent.");
 }
 
+function testFirstPurchaseTransitionToOutstandingPurchaseSendsPatronEmail() {
+  const calls = {};
+  const sideEffects = withSideEffects(calls);
+  const app = makeApp();
+  const context = {
+    action: "purchase",
+    oldStatus: "suggestion",
+    data: { emailPurchaseReminder: false },
+    record: makeRecord({ id: "req1", status: "outstanding_purchase", barcode: "b1" }),
+    staff: makeStaff({})
+  };
+
+  sideEffects.handleStaffActionPatronEmailSideEffects(app, context);
+
+  assert.strictEqual(calls.purchaseApproved, 1);
+  assert.strictEqual(calls.lookupPatron, 1);
+  assert.strictEqual(calls.alreadyOwned, 0);
+  assert.strictEqual(calls.rejected, 0);
+}
+
+function testRepeatPurchaseSaveInOutstandingPurchaseDoesNotResendPatronEmail() {
+  const calls = {};
+  const sideEffects = withSideEffects(calls);
+  const app = makeApp();
+  const context = {
+    action: "purchase",
+    oldStatus: "outstanding_purchase",
+    data: { emailPurchaseReminder: false },
+    record: makeRecord({ id: "req1", status: "outstanding_purchase", barcode: "b1" }),
+    staff: makeStaff({})
+  };
+
+  sideEffects.handleStaffActionPatronEmailSideEffects(app, context);
+
+  assert.strictEqual(calls.purchaseApproved, 0);
+  assert.strictEqual(calls.lookupPatron, 0);
+}
+
 function testPurchaseToPendingHoldSuppressesReminderAndPatronEmail() {
   const calls = {};
   const sideEffects = withSideEffects(calls);
@@ -170,6 +213,7 @@ function testPurchaseToPendingHoldSuppressesReminderAndPatronEmail() {
 
   assert.strictEqual(calls.purchaseReminder, 0);
   assert.strictEqual(calls.additionalCopyReminder, 0);
+  assert.strictEqual(calls.purchaseApproved, 0);
   assert.strictEqual(calls.alreadyOwned, 0);
   assert.strictEqual(calls.rejected, 0);
   assert.strictEqual(calls.holdPlaced, 0);
@@ -211,6 +255,7 @@ function testPurchaseToHoldPlacedSuppressesReminderAndSendsOnePatronOutcomeEmail
 
   assert.strictEqual(calls.purchaseReminder, 0);
   assert.strictEqual(calls.additionalCopyReminder, 0);
+  assert.strictEqual(calls.purchaseApproved, 0);
   assert.strictEqual(calls.alreadyOwned, 1);
   assert.strictEqual(calls.rejected, 0);
   assert.strictEqual(calls.holdPlaced, 0);
@@ -286,6 +331,8 @@ const originalCaches = {
 
 try {
   testPurchaseToOutstandingPurchaseSendsReminder();
+  testFirstPurchaseTransitionToOutstandingPurchaseSendsPatronEmail();
+  testRepeatPurchaseSaveInOutstandingPurchaseDoesNotResendPatronEmail();
   testPurchaseToPendingHoldSuppressesReminderAndPatronEmail();
   testPurchaseToPendingHoldUncheckedReminderStaysQuiet();
   testPurchaseToHoldPlacedSuppressesReminderAndSendsOnePatronOutcomeEmail();

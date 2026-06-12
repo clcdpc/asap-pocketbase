@@ -725,7 +725,7 @@ migrate((app) => {
     barcodeLabel: "Library Card",
     pinLabel: "Pin",
     loginPrompt: "Please enter your information below to start the suggestion process.",
-    suggestionFormNote: "If the library decides to purchase your suggestion, we will automatically place a hold on it and send a confirmation email. Make sure to check your spam folder if you don't see the email.",
+    suggestionFormNote: "If the library approves your suggestion for purchase, we will email you while it is awaiting ordering and cataloging. Once the item is available in the catalog, we will automatically place a hold when possible and send another update.",
     loginNote: "Use of this service requires a valid library card. Contact your library if you need assistance with your card or PIN.",
     successTitle: "Suggestion Submitted",
     successMessage: "You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>",
@@ -748,9 +748,10 @@ migrate((app) => {
   });
 
   saveRecord(app, emailTemplates, "emailsubmit0010", { scope: "system", templateKey: "suggestion_submitted", name: "Submission confirmation", subject: "Suggestion received: {{title}}", body: "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format. Our collection development team has received your request and will review it.\n\nIf we add this item, we will place a hold for you automatically and send another update.\n\nThank you for helping us shape the library collection.", enabled: true });
+  saveRecord(app, emailTemplates, "emailpurch0050", { scope: "system", templateKey: "purchase_approved", name: "Purchase approved", subject: "Purchase approved: {{title}}", body: "Hello {{name}},\n\nGood news. The library has approved your suggestion for purchase: {{title}} by {{author}} in {{format}} format.\n\nThis request is now awaiting ordering and cataloging. Once the item is available in the catalog, ASAP will place a hold automatically when possible and send another update.\n\nThank you for your suggestion.", enabled: true });
   saveRecord(app, emailTemplates, "emailowned00020", { scope: "system", templateKey: "already_owned", name: "Already owned", subject: "{{title}} is already available", body: "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format.\n\nThe library already owns this title or has it on order. We have placed a hold on card {{barcode}} so you will be notified when it is ready.\n\nThank you for using the library's suggestion service.", enabled: true });
   saveRecord(app, emailTemplates, "emailreject0030", { scope: "system", templateKey: "rejected", name: "Rejected", subject: "Update on your suggestion: {{title}}", body: "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format.\n\nAfter review, we are not able to add this item to the collection at this time. We appreciate you taking the time to share your suggestion with us.\n\nThank you for helping us build a collection that reflects our community.", enabled: true });
-  saveRecord(app, emailTemplates, "emailhold000040", { scope: "system", templateKey: "hold_placed", name: "Hold placed", subject: "Hold placed for {{title}}", body: "Hello {{name}},\n\nGood news. The library plans to add {{title}} by {{author}} in {{format}} format.\n\nWe have placed a hold on card {{barcode}}. You will receive the usual pickup notice when the item is ready.\n\nThank you for your suggestion.", enabled: true });
+  saveRecord(app, emailTemplates, "emailhold000040", { scope: "system", templateKey: "hold_placed", name: "Hold placed", subject: "Hold placed for {{title}}", body: "Hello {{name}},\n\n{{title}} by {{author}} in {{format}} format is now available in the catalog.\n\nWe have placed a hold on card {{barcode}}. You will receive the usual pickup notice when the item is ready.\n\nThank you for your suggestion.", enabled: true });
 }, (app) => {
   return null;
 });

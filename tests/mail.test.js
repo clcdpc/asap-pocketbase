@@ -16,6 +16,10 @@ const mockConfig = {
           subject: "Already Owned: {{title}}",
           body: "We already own {{title}}."
         },
+        purchase_approved: {
+          subject: "Purchase Approved: {{title}}",
+          body: "Your suggestion for {{title}} is awaiting ordering and cataloging."
+        },
         rejected: {
           subject: "Rejected: {{title}}",
           body: "Your suggestion for {{title}} was rejected."
@@ -130,6 +134,13 @@ function runTests() {
   assert.strictEqual(sentMessages.length, 1);
   assert.strictEqual(sentMessages[0].subject, "Already Owned: The Great Gatsby");
   assert.strictEqual(sentMessages[0].to[0].address, "john.doe@example.com");
+
+  // Test purchaseApproved
+  sentMessages = [];
+  mail.purchaseApproved(mockApp, record, patron);
+  assert.strictEqual(sentMessages.length, 1);
+  assert.strictEqual(sentMessages[0].subject, "Purchase Approved: The Great Gatsby");
+  assert.strictEqual(sentMessages[0].text, "Your suggestion for The Great Gatsby is awaiting ordering and cataloging.");
 
   // Test rejected with default template
   sentMessages = [];

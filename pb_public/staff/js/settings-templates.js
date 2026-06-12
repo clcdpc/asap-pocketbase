@@ -71,6 +71,10 @@ export function populateEmailTemplateForms(emails) {
   if (document.getElementById('email-submit-subject')) document.getElementById('email-submit-subject').value = emailSubmit.subject || emailTemplateDefaults.suggestion_submitted.subject;
   if (document.getElementById('email-submit-body')) document.getElementById('email-submit-body').value = emailSubmit.body || emailTemplateDefaults.suggestion_submitted.body;
 
+  const emailPurchaseApproved = emails.purchase_approved || {};
+  if (document.getElementById('email-purchase-approved-subject')) document.getElementById('email-purchase-approved-subject').value = emailPurchaseApproved.subject || emailTemplateDefaults.purchase_approved.subject;
+  if (document.getElementById('email-purchase-approved-body')) document.getElementById('email-purchase-approved-body').value = emailPurchaseApproved.body || emailTemplateDefaults.purchase_approved.body;
+
   const emailOwned = emails.already_owned || {};
   if (document.getElementById('email-owned-subject')) document.getElementById('email-owned-subject').value = emailOwned.subject || emailTemplateDefaults.already_owned.subject;
   if (document.getElementById('email-owned-body')) document.getElementById('email-owned-body').value = emailOwned.body || emailTemplateDefaults.already_owned.body;
@@ -102,6 +106,7 @@ export function updateAllSummaries() {
   // Template Summaries
   const sections = [
     { id: 'submit', field: 'email-submit-subject' },
+    { id: 'purchase-approved', field: 'email-purchase-approved-subject' },
     { id: 'owned', field: 'email-owned-subject' },
     { id: 'rejected', field: 'email-rejected-subject' },
     { id: 'hold', field: 'email-hold-subject' }
@@ -304,6 +309,7 @@ document.addEventListener('click', (e) => {
 document.addEventListener('input', (e) => {
   const target = e.target;
   if (target.id === 'email-from-address' || target.id === 'email-from-name' || 
+      target.id === 'email-purchase-approved-subject' ||
       target.id === 'email-submit-subject' || target.id === 'email-owned-subject' || 
       target.id === 'email-rejected-subject' || target.id === 'email-hold-subject') {
     updateAllSummaries();
