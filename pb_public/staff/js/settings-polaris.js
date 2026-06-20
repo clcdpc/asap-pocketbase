@@ -341,12 +341,12 @@ export async function renderLibraryParticipationCheckboxes() {
             <tr>
               <td class="align-middle">
                 <div class="custom-control custom-checkbox">
-                  <input type="checkbox" class="custom-control-input lib-participation-cb" id="lib-p-${org.organizationId}" value="${org.organizationId}">
-                  <label class="custom-control-label" for="lib-p-${org.organizationId}"></label>
+                  <input type="checkbox" class="custom-control-input lib-participation-cb" id="lib-p-${escapeAttr(org.organizationId)}" value="${escapeAttr(org.organizationId)}">
+                  <label class="custom-control-label" for="lib-p-${escapeAttr(org.organizationId)}"></label>
                 </div>
               </td>
               <td class="align-middle font-weight-bold">${escapeAttr(org.displayName || org.name)}</td>
-              <td class="align-middle text-muted small">${org.organizationId}</td>
+              <td class="align-middle text-muted small">${escapeAttr(org.organizationId)}</td>
             </tr>
           `).join('')}
         </tbody>
