@@ -152,6 +152,7 @@ Rules:
 Use the frontend request helpers and load guards consistently. Do not introduce one-off fetch patterns in staff or patron code when the existing helpers cover the behavior.
 
 - Prefer shared request helpers for JSON API calls over raw `fetch`.
+- When using `requestJson` or app wrappers such as `authorizedJson`, pass plain object bodies for JSON requests and let the helper serialize them. Do not pre-stringify JSON bodies unless you also intentionally manage the `Content-Type` contract; otherwise PocketBase routes may reject the request as `Unsupported Content-Type`.
 - Keep cross-app behavior in the shared request core limited to transport concerns: JSON parsing, headers, cache mode, abort signals, and normalized errors.
 - Keep auth/session policy in app-specific wrappers. Staff auth stays in `pb_public/staff/js/http.js`; patron session-expiry behavior stays in `pb_public/patron/js/api.js`.
 - Explicitly protect screen-level staff loads with abort-plus-stale-result guards.

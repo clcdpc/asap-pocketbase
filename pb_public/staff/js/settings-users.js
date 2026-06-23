@@ -225,7 +225,7 @@ if (staffUsersTableBody) {
     try {
       await authorizedJson(`/api/asap/staff/users/${encodeURIComponent(id)}/role`, {
         method: 'POST',
-        body: JSON.stringify({ role: nextRole })
+        body: { role: nextRole }
       });
       if (msgEl) {
         msgEl.textContent = 'Staff role updated successfully.';
@@ -310,12 +310,12 @@ if (addStaffBtn) {
       const opt = libSelect && libSelect.selectedIndex >= 0 ? libSelect.options[libSelect.selectedIndex] : null;
       await authorizedJson('/api/asap/staff/users', {
         method: 'POST',
-        body: JSON.stringify({
+        body: {
           username: identity,
           libraryOrgId,
           libraryOrgName: opt ? opt.text : '',
           role
-        })
+        }
       });
 
       identityInput.value = '';

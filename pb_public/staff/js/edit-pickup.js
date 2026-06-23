@@ -45,19 +45,19 @@ function resetEditPickupUi() {
 async function fetchEditPickupOptions(id, options = {}) {
   return authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(id)}/pickup-options`, {
     method: 'POST',
-    body: JSON.stringify({
+    body: {
       forceRefresh: !!options.forceRefresh
-    })
+    }
   });
 }
 
 async function saveEditPickupPreference(id, selectedId, atLoadId) {
   return authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(id)}/pickup-preference`, {
     method: 'POST',
-    body: JSON.stringify({
+    body: {
       preferredPickupBranchId: selectedId,
       currentPreferredPickupBranchIdAtLoad: atLoadId || ''
-    })
+    }
   });
 }
 

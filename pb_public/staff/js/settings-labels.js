@@ -62,7 +62,7 @@ document.getElementById('btn-reset-library-settings').addEventListener('click', 
   if (confirmed) {
     await authorizedJson('/api/asap/staff/settings/library', {
       method: 'POST',
-      body: JSON.stringify({ orgId: currentLibraryContextOrgId, action: 'reset' })
+      body: { orgId: currentLibraryContextOrgId, action: 'reset' }
     });
     showToast('Library settings reset to system defaults', 'success');
     await loadLibrarySettings(currentLibraryContextOrgId);

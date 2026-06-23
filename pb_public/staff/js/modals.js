@@ -1432,10 +1432,7 @@ async function performImmediateStaffAction(id, payload) {
       await showAlert(`Note: This suggestion moved directly to "${statusNames[updatedRecord.status] || updatedRecord.status}" because ${reason}.`);
     }
 
-    if (typeof loadTab === 'function') {
-      console.log('Action complete, refreshing grid for status:', currentStatus);
-      refreshCurrentStaffView();
-    }
+    refreshCurrentStaffView();
   } catch (err) {
     console.error('performImmediateStaffAction failed:', err);
     if (err && err.code === 'duplicate_open_request') {

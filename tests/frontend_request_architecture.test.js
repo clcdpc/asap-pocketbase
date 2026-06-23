@@ -4,6 +4,63 @@ const path = require('path');
 
 const root = path.join(__dirname, '..');
 
+function findFiles(dir, predicate, results = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      findFiles(fullPath, predicate, results);
+    } else if (predicate(fullPath)) {
+      results.push(fullPath);
+    }
+  }
+  return results;
+}
+
+function findPreStringifiedAuthorizedJsonBodies(source) {
+  const matches = [];
+  let index = 0;
+  const needle = 'authorizedJson(';
+  while ((index = source.indexOf(needle, index)) !== -1) {
+    const callStart = index;
+    let depth = 0;
+    let quote = '';
+    let escaped = false;
+    let callEnd = -1;
+    for (let i = callStart; i < source.length; i += 1) {
+      const ch = source[i];
+      if (quote) {
+        if (escaped) {
+          escaped = false;
+        } else if (ch === '\\') {
+          escaped = true;
+        } else if (ch === quote) {
+          quote = '';
+        }
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === '`') {
+        quote = ch;
+        continue;
+      }
+      if (ch === '(') depth += 1;
+      if (ch === ')') {
+        depth -= 1;
+        if (depth === 0) {
+          callEnd = i + 1;
+          break;
+        }
+      }
+    }
+    if (callEnd === -1) break;
+    const callSource = source.slice(callStart, callEnd);
+    if (/body\s*:\s*JSON\.stringify\s*\(/.test(callSource)) {
+      matches.push(callSource);
+    }
+    index = callEnd;
+  }
+  return matches;
+}
+
 function loadSimpleEsModule(modulePath, scope = {}) {
   const source = fs.readFileSync(modulePath, 'utf8');
   const exportNames = [];
@@ -43,7 +100,10 @@ async function main() {
   const analyticsPath = path.join(root, 'pb_public/staff/js/analytics.js');
   const actionsPath = path.join(root, 'pb_public/staff/js/actions.js');
   const modalsPath = path.join(root, 'pb_public/staff/js/modals.js');
+  const gridPath = path.join(root, 'pb_public/staff/js/grid.js');
   const settingsPolarisPath = path.join(root, 'pb_public/staff/js/settings-polaris.js');
+  const settingsLabelsPath = path.join(root, 'pb_public/staff/js/settings-labels.js');
+  const settingsPath = path.join(root, 'pb_public/staff/js/settings.js');
   const agentsPath = path.join(root, 'AGENTS.md');
 
   assert.ok(fs.existsSync(httpModulePath), 'shared http helper should exist');
@@ -189,14 +249,56 @@ async function main() {
   }
 
   {
+    const settingsSource = fs.readFileSync(settingsPath, 'utf8');
+    const settingsLabelsSource = fs.readFileSync(settingsLabelsPath, 'utf8');
+    assert.ok(
+      settingsSource.includes('body: libraryPayload'),
+      'settings save should pass object bodies so requestJson sets application/json'
+    );
+    assert.ok(
+      !settingsSource.includes('body: JSON.stringify(libraryPayload)'),
+      'settings save should not pre-stringify the library payload'
+    );
+    assert.ok(
+      settingsLabelsSource.includes("body: { orgId: currentLibraryContextOrgId, action: 'reset' }"),
+      'library settings reset should pass object bodies so requestJson sets application/json'
+    );
+    assert.ok(
+      !settingsLabelsSource.includes("body: JSON.stringify({ orgId: currentLibraryContextOrgId, action: 'reset' })"),
+      'library settings reset should not pre-stringify the reset payload'
+    );
+  }
+
+  {
+    const staffJsFiles = findFiles(path.join(root, 'pb_public/staff/js'), file => file.endsWith('.js'));
+    const offenders = [];
+    for (const file of staffJsFiles) {
+      const source = fs.readFileSync(file, 'utf8');
+      const matches = findPreStringifiedAuthorizedJsonBodies(source);
+      matches.forEach(() => offenders.push(path.relative(root, file)));
+    }
+    assert.deepStrictEqual(
+      offenders,
+      [],
+      'authorizedJson callers should pass object bodies so requestJson can set application/json'
+    );
+  }
+
+  {
     const actionsSource = fs.readFileSync(actionsPath, 'utf8');
     const modalsSource = fs.readFileSync(modalsPath, 'utf8');
+    const gridSource = fs.readFileSync(gridPath, 'utf8');
     const settingsPolarisSource = fs.readFileSync(settingsPolarisPath, 'utf8');
 
     assert.ok(actionsSource.includes('refreshCurrentStaffView'), 'actions should refresh through the named helper');
     assert.ok(!actionsSource.includes('loadTab(currentStatus)'), 'actions should not reload with direct loadTab calls');
     assert.ok(modalsSource.includes('refreshCurrentStaffView'), 'modals should refresh through the named helper');
     assert.ok(!modalsSource.includes('loadTab(currentStatus)'), 'modals should not reload with direct loadTab calls');
+    assert.ok(!modalsSource.includes('typeof loadTab'), 'modals should not guard refreshes on stale loadTab globals');
+    assert.ok(
+      !gridSource.includes("setCurrentWorkflowOrgScopeId(select.value || 'all');\n      loadTab(currentStatus);"),
+      'workflow scope changes should refresh through the named helper'
+    );
     assert.ok(settingsPolarisSource.includes('refreshCurrentStaffView'), 'settings-polaris should refresh through the named helper');
   }
 

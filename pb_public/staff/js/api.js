@@ -819,13 +819,13 @@ if (profileForm) {
       }
       const updated = await authorizedJson('/api/asap/staff/profile', {
         method: 'POST',
-        body: JSON.stringify({
+        body: {
           weekly_action_summary_enabled: summaryEnabled,
           purchase_reminder_default: reminderDefault,
           additional_copy_reminder_default: additionalCopyReminderDefault,
           default_mine_unclaimed_filter: mineUnclaimedDefault,
           weekly_action_summary_email: email
-        })
+        }
       });
 
       pb.authStore.save(pb.authStore.token, Object.assign({}, pb.authStore.model || {}, updated));

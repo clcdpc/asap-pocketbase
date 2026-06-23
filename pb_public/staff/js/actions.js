@@ -73,7 +73,7 @@ export async function closeDuplicateRequest(id) {
   try {
     await authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(id)}/action`, {
       method: 'POST',
-      body: JSON.stringify({
+      body: {
         action: 'closeDuplicate',
         status: 'closed',
         title: row.title || '',
@@ -85,7 +85,7 @@ export async function closeDuplicateRequest(id) {
         exactPublicationDate: row.exactPublicationDate || '',
         notes: row.notes || '',
         editedBy: pb.authStore.model.username
-      })
+      }
     });
     showToast('Duplicate request closed.', 'success');
     refreshCurrentStaffView();

@@ -329,7 +329,7 @@ function updateWorkflowScopeControl(data) {
   if (!select.dataset.workflowScopeBound) {
     select.addEventListener('change', () => {
       setCurrentWorkflowOrgScopeId(select.value || 'all');
-      loadTab(currentStatus);
+      refreshCurrentStaffView();
     });
     select.dataset.workflowScopeBound = 'true';
   }
@@ -1396,7 +1396,7 @@ export async function openAssignDialog(row) {
       const endpointPrefix = row.type === 'additional_copy' ? 'additional-copies' : 'title-requests';
       await authorizedJson(`/api/asap/staff/${endpointPrefix}/${encodeURIComponent(row.id)}/assign`, {
         method: 'POST',
-        body: JSON.stringify({ assigneeId })
+        body: { assigneeId }
       });
       const typeLabel = row.type === 'additional_copy' ? 'Additional-copy task' : 'Claim';
       showToast(`${typeLabel} assigned.`, 'success');
@@ -1418,7 +1418,7 @@ async function closeAdditionalCopyRequest(id) {
   if (!confirmed) return;
   await authorizedJson(`/api/asap/staff/additional-copies/${encodeURIComponent(id)}/close`, {
     method: 'POST',
-    body: JSON.stringify({})
+    body: {}
   });
   showToast('Additional-copy task closed.', 'success');
   await refreshCurrentStaffView();
@@ -1456,7 +1456,7 @@ async function buyAnotherCopyForRow(row) {
   if (!confirmed || !confirmed.confirmed) return;
   const response = await authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(id)}/additional-copy`, {
     method: 'POST',
-    body: JSON.stringify({ emailPurchaseReminder: confirmed.emailPurchaseReminder })
+    body: { emailPurchaseReminder: confirmed.emailPurchaseReminder }
   });
   const afterCount = Number(response && response.openCountAfter || openCount + 1);
   showToast(`Additional-copy task created. Open tasks for this BIB: ${afterCount}.`, 'success');
@@ -1499,7 +1499,7 @@ async function mutateRequestClaim(requestId, action, successMessage) {
     const endpointPrefix = row.type === 'additional_copy' ? 'additional-copies' : 'title-requests';
     await authorizedJson(`/api/asap/staff/${endpointPrefix}/${encodeURIComponent(requestId)}/${action}`, {
       method: 'POST',
-      body: JSON.stringify({})
+      body: {}
     });
     showToast(successMessage, 'success');
   } catch (err) {

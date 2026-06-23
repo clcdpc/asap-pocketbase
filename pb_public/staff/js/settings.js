@@ -1000,7 +1000,7 @@ export async function saveSettings(options = {}) {
 
     const libraryPromise = authorizedJson('/api/asap/staff/settings/library', {
       method: 'POST',
-      body: JSON.stringify(libraryPayload)
+      body: libraryPayload
     });
 
     await libraryPromise;

@@ -220,7 +220,7 @@ if (bulkDeleteClosedForm) {
     try {
       const result = await authorizedJson('/api/asap/staff/requests/delete-closed', {
         method: 'POST',
-        body: JSON.stringify({ confirm: bulkDeleteClosedInput.value })
+        body: { confirm: bulkDeleteClosedInput.value }
       });
       if (bulkDeleteClosedDialog && bulkDeleteClosedDialog.open) bulkDeleteClosedDialog.close();
       showToast(`Deleted ${result.deleted || 0} closed request${result.deleted === 1 ? '' : 's'}.`, 'success');
