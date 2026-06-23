@@ -270,7 +270,16 @@ export function applyUiConfig() {
 }
 
 export function resetSuggestionFormUi() {
+  const pickupSelect = byId('preferred-pickup-branch');
+  const pickupValue = pickupSelect ? pickupSelect.value : '';
   if (suggestionForm) suggestionForm.reset();
+  if (
+    pickupSelect &&
+    pickupValue &&
+    Array.from(pickupSelect.options).some(option => option.value === pickupValue)
+  ) {
+    pickupSelect.value = pickupValue;
+  }
   setVisible('submit-error', false);
   updateFormatUI();
   showSuggestionStep();
