@@ -2,7 +2,7 @@ import { pb, formatMap, availableFormats, currentRejectionTemplates, currentStat
 import { leapBibUrl, leapPatronUrl, openProfileDialog } from './api.js';
 import { closeDuplicateRequest } from './actions.js';
 import { showToast, showAlert, showConfirm } from './dialogs.js';
-import { loadTab, formatDateTime, renderWorkflowTags, escapeAttr } from './grid.js';
+import { refreshCurrentStaffView, formatDateTime, renderWorkflowTags, escapeAttr } from './grid.js';
 import { setSelectValue, dateOnly, lookupEditBibById, applySelectedPolarisResultToEditForm } from './settings-ui.js';
 import { rememberRecentSuggestion, renderRecentSuggestionsSwitcher, updateRecentSuggestion } from './recent-suggestions.js';
 import { loadEditPickupForRequest } from './edit-pickup.js';
@@ -1325,13 +1325,13 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
       await showAlert(`Note: This suggestion moved directly to "${statusNames[updatedRecord.status] || updatedRecord.status}" because ${reason}.`);
     }
 
-    loadTab(currentStatus);
+    refreshCurrentStaffView();
   } catch (err) {
     if (err && err.code === 'duplicate_open_request') {
       const confirmed = await confirmDuplicateOpenRequestClose(err, id);
       if (confirmed) {
         document.getElementById('editModal').close();
-        loadTab(currentStatus);
+        refreshCurrentStaffView();
         return;
       }
     }
@@ -1434,14 +1434,14 @@ async function performImmediateStaffAction(id, payload) {
 
     if (typeof loadTab === 'function') {
       console.log('Action complete, refreshing grid for status:', currentStatus);
-      loadTab(currentStatus);
+      refreshCurrentStaffView();
     }
   } catch (err) {
     console.error('performImmediateStaffAction failed:', err);
     if (err && err.code === 'duplicate_open_request') {
       const confirmed = await confirmDuplicateOpenRequestClose(err, id);
       if (confirmed) {
-        if (typeof loadTab === 'function') loadTab(currentStatus);
+        if (typeof refreshCurrentStaffView === 'function') refreshCurrentStaffView();
         return;
       }
     }

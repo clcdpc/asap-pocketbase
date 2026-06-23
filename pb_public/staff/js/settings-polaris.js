@@ -2,7 +2,7 @@ import { pb, currentStatus, organizationsStatus, setOrganizationsStatus, lastWor
 import { getFieldValue, getFieldChecked, validateSmtpHostField, isSuperAdminStaff, isAdminStaff, updateOrganizationsStatusUi, setInlineResult, postPolarisTest } from './api.js';
 import { authorizedJson } from './http.js';
 import { showToast } from './dialogs.js';
-import { loadTab, escapeAttr } from './grid.js';
+import { refreshCurrentStaffView, refreshStaffStatus, escapeAttr } from './grid.js';
 import { populateLibrarySelector, saveSettings } from './settings.js';
 
 export function collectSettingsPolaris() {
@@ -136,7 +136,7 @@ document.getElementById('btn-run-hold-check').addEventListener('click', async ()
     if (res.ok) {
       msg.textContent = `Hold check complete. Moved to Pending hold: ${data.promoted}, holds placed: ${data.holdsPlaced}, closed after checkout: ${data.checkoutClosures}, auto-closed: ${data.timedOut}`;
       msg.className = 'mb-3 font-weight-bold text-success';
-      loadTab(currentStatus);
+      refreshCurrentStaffView();
     } else {
       throw new Error(data.message || 'Failed to run hold check');
     }
@@ -165,7 +165,7 @@ document.getElementById('btn-run-promoter-check').addEventListener('click', asyn
     if (res.ok) {
       msg.textContent = `Auto-promoter complete. Moved ${data.promoted} item${data.promoted === 1 ? '' : 's'} to Pending hold.`;
       msg.className = 'mb-3 font-weight-bold text-success';
-      loadTab(currentStatus);
+      refreshCurrentStaffView();
     } else {
       throw new Error(data.message || 'Failed to run promoter check');
     }
@@ -224,7 +224,7 @@ if (bulkDeleteClosedForm) {
       });
       if (bulkDeleteClosedDialog && bulkDeleteClosedDialog.open) bulkDeleteClosedDialog.close();
       showToast(`Deleted ${result.deleted || 0} closed request${result.deleted === 1 ? '' : 's'}.`, 'success');
-      loadTab('closed');
+      refreshStaffStatus('closed');
     } catch (err) {
       if (bulkDeleteClosedMsg) {
         bulkDeleteClosedMsg.textContent = err.message || 'Could not delete closed requests.';

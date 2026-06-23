@@ -3,17 +3,20 @@ import { openEdit, openPolarisSearch, polarisSearchValueForRow, renderPolarisSea
 import { openNewSuggestionForPatron } from './patron.js';
 import { undoRow, deleteClosedRequest, closeDuplicateRequest } from './actions.js';
 import { leapBibUrl, leapPatronUrl, isSuperAdminStaff, isAdminStaff, getSettingsSectionFromHash, activateSettingsSection, requestedRequestIdFromUrl } from './api.js';
-import { authorizedJson } from './http.js';
+import { authorizedJson, isAbortError } from './http.js';
 import { showToast, showAlert, showConfirm, closeOpenDialogs } from './dialogs.js';
-import { showSettingsAccessDenied, hideSettingsAccessDenied, loadSettings } from './settings.js';
-import { loadAnalytics } from './analytics.js';
+import { showSettingsAccessDenied, hideSettingsAccessDenied, refreshSettingsView } from './settings.js';
+import { refreshAnalyticsView } from './analytics.js';
 import { renderNoteActivity } from './note-activity.js';
 import { normalizeLabel, flagDisplayMap, getFlagDisplay, getIsbnCheckLabel, effectiveWorkflowFlagsForRow, getFilterableLabelsForRow, normalizeWorkflowTagLabel, cleanWorkflowTags, tagCountsForRecords, normalizeStatus } from './grid-policy.mjs';
 import { buildRowActions } from './grid-row-actions.mjs';
+import { createLatestLoad } from '../../shared/latest-load.js';
 
 export { normalizeLabel, flagDisplayMap, getFlagDisplay, getIsbnCheckLabel, effectiveWorkflowFlagsForRow, getFilterableLabelsForRow, normalizeWorkflowTagLabel, cleanWorkflowTags, tagCountsForRecords, normalizeStatus } from './grid-policy.mjs';
+const tabLoads = createLatestLoad();
 
 export async function loadTab(status) {
+  const guard = tabLoads.begin('tab');
   if (status !== currentStatus) {
     setGridSearchKeyword('');
   }
@@ -24,6 +27,7 @@ export async function loadTab(status) {
 
   if (status === 'settings') {
     loadSettingsTab();
+    tabLoads.finish('tab', guard.token);
     return;
   }
 
@@ -34,20 +38,26 @@ export async function loadTab(status) {
     hideTagFilter();
     hideClaimFilter();
     if (staffGridFilterBar) staffGridFilterBar.classList.add('hidden');
-    await loadAnalytics(gridContainer);
-    announceTabLoaded(status);
+    await refreshAnalyticsView(gridContainer);
+    if (guard.isCurrent()) {
+      announceTabLoaded(status);
+    }
+    tabLoads.finish('tab', guard.token);
     return;
   }
 
   try {
     if (status === 'additional_copies') {
-      const openResult = await safeFetchAdditionalCopies('open');
+      const openResult = await safeFetchAdditionalCopies('open', guard.signal);
+      if (!guard.isCurrent()) return;
       const openRecords = Array.isArray(openResult.items) ? openResult.items : [];
       
-      const closedResult = await safeFetchAdditionalCopies('closed');
+      const closedResult = await safeFetchAdditionalCopies('closed', guard.signal);
+      if (!guard.isCurrent()) return;
       const closedRecords = Array.isArray(closedResult.items) ? closedResult.items : [];
       
-      const titleResult = await safeFetchTitleRequests();
+      const titleResult = await safeFetchTitleRequests(guard.signal);
+      if (!guard.isCurrent()) return;
       const titleRecords = Array.isArray(titleResult.items) ? titleResult.items : [];
       
       updateWorkflowScopeControl(openResult);
@@ -58,19 +68,24 @@ export async function loadTab(status) {
       updateTabCounts(titleRecords, openRecords.length, closedRecords.length);
       
       renderAdditionalCopiesGrid(openRecords);
-      announceTabLoaded(status);
+      if (guard.isCurrent()) {
+        announceTabLoaded(status);
+      }
       return;
     }
 
-    const scopedResult = await fetchTitleRequests();
+    const scopedResult = await fetchTitleRequests(guard.signal);
+    if (!guard.isCurrent()) return;
     let records = Array.isArray(scopedResult.items) ? scopedResult.items : [];
     updateWorkflowScopeControl(scopedResult);
 
-    const openAdditionalResult = await safeFetchAdditionalCopies('open');
+    const openAdditionalResult = await safeFetchAdditionalCopies('open', guard.signal);
+    if (!guard.isCurrent()) return;
     const openAdditionalRecords = Array.isArray(openAdditionalResult.items) ? openAdditionalResult.items : [];
     const openAdditionalCount = openAdditionalRecords.length;
 
-    const closedAdditionalResult = await safeFetchAdditionalCopies('closed');
+    const closedAdditionalResult = await safeFetchAdditionalCopies('closed', guard.signal);
+    if (!guard.isCurrent()) return;
     const closedAdditionalRecords = Array.isArray(closedAdditionalResult.items) ? closedAdditionalResult.items : [];
     const closedAdditionalCount = closedAdditionalRecords.length;
 
@@ -87,10 +102,16 @@ export async function loadTab(status) {
       return;
     }
   } catch (err) {
-    handleLoadTabError(err);
+    if (!isAbortError(err) && guard.isCurrent()) {
+      handleLoadTabError(err);
+    }
+  } finally {
+    tabLoads.finish('tab', guard.token);
   }
 
-  announceTabLoaded(status);
+  if (guard.isCurrent()) {
+    announceTabLoaded(status);
+  }
 }
 
 function syncStatusTab(status) {
@@ -226,7 +247,7 @@ function loadSettingsTab() {
     showSettingsAccessDenied();
     return;
   }
-  loadSettings({ showErrors: true });
+  refreshSettingsView({ showErrors: true });
 }
 
 function prepareGridView() {
@@ -237,38 +258,40 @@ function prepareGridView() {
   resetGrid();
 }
 
-async function fetchTitleRequests() {
+async function fetchTitleRequests(signal) {
   const params = new URLSearchParams();
   if (isSuperAdminStaff()) {
     params.set('scope', currentWorkflowOrgScopeId || 'all');
   }
   params.set('_', String(Date.now()));
-  return authorizedJson('/api/asap/staff/title-requests?' + params.toString(), { cache: 'no-store' });
+  return authorizedJson('/api/asap/staff/title-requests?' + params.toString(), { cache: 'no-store', signal });
 }
 
-async function fetchAdditionalCopies(status = 'open') {
+async function fetchAdditionalCopies(status = 'open', signal) {
   const params = new URLSearchParams();
   if (isSuperAdminStaff()) {
     params.set('scope', currentWorkflowOrgScopeId || 'all');
   }
   params.set('status', status);
   params.set('_', String(Date.now()));
-  return authorizedJson('/api/asap/staff/additional-copies?' + params.toString(), { cache: 'no-store' });
+  return authorizedJson('/api/asap/staff/additional-copies?' + params.toString(), { cache: 'no-store', signal });
 }
 
-async function safeFetchTitleRequests() {
+async function safeFetchTitleRequests(signal) {
   try {
-    return await fetchTitleRequests();
+    return await fetchTitleRequests(signal);
   } catch (err) {
+    if (isAbortError(err)) throw err;
     console.warn('Title-request count refresh failed.', err);
     return { items: [] };
   }
 }
 
-async function safeFetchAdditionalCopies(status = 'open') {
+async function safeFetchAdditionalCopies(status = 'open', signal) {
   try {
-    return await fetchAdditionalCopies(status);
+    return await fetchAdditionalCopies(status, signal);
   } catch (err) {
+    if (isAbortError(err)) throw err;
     console.warn('Additional-copy refresh failed.', err);
     return { items: [] };
   }
@@ -408,6 +431,14 @@ export function resetGrid() {
   }
   setGrid(null);
   gridContainer.innerHTML = '';
+}
+
+export function refreshCurrentStaffView() {
+  return loadTab(currentStatus);
+}
+
+export function refreshStaffStatus(status) {
+  return loadTab(status || currentStatus);
 }
 
 const duplicateStatusNames = {
@@ -1370,7 +1401,7 @@ export async function openAssignDialog(row) {
       const typeLabel = row.type === 'additional_copy' ? 'Additional-copy task' : 'Claim';
       showToast(`${typeLabel} assigned.`, 'success');
       cleanup();
-      await loadTab(currentStatus);
+      await refreshCurrentStaffView();
     } catch (err) {
       const message = err && err.message ? err.message : 'Assignment failed.';
       await showAlert(message);
@@ -1390,7 +1421,7 @@ async function closeAdditionalCopyRequest(id) {
     body: JSON.stringify({})
   });
   showToast('Additional-copy task closed.', 'success');
-  await loadTab(currentStatus);
+  await refreshCurrentStaffView();
 }
 
 function additionalCopyActionForRow(row) {
@@ -1429,7 +1460,7 @@ async function buyAnotherCopyForRow(row) {
   });
   const afterCount = Number(response && response.openCountAfter || openCount + 1);
   showToast(`Additional-copy task created. Open tasks for this BIB: ${afterCount}.`, 'success');
-  await loadTab(currentStatus);
+  await refreshCurrentStaffView();
 }
 
 function duplicateCloseActionForRow(row) {
@@ -1474,7 +1505,7 @@ async function mutateRequestClaim(requestId, action, successMessage) {
   } catch (err) {
     await showAlert(err.message || 'Claim update failed.');
   } finally {
-    await loadTab(currentStatus);
+    await refreshCurrentStaffView();
   }
 }
 

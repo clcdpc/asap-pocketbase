@@ -1,4 +1,6 @@
-import { pb } from './state.js';
+import { authorizedJson } from './http.js';
+import { isAbortError } from './http.js';
+import { createLatestLoad } from '../../shared/latest-load.js';
 
 const dateRangeLabels = {
   last30: 'Last 30 days',
@@ -28,6 +30,7 @@ const reasonLabels = {
 
 let analyticsScope = '';
 let analyticsRange = 'lastMonth';
+const analyticsLoads = createLatestLoad();
 
 function escapeHtml(value) {
   return String(value || '').replace(/[&<>"']/g, ch => ({
@@ -56,19 +59,6 @@ function formatDays(value) {
   return number.toFixed(number >= 10 ? 0 : 1);
 }
 
-async function authorizedJson(path) {
-  const headers = {};
-  if (pb.authStore.token) {
-    headers.Authorization = pb.authStore.token;
-  }
-  const res = await fetch(path, { headers, cache: 'no-store' });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data.message || 'Analytics could not be loaded.');
-  }
-  return data;
-}
-
 function analyticsUrl() {
   const params = new URLSearchParams();
   params.set('range', analyticsRange);
@@ -81,15 +71,28 @@ function analyticsUrl() {
 
 export async function loadAnalytics(container) {
   if (!container) return;
+  const guard = analyticsLoads.begin('analytics');
   container.innerHTML = '<div class="alert alert-light border">Loading analytics...</div>';
 
   try {
-    const data = await authorizedJson(analyticsUrl());
+    const data = await authorizedJson(analyticsUrl(), {
+      cache: 'no-store',
+      signal: guard.signal
+    });
+    if (!guard.isCurrent()) return;
     analyticsScope = data.scope && data.scope.mode === 'all' ? 'all' : (data.scope && data.scope.libraryOrgId) || analyticsScope;
     renderAnalytics(container, data);
   } catch (err) {
+    if (isAbortError(err)) return;
+    if (!guard.isCurrent()) return;
     container.innerHTML = `<div class="alert alert-danger">${escapeHtml(err.message || 'Analytics could not be loaded.')}</div>`;
+  } finally {
+    analyticsLoads.finish('analytics', guard.token);
   }
+}
+
+export function refreshAnalyticsView(container) {
+  return loadAnalytics(container);
 }
 
 function renderAnalytics(container, data) {

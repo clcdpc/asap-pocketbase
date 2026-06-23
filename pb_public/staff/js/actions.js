@@ -2,7 +2,7 @@ import { pb, currentStatus, currentSuggestions, allSuggestions } from './state.j
 import { isAdminStaff } from './api.js';
 import { authorizedJson } from './http.js';
 import { showToast, showAlert, showConfirm } from './dialogs.js';
-import { loadTab, escapeAttr } from './grid.js';
+import { refreshCurrentStaffView, escapeAttr } from './grid.js';
 
 export function undoConfirmMessage(type) {
   if (type === 'additional_copy') {
@@ -46,7 +46,7 @@ export async function undoRow(id) {
       const data = await res.json().catch(() => ({}));
       throw new Error(data.message || 'Error undoing action');
     }
-    loadTab(currentStatus);
+    refreshCurrentStaffView();
   } catch (err) {
     await showAlert(err.message || 'Error undoing action');
   }
@@ -59,7 +59,7 @@ export async function deleteClosedRequest(id) {
   try {
     await authorizedJson(`/api/asap/staff/requests/${encodeURIComponent(id)}`, { method: 'DELETE' });
     showToast('Closed request deleted.', 'success');
-    loadTab(currentStatus);
+    refreshCurrentStaffView();
   } catch (err) {
     await showAlert(err.message || 'Could not delete closed request.');
   }
@@ -88,7 +88,7 @@ export async function closeDuplicateRequest(id) {
       })
     });
     showToast('Duplicate request closed.', 'success');
-    loadTab(currentStatus);
+    refreshCurrentStaffView();
   } catch (err) {
     await showAlert(err.message || 'Could not close duplicate request.');
   }

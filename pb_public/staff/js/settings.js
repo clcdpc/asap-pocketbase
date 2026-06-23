@@ -1,7 +1,7 @@
 import { pb, settingsContainer, settingsForm, formatMap, availableFormats, setAvailableFormats, currentRejectionTemplates, verifiedBibId, publicationOptions, setPublicationOptions, workflowSettings, currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, initialSettingsSnapshot, libraryContextLoadSerial, librarySelectorBound, organizationsStatus, setOrganizationsStatus, organizationsStatusMessage, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, leapBibUrlPattern, leapPatronUrlPattern, lastWorkflowEnabledList, defaultPublicationOptions, emailTemplateDefaults, setVerifiedBibId, setCurrentLibraryContextOrgId, setCurrentFormatClaimRules, setFormatClaimStaffOptions, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId, setInitialSettingsSnapshot, setLibrarySelectorBound, setSettingsSaving, setSettingsLoading, setLeapBibUrlPattern, setLeapPatronUrlPattern, setLastWorkflowEnabledList, incrementLibraryContextLoadSerial, libraryOverridesSummary, setLibraryOverridesSummary, setAdditionalFieldDefinitions, setCurrentPatronFieldConfig } from './state.js';
 
 import { setFieldValue, setFieldChecked, getFieldValue, getFieldChecked, validateStaffUrl, normalizeStaffUrl, normalizeLeapBibUrlPattern, normalizeLeapPatronUrlPattern, isPocketBaseAutoCancelError, validateSmtpHostField, setVisible, isSuperAdminStaff, updateSaveBarState, markSettingsDirty, markSettingsClean, activateSettingsSection, initSettingsNavigation, updateEmailStatusBanner, updateOrganizationsStatusUi, checkAuth, loadSetupStatus, updateAutoRejectEmailControls, updateLibraryOverrideStatusVisibility } from './api.js';
-import { authorizedJson } from './http.js';
+import { authorizedJson, isAbortError } from './http.js';
 import { showToast, showConfirm, closeOpenDialogs } from './dialogs.js';
 import { closeActionMenu, escapeAttr } from './grid.js';
 import { renderEditLeapBibLink } from './modals.js';
@@ -12,9 +12,12 @@ import { populateEmailTemplateForms } from './settings-templates.js';
 import { updatePublicationOptionsUi, renderPatronFormatRulesEditor, collectPatronFormatRules, renderOptionListEditor, collectOptionList, addOptionListRow, handleOptionListClick } from './settings-ui.js';
 import { renderAdditionalFieldsEditor, collectAdditionalFieldDefinitions } from './settings-additional-fields.js';
 import { loadStaffUsers, populateStaffLibraryOptions } from './settings-users.js';
+import { createLatestLoad } from '../../shared/latest-load.js';
 
 const adminSettingsSections = ['start', 'staff', 'templates', 'workflow', 'patron'];
 const SUPER_ADMIN_LIBRARY_CONTEXT_STORAGE_KEY = 'asap.superAdmin.settings.libraryContextOrgId';
+const settingsLoads = createLatestLoad();
+const librarySettingsLoads = createLatestLoad();
 
 export function normalizeExternalSearchUrlTemplate(value) {
   const text = String(value || '').trim();
@@ -91,14 +94,17 @@ export function refreshLibrarySelectorIndicators() {
 export async function loadSettings(options = {}) {
   const isSuper = isSuperAdminStaff();
   const showErrors = options.showErrors !== false;
+  const guard = settingsLoads.begin('settings');
   setSettingsLoading(true);
 
   try {
     updateSettingsSidebar(isSuper);
     ensureAllowedSettingsSection(isSuper);
     await loadLibraryContext(isSuper);
+    if (!guard.isCurrent()) return;
 
     const loadedLibrarySettings = await loadLibrarySettings(currentLibraryContextOrgId);
+    if (!guard.isCurrent()) return;
 
     if (!isSuper) {
       await loadLibraryAdminSettings();
@@ -113,13 +119,19 @@ export async function loadSettings(options = {}) {
 
     populateSystemSettingsForms(loadedLibrarySettings);
     await loadStaffAccessSettings();
+    if (!guard.isCurrent()) return;
     showSettingsForm();
 
   } catch (err) {
-    handleLoadSettingsError(err, showErrors);
+    if (guard.isCurrent()) {
+      handleLoadSettingsError(err, showErrors);
+    }
   } finally {
-    setSettingsLoading(false);
-    markSettingsClean('clean');
+    if (guard.isCurrent()) {
+      setSettingsLoading(false);
+      markSettingsClean('clean');
+    }
+    settingsLoads.finish('settings', guard.token);
   }
 }
 
@@ -521,8 +533,8 @@ export async function handleLibraryContextSwitch(orgId) {
 }
 
 export async function loadLibrarySettings(orgId) {
-
   const requestedOrgId = orgId || 'system';
+  const guard = librarySettingsLoads.begin('library-settings');
   incrementLibraryContextLoadSerial();
   const requestId = libraryContextLoadSerial;
   setCurrentLibraryContextOrgId(requestedOrgId);
@@ -530,8 +542,11 @@ export async function loadLibrarySettings(orgId) {
   try {
     let settings = {};
 
-    const result = await authorizedJson(`/api/asap/staff/settings/library?orgId=${encodeURIComponent(requestedOrgId)}&_=${Date.now()}`, { cache: 'no-store' });
-    if (requestId !== libraryContextLoadSerial || requestedOrgId !== currentLibraryContextOrgId) {
+    const result = await authorizedJson(`/api/asap/staff/settings/library?orgId=${encodeURIComponent(requestedOrgId)}&_=${Date.now()}`, {
+      cache: 'no-store',
+      signal: guard.signal
+    });
+    if (!guard.isCurrent() || requestId !== libraryContextLoadSerial || requestedOrgId !== currentLibraryContextOrgId) {
       return; // A newer request is in flight
     }
 
@@ -543,11 +558,16 @@ export async function loadLibrarySettings(orgId) {
     return settings;
 
   } catch (err) {
+    if (isAbortError(err)) {
+      return;
+    }
     if (isPocketBaseAutoCancelError(err)) {
       return;
     }
     console.error('Error loading library settings:', err);
     showToast('Failed to load library settings', 'error');
+  } finally {
+    librarySettingsLoads.finish('library-settings', guard.token);
   }
 }
 
@@ -990,7 +1010,7 @@ export async function saveSettings(options = {}) {
     if (options.clearDelay !== 0) {
       setTimeout(() => msg.textContent = '', options.clearDelay || 3000);
     }
-    await loadSettings({ showErrors: false }); // Sync internal state (also triggers loadLibrarySettings)
+    await refreshSettingsView({ showErrors: false }); // Sync internal state (also triggers loadLibrarySettings)
     await loadStaffConfig(); // Refresh logo and titles immediately after saving
     loadStaffUsers();
     saveSucceeded = true;
@@ -1019,6 +1039,10 @@ export function updateSaveButtonText() {
       ? 'Save System Defaults'
       : 'Save Library Settings';
   }
+}
+
+export function refreshSettingsView(options = {}) {
+  return loadSettings(options);
 }
 
 settingsForm.addEventListener('submit', async (e) => {
@@ -1231,7 +1255,7 @@ document.getElementById('btn-upload-logo').addEventListener('click', async () =>
     
     showToast('Branding updated successfully.');
     // Reload settings to refresh the preview and system config
-    await loadSettings({ showErrors: true });
+    await refreshSettingsView({ showErrors: true });
     await loadStaffConfig(); // Refresh nav logo
   } catch (err) {
     showToast(err.message, 'error');
@@ -1260,7 +1284,7 @@ document.getElementById('btn-reset-logo').addEventListener('click', async () => 
     if (!res.ok) throw new Error(data.message || 'Failed to reset branding');
     
     showToast('Branding reset to system defaults.');
-    await loadSettings({ showErrors: true });
+    await refreshSettingsView({ showErrors: true });
     await loadStaffConfig();
   } catch (err) {
     showToast(err.message, 'error');
