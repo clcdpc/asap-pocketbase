@@ -2,7 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const source = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/api.js'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/app/nav.js'), 'utf8');
 
 function extractFunction(name) {
   const start = source.indexOf('function ' + name + '(');

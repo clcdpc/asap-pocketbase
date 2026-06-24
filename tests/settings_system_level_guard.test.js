@@ -2,7 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const apiSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/api.js'), 'utf8');
+const navSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/app/nav.js'), 'utf8');
 const settingsSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/settings.js'), 'utf8');
 const stylesSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/styles.css'), 'utf8');
 
@@ -100,12 +100,12 @@ function loadSwitchHarness(confirmResult) {
 console.log('Running system-level settings guard tests...');
 
 assert.ok(
-  apiSource.includes("switchBtn.textContent = 'Switch to System Level';"),
+  navSource.includes("switchBtn.textContent = 'Switch to System Level';"),
   'System-only guard should use system-level language, not default language'
 );
 
 assert.ok(
-  apiSource.includes("await handleLibraryContextSwitch('system');"),
+  navSource.includes("await handleLibraryContextSwitch('system');"),
   'System-only guard should route clicks through the shared context switch helper'
 );
 
