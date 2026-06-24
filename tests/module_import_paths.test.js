@@ -2,8 +2,12 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const STAFF_JS = path.resolve(__dirname, '../pb_public/staff/js');
 const ROOT = path.resolve(__dirname, '..');
+
+const SEARCH_DIRS = [
+  path.resolve(ROOT, 'pb_public/staff'),
+  path.resolve(ROOT, 'pb_public/patron'),
+];
 
 const bareImportPattern = /^[a-zA-Z@]/;
 
@@ -50,7 +54,7 @@ function collectJsFiles(dir) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       results.push(...collectJsFiles(full));
-    } else if (entry.isFile() && entry.name.endsWith('.js')) {
+    } else if (entry.isFile() && (entry.name.endsWith('.js') || entry.name.endsWith('.mjs'))) {
       results.push(full);
     }
   }
@@ -59,7 +63,7 @@ function collectJsFiles(dir) {
 
 console.log('Running module import path validation tests...');
 
-const allFiles = collectJsFiles(STAFF_JS);
+const allFiles = SEARCH_DIRS.flatMap(collectJsFiles);
 let total = 0;
 let failed = 0;
 
