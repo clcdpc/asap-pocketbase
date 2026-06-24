@@ -18,3 +18,7 @@
 **Vulnerability:** Similar to role updates, a standard `admin` user could delete a `super_admin`'s account because the `staffUserDelete` endpoint only verified that at least one super admin remains, rather than strictly requiring `super_admin` privileges to delete a `super_admin` account.
 **Learning:** Role-based access control (RBAC) must check both the user *performing* the action and the *target* user of the action. Modifying or deleting elevated roles requires elevated authorization.
 **Prevention:** Ensure all endpoints that perform state-changing operations on user accounts strictly validate the actor's privileges against the target object's sensitivity tier.
+## 2026-06-20 - Prevent XSS in Polaris Organizations Settings
+**Vulnerability:** `org.organizationId` was directly interpolated into HTML without escaping in `pb_public/staff/js/settings-polaris.js`.
+**Learning:** Even internal or synchronized IDs can contain characters that break HTML when displayed dynamically in the frontend if unescaped.
+**Prevention:** Wrap all variable substitutions in template literals with `escapeAttr()` when injected into innerHTML.
