@@ -33,7 +33,7 @@ pb_public/staff/js/
 │   ├── dom.js           # DOM field helpers (10 exports, 0 project deps)
 │   ├── url-utils.js     # URL normalization + query parsing (9 exports)
 │   ├── auth.js          # Auth checks, bootstrap, profile, email status
-│   ├── settings-nav.js  # Settings section mgmt, save bar, dirty state
+│   ├── nav.js           # Status tabs, settings section mgmt, save bar
 │   ├── misc.js          # Straggler utilities (6 exports)
 │   └── events.js        # App event listeners (import-time side effects)
 ├── api.js               # Barrel re-exporting from app/* + app/events.js
@@ -96,17 +96,19 @@ isSuperAdminStaff()
 isAdminStaff()
 checkAuth()
 showBootstrapAdminMessage()
-loadSetupStatus()
+loadSetupStatus()            // MUST replace fetch with requestJson
 loadEmailStatus(orgId)
 updateEmailStatusBanner(status)
 openProfileDialog()
 ```
 
-Internal: `appliedProfileClaimFilterDefaultForStaffId`,
-`profileDefaultClaimFilter()`, `applyProfileClaimFilterDefault()`,
-`clearAppliedProfileClaimFilterDefault()`.
+Internal: `appliedProfileClaimFilterDefaultForStaffId`, `profileDefaultClaimFilter()`.
 
-### 4. `app/settings-nav.js` — Settings Navigation & State (~240 lines)
+**Note:** `applyProfileClaimFilterDefault()` and `clearAppliedProfileClaimFilterDefault()` must be exported from this module so that `app/events.js` can bind them to the profile form submit and logout button listeners. They do not need to be re-exported by the `api.js` barrel.
+
+### 4. `app/nav.js` — Navigation & Settings State (~240 lines)
+
+*(Renamed from `settings-nav.js` because `activateStatusTab` controls global application navigation, not just settings).*
 
 Imports settings-related state from `state.js` (`settingsSectionIds`,
 `currentSettingsSection`, `settingsDirty`, `settingsSaving`, `settingsLoading`,
@@ -135,7 +137,7 @@ initSettingsNavigation()
 
 Miscellaneous settings-related utilities that don't fit the other categories.
 Imports from `state.js` (`currentRejectionTemplates`, `workflowSettings`,
-`organizationsStatus`, etc.) and from `app/dom.js`.
+`organizationsStatus`, etc.) and from `app/dom.js`. Needs `requestJson` from `../../shared/http.js` to replace raw `fetch`.
 
 Exports:
 
@@ -143,9 +145,9 @@ Exports:
 isPocketBaseAutoCancelError(err)
 isValidSmtpHost(host)
 validateSmtpHostField(showMessage)
-updateAutoRejectEmailControls()
-updateOrganizationsStatusUi(status, message)
-postPolarisTest(url, resultEl, payload, options)
+updateAutoRejectEmailControls()          // MUST refactor innerHTML to DOM construction
+updateOrganizationsStatusUi(status, message) // MUST refactor innerHTML to DOM construction
+postPolarisTest(url, resultEl, payload, options) // MUST replace fetch with requestJson
 ```
 
 ### 6. `app/events.js` — App Event Listeners (~270 lines)
@@ -156,10 +158,12 @@ setup form submit, setup test Polaris button, logout button, profile dialog
 event listeners, status tabs click handlers, filter select change handlers,
 grid search input handler, and `initRecentSuggestionsDropdown()`.
 
+**AGENTS.md Requirement**: The `login` and `setup` form submit handlers MUST replace their raw `fetch` calls with `requestJson` from `../../shared/http.js`. Do not pre-stringify the JSON bodies; pass them as plain objects.
+
 Imports from sibling `app/*` modules for utility functions, and from external
 modules (`settings.js`, `grid.js`, `dialogs.js`, `http.js`, `state.js`,
 `settings-polaris.js`, `settings-templates.js`, `recent-suggestions.js`) for
-their specific exports.
+their specific exports. Also needs `requestJson` from `../../shared/http.js`.
 
 No exports. Runs at import time when `api.js` imports it.
 
@@ -169,27 +173,29 @@ No exports. Runs at import time when `api.js` imports it.
 export * from './app/dom.js';
 export * from './app/url-utils.js';
 export * from './app/auth.js';
-export * from './app/settings-nav.js';
+export * from './app/nav.js';
 export * from './app/misc.js';
 export { authorizedJson, showToast, showAlert, showConfirm, closeOpenDialogs } from './http.js';
 export { authorizedJson, showToast, showAlert, showConfirm, closeOpenDialogs } from './dialogs.js';
 import './app/events.js';
 ```
 
+*(Exclude `applyProfileClaimFilterDefault` and `clearAppliedProfileClaimFilterDefault` from the `auth.js` wildcard export if using explicit exports, or just let them pass through since they are harmless).*
+
 All 47 exports preserved. Zero consumer import changes.
 
 ## Test Updates
 
 Two source-inspection tests read from `api.js` directly and must be updated to
-read from `app/settings-nav.js`:
+read from `app/nav.js`:
 
 1. `tests/settings_system_level_guard.test.js` — reads api.js source to check
    strings in `activateSettingsSection` (switch button text, context switch
-   call). Extract from `app/settings-nav.js` instead.
+   call). Extract from `app/nav.js` instead.
 
 2. `tests/settings_staff_scope_banner.test.js` — reads api.js source to
    extract `updateLibraryOverrideStatusVisibility`. Extract from
-   `app/settings-nav.js` instead. Also checks for the string
+   `app/nav.js` instead. Also checks for the string
    `"export const libraryContextSections = libraryOverrideStatusSections.concat(['staff']);"`
    which moves to the new file.
 
@@ -200,7 +206,7 @@ read from `app/settings-nav.js`:
 | 0 | Baseline: capture all exports, verify test output | (inspection only) |
 | 1 | Create `app/dom.js` + `app/url-utils.js` | 2 new files |
 | 2 | Create `app/auth.js` | 1 new file |
-| 3 | Create `app/settings-nav.js` | 1 new file |
+| 3 | Create `app/nav.js` | 1 new file |
 | 4 | Create `app/misc.js` + `app/events.js` | 2 new files |
 | 5 | Convert `api.js` to barrel | 1 modified file |
 | 6 | Update 2 source-inspection tests | 2 modified files |
