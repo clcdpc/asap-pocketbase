@@ -4,6 +4,8 @@ const path = require('path');
 
 const navSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/app/nav.js'), 'utf8');
 const settingsSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/settings.js'), 'utf8');
+const libraryContextSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/settings/library-context.js'), 'utf8');
+const serializeSaveSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/settings/serialize-save.js'), 'utf8');
 const stylesSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/styles.css'), 'utf8');
 
 function extractFunction(source, name) {
@@ -41,7 +43,7 @@ function makeSelect(initialValue) {
 }
 
 function loadSwitchHarness(confirmResult) {
-  const switchSource = extractFunction(settingsSource, 'switchLibraryContext');
+  const switchSource = extractFunction(libraryContextSource, 'switchLibraryContext');
   return new Function('makeSelect', 'confirmResult', `
     let currentLibraryContextOrgId = '2';
     let settingsDirty = true;
@@ -115,14 +117,14 @@ assert.ok(
 );
 
 assert.ok(
-  settingsSource.includes('const isSystemSave = currentLibraryContextOrgId === \'system\';'),
+  serializeSaveSource.includes('const isSystemSave = currentLibraryContextOrgId === \'system\';'),
   'Save path should explicitly distinguish system saves from library saves'
 );
 assert.ok(
-  settingsSource.includes('if (isSystemSave)') &&
-    settingsSource.includes('libraryPayload.smtp = payload.smtp;') &&
-    settingsSource.includes('libraryPayload.polaris = payload.polaris;') &&
-    settingsSource.includes('libraryPayload.patronEmbedAllowedOrigins = payload.patronEmbedAllowedOrigins;'),
+  serializeSaveSource.includes('if (isSystemSave)') &&
+    serializeSaveSource.includes('libraryPayload.smtp = payload.smtp;') &&
+    serializeSaveSource.includes('libraryPayload.polaris = payload.polaris;') &&
+    serializeSaveSource.includes('libraryPayload.patronEmbedAllowedOrigins = payload.patronEmbedAllowedOrigins;'),
   'System-only payload keys should only be included for system-context saves'
 );
 

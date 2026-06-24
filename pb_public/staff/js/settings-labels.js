@@ -3,7 +3,7 @@ import { markSettingsClean } from './api.js';
 import { authorizedJson } from './http.js';
 import { showToast, showConfirm } from './dialogs.js';
 import { escapeAttr } from './grid.js';
-import { loadLibrarySettings } from './settings.js';
+import { loadLibrarySettings } from './settings/library-context.js';
 
 export function normalizeDuplicateStatusLabels(labels = {}) {
   return { ...duplicateStatusLabelDefaults, ...(labels && typeof labels === 'object' ? labels : {}) };

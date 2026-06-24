@@ -3,7 +3,8 @@ import { getFieldValue, getFieldChecked, validateSmtpHostField, isSuperAdminStaf
 import { authorizedJson } from './http.js';
 import { showToast } from './dialogs.js';
 import { refreshCurrentStaffView, refreshStaffStatus, escapeAttr } from './grid.js';
-import { populateLibrarySelector, saveSettings } from './settings.js';
+import { populateLibrarySelector } from './settings/library-context.js';
+import { saveSettings } from './settings/serialize-save.js';
 
 export function collectSettingsPolaris() {
   return {

@@ -3,8 +3,11 @@ const fs = require("fs");
 const path = require("path");
 
 // Mock environment for settings.js logic testing
-const source = fs.readFileSync(path.join(__dirname, "../pb_public/staff/js/settings.js"), "utf8")
+const serializeSaveSource = fs.readFileSync(path.join(__dirname, "../pb_public/staff/js/settings/serialize-save.js"), "utf8")
   .replace(/\bexport\s+/g, "");
+const formPopulationSource = fs.readFileSync(path.join(__dirname, "../pb_public/staff/js/settings/form-population.js"), "utf8")
+  .replace(/\bexport\s+/g, "");
+const source = serializeSaveSource + "\n" + formPopulationSource;
 
 function extractFunction(name) {
   const start = source.indexOf("function " + name + "(");

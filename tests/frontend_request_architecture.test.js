@@ -311,14 +311,14 @@ async function main() {
   }
 
   {
-    const settingsSource = fs.readFileSync(settingsPath, 'utf8');
+    const serializeSaveSource = fs.readFileSync(path.join(root, 'pb_public/staff/js/settings/serialize-save.js'), 'utf8');
     const settingsLabelsSource = fs.readFileSync(settingsLabelsPath, 'utf8');
     assert.ok(
-      settingsSource.includes('body: libraryPayload'),
+      serializeSaveSource.includes('body: libraryPayload'),
       'settings save should pass object bodies so requestJson sets application/json'
     );
     assert.ok(
-      !settingsSource.includes('body: JSON.stringify(libraryPayload)'),
+      !serializeSaveSource.includes('body: JSON.stringify(libraryPayload)'),
       'settings save should not pre-stringify the library payload'
     );
     assert.ok(
