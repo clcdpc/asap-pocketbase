@@ -5,7 +5,7 @@ const path = require('path');
 const navSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/app/nav.js'), 'utf8');
 const settingsSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/settings.js'), 'utf8');
 const libraryContextSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/settings/library-context.js'), 'utf8');
-const serializeSaveSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/settings/serialize-save.js'), 'utf8');
+const saveControllerSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/settings/save-controller.js'), 'utf8');
 const stylesSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/styles.css'), 'utf8');
 
 function extractFunction(source, name) {
@@ -117,14 +117,14 @@ assert.ok(
 );
 
 assert.ok(
-  serializeSaveSource.includes('const isSystemSave = currentLibraryContextOrgId === \'system\';'),
+  saveControllerSource.includes('const isSystemSave = currentLibraryContextOrgId === \'system\';'),
   'Save path should explicitly distinguish system saves from library saves'
 );
 assert.ok(
-  serializeSaveSource.includes('if (isSystemSave)') &&
-    serializeSaveSource.includes('libraryPayload.smtp = payload.smtp;') &&
-    serializeSaveSource.includes('libraryPayload.polaris = payload.polaris;') &&
-    serializeSaveSource.includes('libraryPayload.patronEmbedAllowedOrigins = payload.patronEmbedAllowedOrigins;'),
+  saveControllerSource.includes('if (isSystemSave)') &&
+    saveControllerSource.includes('libraryPayload.smtp = payload.smtp;') &&
+    saveControllerSource.includes('libraryPayload.polaris = payload.polaris;') &&
+    saveControllerSource.includes('libraryPayload.patronEmbedAllowedOrigins = payload.patronEmbedAllowedOrigins;'),
   'System-only payload keys should only be included for system-context saves'
 );
 

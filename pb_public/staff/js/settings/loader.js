@@ -1,12 +1,12 @@
 import { settingsContainer, settingsLoading, currentLibraryContextOrgId, currentSettingsSection, setSettingsLoading, setAdditionalFieldDefinitions, setCurrentPatronFieldConfig, pb, setCurrentLibraryContextOrgId, workflowSettings, organizationsStatus } from '../state.js';
 import { setVisible, isSuperAdminStaff, activateSettingsSection, initSettingsNavigation, checkAuth, loadSetupStatus, markSettingsClean, setFieldValue, setFieldChecked, isPocketBaseAutoCancelError } from '../api.js';
-import { updateSaveButtonText } from './form-population.js';
+import { updateSaveButtonText } from './save-ui.js';
 import { authorizedJson } from '../http.js';
 import { closeOpenDialogs } from '../dialogs.js';
 import { closeActionMenu } from '../grid.js';
 import { populateLibrarySelector, loadLibrarySettings } from './library-context.js';
 import { updatePublicationOptionsUi } from '../settings-ui.js';
-import { syncPolarisOrganizations } from '../settings-polaris.js';
+import { syncPolarisOrganizations } from './polaris-sync.js';
 import { loadStaffAccessSettings } from './staff-access.js';
 import { registerSettingsRefreshHandlers } from './refresh.js';
 import { createLatestLoad } from '../../../shared/latest-load.js';

@@ -7,6 +7,9 @@ export * from './settings/loader.js';
 export * from './settings/duplicate-labels.js';
 export * from './settings/polaris-fields.js';
 export * from './settings/staff-access.js';
+export * from './settings/save-controller.js';
+export * from './settings/save-ui.js';
+export * from './settings/polaris-sync.js';
 
 import { settingsForm, defaultPublicationOptions, verifiedBibId, setVerifiedBibId, currentLibraryContextOrgId, pb } from './state.js';
 import { markSettingsDirty, updateAutoRejectEmailControls } from './api.js';
@@ -14,7 +17,7 @@ import { authorizedJson } from './http.js';
 import { showToast, showConfirm } from './dialogs.js';
 import { renderEditLeapBibLink } from './modals.js';
 import { handleOptionListClick, addOptionListRow } from './settings-ui.js';
-import { saveSettings, discardLibrarySettingsChanges } from './settings/serialize-save.js';
+import { saveSettings, discardLibrarySettingsChanges } from './settings/save-controller.js';
 import { toggleTimeoutGroup, toggleHoldPickupTimeoutGroup, togglePendingHoldTimeoutGroup, toggleAdditionalCopyTimeoutGroup, toggleCommonAuthorsGroup } from './settings/toggles.js';
 import { refreshSettingsView, loadStaffConfig } from './settings/loader.js';
 

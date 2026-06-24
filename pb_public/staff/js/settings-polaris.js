@@ -2,9 +2,8 @@ import { pb, currentStatus, organizationsStatus, setOrganizationsStatus, lastWor
 import { getFieldValue, getFieldChecked, validateSmtpHostField, isSuperAdminStaff, isAdminStaff, updateOrganizationsStatusUi, setInlineResult, postPolarisTest } from './api.js';
 import { authorizedJson } from './http.js';
 import { showToast } from './dialogs.js';
-import { refreshCurrentStaffView, refreshStaffStatus, escapeAttr } from './grid.js';
-import { populateLibrarySelector } from './settings/library-context.js';
-import { saveSettings } from './settings/serialize-save.js';
+import { refreshCurrentStaffView, refreshStaffStatus } from './grid.js';
+import { saveSettings } from './settings/save-controller.js';
 import { collectSettingsPolaris, renderLibraryParticipationCheckboxes, collectEnabledLibraryIds } from './settings/polaris-fields.js';
 
 export { collectSettingsPolaris, renderLibraryParticipationCheckboxes, collectEnabledLibraryIds };
@@ -42,36 +41,9 @@ document.getElementById('btn-test-polaris').addEventListener('click', async (e) 
   });
 });
 
-const syncOrganizationsBtn = document.getElementById('btn-sync-organizations');
-export async function syncPolarisOrganizations(options = {}) {
-  const resultEl = document.getElementById('organizations-sync-result');
-  const btn = options.button || syncOrganizationsBtn;
-  if (btn) btn.disabled = true;
-  updateOrganizationsStatusUi('loading', 'Organizations loading from Polaris. Organization selection will be available after this sync completes.');
-  setInlineResult(resultEl, 'Syncing organizations...', 'ml-2 text-muted');
+import { syncPolarisOrganizations } from './settings/polaris-sync.js';
 
-  try {
-    const result = await authorizedJson('/api/asap/staff/organizations/sync', { method: 'POST' });
-    const count = result.synced || 0;
-    updateOrganizationsStatusUi('loaded', `Polaris organizations loaded successfully. ${count} organization record${count === 1 ? '' : 's'} synced. Leave all libraries unchecked to enable all organizations.`);
-    setInlineResult(resultEl, `Synced ${count} organization records.`, 'ml-2 text-success font-weight-bold');
-    const container = document.getElementById('enabled-libraries-checkbox-container');
-    if (container) {
-      container.removeAttribute('data-loaded');
-    }
-    if (isSuperAdminStaff()) {
-      await populateLibrarySelector();
-    }
-    await renderLibraryParticipationCheckboxes();
-    return result;
-  } catch (err) {
-    updateOrganizationsStatusUi('error', 'Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.');
-    setInlineResult(resultEl, 'Warning: ' + (err.message || 'Organization sync failed.'), 'ml-2 text-warning font-weight-bold');
-    throw err;
-  } finally {
-    if (btn) btn.disabled = false;
-  }
-}
+const syncOrganizationsBtn = document.getElementById('btn-sync-organizations');
 
 if (syncOrganizationsBtn) {
   syncOrganizationsBtn.addEventListener('click', async (e) => {

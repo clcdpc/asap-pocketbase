@@ -78,8 +78,9 @@ function runTests() {
   assert.ok(configRouteSource.includes("response.externalSearch4UrlTemplate"));
 
   const serializeSaveJs = fileText("pb_public/staff/js/settings/serialize-save.js");
+  const saveControllerJs = fileText("pb_public/staff/js/settings/save-controller.js");
   assert.ok(serializeSaveJs.includes("wf-external-search-4-enabled"));
-  assert.ok(serializeSaveJs.includes("payload.externalSearch4Enabled"));
+  assert.ok(saveControllerJs.includes("payload.externalSearch4Enabled"));
 
   const utilsJs = fileText("pb_public/staff/js/settings/utils.js");
   const normalizeSource = extractFunction(utilsJs.replace("export function normalizeExternalSearchUrlTemplate", "function normalizeExternalSearchUrlTemplate"), "normalizeExternalSearchUrlTemplate");

@@ -4,7 +4,7 @@ const path = require('path');
 
 const settingsSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/settings.js'), 'utf8');
 const loaderSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/settings/loader.js'), 'utf8');
-const serializeSaveSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/settings/serialize-save.js'), 'utf8');
+const saveControllerSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/settings/save-controller.js'), 'utf8');
 const polarisFieldsSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/settings/polaris-fields.js'), 'utf8');
 const polarisSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/settings-polaris.js'), 'utf8');
 const htmlSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/index.html'), 'utf8');
@@ -54,7 +54,7 @@ const populateHarness = new Function(`
 assert.ok(populateHarness.some(([id, value]) => id === 'polaris-workstation-id' && value === '77'));
 assert.ok(populateHarness.some(([id, value]) => id === 'polaris-workstation-id' && value === '1'));
 
-assert.ok(serializeSaveSource.includes('const isSystemSave = currentLibraryContextOrgId === \'system\';'));
-assert.ok(serializeSaveSource.includes('if (isSystemSave)') && serializeSaveSource.includes('libraryPayload.polaris = payload.polaris;'), 'library save path should not include global Polaris payload keys');
+assert.ok(saveControllerSource.includes('const isSystemSave = currentLibraryContextOrgId === \'system\';'));
+assert.ok(saveControllerSource.includes('if (isSystemSave)') && saveControllerSource.includes('libraryPayload.polaris = payload.polaris;'), 'library save path should not include global Polaris payload keys');
 
 console.log('Settings Polaris workstation tests passed.');
