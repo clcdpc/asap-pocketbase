@@ -376,6 +376,18 @@ async function main() {
     );
   }
 
+  {
+    const settingsBarrelSource = fs.readFileSync(settingsPath, 'utf8');
+    assert.ok(
+      settingsBarrelSource.includes("import './settings-labels.js'"),
+      'settings barrel should import settings-labels.js for side-effect event registration'
+    );
+    assert.ok(
+      settingsBarrelSource.includes("import './settings-polaris.js'"),
+      'settings barrel should import settings-polaris.js for side-effect event registration'
+    );
+  }
+
   console.log('frontend_request_architecture.test.js passed.');
 }
 
