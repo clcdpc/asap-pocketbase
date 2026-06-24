@@ -173,3 +173,11 @@ For each new setting, verify all of the following:
 
 ### Good design pattern
 Use one clear source of truth for the selected settings scope. If the UI tracks a current org/system selection, all load and save helpers should consume that same state instead of re-deriving scope ad hoc in multiple places.
+
+### JSON vs Goja Data Types and Normalization
+PocketBase hooks interface with data originating from multiple engines. Be extremely careful when writing normalization or parser helpers to coerce types safely:
+- PocketBase JSON fields loaded from SQLite are often handed to Goja hooks as raw byte arrays.
+- JSON responses from external HTTP APIs (e.g., Polaris) are standard JavaScript objects containing primitives like `number`, `string`, and `boolean`.
+- If a helper expects an array or string (e.g. iterating over `bytes.length`) and encounters a JavaScript `number`, it must handle it gracefully or coerce it using `String(value)`.
+- Falsy primitive values like `0` and `false` must not be accidentally swallowed or converted to `""` during normalization unless explicitly desired.
+- Write tests that provide `number`, `boolean`, `null`, `undefined`, `""`, `"string"`, and `[byte array]` permutations for normalization functions.
