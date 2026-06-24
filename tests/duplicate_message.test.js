@@ -47,6 +47,35 @@ function runTests() {
   assert.ok(openMessage.includes('Match: title and format.'));
   assert.ok(openMessage.includes('Format: unknown_format.'));
 
+  // Tests for formatDuplicateDate
+  const duplicateMessages = require('../lib/duplicate_messages.js');
+
+  // Empty values
+  assert.strictEqual(duplicateMessages.formatDuplicateDate(null), "");
+  assert.strictEqual(duplicateMessages.formatDuplicateDate(undefined), "");
+  assert.strictEqual(duplicateMessages.formatDuplicateDate(""), "");
+  assert.strictEqual(duplicateMessages.formatDuplicateDate("   "), "");
+
+  // Invalid date strings
+  assert.strictEqual(duplicateMessages.formatDuplicateDate("not a date"), "not a date");
+  assert.strictEqual(duplicateMessages.formatDuplicateDate("invalid string 1234 XYZ"), "invalid string 1234 XYZ");
+
+  // Valid date strings without time
+  const dateStr1 = duplicateMessages.formatDuplicateDate("2024-05-15");
+  assert.ok(dateStr1.includes("2024") && dateStr1.includes("May"));
+
+  // Valid date strings with spaces
+  const dateStr2 = duplicateMessages.formatDuplicateDate("2024-05-15 14:30:00");
+  assert.ok(dateStr2.includes("2024") && dateStr2.includes("May") && dateStr2.includes("15"));
+
+  // Valid date strings with T
+  const dateStr3 = duplicateMessages.formatDuplicateDate("2024-05-15T14:30:00.000Z");
+  assert.ok(dateStr3.includes("2024") && dateStr3.includes("May") && dateStr3.includes("15"));
+
+  // Trimmed values
+  const dateStr4 = duplicateMessages.formatDuplicateDate("  2024-05-15 14:30:00  ");
+  assert.ok(dateStr4.includes("2024") && dateStr4.includes("May") && dateStr4.includes("15"));
+
   console.log('duplicate_message tests passed.');
 }
 
