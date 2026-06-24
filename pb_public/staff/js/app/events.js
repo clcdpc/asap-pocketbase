@@ -8,7 +8,7 @@ import { initRecentSuggestionsDropdown } from '../recent-suggestions.js';
 import { formDataObject, setFieldChecked, setFieldValue, getFieldChecked, getFieldValue } from './dom.js';
 import { checkAuth, openProfileDialog, applyProfileClaimFilterDefault, clearAppliedProfileClaimFilterDefault } from './auth.js';
 import { postPolarisTest } from './misc.js';
-import { activateStatusTab, updateStageQuery } from './nav.js';
+import { activateStatusTab } from './nav.js';
 import { updateStageQuery as updateStageQueryFromUrl } from './url-utils.js';
 
 loginForm.addEventListener('submit', async (e) => {
