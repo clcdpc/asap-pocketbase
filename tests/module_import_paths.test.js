@@ -46,6 +46,175 @@ function findNamedImports(source) {
   return imports;
 }
 
+function importedLocalNames(source) {
+  const names = new Set();
+  let match;
+
+  const namedRe = /import\s*\{([^}]+)\}\s*from\s*['"][^'"]+['"]/g;
+  while ((match = namedRe.exec(source)) !== null) {
+    match[1]
+      .split(',')
+      .map(part => part.trim())
+      .filter(Boolean)
+      .map(part => {
+        const pieces = part.split(/\s+as\s+/);
+        return (pieces[1] || pieces[0]).trim();
+      })
+      .filter(Boolean)
+      .forEach(name => names.add(name));
+  }
+
+  const defaultRe = /import\s+([A-Za-z_$][\w$]*)\s+from\s*['"][^'"]+['"]/g;
+  while ((match = defaultRe.exec(source)) !== null) {
+    names.add(match[1]);
+  }
+
+  const namespaceRe = /import\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*['"][^'"]+['"]/g;
+  while ((match = namespaceRe.exec(source)) !== null) {
+    names.add(match[1]);
+  }
+
+  return names;
+}
+
+function stripCommentsAndStrings(source) {
+  return source
+    .replace(/`(?:\\[\s\S]|[^`\\])*`/g, '``')
+    .replace(/'(?:\\.|[^'\\])*'/g, "''")
+    .replace(/"(?:\\.|[^"\\])*"/g, '""')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/[^\n\r]*/g, '');
+}
+
+function declaredLocalNames(source) {
+  const names = importedLocalNames(source);
+  const clean = stripCommentsAndStrings(source);
+  let match;
+
+  const declarationRe = /(?:export\s+)?(?:async\s+)?(?:function|class)\s+([A-Za-z_$][\w$]*)/g;
+  while ((match = declarationRe.exec(clean)) !== null) {
+    names.add(match[1]);
+  }
+
+  const variableRe = /(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g;
+  while ((match = variableRe.exec(clean)) !== null) {
+    names.add(match[1]);
+  }
+
+  const functionParamsRe = /(?:function\s*[A-Za-z_$][\w$]*|(?:async\s+)?\([^)]*\)\s*=>)\s*\(([^)]*)\)/g;
+  while ((match = functionParamsRe.exec(clean)) !== null) {
+    match[1]
+      .split(',')
+      .map(part => part.trim().replace(/=.*$/, '').trim())
+      .filter(name => /^[A-Za-z_$][\w$]*$/.test(name))
+      .forEach(name => names.add(name));
+  }
+
+  const arrowParamsRe = /\(([^()]*)\)\s*=>/g;
+  while ((match = arrowParamsRe.exec(clean)) !== null) {
+    match[1]
+      .split(',')
+      .map(part => part.trim().replace(/=.*$/, '').trim())
+      .filter(name => /^[A-Za-z_$][\w$]*$/.test(name))
+      .forEach(name => names.add(name));
+  }
+
+  const singleArrowParamRe = /(^|[^.\w$])([A-Za-z_$][\w$]*)\s*=>/g;
+  while ((match = singleArrowParamRe.exec(clean)) !== null) {
+    names.add(match[2]);
+  }
+
+  return names;
+}
+
+const allowedBareCalls = new Set([
+  'Array',
+  'Boolean',
+  'CustomEvent',
+  'Date',
+  'Error',
+  'Event',
+  'FileReader',
+  'FormData',
+  'Map',
+  'Number',
+  'Option',
+  'Promise',
+  'ResizeObserver',
+  'Set',
+  'String',
+  'TextDecoder',
+  'Uint8Array',
+  'URL',
+  'URLSearchParams',
+  'alert',
+  'async',
+  'clearTimeout',
+  'confirm',
+  'constructor',
+  'decodeURIComponent',
+  'encodeURIComponent',
+  'escape',
+  'fetch',
+  'isFinite',
+  'isNaN',
+  'parseFloat',
+  'parseInt',
+  'prompt',
+  'requestAnimationFrame',
+  'structuredClone',
+  'setInterval',
+  'setTimeout',
+  'super',
+  'unescape',
+]);
+
+const jsKeywords = new Set([
+  'catch',
+  'do',
+  'for',
+  'function',
+  'if',
+  'import',
+  'new',
+  'return',
+  'switch',
+  'throw',
+  'typeof',
+  'while',
+]);
+
+function unresolvedBareFunctionCalls(source) {
+  const clean = stripCommentsAndStrings(source);
+  const declared = declaredLocalNames(source);
+  const missing = [];
+  const callRe = /(^|[^.\w$])([A-Za-z_$][\w$]*)\s*\(/g;
+  let match;
+
+  while ((match = callRe.exec(clean)) !== null) {
+    const name = match[2];
+    if (declared.has(name) || allowedBareCalls.has(name) || jsKeywords.has(name)) continue;
+    const closeParen = clean.indexOf(')', callRe.lastIndex - 1);
+    if (closeParen >= 0) {
+      const next = clean.slice(closeParen + 1).match(/\S/);
+      if (next && next[0] === '{') continue;
+    }
+    missing.push(name);
+  }
+
+  return Array.from(new Set(missing)).sort();
+}
+
+function shouldCheckBareCalls(file) {
+  const rel = path.relative(ROOT, file).replace(/\\/g, '/');
+  return (
+    rel === 'pb_public/staff/js/settings.js' ||
+    rel === 'pb_public/staff/js/settings-labels.js' ||
+    rel === 'pb_public/staff/js/settings-polaris.js' ||
+    rel.startsWith('pb_public/staff/js/settings/')
+  );
+}
+
 function resolveImportPath(importerFile, importPath) {
   if (bareImportPattern.test(importPath)) {
     return null;
@@ -166,6 +335,14 @@ for (const file of allFiles) {
         console.error(`  FAIL: ${relPath} imports { ${name} } from '${namedImport.importPath}' -> ${importRel} does not export '${name}'`);
         failed++;
       }
+    }
+  }
+
+  if (shouldCheckBareCalls(file)) {
+    for (const name of unresolvedBareFunctionCalls(source)) {
+      total++;
+      console.error(`  FAIL: ${relPath} calls '${name}()' but does not declare or import '${name}'`);
+      failed++;
     }
   }
 }

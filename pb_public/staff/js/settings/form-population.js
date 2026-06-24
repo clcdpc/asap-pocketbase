@@ -7,6 +7,7 @@ import { renderOptionListEditor, renderPatronFormatRulesEditor, updatePublicatio
 import { populateEmailTemplateForms } from '../settings-templates.js';
 import { renderAdditionalFieldsEditor } from '../settings-additional-fields.js';
 import { renderLibraryParticipationCheckboxes } from './polaris-fields.js';
+import { updateSaveButtonText } from './save-ui.js';
 
 function patronPortalUrl(orgId, embed) {
   const url = new URL('/patron/', window.location.origin);
@@ -331,5 +332,4 @@ export function populatePatronUiForms(uiText) {
   renderPatronFormatRulesEditor(uiText.formatRules);
   updatePublicationOptionsUi(uiText.publicationOptions);
 }
-
 
