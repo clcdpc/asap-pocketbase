@@ -2,7 +2,7 @@
 
 ## Summary
 
-Split `pb_public/staff/js/modals.js` (1499 lines, 24 exports, 53 functional blocks) into focused modules while preserving the existing public import surface through a `modals.js` barrel. Replace three raw `fetch` calls with `authorizedJson`. Merge two near-duplicate submit paths into a shared action submitter. Extract Polaris search into its own module. Gate scattered top-level event listeners behind an explicit `init()` call.
+Split `pb_public/staff/js/modals.js` (currently about 1519 lines, with the exact export list generated in Phase 0) into focused modules while preserving the existing public import surface through a `modals.js` barrel. Replace three raw `fetch` calls with `authorizedJson`. Merge two near-duplicate submit paths into a shared action submitter. Extract Polaris search into its own module. Gate scattered top-level event listeners behind an explicit `init()` call.
 
 This is a structural refactor only. It must not change staff dialog behavior, request/refresh semantics, row action behavior, or public exports.
 
@@ -37,6 +37,9 @@ export function createModalContext(state) {
 
     // Live mutable values from state.js
     get currentRejectionTemplates() { return state.currentRejectionTemplates; },
+    get currentSuggestions() { return state.currentSuggestions; },
+    get allSuggestions() { return state.allSuggestions; },
+    get verifiedBibId() { return state.verifiedBibId; },
     get workflowSettings() { return state.workflowSettings; },
     get currentAdditionalFieldDefinitions() { return state.currentAdditionalFieldDefinitions; },
     get currentFormatRules() { return state.currentFormatRules; },
@@ -116,7 +119,7 @@ Contents:
 
 Owns patron information display in the edit modal. All DOM construction is safe (no `innerHTML` except for static developer-authored markup).
 
-Dependencies: `modals/context.js`, `modals/utils.js`, `./api.js` (for `leapPatronUrl`), `./grid.js` (for `escapeAttr`)
+Dependencies: `modals/context.js`, `modals/utils.js`, `./api.js` (for `leapPatronUrl`), `./grid-utils.js` (for `escapeAttr`)
 
 Contents:
 
@@ -155,6 +158,9 @@ Dependencies:
 - `modals/claim-tags.js`
 - `modals/audit-preview.js`
 - `modals/rejection-templates.js`
+- `./api.js` (for `leapBibUrl`)
+- `./grid-utils.js` (for `escapeAttr`, `formatDateTime`)
+- `./settings-ui.js` (for `setSelectValue`, `dateOnly`)
 - `./recent-suggestions.js` (for `rememberRecentSuggestion`, `renderRecentSuggestionsSwitcher`)
 - `./edit-pickup.js` (for `loadEditPickupForRequest`)
 - `./request-custom-fields.js` (for `renderEditCustomFields`)
@@ -175,12 +181,14 @@ Contents:
 
 Owns workflow tag and claim state rendering in the edit dialog.
 
-Dependencies: `modals/context.js`, `./grid.js` (for `renderWorkflowTags`)
+Dependencies: `modals/context.js`, lower-level workflow tag rendering helper (avoid importing `./grid.js` if that would preserve or deepen a `grid.js <-> modals.js` cycle)
+
+If the current workflow tag renderer only exists behind `grid.js`, first extract the reusable rendering logic to a lower-level helper such as `grid-rendering.js`, `grid-utils.js`, or a small dedicated module. Do not solve this by importing from the `modals.js` barrel.
 
 Contents:
 
 - `renderEditClaimState(row, ctx)` — renders claim badge (unclaimed/mine/claimed by X)
-- `renderEditWorkflowTags(tags, row, ctx)` — renders workflow tag badges; delegates to `grid.renderWorkflowTags`
+- `renderEditWorkflowTags(tags, row, ctx)` — renders workflow tag badges; delegates to the lower-level workflow tag renderer
 - `reactiveCleanupWorkflowFlags(rowId, ctx)` — removes stale flags after BIB verification
 
 ### 8. `modals/audit-preview.js`
@@ -214,8 +222,8 @@ Dependencies:
 - `modals/context.js`
 - `modals/utils.js`
 - `modals/additional-copy.js`
+- `modals/edit-submit.js` (for `submitTitleRequestAction`, after Phase 5)
 - `./http.js` (for `authorizedJson`, `isAbortError`)
-- `./grid.js` (for `refreshCurrentStaffView` via `onRefresh` callback)
 - `./dialogs.js` (for `showToast`, `showAlert`)
 - `./settings-ui.js` (for `applySelectedPolarisResultToEditForm`)
 
@@ -253,6 +261,9 @@ Contents:
 
 - `submitEditForm(ctx, onRefresh)` — validates form, builds payload, posts via `authorizedJson`, handles errors/toast/refresh
 - `submitTitleRequestAction(id, payload, ctx, onRefresh)` — shared between edit form submit and `performImmediateStaffAction`; replaced from both paths
+- `normalizeActionError(err)` — converts `authorizedJson`/`HttpError` failures into the same status/message/code shape the current raw `fetch` handlers produce
+
+`authorizedJson` returns parsed JSON on success and throws `HttpError` on failure with `err.status` and `err.response`. The refactor must preserve duplicate-open behavior by passing `err.status`, `err.response`, and a fallback raw message through `actionErrorMessage(...)`, then setting `normalized.code = err.response?.code || err.code || ''`. The existing duplicate flow depends on `err.code === 'duplicate_open_request'`.
 
 ### 12. `modals/events.js`
 
@@ -272,10 +283,13 @@ Contents:
   - Edit/new title/author/identifier Polaris search trigger buttons (6 calls)
   - `#edit-form` submit → `submitEditForm(ctx, onRefresh)`
   - `#edit-format`, `#edit-publication`, `#edit-autohold` change → audit refresh
+  - `#edit-format` change → custom-field refresh in addition to audit refresh
   - `#edit-bibid` input → audit refresh
   - `window.asap-bib-verified` custom event → `reactiveCleanupWorkflowFlags` + audit refresh
   - `.js-open-profile-dialog` click → `openProfileDialog()`
 - Uses `eventsBound` module-level flag to prevent double-binding
+
+Do not move the separate `#edit-bibid` keydown/input listeners owned by `settings.js` into `modals/events.js`; those listeners handle lookup shortcuts, Leap link refresh, and verified-BIB reset behavior. `modals/events.js` should own only the modal listeners currently declared in `modals.js`.
 
 ### 13. Barrel: `modals.js`
 
@@ -416,10 +430,10 @@ modals.js (barrel)
       -> modals/claim-tags.js
       -> modals/audit-preview.js
       -> modals/rejection-templates.js
-      -> (recent-suggestions, edit-pickup, request-custom-fields)
+      -> (api, grid-utils, settings-ui, recent-suggestions, edit-pickup, request-custom-fields)
   -> modals/claim-tags.js
       -> modals/context.js
-      -> (grid.js for renderWorkflowTags)
+      -> (lower-level workflow tag renderer; avoid grid.js if it preserves a cycle)
   -> modals/audit-preview.js
       -> modals/context.js
       -> modals/utils.js
@@ -433,6 +447,7 @@ modals.js (barrel)
       -> modals/context.js
       -> modals/utils.js
       -> modals/additional-copy.js
+      -> modals/edit-submit.js (after Phase 5)
       -> (http, dialogs, settings-ui)
   -> modals/events.js
       -> modals/polaris-search.js
@@ -444,11 +459,12 @@ modals.js (barrel)
 
 Forbidden imports:
 
-- `modals/polaris-search.js` must not import `modals/events.js` or `modals/edit-submit.js`.
+- `modals/polaris-search.js` must not import `modals/events.js`. It may import `modals/edit-submit.js` only after Phase 5, when `performImmediateStaffAction` delegates to `submitTitleRequestAction`.
 - `modals/edit-form.js` must not import `modals/polaris-search.js`, `modals/edit-submit.js`, or `modals/events.js`.
 - `modals/events.js` must not import `modals/edit-form.js` or `modals/audit-preview.js`.
 - No new `modals/*` module should import from `modals.js` (the barrel) to avoid cycles.
 - No new module should use raw `fetch` for JSON API calls; use `authorizedJson`.
+- Avoid new imports from `grid.js` inside `modals/*` modules unless the final circular dependency check proves the edge is acyclic. Prefer lower-level helpers (`grid-utils.js`, `grid-rendering.js`, or a new shared utility) for escaping, date formatting, and tag rendering.
 
 ## Technical Debt Fixed In-Refactor
 
@@ -459,6 +475,8 @@ Forbidden imports:
 | `performImmediateStaffAction` (line 1364) | Raw `fetch` with manual auth + serialize + error parse | `authorizedJson(...)` with `onRefresh` callback |
 | Edit submit + `performImmediateStaffAction` | Near-duplicate ~90 line error handling + payload + toast logic | Merge into shared `submitTitleRequestAction(id, payload, ctx, onRefresh)` |
 | `renderEditLeapBibLink` (line 523) | `innerHTML` for link markup | DOM construction (`createElement('a')`) |
+| `renderPurchaseReminderOption` (line 319) | `innerHTML` with escaped email/profile-link markup | DOM construction for email text and profile link, or keep only with a nearby static/sanitized-content comment and regression coverage |
+| `renderEditWorkflowTags` (line 481) | Temporary `innerHTML` for markup returned by workflow tag renderer | Prefer extracting workflow tag DOM construction; if retained, document why the source is developer-authored/sanitized and test it |
 | `holdingsLookupUnavailable` (line 799) | Mutable module-level variable | Moved to context as `ctx.holdingsLookupUnavailable` |
 | Top-level event listeners (lines 320-325, 1196-1205, 1482-1496) | Run at import time, no guard | Gated behind `initModalEvents(ctx, { onRefresh })` |
 
@@ -466,9 +484,12 @@ Forbidden imports:
 
 ### Phase 0: Baseline inventory and tests
 
-1. Capture all 24 current exports from `pb_public/staff/js/modals.js` (names and line numbers).
+1. Capture the exact current exports from `pb_public/staff/js/modals.js` (names and line numbers). As of review, a source scan shows 22 exported functions; do not trust older counts.
 2. Capture all consumer imports from `./modals.js`:
-   - `grid.js`: `openEdit`, `openPolarisSearch`, `polarisSearchValueForRow`, `renderPolarisSearchButtonMarkup`, `confirmAdditionalCopyAction`
+   - `grid.js`: `openEdit`, `polarisSearchValueForRow`, `renderPolarisSearchButtonMarkup`
+   - `grid-actions.js`: `openEdit`, `confirmAdditionalCopyAction`
+   - `grid-data.js`: `openEdit`
+   - `grid-events.js`: `openPolarisSearch`
    - `patron.js`: `renderPatronContext`
    - `recent-suggestions.js`: `workflowStatusLabel`
    - `settings.js`: `renderEditLeapBibLink`
@@ -479,6 +500,7 @@ Forbidden imports:
    - `tests/polaris_grid_search_ui.test.js` — reads `modals.js` for assertions
    - `tests/frontend_request_architecture.test.js` — reads `modals.js` for `refreshCurrentStaffView`/`loadTab(currentStatus)` checks
 4. Run `npm test` before extracting modules.
+5. Create a temporary export/consumer baseline artifact in the task notes or commit message. Phase 7 must compare against this generated baseline, not against hard-coded counts in this design doc.
 
 ### Phase 1: Context and utilities
 
@@ -514,7 +536,7 @@ Forbidden imports:
 4. Add `ctx` parameter to `openPolarisSearch`, `renderPolarisSearchResults`, `launchEditPolarisSearch`, `performImmediateStaffAction`, `currentEditPolarisSearchRow`.
 5. Wire re-exports in `modals.js`. Wrap context-dependent exports.
 6. Update source-inspection tests pointing at Polaris search functions.
-7. `npm test`.
+7. Focused verification must include duplicate-open error handling and Polaris search source-inspection tests, then `npm test`.
 
 ### Phase 4: Edit form renderers
 
@@ -530,19 +552,21 @@ Forbidden imports:
    - `renderPurchaseReminderOption` (add `ctx` parameter)
    - `renderEditCustomFieldsForCurrentFormat` (add `ctx` parameter)
 5. Wire re-exports in `modals.js`. Wrap all context-dependent functions.
-6. Update source-inspection tests:
+6. Make `renderPurchaseReminderOption` and `renderEditLeapBibLink` use DOM construction instead of interpolated `innerHTML`. Reassess `renderEditWorkflowTags`; either eliminate its temporary `innerHTML` path or document and test why that path is safe.
+7. Update source-inspection tests:
    - `security_url_validation.test.js` → point at `modals/edit-form.js`
    - `polaris_grid_search_ui.test.js` → point at `modals/polaris-search.js` + `modals/edit-form.js`
-7. `npm test`.
+8. `npm test`.
 
 ### Phase 5: Edit submit and shared action submitter
 
-1. Extract shared `submitTitleRequestAction(id, payload, ctx, onRefresh)` — centrally handles `authorizedJson` call, error parsing, toast, and refresh. Located in `modals/edit-submit.js`.
+1. Extract shared `submitTitleRequestAction(id, payload, ctx, onRefresh)` — centrally handles `authorizedJson` call, `HttpError` normalization, duplicate-open error code preservation, toast, and refresh. Located in `modals/edit-submit.js`.
 2. Create `submitEditForm(ctx, onRefresh)` in `modals/edit-submit.js` — validates form, builds edit payload, delegates to `submitTitleRequestAction`.
 3. Replace `performImmediateStaffAction` in `modals/polaris-search.js` to use `submitTitleRequestAction`.
 4. Wire `modals.js` to use `submitEditForm` in the edit form submit event (event wiring happens in Phase 6).
 5. Update `staff_modal_duplicate_error.test.js` to point at `modals/edit-submit.js`.
-6. `npm test`.
+6. Add or update focused assertions that `duplicate_open_request` remains `err.code === 'duplicate_open_request'` after the `authorizedJson` conversion.
+7. `npm test`.
 
 ### Phase 6: Events coordinator
 
@@ -551,21 +575,23 @@ Forbidden imports:
    - Edit/new Polaris search trigger buttons (6 calls)
    - `#edit-form` submit → `submitEditForm(ctx, onRefresh)`
    - `#edit-format`, `#edit-publication`, `#edit-autohold` change → audit refresh
+   - `#edit-format` change → custom-field refresh
    - `#edit-bibid` input → audit refresh
    - `window.asap-bib-verified` → `reactiveCleanupWorkflowFlags` + audit refresh
    - `.js-open-profile-dialog` click → `openProfileDialog()`
 2. Guard against double-binding: use a module-level `eventsBound` flag.
 3. `modals.js` barrel calls `initModalEvents(ctx, { onRefresh: refreshCurrentStaffView })` once at module load.
 4. Remove all scattered top-level `addEventListener` calls from `modals.js`.
-5. `npm test`.
+5. Leave the `settings.js` `#edit-bibid` keydown/input listeners in place; verify they are not duplicated by `modals/events.js`.
+6. `npm test`.
 
 ### Phase 7: Barrel cleanup and final validation
 
 1. `modals.js` is now the thin barrel: creates context, exports wrappers, initializes events.
-2. Verify zero consumer import changes needed by diffing against Phase 0's consumer list.
-3. Verify all 24 exports are still present from `modals.js`.
-4. Run `frontend_request_architecture.test.js` — update assertions that reference `modals.js` source to point at `modals/polaris-search.js` and `modals/edit-submit.js`.
-5. Run circular dependency check manually.
+2. Verify zero consumer import changes needed by diffing against Phase 0's generated consumer list.
+3. Verify every export captured in Phase 0 is still present from `modals.js`.
+4. Run `frontend_request_architecture.test.js` — update assertions that reference `modals.js` source to point at `modals/polaris-search.js`, `modals/edit-submit.js`, and any lower-level helper that now owns refresh behavior.
+5. Run circular dependency check manually across all `pb_public/staff/js/**/*.js`, not just `modals/*`. In particular, verify no `modals/* -> grid.js -> modals.js` cycle remains.
 6. Run `npm test`.
 7. Commit.
 
@@ -582,17 +608,25 @@ Forbidden imports:
 | Double-bound event listeners after module hot-reload | `eventsBound` flag in `initModalEvents`; called once from barrel |
 | `renderEditLeapBibLink` innerHTML replacement changes rendered output | DOM construction produces identical HTML; verify with `security_url_validation.test.js` |
 | `submitTitleRequestAction` shared path diverges between callers | Single implementation in `modals/edit-submit.js`; both edit submit and Polaris immediate action call the same function |
+| `authorizedJson` changes error shape from raw `Response` parsing to `HttpError` | Add `normalizeActionError(err)` and focused duplicate-open assertions that preserve `status`, message text, and `code` |
+| `edit-format` change stops refreshing custom fields | Events phase wires custom-field refresh separately from audit preview refresh |
+| Refactor preserves stale or new `grid.js` cycles | Prefer lower-level helper imports and run a final whole-staff-module circular dependency review |
+| Source-inspection tests assert snippets that move out of `modals.js` | Split assertions by owning module; do not leave implementation copies in the barrel just to satisfy old test paths |
 
 ## Success Criteria
 
 - `npm test` passes after every phase
 - `modals.js` is under 70 lines (barrel + init call only)
 - Zero consumer files need import path changes
-- `modals.js` exports the same 24 public names as before the refactor
+- `modals.js` exports the same public names captured in Phase 0
 - All 3 raw `fetch` calls replaced with `authorizedJson`
 - Edit form submit and `performImmediateStaffAction` share a single `submitTitleRequestAction` function
+- Duplicate-open errors still surface the duplicate-specific message and still set `err.code === 'duplicate_open_request'`
 - `renderEditLeapBibLink` uses DOM construction, not `innerHTML`
+- Any remaining `innerHTML` in touched modal modules is either removed or justified as static/sanitized developer-authored markup with focused coverage
 - All top-level event listeners are gated behind `initModalEvents(ctx, { onRefresh })`
+- `edit-format` changes still refresh edit custom fields
+- Existing `settings.js` BIB lookup/reset listeners are not duplicated or moved into modal events
 - `frontend_request_architecture.test.js` assertions about modals.js point at the correct new module files and still pass
-- No circular dependencies among `modals/*` modules
+- No circular dependencies among `modals/*` modules or between `modals/*`, `modals.js`, and `grid.js`
 - `holdingsLookupUnavailable` is no longer a rogue module-level flag
