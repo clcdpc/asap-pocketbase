@@ -4,42 +4,134 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 
-function fileText(relativePath) {
-  return fs.readFileSync(path.resolve(ROOT, relativePath), 'utf8');
+const ENTRY_FILES = [
+  'pb_public/staff/js/settings.js',
+  'pb_public/staff/js/settings-labels.js',
+  'pb_public/staff/js/settings-polaris.js',
+];
+
+const SETTINGS_DIR = path.resolve(ROOT, 'pb_public/staff/js/settings');
+
+function collectJsFiles(dir) {
+  const results = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...collectJsFiles(full));
+    } else if (entry.isFile() && entry.name.endsWith('.js')) {
+      results.push(full);
+    }
+  }
+  return results;
 }
 
-function run() {
-  console.log('Running module import cycle regression tests...');
+function findImportPaths(source) {
+  const paths = [];
+  const re = /(?:import|export)\s+(?:(?:\*\s+as\s+\w+\s+from\s+['"]|[\s\S]*?\s+from\s+['"]|['"]))([^'"]+)(?=['"])/g;
+  let match;
+  while ((match = re.exec(source)) !== null) {
+    paths.push(match[1]);
+  }
 
-  // Cycle 1 (fixed): settings-labels.js → library-context.js → form-population.js → settings-labels.js
-  // This cycle existed because form-population.js imported renderDuplicateStatusLabelSettings from
-  // settings-labels.js while settings-labels.js imported loadLibrarySettings from library-context.js.
-  // Fix: form-population.js now imports from settings/duplicate-labels.js (leaf) instead.
-  const formPopulationSource = fileText('pb_public/staff/js/settings/form-population.js');
-  assert.ok(
-    !formPopulationSource.includes("from '../settings-labels.js'"),
-    'form-population.js should not import from settings-labels.js (creates cycle). Should import from settings/duplicate-labels.js'
-  );
-  assert.ok(
-    formPopulationSource.includes("from './duplicate-labels.js'"),
-    'form-population.js should import duplicate labels from settings/duplicate-labels.js'
-  );
+  const sideEffectRe = /import\s+['"]([^'"]+)['"]/g;
+  while ((match = sideEffectRe.exec(source)) !== null) {
+    if (!paths.includes(match[1])) {
+      paths.push(match[1]);
+    }
+  }
 
-  // Cycle 2 (fixed): settings-polaris.js → serialize-save.js → settings-polaris.js
-  // This cycle existed because serialize-save.js imported collectSettingsPolaris and
-  // collectEnabledLibraryIds from settings-polaris.js.
-  // Fix: serialize-save.js now imports from settings/polaris-fields.js (leaf) instead.
-  const serializeSaveSource = fileText('pb_public/staff/js/settings/serialize-save.js');
-  assert.ok(
-    !serializeSaveSource.includes("from '../settings-polaris.js'"),
-    'serialize-save.js should not import from settings-polaris.js (creates cycle). Should import from settings/polaris-fields.js'
-  );
-  assert.ok(
-    serializeSaveSource.includes("from './polaris-fields.js'"),
-    'serialize-save.js should import Polaris fields from settings/polaris-fields.js'
-  );
-
-  console.log('All settings import cycle regression checks passed.');
+  return paths;
 }
 
-run();
+function resolveImport(importer, importPath) {
+  if (!importPath.startsWith('.')) return null;
+
+  const raw = path.resolve(path.dirname(importer), importPath);
+  const candidates = [raw, `${raw}.js`, path.join(raw, 'index.js')];
+
+  return candidates.find(candidate => fs.existsSync(candidate) && fs.statSync(candidate).isFile()) || null;
+}
+
+function normalize(file) {
+  return path.relative(ROOT, file).replace(/\\/g, '/');
+}
+
+function isInScope(file) {
+  const rel = normalize(file);
+  return (
+    rel === 'pb_public/staff/js/settings.js' ||
+    rel === 'pb_public/staff/js/settings-labels.js' ||
+    rel === 'pb_public/staff/js/settings-polaris.js' ||
+    rel.startsWith('pb_public/staff/js/settings/')
+  );
+}
+
+function buildGraph(files) {
+  const graph = new Map();
+
+  for (const file of files) {
+    if (!isInScope(file)) continue;
+
+    const source = fs.readFileSync(file, 'utf8');
+    const deps = findImportPaths(source)
+      .map(importPath => resolveImport(file, importPath))
+      .filter(Boolean)
+      .filter(isInScope);
+
+    graph.set(normalize(file), deps.map(normalize));
+  }
+
+  return graph;
+}
+
+function findCycles(graph) {
+  const cycles = [];
+  const visiting = new Set();
+  const visited = new Set();
+  const stack = [];
+
+  function visit(node) {
+    if (visiting.has(node)) {
+      const start = stack.indexOf(node);
+      cycles.push([...stack.slice(start), node]);
+      return;
+    }
+
+    if (visited.has(node)) return;
+
+    visiting.add(node);
+    stack.push(node);
+
+    for (const dep of graph.get(node) || []) {
+      visit(dep);
+    }
+
+    stack.pop();
+    visiting.delete(node);
+    visited.add(node);
+  }
+
+  for (const node of graph.keys()) {
+    visit(node);
+  }
+
+  return cycles;
+}
+
+console.log('Running module import cycle regression tests...');
+
+const files = [
+  ...ENTRY_FILES.map(file => path.resolve(ROOT, file)),
+  ...collectJsFiles(SETTINGS_DIR),
+];
+
+const graph = buildGraph(files);
+const cycles = findCycles(graph);
+
+assert.deepStrictEqual(
+  cycles,
+  [],
+  `Settings import graph should be acyclic:\n${cycles.map(cycle => `- ${cycle.join(' -> ')}`).join('\n')}`
+);
+
+console.log('All settings import cycle regression checks passed.');

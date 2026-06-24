@@ -1,5 +1,4 @@
 import { setFieldValue, setFieldChecked, setVisible, updateLibraryOverrideStatusVisibility, updateEmailStatusBanner, updateOrganizationsStatusUi, activateSettingsSection, updateAutoRejectEmailControls } from '../api.js';
-import { updateSaveButtonText } from './serialize-save.js';
 import { currentLibraryContextOrgId, currentSettingsSection, settingsLoading, formatMap, availableFormats, setAvailableFormats, workflowSettings, lastWorkflowEnabledList, setLastWorkflowEnabledList, defaultPublicationOptions, setCurrentFormatClaimRules, setFormatClaimStaffOptions, setLeapBibUrlPattern, setLeapPatronUrlPattern, leapBibUrlPattern, leapPatronUrlPattern, setAdditionalFieldDefinitions, setCurrentPatronFieldConfig } from '../state.js';
 import { toggleTimeoutGroup, toggleHoldPickupTimeoutGroup, togglePendingHoldTimeoutGroup, toggleAdditionalCopyTimeoutGroup, toggleCommonAuthorsGroup } from './toggles.js';
 import { renderFormatSettings, updateModalFormatDropdowns } from '../settings-formats.js';
@@ -331,4 +330,13 @@ export function populatePatronUiForms(uiText) {
   }
   renderPatronFormatRulesEditor(uiText.formatRules);
   updatePublicationOptionsUi(uiText.publicationOptions);
+}
+
+export function updateSaveButtonText() {
+  const saveBtn = document.getElementById('settings-save-btn');
+  if (saveBtn) {
+    saveBtn.textContent = currentLibraryContextOrgId === 'system'
+      ? 'Save System Defaults'
+      : 'Save Library Settings';
+  }
 }

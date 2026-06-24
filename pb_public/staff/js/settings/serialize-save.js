@@ -8,7 +8,7 @@ import { collectDuplicateStatusLabels } from './duplicate-labels.js';
 import { collectSettingsPolaris, collectEnabledLibraryIds } from './polaris-fields.js';
 import { collectOptionList, collectPatronFormatRules } from '../settings-ui.js';
 import { collectAdditionalFieldDefinitions } from '../settings-additional-fields.js';
-import { refreshSettingsView, loadStaffConfig } from './loader.js';
+import { refreshSettingsView, loadStaffConfig } from './refresh.js';
 import { loadStaffUsers } from '../settings-users.js';
 import { applyLibrarySettingsToForm } from './form-population.js';
 
@@ -328,11 +328,4 @@ export async function saveSettings(options = {}) {
   }
 }
 
-export function updateSaveButtonText() {
-  const saveBtn = document.getElementById('settings-save-btn');
-  if (saveBtn) {
-    saveBtn.textContent = currentLibraryContextOrgId === 'system'
-      ? 'Save System Defaults'
-      : 'Save Library Settings';
-  }
-}
+

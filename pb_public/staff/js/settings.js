@@ -6,6 +6,7 @@ export * from './settings/library-context.js';
 export * from './settings/loader.js';
 export * from './settings/duplicate-labels.js';
 export * from './settings/polaris-fields.js';
+export * from './settings/staff-access.js';
 
 import { settingsForm, defaultPublicationOptions, verifiedBibId, setVerifiedBibId, currentLibraryContextOrgId, pb } from './state.js';
 import { markSettingsDirty, updateAutoRejectEmailControls } from './api.js';

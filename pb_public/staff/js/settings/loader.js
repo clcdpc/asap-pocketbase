@@ -1,13 +1,14 @@
 import { settingsContainer, settingsLoading, currentLibraryContextOrgId, currentSettingsSection, setSettingsLoading, setAdditionalFieldDefinitions, setCurrentPatronFieldConfig, pb, setCurrentLibraryContextOrgId, workflowSettings, organizationsStatus } from '../state.js';
 import { setVisible, isSuperAdminStaff, activateSettingsSection, initSettingsNavigation, checkAuth, loadSetupStatus, markSettingsClean, setFieldValue, setFieldChecked, isPocketBaseAutoCancelError } from '../api.js';
-import { updateSaveButtonText } from './serialize-save.js';
+import { updateSaveButtonText } from './form-population.js';
 import { authorizedJson } from '../http.js';
 import { closeOpenDialogs } from '../dialogs.js';
 import { closeActionMenu } from '../grid.js';
 import { populateLibrarySelector, loadLibrarySettings } from './library-context.js';
 import { updatePublicationOptionsUi } from '../settings-ui.js';
 import { syncPolarisOrganizations } from '../settings-polaris.js';
-import { loadStaffUsers, populateStaffLibraryOptions } from '../settings-users.js';
+import { loadStaffAccessSettings } from './staff-access.js';
+import { registerSettingsRefreshHandlers } from './refresh.js';
 import { createLatestLoad } from '../../../shared/latest-load.js';
 
 const adminSettingsSections = ['start', 'staff', 'templates', 'workflow', 'patron'];
@@ -68,11 +69,6 @@ async function loadLibraryAdminSettings() {
   showSettingsForm();
   await loadStaffAccessSettings();
   updateSaveButtonText();
-}
-
-export async function loadStaffAccessSettings() {
-  await populateStaffLibraryOptions();
-  await loadStaffUsers();
 }
 
 function showSettingsForm() {
@@ -215,3 +211,5 @@ export async function initStaffApp() {
   await loadSetupStatus();
   checkAuth();
 }
+
+registerSettingsRefreshHandlers({ refreshSettingsView, loadStaffConfig });

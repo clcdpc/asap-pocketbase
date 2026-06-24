@@ -1,6 +1,75 @@
 import { pb, organizationsStatus, lastWorkflowEnabledList } from '../state.js';
 import { getFieldValue, updateOrganizationsStatusUi } from '../api.js';
-import { escapeAttr } from '../grid.js';
+
+function renderMessage(container, className, text) {
+  const div = document.createElement('div');
+  div.className = className;
+  div.textContent = text;
+  container.replaceChildren(div);
+}
+
+function renderLibraryParticipationTable(container, orgs) {
+  const table = document.createElement('table');
+  table.className = 'table table-sm table-hover mb-0';
+
+  const thead = document.createElement('thead');
+  thead.className = 'bg-white library-table-head';
+
+  const headerRow = document.createElement('tr');
+
+  const enableTh = document.createElement('th');
+  enableTh.className = 'library-enable-col';
+  enableTh.textContent = 'Enable';
+
+  const nameTh = document.createElement('th');
+  nameTh.textContent = 'Library name';
+
+  const idTh = document.createElement('th');
+  idTh.className = 'library-id-col';
+  idTh.textContent = 'ID';
+
+  headerRow.append(enableTh, nameTh, idTh);
+  thead.appendChild(headerRow);
+
+  const tbody = document.createElement('tbody');
+
+  orgs.forEach(org => {
+    const row = document.createElement('tr');
+
+    const enableTd = document.createElement('td');
+    enableTd.className = 'align-middle';
+
+    const control = document.createElement('div');
+    control.className = 'custom-control custom-checkbox';
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'custom-control-input lib-participation-cb';
+    checkbox.id = `lib-p-${org.organizationId}`;
+    checkbox.value = org.organizationId;
+
+    const label = document.createElement('label');
+    label.className = 'custom-control-label';
+    label.setAttribute('for', checkbox.id);
+
+    control.append(checkbox, label);
+    enableTd.appendChild(control);
+
+    const nameTd = document.createElement('td');
+    nameTd.className = 'align-middle font-weight-bold';
+    nameTd.textContent = org.displayName || org.name || '';
+
+    const orgIdTd = document.createElement('td');
+    orgIdTd.className = 'align-middle text-muted small';
+    orgIdTd.textContent = org.organizationId || '';
+
+    row.append(enableTd, nameTd, orgIdTd);
+    tbody.appendChild(row);
+  });
+
+  table.append(thead, tbody);
+  container.replaceChildren(table);
+}
 
 export function collectSettingsPolaris() {
   return {
@@ -26,12 +95,12 @@ export async function renderLibraryParticipationCheckboxes() {
   if (!container || container.getAttribute('data-loaded') === 'true') return;
 
   if (organizationsStatus === 'loading') {
-    container.innerHTML = '<div class="p-3 text-muted">Organizations loading...</div>';
+    renderMessage(container, 'p-3 text-muted', 'Organizations loading...');
     return;
   }
 
   if (organizationsStatus === 'error') {
-    container.innerHTML = '<div class="p-3 text-warning">Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.</div>';
+    renderMessage(container, 'p-3 text-warning', 'Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.');
     return;
   }
 
@@ -44,39 +113,15 @@ export async function renderLibraryParticipationCheckboxes() {
 
     if (!orgs.length) {
       if (organizationsStatus === 'not_loaded') {
-        container.innerHTML = '<div class="p-3 text-muted">Organizations have not been synced yet. Use Settings > Polaris > Sync Polaris Organizations Now.</div>';
+        renderMessage(container, 'p-3 text-muted', 'Organizations have not been synced yet. Use Settings > Polaris > Sync Polaris Organizations Now.');
       } else {
-        container.innerHTML = '<div class="p-3 text-muted">Organization sync completed, but no library organizations were returned.</div>';
+        renderMessage(container, 'p-3 text-muted', 'Organization sync completed, but no library organizations were returned.');
       }
       return;
     }
 
     updateOrganizationsStatusUi('loaded', `Polaris organizations loaded. ${orgs.length} library organization${orgs.length === 1 ? '' : 's'} available. Leave all libraries unchecked to enable all organizations.`);
-    container.innerHTML = `
-      <table class="table table-sm table-hover mb-0">
-        <thead class="bg-white library-table-head">
-          <tr>
-            <th class="library-enable-col">Enable</th>
-            <th>Library name</th>
-            <th class="library-id-col">ID</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${orgs.map(org => `
-            <tr>
-              <td class="align-middle">
-                <div class="custom-control custom-checkbox">
-                  <input type="checkbox" class="custom-control-input lib-participation-cb" id="lib-p-${escapeAttr(org.organizationId)}" value="${escapeAttr(org.organizationId)}">
-                  <label class="custom-control-label" for="lib-p-${escapeAttr(org.organizationId)}"></label>
-                </div>
-              </td>
-              <td class="align-middle font-weight-bold">${escapeAttr(org.displayName || org.name)}</td>
-              <td class="align-middle text-muted small">${escapeAttr(org.organizationId)}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    `;
+    renderLibraryParticipationTable(container, orgs);
 
     container.setAttribute('data-loaded', 'true');
 
@@ -89,7 +134,7 @@ export async function renderLibraryParticipationCheckboxes() {
   } catch (err) {
     console.error('Failed to load libraries for participation list', err);
     updateOrganizationsStatusUi('error', 'Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.');
-    container.innerHTML = '<div class="p-3 text-warning">Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.</div>';
+    renderMessage(container, 'p-3 text-warning', 'Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.');
   }
 }
 

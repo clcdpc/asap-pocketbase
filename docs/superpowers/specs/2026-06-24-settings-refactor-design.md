@@ -172,37 +172,45 @@ Currently uses raw `fetch` (line 1077). Since this function moves to `settings/l
 
 ## Circular dependency fix
 
-Two cycles were broken by extracting reusable render/collect helpers into neutral leaf modules:
+The import graph is now fully acyclic within the settings scope, enforced by `tests/module_import_cycles.test.js`.
 
-### Cycle 1: labels → library-context → form-population → labels
+Three strategies were used to break all cycles:
 
-```
-settings-labels.js → settings/library-context.js → settings/form-population.js → settings-labels.js
-```
+### Strategy 1: Extract reusable render/collect helpers into neutral leaf modules
 
-`settings-labels.js` exported `renderDuplicateStatusLabelSettings` and `collectDuplicateStatusLabels`, which were imported by `settings/form-population.js` and `settings/serialize-save.js`. Meanwhile, `settings-labels.js` imported `loadLibrarySettings` from `settings/library-context.js`, creating a cycle.
+**Cycle: labels → library-context → form-population → labels**
 
-**Fix:** Extracted `normalizeDuplicateStatusLabels`, `renderDuplicateStatusLabelSettings`, and `collectDuplicateStatusLabels` into `settings/duplicate-labels.js` (a leaf module with no settings dependencies). `settings-labels.js` now re-exports from the leaf module.
+`settings-labels.js` exported `renderDuplicateStatusLabelSettings`/`collectDuplicateStatusLabels`, imported by `form-population.js` and `serialize-save.js`. `settings-labels.js` imported `loadLibrarySettings` from `library-context.js`.
 
-| Before | After |
-|---|---|
-| `form-population.js → settings-labels.js` | `form-population.js → settings/duplicate-labels.js` |
-| `serialize-save.js → settings-labels.js` | `serialize-save.js → settings/duplicate-labels.js` |
+**Fix:** Extracted helpers into `settings/duplicate-labels.js` (leaf).
 
-### Cycle 2: polaris → serialize-save → polaris
+**Cycle: polaris → serialize-save → polaris**
 
-```
-settings-polaris.js → settings/serialize-save.js → settings-polaris.js
-```
+`serialize-save.js` imported `collectSettingsPolaris`/`collectEnabledLibraryIds` from `settings-polaris.js`, while `settings-polaris.js` imported `saveSettings` from `serialize-save.js`.
 
-`settings/serialize-save.js` imported `collectSettingsPolaris` and `collectEnabledLibraryIds` from `settings-polaris.js`, while `settings-polaris.js` imported `saveSettings` from `settings/serialize-save.js`.
+**Fix:** Extracted Polaris helpers into `settings/polaris-fields.js` (leaf).
 
-**Fix:** Extracted `collectSettingsPolaris`, `renderLibraryParticipationCheckboxes`, and `collectEnabledLibraryIds` into `settings/polaris-fields.js` (a leaf module with no settings dependencies). `settings-polaris.js` now re-exports from the leaf module.
+### Strategy 2: Extract shared orchestration logic into neutral modules
 
-| Before | After |
-|---|---|
-| `serialize-save.js → settings-polaris.js` | `serialize-save.js → settings/polaris-fields.js` |
-| `form-population.js → settings-polaris.js` | `form-population.js → settings/polaris-fields.js` |
+**Cycle: loader ↔ library-context (through loadStaffAccessSettings)**
+
+Both `loader.js` and `library-context.js` needed `loadStaffAccessSettings`, but it was defined in `loader.js` and imported by `library-context.js`.
+
+**Fix:** Extracted into `settings/staff-access.js` — both modules import from the leaf.
+
+### Strategy 3: Use callback registration for refresh coordination
+
+**Cycle: serialize-save ↔ loader (through refreshSettingsView/loadStaffConfig and updateSaveButtonText)**
+
+`serialize-save.js` called `refreshSettingsView`/`loadStaffConfig` from `loader.js`, while `loader.js` used `updateSaveButtonText` from `serialize-save.js`. Separately, `form-population.js` used `updateSaveButtonText` from `serialize-save.js` while `serialize-save.js` called `applyLibrarySettingsToForm` from `form-population.js`.
+
+**Fix:**
+- Created `settings/refresh.js` with a callback registration pattern. `loader.js` registers its `refreshSettingsView`/`loadStaffConfig` functions at module init. `serialize-save.js` calls through the neutral module instead of importing from `loader.js`.
+- Moved `updateSaveButtonText` from `serialize-save.js` to `form-population.js` (where it's called from). `loader.js` imports it from `form-population.js`. Neither `serialize-save.js` nor `form-population.js` import from each other in the direction that created a cycle.
+
+### Result
+
+`tests/module_import_cycles.test.js` builds the scoped settings import graph and uses DFS to assert no cycles exist.
 
 ## Execution order
 

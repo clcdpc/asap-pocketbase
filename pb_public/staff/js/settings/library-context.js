@@ -4,7 +4,7 @@ import { authorizedJson, isAbortError } from '../http.js';
 import { showConfirm, showToast } from '../dialogs.js';
 import { applyLibrarySettingsToForm } from './form-population.js';
 import { rememberLastSavedLibrarySettings, captureSettingsBaseline } from './serialize-save.js';
-import { loadStaffAccessSettings } from './loader.js';
+import { loadStaffAccessSettings } from './staff-access.js';
 import { createLatestLoad } from '../../../shared/latest-load.js';
 
 const SUPER_ADMIN_LIBRARY_CONTEXT_STORAGE_KEY = 'asap.superAdmin.settings.libraryContextOrgId';
@@ -71,7 +71,10 @@ export async function populateLibrarySelector() {
     const savedOrgId = readSavedSuperAdminLibraryContext();
     const selectedOrgId = savedOrgId || currentLibraryContextOrgId || select.value || 'system';
     select.disabled = true;
-    select.innerHTML = '<option value="system">System Defaults</option>';
+    const systemOption = document.createElement('option');
+    systemOption.value = 'system';
+    systemOption.textContent = 'System Defaults';
+    select.replaceChildren(systemOption);
 
     const orgs = await pb.collection('polaris_organizations').getFullList({
       filter: 'organizationCodeId = "2"',
