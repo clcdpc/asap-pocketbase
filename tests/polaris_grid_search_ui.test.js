@@ -16,6 +16,7 @@ function runTests() {
   assert.ok(gridRenderingJs.includes("data-polaris-search-mode"));
   assert.ok(gridRenderingJs.includes("row.status === 'hold_placed'"));
   assert.ok(gridRenderingJs.includes("if (row.status === 'hold_placed') return '';"));
+  assert.ok(gridRenderingJs.includes("${rowMarker(row)}"));
   assert.ok(gridEventsJs.includes("openPolarisSearch(row, mode)"));
   assert.ok(gridRenderingJs.includes("renderAuthorCell(row"));
   assert.ok(gridRenderingJs.includes("polarisSearchValueForRow(row, mode)"));

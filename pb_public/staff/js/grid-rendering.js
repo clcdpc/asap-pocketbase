@@ -85,6 +85,7 @@ export function renderPolarisRowSearchButton(row, mode, ctx) {
 export function renderTitleCell(row, ctx) {
   return gridjs.html(`
     <div class="staff-title-cell searchable-cell">
+      ${rowMarker(row)}
       <div class="searchable-cell-text">
         ${renderDuplicateSummary(row, ctx)}
         <div class="staff-title-main" title="${escapeAttr(row.title || '')}">${escapeAttr(row.title || '')}</div>
