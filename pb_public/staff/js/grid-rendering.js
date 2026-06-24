@@ -72,6 +72,7 @@ export function renderAdditionalCopySourceCell(row) {
 }
 
 export function renderPolarisRowSearchButton(row, mode, ctx) {
+  if (row.status === 'hold_placed') return '';
   const value = ctx.polarisSearchValueForRow(row, mode);
   if (!value) return '';
   return ctx.renderPolarisSearchButtonMarkup(mode, {
