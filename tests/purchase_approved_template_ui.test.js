@@ -5,7 +5,7 @@ const path = require("path");
 const html = fs.readFileSync(path.join(__dirname, "../pb_public/staff/index.html"), "utf8");
 const state = fs.readFileSync(path.join(__dirname, "../pb_public/staff/js/state.js"), "utf8");
 const templates = fs.readFileSync(path.join(__dirname, "../pb_public/staff/js/settings-templates.js"), "utf8");
-const settings = fs.readFileSync(path.join(__dirname, "../pb_public/staff/js/settings.js"), "utf8");
+const settings = fs.readFileSync(path.join(__dirname, "../pb_public/staff/js/settings/serialize-save.js"), "utf8");
 
 console.log("Running purchase approved template UI tests...");
 

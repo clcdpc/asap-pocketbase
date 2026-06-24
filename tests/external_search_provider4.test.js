@@ -77,21 +77,24 @@ function runTests() {
   assert.ok(configRouteSource.includes("response.externalSearch4Label"));
   assert.ok(configRouteSource.includes("response.externalSearch4UrlTemplate"));
 
-  const settingsJs = fileText("pb_public/staff/js/settings.js");
-  assert.ok(settingsJs.includes("wf-external-search-4-enabled"));
-  assert.ok(settingsJs.includes("payload.externalSearch4Enabled"));
-  const normalizeSource = extractFunction(settingsJs.replace("export function normalizeExternalSearchUrlTemplate", "function normalizeExternalSearchUrlTemplate"), "normalizeExternalSearchUrlTemplate");
+  const serializeSaveJs = fileText("pb_public/staff/js/settings/serialize-save.js");
+  const saveControllerJs = fileText("pb_public/staff/js/settings/save-controller.js");
+  assert.ok(serializeSaveJs.includes("wf-external-search-4-enabled"));
+  assert.ok(saveControllerJs.includes("payload.externalSearch4Enabled"));
+
+  const utilsJs = fileText("pb_public/staff/js/settings/utils.js");
+  const normalizeSource = extractFunction(utilsJs.replace("export function normalizeExternalSearchUrlTemplate", "function normalizeExternalSearchUrlTemplate"), "normalizeExternalSearchUrlTemplate");
   const normalizeExternalSearchUrlTemplate = Function(`${normalizeSource}; return normalizeExternalSearchUrlTemplate;`)();
   assert.strictEqual(normalizeExternalSearchUrlTemplate("domain.example"), "https://domain.example");
   assert.strictEqual(normalizeExternalSearchUrlTemplate("domain.example/search?q={{title}}"), "https://domain.example/search?q={{title}}");
   assert.strictEqual(normalizeExternalSearchUrlTemplate("http://domain.example/search?q={{title}}"), "http://domain.example/search?q={{title}}");
   assert.strictEqual(normalizeExternalSearchUrlTemplate("https://domain.example/search?q={{identifier}}"), "https://domain.example/search?q={{identifier}}");
   assert.strictEqual(normalizeExternalSearchUrlTemplate("   "), "");
-  assert.ok(settingsJs.includes("externalSearch1UrlTemplate = normalizeExternalSearchUrlTemplate"));
-  assert.ok(settingsJs.includes("externalSearch2UrlTemplate = normalizeExternalSearchUrlTemplate"));
-  assert.ok(settingsJs.includes("externalSearch3UrlTemplate = normalizeExternalSearchUrlTemplate"));
-  assert.ok(settingsJs.includes("externalSearch4UrlTemplate = normalizeExternalSearchUrlTemplate"));
-  assert.ok(settingsJs.includes("setFieldValue('wf-external-search-4-url-template', externalSearch4UrlTemplate)"));
+  assert.ok(serializeSaveJs.includes("externalSearch1UrlTemplate = normalizeExternalSearchUrlTemplate"));
+  assert.ok(serializeSaveJs.includes("externalSearch2UrlTemplate = normalizeExternalSearchUrlTemplate"));
+  assert.ok(serializeSaveJs.includes("externalSearch3UrlTemplate = normalizeExternalSearchUrlTemplate"));
+  assert.ok(serializeSaveJs.includes("externalSearch4UrlTemplate = normalizeExternalSearchUrlTemplate"));
+  assert.ok(serializeSaveJs.includes("setFieldValue('wf-external-search-4-url-template', externalSearch4UrlTemplate)"));
 
   const editFormJs = fileText("pb_public/staff/js/modals/edit-form.js");
   assert.ok(editFormJs.includes("workflowSettings[`externalSearch${i}Enabled`]"));

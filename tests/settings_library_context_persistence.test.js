@@ -2,7 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const source = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/settings.js'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/settings/library-context.js'), 'utf8');
 
 console.log('Running settings library context persistence tests...');
 

@@ -311,14 +311,14 @@ async function main() {
   }
 
   {
-    const settingsSource = fs.readFileSync(settingsPath, 'utf8');
+    const saveControllerSource = fs.readFileSync(path.join(root, 'pb_public/staff/js/settings/save-controller.js'), 'utf8');
     const settingsLabelsSource = fs.readFileSync(settingsLabelsPath, 'utf8');
     assert.ok(
-      settingsSource.includes('body: libraryPayload'),
+      saveControllerSource.includes('body: libraryPayload'),
       'settings save should pass object bodies so requestJson sets application/json'
     );
     assert.ok(
-      !settingsSource.includes('body: JSON.stringify(libraryPayload)'),
+      !saveControllerSource.includes('body: JSON.stringify(libraryPayload)'),
       'settings save should not pre-stringify the library payload'
     );
     assert.ok(
@@ -373,6 +373,18 @@ async function main() {
     assert.ok(
       agentsSource.includes('protect screen-level staff loads with abort-plus-stale-result guards'),
       'AGENTS.md should describe staff load race protection'
+    );
+  }
+
+  {
+    const settingsBarrelSource = fs.readFileSync(settingsPath, 'utf8');
+    assert.ok(
+      settingsBarrelSource.includes("import './settings-labels.js'"),
+      'settings barrel should import settings-labels.js for side-effect event registration'
+    );
+    assert.ok(
+      settingsBarrelSource.includes("import './settings-polaris.js'"),
+      'settings barrel should import settings-polaris.js for side-effect event registration'
     );
   }
 
