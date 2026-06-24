@@ -98,6 +98,7 @@ export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
       bibHint.textContent = 'Required for Pending hold. Use Lookup to verify.';
     }
   }
+  applyHoldPlacedBibLock(row);
 
   renderEditPatronContext(row);
   renderEditWorkflowTags(row.workflowTags, row);
@@ -120,6 +121,25 @@ export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
 
   document.getElementById('editModal').showModal();
   document.getElementById('close-modal-btn').focus();
+}
+
+function applyHoldPlacedBibLock(row) {
+  const isLocked = row.status === 'hold_placed';
+  const bibHint = document.getElementById('edit-bibid-hint');
+
+  document.getElementById('edit-bibid').disabled = isLocked;
+  const bibLookupBtn = document.getElementById('btn-bib-lookup');
+  if (bibLookupBtn) {
+    bibLookupBtn.disabled = isLocked;
+    bibLookupBtn.classList.toggle('hidden', isLocked);
+  }
+  document.getElementById('edit-title-polaris-search')?.classList.toggle('hidden', isLocked);
+  document.getElementById('edit-author-polaris-search')?.classList.toggle('hidden', isLocked);
+  document.getElementById('edit-identifier-polaris-search')?.classList.toggle('hidden', isLocked);
+  if (bibHint && isLocked) {
+    bibHint.textContent = 'BIB ID is locked because the hold has already been placed.';
+    bibHint.classList.remove('text-danger', 'font-weight-bold');
+  }
 }
 
 function renderEditCustomFieldsForCurrentFormat(row) {
@@ -1208,8 +1228,11 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const id = document.getElementById('edit-id').value;
   const nextStatus = document.getElementById('edit-next-status').value;
-  const bibid = document.getElementById('edit-bibid').value.trim();
   const row = currentSuggestions.find(r => r.id === id) || allSuggestions.find(r => r.id === id);
+  const bibInput = document.getElementById('edit-bibid');
+  const bibid = row && row.status === 'hold_placed'
+    ? String(row.bibid || '').trim()
+    : bibInput.value.trim();
   if (row && row.status === 'outstanding_purchase' && bibid && !row.autohold) {
     const confirmed = await showConfirm('Do Not Auto Queue Hold', 'This request is marked Do Not Auto Queue Hold. Saving this BIB ID will close the request immediately and skip the hold-queueing workflow.');
     if (!confirmed) return;

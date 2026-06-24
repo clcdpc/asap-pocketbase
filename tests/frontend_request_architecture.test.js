@@ -101,6 +101,7 @@ async function main() {
   const actionsPath = path.join(root, 'pb_public/staff/js/actions.js');
   const modalsPath = path.join(root, 'pb_public/staff/js/modals.js');
   const gridPath = path.join(root, 'pb_public/staff/js/grid.js');
+  const gridContextPath = path.join(root, 'pb_public/staff/js/grid-context.js');
   const settingsPolarisPath = path.join(root, 'pb_public/staff/js/settings-polaris.js');
   const settingsLabelsPath = path.join(root, 'pb_public/staff/js/settings-labels.js');
   const settingsPath = path.join(root, 'pb_public/staff/js/settings.js');
@@ -108,6 +109,7 @@ async function main() {
 
   assert.ok(fs.existsSync(httpModulePath), 'shared http helper should exist');
   assert.ok(fs.existsSync(loadModulePath), 'latest-load helper should exist');
+  assert.ok(fs.existsSync(gridContextPath), 'staff grid context helper should exist');
 
   {
     const calls = [];
@@ -246,6 +248,66 @@ async function main() {
     const analyticsSource = fs.readFileSync(analyticsPath, 'utf8');
     assert.match(analyticsSource, /import\s+\{\s*authorizedJson\s*\}\s+from\s+['"]\.\/http\.js['"]/);
     assert.ok(!/async function authorizedJson\(/.test(analyticsSource), 'analytics should not define a duplicate authorizedJson helper');
+  }
+
+  {
+    const { createGridContext } = loadSimpleEsModule(gridContextPath);
+    const state = {
+      pb: {},
+      gridContainer: {},
+      staffGridFilterBar: {},
+      tagFilterSelect: {},
+      claimFilterSelect: {},
+      similarRequestFilterSelect: {},
+      additionalCopyStatusFilterSelect: {},
+      closedTypeFilterSelect: {},
+      gridSearchInput: {},
+      settingsContainer: {},
+      formatMap: {},
+      ageMap: {},
+      closeReasonMap: {},
+      descriptions: {},
+      emptyStateMessages: {},
+      statusStages: [],
+      rowActionRegistry: new Map(),
+      grid: 'grid-a',
+      currentStatus: 'suggestion',
+      currentSuggestions: [],
+      allSuggestions: [],
+      activeTagFilter: '',
+      gridSearchKeyword: '',
+      currentClaimFilter: 'all',
+      currentSimilarRequestFilter: 'all',
+      currentAdditionalCopyStatus: 'open',
+      currentClosedTypeFilter: 'all',
+      currentWorkflowOrgScopeId: 'all',
+      workflowSettings: {},
+      currentSettingsSection: 'start',
+      activeActionMenu: null,
+      setCurrentStatus(value) { this.currentStatus = value; },
+      setCurrentSuggestions(value) { this.currentSuggestions = value; },
+      setActiveTagFilter(value) { this.activeTagFilter = value; },
+      setGridSearchKeyword(value) { this.gridSearchKeyword = value; },
+      setCurrentClaimFilter(value) { this.currentClaimFilter = value; },
+      setCurrentWorkflowOrgScopeId(value) { this.currentWorkflowOrgScopeId = value; },
+      setCurrentClosedTypeFilter(value) { this.currentClosedTypeFilter = value; },
+      setActiveActionMenu(value) { this.activeActionMenu = value; },
+      setGrid(value) { this.grid = value; },
+      setAllSuggestions(value) { this.allSuggestions = value; },
+      incrementRowActionIdCounter() { return 1; }
+    };
+    const ctx = createGridContext(state);
+
+    assert.strictEqual(ctx.currentStatus, 'suggestion');
+    state.currentStatus = 'closed';
+    state.currentSuggestions = [{ id: 'one' }];
+    state.grid = 'grid-b';
+    state.activeActionMenu = { id: 'menu' };
+
+    assert.strictEqual(ctx.currentStatus, 'closed', 'context should expose live currentStatus');
+    assert.deepStrictEqual(ctx.currentSuggestions, [{ id: 'one' }], 'context should expose live currentSuggestions');
+    assert.strictEqual(ctx.grid, 'grid-b', 'context should expose live grid');
+    assert.deepStrictEqual(ctx.activeActionMenu, { id: 'menu' }, 'context should expose live activeActionMenu');
   }
 
   {

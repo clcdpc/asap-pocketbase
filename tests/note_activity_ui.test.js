@@ -145,11 +145,11 @@ function runTests() {
   assert.strictEqual(unsafe.querySelector('img'), null);
   assert.ok(unsafe.textContent.includes('<img src=x onerror=alert(1)>'));
 
-  const gridJs = fs.readFileSync(path.resolve(__dirname, '../pb_public/staff/js/grid.js'), 'utf8');
-  assert.ok(gridJs.includes("from './note-activity.js'"));
-  assert.ok(gridJs.includes('data-note-record-id'));
-  assert.ok(!gridJs.includes('data-full-note'));
-  assert.ok(gridJs.includes('content.replaceChildren(renderNoteActivity(row.notes))'));
+  const gridEventsJs = fs.readFileSync(path.resolve(__dirname, '../pb_public/staff/js/grid-events.js'), 'utf8');
+  assert.ok(gridEventsJs.includes("from './note-activity.js'"));
+  assert.ok(gridEventsJs.includes('data-note-record-id'));
+  assert.ok(!gridEventsJs.includes('data-full-note'));
+  assert.ok(gridEventsJs.includes('content.replaceChildren(renderNoteActivity(row.notes))'));
 
   const html = fs.readFileSync(path.resolve(__dirname, '../pb_public/staff/index.html'), 'utf8');
   assert.ok(html.includes('Notes &amp; activity'));

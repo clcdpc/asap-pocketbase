@@ -8,16 +8,19 @@ function fileText(relativePath) {
 
 function runTests() {
   const gridJs = fileText("pb_public/staff/js/grid.js");
-  assert.ok(gridJs.includes("renderPolarisRowSearchButton"));
-  assert.ok(gridJs.includes("renderPolarisSearchButtonMarkup"));
-  assert.ok(gridJs.includes("data-polaris-search-mode"));
-  assert.ok(gridJs.includes("openPolarisSearch(row, mode)"));
-  assert.ok(gridJs.includes("renderAuthorCell(row)"));
-  assert.ok(gridJs.includes("polarisSearchValueForRow(row, mode)"));
-  assert.ok(gridJs.includes("additionalCopyActionForRow(row)"));
-  assert.ok(gridJs.includes("Buy another copy"));
-  assert.ok(gridJs.includes("/additional-copy"));
-  assert.ok(gridJs.includes("Open tasks for this BIB"));
+  const gridActionsJs = fileText("pb_public/staff/js/grid-actions.js");
+  const gridEventsJs = fileText("pb_public/staff/js/grid-events.js");
+  const gridRenderingJs = fileText("pb_public/staff/js/grid-rendering.js");
+  assert.ok(gridRenderingJs.includes("renderPolarisRowSearchButton"));
+  assert.ok(gridRenderingJs.includes("renderPolarisSearchButtonMarkup"));
+  assert.ok(gridRenderingJs.includes("data-polaris-search-mode"));
+  assert.ok(gridEventsJs.includes("openPolarisSearch(row, mode)"));
+  assert.ok(gridRenderingJs.includes("renderAuthorCell(row"));
+  assert.ok(gridRenderingJs.includes("polarisSearchValueForRow(row, mode)"));
+  assert.ok(gridActionsJs.includes("additionalCopyActionForRow(row)"));
+  assert.ok(gridActionsJs.includes("Buy another copy"));
+  assert.ok(gridActionsJs.includes("/additional-copy"));
+  assert.ok(gridActionsJs.includes("Open tasks for this BIB"));
 
   const modalJs = fileText("pb_public/staff/js/modals.js");
   assert.ok(modalJs.includes("export function renderPolarisSearchButtonMarkup"));
@@ -50,6 +53,14 @@ function runTests() {
   assert.ok(modalJs.includes("function normalizedAdditionalCopyPublication"));
   assert.ok(modalJs.includes("payload.emailPurchaseReminder = confirmResult.emailPurchaseReminder"));
   assert.ok(modalJs.indexOf("const launchedFromEditForm = options.source === 'edit'") < modalJs.indexOf("performImmediateStaffAction(row.id, payload)"));
+  assert.ok(modalJs.includes("function applyHoldPlacedBibLock(row)"));
+  assert.ok(modalJs.includes("row.status === 'hold_placed'"));
+  assert.ok(modalJs.includes("BIB ID is locked because the hold has already been placed."));
+  assert.ok(modalJs.includes("document.getElementById('edit-bibid').disabled = isLocked"));
+  assert.ok(modalJs.includes("bibLookupBtn.classList.toggle('hidden', isLocked)"));
+  assert.ok(modalJs.includes("document.getElementById('edit-title-polaris-search')?.classList.toggle('hidden', isLocked)"));
+  assert.ok(modalJs.includes("document.getElementById('edit-author-polaris-search')?.classList.toggle('hidden', isLocked)"));
+  assert.ok(modalJs.includes("document.getElementById('edit-identifier-polaris-search')?.classList.toggle('hidden', isLocked)"));
 
   const settingsUiJs = fileText("pb_public/staff/js/settings-ui.js");
   assert.ok(settingsUiJs.includes("export async function lookupEditBibById"));
@@ -59,6 +70,7 @@ function runTests() {
   assert.ok(titleRequestActionsJs.includes('context.action === "additionalCopy"'));
   assert.ok(titleRequestActionsJs.includes('context.data.publication = context.record.get("publication")'));
   assert.ok(titleRequestActionsJs.includes('context.data.selectedPolarisPublication = ""'));
+  assert.ok(titleRequestActionsJs.includes("BIB ID cannot be changed after the hold has been placed."));
 
   const html = fileText("pb_public/staff/index.html");
   assert.ok(html.includes("polarisSearchDialog"));
