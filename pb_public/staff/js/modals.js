@@ -71,7 +71,7 @@ export function reactiveCleanupWorkflowFlags(rowId) {
 }
 
 export function openPolarisSearch(row, mode, options = {}) {
-  return polarisSearchOpen(row, mode, options, ctx);
+  return polarisSearchOpen(row, mode, options, ctx, refreshCurrentStaffView);
 }
 
 export { polarisSearchBtnMarkup as renderPolarisSearchButtonMarkup };
