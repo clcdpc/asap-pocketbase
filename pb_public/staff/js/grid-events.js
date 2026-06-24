@@ -1,4 +1,4 @@
-import { openPolarisSearch } from './modals.js';
+import { openPolarisSearch } from './modals/polaris-search.js';
 import { openNewSuggestionForPatron } from './patron.js';
 import { showToast } from './dialogs.js';
 import { renderNoteActivity } from './note-activity.js';

@@ -14,7 +14,7 @@ function extractFunction(filePath, functionName) {
 }
 
 // Extract functions
-const renderEditLeapBibLinkSource = extractFunction(path.join(__dirname, '../pb_public/staff/js/modals.js'), 'renderEditLeapBibLink');
+const renderEditLeapBibLinkSource = extractFunction(path.join(__dirname, '../pb_public/staff/js/modals/edit-form.js'), 'renderEditLeapBibLink');
 const renderBibIdCellSource = extractFunction(path.join(__dirname, '../pb_public/staff/js/grid-rendering.js'), 'renderBibIdCell');
 const renderBarcodeCellSource = extractFunction(path.join(__dirname, '../pb_public/staff/js/grid-rendering.js'), 'renderBarcodeCell');
 
@@ -28,51 +28,48 @@ function escapeAttr(value) {
         .replace(/>/g, '&gt;');
 }
 
+function makeMockContainer() {
+    return {
+        classList: {
+            classes: new Set(),
+            add: function(c) { this.classes.add(c); },
+            remove: function(c) { this.classes.delete(c); },
+            contains: function(c) { return this.classes.has(c); }
+        },
+        innerHTML: ''
+    };
+}
+
+function makeMockCtx(container) {
+    return {
+        leapBibLinkContainer: container
+    };
+}
+
 function runTests() {
     console.log('Running security URL validation tests...');
 
     // Test renderEditLeapBibLink
-    const testRenderEditLeapBibLink = new Function('bibId', 'leapBibUrl', 'document', 'escapeAttr', `
+    const testRenderEditLeapBibLink = new Function('bibId', 'leapBibUrl', 'ctx', 'escapeAttr', `
         ${renderEditLeapBibLinkSource}
-        renderEditLeapBibLink(bibId);
+        renderEditLeapBibLink(bibId, ctx);
     `);
 
-    const mockDocument = {
-        elements: {},
-        getElementById: function(id) {
-            if (!this.elements[id]) {
-                this.elements[id] = {
-                    classList: {
-                        classes: new Set(),
-                        add: function(c) { this.classes.add(c); },
-                        remove: function(c) { this.classes.delete(c); },
-                        contains: function(c) { return this.classes.has(c); }
-                    },
-                    innerHTML: ''
-                };
-            }
-            return this.elements[id];
-        }
-    };
-
     // Case 1: Safe URL
-    mockDocument.elements = {};
-    testRenderEditLeapBibLink('123', () => 'https://leap.example.com/123', mockDocument, escapeAttr);
-    const container1 = mockDocument.getElementById('edit-leap-bib-link-container');
+    const container1 = makeMockContainer();
+    testRenderEditLeapBibLink('123', () => 'https://leap.example.com/123', makeMockCtx(container1), escapeAttr);
     assert.strictEqual(container1.classList.contains('hidden'), false, 'Should not be hidden for safe URL');
     assert.ok(container1.innerHTML.includes('href="https://leap.example.com/123"'), 'Should contain safe URL in href');
 
     // Case 2: Unsafe URL (javascript:)
-    mockDocument.elements = {};
-    testRenderEditLeapBibLink('123', () => 'javascript:alert(1)', mockDocument, escapeAttr);
-    const container2 = mockDocument.getElementById('edit-leap-bib-link-container');
+    const container2 = makeMockContainer();
+    testRenderEditLeapBibLink('123', () => 'javascript:alert(1)', makeMockCtx(container2), escapeAttr);
     assert.strictEqual(container2.classList.contains('hidden'), true, 'Should be hidden for javascript: URL');
     assert.strictEqual(container2.innerHTML, '', 'InnerHTML should be empty for unsafe URL');
 
     // Case 3: Empty URL
-    mockDocument.elements = {};
-    testRenderEditLeapBibLink('123', () => '', mockDocument, escapeAttr);
-    const container3 = mockDocument.getElementById('edit-leap-bib-link-container');
+    const container3 = makeMockContainer();
+    testRenderEditLeapBibLink('123', () => '', makeMockCtx(container3), escapeAttr);
     assert.strictEqual(container3.classList.contains('hidden'), true, 'Should be hidden for empty URL');
 
     // Test renderBibIdCell

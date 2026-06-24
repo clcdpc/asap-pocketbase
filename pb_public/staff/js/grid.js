@@ -1,5 +1,6 @@
 import { pb, gridContainer, staffGridFilterBar, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, additionalCopyStatusFilterSelect, closedTypeFilterSelect, gridSearchInput, settingsContainer, grid, formatMap, ageMap, closeReasonMap, descriptions, emptyStateMessages, statusStages, currentStatus, currentSuggestions, activeTagFilter, gridSearchKeyword, currentClaimFilter, currentSimilarRequestFilter, currentAdditionalCopyStatus, currentClosedTypeFilter, currentWorkflowOrgScopeId, allSuggestions, workflowSettings, currentSettingsSection, activeActionMenu, rowActionIdCounter, rowActionRegistry, setCurrentStatus, setCurrentSuggestions, setActiveTagFilter, setGridSearchKeyword, setCurrentClaimFilter, setCurrentWorkflowOrgScopeId, setCurrentClosedTypeFilter, setActiveActionMenu, setGrid, setAllSuggestions, incrementRowActionIdCounter } from './state.js';
-import { openEdit, polarisSearchValueForRow, renderPolarisSearchButtonMarkup } from './modals.js';
+import { openEdit, polarisSearchValueForRow } from './modals.js';
+import { renderPolarisSearchButtonMarkup } from './modals/polaris-search.js';
 import { leapBibUrl, leapPatronUrl } from './api.js';
 import { escapeAttr, formatStandardDate, formatDateTime, formatPublication, formatNote } from './grid-utils.js';
 import {
