@@ -28,6 +28,26 @@ function runTests() {
   const modalJs = fileText("pb_public/staff/js/modals.js");
   assert.ok(modalJs.includes("polarisSearchValueForRow }"));
 
+  assert.ok(
+    gridEventsJs.includes("import { openPolarisSearch } from './modals.js';"),
+    "grid-events.js should use the modals.js openPolarisSearch wrapper so row-level Polaris actions receive refresh behavior"
+  );
+
+  assert.ok(
+    !gridEventsJs.includes("from './modals/polaris-search.js'"),
+    "grid-events.js should not import openPolarisSearch directly from the lower-level Polaris module"
+  );
+
+  assert.ok(
+    modalJs.includes("import { refreshCurrentStaffView } from './grid.js';"),
+    "modals.js should import refreshCurrentStaffView for modal action refresh callbacks"
+  );
+
+  assert.ok(
+    modalJs.includes("return polarisSearchOpen(row, mode, options, ctx, refreshCurrentStaffView);"),
+    "modals.js openPolarisSearch wrapper should pass refreshCurrentStaffView to the lower-level Polaris search module"
+  );
+
   const editFormJs = fileText("pb_public/staff/js/modals/edit-form.js");
   assert.ok(editFormJs.includes("function applyHoldPlacedBibLock(row"));
   assert.ok(editFormJs.includes("row.status === 'hold_placed'"));
