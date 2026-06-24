@@ -5,6 +5,7 @@ import { showToast } from './dialogs.js';
 import { refreshCurrentStaffView, refreshStaffStatus } from './grid.js';
 import { saveSettings } from './settings/save-controller.js';
 import { collectSettingsPolaris, renderLibraryParticipationCheckboxes, collectEnabledLibraryIds } from './settings/polaris-fields.js';
+import { syncPolarisOrganizations } from './settings/polaris-sync.js';
 
 export { collectSettingsPolaris, renderLibraryParticipationCheckboxes, collectEnabledLibraryIds };
 
@@ -40,8 +41,6 @@ document.getElementById('btn-test-polaris').addEventListener('click', async (e) 
     successText: 'Success! Polaris API is working.'
   });
 });
-
-import { syncPolarisOrganizations } from './settings/polaris-sync.js';
 
 const syncOrganizationsBtn = document.getElementById('btn-sync-organizations');
 
