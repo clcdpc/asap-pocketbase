@@ -15,8 +15,8 @@ function extractFunction(filePath, functionName) {
 
 // Extract functions
 const renderEditLeapBibLinkSource = extractFunction(path.join(__dirname, '../pb_public/staff/js/modals.js'), 'renderEditLeapBibLink');
-const renderBibIdCellSource = extractFunction(path.join(__dirname, '../pb_public/staff/js/grid.js'), 'renderBibIdCell');
-const renderBarcodeCellSource = extractFunction(path.join(__dirname, '../pb_public/staff/js/grid.js'), 'renderBarcodeCell');
+const renderBibIdCellSource = extractFunction(path.join(__dirname, '../pb_public/staff/js/grid-rendering.js'), 'renderBibIdCell');
+const renderBarcodeCellSource = extractFunction(path.join(__dirname, '../pb_public/staff/js/grid-rendering.js'), 'renderBarcodeCell');
 
 // Mock escapeAttr (simplified version for testing)
 function escapeAttr(value) {
@@ -78,7 +78,7 @@ function runTests() {
     // Test renderBibIdCell
     const testRenderBibIdCell = new Function('row', 'leapBibUrl', 'gridjs', 'escapeAttr', `
         ${renderBibIdCellSource}
-        return renderBibIdCell(row);
+        return renderBibIdCell(row, { leapBibUrl });
     `);
 
     const mockGridjs = {
@@ -101,7 +101,7 @@ function runTests() {
     // Test renderBarcodeCell
     const testRenderBarcodeCell = new Function('row', 'leapPatronUrl', 'gridjs', 'escapeAttr', `
         ${renderBarcodeCellSource}
-        return renderBarcodeCell(row);
+        return renderBarcodeCell(row, { leapPatronUrl });
     `);
 
     const patronCell1 = testRenderBarcodeCell({ barcode: '2900', polarisPatronId: 'p1' }, () => 'https://leap.example.com/patrons/p1', mockGridjs, escapeAttr);
