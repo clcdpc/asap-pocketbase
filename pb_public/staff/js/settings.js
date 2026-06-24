@@ -7,6 +7,7 @@ export * from './settings/loader.js';
 
 import { settingsForm, defaultPublicationOptions, verifiedBibId, setVerifiedBibId, currentLibraryContextOrgId, pb } from './state.js';
 import { markSettingsDirty, updateAutoRejectEmailControls } from './api.js';
+import { authorizedJson } from './http.js';
 import { showToast, showConfirm } from './dialogs.js';
 import { renderEditLeapBibLink } from './modals.js';
 import { handleOptionListClick, addOptionListRow } from './settings-ui.js';
@@ -97,25 +98,16 @@ document.getElementById('btn-upload-logo').addEventListener('click', async () =>
   formData.append('logoAlt', altInput.value.trim());
 
   btn.disabled = true;
-  const originalText = btn.innerHTML;
-  btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Saving...';
+  const originalNodes = Array.from(btn.childNodes);
+  const spinner = document.createElement('i');
+  spinner.className = 'fa fa-spinner fa-spin mr-1';
+  btn.replaceChildren(spinner, document.createTextNode(' Saving...'));
 
   try {
-    const res = await fetch(`/api/asap/staff/settings/logo?orgId=${encodeURIComponent(currentLibraryContextOrgId)}`, {
+    await authorizedJson(`/api/asap/staff/settings/logo?orgId=${encodeURIComponent(currentLibraryContextOrgId)}`, {
       method: 'POST',
-      headers: {
-        'Authorization': pb.authStore.token
-      },
       body: formData
     });
-
-    const isJson = res.headers.get('content-type')?.includes('application/json');
-    const data = isJson ? await res.json() : null;
-
-    if (!res.ok) {
-      console.error('Server Error:', data);
-      throw new Error(data?.message || `Server error: ${res.status}`);
-    }
 
     showToast('Branding updated successfully.');
     await refreshSettingsView({ showErrors: true });
@@ -124,7 +116,7 @@ document.getElementById('btn-upload-logo').addEventListener('click', async () =>
     showToast(err.message, 'error');
   } finally {
     btn.disabled = false;
-    btn.innerHTML = originalText;
+    btn.replaceChildren(...originalNodes);
   }
 });
 
@@ -137,14 +129,9 @@ document.getElementById('btn-reset-logo').addEventListener('click', async () => 
   btn.disabled = true;
 
   try {
-    const res = await fetch(`/api/asap/staff/settings/logo?orgId=${encodeURIComponent(currentLibraryContextOrgId)}`, {
-      method: 'DELETE',
-      headers: {
-        'Authorization': pb.authStore.token
-      }
+    await authorizedJson(`/api/asap/staff/settings/logo?orgId=${encodeURIComponent(currentLibraryContextOrgId)}`, {
+      method: 'DELETE'
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.message || 'Failed to reset branding');
 
     showToast('Branding reset to system defaults.');
     await refreshSettingsView({ showErrors: true });
