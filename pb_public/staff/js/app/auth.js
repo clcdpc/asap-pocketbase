@@ -2,7 +2,7 @@ import { pb, loginContainer, setupContainer, appContainer, bootstrapAdminMessage
 import { loadTab, renderCurrentGrid, closeActionMenu } from '../grid.js';
 import { closeOpenDialogs } from '../dialogs.js';
 import { authorizedJson } from '../http.js';
-import { requestJson } from '../../shared/http.js';
+import { requestJson } from '../../../shared/http.js';
 import { loadSettings } from '../settings.js';
 import { renderRecentSuggestionsSwitcher } from '../recent-suggestions.js';
 import { setText, setVisible, setFieldChecked, setFieldValue } from './dom.js';

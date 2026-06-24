@@ -2,7 +2,7 @@ import { pb, loginForm, setupForm, logoutBtn, profileBtn, grid, gridSearchInput,
 import { loadTab, renderCurrentGrid } from '../grid.js';
 import { showToast } from '../dialogs.js';
 import { authorizedJson } from '../http.js';
-import { requestJson } from '../../shared/http.js';
+import { requestJson } from '../../../shared/http.js';
 import { syncPolarisOrganizations } from '../settings-polaris.js';
 import { initRecentSuggestionsDropdown } from '../recent-suggestions.js';
 import { formDataObject, setFieldChecked, setFieldValue, getFieldChecked, getFieldValue } from './dom.js';

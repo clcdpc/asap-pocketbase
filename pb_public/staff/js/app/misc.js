@@ -1,6 +1,6 @@
 import { currentRejectionTemplates, workflowSettings, organizationsStatus, setOrganizationsStatus, setOrganizationsStatusMessage, organizationsStatusMessage } from '../state.js';
 import { escapeAttr } from '../grid-utils.js';
-import { requestJson } from '../../shared/http.js';
+import { requestJson } from '../../../shared/http.js';
 import { getFieldValue, getFieldChecked, setFieldChecked, setFieldValue, setInlineResult } from './dom.js';
 
 export function isPocketBaseAutoCancelError(err) {
