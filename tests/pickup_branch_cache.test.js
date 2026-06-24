@@ -59,6 +59,10 @@ function makeRecord(data) {
   return record;
 }
 
+function byteJson(value) {
+  return Array.from(Buffer.from(JSON.stringify(value), 'utf8'));
+}
+
 try {
   delete require.cache[require.resolve('../lib/polaris/pickup_branch_cache.js')];
   const cache = require('../lib/polaris/pickup_branch_cache.js');
@@ -107,6 +111,15 @@ try {
   };
   const mockBranches = cache.normalizeBranchList([{ id: '10', label: 'Branch 10' }], appForMapping);
   assert.strictEqual(mockBranches[0].label, 'Synced Main Branch');
+
+  const byteBranchCache = makeRecord({
+    patronOrgId: '30',
+    branches: byteJson([{ id: '30', label: 'Byte Branch' }]),
+    refreshedAt: now.toISOString(),
+    sourceKey: 'api.polaris.example.com|1033|100|30'
+  });
+  app = makeApp([byteBranchCache]);
+  assert.deepStrictEqual(cache.getCachedPickupBranches(app, {}, '30', { now }), [{ id: '30', label: 'Byte Branch' }]);
 
   // Verify branch name sorting is alphabetical
   const unsorted = [

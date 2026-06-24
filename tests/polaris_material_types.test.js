@@ -34,6 +34,10 @@ const mockConfig = {
   formatIconUrlPattern: (app) => "https://catalog.example.org/formatid{id2}.gif"
 };
 
+function byteJson(value) {
+  return Array.from(Buffer.from(JSON.stringify(value), "utf8"));
+}
+
 interceptRequire({
   "helpers.js": mockHelpers,
   "auth.js": { adminStaffAuth: () => ({}) },
@@ -86,6 +90,15 @@ function testMaterialTypes() {
   const v2Rows = polarisBib.normalizeMaterialTypesCache(v1Cache);
   assert.strictEqual(v2Rows["1"].description, "Old Book");
   assert.strictEqual(v2Rows["1"].id2, "01");
+
+  const v2Bytes = byteJson({
+    version: 2,
+    rows: {
+      "2": { id: "2", id2: "02", searchCode: "dvd", description: "DVD" }
+    }
+  });
+  const parsedBytes = polarisBib.normalizeMaterialTypesCache(v2Bytes);
+  assert.strictEqual(parsedBytes["2"].description, "DVD");
 
   // 5. Pattern replacement safety
   mockConfig.formatIconUrlPattern = () => "javascript:alert(1){id}";

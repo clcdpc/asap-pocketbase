@@ -83,18 +83,10 @@ document.getElementById('btn-run-hold-check').addEventListener('click', async ()
   msg.className = 'mb-3 font-weight-bold text-info';
 
   try {
-    const res = await fetch('/api/asap/jobs/hold-check', {
-      method: 'POST',
-      headers: { 'Authorization': pb.authStore.token }
-    });
-    const data = await res.json();
-    if (res.ok) {
-      msg.textContent = `Hold check complete. Moved to Pending hold: ${data.promoted}, holds placed: ${data.holdsPlaced}, closed after checkout: ${data.checkoutClosures}, auto-closed: ${data.timedOut}`;
-      msg.className = 'mb-3 font-weight-bold text-success';
-      refreshCurrentStaffView();
-    } else {
-      throw new Error(data.message || 'Failed to run hold check');
-    }
+    const data = await authorizedJson('/api/asap/jobs/hold-check', { method: 'POST' });
+    msg.textContent = `Hold check complete. Moved to Pending hold: ${data.promoted}, holds placed: ${data.holdsPlaced}, closed after checkout: ${data.checkoutClosures}, auto-closed: ${data.timedOut}`;
+    msg.className = 'mb-3 font-weight-bold text-success';
+    refreshCurrentStaffView();
   } catch (err) {
     msg.textContent = 'Error: ' + err.message;
     msg.className = 'mb-3 font-weight-bold text-danger';
@@ -112,18 +104,10 @@ document.getElementById('btn-run-promoter-check').addEventListener('click', asyn
   msg.className = 'mb-3 font-weight-bold text-info';
 
   try {
-    const res = await fetch('/api/asap/jobs/promoter-check', {
-      method: 'POST',
-      headers: { 'Authorization': pb.authStore.token }
-    });
-    const data = await res.json();
-    if (res.ok) {
-      msg.textContent = `Auto-promoter complete. Moved ${data.promoted} item${data.promoted === 1 ? '' : 's'} to Pending hold.`;
-      msg.className = 'mb-3 font-weight-bold text-success';
-      refreshCurrentStaffView();
-    } else {
-      throw new Error(data.message || 'Failed to run promoter check');
-    }
+    const data = await authorizedJson('/api/asap/jobs/promoter-check', { method: 'POST' });
+    msg.textContent = `Auto-promoter complete. Moved ${data.promoted} item${data.promoted === 1 ? '' : 's'} to Pending hold.`;
+    msg.className = 'mb-3 font-weight-bold text-success';
+    refreshCurrentStaffView();
   } catch (err) {
     msg.textContent = 'Error: ' + err.message;
     msg.className = 'mb-3 font-weight-bold text-danger';
@@ -227,16 +211,11 @@ document.getElementById('btn-test-smtp').addEventListener('click', async (e) => 
   try {
     await new Promise(resolve => setTimeout(resolve, 300));
 
-    const res = await fetch('/api/asap/staff/test-smtp', {
+    const data = await authorizedJson('/api/asap/staff/test-smtp', {
       method: 'POST',
-      headers: {
-        'Authorization': pb.authStore.token,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ email: testEmail })
+      body: { email: testEmail }
     });
-    const data = await res.json();
-    if (res.ok && data.success) {
+    if (data.success) {
       resSpan.textContent = "Success! " + data.message;
       resSpan.className = "mt-2 text-success font-weight-bold small";
     } else {

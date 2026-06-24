@@ -93,7 +93,7 @@ function runTests() {
 
   const settingsUiJs = fileText("pb_public/staff/js/settings-ui.js");
   assert.ok(settingsUiJs.includes("export async function lookupEditBibById"));
-  assert.ok(settingsUiJs.includes("body: JSON.stringify({ bibId, barcode })"));
+  assert.ok(settingsUiJs.includes("body: { bibId, barcode }"));
 
   const titleRequestActionsJs = fileText("lib/staff/title_request_actions.js");
   assert.ok(titleRequestActionsJs.includes('context.action === "additionalCopy"'));

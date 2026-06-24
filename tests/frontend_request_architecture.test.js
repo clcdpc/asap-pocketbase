@@ -347,6 +347,21 @@ async function main() {
   }
 
   {
+    const staffJsFiles = findFiles(path.join(root, 'pb_public/staff/js'), file => file.endsWith('.js'));
+    const rawFetchFiles = [];
+    for (const file of staffJsFiles) {
+      const source = fs.readFileSync(file, 'utf8');
+      if (/\bfetch\s*\(/.test(source)) rawFetchFiles.push(path.relative(root, file));
+    }
+
+    assert.deepStrictEqual(
+      rawFetchFiles,
+      [],
+      'staff JS modules should not call fetch() directly'
+    );
+  }
+
+  {
     const actionsSource = fs.readFileSync(actionsPath, 'utf8');
     const modalsSource = fs.readFileSync(modalsPath, 'utf8');
     const gridSource = fs.readFileSync(gridPath, 'utf8');

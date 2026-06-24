@@ -18,34 +18,21 @@ export async function undoRow(id) {
   if (!await showConfirm('Undo action', undoConfirmMessage(row.type))) return;
 
   try {
-    let url;
-    let body;
+    const url = row.type === 'additional_copy'
+      ? `/api/asap/staff/additional-copies/${encodeURIComponent(id)}/reopen`
+      : `/api/asap/staff/title-requests/${encodeURIComponent(id)}/action`;
+    const body = row.type === 'additional_copy'
+      ? {}
+      : {
+          ...row,
+          status: 'suggestion',
+          editedBy: pb.authStore.model.username
+        };
 
-    if (row.type === 'additional_copy') {
-      url = `/api/asap/staff/additional-copies/${encodeURIComponent(id)}/reopen`;
-      body = JSON.stringify({});
-    } else {
-      url = `/api/asap/staff/title-requests/${encodeURIComponent(id)}/action`;
-      body = JSON.stringify({
-        ...row,
-        status: 'suggestion',
-        editedBy: pb.authStore.model.username
-      });
-    }
-
-    const res = await fetch(url, {
+    await authorizedJson(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': pb.authStore.token
-      },
-      body: body
+      body
     });
-
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.message || 'Error undoing action');
-    }
     refreshCurrentStaffView();
   } catch (err) {
     await showAlert(err.message || 'Error undoing action');

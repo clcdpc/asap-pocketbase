@@ -1,5 +1,6 @@
 import { pb, formatMap, availableFormats, patronFormatKeys, patronFormatFields, defaultPatronFormatRules, currentSuggestions, publicationOptions, setPublicationOptions, defaultPublicationOptions, setVerifiedBibId, additionalFieldDefinitions } from './state.js';
 import { isValidSmtpHost, validateSmtpHostField, markSettingsDirty } from './api.js';
+import { authorizedJson } from './http.js';
 import { showToast } from './dialogs.js';
 import { escapeAttr } from './grid.js';
 
@@ -547,17 +548,52 @@ export function renderOptionListEditor(editorId, options, fallbackLabels) {
   const editor = document.getElementById(editorId);
   if (!editor) return;
   const list = normalizeOptionList(options, fallbackLabels);
-  editor.innerHTML = list.map((option, index) => `
-    <div class="option-list-row" data-option-id="${escapeAttr(option.id)}" draggable="true">
-      <div class="text-muted option-drag-handle" aria-label="Drag to reorder" tabindex="0" title="Drag to reorder">&#8597;</div>
-      <input type="text" class="form-control form-control-sm option-list-label" value="${escapeAttr(option.label)}" aria-label="Option label">
-      <div class="form-check mb-0">
-        <input type="checkbox" class="form-check-input option-list-enabled" id="${escapeAttr(editorId)}-${escapeAttr(option.id)}"${option.enabled !== false ? ' checked' : ''}>
-        <label class="form-check-label small" for="${escapeAttr(editorId)}-${escapeAttr(option.id)}">Enabled</label>
-      </div>
-      <button type="button" class="btn btn-sm btn-outline-danger option-list-delete" aria-label="Delete option">Delete</button>
-    </div>
-  `).join('');
+  const rows = list.map(option => {
+    const row = document.createElement('div');
+    row.className = 'option-list-row';
+    row.setAttribute('data-option-id', option.id);
+    row.draggable = true;
+
+    const dragHandle = document.createElement('div');
+    dragHandle.className = 'text-muted option-drag-handle';
+    dragHandle.setAttribute('aria-label', 'Drag to reorder');
+    dragHandle.setAttribute('tabindex', '0');
+    dragHandle.setAttribute('title', 'Drag to reorder');
+    dragHandle.textContent = '\u2195';
+
+    const labelInput = document.createElement('input');
+    labelInput.type = 'text';
+    labelInput.className = 'form-control form-control-sm option-list-label';
+    labelInput.value = option.label;
+    labelInput.setAttribute('aria-label', 'Option label');
+
+    const checkboxWrap = document.createElement('div');
+    checkboxWrap.className = 'form-check mb-0';
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'form-check-input option-list-enabled';
+    checkbox.id = `${editorId}-${option.id}`;
+    if (option.enabled !== false) checkbox.checked = true;
+
+    const checkboxLabel = document.createElement('label');
+    checkboxLabel.className = 'form-check-label small';
+    checkboxLabel.setAttribute('for', checkbox.id);
+    checkboxLabel.textContent = 'Enabled';
+
+    checkboxWrap.append(checkbox, checkboxLabel);
+
+    const deleteButton = document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.className = 'btn btn-sm btn-outline-danger option-list-delete';
+    deleteButton.setAttribute('aria-label', 'Delete option');
+    deleteButton.textContent = 'Delete';
+
+    row.append(dragHandle, labelInput, checkboxWrap, deleteButton);
+    return row;
+  });
+
+  editor.replaceChildren(...rows);
 }
 
 export function collectOptionList(editorId, fallbackLabels) {
@@ -701,16 +737,10 @@ export async function lookupEditBibById(options = {}) {
     const row = currentSuggestions.find(r => r.id === document.getElementById('edit-id').value);
     const barcode = row ? row.barcode : '';
 
-    const res = await fetch('/api/asap/staff/bib-lookup', {
+    const data = await authorizedJson('/api/asap/staff/bib-lookup', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': pb.authStore.token
-      },
-      body: JSON.stringify({ bibId, barcode })
+      body: { bibId, barcode }
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.message || 'Lookup failed');
 
     display.classList.remove('hidden', 'alert-danger', 'alert-warning');
     display.classList.add('alert-info');
