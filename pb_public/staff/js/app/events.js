@@ -3,7 +3,7 @@ import { loadTab, renderCurrentGrid } from '../grid.js';
 import { showToast } from '../dialogs.js';
 import { authorizedJson } from '../http.js';
 import { requestJson } from '../../../shared/http.js';
-import { syncPolarisOrganizations } from '../settings-polaris.js';
+import { syncPolarisOrganizations } from '../settings/polaris-sync.js';
 import { initRecentSuggestionsDropdown } from '../recent-suggestions.js';
 import { formDataObject, setFieldChecked, setFieldValue, getFieldChecked, getFieldValue } from './dom.js';
 import { checkAuth, openProfileDialog, applyProfileClaimFilterDefault, clearAppliedProfileClaimFilterDefault } from './auth.js';
