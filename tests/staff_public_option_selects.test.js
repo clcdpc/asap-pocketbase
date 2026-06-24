@@ -2,7 +2,7 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 
-const source = fs.readFileSync(path.join(__dirname, "../pb_public/staff/js/settings-ui.js"), "utf8")
+const source = fs.readFileSync(path.join(__dirname, "../pb_public/staff/js/settings/option-list.js"), "utf8")
   .replace(/\bexport\s+/g, "");
 
 function extractFunction(name) {

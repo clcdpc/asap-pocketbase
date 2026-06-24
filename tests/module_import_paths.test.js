@@ -38,7 +38,7 @@ function parseNamedList(raw) {
 
 function findNamedImports(source) {
   const imports = [];
-  const re = /import\s*\{([^}]+)\}\s*from\s*['"]([^'"]+)['"]/g;
+  const re = /(?:import|export)\s*\{([^}]+)\}\s*from\s*['"]([^'"]+)['"]/g;
   let match;
   while ((match = re.exec(source)) !== null) {
     imports.push({ importPath: match[2], names: parseNamedList(match[1]) });
@@ -163,6 +163,7 @@ const allowedBareCalls = new Set([
   'prompt',
   'requestAnimationFrame',
   'structuredClone',
+  'setHiddenEditValue',
   'setInterval',
   'setTimeout',
   'super',

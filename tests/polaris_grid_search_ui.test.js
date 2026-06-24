@@ -91,9 +91,9 @@ function runTests() {
   assert.ok(polarisSearchJs.includes("payload.emailPurchaseReminder = confirmResult.emailPurchaseReminder"));
   assert.ok(polarisSearchJs.indexOf("const launchedFromEditForm = options.source === 'edit'") < polarisSearchJs.indexOf("performImmediateStaffAction(row.id, payload"));
 
-  const settingsUiJs = fileText("pb_public/staff/js/settings-ui.js");
-  assert.ok(settingsUiJs.includes("export async function lookupEditBibById"));
-  assert.ok(settingsUiJs.includes("body: { bibId, barcode }"));
+  const bibLookupJs = fileText("pb_public/staff/js/settings/bib-lookup.js");
+  assert.ok(bibLookupJs.includes("export async function lookupEditBibById"));
+  assert.ok(bibLookupJs.includes("body: { bibId, barcode }"));
 
   const titleRequestActionsJs = fileText("lib/staff/title_request_actions.js");
   assert.ok(titleRequestActionsJs.includes('context.action === "additionalCopy"'));
