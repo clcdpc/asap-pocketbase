@@ -35,14 +35,18 @@ All imports use `./settings.js` — keeping the barrel at that path means zero c
 
 ```
 pb_public/staff/js/
-  settings.js              ← barrel: re-exports all 31 exports + 17 event listener registrations (~180 lines)
+  settings.js              ← barrel: re-exports all exports + 17 event listener registrations (~144 lines)
   settings/
-    loader.js              ← load orchestration, app init (6 exports, ~155 lines)
-    library-context.js     ← library selector, context switching (6 exports, ~165 lines)
-    form-population.js     ← applying server data to DOM (3 exports, ~270 lines)
-    serialize-save.js      ← serialization, dirty tracking, save (9 exports, ~260 lines)
+    loader.js              ← load orchestration, app init (7 exports, ~210 lines)
+    library-context.js     ← library selector, context switching (6 exports, ~190 lines)
+    form-population.js     ← applying server data to DOM (3 exports, ~255 lines)
+    serialize-save.js      ← serialization, dirty tracking, save (9 exports, ~345 lines)
     toggles.js             ← toggle visibility groups (5 exports, ~50 lines)
-    utils.js               ← pure utility functions (2 exports, ~30 lines)
+    utils.js               ← pure utility functions (2 exports, ~20 lines)
+    duplicate-labels.js    ← duplicate label render/collect helpers (3 exports, ~60 lines)
+    polaris-fields.js      ← Polaris form collect/render helpers (3 exports, ~115 lines)
+  settings-labels.js       ← reset labels event handler; re-exports from duplicate-labels.js
+  settings-polaris.js      ← Polaris buttons/jobs/test/sync; re-exports from polaris-fields.js
 ```
 
 ## Module details
@@ -168,10 +172,37 @@ Currently uses raw `fetch` (line 1077). Since this function moves to `settings/l
 
 ## Circular dependency fix
 
-| Current | New path | Effect |
-|---|---|---|
-| `settings-labels.js` → `import { loadLibrarySettings } from './settings.js'` | → `import { loadLibrarySettings } from './settings/library-context.js'` | ✅ Cycle broken |
-| `settings-polaris.js` → `import { populateLibrarySelector, saveSettings } from './settings.js'` | → import from `./settings/library-context.js` and `./settings/serialize-save.js` | ✅ Cycle broken |
+Two cycles were broken by extracting reusable render/collect helpers into neutral leaf modules:
+
+### Cycle 1: labels → library-context → form-population → labels
+
+```
+settings-labels.js → settings/library-context.js → settings/form-population.js → settings-labels.js
+```
+
+`settings-labels.js` exported `renderDuplicateStatusLabelSettings` and `collectDuplicateStatusLabels`, which were imported by `settings/form-population.js` and `settings/serialize-save.js`. Meanwhile, `settings-labels.js` imported `loadLibrarySettings` from `settings/library-context.js`, creating a cycle.
+
+**Fix:** Extracted `normalizeDuplicateStatusLabels`, `renderDuplicateStatusLabelSettings`, and `collectDuplicateStatusLabels` into `settings/duplicate-labels.js` (a leaf module with no settings dependencies). `settings-labels.js` now re-exports from the leaf module.
+
+| Before | After |
+|---|---|
+| `form-population.js → settings-labels.js` | `form-population.js → settings/duplicate-labels.js` |
+| `serialize-save.js → settings-labels.js` | `serialize-save.js → settings/duplicate-labels.js` |
+
+### Cycle 2: polaris → serialize-save → polaris
+
+```
+settings-polaris.js → settings/serialize-save.js → settings-polaris.js
+```
+
+`settings/serialize-save.js` imported `collectSettingsPolaris` and `collectEnabledLibraryIds` from `settings-polaris.js`, while `settings-polaris.js` imported `saveSettings` from `settings/serialize-save.js`.
+
+**Fix:** Extracted `collectSettingsPolaris`, `renderLibraryParticipationCheckboxes`, and `collectEnabledLibraryIds` into `settings/polaris-fields.js` (a leaf module with no settings dependencies). `settings-polaris.js` now re-exports from the leaf module.
+
+| Before | After |
+|---|---|
+| `serialize-save.js → settings-polaris.js` | `serialize-save.js → settings/polaris-fields.js` |
+| `form-population.js → settings-polaris.js` | `form-population.js → settings/polaris-fields.js` |
 
 ## Execution order
 
@@ -188,6 +219,13 @@ Currently uses raw `fetch` (line 1077). Since this function moves to `settings/l
 11. Update `tests/external_search_provider4.test.js` — read from `settings/utils.js` instead of `settings.js`
 12. Run `npm test` — verify all pass
 13. Run import path validator — verify all new paths resolve
+14. Create `settings/duplicate-labels.js` — extract duplicate label helpers from `settings-labels.js`
+15. Create `settings/polaris-fields.js` — extract Polaris form helpers from `settings-polaris.js`
+16. Update `form-population.js` and `serialize-save.js` to import from neutral modules instead of `settings-labels.js`/`settings-polaris.js`
+17. Rewrite `settings-labels.js` — keep reset event handler, re-export from `settings/duplicate-labels.js`
+18. Rewrite `settings-polaris.js` — keep event handlers + `syncPolarisOrganizations`, re-export from `settings/polaris-fields.js`
+19. Update barrel — add `export * from './settings/duplicate-labels.js'` and `export * from './settings/polaris-fields.js'`
+20. Create `tests/module_import_cycles.test.js` — asserts the two planned cycles are broken
 
 ## Manual verification checklist
 

@@ -3,11 +3,11 @@ import { updateSaveButtonText } from './serialize-save.js';
 import { currentLibraryContextOrgId, currentSettingsSection, settingsLoading, formatMap, availableFormats, setAvailableFormats, workflowSettings, lastWorkflowEnabledList, setLastWorkflowEnabledList, defaultPublicationOptions, setCurrentFormatClaimRules, setFormatClaimStaffOptions, setLeapBibUrlPattern, setLeapPatronUrlPattern, leapBibUrlPattern, leapPatronUrlPattern, setAdditionalFieldDefinitions, setCurrentPatronFieldConfig } from '../state.js';
 import { toggleTimeoutGroup, toggleHoldPickupTimeoutGroup, togglePendingHoldTimeoutGroup, toggleAdditionalCopyTimeoutGroup, toggleCommonAuthorsGroup } from './toggles.js';
 import { renderFormatSettings, updateModalFormatDropdowns } from '../settings-formats.js';
-import { renderDuplicateStatusLabelSettings } from '../settings-labels.js';
+import { renderDuplicateStatusLabelSettings } from './duplicate-labels.js';
 import { renderOptionListEditor, renderPatronFormatRulesEditor, updatePublicationOptionsUi } from '../settings-ui.js';
 import { populateEmailTemplateForms } from '../settings-templates.js';
 import { renderAdditionalFieldsEditor } from '../settings-additional-fields.js';
-import { renderLibraryParticipationCheckboxes } from '../settings-polaris.js';
+import { renderLibraryParticipationCheckboxes } from './polaris-fields.js';
 
 function patronPortalUrl(orgId, embed) {
   const url = new URL('/patron/', window.location.origin);
