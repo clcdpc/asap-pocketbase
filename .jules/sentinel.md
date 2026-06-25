@@ -22,3 +22,7 @@
 **Vulnerability:** The `overridePassword` field in `lib/config/polaris.js` and `pb_migrations/0000000000_initial.js` was hardcoded to "admin". This backdoor password allowed any staff account to login if the system defaults were used.
 **Learning:** Hardcoding backup or override passwords in configuration logic and default migrations creates a latent backdoor, significantly increasing the risk of unauthorized access.
 **Prevention:** Default security-related backup fields like `overridePassword` to an empty string (`""`) so that the feature is disabled by default, and require intentional, manual configuration to enable it.
+## 2026-06-20 - Prevent XSS in Polaris Organizations Settings
+**Vulnerability:** `org.organizationId` was directly interpolated into HTML without escaping in `pb_public/staff/js/settings-polaris.js`.
+**Learning:** Even internal or synchronized IDs can contain characters that break HTML when displayed dynamically in the frontend if unescaped.
+**Prevention:** Wrap all variable substitutions in template literals with `escapeAttr()` when injected into innerHTML.

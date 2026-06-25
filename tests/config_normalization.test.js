@@ -30,6 +30,30 @@ function testNormalization() {
   assert.strictEqual(normalization.normalizeFormatIconUrlPattern("data:text/html,{id}"), defaultPattern);
 
   console.log("Config normalization tests passed.");
+
+  console.log("Running decodeUtf8Bytes tests...");
+  // Null/Undefined
+  assert.strictEqual(normalization.decodeUtf8Bytes(null), "");
+  assert.strictEqual(normalization.decodeUtf8Bytes(undefined), "");
+
+  // Strings
+  assert.strictEqual(normalization.decodeUtf8Bytes("hello"), "hello");
+  assert.strictEqual(normalization.decodeUtf8Bytes(""), "");
+
+  // Numbers (including falsy numbers)
+  assert.strictEqual(normalization.decodeUtf8Bytes(9), "9");
+  assert.strictEqual(normalization.decodeUtf8Bytes(0), "0");
+  assert.strictEqual(normalization.decodeUtf8Bytes(-1), "-1");
+  assert.strictEqual(normalization.decodeUtf8Bytes(NaN), "NaN");
+
+  // Booleans
+  assert.strictEqual(normalization.decodeUtf8Bytes(true), "true");
+  assert.strictEqual(normalization.decodeUtf8Bytes(false), "false");
+
+  // Byte Arrays (ASCII)
+  assert.strictEqual(normalization.decodeUtf8Bytes([104, 101, 108, 108, 111]), "hello");
+
+  console.log("decodeUtf8Bytes tests passed.");
 }
 
 testNormalization();

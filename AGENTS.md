@@ -148,6 +148,20 @@ Rules:
 - Scope must be applied in the query/data layer, not just implied in the UI.
 - Every new metric must define its scope behavior before implementation.
 
+### Frontend request and refresh architecture
+Use the frontend request helpers and load guards consistently. Do not introduce one-off fetch patterns in staff or patron code when the existing helpers cover the behavior.
+
+- Prefer shared request helpers for JSON API calls over raw `fetch`.
+- When using `requestJson` or app wrappers such as `authorizedJson`, pass plain object bodies for JSON requests and let the helper serialize them. Do not pre-stringify JSON bodies unless you also intentionally manage the `Content-Type` contract; otherwise PocketBase routes may reject the request as `Unsupported Content-Type`.
+- Keep cross-app behavior in the shared request core limited to transport concerns: JSON parsing, headers, cache mode, abort signals, and normalized errors.
+- Keep auth/session policy in app-specific wrappers. Staff auth stays in `pb_public/staff/js/http.js`; patron session-expiry behavior stays in `pb_public/patron/js/api.js`.
+- Explicitly protect screen-level staff loads with abort-plus-stale-result guards.
+- Protect screen-level staff loads with abort-plus-stale-result guards so fast tab, analytics, or library-context switches cannot render stale data.
+- Route mutation follow-up reloads through explicit refresh helpers instead of scattering direct `loadTab(currentStatus)` calls through action modules.
+- When identifying a staff load, include the relevant scope inputs in the request path and guard logic: current status, workflow scope, analytics scope/range, selected settings library context, and current auth context where relevant.
+- Do not add TanStack Query or another frontend cache layer unless the frontend architecture changes materially.
+- Add regression coverage when changing request helpers or guarded load paths, especially for grid, settings, and analytics behavior.
+
 ### Manual verification checklist for new settings
 For each new setting, verify all of the following:
 - save at system level persists correctly
@@ -159,3 +173,11 @@ For each new setting, verify all of the following:
 
 ### Good design pattern
 Use one clear source of truth for the selected settings scope. If the UI tracks a current org/system selection, all load and save helpers should consume that same state instead of re-deriving scope ad hoc in multiple places.
+
+### JSON vs Goja Data Types and Normalization
+PocketBase hooks interface with data originating from multiple engines. Be extremely careful when writing normalization or parser helpers to coerce types safely:
+- PocketBase JSON fields loaded from SQLite are often handed to Goja hooks as raw byte arrays.
+- JSON responses from external HTTP APIs (e.g., Polaris) are standard JavaScript objects containing primitives like `number`, `string`, and `boolean`.
+- If a helper expects an array or string (e.g. iterating over `bytes.length`) and encounters a JavaScript `number`, it must handle it gracefully or coerce it using `String(value)`.
+- Falsy primitive values like `0` and `false` must not be accidentally swallowed or converted to `""` during normalization unless explicitly desired.
+- Write tests that provide `number`, `boolean`, `null`, `undefined`, `""`, `"string"`, and `[byte array]` permutations for normalization functions.

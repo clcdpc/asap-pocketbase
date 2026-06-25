@@ -2,7 +2,7 @@ import { pb, currentStatus, currentSuggestions, allSuggestions } from './state.j
 import { isAdminStaff } from './api.js';
 import { authorizedJson } from './http.js';
 import { showToast, showAlert, showConfirm } from './dialogs.js';
-import { loadTab, escapeAttr } from './grid.js';
+import { refreshCurrentStaffView, escapeAttr } from './grid.js';
 
 export function undoConfirmMessage(type) {
   if (type === 'additional_copy') {
@@ -18,35 +18,22 @@ export async function undoRow(id) {
   if (!await showConfirm('Undo action', undoConfirmMessage(row.type))) return;
 
   try {
-    let url;
-    let body;
+    const url = row.type === 'additional_copy'
+      ? `/api/asap/staff/additional-copies/${encodeURIComponent(id)}/reopen`
+      : `/api/asap/staff/title-requests/${encodeURIComponent(id)}/action`;
+    const body = row.type === 'additional_copy'
+      ? {}
+      : {
+          ...row,
+          status: 'suggestion',
+          editedBy: pb.authStore.model.username
+        };
 
-    if (row.type === 'additional_copy') {
-      url = `/api/asap/staff/additional-copies/${encodeURIComponent(id)}/reopen`;
-      body = JSON.stringify({});
-    } else {
-      url = `/api/asap/staff/title-requests/${encodeURIComponent(id)}/action`;
-      body = JSON.stringify({
-        ...row,
-        status: 'suggestion',
-        editedBy: pb.authStore.model.username
-      });
-    }
-
-    const res = await fetch(url, {
+    await authorizedJson(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': pb.authStore.token
-      },
-      body: body
+      body
     });
-
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.message || 'Error undoing action');
-    }
-    loadTab(currentStatus);
+    refreshCurrentStaffView();
   } catch (err) {
     await showAlert(err.message || 'Error undoing action');
   }
@@ -59,7 +46,7 @@ export async function deleteClosedRequest(id) {
   try {
     await authorizedJson(`/api/asap/staff/requests/${encodeURIComponent(id)}`, { method: 'DELETE' });
     showToast('Closed request deleted.', 'success');
-    loadTab(currentStatus);
+    refreshCurrentStaffView();
   } catch (err) {
     await showAlert(err.message || 'Could not delete closed request.');
   }
@@ -73,7 +60,7 @@ export async function closeDuplicateRequest(id) {
   try {
     await authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(id)}/action`, {
       method: 'POST',
-      body: JSON.stringify({
+      body: {
         action: 'closeDuplicate',
         status: 'closed',
         title: row.title || '',
@@ -85,10 +72,10 @@ export async function closeDuplicateRequest(id) {
         exactPublicationDate: row.exactPublicationDate || '',
         notes: row.notes || '',
         editedBy: pb.authStore.model.username
-      })
+      }
     });
     showToast('Duplicate request closed.', 'success');
-    loadTab(currentStatus);
+    refreshCurrentStaffView();
   } catch (err) {
     await showAlert(err.message || 'Could not close duplicate request.');
   }

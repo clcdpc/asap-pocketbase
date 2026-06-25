@@ -5,7 +5,7 @@ const path = require("path");
 const migrationPath = path.join(__dirname, "../pb_migrations/202606120001_purchase_approved_email_template.js");
 const initial = fs.readFileSync(path.join(__dirname, "../pb_migrations/0000000000_initial.js"), "utf8");
 const uiText = fs.readFileSync(path.join(__dirname, "../lib/config/ui_text.js"), "utf8");
-const settings = fs.readFileSync(path.join(__dirname, "../pb_public/staff/js/settings.js"), "utf8");
+const settings = fs.readFileSync(path.join(__dirname, "../pb_public/staff/js/settings/form-population.js"), "utf8");
 
 console.log("Running purchase approved migration tests...");
 

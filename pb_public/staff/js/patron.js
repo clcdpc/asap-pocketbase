@@ -1,5 +1,6 @@
 import { pb, verifiedNewSuggestionBarcode, setVerifiedNewSuggestionBarcode, currentWorkflowOrgScopeId, workflowSettings } from './state.js';
 import { setFieldChecked, getFieldChecked, isSuperAdminStaff } from './api.js';
+import { authorizedJson } from './http.js';
 import { loadTab, escapeAttr } from './grid.js';
 import { renderPatronContext } from './modals.js';
 import { populateLibrarySelector } from './settings.js';
@@ -115,20 +116,10 @@ document.getElementById('btn-lookup-patron').addEventListener('click', async () 
   btn.disabled = true;
   btn.textContent = 'Looking up...';
   try {
-    const res = await fetch('/api/asap/staff/patron-lookup', {
+    const data = await authorizedJson('/api/asap/staff/patron-lookup', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': pb.authStore.token
-      },
-      body: JSON.stringify(staffSuggestionLibraryPayload({ query: patronQuery }))
+      body: staffSuggestionLibraryPayload({ query: patronQuery })
     });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const error = new Error(data.message || 'No patron found. Try barcode, name, or first name then last name.');
-      error.lookupResponse = data;
-      throw error;
-    }
 
     if (data.status === 'multiple' && Array.isArray(data.results)) {
       updatePatronSearchScopeNotice(data);
@@ -139,7 +130,7 @@ document.getElementById('btn-lookup-patron').addEventListener('click', async () 
     updatePatronSearchScopeNotice(data);
     applySelectedPatron(data);
   } catch (err) {
-    updatePatronSearchScopeNotice(err.lookupResponse || null);
+    updatePatronSearchScopeNotice(err.response || err.lookupResponse || null);
     showLookupResult(err.message || 'No patron found. Try barcode, name, or first name then last name.', 'danger');
     document.getElementById('new-barcode').focus();
   } finally {
@@ -186,19 +177,10 @@ document.getElementById('new-suggestion-form').addEventListener('submit', async 
   btn.textContent = 'Submitting...';
 
   try {
-    const res = await fetch('/api/asap/staff/suggestions', {
+    await authorizedJson('/api/asap/staff/suggestions', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': pb.authStore.token
-      },
-      body: JSON.stringify(payload)
+      body: payload
     });
-
-    if (!res.ok) {
-      const data = await res.json();
-      throw new Error(data.message || 'Failed to create suggestion');
-    }
 
     document.getElementById('newSuggestionModal').close();
     loadTab('suggestion');
@@ -397,19 +379,10 @@ export async function setNewSuggestionDetailsEnabled(enabled) {
 }
 
 async function fetchSelectedPatronByBarcode(barcode) {
-  const res = await fetch('/api/asap/staff/patron-lookup', {
+  return authorizedJson('/api/asap/staff/patron-lookup', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': pb.authStore.token
-    },
-    body: JSON.stringify(staffSuggestionLibraryPayload({ barcode: String(barcode || '').trim() }))
+    body: staffSuggestionLibraryPayload({ barcode: String(barcode || '').trim() })
   });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data.message || 'Could not load selected patron.');
-  }
-  return data;
 }
 
 function resetPickupSelector() {

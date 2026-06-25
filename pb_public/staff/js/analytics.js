@@ -1,4 +1,6 @@
-import { pb } from './state.js';
+import { authorizedJson } from './http.js';
+import { isAbortError } from './http.js';
+import { createLatestLoad } from '../../shared/latest-load.js';
 
 const dateRangeLabels = {
   last30: 'Last 30 days',
@@ -28,16 +30,7 @@ const reasonLabels = {
 
 let analyticsScope = '';
 let analyticsRange = 'lastMonth';
-
-function escapeHtml(value) {
-  return String(value || '').replace(/[&<>"']/g, ch => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;'
-  })[ch]);
-}
+const analyticsLoads = createLatestLoad();
 
 function formatAnalyticsDate(iso) {
   if (!iso) return '';
@@ -56,19 +49,6 @@ function formatDays(value) {
   return number.toFixed(number >= 10 ? 0 : 1);
 }
 
-async function authorizedJson(path) {
-  const headers = {};
-  if (pb.authStore.token) {
-    headers.Authorization = pb.authStore.token;
-  }
-  const res = await fetch(path, { headers, cache: 'no-store' });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data.message || 'Analytics could not be loaded.');
-  }
-  return data;
-}
-
 function analyticsUrl() {
   const params = new URLSearchParams();
   params.set('range', analyticsRange);
@@ -79,53 +59,88 @@ function analyticsUrl() {
   return '/api/asap/staff/analytics?' + params.toString();
 }
 
+function renderStatus(container, className, message) {
+  const node = document.createElement('div');
+  node.className = className;
+  node.textContent = message;
+  container.replaceChildren(node);
+}
+
 export async function loadAnalytics(container) {
   if (!container) return;
-  container.innerHTML = '<div class="alert alert-light border">Loading analytics...</div>';
+  const guard = analyticsLoads.begin('analytics');
+  renderStatus(container, 'alert alert-light border', 'Loading analytics...');
 
   try {
-    const data = await authorizedJson(analyticsUrl());
+    const data = await authorizedJson(analyticsUrl(), {
+      cache: 'no-store',
+      signal: guard.signal
+    });
+    if (!guard.isCurrent()) return;
     analyticsScope = data.scope && data.scope.mode === 'all' ? 'all' : (data.scope && data.scope.libraryOrgId) || analyticsScope;
     renderAnalytics(container, data);
   } catch (err) {
-    container.innerHTML = `<div class="alert alert-danger">${escapeHtml(err.message || 'Analytics could not be loaded.')}</div>`;
+    if (isAbortError(err) || !guard.isCurrent()) return;
+    renderStatus(container, 'alert alert-danger', err.message || 'Analytics could not be loaded.');
+  } finally {
+    analyticsLoads.finish('analytics', guard.token);
   }
 }
 
-function renderAnalytics(container, data) {
-  container.innerHTML = `
-    <section class="analytics-shell" aria-labelledby="analytics-title">
-      <div class="analytics-header">
-        <div>
-          <h2 id="analytics-title" class="h4 mb-1">Analytics</h2>
-          <p class="text-muted mb-0">Operational summary for ${escapeHtml(data.scope.label)}: ${escapeHtml(formatAnalyticsDate(data.dateRange.start))} through ${escapeHtml(formatAnalyticsDate(data.dateRange.end))}</p>
-        </div>
-        <div class="analytics-controls">
-          ${renderScopeControl(data)}
-          ${renderDateRangeControl(data.dateRange.key)}
-        </div>
-      </div>
-      ${renderSummaryCards(data.summary)}
-      <div class="analytics-grid">
-        ${renderStageCounts(data.stageCounts)}
-        ${renderAging(data.aging)}
-        ${renderClosedReasons(data.closedReasons)}
-        ${renderExceptions(data.exceptions)}
-      </div>
-    </section>
-  `;
+export function refreshAnalyticsView(container) {
+  return loadAnalytics(container);
+}
 
+function renderAnalytics(container, data) {
+  const shell = document.createElement('section');
+  shell.className = 'analytics-shell';
+  shell.setAttribute('aria-labelledby', 'analytics-title');
+  shell.append(
+    renderAnalyticsHeader(data),
+    renderSummaryCards(data.summary),
+    renderAnalyticsGrid(data)
+  );
+  container.replaceChildren(shell);
   bindAnalyticsControls(container);
 }
 
+function renderAnalyticsHeader(data) {
+  const header = document.createElement('div');
+  header.className = 'analytics-header';
+
+  const titleGroup = document.createElement('div');
+  const h2 = document.createElement('h2');
+  h2.id = 'analytics-title';
+  h2.className = 'h4 mb-1';
+  h2.textContent = 'Analytics';
+  const p = document.createElement('p');
+  p.className = 'text-muted mb-0';
+  p.textContent = 'Operational summary for ' + data.scope.label + ': ' + formatAnalyticsDate(data.dateRange.start) + ' through ' + formatAnalyticsDate(data.dateRange.end);
+  titleGroup.append(h2, p);
+
+  const controls = document.createElement('div');
+  controls.className = 'analytics-controls';
+  controls.append(
+    renderScopeControl(data),
+    renderDateRangeControl(data.dateRange.key)
+  );
+
+  header.append(titleGroup, controls);
+  return header;
+}
+
 function renderScopeControl(data) {
+  const control = document.createElement('div');
+  control.className = 'analytics-control';
+
   if (!data.scope.superAdmin) {
-    return `
-      <div class="analytics-control">
-        <span class="analytics-control-label">Scope</span>
-        <strong>${escapeHtml(data.scope.label)}</strong>
-      </div>
-    `;
+    const span = document.createElement('span');
+    span.className = 'analytics-control-label';
+    span.textContent = 'Scope';
+    const strong = document.createElement('strong');
+    strong.textContent = data.scope.label;
+    control.append(span, strong);
+    return control;
   }
 
   const libraries = (data.availableLibraries || []).slice();
@@ -133,54 +148,102 @@ function renderScopeControl(data) {
     libraries.push({ orgId: data.scope.libraryOrgId, name: data.scope.label || 'Current library' });
   }
 
-  const options = [
-    `<option value="all"${data.scope.mode === 'all' ? ' selected' : ''}>All libraries</option>`,
-    ...libraries.map(library => {
-      const selected = data.scope.mode === 'library' && data.scope.libraryOrgId === library.orgId ? ' selected' : '';
-      return `<option value="${escapeHtml(library.orgId)}"${selected}>${escapeHtml(library.name)} (ID ${escapeHtml(library.orgId)})</option>`;
-    })
-  ].join('');
+  const label = document.createElement('label');
+  label.className = 'analytics-control';
 
-  return `
-    <label class="analytics-control">
-      <span class="analytics-control-label">Scope</span>
-      <select id="analytics-scope" class="form-control form-control-sm">${options}</select>
-    </label>
-  `;
+  const labelSpan = document.createElement('span');
+  labelSpan.className = 'analytics-control-label';
+  labelSpan.textContent = 'Scope';
+
+  const select = document.createElement('select');
+  select.id = 'analytics-scope';
+  select.className = 'form-control form-control-sm';
+
+  const allOption = document.createElement('option');
+  allOption.value = 'all';
+  allOption.textContent = 'All libraries';
+  if (data.scope.mode === 'all') allOption.selected = true;
+  select.appendChild(allOption);
+
+  libraries.forEach(library => {
+    const option = document.createElement('option');
+    option.value = library.orgId;
+    option.textContent = library.name + ' (ID ' + library.orgId + ')';
+    if (data.scope.mode === 'library' && data.scope.libraryOrgId === library.orgId) option.selected = true;
+    select.appendChild(option);
+  });
+
+  label.append(labelSpan, select);
+  return label;
 }
 
 function renderDateRangeControl(selected) {
-  const options = Object.entries(dateRangeLabels).map(([value, label]) => (
-    `<option value="${value}"${value === selected ? ' selected' : ''}>${escapeHtml(label)}</option>`
-  )).join('');
+  const label = document.createElement('label');
+  label.className = 'analytics-control';
 
-  return `
-    <label class="analytics-control">
-      <span class="analytics-control-label">Date range</span>
-      <select id="analytics-date-range" class="form-control form-control-sm">${options}</select>
-    </label>
-  `;
+  const span = document.createElement('span');
+  span.className = 'analytics-control-label';
+  span.textContent = 'Date range';
+
+  const select = document.createElement('select');
+  select.id = 'analytics-date-range';
+  select.className = 'form-control form-control-sm';
+
+  Object.entries(dateRangeLabels).forEach(([value, labelText]) => {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = labelText;
+    if (value === selected) option.selected = true;
+    select.appendChild(option);
+  });
+
+  label.append(span, select);
+  return label;
 }
 
 function renderSummaryCards(summary) {
-  return `
-    <div class="analytics-summary" aria-label="Summary metrics">
-      ${renderSummaryCard('New suggestions', formatCount(summary.newSuggestions), 'Created in selected period')}
-      ${renderSummaryCard('Open requests', formatCount(summary.openRequests), 'Current non-closed requests')}
-      ${renderSummaryCard('Closed requests', formatCount(summary.closedRequests), 'Closed and updated in selected period')}
-      ${renderSummaryCard('Avg days to hold', formatDays(summary.averageDaysToHold), 'Created to first Polaris hold placement')}
-    </div>
-  `;
+  const container = document.createElement('div');
+  container.className = 'analytics-summary';
+  container.setAttribute('aria-label', 'Summary metrics');
+  container.append(
+    renderSummaryCard('New suggestions', formatCount(summary.newSuggestions), 'Created in selected period'),
+    renderSummaryCard('Open requests', formatCount(summary.openRequests), 'Current non-closed requests'),
+    renderSummaryCard('Closed requests', formatCount(summary.closedRequests), 'Closed and updated in selected period'),
+    renderSummaryCard('Avg days to hold', formatDays(summary.averageDaysToHold), 'Created to first Polaris hold placement')
+  );
+  return container;
 }
 
 function renderSummaryCard(label, value, hint) {
-  return `
-    <article class="analytics-card">
-      <div class="analytics-card-label">${escapeHtml(label)}</div>
-      <div class="analytics-card-value">${escapeHtml(value)}</div>
-      <div class="analytics-card-hint">${escapeHtml(hint)}</div>
-    </article>
-  `;
+  const article = document.createElement('article');
+  article.className = 'analytics-card';
+
+  const labelDiv = document.createElement('div');
+  labelDiv.className = 'analytics-card-label';
+  labelDiv.textContent = label;
+
+  const valueDiv = document.createElement('div');
+  valueDiv.className = 'analytics-card-value';
+  valueDiv.textContent = value;
+
+  const hintDiv = document.createElement('div');
+  hintDiv.className = 'analytics-card-hint';
+  hintDiv.textContent = hint;
+
+  article.append(labelDiv, valueDiv, hintDiv);
+  return article;
+}
+
+function renderAnalyticsGrid(data) {
+  const grid = document.createElement('div');
+  grid.className = 'analytics-grid';
+  grid.append(
+    renderStageCounts(data.stageCounts),
+    renderAging(data.aging),
+    renderClosedReasons(data.closedReasons),
+    renderExceptions(data.exceptions)
+  );
+  return grid;
 }
 
 function renderStageCounts(stageCounts) {
@@ -224,28 +287,48 @@ function renderExceptions(exceptions) {
 }
 
 function renderPanel(title, hint, body) {
-  return `
-    <article class="analytics-panel">
-      <div class="analytics-panel-header">
-        <h3 class="h6 mb-1">${escapeHtml(title)}</h3>
-        <p class="text-muted small mb-0">${escapeHtml(hint)}</p>
-      </div>
-      ${body}
-    </article>
-  `;
+  const article = document.createElement('article');
+  article.className = 'analytics-panel';
+
+  const header = document.createElement('div');
+  header.className = 'analytics-panel-header';
+
+  const h3 = document.createElement('h3');
+  h3.className = 'h6 mb-1';
+  h3.textContent = title;
+
+  const p = document.createElement('p');
+  p.className = 'text-muted small mb-0';
+  p.textContent = hint;
+
+  header.append(h3, p);
+  article.append(header, body);
+  return article;
 }
 
 function renderRows(rows) {
-  return `
-    <div class="analytics-table" role="table">
-      ${(rows || []).map(row => `
-        <div class="analytics-row" role="row">
-          <div role="cell">${escapeHtml(row.label)}</div>
-          <strong role="cell">${escapeHtml(row.value)}</strong>
-        </div>
-      `).join('')}
-    </div>
-  `;
+  const table = document.createElement('div');
+  table.className = 'analytics-table';
+  table.setAttribute('role', 'table');
+
+  (rows || []).forEach(row => {
+    const rowDiv = document.createElement('div');
+    rowDiv.className = 'analytics-row';
+    rowDiv.setAttribute('role', 'row');
+
+    const labelCell = document.createElement('div');
+    labelCell.setAttribute('role', 'cell');
+    labelCell.textContent = row.label;
+
+    const valueCell = document.createElement('strong');
+    valueCell.setAttribute('role', 'cell');
+    valueCell.textContent = row.value;
+
+    rowDiv.append(labelCell, valueCell);
+    table.appendChild(rowDiv);
+  });
+
+  return table;
 }
 
 function bindAnalyticsControls(container) {

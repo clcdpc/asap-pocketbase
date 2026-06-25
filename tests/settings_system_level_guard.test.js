@@ -2,8 +2,10 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const apiSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/api.js'), 'utf8');
+const navSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/app/nav.js'), 'utf8');
 const settingsSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/settings.js'), 'utf8');
+const libraryContextSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/settings/library-context.js'), 'utf8');
+const saveControllerSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/js/settings/save-controller.js'), 'utf8');
 const stylesSource = fs.readFileSync(path.join(__dirname, '../pb_public/staff/styles.css'), 'utf8');
 
 function extractFunction(source, name) {
@@ -41,7 +43,7 @@ function makeSelect(initialValue) {
 }
 
 function loadSwitchHarness(confirmResult) {
-  const switchSource = extractFunction(settingsSource, 'switchLibraryContext');
+  const switchSource = extractFunction(libraryContextSource, 'switchLibraryContext');
   return new Function('makeSelect', 'confirmResult', `
     let currentLibraryContextOrgId = '2';
     let settingsDirty = true;
@@ -100,12 +102,12 @@ function loadSwitchHarness(confirmResult) {
 console.log('Running system-level settings guard tests...');
 
 assert.ok(
-  apiSource.includes("switchBtn.textContent = 'Switch to System Level';"),
+  navSource.includes("switchBtn.textContent = 'Switch to System Level';"),
   'System-only guard should use system-level language, not default language'
 );
 
 assert.ok(
-  apiSource.includes("await handleLibraryContextSwitch('system');"),
+  navSource.includes("await handleLibraryContextSwitch('system');"),
   'System-only guard should route clicks through the shared context switch helper'
 );
 
@@ -115,14 +117,14 @@ assert.ok(
 );
 
 assert.ok(
-  settingsSource.includes('const isSystemSave = currentLibraryContextOrgId === \'system\';'),
+  saveControllerSource.includes('const isSystemSave = currentLibraryContextOrgId === \'system\';'),
   'Save path should explicitly distinguish system saves from library saves'
 );
 assert.ok(
-  settingsSource.includes('if (isSystemSave)') &&
-    settingsSource.includes('libraryPayload.smtp = payload.smtp;') &&
-    settingsSource.includes('libraryPayload.polaris = payload.polaris;') &&
-    settingsSource.includes('libraryPayload.patronEmbedAllowedOrigins = payload.patronEmbedAllowedOrigins;'),
+  saveControllerSource.includes('if (isSystemSave)') &&
+    saveControllerSource.includes('libraryPayload.smtp = payload.smtp;') &&
+    saveControllerSource.includes('libraryPayload.polaris = payload.polaris;') &&
+    saveControllerSource.includes('libraryPayload.patronEmbedAllowedOrigins = payload.patronEmbedAllowedOrigins;'),
   'System-only payload keys should only be included for system-context saves'
 );
 

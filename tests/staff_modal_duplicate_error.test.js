@@ -20,11 +20,11 @@ function extractFunction(source, name) {
   throw new Error(`Could not parse ${name}`);
 }
 
-const source = fs.readFileSync(path.resolve(__dirname, '../pb_public/staff/js/modals.js'), 'utf8');
+const modalsUtilsSource = fs.readFileSync(path.resolve(__dirname, '../pb_public/staff/js/modals/utils.js'), 'utf8');
 const actionErrorMessage = new Function([
-  extractFunction(source, 'workflowStatusLabel'),
-  extractFunction(source, 'duplicateOpenRequestMessage'),
-  extractFunction(source, 'actionErrorMessage'),
+  extractFunction(modalsUtilsSource, 'workflowStatusLabel'),
+  extractFunction(modalsUtilsSource, 'duplicateOpenRequestMessage'),
+  extractFunction(modalsUtilsSource, 'actionErrorMessage'),
   'return actionErrorMessage;'
 ].join('\n'))();
 
@@ -74,7 +74,7 @@ const actionErrorMessage = new Function([
 
 {
   // Test confirmDuplicateOpenRequestClose logic
-  const source = fs.readFileSync(path.resolve(__dirname, '../pb_public/staff/js/modals.js'), 'utf8');
+  const confirmDuplicateSource = fs.readFileSync(path.resolve(__dirname, '../pb_public/staff/js/modals/confirm-duplicate.js'), 'utf8');
   
   // Mock dependencies for the test
   let showConfirmCalled = false;
@@ -90,7 +90,7 @@ const actionErrorMessage = new Function([
 
   const confirmDuplicateOpenRequestClose = new Function(
     'showConfirm', 'closeDuplicateRequest', 'showToast',
-    'return async (err, id) => ' + extractFunction(source, 'confirmDuplicateOpenRequestClose').slice(extractFunction(source, 'confirmDuplicateOpenRequestClose').indexOf('{'))
+    'return async (err, id) => ' + extractFunction(confirmDuplicateSource, 'confirmDuplicateOpenRequestClose').slice(extractFunction(confirmDuplicateSource, 'confirmDuplicateOpenRequestClose').indexOf('{'))
   )(mockShowConfirm, mockCloseDuplicateRequest, mockShowToast);
 
   const confirmed = await confirmDuplicateOpenRequestClose(null, 'test-id');

@@ -1,4 +1,5 @@
 import { authToken, setAuthToken } from './state.js';
+import { requestJson } from '../../shared/http.js';
 
 export class SessionExpiredError extends Error {
   constructor(message) {
@@ -13,34 +14,21 @@ export function getApiUrl(path) {
 }
 
 export async function request(path, options = {}) {
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = {};
   if (authToken) headers.Authorization = authToken;
 
-  const response = await fetch(getApiUrl(path), {
-    ...options,
-    headers: { ...headers, ...options.headers }
-  });
-
-  if (!response.ok) {
-    if (response.status === 401 && !path.endsWith('/login')) {
+  try {
+    return await requestJson(getApiUrl(path), {
+      ...options,
+      headers: { ...headers, ...(options.headers || {}) }
+    });
+  } catch (err) {
+    if (err.status === 401 && !path.endsWith('/login')) {
       setAuthToken('');
       throw new SessionExpiredError('Your session has expired. Please log in again.');
     }
-
-    let message = response.statusText;
-    let data = null;
-    try {
-      data = await response.json();
-      if (data && data.message) message = data.message;
-    } catch (err) {}
-
-    const err = new Error(message);
-    err.status = response.status;
-    err.response = data;
     throw err;
   }
-
-  return response.json();
 }
 
 export function loadPatronConfig(path) {
@@ -50,13 +38,13 @@ export function loadPatronConfig(path) {
 export function loginPatron(payload) {
   return request('/api/asap/patron/login', {
     method: 'POST',
-    body: JSON.stringify(payload)
+    body: payload
   });
 }
 
 export function submitSuggestion(payload) {
   return request('/api/asap/patron/suggestions', {
     method: 'POST',
-    body: JSON.stringify(payload)
+    body: payload
   });
 }

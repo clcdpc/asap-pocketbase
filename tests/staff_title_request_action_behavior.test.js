@@ -191,6 +191,122 @@ function testBibActionShortCircuits() {
   assert.strictEqual(calls.sideEffects, 0);
 }
 
+function testHoldPlacedRejectsChangedBibId() {
+  const calls = { prepareBibAction: 0, updateTitleRequest: 0 };
+  const staff = makeStaff({ username: "tester" });
+  const record = makeRecord({ id: "req1", status: "hold_placed", bibid: "12345" });
+
+  const recordsMock = {
+    STATUS: { PENDING_HOLD: "pending_hold", HOLD_PLACED: "hold_placed" },
+    normalizeStatus(value) {
+      return String(value || "");
+    },
+    updateTitleRequest() {
+      calls.updateTitleRequest += 1;
+      return record;
+    },
+    titleRequestToJson() {
+      return { id: "req1" };
+    }
+  };
+
+  const context = {
+    response: null,
+    id: "req1",
+    action: "",
+    nextStatus: "hold_placed",
+    data: { status: "hold_placed", bibid: "99999" },
+    record,
+    staff,
+    formatChanged: false,
+    originalFormat: "book"
+  };
+
+  const { staffTitleRequestAction } = loadWithMocks({
+    records: recordsMock,
+    additionalCopies: { createFromTitleRequest() { throw new Error("not expected"); }, toJson() { return {}; } },
+    formatClaimRules: { applyFormatClaimRule() {} },
+    contextModule: { titleRequestActionContext() { return context; } },
+    bibActions: {
+      finalizeTitleRequestCloseReason() {},
+      prepareTitleRequestBibAction() {
+        calls.prepareBibAction += 1;
+        return null;
+      }
+    },
+    sideEffects: {
+      handleAlreadyOwnOrRejectSideEffects() {},
+      sendPurchaseReminderIfRequested() { return null; },
+      maybeRunImmediatePromoter() {}
+    }
+  });
+
+  const result = staffTitleRequestAction(makeEvent());
+  assert.strictEqual(result.code, 400);
+  assert.strictEqual(result.payload.message, "BIB ID cannot be changed after the hold has been placed.");
+  assert.strictEqual(record.get("bibid"), "12345");
+  assert.strictEqual(calls.prepareBibAction, 0);
+  assert.strictEqual(calls.updateTitleRequest, 0);
+}
+
+function testHoldPlacedRejectsClearedBibId() {
+  const calls = { prepareBibAction: 0, updateTitleRequest: 0 };
+  const staff = makeStaff({ username: "tester" });
+  const record = makeRecord({ id: "req1", status: "hold_placed", bibid: "12345" });
+
+  const recordsMock = {
+    STATUS: { PENDING_HOLD: "pending_hold", HOLD_PLACED: "hold_placed" },
+    normalizeStatus(value) {
+      return String(value || "");
+    },
+    updateTitleRequest() {
+      calls.updateTitleRequest += 1;
+      return record;
+    },
+    titleRequestToJson() {
+      return { id: "req1" };
+    }
+  };
+
+  const context = {
+    response: null,
+    id: "req1",
+    action: "silentClose",
+    nextStatus: "closed",
+    data: { status: "closed", bibid: "" },
+    record,
+    staff,
+    formatChanged: false,
+    originalFormat: "book"
+  };
+
+  const { staffTitleRequestAction } = loadWithMocks({
+    records: recordsMock,
+    additionalCopies: { createFromTitleRequest() { throw new Error("not expected"); }, toJson() { return {}; } },
+    formatClaimRules: { applyFormatClaimRule() {} },
+    contextModule: { titleRequestActionContext() { return context; } },
+    bibActions: {
+      finalizeTitleRequestCloseReason() {},
+      prepareTitleRequestBibAction() {
+        calls.prepareBibAction += 1;
+        return null;
+      }
+    },
+    sideEffects: {
+      handleAlreadyOwnOrRejectSideEffects() {},
+      sendPurchaseReminderIfRequested() { return null; },
+      maybeRunImmediatePromoter() {}
+    }
+  });
+
+  const result = staffTitleRequestAction(makeEvent());
+  assert.strictEqual(result.code, 400);
+  assert.strictEqual(result.payload.message, "BIB ID cannot be changed after the hold has been placed.");
+  assert.strictEqual(record.get("bibid"), "12345");
+  assert.strictEqual(calls.prepareBibAction, 0);
+  assert.strictEqual(calls.updateTitleRequest, 0);
+}
+
 function testAutoClaimUnclaimedSuggestion() {
   const calls = { setManualClaim: 0, save: 0, recordEvent: 0, updateTitleRequest: 0, sideEffects: 0 };
   const staff = makeStaff({ id: "staff1", username: "tester", displayName: "Tester" });
@@ -528,6 +644,8 @@ const originalCaches = {
 try {
   testPendingHoldRequiresBibId();
   testBibActionShortCircuits();
+  testHoldPlacedRejectsChangedBibId();
+  testHoldPlacedRejectsClearedBibId();
   testAutoClaimUnclaimedSuggestion();
   testAutoClaimTransfer();
   testAutoClaimDoesNotDuplicate();

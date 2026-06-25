@@ -7,12 +7,16 @@ global.Record = function Record() {
 };
 
 const routes = require("../lib/staff_routes.js");
+const emailConfig = require("../lib/config/emails.js");
 
 function record(id, fields) {
   return {
     id,
     get: function (key) {
       return fields[key];
+    },
+    getBool: function (key) {
+      return !!fields[key];
     },
     set: function (key, value) {
       fields[key] = value;
@@ -188,6 +192,70 @@ test("deletes former auto-reject template after workflow switches to standard", 
   routes.saveRejectionTemplates(app, "system", "", []);
   assert.strictEqual(workflow.get("outstandingTimeoutRejectionTemplate"), "");
   assert.deepStrictEqual(deleted, ["tpl_custom"]);
+});
+
+test("library deletion of an inherited rejection template persists as an override", function () {
+  const org = record("org_rec_100", { organizationId: "100" });
+  const systemTemplate = record("tpl_system", {
+    scope: "system",
+    name: "System reason",
+    subject: "System subject",
+    body: "System body",
+    enabled: true,
+    sortOrder: 1,
+  });
+  const rows = [systemTemplate];
+  const saved = [];
+  const app = {
+    findCollectionByNameOrId: function (name) {
+      return { name };
+    },
+    findFirstRecordByData: function (collection, field, value) {
+      if (collection === "polaris_organizations" && field === "organizationId" && String(value) === "100") return org;
+      throw new Error("not found");
+    },
+    findRecordsByFilter: function (collection, filter, sort, limit, offset, params) {
+      if (collection === "rejection_templates") {
+        if (filter.indexOf("scope = 'system'") >= 0) {
+          return rows.filter(function (row) {
+            return row.get("scope") === "system" && row.getBool("enabled") !== false;
+          });
+        }
+        if (filter.indexOf("scope = 'library'") >= 0 && params && params.org === org.id) {
+          return rows.filter(function (row) {
+            return row.get("scope") === "library" && row.get("libraryOrganization") === org.id && (filter.indexOf("enabled = true") < 0 || row.getBool("enabled") !== false);
+          });
+        }
+      }
+      if (collection === "email_templates") return [];
+      if (collection === "workflow_settings") return [];
+      return [];
+    },
+    findFirstRecordByFilter: function () {
+      throw new Error("not found");
+    },
+    findRecordById: function () {
+      throw new Error("not found");
+    },
+    save: function (row) {
+      if (!row.id) row.id = "library_hidden_tpl";
+      if (rows.indexOf(row) === -1) rows.push(row);
+      saved.push(row);
+    },
+    delete: function (row) {
+      const index = rows.indexOf(row);
+      if (index >= 0) rows.splice(index, 1);
+    },
+  };
+
+  routes.saveRejectionTemplates(app, "library", "100", []);
+
+  assert.strictEqual(saved.length, 1, "Expected a library override marker to be saved");
+  assert.strictEqual(saved[0].get("scope"), "library");
+  assert.strictEqual(saved[0].get("libraryOrganization"), org.id);
+  assert.strictEqual(saved[0].get("sourceTemplateId"), "tpl_system");
+  assert.strictEqual(saved[0].getBool("enabled"), false);
+  assert.deepStrictEqual(emailConfig.emailsFor(app, "100").rejection_templates, []);
 });
 
 console.log(`Tests finished: ${passed} passed, ${failed} failed.`);

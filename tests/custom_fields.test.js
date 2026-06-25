@@ -1,8 +1,12 @@
 const assert = require("assert");
 const customFields = require("../lib/custom_fields.js");
 
+function byteJson(value) {
+  return Array.from(Buffer.from(JSON.stringify(value), "utf8"));
+}
+
 function testNormalizeDefinitions() {
-  const defs = customFields.normalizeDefinitions([
+  const defs = customFields.normalizeDefinitions(byteJson([
     {
       key: "Platform!",
       label: " Platform ",
@@ -17,7 +21,7 @@ function testNormalizeDefinitions() {
       ]
     },
     { key: "bad", label: "", type: "date" }
-  ]);
+  ]));
 
   assert.deepStrictEqual(defs.map(d => d.key), ["platform"]);
   assert.strictEqual(defs[0].label, "Platform");
