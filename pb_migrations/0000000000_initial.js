@@ -678,7 +678,7 @@ migrate((app) => {
     staffDomain: "",
     adminUser: "",
     adminPassword: "",
-    overridePassword: "admin",
+    overridePassword: "",
     langId: "1033",
     appId: "100",
     orgId: "1",

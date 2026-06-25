@@ -18,6 +18,10 @@
 **Vulnerability:** Similar to role updates, a standard `admin` user could delete a `super_admin`'s account because the `staffUserDelete` endpoint only verified that at least one super admin remains, rather than strictly requiring `super_admin` privileges to delete a `super_admin` account.
 **Learning:** Role-based access control (RBAC) must check both the user *performing* the action and the *target* user of the action. Modifying or deleting elevated roles requires elevated authorization.
 **Prevention:** Ensure all endpoints that perform state-changing operations on user accounts strictly validate the actor's privileges against the target object's sensitivity tier.
+## 2024-06-22 - Prevent Hardcoded Backdoor Override Passwords
+**Vulnerability:** The `overridePassword` field in `lib/config/polaris.js` and `pb_migrations/0000000000_initial.js` was hardcoded to "admin". This backdoor password allowed any staff account to login if the system defaults were used.
+**Learning:** Hardcoding backup or override passwords in configuration logic and default migrations creates a latent backdoor, significantly increasing the risk of unauthorized access.
+**Prevention:** Default security-related backup fields like `overridePassword` to an empty string (`""`) so that the feature is disabled by default, and require intentional, manual configuration to enable it.
 ## 2026-06-20 - Prevent XSS in Polaris Organizations Settings
 **Vulnerability:** `org.organizationId` was directly interpolated into HTML without escaping in `pb_public/staff/js/settings-polaris.js`.
 **Learning:** Even internal or synchronized IDs can contain characters that break HTML when displayed dynamically in the frontend if unescaped.
