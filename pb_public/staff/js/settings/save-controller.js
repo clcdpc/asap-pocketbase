@@ -96,6 +96,9 @@ export async function saveSettings(options = {}) {
     if (options.clearDelay !== 0) {
       setTimeout(() => msg.textContent = '', options.clearDelay || 3000);
     }
+    // Clear the data-loaded flag so library participation checkboxes re-render after save
+    const libCheckboxContainer = document.getElementById('enabled-libraries-checkbox-container');
+    if (libCheckboxContainer) libCheckboxContainer.removeAttribute('data-loaded');
     await refreshSettingsView({ showErrors: false });
     await loadStaffConfig();
     loadStaffUsers();
@@ -122,6 +125,8 @@ export function discardLibrarySettingsChanges() {
   if (!lastSavedLibrarySettingsSnapshot || lastSavedLibrarySettingsOrgId !== (currentLibraryContextOrgId || 'system')) return;
   setSettingsLoading(true);
   try {
+    const libCheckboxContainer = document.getElementById('enabled-libraries-checkbox-container');
+    if (libCheckboxContainer) libCheckboxContainer.removeAttribute('data-loaded');
     applyLibrarySettingsToForm(cloneLibrarySettingsSnapshot(lastSavedLibrarySettingsSnapshot));
     captureSettingsBaseline();
     markSettingsClean('clean');
