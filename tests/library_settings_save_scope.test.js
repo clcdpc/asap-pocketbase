@@ -57,7 +57,18 @@ function createMockApp() {
         if (collectionName === 'patron_settings_overrides' && patronOverride) return patronOverride;
         throw new Error('not found');
       },
-      findRecordsByFilter() { return []; },
+      findRecordsByFilter(collectionName, filter, sort, limit, offset, params) {
+        if (collectionName === 'email_templates' && filter.includes("templateKey = {:k")) {
+            return [
+                makeRecord('email-existing-1', { scope: 'library', libraryOrganization: org.id, templateKey: 'suggestion_submitted' }),
+                makeRecord('email-existing-2', { scope: 'library', libraryOrganization: org.id, templateKey: 'purchase_approved' }),
+                makeRecord('email-existing-3', { scope: 'library', libraryOrganization: org.id, templateKey: 'already_owned' }),
+                makeRecord('email-existing-4', { scope: 'library', libraryOrganization: org.id, templateKey: 'rejected' }),
+                makeRecord('email-existing-5', { scope: 'library', libraryOrganization: org.id, templateKey: 'hold_placed' })
+            ];
+        }
+        return [];
+      },
       findRecordById() { throw new Error('not found'); },
       save(record) {
         if ((record.get('orgId') || '') === '100') patronOverride = record;
