@@ -157,7 +157,7 @@ export function renderRejectionTemplates() {
         </div>
         <div class="form-group mb-0">
           <label class="template-editor-label">Body</label>
-          <textarea class="form-control template-editor-textarea" data-field="body" data-index="${index}" rows="5">${escapeAttr(template.body || '')}</textarea>
+          <textarea class="form-control template-editor-textarea js-update-rejection-template" data-field="body" data-index="${index}" rows="5">${escapeAttr(template.body || '')}</textarea>
         </div>
       </div>
     `;
