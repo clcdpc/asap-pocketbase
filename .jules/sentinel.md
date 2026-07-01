@@ -26,3 +26,7 @@
 **Vulnerability:** `org.organizationId` was directly interpolated into HTML without escaping in `pb_public/staff/js/settings-polaris.js`.
 **Learning:** Even internal or synchronized IDs can contain characters that break HTML when displayed dynamically in the frontend if unescaped.
 **Prevention:** Wrap all variable substitutions in template literals with `escapeAttr()` when injected into innerHTML.
+## 2024-05-18 - Prevent DOM-based XSS by removing static innerHTML usage
+**Vulnerability:** While not immediately exploitable, `settings-users.js` used `.innerHTML` to insert static UI states (like loading messages and icons). This is a bad pattern because future developers might accidentally introduce dynamic user input into these strings, creating a DOM-based XSS vulnerability.
+**Learning:** Even for static strings, using `.innerHTML` violates defense-in-depth principles and creates fragile code. Safe DOM APIs should be the default for all UI construction.
+**Prevention:** Replace `.innerHTML` with secure DOM manipulation methods like `document.createElement`, `replaceChildren`, and `textContent` for constructing UI elements, even when the content is currently static.
