@@ -26,3 +26,8 @@
 **Vulnerability:** `org.organizationId` was directly interpolated into HTML without escaping in `pb_public/staff/js/settings-polaris.js`.
 **Learning:** Even internal or synchronized IDs can contain characters that break HTML when displayed dynamically in the frontend if unescaped.
 **Prevention:** Wrap all variable substitutions in template literals with `escapeAttr()` when injected into innerHTML.
+
+## 2024-07-04 - Prevent XSS via innerHTML with unescaped context variables
+**Vulnerability:** In `pb_public/staff/js/modals/edit-form.js`, `innerHTML` was used in functions like `renderPurchaseReminderOption`, `renderEditLeapBibLink` and `renderEditMetadata` to inject markup using runtime data and user input (like the email variable). Even when escaped, directly assigning to `innerHTML` when interpolating dynamic data can introduce unexpected XSS vulnerabilities or markup issues if escaping fails or misses edge cases.
+**Learning:** You shouldn't rely solely on string escaping when creating dynamic HTML content, especially inside the UI code. The best practice, particularly mandated by this project's security guidelines, is to construct DOM elements natively (e.g. `document.createElement`, `.textContent`, `appendChild()`) instead of interpolating strings.
+**Prevention:** Avoid `innerHTML` entirely for new or refactored UI code unless the content is strictly static and developer-authored. For all other cases, use safe DOM construction APIs to build the required markup dynamically.
