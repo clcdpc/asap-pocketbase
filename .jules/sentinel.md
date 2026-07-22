@@ -26,3 +26,7 @@
 **Vulnerability:** `org.organizationId` was directly interpolated into HTML without escaping in `pb_public/staff/js/settings-polaris.js`.
 **Learning:** Even internal or synchronized IDs can contain characters that break HTML when displayed dynamically in the frontend if unescaped.
 **Prevention:** Wrap all variable substitutions in template literals with `escapeAttr()` when injected into innerHTML.
+## 2026-06-25 - Prevent Information Disclosure in Staff Login Errors
+**Vulnerability:** The `staffLogin` route previously threw raw exceptions (e.g., from network failures, database errors, or explicitly thrown `UnauthorizedError`s) which would bubble up to the client because they were not wrapped in a `try...catch` block. This could leak internal system details, IP addresses, or Polaris error specifics.
+**Learning:** High-level route handlers must catch all exceptions to prevent raw error strings from leaking to the end user.
+**Prevention:** Wrapped the core logic of `staffLogin` in `lib/staff/auth_routes.js` with a `try...catch` block. Valid validation errors and unauthorized errors are logged securely via `e.app.logger()`, and a sanitized, generic error message (e.g., "Invalid credentials or login failed. Please try again.") is returned to the user with a `401` status code.
