@@ -26,3 +26,8 @@
 **Vulnerability:** `org.organizationId` was directly interpolated into HTML without escaping in `pb_public/staff/js/settings-polaris.js`.
 **Learning:** Even internal or synchronized IDs can contain characters that break HTML when displayed dynamically in the frontend if unescaped.
 **Prevention:** Wrap all variable substitutions in template literals with `escapeAttr()` when injected into innerHTML.
+
+## 2026-07-25 - Add HTTP Security Headers
+**Vulnerability:** The application did not enforce standard HTTP security headers (X-Content-Type-Options, X-XSS-Protection, X-Frame-Options, Strict-Transport-Security) on API responses.
+**Learning:** PocketBase's `routerUse` is a great place to globally apply security headers for all API and custom routes.
+**Prevention:** Ensure new PocketBase applications include standard security headers in the global router middleware to provide defense-in-depth against MIME sniffing, clickjacking, and enforce secure transport.
