@@ -4,6 +4,7 @@ import { normalizeExternalSearchUrlTemplate, sortAuthorsByLastName } from './uti
 import { collectFormatLabels, collectAvailableFormats, collectFormatOrder, collectFormatClaimRules } from '../settings-formats.js';
 import { collectDuplicateStatusLabels } from './duplicate-labels.js';
 import { collectSettingsPolaris, collectEnabledLibraryIds } from './polaris-fields.js';
+import { collectAllowedPatronCodeIds, getPatronCodeEligibilityEnabled } from './patron-codes.js';
 import { collectOptionList, collectPatronFormatRules } from '../settings-ui.js';
 import { collectAdditionalFieldDefinitions } from '../settings-additional-fields.js';
 
@@ -112,8 +113,13 @@ function _serializeSettingsState(validate = false) {
   const externalSearch2UrlTemplate = normalizeExternalSearchUrlTemplate(getFieldValue('wf-external-search-2-url-template').trim() || 'https://www.goodreads.com/search?q={{title}}');
   const externalSearch3UrlTemplate = normalizeExternalSearchUrlTemplate(getFieldValue('wf-external-search-3-url-template').trim() || 'https://www.worldcat.org/search?q={{title}}');
   const externalSearch4UrlTemplate = normalizeExternalSearchUrlTemplate(getFieldValue('wf-external-search-4-url-template'));
+  const patronCodeEligibilityEnabled = getPatronCodeEligibilityEnabled();
+  const allowedPatronCodeIds = collectAllowedPatronCodeIds();
 
   if (validate) {
+    if (patronCodeEligibilityEnabled && !allowedPatronCodeIds) {
+      throw new Error('Select at least one allowed patron code when patron code access is limited.');
+    }
     setFieldValue('wf-external-search-1-url-template', externalSearch1UrlTemplate);
     setFieldValue('wf-external-search-2-url-template', externalSearch2UrlTemplate);
     setFieldValue('wf-external-search-3-url-template', externalSearch3UrlTemplate);
@@ -143,6 +149,9 @@ function _serializeSettingsState(validate = false) {
     autoPromote: getFieldChecked('polaris-auto-promote'),
     allowPatronAutoholdOptOut: getFieldChecked('allow-patron-autohold-opt-out'),
     allowAnyRegisteredCardLogin: getFieldChecked('allow-any-registered-card-login'),
+    patronCodeEligibilityEnabled: patronCodeEligibilityEnabled,
+    allowedPatronCodeIds: allowedPatronCodeIds,
+    patronCodeEligibilityMessage: getFieldValue('patron-code-eligibility-message').trim() || 'Your library card is not eligible to use this suggestion service.',
     externalSearch1Enabled: getFieldChecked('wf-external-search-1-enabled'),
     externalSearch1Label: getFieldValue('wf-external-search-1-label').trim() || 'Search Amazon',
     externalSearch1UrlTemplate: externalSearch1UrlTemplate,

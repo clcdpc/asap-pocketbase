@@ -348,6 +348,48 @@ body {
   overflow-y: auto;
 }
 
+.patron-code-mode-options {
+  display: grid;
+  gap: 12px;
+}
+
+.patron-code-mode-options .custom-control {
+  min-height: 44px;
+}
+
+.patron-code-accordion {
+  box-shadow: none;
+  margin-top: 12px;
+}
+
+.patron-code-checklist-toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.patron-code-checklist {
+  border: 1px solid var(--asap-color-border);
+  border-radius: var(--asap-radius-sm);
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.patron-code-checklist-option {
+  border-bottom: 1px solid #e9ecef;
+  padding: 12px 14px;
+}
+
+.patron-code-checklist-option:last-child {
+  border-bottom: none;
+}
+
+.patron-code-checklist-option .custom-control-label {
+  cursor: pointer;
+  display: block;
+  line-height: 1.35;
+}
+
 .settings-number-sm {
   width: 100px;
 }

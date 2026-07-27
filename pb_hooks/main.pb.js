@@ -191,6 +191,10 @@ routerAdd("POST", "/api/asap/staff/organizations/sync", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffSyncOrganizations(e);
 });
 
+routerAdd("POST", "/api/asap/staff/patron-codes/sync", (e) => {
+  return require(`${__hooks}/../lib/staff_routes.js`).staffSyncPatronCodes(e);
+});
+
 routerAdd("POST", "/api/asap/staff/material-types/sync", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffMaterialTypesSync(e);
 });

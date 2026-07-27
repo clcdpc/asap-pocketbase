@@ -16,6 +16,7 @@ assert.ok(
 [
   "accordion-patron-branding",
   "accordion-patron-login-text",
+  "accordion-patron-code-selection",
   "accordion-patron-suggestion-messages",
   "accordion-patron-publication-options",
   "accordion-patron-format-display",

@@ -10,6 +10,7 @@ const originalRequire = Module.prototype.require;
 let configMock = {
   getSettings: () => ({ enabledLibraryOrgIds: "1,2" }),
   librarySettings: (app, orgId) => ({
+    workflow: {},
     ui_text: {
       systemNotEnabledMessage: "{{library}} does not currently participate in this suggestion service."
     }
@@ -156,6 +157,7 @@ runTest('participation warning replaces "Your library" for backward compatibilit
   });
   
   configMock.librarySettings = () => ({
+    workflow: {},
     ui_text: {
       systemNotEnabledMessage: "Your library does not currently participate in this suggestion service."
     }
@@ -176,6 +178,7 @@ runTest('participation warning falls back to "Your library" if name is missing',
   });
   
   configMock.librarySettings = () => ({
+    workflow: {},
     ui_text: {
       systemNotEnabledMessage: "{{library}} does not currently participate in this suggestion service."
     }
@@ -217,6 +220,87 @@ runTest('pickup context load failure does not block valid login', () => {
     currentPreferenceAllowed: false,
     pickupBranchWarning: ""
   });
+});
+
+runTest('patron code allow-list permits matching PatronCodeID', () => {
+  polarisMock.authenticatePatron = () => ({
+    LibraryOrgID: 2,
+    LibraryOrgName: "Anytown Library",
+    PatronOrgID: "2",
+    PatronCodeID: 91
+  });
+  configMock.getSettings = () => ({ enabledLibraryOrgIds: "2,3" });
+  configMock.librarySettings = () => ({
+    workflow: {
+      patronCodeEligibilityEnabled: true,
+      allowedPatronCodeIds: "91,92",
+      patronCodeEligibilityMessage: "Not eligible."
+    },
+    ui_text: {
+      systemNotEnabledMessage: "{{library}} does not currently participate in this suggestion service."
+    }
+  });
+
+  const { e, getResponse } = createEventMock({ barcode: '123', pin: '456' });
+  patronRoutes.patronLogin(e);
+  const { status } = getResponse();
+  assert.strictEqual(status, 200);
+});
+
+runTest('patron code allow-list blocks non-matching PatronCodeID', () => {
+  polarisMock.authenticatePatron = () => ({
+    LibraryOrgID: 2,
+    LibraryOrgName: "Anytown Library",
+    PatronOrgID: "2",
+    PatronCodeID: "44"
+  });
+  configMock.getSettings = () => ({ enabledLibraryOrgIds: "2,3" });
+  configMock.librarySettings = () => ({
+    workflow: {
+      patronCodeEligibilityEnabled: true,
+      allowedPatronCodeIds: "91,92",
+      patronCodeEligibilityMessage: "This card cannot use suggestions."
+    },
+    ui_text: {
+      systemNotEnabledMessage: "{{library}} does not currently participate in this suggestion service."
+    }
+  });
+
+  const { e, getResponse } = createEventMock({ barcode: '123', pin: '456' });
+  patronRoutes.patronLogin(e);
+  const { status, payload } = getResponse();
+  assert.strictEqual(status, 403);
+  assert.strictEqual(payload.message, "This card cannot use suggestions.");
+});
+
+runTest('patron code eligibility allows login when Polaris omits PatronCodeID', () => {
+  let warned = false;
+  polarisMock.authenticatePatron = () => ({
+    LibraryOrgID: 2,
+    LibraryOrgName: "Anytown Library",
+    PatronOrgID: "2"
+  });
+  configMock.getSettings = () => ({ enabledLibraryOrgIds: "2,3" });
+  configMock.librarySettings = () => ({
+    workflow: {
+      patronCodeEligibilityEnabled: true,
+      allowedPatronCodeIds: "91",
+      patronCodeEligibilityMessage: "Not eligible."
+    },
+    ui_text: {
+      systemNotEnabledMessage: "{{library}} does not currently participate in this suggestion service."
+    }
+  });
+
+  const { e, getResponse } = createEventMock({ barcode: '123', pin: '456' });
+  e.app.logger = () => ({
+    error: () => {},
+    warn: () => { warned = true; }
+  });
+  patronRoutes.patronLogin(e);
+  const { status } = getResponse();
+  assert.strictEqual(status, 200);
+  assert.strictEqual(warned, true);
 });
 
 console.log(`\nTests finished: ${passed} passed, ${failed} failed.`);

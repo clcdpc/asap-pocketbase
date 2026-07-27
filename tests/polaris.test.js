@@ -441,6 +441,40 @@ try {
   failed++;
 }
 
+// Test 12: patron basicdata normalizes PatronCodeID permutations
+try {
+  const staff = { AccessToken: "mock_token", AccessSecret: "mock_secret" };
+  const cases = [
+    { value: 91, expected: "91" },
+    { value: "92", expected: "92" },
+    { value: null, expected: "" },
+    { value: [57, 51], expected: "93" }
+  ];
+
+  for (let i = 0; i < cases.length; i++) {
+    httpSendResult = {
+      statusCode: 200,
+      json: {
+        PatronBasicData: {
+          PatronID: "p" + i,
+          Barcode: "b" + i,
+          PatronCodeID: cases[i].value,
+          PatronCode: "Code " + i
+        }
+      }
+    };
+    const patron = polaris.lookupPatron(staff, "b" + i);
+    assert.strictEqual(patron.PatronCodeID, cases[i].expected);
+    assert.strictEqual(patron.PatronCode, "Code " + i);
+  }
+
+  console.log('✅ Test case 12 (PatronCodeID normalization) passed');
+  passed++;
+} catch (err) {
+  console.error('❌ Test case 12 failed:', err.stack);
+  failed++;
+}
+
 console.log(`\nTests finished: ${passed} passed, ${failed} failed.`);
 
 if (failed > 0) {

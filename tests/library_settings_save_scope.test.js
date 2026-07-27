@@ -89,7 +89,10 @@ const result = staffRoutes.updateLibrarySettings(makeEvent(app, {
   },
   workflow: {
     additionalCopyTimeoutEnabled: true,
-    additionalCopyTimeoutDays: 21
+    additionalCopyTimeoutDays: 21,
+    patronCodeEligibilityEnabled: true,
+    allowedPatronCodeIds: '1,14,28',
+    patronCodeEligibilityMessage: 'This card is not eligible.'
   },
   smtp: { host: 'should-not-save.example.org', port: 2525 },
   staffUrl: 'https://example.org/staff'
@@ -102,6 +105,9 @@ assert.deepStrictEqual(override.get('publicationOptions'), [{ id: 'local', label
 assert.strictEqual(systemUi.get('publicationOptions'), JSON.stringify([{ id: 'new', label: 'New', enabled: true, sortOrder: 10 }]));
 assert.strictEqual(workflowLibrary.get('additionalCopyTimeoutEnabled'), true);
 assert.strictEqual(workflowLibrary.get('additionalCopyTimeoutDays'), 21);
+assert.strictEqual(workflowLibrary.get('patronCodeEligibilityEnabled'), true);
+assert.strictEqual(workflowLibrary.get('allowedPatronCodeIds'), '1,14,28');
+assert.strictEqual(workflowLibrary.get('patronCodeEligibilityMessage'), 'This card is not eligible.');
 assert.strictEqual(deleted.length, 5, 'Expected blank library email templates to clear template overrides');
 
 console.log('All library settings save scope tests passed!');

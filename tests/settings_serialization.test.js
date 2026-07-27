@@ -22,7 +22,9 @@ function extractFunction(name) {
   throw new Error("Could not extract function " + name);
 }
 
-function loadSettingsLogic() {
+function loadSettingsLogic(options = {}) {
+  const eligibilityEnabled = !!options.eligibilityEnabled;
+  const allowedPatronCodeIds = String(options.allowedPatronCodeIds || "");
   const mocks = `
     const currentLibraryContextOrgId = 'system';
     const leapBibUrlPattern = '';
@@ -69,6 +71,9 @@ function loadSettingsLogic() {
     function sortAuthorsByLastName(l) { return l; }
     function collectSettingsPolaris() { return {}; }
     function collectEnabledLibraryIds() { return []; }
+    function collectAllowedPatronCodeIds() { return ${JSON.stringify(allowedPatronCodeIds)}; }
+    function getPatronCodeEligibilityEnabled() { return ${JSON.stringify(eligibilityEnabled)}; }
+    function setPatronCodeEligibilityMode() {}
     function renderFormatSettings() {}
     function updateModalFormatDropdowns() {}
     function renderOptionListEditor() {}
@@ -78,6 +83,8 @@ function loadSettingsLogic() {
     function setCurrentPatronFieldConfig() {}
     function updatePublicationOptionsUi() {}
     function renderDuplicateStatusLabelSettings() {}
+    function renderPatronCodeEligibilityOptions() {}
+    function updatePatronCodesStatusUi() {}
     
     const workflowSettings = {};
     const document = {
@@ -123,6 +130,16 @@ try {
 
   console.log("  Testing populatePatronUiForms...");
   logic.populatePatronUiForms({});
+
+  console.log("  Testing restricted patron code validation...");
+  const restrictedLogic = loadSettingsLogic({ eligibilityEnabled: true, allowedPatronCodeIds: "" });
+  assert.throws(
+    () => restrictedLogic._serializeSettingsState(true),
+    /Select at least one allowed patron code/
+  );
+  const selectedLogic = loadSettingsLogic({ eligibilityEnabled: true, allowedPatronCodeIds: "1,14" });
+  assert.strictEqual(selectedLogic._serializeSettingsState(true).patronCodeEligibilityEnabled, true);
+  assert.strictEqual(selectedLogic._serializeSettingsState(true).allowedPatronCodeIds, "1,14");
 
   console.log("PASS: Settings logic is sound.");
 } catch (err) {

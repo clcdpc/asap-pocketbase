@@ -7,6 +7,7 @@ import { renderOptionListEditor, renderPatronFormatRulesEditor, updatePublicatio
 import { populateEmailTemplateForms } from '../settings-templates.js';
 import { renderAdditionalFieldsEditor } from '../settings-additional-fields.js';
 import { renderLibraryParticipationCheckboxes } from './polaris-fields.js';
+import { renderPatronCodeEligibilityOptions, setPatronCodeEligibilityMode, updatePatronCodesStatusUi } from './patron-codes.js';
 import { updateSaveButtonText } from './save-ui.js';
 
 function patronPortalUrl(orgId, embed) {
@@ -165,6 +166,11 @@ export function applyLibrarySettingsToForm(settings) {
       const message = settings.organizationSync.error || settings.organizationSync.message || '';
       updateOrganizationsStatusUi(state, message);
     }
+    if (settings.patronCodesSync) {
+      const state = settings.patronCodesSync.status || 'not_loaded';
+      const message = settings.patronCodesSync.error || settings.patronCodesSync.message || '';
+      updatePatronCodesStatusUi(state, message);
+    }
     updateSaveButtonText();
     if (!settingsLoading) {
       activateSettingsSection(currentSettingsSection, { updateHash: false });
@@ -216,6 +222,9 @@ export function populateWorkflowForms(wf) {
   setFieldChecked('polaris-auto-promote', !!wf.autoPromote);
   setFieldChecked('allow-patron-autohold-opt-out', !!wf.allowPatronAutoholdOptOut);
   setFieldChecked('allow-any-registered-card-login', !!wf.allowAnyRegisteredCardLogin);
+  setPatronCodeEligibilityMode(!!wf.patronCodeEligibilityEnabled);
+  setFieldValue('patron-code-eligibility-message', wf.patronCodeEligibilityMessage || 'Your library card is not eligible to use this suggestion service.');
+  renderPatronCodeEligibilityOptions(wf.allowedPatronCodeIds || '');
   const orgId = currentLibraryContextOrgId;
   const loginUrl = `${window.location.origin}/patron/?libraryOrgId=${encodeURIComponent(orgId)}`;
   const linkEl = document.getElementById('any-card-login-url');
@@ -332,4 +341,3 @@ export function populatePatronUiForms(uiText) {
   renderPatronFormatRulesEditor(uiText.formatRules);
   updatePublicationOptionsUi(uiText.publicationOptions);
 }
-

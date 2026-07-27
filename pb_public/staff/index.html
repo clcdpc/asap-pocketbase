@@ -289,8 +289,8 @@
                       <div class="card h-100">
                         <div class="card-body">
                           <h5 class="card-title">First-time setup path</h5>
-                          <p class="card-text text-muted">Confirm Polaris credentials, sync organizations, then review
-                            staff access so users are scoped to the correct parent library.</p>
+                          <p class="card-text text-muted">Confirm Polaris credentials, sync organizations and patron codes,
+                            then review staff access so users are scoped to the correct parent library.</p>
                         </div>
                       </div>
                     </div>
@@ -405,12 +405,15 @@
                     <span id="polaris-test-result" class="ml-2"></span>
                   </div>
                   <div class="settings-maintenance mt-4">
-                    <div class="font-weight-bold mb-1">Organization sync</div>
-                    <p class="small text-muted mb-2">Polaris organizations sync automatically once a day at 2 AM server
-                      time. Use this manual sync after changing Polaris organizations or updating these credentials.</p>
-                    <button type="button" id="btn-sync-organizations" class="btn btn-outline-info btn-sm">Sync Polaris
-                      organizations now</button>
+                    <div class="font-weight-bold mb-1">Polaris reference data</div>
+                    <p class="small text-muted mb-2">Polaris organizations and patron codes sync automatically once a day
+                      at 2 AM server time. Use this manual sync after changing either list or updating these credentials.</p>
+                    <button type="button" id="btn-sync-organizations" class="btn btn-outline-info btn-sm">Sync organizations
+                      and patron codes now</button>
                     <span id="organizations-sync-result" class="ml-2"></span>
+                    <div id="patron-codes-status-message" class="alert alert-info small mt-3 mb-0">
+                      Polaris patron codes have not been loaded yet.
+                    </div>
                   </div>
                   <div class="settings-maintenance mt-4 border-top pt-3">
                     <div class="font-weight-bold mb-1">Material type cache</div>
@@ -891,6 +894,60 @@
                              </div>
                              <small class="form-text text-muted">Let patrons choose to decline automatic hold placement when submitting a suggestion. If unchecked, all suggestions default to automatic holds.</small>
                            </div>
+                          </div>
+                          <fieldset class="form-group mb-3">
+                            <legend class="h6 mb-2">Patron code access</legend>
+                            <div class="patron-code-mode-options">
+                              <div class="custom-control custom-radio">
+                                <input type="radio" class="custom-control-input" id="patron-code-access-all"
+                                  name="patron-code-access-mode" value="all">
+                                <label class="custom-control-label font-weight-bold" for="patron-code-access-all">Allow all patron codes</label>
+                                <small class="form-text text-muted">Any patron with a valid eligible library card may log in.</small>
+                              </div>
+                              <div class="custom-control custom-radio">
+                                <input type="radio" class="custom-control-input" id="patron-code-access-restricted"
+                                  name="patron-code-access-mode" value="restricted">
+                                <label class="custom-control-label font-weight-bold" for="patron-code-access-restricted">Allow only selected patron codes</label>
+                                <small class="form-text text-muted">Only patrons whose Polaris patron code is checked below may log in.</small>
+                              </div>
+                            </div>
+                          </fieldset>
+
+                          <div id="patron-code-restriction-settings" class="hidden">
+                            <div class="asap-accordion patron-code-accordion">
+                              <div class="asap-accordion-item active" id="accordion-patron-code-selection">
+                                <button type="button" class="asap-accordion-header" aria-expanded="true"
+                                  aria-controls="panel-patron-code-selection">
+                                  <span class="asap-accordion-title">Allowed patron codes</span>
+                                  <span id="patron-code-accordion-summary" class="asap-accordion-summary">Select at least one patron code</span>
+                                  <i class="fa fa-chevron-down asap-accordion-chevron"></i>
+                                </button>
+                                <div id="panel-patron-code-selection" class="asap-accordion-panel" role="region"
+                                  aria-labelledby="accordion-patron-code-selection">
+                                  <div id="patron-code-restriction-status" class="alert alert-warning small" role="status">
+                                    Access is limited, but no patron codes are selected.
+                                  </div>
+                                  <div class="form-group">
+                                    <label for="patron-code-search">Find a patron code</label>
+                                    <input type="search" id="patron-code-search" class="form-control"
+                                      placeholder="Search by name or ID">
+                                  </div>
+                                  <div class="patron-code-checklist-toolbar">
+                                    <button type="button" id="patron-code-select-all"
+                                      class="btn btn-sm btn-outline-secondary">Select all</button>
+                                    <button type="button" id="patron-code-clear-all"
+                                      class="btn btn-sm btn-outline-secondary">Clear all</button>
+                                  </div>
+                                  <div id="allowed-patron-code-container" class="patron-code-checklist mb-3">
+                                    <div class="p-3 text-muted">Patron codes not loaded yet.</div>
+                                  </div>
+                                  <div class="form-group mb-0">
+                                    <label for="patron-code-eligibility-message">Message shown to patrons who cannot log in</label>
+                                    <textarea id="patron-code-eligibility-message" class="form-control" rows="2"></textarea>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
                           </div>
 
                       </div>

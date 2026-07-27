@@ -13,6 +13,7 @@ assert.throws(() => {
 const staffRoutes = require("../lib/staff_routes.js");
 assert.strictEqual(typeof staffRoutes.staffLogin, "function");
 assert.strictEqual(typeof staffRoutes.staffTitleRequestAction, "function");
+assert.strictEqual(typeof staffRoutes.staffSyncPatronCodes, "function");
 assert.strictEqual(typeof staffRoutes.TEMPLATE_IN_USE_BY_AUTO_REJECT_CODE, "string");
 
 console.log("staff_routes_export_guard.test.js passed.");
