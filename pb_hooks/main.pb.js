@@ -27,6 +27,10 @@ routerAdd("POST", "/api/asap/staff/login", (e) => {
   return require(`${__hooks}/../lib/staff_routes.js`).staffLogin(e);
 });
 
+routerAdd("POST", "/api/asap/staff/login-diagnostics", (e) => {
+  return require(`${__hooks}/../lib/staff/login_diagnostics.js`).staffLoginDiagnostics(e);
+});
+
 routerAdd("GET", "/api/asap/setup/status", (e) => {
   return require(`${__hooks}/../lib/setup_routes.js`).setupStatus(e);
 });

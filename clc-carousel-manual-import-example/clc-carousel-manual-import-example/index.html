@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+
+	<title>CLC Splide Carousel</title>
+
+	<!--
+		No explicit carousel stylesheets are required here.
+		clc-splide-carousel.js automatically loads Splide CSS and clc-splide-carousel.css.
+	-->
+</head>
+
+<body>
+	<!--
+		CLC carousel options
+
+		Required:
+		- class="clc-carousel"
+		- data-rsid: carousel record-set ID
+
+		Branch/context:
+		- data-ctx: sent to the service as ctx
+		- data-branch-id: alias for data-ctx; used only when data-ctx is not present
+
+		Text/accessibility:
+		- data-title: visible heading and preferred accessible name
+		- data-label: accessible fallback label when no title is shown
+		- data-role: group or region; default is group
+		- data-heading-level: 2 through 6; default is 2
+
+		Layout:
+		- data-item-width: item/cover width in pixels; default is 100
+		- data-max-items: maximum visible items; default is 6
+		- data-arrow-gutter: arrow space in pixels; default is 50
+		- data-show-item-titles: true/false; default is false
+		- data-item-title-lines: visible item title lines; default is 2; max is 4
+
+		Arrow colors:
+		- data-arrow-color: normal arrow color; accepts valid CSS color values
+		- data-arrow-hover-color: hover color; defaults to data-arrow-color when set
+		- data-arrow-disabled-color: disabled arrow color; default is #9a9a9a
+
+		Behavior:
+		- data-open-new-tab: true/false; default is false
+		- data-endpoint: optional alternate data endpoint; script appends rsid and ctx
+
+		Script dependency loading:
+		- clc-splide-carousel.js automatically loads Splide JS, Splide CSS, and carousel CSS
+		- set data-auto-load-css="false" or data-auto-load-splide="false" on the script tag
+		  only when dependencies are included manually
+
+		Missing covers:
+		- If the cover endpoint returns a 1x1 missing-cover image, the script
+		  automatically displays a bounded fallback in the same cover-sized box.
+
+		Messages:
+		- data-loading-message: optional loading text
+		- data-empty-message: message when no usable items are available
+		- data-error-message: message when the carousel request fails
+
+		Boolean values accept true/1/yes and false/0/no.
+		See README.md for more examples.
+	-->
+
+	<section
+		class="clc-carousel"
+		data-rsid="92105"
+		data-branch-id="17"
+		data-title="Featured Titles"
+		data-arrow-color="#005ea8">
+	</section>
+
+	<section
+		class="clc-carousel"
+		data-rsid="92105"
+		data-ctx="17"
+		data-title="Featured Titles 2"
+		data-arrow-color="#005ea8"
+		data-arrow-hover-color="#003f73">
+	</section>
+
+	<section
+		class="clc-carousel"
+		data-rsid="92105"
+		data-ctx="17"
+		data-title="Featured Titles 3"
+		data-open-new-tab="true">
+	</section>
+
+	<section
+		class="clc-carousel"
+		data-rsid="92105"
+		data-ctx="17"
+		data-title="Featured Titles 4"
+		data-item-width="110"
+		data-max-items="10">
+	</section>
+
+	<section
+		class="clc-carousel"
+		data-rsid="92105"
+		data-ctx="17"
+		data-title="Featured Titles With Item Titles"
+		data-show-item-titles="true"
+		data-item-title-lines="2">
+	</section>
+
+	<!--
+		Local carousel script. Cache-bust this URL when deploying updates, if needed.
+		By default, the script automatically loads Splide JS, Splide CSS, and the carousel CSS.
+
+		Supported script tag attributes:
+		- data-auto-load-css: true/false; auto-load missing Splide CSS and carousel CSS
+		- data-auto-load-splide: true/false; auto-load Splide JavaScript when needed
+		- data-splide-src: alternate Splide JavaScript URL
+		- data-splide-css-src: alternate Splide stylesheet URL
+		- data-carousel-css-src: alternate carousel stylesheet URL
+	-->
+	<script src="https://carousels.clcohio.org/content/clc-splide-carousel.js"></script>
+</body>
+</html>

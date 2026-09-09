@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>ASAP Staff Login Diagnostics</title>
+  <link rel="stylesheet" href="./login-debug.css">
+</head>
+<body>
+  <main>
+    <header><h1>ASAP Staff Login Diagnostics</h1><a href="/staff/">Staff portal</a></header>
+    <p id="session-status" role="status"></p>
+    <form id="diagnostic-form">
+      <label for="username">Staff username</label>
+      <input id="username" name="username" autocomplete="off" autocapitalize="none" spellcheck="false" required value="WESTERVILLELIBRARY.ORG&#92;rsomerfeldt">
+      <label for="password">Staff password</label>
+      <input id="password" name="password" type="password" autocomplete="off" required>
+      <button id="run" type="submit" disabled>Run test</button>
+    </form>
+    <section aria-labelledby="report-title">
+      <div class="report-heading"><h2 id="report-title">Diagnostic report</h2><button id="copy" type="button" disabled>Copy report</button></div>
+      <pre id="report" aria-live="polite">No test run.</pre>
+    </section>
+  </main>
+  <script src="https://unpkg.com/pocketbase/dist/pocketbase.umd.js"></script>
+  <script type="module" src="./js/login-debug.js"></script>
+</body>
+</html>
