@@ -26,3 +26,7 @@
 **Vulnerability:** `org.organizationId` was directly interpolated into HTML without escaping in `pb_public/staff/js/settings-polaris.js`.
 **Learning:** Even internal or synchronized IDs can contain characters that break HTML when displayed dynamically in the frontend if unescaped.
 **Prevention:** Wrap all variable substitutions in template literals with `escapeAttr()` when injected into innerHTML.
+## 2024-06-25 - Prevent PII Leakage in Application Logs
+**Vulnerability:** The patron login (`lib/patron_routes.js`) and staff proxy suggestion creation (`lib/staff/admin_routes.js`) endpoints were directly logging the patron's library card barcode in the event of an error fetching or updating the pickup context (e.g., `logger().warn("...", "barcode", barcode, ...)`).
+**Learning:** Application logs can often be synchronized to external monitoring and observability systems. Logging sensitive Personally Identifiable Information (PII) like library card barcodes violates privacy standards and creates a vector for data breaches.
+**Prevention:** Always ensure sensitive identifiers and user data are replaced with `"[REDACTED]"` or suitably hashed values before being logged via the application logger.
