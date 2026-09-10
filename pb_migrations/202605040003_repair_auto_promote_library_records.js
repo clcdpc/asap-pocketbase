@@ -19,7 +19,7 @@ migrate((app) => {
       // get() returns null for unset fields; getBool() coerces to false.
       // Only update records where the field hasn't been explicitly set yet.
       var raw = rec.get("autoPromote");
-      if (raw === null || raw === undefined || raw === "") {
+      if (raw === null || raw === undefined || raw === "" || raw === false) {
         rec.set("autoPromote", systemValue);
         app.save(rec);
       }
