@@ -4,6 +4,5 @@
   },
   "scripts": {
     "test": "node tests/run_all.js"
-
   }
 }

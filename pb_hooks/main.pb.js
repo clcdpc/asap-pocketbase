@@ -4,10 +4,16 @@
 
 routerUse((e) => {
   try {
+    const headers = e.response.header();
+    headers.set("X-Content-Type-Options", "nosniff");
+    headers.set("X-XSS-Protection", "1; mode=block");
+    headers.set("X-Frame-Options", "SAMEORIGIN");
+    headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+
     const path = e.request && e.request.url ? String(e.request.url.path || "") : "";
     if (path.indexOf("/patron/") === 0) {
       const csp = require(`${__hooks}/../lib/config.js`).patronEmbedFrameAncestors(e.app);
-      e.response.header().set("Content-Security-Policy", csp);
+      headers.set("Content-Security-Policy", csp);
     }
   } catch (err) {
     e.app.logger().warn("Patron embed CSP header skipped", "error", String(err));
