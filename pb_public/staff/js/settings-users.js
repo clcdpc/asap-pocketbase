@@ -30,7 +30,13 @@ export async function loadStaffUsers() {
   if (refreshBtn) refreshBtn.disabled = true;
   msgEl.textContent = 'Loading staff users...';
   msgEl.className = 'mb-2 text-muted';
-    bodyEl.innerHTML = '<tr><td colspan="7" class="text-muted">Loading staff users...</td></tr>';
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 7;
+    td.className = 'text-muted';
+    td.textContent = 'Loading staff users...';
+    tr.appendChild(td);
+    bodyEl.replaceChildren(tr);
 
 
   try {
@@ -54,7 +60,13 @@ export async function loadStaffUsers() {
     console.error('Failed to load staff users', err);
     msgEl.textContent = err.message || 'Failed to load staff users.';
     msgEl.className = 'mb-2 text-danger font-weight-bold';
-    bodyEl.innerHTML = '<tr><td colspan="7" class="text-muted">Unable to load staff users.</td></tr>';
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 7;
+    td.className = 'text-muted';
+    td.textContent = 'Unable to load staff users.';
+    tr.appendChild(td);
+    bodyEl.replaceChildren(tr);
 
   } finally {
     if (refreshBtn) refreshBtn.disabled = false;
@@ -67,7 +79,7 @@ export function renderStaffUsers(users) {
     return;
   }
 
-  bodyEl.innerHTML = '';
+  bodyEl.replaceChildren();
 
   if (!users.length) {
     const tr = document.createElement('tr');
@@ -268,7 +280,7 @@ export async function populateStaffLibraryOptions() {
 
     const isLibraryContext = currentLibraryContextOrgId && currentLibraryContextOrgId !== 'system';
     
-    select.innerHTML = '<option value="">Select library</option>';
+    select.replaceChildren(new Option('Select library', ''));
     const orgs = await pb.collection('polaris_organizations').getFullList({
       filter: 'organizationCodeId = "2"',
       sort: 'displayName',
@@ -284,7 +296,7 @@ export async function populateStaffLibraryOptions() {
     context.classList.remove('hidden');
     const libraryName = me.libraryOrgName || me.libraryOrgId || 'My Library';
     context.textContent = `${libraryName} (ID ${me.libraryOrgId || '?'})`;
-    select.innerHTML = '';
+    select.replaceChildren();
     select.appendChild(new Option(libraryName, me.libraryOrgId));
     select.value = me.libraryOrgId;
   }
@@ -321,7 +333,11 @@ if (addStaffBtn) {
       identityInput.value = '';
 
       if (msgEl) {
-        msgEl.innerHTML = '<i class="fa fa-check-circle"></i> Staff record created or updated. This user still signs in with their Polaris credentials.';
+        msgEl.replaceChildren();
+        const icon = document.createElement('i');
+        icon.className = 'fa fa-check-circle';
+        msgEl.appendChild(icon);
+        msgEl.appendChild(document.createTextNode(' Staff record created or updated. This user still signs in with their Polaris credentials.'));
         msgEl.className = 'mb-2 text-success font-weight-bold';
       }
 
