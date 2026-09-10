@@ -36,7 +36,10 @@ function makeMockContainer() {
             remove: function(c) { this.classes.delete(c); },
             contains: function(c) { return this.classes.has(c); }
         },
-        innerHTML: ''
+        replaceChildren: function(el) {
+            this.children = el ? [el] : [];
+        },
+        children: []
     };
 }
 
@@ -55,17 +58,23 @@ function runTests() {
         renderEditLeapBibLink(bibId, ctx);
     `);
 
+    // Global document mock for DOM construction
+    global.document = {
+        createElement: (tag) => ({ tagName: tag, classList: { add: () => {} }, setAttribute: () => {}, appendChild: () => {} }),
+        createTextNode: (text) => ({ nodeType: 3, nodeValue: text })
+    };
+
     // Case 1: Safe URL
     const container1 = makeMockContainer();
     testRenderEditLeapBibLink('123', () => 'https://leap.example.com/123', makeMockCtx(container1), escapeAttr);
     assert.strictEqual(container1.classList.contains('hidden'), false, 'Should not be hidden for safe URL');
-    assert.ok(container1.innerHTML.includes('href="https://leap.example.com/123"'), 'Should contain safe URL in href');
+    assert.ok(container1.children.length === 1 && container1.children[0].href === 'https://leap.example.com/123', 'Should contain safe URL in href');
 
     // Case 2: Unsafe URL (javascript:)
     const container2 = makeMockContainer();
     testRenderEditLeapBibLink('123', () => 'javascript:alert(1)', makeMockCtx(container2), escapeAttr);
     assert.strictEqual(container2.classList.contains('hidden'), true, 'Should be hidden for javascript: URL');
-    assert.strictEqual(container2.innerHTML, '', 'InnerHTML should be empty for unsafe URL');
+    assert.strictEqual(container2.children.length, 0, 'Children should be empty for unsafe URL');
 
     // Case 3: Empty URL
     const container3 = makeMockContainer();
