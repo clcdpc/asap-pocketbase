@@ -36,7 +36,15 @@ function makeMockContainer() {
             remove: function(c) { this.classes.delete(c); },
             contains: function(c) { return this.classes.has(c); }
         },
-        innerHTML: ''
+        innerHTML: '',
+        textContent: '',
+        replaceChildren: function(child) {
+            if (child && child.nodeName === 'A') {
+                this.innerHTML = `<a class="${child.className}" href="${child.href}" target="${child.target}" rel="${child.rel}">${child.textContent}</a>`;
+            } else {
+                this.innerHTML = '';
+            }
+        }
     };
 }
 
@@ -48,6 +56,23 @@ function makeMockCtx(container) {
 
 function runTests() {
     console.log('Running security URL validation tests...');
+
+    // Setup basic mock document
+    global.document = {
+        createElement: function(tag) {
+            if (tag === 'a') {
+                return {
+                    nodeName: 'A',
+                    className: '',
+                    href: '',
+                    target: '',
+                    rel: '',
+                    textContent: ''
+                };
+            }
+            return {};
+        }
+    };
 
     // Test renderEditLeapBibLink
     const testRenderEditLeapBibLink = new Function('bibId', 'leapBibUrl', 'ctx', 'escapeAttr', `
@@ -65,7 +90,7 @@ function runTests() {
     const container2 = makeMockContainer();
     testRenderEditLeapBibLink('123', () => 'javascript:alert(1)', makeMockCtx(container2), escapeAttr);
     assert.strictEqual(container2.classList.contains('hidden'), true, 'Should be hidden for javascript: URL');
-    assert.strictEqual(container2.innerHTML, '', 'InnerHTML should be empty for unsafe URL');
+    assert.strictEqual(container2.textContent, '', 'textContent should be empty for unsafe URL');
 
     // Case 3: Empty URL
     const container3 = makeMockContainer();

@@ -144,11 +144,17 @@ export function renderEditLeapBibLink(bibId, ctx) {
   const url = leapBibUrl(bibId);
   if (!url || !/^https?:\/\//i.test(url)) {
     container.classList.add('hidden');
-    container.innerHTML = '';
+    container.textContent = '';
     return;
   }
   container.classList.remove('hidden');
-  container.innerHTML = `<a class="btn btn-sm btn-outline-primary" href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">Open Bib in Leap</a>`;
+  const a = document.createElement('a');
+  a.className = 'btn btn-sm btn-outline-primary';
+  a.href = url;
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  a.textContent = 'Open Bib in Leap';
+  container.replaceChildren(a);
 }
 
 export function renderExternalSearchButton(title, identifier, ctx) {
@@ -211,7 +217,7 @@ export function renderEditMetadata(row, ctx) {
     block.textContent = `Auto-promoter last checked: ${escapeAttr(lastChecked)}`;
     block.classList.remove('hidden');
   } else {
-    block.innerHTML = '';
+    block.textContent = '';
     block.classList.add('hidden');
   }
 }
@@ -227,12 +233,21 @@ export function renderPurchaseReminderOption(actionStr, ctx) {
   container.classList.toggle('hidden', !(isPurchaseAction && isStaff));
   if (!(isPurchaseAction && isStaff)) {
     checkbox.disabled = true;
-    help.innerHTML = '';
+    help.textContent = '';
     return;
   }
   const email = staffProfileEmail(ctx.pb);
   checkbox.disabled = !email;
-  help.innerHTML = email
-    ? `Send purchase details to ${escapeAttr(email)}.`
-    : 'Add an email address to your <a href="#" class="js-open-profile-dialog">staff profile</a> to email yourself purchase reminders.';
+
+  if (email) {
+    help.textContent = `Send purchase details to ${email}.`;
+  } else {
+    const textNode1 = document.createTextNode('Add an email address to your ');
+    const a = document.createElement('a');
+    a.href = '#';
+    a.className = 'js-open-profile-dialog';
+    a.textContent = 'staff profile';
+    const textNode2 = document.createTextNode(' to email yourself purchase reminders.');
+    help.replaceChildren(textNode1, a, textNode2);
+  }
 }
