@@ -82,5 +82,11 @@ Terra High Pass 3: clean full-slice re-review in the same context, with no
 substantive findings or nonblocking notes. The local acceptance/review gate is
 passed and the coherent Slice 0 milestone commit is authorized.
 
-Remote CI has not yet run. It will run on the draft PR after the reviewed
-milestone push; a remote failure remains blocking and must be fixed/reviewed.
+Milestone `00967778001e7ec8198ab4498d0fbd15ded4d984` was committed and pushed
+after the local acceptance and review/fix/re-review gate. Its
+[remote CI run](https://github.com/clcdpc/asap-pocketbase/actions/runs/34703502557)
+passed in 1 minute 56 seconds: Linux Release build, real SQL Server 2022 tests,
+legacy/frontend tests, and web/self-contained migration publish verification.
+GitHub emitted an informational action-runtime deprecation annotation and ran
+the existing v4 actions on Node 24 successfully. This does not add Node to the
+application build or runtime; Node remains a test/development prerequisite.

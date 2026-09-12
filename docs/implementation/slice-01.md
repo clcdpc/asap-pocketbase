@@ -2,9 +2,16 @@
 
 ## Gate And Ownership
 
-Prepared ahead of dispatch. Implementation cannot start before the Slice 0
-test/review/milestone gate. Astra will record that milestone and verified
-package selection here before dispatch. A fresh Sol XHigh context owns this
+Prepared ahead of dispatch. The Slice 0 gate passed at milestone
+`00967778001e7ec8198ab4498d0fbd15ded4d984`, including 44 .NET/real-SQL tests,
+legacy tests, the Terra review/fix/re-review cycle, and remote CI. The verified
+CLC package incompatibility in `clc-package-probe.md` remains unresolved:
+Postmark source or a maintained Rest 3-compatible cancellable async build has
+been requested. Do not declare this slice complete or substitute a duplicate
+transport while that prerequisite is missing. Final package selection and
+dependency verification must be recorded before the integration gate.
+
+A fresh Sol XHigh context owns this
 complete slice because session serialization, outbox leases and historical
 migration are material correctness work. A fresh Terra High reviews the full
 slice twice, with Sol fixes and required re-review before the milestone.

@@ -46,8 +46,8 @@ cap. Migration code and reconciliation grow with every data-owning slice.
 
 | Slice | Scope | Status |
 | --- | --- | --- |
-| 0 | Branch, skeleton, engineering baseline | Local gate passed: 44 tests green, Terra Pass 3 clean; remote CI pending |
-| 1 | Patron login and submission | Not started |
+| 0 | Branch, skeleton, engineering baseline | Complete: reviewed milestone `0096777`, remote CI passed |
+| 1 | Patron login and submission | Packet prepared; awaiting required Postmark source/compatible build |
 | 2 | Staff Entra and core request workflow | Not started |
 | 3 | Additional-copy workflow | Not started |
 | 4 | Administration and configuration | Not started |
@@ -67,6 +67,8 @@ corrected maintained package has been requested; no custom transport or weaker
 timeout is approved. Slice 0 is independent of that prerequisite.
 
 See `slice-00-evidence.md` for actual build, SQL, startup and publish checks.
+Milestone `00967778001e7ec8198ab4498d0fbd15ded4d984` passed the complete
+[remote CI run](https://github.com/clcdpc/asap-pocketbase/actions/runs/34703502557).
 No business/provider/entity-migration/browser/rehearsal/release gate is claimed
 passed by the documentation pack or the engineering baseline.
 Slice evidence belongs beside each focused packet. Final completion requires
