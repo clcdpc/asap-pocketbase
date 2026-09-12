@@ -202,6 +202,8 @@ Ship a small PowerShell sensor in the repo that calls `/health/ready` and emits 
 
 ## 12. Production staging and hostname cutover
 
+PocketBase remains authoritative production during the interval after the .NET merge and before cutover. A critical PocketBase fix in that interval uses a temporary branch and/or tag from the exact last deployed PocketBase commit, follows the normal emergency test/deploy process, and is immediately ported into .NET `main`; no permanent PocketBase branch is maintained. Build and rehearse the replacement exact .NET artifact. If the fix affects PocketBase schema, stored-data semantics, migration input, or an export/import/reconciliation assumption, update the migration tooling/contract and repeat the full exact-artifact rehearsal before production cutover. After successful cutover, remove temporary branches and make the permanent final-PocketBase tag point to the exact commit that was actually frozen.
+
 Before the final production migration:
 
 - create a disposable preflight SQL database and deploy the exact release DACPAC to it;
@@ -219,6 +221,8 @@ During the maintenance window, prepare the exact DACPAC/files with the app pool 
 There is no general patron maintenance-mode feature in the initial .NET app. Ordinary upgrades are performed off-hours. During the one-time PocketBase migration, the old system is explicitly stopped so the dataset is frozen; this is accepted maintenance-window downtime.
 
 Once a normal production deployment completes and readiness is healthy, the application may serve patrons while staff perform smoke validation. Do not add a separate staged "staff-only then patron-open" lifecycle.
+
+After .NET accepts its first production write, never start the retired production PocketBase deployment as-is. Retained executable/data/config/backup material is kept for approximately 30 days as forensic/reference material only, and direct database/file inspection is preferred. A genuinely necessary executable investigation must use a separate isolated copy with outbound Polaris/email access blocked and all recurring production jobs disabled before startup. It can never serve as parallel read/write or fallback production.
 
 ## 14. Permanent nonproduction operations
 
@@ -240,4 +244,4 @@ After first .NET production deployment is validated:
 - rename repository `clcdpc/asap-pocketbase` -> `clcdpc/asap`;
 - canonical docs describe .NET only;
 - old PocketBase operational/setup docs are removed rather than maintained under a permanent legacy folder;
-- final PocketBase tag and Git history remain the archival reference.
+- the permanent final-PocketBase tag points to the exact PocketBase commit frozen at the successful production cutover, including any post-merge emergency hotfix, and Git history remains the archival reference.

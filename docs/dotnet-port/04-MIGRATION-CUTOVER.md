@@ -52,7 +52,7 @@ Controls:
 The manifest should identify at minimum:
 
 - export format version;
-- PocketBase source schema/app version or final PocketBase Git SHA/tag;
+- PocketBase source schema/app version and exact deployed PocketBase Git SHA, which becomes the permanent final-tag target after successful cutover;
 - export UTC timestamp;
 - source database hash/metadata sufficient to identify the snapshot;
 - entity/file counts;
@@ -297,6 +297,7 @@ Transform existing PocketBase deletion audit into the reduced target audit. Inte
 - Production reconciliation/cutover requires a usable effective system Postmark token before background processing or production traffic is enabled.
 - Migrate historical delivery/audit metadata.
 - Do not create pending outbox rows from historical mail; outbox begins empty.
+- `RecipientAddressKind` is target-only outbox state and requires no legacy-row transformation because the outbox begins empty.
 - Do not resend historical messages.
 
 ### 6.14 Branding/files
@@ -395,6 +396,17 @@ Permanent nonproduction stays on PocketBase until the .NET implementation is com
 
 Do not seed permanent nonproduction from production data.
 
+### 9.3 Emergency PocketBase hotfix after the .NET merge
+
+PocketBase production can remain authoritative between the .NET merge and final cutover. If a critical production fix is required in that interval:
+
+1. Record the exact PocketBase commit currently deployed and create a temporary branch and/or tag from that commit. Do not maintain a permanent PocketBase branch.
+2. Develop, test, and deploy the PocketBase correction through the normal emergency process.
+3. Immediately port the equivalent behavioral correction into .NET `main`, create a replacement .NET version tag/artifact, and repeat the required exact-artifact permanent-nonproduction rehearsal.
+4. If the PocketBase correction changes its schema, stored-data semantics, migration input, or any behavior assumed by export/import/reconciliation, update this migration contract and the tooling before repeating the full rehearsal.
+5. Before the production maintenance window, record the exact PocketBase commit actually running and verify that the rehearsed .NET artifact and migration tooling account for it.
+6. After successful .NET cutover, create/verify the permanent final-PocketBase tag at that exact frozen commit. Temporary hotfix branches may then be removed.
+
 ## 10. Production preflight database isolation
 
 Production-hostname preflight must **never** use the final SQL database that will receive the PocketBase import. Before the maintenance window:
@@ -427,11 +439,12 @@ The final migration target therefore cannot contain bootstrap StaffUser/default 
 - Entra redirect, durable (`tid`,`oid`) StaffUser matching, cookies, CSP, deep links, SQL, health, and static assets verified under that production hostname.
 - Disposable preflight database removed; final production config restored; final target SQL database recreated/reset to the defined fresh migration-target state; app pool remains stopped against that final target.
 - Final nonproduction rehearsal passed on the exact artifact.
+- Exact PocketBase production commit recorded; every post-merge emergency fix is represented in .NET and, where relevant, the migration tooling used by the passing rehearsal.
 
 ### Maintenance window
 
 1. Announce/start the planned outage by taking the old application out of normal service as operationally appropriate.
-2. Stop PocketBase application writes and all PocketBase background jobs.
+2. Record the exact deployed PocketBase commit, then stop PocketBase application writes and all PocketBase background jobs.
 3. Take/verify final PocketBase backup/snapshot.
 4. Run final `Asap.Migration export` on the old server against the stopped DB + file storage with the same effective legacy environment inputs; freeze both `effective-legacy-runtime-config.json` (system/global SQL-bound fallback values only) and `effective-legacy-operational-config.json` (cron/queue limits), and fail export if required effective values cannot be resolved.
 5. Validate export manifest/hashes/counts.
@@ -444,8 +457,9 @@ The final migration target therefore cannot contain bootstrap StaffUser/default 
 12. Start the app pool only after import/reconciliation and the active-bound-super-admin gate succeed, required target-only integration configuration is present, and target schedules/processing limits pass operational parity; run readiness and authenticated diagnostics against the imported SQL database.
 13. If all gates pass, switch production hostname/DNS to the new server.
 14. Perform production smoke tests, including patron and staff critical paths.
-15. Allow normal production use.
-16. Delete sensitive normalized migration packages and staff identity-map working copies from both servers after successful validation.
+15. Allow normal production use; from the first accepted .NET production write onward, SQL/.NET is authoritative.
+16. Create/verify the permanent final-PocketBase historical tag so it points to the exact commit recorded and frozen for this successful cutover.
+17. Delete sensitive normalized migration packages and staff identity-map working copies from both servers after successful validation.
 
 The design favors a simple full offline maintenance window. Do not build delta synchronization/prestaging complexity solely to reduce minutes of downtime.
 
@@ -463,8 +477,9 @@ This point-of-no-return must be explicit in the production runbook.
 
 ## 13. Post-cutover PocketBase retention
 
-- PocketBase remains stopped and not normally reachable.
-- Retain executable/data/config for approximately 30 days so an administrator can manually start it for investigation/reference if required.
-- It is not a routine read-only parallel production system.
+- The retired production PocketBase deployment remains stopped and must never be started as-is after .NET has accepted production writes. Its executable, data, configuration, and backup material are retained for approximately 30 days only for forensic/reference use.
+- Prefer direct inspection of the retained SQLite database, files, logs, and configuration without executing PocketBase.
+- If running PocketBase is genuinely necessary for investigation, create a separate isolated copy. Before startup, block all outbound Polaris and email access and disable registration/execution of every recurring production job, including hold/workflow processing, ISBN processing, organization sync, and weekly email. Both isolation controls are required.
+- The retained deployment or isolated copy must never become a parallel read/write service, a production fallback, or a source that can mutate external systems or send mail.
 - Retain the final PocketBase backup/tag indefinitely according to source/backup policies.
 - After the reference period, remove the runnable old deployment deliberately; do not automate deletion as part of the cutover.

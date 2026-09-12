@@ -6,7 +6,7 @@ The port is one dedicated branch and one large draft pull request. It is **not**
 
 The existing PocketBase application remains in place, unchanged, as a behavior/reference implementation until the final cleanup slice. Do not move it to a temporary legacy directory. Freeze ordinary PocketBase feature development during the port; urgent production fixes are allowed but must be deliberately copied/ported into the .NET branch immediately.
 
-At branch start, record the exact PocketBase baseline SHA. The permanent **final PocketBase** Git tag must point to the last PocketBase production/main commit and therefore is created/verified immediately before the .NET port replaces `main` (after any urgent freeze-period fixes have landed). This is the long-term historical snapshot; do not maintain a permanent PocketBase branch.
+At branch start, record the exact PocketBase baseline SHA and keep tracking the exact commit deployed to PocketBase production. The permanent **final PocketBase** Git tag is created/verified after the successful .NET production cutover and must point to the exact PocketBase commit that was frozen for that cutover, including any emergency fix after the .NET merge. This is the long-term historical snapshot; do not maintain a permanent PocketBase branch.
 
 Open a draft PR early and keep it current throughout the work.
 
@@ -215,7 +215,7 @@ Implement the complete current background-processing set:
 - one hourly `asap-workflow-processing` orchestrator that executes acquired-hold recovery (including inactive libraries) -> unreviewed-suggestion OutstandingTimeout / pending-hold / hold-pickup / additional-copy timeouts -> purchase promotion -> new hold placement -> fulfillment tracking in that exact order and cannot overlap with another scheduled/manual orchestrator run;
 - weekly staff action summaries generated per recipient authorization scope: staff/admin own active library only, super-admin active consortium-wide; do not reuse one consortium-wide payload across ordinary library recipients. Ordinary runs use recipient+period idempotency; every accepted explicit forced run gets one durable `ManualRunId`, intentionally resends under force-run keys, and reuses that ID on retries;
 - session cleanup;
-- one coherent five-state outbox (`pending`/`sending`/`sent`/`failed`/`suppressed`), including database-enforced filtered uniqueness for non-null deterministic `BusinessKey`, duplicate-key-race-as-success semantics, ordinary recipient+period and forced-`ManualRunId` summary keys, lease-based `sending` claims, expired-lease recovery, authorization-sensitive staff original-tuple/current-tenant/scope/address revalidation before every send/retry, and documented at-least-once ambiguity behavior. `failed` retains payload/manual Retry; only terminal `sent`/`suppressed` payload is purge-eligible after 90 days. Missing notification configuration must never roll back the owning ordinary business mutation;
+- one coherent five-state outbox (`pending`/`sending`/`sent`/`failed`/`suppressed`), including database-enforced filtered uniqueness for non-null deterministic `BusinessKey`, duplicate-key-race-as-success semantics, ordinary recipient+period and forced-`ManualRunId` summary keys, and authorization-sensitive staff original-tuple/current-tenant/scope/address revalidation before every send/retry. Persist `RecipientAddressKind=notification_email|weekly_summary` and resolve the matching current address rule instead of inferring it from `BusinessKey`. Treat every expired `sending` lease as transport-ambiguous under the fixed 30-second call-start deadline, 30-second complete provider timeout, two-minute lease, reclaim-after-expiry rule, and `Status` + `LeaseId` + rowversion/equivalent stale-worker fencing. Delivery remains at-least-once; `failed` retains payload/manual Retry; only terminal `sent`/`suppressed` payload is purge-eligible after 90 days. Missing notification configuration must never roll back the owning ordinary business mutation;
 - Postmark webhook/delivery event handling;
 - complete the shared nonproduction recipient-domain safety coverage in `06-TESTING-CI.md` section 4.1 across patron, authorization-sensitive staff, ordinary/forced weekly-summary, and Test email paths, including suppression/idempotency, send/retry checks, and the independent application/testing-auth switches;
 - Run Now actions with library-admin/super-admin scope;
@@ -324,7 +324,7 @@ Before merge:
 - remove PocketBase runtime/source that is no longer required from the port branch;
 - remove obsolete PocketBase setup/operations docs from canonical `main` content;
 - retain only migration-relevant historical material;
-- ensure final PocketBase tag/Git history is the archival source;
+- ensure exact PocketBase production-commit tracking and the final-tag procedure are ready so Git history becomes the archival source after successful cutover;
 - verify no PocketBase package/runtime/data paths remain in production artifact;
 - verify no Node/npm dependency in normal build/publish/F5/deployment;
 - update README/architecture/operations documentation for .NET;
@@ -352,8 +352,10 @@ Stop after **three consecutive passes with no new substantive finding**, maximum
 
 The permanent nonproduction environment stays on PocketBase throughout the implementation branch. The final rehearsal is intentionally **post-merge**, because the production artifact must be built from a version tag on the merged `main` commit.
 
+During the interval after the .NET merge but before production cutover, PocketBase may still be authoritative production. If it needs a critical emergency fix, create a temporary branch and/or tag from the exact last PocketBase production commit; do not establish a permanent PocketBase branch. Test and deploy the fix through the normal emergency process, then immediately port the equivalent behavioral correction into .NET `main`. Create a replacement .NET version tag/artifact and repeat the exact-artifact rehearsal required for any changed production artifact. If the PocketBase fix changes schema, stored-data semantics, migration input, or behavior assumed by migration tooling, update the migration contract/tooling and repeat the full required rehearsal before cutover. Remove temporary hotfix branches after successful .NET cutover. The permanent final-PocketBase tag must ultimately point to the actual PocketBase commit frozen at that successful cutover, not an earlier pre-merge candidate.
+
 1. Final whole-app review clean under the rule above.
-2. Confirm the PocketBase production/main line has not gained an unported urgent fix; then create/verify the permanent **final PocketBase** tag on that last PocketBase commit.
+2. Record the exact commit currently deployed to PocketBase production and confirm it has no behavioral fix missing from the port.
 3. Merge port PR to `main`.
 4. Create the intended production version tag from that merged commit.
 5. Build immutable web/DACPAC/deployment and migration artifacts from that tag.
@@ -362,12 +364,13 @@ The permanent nonproduction environment stays on PocketBase throughout the imple
 8. If rehearsal exposes a blocking defect, fix it on `main`, create a **new** version tag/artifact, and repeat the rehearsal with the replacement. Never promote an un-rehearsed rebuild.
 9. Only after an exact artifact passes the rehearsal, stage those same artifacts on the new production server.
 10. Complete production preflight and hosts-file validation against the real production hostname using a disposable preflight SQL database/config; then stop the app, destroy the disposable database, restore the final production config, and keep the app from starting against the final fresh migration target until cutover import completes.
-11. Execute the offline PocketBase -> SQL cutover.
-12. Switch production hostname/DNS to the new server.
-13. Run production smoke/health/diagnostics checks.
-14. Once the .NET application accepts production writes, treat it as authoritative and repair-forward.
-15. Keep PocketBase offline but retained for about 30 days as an administrator-startable reference.
-16. After production validation, rename repository from `asap-pocketbase` to `asap`.
+11. Immediately before the maintenance window, record the exact PocketBase production commit again and confirm every later emergency fix has been ported and, where required, reflected in migration tooling and the successfully rehearsed .NET artifact.
+12. Execute the offline PocketBase -> SQL cutover.
+13. Switch production hostname/DNS to the new server.
+14. Run production smoke/health/diagnostics checks.
+15. Once the .NET application accepts production writes, treat it as authoritative and repair-forward; create/verify the permanent final-PocketBase tag against the exact PocketBase commit frozen for this successful cutover.
+16. Keep the retired PocketBase deployment stopped for about 30 days as forensic/reference material. Never start the production deployment as-is. Prefer direct database/file inspection; if execution is genuinely necessary, use only an isolated copy with outbound Polaris/email access blocked and recurring production jobs disabled before startup. It must never operate as parallel read/write or fallback production.
+17. After production validation, rename repository from `asap-pocketbase` to `asap`.
 
 ## 8. Scope-control rule
 

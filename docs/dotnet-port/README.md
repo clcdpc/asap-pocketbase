@@ -1,6 +1,6 @@
 # ASAP PocketBase -> .NET Porting Documentation Pack
 
-**Status:** Execution-model handoff refinement complete; R1-R7/F1-F3 retained as initial-port requirements; implementation/release tests remain required
+**Status:** Four-finding cutover/outbox remediation complete; R1-R7/F1-F3 retained as initial-port requirements; implementation/release tests remain required
 **Prepared:** 2026-09-12  
 **Repository:** `clcdpc/asap-pocketbase`  
 **Source snapshot:** `150b30b776565194260cc327eeeffdfb46475e81` (`Improve staff login diagnostics and library-aware email formatting`, 2026-09-09)  
@@ -12,9 +12,11 @@ This pack is the authoritative implementation baseline for replacing the PocketB
 
 The design was developed by walking the architecture, data model, authentication, Polaris/Postmark integrations, migration, deployment, testing, CI, operational model, and cutover behavior decision-by-decision. When this pack conflicts with an older PocketBase document, this pack governs the .NET port.
 
-This revision retains the prior handoff cleanup and updates only the Codex execution model to use Astra for orchestration/advice, Sol for primary implementation, and Terra for independent review. This is not an architectural revision to the .NET port. The prior R1-R7 and final F1-F3 decisions remain unchanged, including OutstandingTimeout suggestion-age semantics, particular tracked hold identity for terminal fulfillment, and exhaustive retained legacy placed-hold evidence/BIB protection.
+This revision closes four focused cutover/outbox findings: retired production PocketBase is forensic-only and cannot be started as-is after .NET accepts writes; expired email leases use a concrete conservative timeout/reclaim/fencing contract; authorization-sensitive staff mail persists the applicable ordinary-versus-weekly address rule; and post-merge/pre-cutover emergency PocketBase fixes have an explicit temporary-branch, immediate .NET propagation, rehearsal, and final-tag procedure. The pinned baseline and settled architecture remain unchanged, and no generalized messaging or migration framework is added.
 
-The prior hold-recovery, identity/session/lifecycle, Organization/claim, AdditionalCopy, outbox, queue-fairness, deployment/Hangfire, migration-bootstrap, configuration-inheritance, and forced-summary decisions remain binding. `14-REMEDIATION-AUDIT.md` records this execution-model refinement and the prior handoff cleanup separately from the historical F1-F3/R1-R7 audits and their archive/review hashes. Required regression/release gates remain in `06-TESTING-CI.md` sections 10.1-10.2 and `08-RELEASE-VALIDATION-NOTES.md` sections 2.1-2.2; recipient-domain safety adds testing section 4.1 and release section 6.
+The preceding execution-model refinement retains Astra for orchestration/advice, Sol for primary implementation, and Terra for independent review. The prior R1-R7 and final F1-F3 decisions remain unchanged, including OutstandingTimeout suggestion-age semantics, particular tracked hold identity for terminal fulfillment, and exhaustive retained legacy placed-hold evidence/BIB protection.
+
+The prior hold-recovery, identity/session/lifecycle, Organization/claim, AdditionalCopy, outbox, queue-fairness, deployment/Hangfire, migration-bootstrap, configuration-inheritance, and forced-summary decisions remain binding. `14-REMEDIATION-AUDIT.md` records this four-finding remediation, the execution-model refinement, and the prior handoff cleanup separately from the historical F1-F3/R1-R7 audits and their archive/review hashes. Required regression/release gates remain in `06-TESTING-CI.md` sections 10.1-10.2 and `08-RELEASE-VALIDATION-NOTES.md` sections 2.1-2.2; recipient-domain safety adds testing section 4.1 and release section 6.
 
 ## Governing principles
 

@@ -292,7 +292,7 @@ The target deliberately changes reliability mechanics:
 - Hangfire delivery/retry;
 - sender/recipient/content snapshot at business transaction time for deliverable messages; a terminal suppressed intent may omit the specific sender/recipient value whose absence caused suppression;
 - effective transport credential resolved at send/retry;
-- transient retry bounds + visible `failed` state/manual retry with payload retained while retryable; authorization-sensitive staff rows revalidate current recipient scope/address and become terminal `suppressed` when stale; only terminal sent/suppressed payload is retention-purge eligible;
+- transient retry bounds + visible `failed` state/manual retry with payload retained while retryable; every expired sending lease is conservatively transport-ambiguous and fenced from stale-worker updates; authorization-sensitive staff rows persist the ordinary-versus-weekly recipient-address rule, revalidate current scope and that rule's effective address, and become terminal `suppressed` when stale; only terminal sent/suppressed payload is retention-purge eligible;
 - historical delivery/audit data migrated, but no historical email is placed into the new outbox for replay.
 
 When porting each workflow, include its email side effect in that vertical slice rather than postponing all email behavior to the end.
