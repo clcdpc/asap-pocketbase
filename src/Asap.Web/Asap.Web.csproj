@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <RootNamespace>Asap.Web</RootNamespace>
+    <AssemblyName>Asap.Web</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Cronos" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
+    <PackageReference Include="Microsoft.SqlServer.DacFx" />
+    <PackageReference Include="NLog.Web.AspNetCore" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\Shared\SecurityContract.cs" Link="Infrastructure\Security\SecurityContract.cs" />
+    <ProjectReference Include="..\..\database\Asap.Database\Asap.Database.sqlproj"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrontendSource Include="Frontend\**\*" />
+  </ItemGroup>
+  <Target Name="CopyFrontendToWebRoot"
+          BeforeTargets="Build;Publish">
+    <ItemGroup>
+      <ExpectedFrontendOutput Include="@(FrontendSource->'wwwroot\%(RecursiveDir)%(Filename)%(Extension)')" />
+      <StaleFrontendOutput Include="wwwroot\**\*" Exclude="@(ExpectedFrontendOutput)" />
+      <Content Remove="@(StaleFrontendOutput)" />
+    </ItemGroup>
+    <Delete Files="@(StaleFrontendOutput)" />
+    <Copy SourceFiles="@(FrontendSource)"
+          DestinationFiles="@(FrontendSource->'wwwroot\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="CleanFrontendWebRoot" AfterTargets="Clean">
+    <RemoveDir Directories="$(MSBuildProjectDirectory)\wwwroot" />
+  </Target>
+  <Target Name="CopyDacpacToOutput" AfterTargets="Build">
+    <PropertyGroup>
+      <AsapDacpacSource>$(MSBuildProjectDirectory)\..\..\database\Asap.Database\bin\$(Configuration)\Asap.Database.dacpac</AsapDacpacSource>
+    </PropertyGroup>
+    <Copy SourceFiles="$(AsapDacpacSource)"
+          DestinationFolder="$(OutputPath)Database"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(AsapDacpacSource)')" />
+  </Target>
+  <Target Name="AddDacpacToPublish" BeforeTargets="ComputeFilesToPublish">
+    <PropertyGroup>
+      <AsapDacpacSource>$(MSBuildProjectDirectory)\..\..\database\Asap.Database\bin\$(Configuration)\Asap.Database.dacpac</AsapDacpacSource>
+    </PropertyGroup>
+    <ItemGroup Condition="Exists('$(AsapDacpacSource)')">
+      <ResolvedFileToPublish Include="$(AsapDacpacSource)">
+        <RelativePath>Database\Asap.Database.dacpac</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+</Project>
