@@ -29,10 +29,11 @@
 ## 3. Multi-model implementation roles
 
 - GPT-6 Astra Max: orchestrator and on-demand architecture advisor.
-- Luna Max: primary implementer, fresh context per vertical slice.
-- Terra High: independent reviewer, fresh context per slice and fresh whole-app final context.
+- GPT-5.6 Sol High/XHigh: primary implementer, fresh context per vertical slice; High by default, with Astra-selected XHigh for materially difficult work.
+- GPT-5.6 Terra High: independent reviewer, fresh context per slice and fresh whole-app final context.
 - The implementer fixes reviewer findings; the reviewer does not implement its own fixes.
 - Astra owns sequencing, slice packets, progression gates, commits, and delegation.
+- Astra may delegate narrowly bounded mechanical/support work, including to Luna, without replacing Sol's slice ownership or Terra's independent review.
 - Astra may resolve ordinary ambiguity from the pack/current app/repository without asking the user.
 - Use a fresh Astra advisor consultation when there is material uncertainty, a meaningful tradeoff, or a contemplated deviation from the pack; do not invoke advisor mechanically for every slice.
 - Slice packets contain the slice objective/acceptance criteria, relevant architecture, compact global invariants, prior contracts, relevant PocketBase files/behavior, and intersecting deferred items rather than dumping the full specification.

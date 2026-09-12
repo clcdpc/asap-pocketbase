@@ -1,5 +1,9 @@
 # Porting pack remediation and handoff audit
 
+## Execution-model handoff refinement - 2026-09-12
+
+This documentation-only refinement updates the planned Codex roles to GPT-6 Astra Max for orchestration and fresh architectural/deviation advice, fresh GPT-5.6 Sol High/XHigh contexts for primary slice implementation and confirmed-finding fixes, and fresh Terra High contexts for independent review with the same context retained through each slice's review/fix/re-review cycle. Astra may use Luna only for narrowly bounded mechanical/support delegation that does not replace Sol's slice ownership or Terra's independent review. This is not an R/F remediation finding and changes no architecture, implementation requirement, migration behavior, test/release gate, or pinned PocketBase baseline.
+
 ## Final handoff cleanup - 2026-09-12
 
 This documentation-only cleanup on the existing `codex/csharp-port` branch closes the recipient-domain safety contract, agent-instruction scope, and stale closure/schedule wording. The pinned PocketBase baseline remains `150b30b776565194260cc327eeeffdfb46475e81`. No settled architecture, schema, migration, workflow, authentication, hold-recovery, or deployment behavior is redesigned; R1-R7 and F1-F3 remain required initial-port work.

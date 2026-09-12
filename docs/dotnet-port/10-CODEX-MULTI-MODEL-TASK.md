@@ -27,24 +27,26 @@ For each slice:
 
 - prepare a focused implementation packet rather than dumping the entire pack;
 - include objective, acceptance criteria, relevant global invariants, relevant prior-slice contracts, exact current PocketBase files/behavior to preserve, migration impact, and relevant deferred/non-goal warnings;
-- create a fresh Luna Max implementation context;
-- create a fresh Terra High reviewer context;
+- create a fresh GPT-5.6 Sol High/XHigh implementation context;
+- create a fresh GPT-5.6 Terra High reviewer context;
 - keep the same Terra context through that slice's review/fix/re-review sequence;
 - create the milestone commit only after tests and review gate are satisfied.
 
 Resolve ordinary ambiguity yourself from this pack, repository, existing behavior, and tests. Do **not** ask the user for routine implementation choices. Ask only if a genuinely material product/security/migration decision cannot be resolved from the pack/current system.
 
+Astra may delegate narrowly bounded mechanical or support work to another suitable model, including Luna. Such delegation must not replace Sol's required implementation ownership for a slice or weaken the independent Terra review boundary.
+
 ### GPT-6 Astra Max - on-demand advisor
 
 When there is material uncertainty, architectural tradeoff, or a contemplated deviation from this pack, obtain a fresh independent Astra Max consultation. Do not use the advisor ceremonially on every slice.
 
-### Luna Max - primary implementation
+### GPT-5.6 Sol High/XHigh - primary implementation
 
-Use a fresh Luna context per slice. Implement the entire focused slice, including application code, DACPAC, migration mapping, tests, frontend integration, and docs impacted by that slice.
+Use a fresh Sol implementation context per slice. Use High reasoning by default. Astra may escalate the slice context to XHigh when the slice or confirmed review findings involve materially difficult cross-cutting correctness, migration, concurrency, security, external-operation recovery, or deployment work; do not require XHigh ceremonially for every slice. Implement the entire focused slice, including application code, DACPAC, migration mapping, tests, frontend integration, and docs impacted by that slice.
 
-When Terra reports confirmed findings, Luna fixes them. Terra does not implement its own review feedback.
+When Terra reports confirmed findings, Sol fixes them. Terra does not implement its own review feedback.
 
-### Terra High - independent review
+### GPT-5.6 Terra High - independent review
 
 Review the completed slice adversarially, including surrounding code, callers, tests, invariants, authorization/scope, data consistency, concurrency, external failure paths, migration, and unintended coupling.
 
@@ -108,15 +110,16 @@ All R1-R7 cases in `06-TESTING-CI.md` section 10.1 and F1-F3 cases in section 10
 
 For **every** vertical slice:
 
-1. Run all relevant tests and verify the slice end-to-end.
-2. Terra Pass 1: review the full slice.
-3. Luna fixes confirmed substantive findings.
-4. Terra Pass 2: re-review the full slice including regression from fixes.
-5. If Pass 2 finds a new substantive issue, Luna fixes and Terra performs Pass 3.
-6. If Pass 2 is clean, stop.
-7. After Pass 3, record only non-blocking leftovers in deferred follow-ups.
-8. Never progress with a known correctness, security, data-integrity, migration, or material-regression defect merely because the pass cap was reached.
-9. Commit the completed slice with a coherent milestone commit.
+1. Astra prepares the focused slice packet.
+2. A fresh Sol High/XHigh context implements the slice.
+3. Run all relevant tests and verify the slice end-to-end.
+4. A fresh Terra High context performs Pass 1 over the full slice.
+5. Sol fixes confirmed substantive findings.
+6. The same Terra context performs Pass 2 over the full slice, including regression from fixes.
+7. If Pass 2 finds a new substantive issue, Sol fixes and the same Terra context performs Pass 3. If Pass 2 is clean, stop.
+8. After Pass 3, record only non-blocking leftovers in deferred follow-ups.
+9. Never progress with a known correctness, security, data-integrity, migration, or material-regression defect merely because the pass cap was reached.
+10. Commit the completed slice with a coherent milestone commit only after the slice gate passes.
 
 ## Required implementation slice sequence
 

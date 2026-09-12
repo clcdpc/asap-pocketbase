@@ -43,9 +43,9 @@ Owns:
 
 Use a fresh advisor consultation from Astra Max when there is meaningful uncertainty or a contemplated deviation from this specification. Do not invoke an advisor for routine implementation details.
 
-### Primary implementer: Luna Max
+### Primary implementer: GPT-5.6 Sol High/XHigh
 
-Use a **fresh Luna Max context for each vertical slice**. The orchestrator provides a focused slice packet containing:
+Use a **fresh GPT-5.6 Sol implementation context for each vertical slice**. Use High reasoning by default and XHigh when Astra determines that the slice or confirmed review findings involve materially difficult cross-cutting correctness, migration, concurrency, security, external-operation recovery, or deployment work. Do not require XHigh ceremonially for every slice. The orchestrator provides a focused slice packet containing:
 
 - objective and acceptance criteria;
 - relevant architecture/decision excerpts;
@@ -57,20 +57,21 @@ Use a **fresh Luna Max context for each vertical slice**. The orchestrator provi
 
 Do not dump the entire specification into the implementer context unless necessary; the full pack remains available for lookup.
 
-### Reviewer: Terra High
+### Reviewer: GPT-5.6 Terra High
 
-Use a fresh Terra High context for each slice. Keep that context across the slice's review/fix/re-review cycle, then discard it for the next slice. The reviewer never implements its own findings; Luna Max fixes confirmed findings.
+Use a fresh Terra High context for each slice. Keep that context across the slice's review/fix/re-review cycle, then discard it for the next slice. The reviewer never implements its own findings; Sol fixes confirmed findings.
 
 ## 4. Slice review gate
 
 For each slice:
 
-1. **Pass 1:** Terra reviews the entire slice, not merely the diff fragment most recently changed.
-2. Luna fixes confirmed substantive findings.
-3. **Pass 2:** Terra re-reviews the whole slice, including regression risk introduced by fixes.
-4. If Pass 2 finds a new substantive issue, Luna fixes it and Terra performs **Pass 3**.
-5. If Pass 2 is clean, stop; do not perform Pass 3 for ceremony.
-6. After Pass 3, unresolved non-blocking items are recorded in deferred follow-ups/technical debt.
+1. Astra prepares the focused slice packet.
+2. A fresh Sol High/XHigh context implements the slice.
+3. Run all relevant tests and verification, including end-to-end verification where applicable.
+4. A fresh Terra High context performs **Pass 1** over the entire slice, not merely the diff fragment most recently changed.
+5. Sol fixes confirmed substantive findings, then the same Terra context performs **Pass 2** over the whole slice, including regression risk introduced by fixes.
+6. If Pass 2 finds a new substantive issue, Sol fixes it and the same Terra context performs **Pass 3**. If Pass 2 is clean, stop; do not perform Pass 3 for ceremony. After Pass 3, unresolved non-blocking items are recorded in deferred follow-ups/technical debt.
+7. Create the coherent milestone commit only after the slice gate passes.
 
 The pass cap never permits progression with a known correctness, security, data-integrity, migration, or material-regression problem. Those remain blocking even if a fourth investigative cycle would be needed to resolve them.
 
