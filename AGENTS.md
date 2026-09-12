@@ -2,6 +2,8 @@
 
 Maintain the PocketBase application correctly until the planned C#/.NET port. Specific rules for known runtime failures, security boundaries, data scope, and application invariants take precedence over these defaults.
 
+Rules identified as PocketBase-specific, including the route/hook, app-context, data-access, and Goja-runtime rules below, apply only when modifying the legacy PocketBase implementation. Target .NET work follows the porting contract under `docs/dotnet-port/`, including its DACPAC schema ownership, direct EF Core use, and selective Dapper/ADO.NET and parameterized SQL rules; the legacy PocketBase SQL prohibition does not apply to that work. General simplicity/scope, settings-scope, DOM-safety, accessibility, and behavioral-testing guidance remains applicable during and after the port.
+
 * Implement the smallest straightforward solution that satisfies the actual requirement and is easy to understand, maintain, and replace.
 * Add abstractions only for a concrete present benefit; add extra representations of state only when required for correctness.
 * Avoid generalized infrastructure, speculative extensibility, and compatibility or defensive machinery for scenarios the application does not currently support.

@@ -254,7 +254,8 @@
 - Migrate historical delivery/audit metadata but start the new outbox empty; never replay historical messages.
 - Test email follows the same durable outbox -> Hangfire -> Postmark path, using the selected organization's effective configuration.
 - Library admins can send test email and inspect/retry `failed` messages for their own library; super-admins can do so for any context; ordinary staff cannot. `suppressed` rows are visible diagnostically but never expose Retry.
-- Permanent nonproduction restricts recipients by exact normalized email-domain allowlist from external environment config; subdomains are allowed only when explicitly listed.
+- `Environment.IsNonProduction` governs the nonproduction recipient-domain rule in `01-PORTING-SPEC.md` section 14, independently of `ASPNETCORE_ENVIRONMENT=Testing` for testing authentication. When true, every outgoing patron/staff/weekly-summary/Test email recipient must pass the same case-insensitive exact-domain predicate against external `EmailSafety.AllowedRecipientDomains` at intent creation and before every provider call/send/retry. Subdomains require explicit entries; a missing/empty list allows nobody, and malformed configured domains fail startup configuration validation rather than broaden matching.
+- A domain-blocked intent becomes terminal `suppressed` with `recipient_domain_not_allowed`, zero Postmark calls, normal deterministic `BusinessKey`/idempotency behavior, and no rollback of its otherwise valid owning business mutation. Production (`IsNonProduction=false`) does not apply this restriction. Use the existing outbox path/five states; no second environment detector or mail pipeline. Deterministic tests in `06-TESTING-CI.md` section 4.1 are a release gate under `08-RELEASE-VALIDATION-NOTES.md` section 6, without a live send requirement.
 - Production and nonproduction may share the same Postmark server/token initially.
 
 ## 17. Email templates and branding

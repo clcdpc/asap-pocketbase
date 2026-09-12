@@ -68,7 +68,8 @@ Before any release candidate reaches live validation:
 - forced weekly-summary tests prove ordinary recipient+period idempotency, a distinct forced resend, and retry idempotency within the same `ManualRunId`;
 - self-contained `win-x64` migration artifact is validated on a representative old-server environment;
 - environment-isolation validation proves production and permanent-nonproduction IIS app pools use different runtime domain principals, each principal is denied access to the other environment database, and neither runtime identity has deployment/schema/backup privileges;
-- release artifact/manifest checks pass, including DACPAC SHA-256.
+- release artifact/manifest checks pass, including DACPAC SHA-256;
+- nonproduction recipient-domain safety tests in `06-TESTING-CI.md` section 4.1 pass with fake Postmark evidence as required by section 6 below.
 
 These are mandatory and non-overridable in the normal release process.
 
@@ -122,7 +123,11 @@ An override must not convert an actual product correctness failure into a passin
 
 ## 6. Postmark
 
-Do not make a live Postmark send a production-release blocker. Ordinary CI uses fakes; nonproduction can exercise real outbox/Postmark behavior under its recipient-domain safety rule; authenticated diagnostics/test-email functionality can validate configured delivery operationally.
+The recipient-domain boundary in `01-PORTING-SPEC.md` section 14 is a blocking deterministic release gate, verified without a live Postmark send. Record passing evidence from `06-TESTING-CI.md` section 4.1: exact/case-insensitive domains, explicit-only subdomains, missing/empty allowlist suppression, malformed configuration rejection, all patron/staff/weekly-summary/Test email paths, send/retry checks, committed business state and preserved idempotency after suppression, and unrestricted production delivery under this predicate. Blocked intents must be terminal `suppressed` with `recipient_domain_not_allowed` and zero fake provider calls.
+
+Verify the permanent-nonproduction external config sets `Environment.IsNonProduction=true` and lists only approved exact recipient domains. This application switch is independent of `ASPNETCORE_ENVIRONMENT=Testing`, which controls only testing authentication. Production does not apply the nonproduction list; sharing a Postmark server/token does not bypass the rule.
+
+Do not make a live Postmark send a production-release blocker. Ordinary CI uses fakes; optional nonproduction live outbox/diagnostics/**Test email** checks use the same safety predicate and durable pipeline.
 
 ## 7. Future refinement
 

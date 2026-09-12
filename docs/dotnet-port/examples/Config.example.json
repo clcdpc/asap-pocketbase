@@ -32,7 +32,8 @@
   },
   "EmailSafety": {
     "AllowedRecipientDomains": [
-      "example.org"
+      "example.org",
+      "staff.example.org"
     ]
   },
   "Hangfire": {

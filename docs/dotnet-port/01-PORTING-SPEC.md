@@ -361,9 +361,9 @@ Use one tightly ACLed JSON file outside the application directory for environmen
 - ASAP/Hangfire connection strings
 - Entra client ID/secret and allowed tenants
 - initial super-admin tenant ID, object ID, and readable UPN/email/profile seed values
-- environment marker/name
+- environment marker/name and `Environment.IsNonProduction`, the application-level switch for section 14's recipient-domain safety rule
 - filesystem paths (logs, environment-specific Data Protection key ring, backup/reporting paths as needed)
-- nonproduction email recipient domain allowlist
+- `EmailSafety.AllowedRecipientDomains`, the nonproduction exact-domain email allowlist governed by section 14
 - Hangfire recurring schedules
 - Hangfire/job queue processing limits using the documented queue-specific -> timeout-family -> global fallback precedence
 - deployment/environment-specific host information
@@ -444,7 +444,16 @@ Historical PocketBase delivery audit is migrated, but the new outbox starts empt
 
 **Test email** uses the real durable outbox + Hangfire + Postmark route, not a synchronous shortcut. Library admins may send tests for their own library; super-admins may test any context.
 
-In permanent nonproduction, email delivery is restricted by an externally configured exact recipient-domain allowlist. Any staff address in an allowed member-library domain may be a target; blocked recipients are rejected before Postmark. Subdomains are allowed only when explicitly listed. Production and nonproduction may initially share a Postmark server/token.
+The nonproduction recipient-domain safety contract uses the existing external configuration and the same outbox/delivery path:
+
+- `Environment.IsNonProduction` is the application-level switch governing this rule. `ASPNETCORE_ENVIRONMENT=Testing` is independently authoritative only for enabling the testing authentication handler; it does not select this email policy, and `IsNonProduction` cannot enable testing authentication.
+- When `IsNonProduction` is true, every outgoing Postmark recipient must pass the same exact-domain predicate before any provider call, including patron mail, ordinary and authorization-sensitive staff mail, ordinary/forced weekly summaries, and **Test email**. Check every recipient address (including To/Cc/Bcc when present) at intent creation and immediately before every send/retry using the currently loaded configuration. Existing staff authorization/address checks still apply independently.
+- Compare the recipient's domain with `EmailSafety.AllowedRecipientDomains` case-insensitively. Match the entire domain, never a suffix or wildcard. A parent-domain entry does not allow subdomains; a subdomain is allowed only when explicitly listed.
+- A missing or empty allowlist in nonproduction allows no recipient and suppresses all email delivery. Validate configured entries as domain names, not email addresses, URLs, wildcards, or suffix patterns. A malformed configured domain fails startup configuration validation; never interpret it as a broader match.
+- An intent blocked by this rule becomes terminal `suppressed` with the safe machine-readable reason `recipient_domain_not_allowed`; no Postmark call occurs. The owning business mutation still commits normally. Preserve the normal deterministic `BusinessKey`, SQL uniqueness, and duplicate-race-as-success behavior for suppressed intents; intentionally repeatable test/ad-hoc messages retain their existing null-key allowance. Suppressed rows are never retried or resurrected after an allowlist change.
+- When `IsNonProduction` is false (production), this nonproduction recipient-domain restriction does not apply. Production and nonproduction may initially share a Postmark server/token; the token/server does not select the safety policy.
+
+Use one shared safety predicate in the existing mail path, with no additional environment-detection abstraction, pipeline, subsystem, or outbox state. Required deterministic coverage is in `06-TESTING-CI.md` section 4.1; release evidence is in `08-RELEASE-VALIDATION-NOTES.md` section 6.
 
 Library admins may inspect and manually retry `failed` emails for their own library; super-admins have consortium-wide access; ordinary staff do not. `sent` and `suppressed` rows are terminal and do not expose Retry.
 

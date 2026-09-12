@@ -72,6 +72,28 @@ Normal PR/main CI uses deterministic fakes/stubs for Polaris and Postmark. The a
 
 No live Postmark send is a normal release blocker.
 
+### 4.1 Nonproduction recipient-domain safety
+
+Implement deterministic tests for the single predicate in `01-PORTING-SPEC.md` section 14. Use a recording fake Postmark boundary and otherwise valid notification configuration/authorization; assert persisted outbox outcomes and provider-call counts, not just a helper's return value. For allowed cases, drive delivery through the worker and assert `sent` with one fake provider call. For blocked cases, assert terminal `suppressed`, reason `recipient_domain_not_allowed`, and zero provider calls. Unless stated otherwise, use `IsNonProduction=true` in the cases below.
+
+| Case | Configuration / recipient | Required outcome |
+| --- | --- | --- |
+| Exact domain | `IsNonProduction=true`, allow `example.org`, send to `patron@example.org` | Allowed. |
+| Case normalization | Allow `EXAMPLE.ORG`, send to `patron@Example.Org` | Allowed by case-insensitive comparison. |
+| Unlisted domain | Allow `example.org`, send to `patron@other.example` | Suppressed. |
+| No implicit subdomain | Allow only `example.org`, send to `patron@staff.example.org` | Suppressed. |
+| Explicit subdomain | Explicitly allow `staff.example.org`, send to `patron@staff.example.org` | Allowed. |
+| Empty allowlist | `AllowedRecipientDomains=[]` in nonproduction | All delivery suppressed. |
+| Missing allowlist | Omit `AllowedRecipientDomains` in nonproduction | All delivery suppressed. |
+| Malformed configuration | Entries such as `*.example.org`, `.example.org`, `https://example.org`, `patron@example.org`, or `example..org` | Startup configuration validation fails safely; zero provider calls, no broadened matching. |
+| Production | `IsNonProduction=false`, recipient outside a valid list, or list empty/missing | Delivery allowed by this predicate. |
+
+Run representative allowed and blocked cases through patron business-event mail, authorization-sensitive staff mail, ordinary and forced weekly summaries, and **Test email**, proving every path uses the same predicate. Every outgoing recipient must pass, including To/Cc/Bcc when present. Cover a queued message allowed at intent creation but blocked by the configuration loaded after restart: every send/retry rechecks and terminally suppresses it without calling Postmark.
+
+Use real SQL to prove a business action with a blocked notification still commits its normal state/event and one suppressed intent atomically. Repeat/concurrently invoke the same idempotent business event and verify its deterministic `BusinessKey` resolves to the existing suppressed row without a duplicate or action failure. Suppressed rows expose no Retry and remain terminal after the allowlist is expanded.
+
+Prove the switches are independent: `ASPNETCORE_ENVIRONMENT=Testing` with `IsNonProduction=false` does not activate the domain restriction; a normal Development host with `IsNonProduction=true` enforces it without registering testing authentication. The tests exercise the existing outbox/provider boundary, not a separate test-mail pipeline.
+
 ## 5. Frontend/jsdom tests
 
 Keep/adapt useful existing jsdom tests. Node/npm is allowed for development/CI tests only.
@@ -126,6 +148,7 @@ Requirements:
 
 - Production and normal Development never register the scheme.
 - There is no ordinary `TestAuth:Enabled=true` switch that could accidentally enable bypass in production.
+- `Environment.IsNonProduction` governs only the recipient-domain safety concern here and never enables this scheme; section 4.1 verifies that the two switches remain independent.
 - CI Playwright launches the actual web application under `Testing` and authenticates as seeded StaffUser identities/roles, with realistic `tid` + `oid` claims so the same durable local lookup path is exercised.
 - Normal F5 uses real Entra/OIDC.
 

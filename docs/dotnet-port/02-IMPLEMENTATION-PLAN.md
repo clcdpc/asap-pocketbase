@@ -85,7 +85,7 @@ Objectives:
 - Add `Asap.sln`, `Asap.Web`, `Asap.Database`, `Asap.Migration`, `Asap.Tests`.
 - Add .NET 10 pinning/global settings as appropriate.
 - Establish SQL Server 2022/compat 160 DACPAC baseline, `[asap].[SchemaVersion]`, and `[asap].[DeploymentState]` for the last successfully deployed DACPAC hash.
-- Add external config loading and safe example file. Configure the environment-specific Data Protection key ring used for both auth cryptography and encryption of SQL-stored reusable integration credentials.
+- Add external config loading and safe example file, including recipient-domain validation and the independent `Environment.IsNonProduction` email-safety switch from `01-PORTING-SPEC.md` section 14. Configure the environment-specific Data Protection key ring used for both auth cryptography and encryption of SQL-stored reusable integration credentials.
 - Add NLog/correlation ID baseline.
 - Add `/health/live` and `/health/ready` minimal endpoints.
 - Add feature-oriented source layout.
@@ -116,7 +116,7 @@ Implement minimum end-to-end dependencies:
 - duplicate/eligibility/limits/current behavior required to accept/reject a request;
 - auto-claim evaluation on submit where required;
 - request event creation;
-- minimum EmailTemplate/Outbox/Hangfire/Postmark path required for submission-related email behavior;
+- minimum EmailTemplate/Outbox/Hangfire/Postmark path required for submission-related email behavior, including `01-PORTING-SPEC.md` section 14's shared nonproduction domain predicate, terminal suppression without business rollback, and relevant deterministic tests from `06-TESTING-CI.md` section 4.1;
 - relevant legacy deep-link/mapping infrastructure if the flow exposes it.
 
 Migration work in this slice:
@@ -216,6 +216,7 @@ Implement the complete current background-processing set:
 - session cleanup;
 - one coherent five-state outbox (`pending`/`sending`/`sent`/`failed`/`suppressed`), including database-enforced filtered uniqueness for non-null deterministic `BusinessKey`, duplicate-key-race-as-success semantics, ordinary recipient+period and forced-`ManualRunId` summary keys, lease-based `sending` claims, expired-lease recovery, authorization-sensitive staff original-tuple/current-tenant/scope/address revalidation before every send/retry, and documented at-least-once ambiguity behavior. `failed` retains payload/manual Retry; only terminal `sent`/`suppressed` payload is purge-eligible after 90 days. Missing notification configuration must never roll back the owning ordinary business mutation;
 - Postmark webhook/delivery event handling;
+- complete the shared nonproduction recipient-domain safety coverage in `06-TESTING-CI.md` section 4.1 across patron, authorization-sensitive staff, ordinary/forced weekly-summary, and Test email paths, including suppression/idempotency, send/retry checks, and the independent application/testing-auth switches;
 - Run Now actions with library-admin/super-admin scope;
 - Hangfire dashboard super-admin auth;
 - implement the authoritative recurring-job schedule and processing-limit contracts from `01-PORTING-SPEC.md`; expose every listed schedule key/default and the complete global/timeout/queue-specific processing-limit shape in `examples/Config.example.json`; preserve current effective operational values through the separate operational-config parity process unless an explicit transform is documented. New participation-dependent result commits/operation acquisitions lock/re-read the owning Organization first and skip if inactive; recovery/completion of already-acquired holds is the explicit section 9.1 exception and infrastructure jobs continue. Already-committed immutable business-event mail may drain after deactivation, while authorization-sensitive staff mail revalidates/suppresses;
@@ -325,7 +326,8 @@ Before merge:
 - ensure final PocketBase tag/Git history is the archival source;
 - verify no PocketBase package/runtime/data paths remain in production artifact;
 - verify no Node/npm dependency in normal build/publish/F5/deployment;
-- update README/architecture/operations documentation for .NET.
+- update README/architecture/operations documentation for .NET;
+- rewrite repository-level `AGENTS.md` for the completed .NET repository before the port PR merges: remove obsolete PocketBase-only instructions, retain/adapt general simplicity/scope, settings-scope, DOM-safety, accessibility, and behavioral-testing guidance, and describe the actual .NET layout, commands, DACPAC ownership, EF Core, and Dapper/ADO.NET/SQL rules. It must no longer describe .NET as a planned future port.
 
 Then run the final whole-application adversarial review.
 
@@ -372,4 +374,4 @@ When a task uncovers an improvement that does not materially reduce port/cutover
 
 ## Closure-remediation completion gate
 
-The prior seven regression groups R1-R7 in `06-TESTING-CI.md` section 10.1 and final F1-F3 groups in section 10.2 are mandatory in the relevant slices; they are not a deferred design pass. Preserve the exact pinned PocketBase baseline, common lock hierarchy, original seven recurring jobs/eight configured business queues, existing frameworks, and scoped sequential processing. `14-REMEDIATION-AUDIT.md` is the cross-document traceability checklist, not a claim that unbuilt implementation tests have run.
+The prior seven regression groups R1-R7 in `06-TESTING-CI.md` section 10.1 and final F1-F3 groups in section 10.2 are mandatory in the relevant slices; they are not a deferred design pass. Preserve the exact pinned PocketBase baseline, common lock hierarchy, existing frameworks, and scoped sequential processing. The pinned source has four registered recurring cron triggers; the target has seven recurring Hangfire schedules, including target-only maintenance, as defined by the authoritative matrix in `01-PORTING-SPEC.md` section 23. Retain the eight configured processing queue keys plus the separate logical HoldRecovery scan under sections 23 and 23.1. `14-REMEDIATION-AUDIT.md` is the cross-document traceability checklist, not a claim that unbuilt implementation tests have run.

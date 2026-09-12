@@ -1,6 +1,6 @@
 # ASAP PocketBase -> .NET Porting Documentation Pack
 
-**Status:** Final closure-review Findings #1-#3 resolved in the documentation contract; prior clean/settled architecture retained; implementation/release tests remain required
+**Status:** Final handoff cleanup complete in the documentation contract; R1-R7/F1-F3 retained as initial-port requirements; implementation/release tests remain required
 **Prepared:** 2026-09-12  
 **Repository:** `clcdpc/asap-pocketbase`  
 **Source snapshot:** `150b30b776565194260cc327eeeffdfb46475e81` (`Improve staff login diagnostics and library-aware email formatting`, 2026-09-09)  
@@ -12,9 +12,9 @@ This pack is the authoritative implementation baseline for replacing the PocketB
 
 The design was developed by walking the architecture, data model, authentication, Polaris/Postmark integrations, migration, deployment, testing, CI, operational model, and cutover behavior decision-by-decision. When this pack conflicts with an older PocketBase document, this pack governs the .NET port.
 
-This revision resolves only the three confirmed findings in the latest closure review of the exact input archive: OutstandingTimeout now explicitly governs unreviewed suggestions by creation age; terminal fulfillment requires the particular tracked final Polaris hold identity while positive checkout remains title-level; and migration derives permanent BIB protection from every dependable normalized placement-evidence class, including all five terminal reasons and status_changed adoption transitions. Known/null historical BIB protection remains separate from runtime hold identity. No operation/provider success/ID is fabricated.
+This revision closes the nonproduction recipient-domain safety wording and deterministic test/release requirements, clarifies current PocketBase versus target .NET agent-instruction scope, requires the final `AGENTS.md` rewrite in Slice 11, and corrects closure/schedule wording. It preserves the prior R1-R7 and final F1-F3 decisions, including OutstandingTimeout suggestion-age semantics, particular tracked hold identity for terminal fulfillment, and exhaustive retained legacy placed-hold evidence/BIB protection.
 
-The prior hold-recovery, identity/session/lifecycle, Organization/claim, AdditionalCopy, outbox, queue-fairness, deployment/Hangfire, migration-bootstrap, configuration-inheritance, and forced-summary decisions remain binding and were not intentionally redesigned. `14-REMEDIATION-AUDIT.md` separates this final F1-F3 trace from the retained prior R1-R7 record. The required new regression and release gates are `06-TESTING-CI.md` section 10.2 and `08-RELEASE-VALIDATION-NOTES.md` section 2.2.
+The prior hold-recovery, identity/session/lifecycle, Organization/claim, AdditionalCopy, outbox, queue-fairness, deployment/Hangfire, migration-bootstrap, configuration-inheritance, and forced-summary decisions remain binding. `14-REMEDIATION-AUDIT.md` records this handoff cleanup separately from the historical F1-F3/R1-R7 audits and their archive/review hashes. Required regression/release gates remain in `06-TESTING-CI.md` sections 10.1-10.2 and `08-RELEASE-VALIDATION-NOTES.md` sections 2.1-2.2; recipient-domain safety adds testing section 4.1 and release section 6.
 
 ## Governing principles
 
@@ -55,6 +55,8 @@ The prior hold-recovery, identity/session/lifecycle, Organization/claim, Additio
 | `PACK-MANIFEST.txt` | SHA-256 inventory of the pack payload for handoff/integrity checks. |
 
 The configuration examples contain placeholders and agreed **configuration shapes**, not deployable credentials. Exact option-class/key names may be refined during implementation as long as the documented ownership boundaries and behavior remain unchanged.
+
+`examples/Config.example.json` retains `Environment.IsNonProduction=true` and explicitly lists both `example.org` and `staff.example.org`; the parent entry alone never permits the subdomain. The full fail-closed recipient-domain contract is in `01-PORTING-SPEC.md` section 14.
 
 ## Review corrections incorporated
 
