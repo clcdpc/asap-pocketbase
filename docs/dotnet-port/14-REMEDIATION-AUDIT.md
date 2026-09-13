@@ -1,5 +1,32 @@
 # Porting pack remediation and handoff audit
 
+## Astra-first escalation refinement - 2026-09-13
+
+Documentation-only execution-policy correction on `codex/csharp-port`, draft
+PR #264. At task start, clean local HEAD, fetched implementation branch and PR
+head matched `fc31c5637f69eb22510bfbac927cb3de1ee5d2e3`; fetched `origin/main`
+still matched the pinned PocketBase SHA. Slices 0-3 remain accepted; Slice 4
+remains not started.
+
+Luna Max now always consults Astra Max first on material blockers under document
+10. Astra inspects governing evidence and gives a concrete ruling whenever it
+suffices, without a fixed Luna-failure count. Only Astra may dispatch fresh,
+bounded Sol High advice when uncertainty remains or independent reasoning has
+material value; Astra evaluates the advice and decides the resolution. Sol
+XHigh requires Astra's determination of a remaining Sol High blocker or
+exceptional cross-system reasoning. Luna implements/tests, Terra independently
+verifies, and neither Sol model owns the slice.
+
+The normal Luna/Terra loop and every review, test, migration, milestone and
+exact-commit remote-CI gate are unchanged. Prepared Slice 4-11 packets, prior
+Sol implementation history and all earlier audit entries are unchanged.
+`FileEmailSender` retains its temporary boundary; real Postmark integration
+and required validation remain release/rehearsal blockers. This update changes
+no architecture, application, schema, migration, frontend or test implementation.
+Validation covers current-policy/history separation, four JSON examples,
+affected pack-local references and all 19 regenerated manifest hashes. No
+application/release validation is rerun or claimed; PR #264 remains draft.
+
 ## Remaining-slice execution-model transition - 2026-09-13
 
 This documentation-only update takes effect at Slice 4 on the existing

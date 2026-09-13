@@ -66,17 +66,35 @@ pushes the milestone only after all existing gates pass, then requires actual
 remote CI success for that exact milestone before dispatching the next slice.
 Migration code and reconciliation continue with every data-owning slice.
 
-Sol escalation requires a concrete unresolved contract contradiction or
-undetermined behavior; two focused unsuccessful Luna fixes of a substantive
-Terra correctness finding; a failing test exposing unclear cross-cutting
-concurrency/recovery/migration/security/external-operation behavior; an external
-provider/API contract unavailable from source/package/documentation; or a
-smallest fix requiring a binding architectural deviation. Fresh Sol High
-advises on root cause, smallest faithful resolution and affected invariants/tests;
-Luna implements and Terra verifies. Sol XHigh requires an unresolved blocking
-Sol High escalation or Astra's exceptional cross-system reasoning determination.
-Difficulty alone does not transfer whole-slice ownership to Sol. The complete
-policy is in `../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md`.
+Luna Max always escalates first to Astra Max for focused consultation on a
+material blocker: conflicting/undetermined behavior, a Terra finding that
+cannot be resolved confidently, repeated failures caused by unclear invariants,
+cross-slice design questions, provider limitations affecting a contract, an
+architectural deviation, or a material slice-boundary/deferral question. No
+fixed number of Luna failures is required. Luna must not bypass Astra or
+dispatch Sol directly.
+
+Astra owns the complete contract, accepted decisions, cross-slice state,
+packet scope, current implementation, progression and acceptance. Astra
+inspects the authoritative pack, accepted implementation, pinned source and
+tests/evidence, decides which contract governs, narrows the problem and gives
+Luna a concrete implementation ruling whenever the evidence suffices. The same
+Luna implements/tests; the same Terra verifies through normal review/re-review.
+
+Only Astra may dispatch fresh Sol High after focused analysis determines that
+material uncertainty remains or independent/deeper specialist advice has
+material value under document 10's criteria. Sol analyzes only the bounded
+problem and provides root cause, alternatives, the smallest faithful resolution
+and affected invariants/tests. Astra evaluates the advice against the pack and
+accepted implementation and decides the resolution; Luna implements/tests and
+Terra independently verifies. Sol XHigh requires Astra's determination that
+bounded Sol High advice still leaves a blocking issue unresolved or exceptional
+cross-system reasoning is required. Neither Sol model takes slice ownership.
+Code size, difficult SQL, migration, concurrency, authentication, configuration,
+deployment, an external integration or a routine Luna question alone does not
+justify Sol. The authoritative hierarchy is Luna -> Astra -> optional Sol by
+Astra's decision -> Astra ruling -> Luna implementation/tests -> Terra review.
+The complete policy is in `../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md`.
 
 Prepared packets and source notes are committed as clearly labeled documentation
 checkpoints. They do not certify a slice, replace its independent review, or
@@ -91,11 +109,15 @@ documentation-only update does not dispatch or start Slice 4. Prepared later
 packets remain preparation only; the port and deferred Postmark/rehearsal/release
 gates are not complete.
 
-At this policy update's start, local HEAD, fetched implementation branch and
-draft PR #264 all matched `3d4a4d9fb28983fb3ac25489e9a641d9b38abdfe`; the
-working tree was clean and fetched `origin/main` still matched the behavioral
-pin. Validation for this update is documentation-only: JSON examples, local
-references, current-policy/history separation and final pack hashes. Slice 3's
+At the prior Luna-transition update's start, local HEAD, fetched implementation
+branch and draft PR #264 all matched `3d4a4d9fb28983fb3ac25489e9a641d9b38abdfe`;
+the working tree was clean and fetched `origin/main` still matched the behavioral
+pin. At this Astra-first refinement's start, all three implementation heads
+matched `fc31c5637f69eb22510bfbac927cb3de1ee5d2e3`, the Luna-transition policy
+commit; the working tree was clean, PR #264 was draft and fetched `origin/main`
+still matched the pin. Prepared Slice 4-11 packets are unchanged and Slice 4
+remains not started. Validation for this refinement is documentation-only: JSON
+examples, local references, current-policy/history separation and final pack hashes. Slice 3's
 190 application/SQL/browser tests below are retained prior evidence, not rerun
 or claimed as new implementation/release validation by this update.
 

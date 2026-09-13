@@ -41,7 +41,7 @@ Owns:
 - acceptance checks;
 - commits/checkpoints;
 - deciding ordinary ambiguities from this pack + current app + repository;
-- deciding whether a concrete unresolved issue justifies the focused escalation below.
+- serving as Luna's mandatory first escalation point, resolving focused questions and deciding whether additional independent Sol advice has material value.
 
 Before every remaining slice, refresh its already-prepared packet against the accepted prior implementation and prepare the focused context. Astra retains acceptance verification, milestone commits, push, and actual remote CI verification for that exact milestone before dispatching the next slice.
 
@@ -65,21 +65,21 @@ Luna implements the existing contract rather than redesigning it. Do not add rep
 
 Use a fresh Terra High context after each remaining slice's implementation and required tests. Keep that context across the slice's full review/fix/re-review cycle, then use a fresh context for the next slice. Review correctness/regression, callers and surrounding code, SQL/data consistency, authorization/scope, concurrency/ordering, recovery, external side effects, migration, frontend/API contracts, tests, and unnecessary complexity/coupling. Terra reports findings and never implements its own fixes; confirmed findings return to the same Luna context.
 
+### Mandatory first escalation: Luna Max -> Astra Max
+
+Luna always consults Astra Max first when a material blocker requires contract or broader-design interpretation. This includes conflicting/undetermined behavior; a Terra finding that cannot be resolved confidently; repeated attempts failing because the invariant is unclear; cross-slice concurrency, recovery, migration, authorization, security or external-operation questions; provider limitations affecting a contract; a binding architectural deviation; or a material slice-boundary/deferral question. The full conditions are in `10-CODEX-MULTI-MODEL-TASK.md`. No fixed number of failed Luna attempts is required, and Luna must not bypass Astra or dispatch Sol directly.
+
+Astra owns the complete port contract, accepted decisions, cross-slice state, packet scope, current implementation, progression and acceptance. Astra inspects the authoritative pack, accepted implementation, pinned source and tests/evidence, decides which contract governs, narrows the problem, and gives Luna a concrete implementation ruling whenever the evidence suffices. The same Luna implements the ruling and runs required tests; the same Terra independently verifies it through normal review/re-review.
+
 ### Focused escalation advisor: GPT-5.6 Sol High
 
-Sol is outside the normal slice lifecycle. Astra dispatches a fresh Sol High context only for a concrete unresolved issue meeting at least one condition:
+Only after focused Astra analysis, Astra may dispatch a fresh Sol High consultation if the bounded issue remains materially uncertain or independent/deeper specialist reasoning has material value under document 10's criteria. Sol analyzes only that problem and provides root cause, alternatives, the smallest faithful resolution, and affected invariants/tests. Astra evaluates the advice against the authoritative pack and accepted implementation and decides the resolution; the same Luna implements/tests and the same Terra independently verifies it.
 
-1. The pack, accepted target implementation, pinned source, and tests materially contradict each other or do not determine required behavior.
-2. Terra reports a substantive correctness problem and Luna has made two focused unsuccessful attempts to resolve it.
-3. A failing test reveals an unclear cross-cutting concurrency, recovery, migration, security, or external-operation problem.
-4. Required behavior depends on an external provider/API contract that cannot be established from available source, package, or documentation.
-5. The smallest apparent fix would require deviating from a binding architectural decision.
-
-Sol inspects the specific problem, identifies its root cause, recommends the smallest faithful resolution, and identifies affected invariants/tests. Luna implements the resolution and Terra verifies it. Difficult SQL, migration, concurrency, authentication, configuration, deployment, or external integration alone does not justify transferring an entire slice to Sol.
+The hierarchy is Luna Max -> Astra Max focused consultation -> optional fresh Sol High by Astra's decision -> Astra ruling -> Luna implementation/tests -> Terra verification. Neither Sol High nor Sol XHigh owns the slice. Code size, difficult SQL, migration, concurrency, authentication, configuration, deployment, external integration or a routine Luna question alone does not justify invoking Sol.
 
 ### Exceptional escalation: GPT-5.6 Sol XHigh
 
-Use only if the focused Sol High escalation leaves a blocking problem unresolved, or Astra determines that an exceptional cross-system reasoning problem requires it. Sol XHigh is not part of the normal slice lifecycle.
+Use only if Astra determines that the bounded Sol High consultation still leaves a blocking issue unresolved, or the problem requires exceptional cross-system reasoning. Astra retains the resolution decision; Luna implements/tests and Terra independently verifies. Sol XHigh remains outside the normal slice lifecycle and never replaces Astra as Luna's first escalation point.
 
 ## 4. Slice review gate
 

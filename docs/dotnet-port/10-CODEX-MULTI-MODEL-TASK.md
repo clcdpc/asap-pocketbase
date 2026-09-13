@@ -38,7 +38,7 @@ For each remaining slice:
 
 Resolve ordinary ambiguity yourself from this pack, repository, existing behavior, and tests. Do **not** ask the user for routine implementation choices. Ask only if a genuinely material product/security/migration decision cannot be resolved from the pack/current system.
 
-Astra decides when a concrete unresolved issue meets the escalation conditions below. Sol is outside the normal implementation/review loop.
+Astra Max is Luna's mandatory first escalation point. Astra already owns the complete port contract, cross-slice state, accepted decisions, packet scope, current implementation, progression and acceptance, including whether an issue requires design reasoning. For escalation questions, inspect the authoritative documentation, accepted implementation, pinned PocketBase behavior and relevant tests/evidence; decide which contract governs, narrow the problem, and give Luna a concrete implementation ruling. Resolve the issue directly whenever that evidence is sufficient. Astra owns substantive resolution as well as any decision to seek independent Sol advice.
 
 ### GPT-5.6 Luna Max - default primary implementation
 
@@ -50,21 +50,39 @@ Luna implements the existing contract rather than redesigning it. Do not add rep
 
 Use a fresh Terra High context per slice after implementation and required tests, then retain it through the full required review/re-review sequence. Review the full slice, including correctness/regression, callers and surrounding code, SQL/data consistency, authorization/scope, concurrency/ordering, recovery, external side effects, migration, frontend/API contracts, tests, and unnecessary complexity/coupling. Terra reports findings; it does not implement them. Confirmed findings return to the same Luna context.
 
+### Mandatory first escalation: Luna Max -> Astra Max
+
+Luna always consults Astra Max first for a materially blocking issue, including:
+
+1. The pack, accepted target implementation, pinned source, and tests appear to conflict or fail to determine required behavior.
+2. A Terra finding cannot be resolved confidently from the existing contract.
+3. Repeated implementation attempts fail because the correct invariant or behavior is unclear, rather than because of an ordinary coding defect.
+4. A cross-slice concurrency, recovery, migration, authorization, security, or external-operation question requires interpretation of the broader design.
+5. An external provider/API limitation appears to require changing an existing contract.
+6. The smallest apparent implementation would require deviation from a binding architectural decision.
+7. Luna believes work belongs to a different slice or should be deferred, and the answer materially affects current implementation.
+
+No fixed number of Luna failures is required before Astra reasons about an issue. Luna must not bypass Astra or dispatch Sol directly. If Astra resolves the issue, the same Luna implements the ruling and runs required tests; the same Terra independently verifies it during the normal full review/re-review process.
+
 ### GPT-5.6 Sol High - focused escalation advisor only
 
-Use a fresh Sol High context only for a concrete unresolved issue meeting at least one of these conditions:
+Only Astra may dispatch a fresh Sol High consultation, after focused Astra analysis determines that the issue remains materially uncertain or an independent/deeper specialist opinion provides material value. Examples include:
 
-1. The pack, existing target implementation, pinned source, and tests materially contradict each other or do not determine required behavior.
-2. Terra reports a substantive correctness problem and Luna has made two focused unsuccessful attempts to resolve it.
-3. A failing test reveals an unclear cross-cutting concurrency, recovery, migration, security, or external-operation problem.
-4. Required behavior depends on an external provider/API contract that cannot be established from available source, package, or documentation.
-5. The smallest apparent fix would require deviating from a binding architectural decision.
+1. Contradictory evidence with no clear governing source.
+2. Subtle cross-system concurrency/recovery reasoning where multiple plausible solutions remain.
+3. External provider semantics that remain uncertain after available source, package and documentation have been inspected.
+4. A proposed architectural deviation with material correctness implications.
+5. A substantive Terra issue unresolved after focused Luna work and Astra guidance.
 
-Sol normally acts as a narrow advisor: inspect the specific problem, identify its root cause, recommend the smallest faithful resolution, and identify affected invariants/tests. Luna implements the resolution and Terra verifies it. Do not transfer an entire slice to Sol merely because it contains difficult SQL, migration, concurrency, authentication, configuration, deployment, or external-integration work.
+Code size, difficult SQL, migration, concurrency, authentication, configuration, deployment, an external integration, or a routine Luna implementation question alone does not justify Sol consultation.
+
+Sol analyzes only the bounded problem and provides root cause, alternatives, the smallest faithful resolution, and affected invariants/tests. Astra evaluates that advice against the authoritative pack and accepted implementation, then decides the resolution. The same Luna implements it and runs required tests; the same Terra independently verifies it through the normal review/re-review gate. Neither Sol High nor Sol XHigh takes ownership of the slice.
+
+The escalation hierarchy is Luna Max -> Astra Max focused consultation -> optional fresh Sol High only by Astra's decision -> Astra ruling -> Luna implementation/tests -> Terra independent verification. Sol is outside the normal slice lifecycle.
 
 ### GPT-5.6 Sol XHigh - exceptional escalation only
 
-Use only when the focused Sol High escalation still leaves a blocking problem unresolved, or Astra determines that an exceptional cross-system reasoning problem requires it. It is outside the normal slice lifecycle.
+Use only when Astra determines that the bounded Sol High consultation still leaves a blocking issue unresolved, or the problem requires exceptional cross-system reasoning. Astra retains the resolution decision; Luna implements/tests and Terra independently verifies. Sol XHigh remains outside the normal slice lifecycle and never replaces Astra as Luna's first escalation point.
 
 ## Binding architecture
 
