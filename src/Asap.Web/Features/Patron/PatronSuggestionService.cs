@@ -216,6 +216,12 @@ public sealed partial class PatronSuggestionService(
             autoClaimCandidate,
             configuration.OrganizationId,
             cancellationToken);
+        await LockAndValidateFormatAsync(
+            connection,
+            transaction,
+            configuration.OrganizationId,
+            suggestion,
+            cancellationToken);
         await EnforceLimitAsync(
             connection,
             transaction,
@@ -334,6 +340,97 @@ public sealed partial class PatronSuggestionService(
             throw new PatronFlowException(403, configuration.SystemNotEnabledMessage);
         }
     }
+
+    private static async Task LockAndValidateFormatAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        int organizationId,
+        ValidatedSuggestion suggestion,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
+            """
+            SELECT format.[OwnerOrganizationId], format.[Code],
+                   COALESCE(formatOverride.[IsEnabled], format.[IsEnabled]) AS [IsEnabled],
+                   COALESCE(formatOverride.[MessageBehavior], format.[MessageBehavior], N'none') AS [MessageBehavior],
+                   COALESCE(formatOverride.[TitleMode], format.[TitleMode], N'required') AS [TitleMode],
+                   COALESCE(formatOverride.[AuthorMode], format.[AuthorMode], N'optional') AS [AuthorMode],
+                   COALESCE(formatOverride.[IdentifierMode], format.[IdentifierMode], N'optional') AS [IdentifierMode],
+                   COALESCE(formatOverride.[PublicationMode], format.[PublicationMode], N'optional') AS [PublicationMode]
+            FROM [asap].[MaterialFormat] AS format WITH (UPDLOCK, HOLDLOCK)
+            LEFT JOIN [asap].[MaterialFormatOverride] AS formatOverride WITH (UPDLOCK, HOLDLOCK)
+              ON formatOverride.[MaterialFormatId] = format.[Id]
+             AND formatOverride.[LibraryOrganizationId] = @organizationId
+            WHERE format.[Id] = @materialFormatId
+              AND (format.[OwnerOrganizationId] = 1 OR format.[OwnerOrganizationId] = @organizationId);
+            """,
+            connection,
+            transaction);
+        Add(command, "@materialFormatId", SqlDbType.BigInt, suggestion.Format.Id);
+        Add(command, "@organizationId", SqlDbType.Int, organizationId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            throw FormatChanged();
+        }
+
+        var ownerOrganizationId = reader.GetInt32(0);
+        var code = reader.GetString(1);
+        var isEnabled = reader.GetBoolean(2);
+        var messageBehavior = reader.GetString(3);
+        var titleMode = reader.GetString(4);
+        var authorMode = reader.GetString(5);
+        var identifierMode = reader.GetString(6);
+        var publicationMode = reader.GetString(7);
+        if (ownerOrganizationId != 1 && ownerOrganizationId != organizationId ||
+            !string.Equals(code, suggestion.Format.Code, StringComparison.Ordinal) ||
+            !isEnabled ||
+            !string.Equals(messageBehavior, suggestion.Format.MessageBehavior, StringComparison.Ordinal) ||
+            !string.Equals(titleMode, suggestion.Format.Title.Mode, StringComparison.Ordinal) ||
+            !string.Equals(authorMode, suggestion.Format.Author.Mode, StringComparison.Ordinal) ||
+            !string.Equals(identifierMode, suggestion.Format.Identifier.Mode, StringComparison.Ordinal) ||
+            !string.Equals(publicationMode, suggestion.Format.Publication.Mode, StringComparison.Ordinal))
+        {
+            throw FormatChanged();
+        }
+
+        await reader.CloseAsync();
+        await using var rules = new SqlCommand(
+            """
+            SELECT field.[FieldKey], [formatRule].[Mode], [formatRule].[LabelOverride]
+            FROM [asap].[MaterialFormatCustomFieldRule] AS [formatRule] WITH (UPDLOCK, HOLDLOCK)
+            JOIN [asap].[PatronCustomField] AS field WITH (UPDLOCK, HOLDLOCK)
+              ON field.[Id] = [formatRule].[PatronCustomFieldId]
+             AND field.[LibraryOrganizationId] = [formatRule].[LibraryOrganizationId]
+             AND field.[IsEnabled] = 1
+            WHERE [formatRule].[LibraryOrganizationId] = @organizationId
+              AND [formatRule].[MaterialFormatId] = @materialFormatId;
+            """,
+            connection,
+            transaction);
+        Add(rules, "@materialFormatId", SqlDbType.BigInt, suggestion.Format.Id);
+        Add(rules, "@organizationId", SqlDbType.Int, organizationId);
+        var currentRules = new Dictionary<string, (string Mode, string? Label)>(StringComparer.Ordinal);
+        await using var ruleReader = await rules.ExecuteReaderAsync(cancellationToken);
+        while (await ruleReader.ReadAsync(cancellationToken))
+        {
+            currentRules[ruleReader.GetString(0)] =
+                (ruleReader.GetString(1), ruleReader.IsDBNull(2) ? null : ruleReader.GetString(2));
+        }
+
+        if (currentRules.Count != suggestion.Format.CustomFields.Count ||
+            currentRules.Any(pair => !suggestion.Format.CustomFields.TryGetValue(pair.Key, out var captured) ||
+                                     !string.Equals(captured.Mode, pair.Value.Mode, StringComparison.Ordinal)))
+        {
+            throw FormatChanged();
+        }
+    }
+
+    private static PatronFlowException FormatChanged() =>
+        new(
+            409,
+            "The selected material format changed while the suggestion was being submitted. Refresh the form and try again.",
+            new { code = "material_format_changed" });
 
     private async Task EnforceLimitAsync(
         SqlConnection connection,

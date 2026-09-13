@@ -3,13 +3,48 @@ using Asap.Web.Features.Staff;
 
 namespace Asap.Web.Infrastructure.Testing;
 
-public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaffPolarisProvider
+public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaffPolarisProvider, IPolarisReferenceProvider
 {
+    private static readonly IReadOnlyList<PolarisPatronCodeSnapshot> PatronCodes =
+    [
+        new("1", "Adult"),
+        new("2", "Juvenile"),
+        new("3", "Guest"),
+        new("14", "Young adult"),
+        new("28", "Video/VG Restricted"),
+        new("91", "Adult legacy"),
+        new("92", "Young adult legacy")
+    ];
+
     private static readonly IReadOnlyList<PickupBranch> Branches =
     [
         new(101, "Main Library"),
         new(102, "North Branch")
     ];
+
+    public Task<PolarisConnectionTestResult> TestConnectionAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(new PolarisConnectionTestResult(true, 2));
+    }
+
+    public Task<IReadOnlyList<PolarisOrganizationSnapshot>> GetOrganizationsAsync(
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<PolarisOrganizationSnapshot>>(
+        [
+            new(1, "System", null, 0, null),
+            new(2, "Test Library", "Test", 2, 1)
+        ]);
+    }
+
+    public Task<IReadOnlyList<PolarisPatronCodeSnapshot>> GetPatronCodesAsync(
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(PatronCodes);
+    }
 
     public Task<PatronSnapshot> AuthenticateAsync(
         string barcode,

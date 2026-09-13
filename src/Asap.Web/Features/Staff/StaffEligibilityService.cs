@@ -112,6 +112,78 @@ public sealed class StaffEligibilityService(
                 cancellationToken);
     }
 
+    // Administrative mutations lock organizations first, then the actor row. Revalidate the
+    // cookie evidence on that same transaction so a role, binding, or tenant-scope change cannot
+    // authorize a later write merely because the request started with a valid cookie.
+    public async Task<StaffEligibilityResult> RevalidateLockedAsync(
+        AsapDbContext context,
+        CurrentStaff ticket,
+        int? requestedOrganizationId,
+        StaffRoleRequirement roleRequirement,
+        bool requireActorParticipation,
+        IReadOnlySet<int> lockedOrganizationIds,
+        CancellationToken cancellationToken)
+    {
+        var row = await context.StaffUsers.FromSqlInterpolated(
+                $"SELECT * FROM [asap].[StaffUser] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {ticket.Id}")
+            .SingleOrDefaultAsync(cancellationToken);
+        if (row is null ||
+            !row.IsActive ||
+            !row.EntraTenantId.HasValue ||
+            !row.EntraObjectId.HasValue ||
+            row.EntraTenantId.Value != ticket.EntraTenantId ||
+            row.EntraObjectId.Value != ticket.EntraObjectId ||
+            !allowedTenantIds.Contains(row.EntraTenantId.Value))
+        {
+            return Invalid();
+        }
+
+        // The administration caller locks all routing organizations first. Do not issue a
+        // fallback organization read here: a rebound actor must fail instead of retaining a
+        // shared lock on an organization outside that ordered set.
+        if (!lockedOrganizationIds.Contains(row.OrganizationId))
+        {
+            return Invalid();
+        }
+        var organization = context.Organizations.Local
+            .SingleOrDefault(item => item.Id == row.OrganizationId);
+        if (organization is null)
+        {
+            return Invalid();
+        }
+
+        var current = new CurrentStaff(
+            row.Id,
+            row.EntraTenantId.Value,
+            row.EntraObjectId.Value,
+            row.UserPrincipalName,
+            row.DisplayName,
+            row.NotificationEmail,
+            row.Role,
+            row.OrganizationId,
+            organization.DisplayName,
+            organization.IsActive,
+            row.WeeklyActionSummaryEnabled,
+            row.WeeklyActionSummaryEmail,
+            row.PurchaseReminderDefault,
+            row.AdditionalCopyReminderDefault,
+            row.DefaultMineUnclaimedFilter,
+            row.RowVersion);
+
+        var result = await EvaluateLoadedAsync(
+            context,
+            current,
+            requestedOrganizationId,
+            roleRequirement,
+            requireParticipation: false,
+            cancellationToken);
+        return result.Outcome == StaffEligibilityOutcome.Allowed &&
+               requireActorParticipation &&
+               !current.OrganizationIsActive
+            ? Forbidden()
+            : result;
+    }
+
     public async Task<bool> HasUsableSuperAdminAsync(CancellationToken cancellationToken)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);

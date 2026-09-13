@@ -826,8 +826,8 @@ public static class MigrationImporter
                 ? ResolveSourceTemplateId(connection, transaction, row, source.IsRejection, templateKey, mapped)
                 : null;
             var isCustom = scope == "library" && sourceTemplateId is null;
-            var subject = row.Text("subject");
-            var body = row.Text("body");
+            var subject = NormalizeTemplateText(row.Text("subject"));
+            var body = NormalizeTemplateText(row.Text("body"));
             if (sourceTemplateId is null && (subject is null || body is null))
             {
                 throw new MigrationOperationException("email_template_content_missing", $"Email template {sourceId} has no complete content.");
@@ -906,6 +906,9 @@ public static class MigrationImporter
         command.Parameters.AddWithValue("@isCustom", isCustom);
         command.Parameters.AddWithValue("@sortOrder", row.Int32("sortOrder") ?? 0);
     }
+
+    private static string? NormalizeTemplateText(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value;
 
     private static long? ResolveSourceTemplateId(
         SqlConnection connection,

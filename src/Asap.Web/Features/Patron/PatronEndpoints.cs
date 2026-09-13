@@ -292,7 +292,7 @@ public static class PatronEndpoints
         var external = configuration.ExternalSearchProviders.ToDictionary(item => item.Key, StringComparer.Ordinal);
         EffectiveExternalSearchProvider Provider(string key) => external.TryGetValue(key, out var value)
             ? value
-            : new EffectiveExternalSearchProvider(key, false, string.Empty, string.Empty, int.MaxValue);
+            : new EffectiveExternalSearchProvider(0, key, false, string.Empty, string.Empty, int.MaxValue);
         var external1 = Provider("external_search_1");
         var external2 = Provider("external_search_2");
         var external3 = Provider("external_search_3");
@@ -325,6 +325,7 @@ public static class PatronEndpoints
             configuration.SuccessTitle,
             configuration.SuccessMessage,
             configuration.AlreadySubmittedMessage,
+            misconfiguredMessage = configuration.MisconfiguredMessage,
             duplicateStatusLabels = configuration.DuplicateStatusLabels,
             configuration.EbookMessage,
             configuration.EaudiobookMessage,

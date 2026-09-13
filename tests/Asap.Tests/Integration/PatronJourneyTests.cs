@@ -161,7 +161,9 @@ public sealed class PatronJourneyTests
         factory = CreateApplicationFactory(configurationPath);
     }
 
-    private WebApplicationFactory<Program> CreateApplicationFactory(string settingsPath) =>
+    private WebApplicationFactory<Program> CreateApplicationFactory(
+        string settingsPath,
+        IPolarisReferenceProvider? referenceProvider = null) =>
         new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
             builder.UseEnvironment("Testing");
@@ -179,6 +181,11 @@ public sealed class PatronJourneyTests
                 services.AddSingleton<IEmailSender, RecordingEmailSender>();
                 services.RemoveAll<TimeProvider>();
                 services.AddSingleton<TimeProvider>(timeProvider!);
+                if (referenceProvider is not null)
+                {
+                    services.RemoveAll<IPolarisReferenceProvider>();
+                    services.AddSingleton(referenceProvider);
+                }
             });
         });
 
@@ -1025,6 +1032,211 @@ public sealed class PatronJourneyTests
         Assert.IsTrue(await reader.ReadAsync());
         Assert.AreEqual("Suggestion received: {{title}}", reader.GetString(0));
         Assert.AreEqual(expectedBody, reader.GetString(1));
+    }
+
+    [TestMethod]
+    public async Task AdministrationSettingsSaveReadAndClearUsesLivePatronCodesAndSparseOverrides()
+    {
+        using var client = factory!.CreateClient();
+        var actor = await ReadConfiguredSuperAdminAsync();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+
+        using var initialResponse = await client.GetAsync("/api/asap/staff/settings?orgId=2");
+        Assert.AreEqual(HttpStatusCode.OK, initialResponse.StatusCode, await initialResponse.Content.ReadAsStringAsync());
+        using var initialDocument = JsonDocument.Parse(await initialResponse.Content.ReadAsStringAsync());
+        var initial = initialDocument.RootElement;
+        var initialLibrary = initial.GetProperty("stored").GetProperty("libraryOverride");
+        var originalWorkflowMessage = OptionalString(initialLibrary.GetProperty("workflow"), "suggestionLimitMessage");
+        var originalLoginNote = OptionalString(initialLibrary.GetProperty("patron"), "loginNote");
+        var originalCodes = initialLibrary.GetProperty("allowedPatronCodeIds");
+        var originalCodesExist = originalCodes.GetProperty("exists").GetBoolean();
+        var originalCodeValues = originalCodes.GetProperty("values")
+            .EnumerateArray()
+            .Select(item => item.GetString()!)
+            .ToArray();
+        var systemEffectiveCodes = initial.GetProperty("effective").GetProperty("allowedPatronCodeIds")
+            .EnumerateArray()
+            .Select(item => item.GetString()!)
+            .ToArray();
+
+        try
+        {
+            using var choicesResponse = await client.GetAsync("/api/asap/staff/polaris/patron-codes?orgId=2");
+            Assert.AreEqual(HttpStatusCode.OK, choicesResponse.StatusCode, await choicesResponse.Content.ReadAsStringAsync());
+            using var choicesDocument = JsonDocument.Parse(await choicesResponse.Content.ReadAsStringAsync());
+            var choices = choicesDocument.RootElement.GetProperty("data").EnumerateArray().ToArray();
+            Assert.IsTrue(choices.Any(item => item.GetProperty("id").GetString() == "1"));
+            Assert.IsTrue(choices.All(item => item.GetProperty("id").ValueKind == JsonValueKind.String));
+
+            using var saveResponse = await client.PostAsJsonAsync(
+                "/api/asap/staff/settings",
+                new
+                {
+                    orgId = "2",
+                    version = initial.GetProperty("version").GetString(),
+                    workflow = new
+                    {
+                        suggestionLimitMessage = "Library-specific limit message",
+                        allowedPatronCodeIds = new[] { "1" }
+                    },
+                    patron = new { loginNote = "Library-specific login note" }
+                });
+            Assert.AreEqual(HttpStatusCode.OK, saveResponse.StatusCode, await saveResponse.Content.ReadAsStringAsync());
+
+            using var savedResponse = await client.GetAsync("/api/asap/staff/settings?orgId=2");
+            Assert.AreEqual(HttpStatusCode.OK, savedResponse.StatusCode, await savedResponse.Content.ReadAsStringAsync());
+            using var savedDocument = JsonDocument.Parse(await savedResponse.Content.ReadAsStringAsync());
+            var saved = savedDocument.RootElement;
+            Assert.AreEqual(
+                "Library-specific limit message",
+                saved.GetProperty("stored").GetProperty("libraryOverride").GetProperty("workflow")
+                    .GetProperty("suggestionLimitMessage").GetString());
+            Assert.AreEqual(
+                "Library-specific login note",
+                saved.GetProperty("stored").GetProperty("libraryOverride").GetProperty("patron")
+                    .GetProperty("loginNote").GetString());
+            CollectionAssert.AreEqual(
+                new[] { "1" },
+                saved.GetProperty("stored").GetProperty("libraryOverride").GetProperty("allowedPatronCodeIds")
+                    .GetProperty("values").EnumerateArray().Select(item => item.GetString()).ToArray());
+
+            using var invalidResponse = await client.PostAsJsonAsync(
+                "/api/asap/staff/settings",
+                new
+                {
+                    orgId = "2",
+                    version = saved.GetProperty("version").GetString(),
+                    workflow = new { allowedPatronCodeIds = new[] { "999" } }
+                });
+            Assert.AreEqual(HttpStatusCode.BadRequest, invalidResponse.StatusCode, await invalidResponse.Content.ReadAsStringAsync());
+            using var invalidDocument = JsonDocument.Parse(await invalidResponse.Content.ReadAsStringAsync());
+            Assert.AreEqual("patron_code_unknown", invalidDocument.RootElement.GetProperty("code").GetString());
+
+            using var afterInvalidResponse = await client.GetAsync("/api/asap/staff/settings?orgId=2");
+            Assert.AreEqual(HttpStatusCode.OK, afterInvalidResponse.StatusCode, await afterInvalidResponse.Content.ReadAsStringAsync());
+            using var afterInvalidDocument = JsonDocument.Parse(await afterInvalidResponse.Content.ReadAsStringAsync());
+            var afterInvalid = afterInvalidDocument.RootElement;
+            CollectionAssert.AreEqual(
+                new[] { "1" },
+                afterInvalid.GetProperty("stored").GetProperty("libraryOverride").GetProperty("allowedPatronCodeIds")
+                    .GetProperty("values").EnumerateArray().Select(item => item.GetString()).ToArray());
+
+            using var clearScalarResponse = await client.PostAsJsonAsync(
+                "/api/asap/staff/settings",
+                new
+                {
+                    orgId = "2",
+                    version = afterInvalid.GetProperty("version").GetString(),
+                    workflow = new { suggestionLimitMessage = (string?)null }
+                });
+            Assert.AreEqual(HttpStatusCode.OK, clearScalarResponse.StatusCode, await clearScalarResponse.Content.ReadAsStringAsync());
+
+            using var afterScalarClearResponse = await client.GetAsync("/api/asap/staff/settings?orgId=2");
+            Assert.AreEqual(HttpStatusCode.OK, afterScalarClearResponse.StatusCode, await afterScalarClearResponse.Content.ReadAsStringAsync());
+            using var afterScalarClearDocument = JsonDocument.Parse(await afterScalarClearResponse.Content.ReadAsStringAsync());
+            var afterScalarClear = afterScalarClearDocument.RootElement;
+            Assert.AreEqual(
+                JsonValueKind.Null,
+                afterScalarClear.GetProperty("stored").GetProperty("libraryOverride").GetProperty("workflow").ValueKind);
+            Assert.AreEqual(
+                "Library-specific login note",
+                afterScalarClear.GetProperty("stored").GetProperty("libraryOverride").GetProperty("patron")
+                    .GetProperty("loginNote").GetString());
+
+            using var clearSetResponse = await client.PostAsJsonAsync(
+                "/api/asap/staff/settings",
+                new
+                {
+                    orgId = "2",
+                    version = afterScalarClear.GetProperty("version").GetString(),
+                    workflow = new { allowedPatronCodeIds = Array.Empty<string>() }
+                });
+            Assert.AreEqual(HttpStatusCode.OK, clearSetResponse.StatusCode, await clearSetResponse.Content.ReadAsStringAsync());
+
+            using var finalResponse = await client.GetAsync("/api/asap/staff/settings?orgId=2");
+            Assert.AreEqual(HttpStatusCode.OK, finalResponse.StatusCode, await finalResponse.Content.ReadAsStringAsync());
+            using var finalDocument = JsonDocument.Parse(await finalResponse.Content.ReadAsStringAsync());
+            var final = finalDocument.RootElement;
+            Assert.IsFalse(final.GetProperty("stored").GetProperty("libraryOverride").GetProperty("allowedPatronCodeIds")
+                .GetProperty("exists").GetBoolean());
+            CollectionAssert.AreEqual(
+                systemEffectiveCodes,
+                final.GetProperty("effective").GetProperty("allowedPatronCodeIds")
+                    .EnumerateArray().Select(item => item.GetString()).ToArray());
+
+            await using var connection = new SqlConnection(databaseConnectionString);
+            await connection.OpenAsync();
+            await using var verify = connection.CreateCommand();
+            verify.CommandText =
+                "SELECT (SELECT COUNT(*) FROM [asap].[PatronCodeEligibilitySet] WHERE [OrganizationId] = 2), " +
+                "(SELECT COUNT(*) FROM [asap].[PatronCodeEligibilityMember] WHERE [OrganizationId] = 2);";
+            await using var reader = await verify.ExecuteReaderAsync();
+            Assert.IsTrue(await reader.ReadAsync());
+            Assert.AreEqual(0, reader.GetInt32(0));
+            Assert.AreEqual(0, reader.GetInt32(1));
+        }
+        finally
+        {
+            using var latestResponse = await client.GetAsync("/api/asap/staff/settings?orgId=2");
+            if (latestResponse.IsSuccessStatusCode)
+            {
+                using var latestDocument = JsonDocument.Parse(await latestResponse.Content.ReadAsStringAsync());
+                using var restoreResponse = await client.PostAsJsonAsync(
+                    "/api/asap/staff/settings",
+                    new
+                    {
+                        orgId = "2",
+                        version = latestDocument.RootElement.GetProperty("version").GetString(),
+                        workflow = new
+                        {
+                            suggestionLimitMessage = originalWorkflowMessage,
+                            allowedPatronCodeIds = originalCodesExist ? originalCodeValues : Array.Empty<string>()
+                        },
+                        patron = new { loginNote = originalLoginNote }
+                    });
+                Assert.IsTrue(restoreResponse.IsSuccessStatusCode, await restoreResponse.Content.ReadAsStringAsync());
+            }
+        }
+
+        static string? OptionalString(JsonElement parent, string propertyName) =>
+            parent.ValueKind == JsonValueKind.Object && parent.TryGetProperty(propertyName, out var value) &&
+            value.ValueKind != JsonValueKind.Null
+                ? value.GetString()
+                : null;
+    }
+
+    [TestMethod]
+    public async Task AdministrationPatronCodeProviderFailureDoesNotPartiallyWrite()
+    {
+        var actor = await ReadConfiguredSuperAdminAsync();
+        await using var failingFactory = CreateApplicationFactory(
+            configurationPath,
+            new FailingPatronCodeReferenceProvider());
+        using var client = failingFactory.CreateClient();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+
+        using var settingsResponse = await client.GetAsync("/api/asap/staff/settings?orgId=2");
+        Assert.AreEqual(HttpStatusCode.OK, settingsResponse.StatusCode, await settingsResponse.Content.ReadAsStringAsync());
+        using var settingsDocument = JsonDocument.Parse(await settingsResponse.Content.ReadAsStringAsync());
+        var version = settingsDocument.RootElement.GetProperty("version").GetString();
+        var before = await ReadPatronCodeRowsAsync(2);
+
+        using var saveResponse = await client.PostAsJsonAsync(
+            "/api/asap/staff/settings",
+            new
+            {
+                orgId = "2",
+                version,
+                workflow = new { allowedPatronCodeIds = new[] { "1" } }
+            });
+        Assert.AreEqual(HttpStatusCode.BadGateway, saveResponse.StatusCode, await saveResponse.Content.ReadAsStringAsync());
+        using var errorDocument = JsonDocument.Parse(await saveResponse.Content.ReadAsStringAsync());
+        Assert.AreEqual("patron_codes_unavailable", errorDocument.RootElement.GetProperty("code").GetString());
+        var after = await ReadPatronCodeRowsAsync(2);
+        Assert.AreEqual(before.SetCount, after.SetCount);
+        CollectionAssert.AreEqual(before.Values, after.Values);
     }
 
     [TestMethod]
@@ -8214,6 +8426,28 @@ public sealed class PatronJourneyTests
         return Convert.ToInt32(await command.ExecuteScalarAsync());
     }
 
+    private static async Task<PatronCodeRows> ReadPatronCodeRowsAsync(int organizationId)
+    {
+        await using var connection = new SqlConnection(databaseConnectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT COUNT(*) FROM [asap].[PatronCodeEligibilitySet] WHERE [OrganizationId] = @organizationId; " +
+            "SELECT [PatronCodeId] FROM [asap].[PatronCodeEligibilityMember] WHERE [OrganizationId] = @organizationId ORDER BY [PatronCodeId];";
+        command.Parameters.AddWithValue("@organizationId", organizationId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.IsTrue(await reader.ReadAsync());
+        var setCount = reader.GetInt32(0);
+        Assert.IsTrue(await reader.NextResultAsync());
+        var values = new List<string>();
+        while (await reader.ReadAsync())
+        {
+            values.Add(reader.GetString(0));
+        }
+
+        return new PatronCodeRows(setCount, values.ToArray());
+    }
+
     private static async Task WaitForOutboxStatusAsync(
         long outboxId,
         string expectedStatus,
@@ -8362,6 +8596,8 @@ public sealed class PatronJourneyTests
         string? ProviderMessageId,
         string? SuppressionReason);
 
+    private sealed record PatronCodeRows(int SetCount, string[] Values);
+
     private sealed class RecordingEmailSender : IEmailSender
     {
         public List<EmailEnvelope> Envelopes { get; } = [];
@@ -8379,6 +8615,23 @@ public sealed class PatronJourneyTests
             Envelopes.Add(envelope);
             return Task.FromResult(new EmailSendResult("test-message"));
         }
+    }
+
+    private sealed class FailingPatronCodeReferenceProvider : IPolarisReferenceProvider
+    {
+        public Task<PolarisConnectionTestResult> TestConnectionAsync(
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new PolarisConnectionTestResult(false, 0, "testing_patron_codes_failure"));
+
+        public Task<IReadOnlyList<PolarisOrganizationSnapshot>> GetOrganizationsAsync(
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<PolarisOrganizationSnapshot>>([]);
+
+        public Task<IReadOnlyList<PolarisPatronCodeSnapshot>> GetPatronCodesAsync(
+            CancellationToken cancellationToken) =>
+            throw new PolarisOperationalException(
+                "testing_patron_codes_failure",
+                "Testing patron-code reference failure.");
     }
 
     private sealed class DisallowedPreferredPickupPatronProvider : IPatronProvider

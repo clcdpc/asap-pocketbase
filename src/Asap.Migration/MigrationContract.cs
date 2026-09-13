@@ -6,7 +6,7 @@ public static class MigrationContract
 {
     public const string PocketBaseBaselineSha = "150b30b776565194260cc327eeeffdfb46475e81";
     public const int ExpectedSchemaVersion = 4;
-    public const string ContractVersion = "slice-03";
+    public const string ContractVersion = "slice-04";
 
     public static object Describe() => new
     {
@@ -20,8 +20,12 @@ public static class MigrationContract
             "stopped_sqlite_export",
             "hashed_package_validation",
             "fresh_sql_import_and_reconciliation",
-            "additional_copy_workflow"
+            "additional_copy_workflow",
+            "relational_administration_configuration",
+            "scoped_inheritance_and_reset",
+            "polaris_reference_sync",
+            "settings_semantic_reconciliation"
         },
-        note = "Slice 3 includes the AdditionalCopy workflow and its stopped-PocketBase migration contract."
+        note = "Slice 4 includes relational administration/configuration, scoped inheritance/reset, and semantic migration reconciliation."
     };
 }

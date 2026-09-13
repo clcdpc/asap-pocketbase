@@ -37,6 +37,48 @@ fixes use a temporary branch from the deployed source, immediate equivalent
 
 ## Execution And Evidence
 
+### Incomplete Slice 4 Checkpoint - 2026-09-13
+
+The user requested a commit and push of the current work so implementation can
+continue in a new conversation. This is an explicitly authorized work-in-progress
+checkpoint, not the accepted Slice 4 milestone. Slices 0-3 remain complete;
+Slice 4 remains the first incomplete slice. The same Luna context is paused,
+and no Terra review has started. PR #264 remains draft on `codex/csharp-port`.
+
+Start the next conversation with [the Slice 4 handoff](https://github.com/clcdpc/asap-pocketbase/blob/codex/csharp-port/docs/implementation/slice-04-handoff.md).
+It records remaining implementation, known browser failures, verification
+limits, retained agent identity, and local-only acceptance harnesses. Use the
+existing checkout to retain those harnesses. The full Slice 4 review base stays
+`4769a8a8750c315e319824355d4508073bd43546`, not this intermediate checkpoint.
+
+Checkpoint checks: `dotnet build Asap.sln --configuration Release --no-restore`
+passed with zero warnings/errors; `node tests/run_all.js` passed all 168 test
+files. The full .NET/real-SQL suite and published browser/native acceptance were
+not rerun for this checkpoint. Staff Access/audit UI, accessibility/layout,
+broader inventory/race coverage, final verification and independent reviews
+remain open. Any checkpoint CI result is diagnostic only; acceptance still
+requires the completed milestone's actual exact-SHA remote CI before Slice 5.
+
+### Implementation Resumed - 2026-09-13
+
+The user explicitly resumed implementation after the completed Slice 3 stop.
+Earlier pause and preparation entries below remain historical evidence.
+Astra fetched the repository, selected `codex/csharp-port`, and verified a
+clean worktree at PR #264 head `4769a8a8750c315e319824355d4508073bd43546`.
+The Luna execution-policy commit `fc31c5637f69eb22510bfbac927cb3de1ee5d2e3`
+and subsequent Astra-first policy commit `4769a8a8750c315e319824355d4508073bd43546`
+are both present. Slices 0-3 remain accepted and Slice 4 is first incomplete.
+Fetched `main` still equals the behavioral pin, and all 19 pack hashes match.
+The draft PR has no review threads/comments; recovered-head remote CI run
+`34760402589` succeeded. The deployed source SHA remains unverified.
+
+Astra read the complete authoritative pack and refreshed `slice-04.md` against
+the accepted staff/auth/request, AdditionalCopy, schema, runtime configuration,
+migration and frontend contracts. Slice 4 now enters implementation with a
+fresh Luna Max context; independent Terra High review has not started.
+Acceptance, milestone commit and exact-milestone remote CI remain pending.
+Normal progression after that gate is authorized without a new user prompt.
+
 ### Current Execution Policy - 2026-09-13
 
 Slices 0-3 were completed under the prior Sol implementation model. Beginning
@@ -133,7 +175,7 @@ closed. They do not prescribe the current remaining-slice model.
 | 1 | Patron login and submission | Complete: `c1b8655` plus reviewed correction `1e36761`; 120 tests and remote Linux CI passed |
 | 2 | Staff Entra and core request workflow | Complete: reviewed milestone `9f946ae`; 181 local and remote Linux CI tests pass, no skips |
 | 3 | Additional-copy workflow | Complete: reviewed milestone `85539b0`; 190 local/remote tests, native/published-browser checks and full Terra Pass 5 clear |
-| 4 | Administration and configuration | Not started |
+| 4 | Administration and configuration | Incomplete WIP checkpoint; see slice-04-handoff.md |
 | 5 | Background workflows and complete email operations | Not started |
 | 6 | Analytics | Not started |
 | 7 | Migration hardening and legacy links | Not started |

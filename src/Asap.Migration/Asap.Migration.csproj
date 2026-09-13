@@ -14,5 +14,6 @@
     <AssemblyMetadata Include="PocketBaseBaselineSha" Value="150b30b776565194260cc327eeeffdfb46475e81" />
     <AssemblyMetadata Include="ExpectedSchemaVersion" Value="4" />
     <Compile Include="..\Shared\SecurityContract.cs" Link="SecurityContract.cs" />
+    <Compile Include="..\Shared\LogoImageValidator.cs" Link="LogoImageValidator.cs" />
   </ItemGroup>
 </Project>

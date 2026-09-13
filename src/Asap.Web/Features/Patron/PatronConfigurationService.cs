@@ -49,6 +49,7 @@ public sealed record EffectiveBranding(
     string LogoAltText);
 
 public sealed record EffectiveExternalSearchProvider(
+    long Id,
     string Key,
     bool IsEnabled,
     string Label,
@@ -77,6 +78,7 @@ public sealed record EffectivePatronConfiguration(
     string SuccessMessage,
     string AlreadySubmittedMessage,
     string SystemNotEnabledMessage,
+    string MisconfiguredMessage,
     string EbookMessage,
     string EaudiobookMessage,
     IReadOnlyDictionary<string, string> DuplicateStatusLabels,
@@ -101,6 +103,14 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
         CancellationToken cancellationToken)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        return await GetAsync(context, organizationId, cancellationToken);
+    }
+
+    public async Task<EffectivePatronConfiguration?> GetAsync(
+        AsapDbContext context,
+        int organizationId,
+        CancellationToken cancellationToken)
+    {
         var organization = await context.Organizations.AsNoTracking()
             .SingleOrDefaultAsync(item => item.Id == organizationId, cancellationToken);
         if (organization is null)
@@ -182,6 +192,9 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
             Pick(null, systemSettings.SystemNotEnabledMessage,
                     "{{library}} does not currently participate in this suggestion service.")
                 .Replace("{{library}}", organization.DisplayName, StringComparison.Ordinal),
+            Pick(null, systemSettings.MisconfiguredMessage,
+                    "The {{library}} suggestion system is currently misconfigured. Please contact staff.")
+                .Replace("{{library}}", organization.DisplayName, StringComparison.Ordinal),
             Pick(libraryPatron?.EbookMessage, systemPatron.EbookMessage,
                 "<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>"),
             Pick(libraryPatron?.EaudiobookMessage, systemPatron.EaudiobookMessage,
@@ -222,6 +235,15 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
         var formats = await context.MaterialFormats.AsNoTracking()
             .Where(item => item.OwnerOrganizationId == 1 || item.OwnerOrganizationId == organizationId)
             .ToListAsync(cancellationToken);
+        // A library custom format is a distinct owned identity. If legacy data ever
+        // contains a colliding code, keep the selected library identity deterministic
+        // so runtime validation cannot fail with SingleOrDefault on duplicate codes.
+        formats = formats
+            .GroupBy(item => item.Code, StringComparer.Ordinal)
+            .Select(group => organizationId != 1
+                ? group.OrderByDescending(item => item.OwnerOrganizationId == organizationId).ThenBy(item => item.Id).First()
+                : group.OrderBy(item => item.Id).First())
+            .ToList();
         var overrides = organizationId == 1
             ? []
             : await context.MaterialFormatOverrides.AsNoTracking()
@@ -369,9 +391,9 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
             : await context.EmailSettings.AsNoTracking()
                 .SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
         return new EffectiveEmailConfiguration(
-            library?.FromAddress ?? system.FromAddress,
-            library?.FromName ?? system.FromName,
-            library?.ProtectedServerToken ?? system.ProtectedServerToken);
+            Inherit(library?.FromAddress, system.FromAddress),
+            Inherit(library?.FromName, system.FromName),
+            Inherit(library?.ProtectedServerToken, system.ProtectedServerToken));
     }
 
     private static async Task<EffectiveEmailTemplate?> LoadSubmissionTemplateAsync(
@@ -395,9 +417,14 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
                     item => item.OrganizationId == organizationId && item.SourceTemplateId == system.Id,
                     cancellationToken);
         var selected = library ?? system;
-        return selected.SubjectTemplate is null || selected.BodyTemplate is null
+        var subject = Inherit(selected.SubjectTemplate, system.SubjectTemplate);
+        var body = Inherit(selected.BodyTemplate, system.BodyTemplate);
+        return subject is null || body is null
             ? null
-            : new EffectiveEmailTemplate(system.TemplateKey, selected.SubjectTemplate, selected.BodyTemplate);
+            : new EffectiveEmailTemplate(
+                system.TemplateKey,
+                subject,
+                body);
     }
 
     private static async Task<EffectiveBranding> LoadBrandingAsync(
@@ -441,6 +468,7 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
             {
                 overridesByProvider.TryGetValue(provider.Id, out var value);
                 return new EffectiveExternalSearchProvider(
+                    provider.Id,
                     provider.ProviderKey,
                     value?.IsEnabled ?? provider.IsEnabled,
                     value?.Label ?? provider.Label,
@@ -459,4 +487,7 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
             : !string.IsNullOrWhiteSpace(system)
                 ? system
                 : fallback;
+
+    private static string? Inherit(string? library, string? system) =>
+        !string.IsNullOrWhiteSpace(library) ? library : system;
 }

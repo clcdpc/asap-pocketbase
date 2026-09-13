@@ -15,6 +15,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="..\Shared\SecurityContract.cs" Link="Infrastructure\Security\SecurityContract.cs" />
+    <Compile Include="..\Shared\LogoImageValidator.cs" Link="Infrastructure\Media\LogoImageValidator.cs" />
     <ProjectReference Include="..\..\database\Asap.Database\Asap.Database.sqlproj"
                       ReferenceOutputAssembly="false" />
   </ItemGroup>

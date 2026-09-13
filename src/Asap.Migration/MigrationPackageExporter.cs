@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Asap.Shared;
 using Microsoft.Data.Sqlite;
 
 namespace Asap.Migration;
@@ -221,7 +222,17 @@ public static class MigrationPackageExporter
                     "A configured PocketBase branding logo is missing from file storage.");
             }
 
-            var contentType = DetectImageContentType(sourcePath);
+            var sourceData = File.ReadAllBytes(sourcePath);
+            if (!LogoImageValidator.TryDetectContentType(sourceData, out var contentType))
+            {
+                throw new MigrationOperationException(
+                    "branding_asset_invalid",
+                    "A source branding logo is not a supported PNG, JPEG, or GIF image.");
+            }
+            if (!LogoImageValidator.TryValidate(sourceData, contentType, out _, out var imageError))
+            {
+                throw new MigrationOperationException("branding_asset_invalid", imageError);
+            }
             var relativeAssetPath = Path.Combine("assets", "branding", recordId, fileName);
             var targetPath = ResolveWithin(outputPath, relativeAssetPath);
             Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
@@ -244,33 +255,6 @@ public static class MigrationPackageExporter
             manifestFiles.Add(FileManifest(outputPath, targetPath));
         }
         return exported;
-    }
-
-    private static string DetectImageContentType(string path)
-    {
-        Span<byte> header = stackalloc byte[12];
-        using var stream = File.OpenRead(path);
-        var read = stream.Read(header);
-        if (read >= 8 && header[..8].SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }))
-        {
-            return "image/png";
-        }
-        if (read >= 3 && header[0] == 255 && header[1] == 216 && header[2] == 255)
-        {
-            return "image/jpeg";
-        }
-        if (read >= 6 &&
-            (header[..6].SequenceEqual("GIF87a"u8) || header[..6].SequenceEqual("GIF89a"u8)))
-        {
-            return "image/gif";
-        }
-        if (read >= 12 && header[..4].SequenceEqual("RIFF"u8) && header[8..12].SequenceEqual("WEBP"u8))
-        {
-            return "image/webp";
-        }
-        throw new MigrationOperationException(
-            "branding_asset_unsupported",
-            "A source branding logo is not a supported PNG, JPEG, GIF, or WebP image.");
     }
 
     private static string ResolveWithin(string root, string relativePath)

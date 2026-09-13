@@ -14,10 +14,100 @@ namespace Asap.Web.Features.Patron;
 public sealed class PolarisPatronProvider(
     IDbContextFactory<AsapDbContext> contextFactory,
     IntegrationCredentialProtector credentialProtector,
-    IHttpClientFactory httpClientFactory) : IPatronProvider, IStaffPolarisProvider
+    IHttpClientFactory httpClientFactory) : IPatronProvider, IStaffPolarisProvider, IPolarisReferenceProvider
 {
     private static readonly HashSet<int> DocumentedCreateNoEffectStatuses =
         [6, -4002, -4004, -4006, -4007, -4020, -4021, -4022];
+
+    public async Task<PolarisConnectionTestResult> TestConnectionAsync(
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var organizations = await GetOrganizationsAsync(cancellationToken);
+            return new PolarisConnectionTestResult(true, organizations.Count);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (PolarisOperationalException exception)
+        {
+            return new PolarisConnectionTestResult(false, 0, exception.Code);
+        }
+    }
+
+    public async Task<IReadOnlyList<PolarisOrganizationSnapshot>> GetOrganizationsAsync(
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var (client, _) = await CreateClientAsync(cancellationToken);
+            var rows = await LoadOrganizationsAsync(client, cancellationToken);
+            return rows
+                .Where(row => row.OrganizationID > 0)
+                .Select(row => new PolarisOrganizationSnapshot(
+                    row.OrganizationID,
+                    Clean(row.DisplayName) ?? Clean(row.Name) ?? Clean(row.Abbreviation) ?? row.OrganizationID.ToString(),
+                    Clean(row.Abbreviation),
+                    row.OrganizationCodeID,
+                    row.ParentOrganizationID))
+                .ToArray();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (PolarisOperationalException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw Operational("polaris_organizations_failed", exception);
+        }
+    }
+
+    public async Task<IReadOnlyList<PolarisPatronCodeSnapshot>> GetPatronCodesAsync(
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var (client, _) = await CreateClientAsync(cancellationToken);
+            var response = await client.PatronCodesGetAsync(null, cancellationToken);
+            var result = response.Data;
+            if (response.Response?.IsSuccessStatusCode != true ||
+                result is null || result.PAPIErrorCode < 0)
+            {
+                throw new PolarisOperationalException(
+                    "polaris_patron_codes_failed",
+                    "Polaris did not return its patron-code reference data.");
+            }
+
+            return result.PatronCodesRows
+                .Where(row => row.PatronCodeID > 0)
+                .GroupBy(row => row.PatronCodeID)
+                .Select(group => group.First())
+                .OrderBy(row => row.Description, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(row => row.PatronCodeID)
+                .Select(row => new PolarisPatronCodeSnapshot(
+                    row.PatronCodeID.ToString(),
+                    Clean(row.Description) ?? row.PatronCodeID.ToString()))
+                .ToArray();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (PolarisOperationalException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw Operational("polaris_patron_codes_failed", exception);
+        }
+    }
 
     public async Task<PatronSnapshot> AuthenticateAsync(
         string barcode,

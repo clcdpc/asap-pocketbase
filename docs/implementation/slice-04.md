@@ -2,10 +2,10 @@
 
 ## Gate And Ownership
 
-Preparation only, not dispatched; Slice 4 remains not started. Slice 3's
-milestone, tests, independent review and exact-milestone remote CI are complete
-under the prior Sol model. Astra Max refreshes this packet against the accepted
-code/evidence before dispatching fresh Luna Max to implement the complete slice.
+Refreshed by Astra Max on 2026-09-13 for the explicitly authorized resume.
+Slice 3's milestone, tests, independent review and exact-milestone remote CI are
+complete under the prior Sol model. The recovery and accepted-code refresh
+below authorize fresh Luna Max to implement the complete Slice 4.
 Retain that Luna context through tests, confirmed-review fixes and retesting.
 After implementation and required tests, fresh Terra High performs full-slice
 Pass 1 and the same context completes the unchanged required review/re-review
@@ -14,6 +14,60 @@ Astra verifies acceptance, commits/pushes the milestone, and requires actual
 remote CI success for that exact commit before dispatching Slice 5.
 The FileEmailSender exception changes only final transport;
 real Postmark integration/webhooks remain a release/rehearsal blocker.
+
+## Accepted-State Refresh - 2026-09-13
+
+- Fetched repository, selected the existing `codex/csharp-port` branch and
+  verified a clean worktree before this refresh. Local HEAD, remote branch and
+  draft PR #264 head agree at `4769a8a8750c315e319824355d4508073bd43546`.
+  No alternate implementation branch or PR is authorized.
+- Luna policy `fc31c5637f69eb22510bfbac927cb3de1ee5d2e3` and subsequent
+  Astra-first escalation policy `4769a8a8750c315e319824355d4508073bd43546`
+  are present. Slices 0-3 remain accepted; Slice 4 is first incomplete.
+  PR #264 is draft/open, has no review threads/comments, and the recovered
+  head passed remote build-test run `34760402589`. That run does not satisfy
+  the future Slice 4 milestone's exact-SHA CI gate.
+- Fetched `origin/main` still equals behavioral pin
+  `150b30b776565194260cc327eeeffdfb46475e81`. The deployed production
+  commit remains unverified. All 19 authoritative pack payload hashes match.
+- Extend `Features/Staff/StaffLifecycleService.cs`, its endpoints and
+  `StaffEligibilityService.cs` for Staff Access; preserve their original-tuple
+  checks, serialized last-admin invariant and separate cleanup counts.
+  Assignment candidate DTOs intentionally contain only ID/display name.
+  Slice 3 retained-claim eligibility and AdditionalCopy note/history contracts
+  are accepted, not a new review cycle for this slice.
+- Existing `Configuration.sql`, `ConfigurationSets.sql` and related format,
+  template/rule tables already establish explicit relational domains.
+  Accepted `SchemaVersion` is 4 in Web, migration and post-deployment SQL;
+  migration contract is `slice-03`. Advance these together if schema changes
+  require it, preserving additive DACPAC ownership and fresh-target checks.
+- `Features/Patron/PatronConfigurationService.cs` already resolves scoped
+  scalar settings, whole sets, formats, providers and branding. Complete the
+  editor/runtime agreement against inventory 13, including sparse template
+  subject/body fallback and SystemSettings misconfiguration-message use.
+  Do not add a second independent effective-settings authority.
+- `MigrationConfigurationImporter.cs` already imports system, Polaris, email,
+  workflow, patron/sets/formats/custom-field configuration and branding.
+  Extend the existing exporter, validator, importer and reconciler where
+  administration exposes missing semantics. Use `migration-source-notes.md`
+  for staff-URL provenance and keep missing historical event timestamps a
+  hard source-data blocker. Target-only Postmark input is not source SMTP.
+- Target staff entrypoint currently starts `js/workflow.js`; the accepted
+  target UI has Requests, Additional copies and Profile, with no settings
+  module yet. Port the pinned vanilla settings organization and workflows
+  into this frontend using `staff/js/http.js` (`authorizedJson`, plain object
+  request bodies, antiforgery and session policy) and the shared latest-load
+  guard. Preserve scoped navigation, dirty-form protection and existing
+  workflow/profile behavior; do not introduce a new settings UX.
+- Existing real-SQL/Kestrel/browser fixture support is in
+  `tests/Asap.Tests/Integration/PatronJourneyTests.cs`; CI currently enforces
+  190 .NET tests plus the Node regression suite. Keep these tests and add
+  the full Slice 4 behavior coverage below. A final clean Release build,
+  complete real-SQL tests, frontend regressions, fresh published web and
+  self-contained win-x64 migration artifacts, native export/import/reconcile
+  fixtures, and desktop/mobile browser/accessibility evidence are required.
+  Coordinate shared builds and artifact paths; never accept stale RID output
+  or synthetic source fixtures as evidence about deployed production data.
 
 ## Objective And References
 

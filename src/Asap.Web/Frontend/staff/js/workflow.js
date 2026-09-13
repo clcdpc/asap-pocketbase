@@ -5,6 +5,7 @@ import {
   loadStaffSession,
   onSessionInvalid
 } from './http.js';
+import { createSettingsController } from './settings.js';
 
 const STATUS_LABELS = {
   open: 'Open',
@@ -74,10 +75,10 @@ function replaceRequestParameter(id, additionalCopy = false) {
   window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
 }
 
-function replaceStageParameter(additionalCopy) {
+function replaceStageParameter(stage) {
   const url = new URL(window.location.href);
   url.searchParams.delete('request');
-  if (additionalCopy) url.searchParams.set('stage', 'additional_copies');
+  if (stage) url.searchParams.set('stage', stage);
   else url.searchParams.delete('stage');
   window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
 }
@@ -94,6 +95,8 @@ export function createWorkflowApp() {
     queueView: document.querySelector('#queue-view'),
     additionalCopyView: document.querySelector('#additional-copy-view'),
     profileView: document.querySelector('#profile-view'),
+    settingsView: document.querySelector('#settings-view'),
+    settingsTab: document.querySelector('#settings-view-tab'),
     viewTabs: [...document.querySelectorAll('.view-tab')],
     statusTabs: [...document.querySelectorAll('#status-tabs [data-status]')],
     scopeField: document.querySelector('#scope-field'),
@@ -160,6 +163,13 @@ export function createWorkflowApp() {
     dom.status.className = `status-message${kind ? ` ${kind}` : ''}`;
   }
 
+  const settingsController = createSettingsController({
+    root: dom.settingsView,
+    tab: dom.settingsTab,
+    announce,
+    getStaff: () => state.staff
+  });
+
   function cancelAssignmentCandidateLoad() {
     latestLoads.begin('assignment-candidates').abort();
   }
@@ -218,6 +228,7 @@ export function createWorkflowApp() {
     latestLoads.begin('detail').abort();
     latestLoads.begin('additional-copy-detail').abort();
     latestLoads.begin('additional-copy-preview').abort();
+    settingsController.signedOut();
     dom.signedOutMessage.textContent = message || 'Sign in with your authorized library account.';
     dom.signedOut.hidden = false;
     dom.workspace.hidden = true;
@@ -235,6 +246,7 @@ export function createWorkflowApp() {
     dom.staffIdentity.title = `${statusLabel(staff.role)} · ${staff.organizationName}`;
     dom.scopeField.hidden = staff.role !== 'super_admin';
     dom.additionalCopyScopeField.hidden = staff.role !== 'super_admin';
+    settingsController.setStaff(staff);
     dom.claim.value = staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
     dom.additionalCopyClaim.value = staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
     populateProfile(staff);
@@ -260,7 +272,9 @@ export function createWorkflowApp() {
       }
       showWorkspace(session.staff);
       announce('Staff session ready.');
-      if (currentStageParameter() === 'additional_copies') {
+      if (currentStageParameter() === 'settings' && session.staff.role !== 'staff') {
+        switchView('settings', false);
+      } else if (currentStageParameter() === 'additional_copies') {
         switchView('additional-copies', false);
         await loadAdditionalCopies();
       } else {
@@ -1417,20 +1431,25 @@ export function createWorkflowApp() {
     dom.queueView.hidden = name !== 'queue';
     dom.additionalCopyView.hidden = name !== 'additional-copies';
     dom.profileView.hidden = name !== 'profile';
+    dom.settingsView.hidden = name !== 'settings';
     for (const tab of dom.viewTabs) {
       const active = tab.dataset.view === name;
       tab.classList.toggle('active', active);
       if (active) tab.setAttribute('aria-current', 'page');
       else tab.removeAttribute('aria-current');
     }
-    if (updateUrl) replaceStageParameter(name === 'additional-copies');
+    if (updateUrl) replaceStageParameter(
+      name === 'additional-copies' ? 'additional_copies' : name === 'settings' ? 'settings' : null
+    );
     const heading = name === 'queue'
       ? '#queue-title'
-      : name === 'additional-copies' ? '#additional-copy-title' : '#profile-title';
+      : name === 'additional-copies' ? '#additional-copy-title'
+        : name === 'profile' ? '#profile-title' : '#settings-title';
     document.querySelector(heading).focus({ preventScroll: true });
     if (updateUrl && name === 'additional-copies' && !state.additionalCopyLoaded) {
       loadAdditionalCopies({ skipDeepLink: true });
     }
+    if (name === 'settings') settingsController.activate();
   }
 
   function closeDialog() {
@@ -1450,18 +1469,21 @@ export function createWorkflowApp() {
     const ariaLabel = wasAdditionalCopy
       ? `Open additional-copy task ${selectedId}`
       : `Open request ${selectedId}`;
-    const liveGridButton = [...document.querySelectorAll('.grid-open')]
-      .find(button => button.getAttribute('aria-label') === ariaLabel);
-    const focusTarget = returnFocus?.isConnected ? returnFocus : liveGridButton;
-    if (focusTarget?.isConnected) {
-      window.requestAnimationFrame(() => {
-        if (focusTarget.isConnected) focusTarget.focus();
-      });
-    }
+    const focusReturnButton = () => {
+      const liveGridButton = [...document.querySelectorAll('.grid-open')]
+        .find(button => button.getAttribute('aria-label') === ariaLabel);
+      const focusTarget = returnFocus?.isConnected ? returnFocus : liveGridButton;
+      if (focusTarget?.isConnected) focusTarget.focus();
+    };
+    window.requestAnimationFrame(() => {
+      focusReturnButton();
+      window.setTimeout(focusReturnButton, 0);
+    });
   }
 
   function bindEvents() {
     onSessionInvalid(() => showSignedOut('Your staff session ended or no longer has access. Sign in again.'));
+    settingsController.bind();
     dom.signOut.addEventListener('click', async () => {
       try { await authorizedJson('/api/asap/staff/sign-out', { method: 'POST' }); } catch { /* Local UI still returns to sign-in. */ }
       showSignedOut('You are signed out.');

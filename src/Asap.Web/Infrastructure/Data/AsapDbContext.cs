@@ -61,13 +61,73 @@ public sealed class AsapDbContext(DbContextOptions<AsapDbContext> options) : DbC
         modelBuilder.Entity<PatronSettings>().HasKey(value => value.OrganizationId);
         modelBuilder.Entity<EmailSettings>().HasKey(value => value.OrganizationId);
         modelBuilder.Entity<CommonCreatorSet>().HasKey(value => value.OrganizationId);
+        modelBuilder.Entity<CommonCreatorTerm>()
+            .HasOne<CommonCreatorSet>()
+            .WithMany()
+            .HasForeignKey(value => value.OrganizationId)
+            .OnDelete(DeleteBehavior.Cascade);
         modelBuilder.Entity<PatronCodeEligibilitySet>().HasKey(value => value.OrganizationId);
         modelBuilder.Entity<PatronCodeEligibilityMember>()
             .HasKey(value => new { value.OrganizationId, value.PatronCodeId });
+        modelBuilder.Entity<PatronCodeEligibilityMember>()
+            .HasOne<PatronCodeEligibilitySet>()
+            .WithMany()
+            .HasForeignKey(value => value.OrganizationId)
+            .OnDelete(DeleteBehavior.Cascade);
         modelBuilder.Entity<PublicationOptionSet>().HasKey(value => value.OrganizationId);
+        modelBuilder.Entity<PublicationOption>()
+            .HasOne<PublicationOptionSet>()
+            .WithMany()
+            .HasForeignKey(value => value.OrganizationId)
+            .OnDelete(DeleteBehavior.Cascade);
         modelBuilder.Entity<ExternalSearchProviderOverride>()
             .HasKey(value => new { value.LibraryOrganizationId, value.ExternalSearchProviderId });
+        modelBuilder.Entity<ExternalSearchProviderOverride>()
+            .HasOne<ExternalSearchProvider>()
+            .WithMany()
+            .HasForeignKey(value => value.ExternalSearchProviderId)
+            .OnDelete(DeleteBehavior.NoAction);
+        modelBuilder.Entity<PatronCustomFieldOption>()
+            .HasOne<PatronCustomField>()
+            .WithMany()
+            .HasForeignKey(value => value.PatronCustomFieldId)
+            .OnDelete(DeleteBehavior.Cascade);
         modelBuilder.Entity<Branding>().HasKey(value => value.OrganizationId);
+        modelBuilder.Entity<MaterialFormatOverride>()
+            .HasOne<MaterialFormat>()
+            .WithMany()
+            .HasForeignKey(value => value.MaterialFormatId)
+            .OnDelete(DeleteBehavior.NoAction);
+        modelBuilder.Entity<MaterialFormatCustomFieldRule>()
+            .HasOne<MaterialFormat>()
+            .WithMany()
+            .HasForeignKey(value => value.MaterialFormatId)
+            .OnDelete(DeleteBehavior.NoAction);
+        modelBuilder.Entity<MaterialFormatCustomFieldRule>()
+            .HasOne<PatronCustomField>()
+            .WithMany()
+            .HasForeignKey(value => value.PatronCustomFieldId)
+            .OnDelete(DeleteBehavior.NoAction);
+        modelBuilder.Entity<FormatAutoClaimRule>()
+            .HasOne<MaterialFormat>()
+            .WithMany()
+            .HasForeignKey(value => value.MaterialFormatId)
+            .OnDelete(DeleteBehavior.NoAction);
+        modelBuilder.Entity<FormatAutoClaimRule>()
+            .HasOne<StaffUser>()
+            .WithMany()
+            .HasForeignKey(value => value.StaffUserId)
+            .OnDelete(DeleteBehavior.NoAction);
+        modelBuilder.Entity<WorkflowSettings>()
+            .HasOne<EmailTemplate>()
+            .WithMany()
+            .HasForeignKey(value => value.OutstandingTimeoutRejectionTemplateId)
+            .OnDelete(DeleteBehavior.NoAction);
+        modelBuilder.Entity<EmailTemplate>()
+            .HasOne<EmailTemplate>()
+            .WithMany()
+            .HasForeignKey(value => value.SourceTemplateId)
+            .OnDelete(DeleteBehavior.NoAction);
         modelBuilder.Entity<TitleRequestWorkflowTag>()
             .HasKey(value => new { value.TitleRequestId, value.WorkflowTagId });
         modelBuilder.Entity<LegacyPocketBaseMapping>()

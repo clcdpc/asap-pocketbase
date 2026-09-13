@@ -1,3 +1,4 @@
+using Asap.Shared;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -139,6 +140,8 @@ public static class MigrationPackageValidator
             throw new MigrationOperationException("package_count_mismatch", "Manifest entity counts do not match domain files.");
         }
 
+        ValidateBrandingAssets(root);
+
         return new ValidatedMigrationPackage(root, manifest);
     }
 
@@ -201,6 +204,59 @@ public static class MigrationPackageValidator
             throw new MigrationOperationException(
                 "package_metadata_invalid",
                 $"Invalid metadata file: {Path.GetFileName(path)}");
+        }
+    }
+
+    private static void ValidateBrandingAssets(string packageRoot)
+    {
+        var path = Path.Combine(packageRoot, "branding.json");
+        if (!File.Exists(path)) return;
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            if (!document.RootElement.TryGetProperty("collections", out var collections) ||
+                !collections.TryGetProperty("branding", out var rows) ||
+                rows.ValueKind != JsonValueKind.Array)
+            {
+                throw new MigrationOperationException("package_domain_invalid", "The branding collection is invalid.");
+            }
+
+            foreach (var row in rows.EnumerateArray())
+            {
+                if (!row.TryGetProperty("assetPath", out var assetPathValue) ||
+                    !row.TryGetProperty("contentType", out var contentTypeValue) ||
+                    !row.TryGetProperty("length", out var lengthValue) ||
+                    !row.TryGetProperty("sha256", out var hashValue))
+                {
+                    throw new MigrationOperationException("branding_asset_invalid", "A branding asset is missing validation metadata.");
+                }
+
+                var assetPath = assetPathValue.GetString();
+                var contentType = contentTypeValue.GetString();
+                var expectedLength = lengthValue.GetInt64();
+                var expectedHash = hashValue.GetString();
+                if (string.IsNullOrWhiteSpace(assetPath) || string.IsNullOrWhiteSpace(contentType) ||
+                    string.IsNullOrWhiteSpace(expectedHash))
+                {
+                    throw new MigrationOperationException("branding_asset_invalid", "A branding asset has invalid validation metadata.");
+                }
+
+                var fullPath = ResolveWithin(packageRoot, assetPath);
+                var data = File.ReadAllBytes(fullPath);
+                if (data.LongLength != expectedLength ||
+                    !string.Equals(Convert.ToHexStringLower(SHA256.HashData(data)), expectedHash, StringComparison.OrdinalIgnoreCase) ||
+                    !LogoImageValidator.TryValidate(data, contentType, out _, out _))
+                {
+                    throw new MigrationOperationException(
+                        "branding_asset_invalid",
+                        "A branding asset failed its length, hash, or image-content validation.");
+                }
+            }
+        }
+        catch (JsonException exception)
+        {
+            throw new MigrationOperationException("package_domain_invalid", exception.Message);
         }
     }
 

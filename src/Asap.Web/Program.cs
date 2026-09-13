@@ -15,6 +15,7 @@ using Microsoft.EntityFrameworkCore;
 using NLog.Web;
 using System.Threading.RateLimiting;
 using Asap.Web.Features.Patron;
+using Asap.Web.Features.Administration;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -113,6 +114,7 @@ if (externalConfiguration is not null)
     builder.Services.AddSingleton<StaffSignInService>();
     builder.Services.AddSingleton<StaffProfileService>();
     builder.Services.AddSingleton<StaffLifecycleService>();
+    builder.Services.AddSingleton<AdministrationService>();
     builder.Services.AddSingleton<TitleRequestViewService>();
     builder.Services.AddSingleton<TitleRequestMutationService>();
     builder.Services.AddSingleton<AdditionalCopyService>();
@@ -128,12 +130,15 @@ if (externalConfiguration is not null)
             services.GetRequiredService<Asap.Web.Infrastructure.Testing.DeterministicTestingPatronProvider>());
         builder.Services.AddSingleton<IStaffPolarisProvider>(services =>
             services.GetRequiredService<Asap.Web.Infrastructure.Testing.DeterministicTestingPatronProvider>());
+        builder.Services.AddSingleton<IPolarisReferenceProvider>(services =>
+            services.GetRequiredService<Asap.Web.Infrastructure.Testing.DeterministicTestingPatronProvider>());
     }
     else
     {
         builder.Services.AddSingleton<PolarisPatronProvider>();
         builder.Services.AddSingleton<IPatronProvider>(services => services.GetRequiredService<PolarisPatronProvider>());
         builder.Services.AddSingleton<IStaffPolarisProvider>(services => services.GetRequiredService<PolarisPatronProvider>());
+        builder.Services.AddSingleton<IPolarisReferenceProvider>(services => services.GetRequiredService<PolarisPatronProvider>());
     }
     builder.Services.AddHostedService<DataProtectionInitializer>();
     builder.Services.AddSingleton<RecipientDomainPolicy>();
@@ -189,6 +194,7 @@ if (externalConfiguration is not null)
     app.MapPatronEndpoints();
     app.MapStaffAuthenticationEndpoints();
     app.MapStaffLifecycleEndpoints();
+    app.MapAdministrationEndpoints();
     app.MapTitleRequestEndpoints();
     app.MapAdditionalCopyEndpoints();
 }
