@@ -112,8 +112,7 @@ public static class MigrationImporter
                 identityMap,
                 organizationIds,
                 options.AllowedTenantIds,
-                importedCounts,
-                transformations);
+                importedCounts);
             var bootstrapMutatedStaffUserId = EnsureUsableSuperAdministrator(
                 connection,
                 transaction,
@@ -121,6 +120,15 @@ public static class MigrationImporter
                 options.AllowedTenantIds,
                 package.Manifest.ExportedAtUtc.UtcDateTime,
                 importedCounts,
+                transformations);
+            AddStaffRecipientTransformations(
+                connection,
+                transaction,
+                staffUsers,
+                identityMap,
+                staffIds,
+                options.AllowedTenantIds,
+                bootstrapMutatedStaffUserId,
                 transformations);
             var tagIds = ImportWorkflowTags(
                 connection,
@@ -158,6 +166,7 @@ public static class MigrationImporter
                 options.AllowedTenantIds,
                 requestStatuses,
                 requestCloseReasons,
+                package.Manifest.ExportedAtUtc.UtcDateTime,
                 importedCounts,
                 transformations,
                 claimTransformations);
@@ -197,6 +206,9 @@ public static class MigrationImporter
                 titleRequestRows,
                 organizationIds,
                 formatIds,
+                staffIds,
+                claimRuleIds,
+                options.AllowedTenantIds,
                 requestStatuses,
                 requestCloseReasons,
                 bootstrapMutatedStaffUserId);
@@ -564,8 +576,7 @@ public static class MigrationImporter
         IReadOnlyDictionary<string, StaffIdentity> identities,
         IReadOnlyDictionary<string, int> organizationIds,
         IReadOnlySet<Guid> allowedTenantIds,
-        IDictionary<string, int> importedCounts,
-        ICollection<object> transformations)
+        IDictionary<string, int> importedCounts)
     {
         var mapped = new Dictionary<string, long>(StringComparer.Ordinal);
         foreach (var row in rows.OrderBy(item => item.RequiredString("id"), StringComparer.Ordinal))
@@ -603,15 +614,7 @@ public static class MigrationImporter
             var weeklyEmail = RealEmail(row.String("weekly_action_summary_email"));
             var mappedNotification = RealEmail(identity?.NotificationEmail);
             var notificationEmail = mappedNotification ?? sourceEmail ?? weeklyEmail;
-            var notificationSource = mappedNotification is not null
-                ? "identity_map"
-                : sourceEmail is not null
-                    ? "staff_email"
-                    : weeklyEmail is not null
-                        ? "weekly_action_summary_email"
-                        : "none";
-            var sourceWeeklyRecipient = weeklyEmail ?? sourceEmail;
-            var targetWeeklyRecipient = weeklyEmail ?? notificationEmail;
+            var weeklyEnabled = row.Bool("weekly_action_summary_enabled");
             var userPrincipalName = identity?.UserPrincipalName.Trim() ?? sourceEmail ?? row.String("username");
             var displayName = Clean(identity?.DisplayName) ?? row.String("displayName") ?? row.String("username");
 
@@ -640,7 +643,7 @@ public static class MigrationImporter
             command.Parameters.AddWithValue("@role", role);
             command.Parameters.AddWithValue("@organizationId", organizationId);
             command.Parameters.AddWithValue("@isActive", active);
-            command.Parameters.AddWithValue("@weeklyEnabled", row.Bool("weekly_action_summary_enabled"));
+            command.Parameters.AddWithValue("@weeklyEnabled", weeklyEnabled);
             command.Parameters.AddWithValue("@weeklyEmail", (object?)weeklyEmail ?? DBNull.Value);
             command.Parameters.AddWithValue("@purchaseDefault", row.Bool("purchase_reminder_default"));
             command.Parameters.AddWithValue("@additionalCopyDefault", row.Bool("additional_copy_reminder_default"));
@@ -649,24 +652,127 @@ public static class MigrationImporter
             var targetId = Convert.ToInt64(command.ExecuteScalar());
             mapped.Add(sourceId, targetId);
             InsertMapping(connection, transaction, "staff_user", sourceId, targetId);
+        }
+        importedCounts["staff_users"] = rows.Count;
+        return mapped;
+    }
+
+    private static void AddStaffRecipientTransformations(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        IReadOnlyList<SourceRow> rows,
+        IReadOnlyDictionary<string, StaffIdentity> identities,
+        IReadOnlyDictionary<string, long> staffIds,
+        IReadOnlySet<Guid> allowedTenantIds,
+        long? bootstrapMutatedStaffUserId,
+        ICollection<object> transformations)
+    {
+        foreach (var row in rows.OrderBy(item => item.RequiredString("id"), StringComparer.Ordinal))
+        {
+            var sourceId = row.RequiredString("id");
+            var targetId = staffIds[sourceId];
+            var sourceEmailValue = row.Text("email");
+            var sourceWeeklyValue = row.Text("weekly_action_summary_email");
+            var sourceAssignmentRecipient = LegacyTransportRecipient(
+                IsLegacyTruthy(sourceWeeklyValue) ? sourceWeeklyValue : sourceEmailValue);
+            var sourcePurchaseReminderRecipient = LegacyTransportRecipient(sourceWeeklyValue);
+            var sourceAdditionalCopyReminderRecipient = LegacyTransportRecipient(sourceWeeklyValue);
+            var sourceWeeklyRecipient = LegacyTransportRecipient(sourceWeeklyValue);
+            var weeklyEnabled = row.Bool("weekly_action_summary_enabled");
+            var sourceWeeklyEligible = weeklyEnabled && row.Bool("verified") && sourceWeeklyRecipient is not null;
+
+            string? targetNotificationEmail;
+            string? targetWeeklyEmail;
+            bool targetWeeklyEnabled;
+            bool targetActive;
+            string targetRole;
+            int targetOrganizationId;
+            Guid? targetTenantId;
+            Guid? targetObjectId;
+            using (var command = new SqlCommand(
+                       """
+                       SELECT [NotificationEmail], [WeeklyActionSummaryEmail], [WeeklyActionSummaryEnabled],
+                              [IsActive], [Role], [OrganizationId], [EntraTenantId], [EntraObjectId]
+                       FROM [asap].[StaffUser]
+                       WHERE [Id] = @id;
+                       """,
+                       connection,
+                       transaction))
+            {
+                command.Parameters.AddWithValue("@id", targetId);
+                using var reader = command.ExecuteReader();
+                if (!reader.Read())
+                {
+                    throw new MigrationOperationException("reconciliation_failed", $"Imported staff user {sourceId} is missing from the target.");
+                }
+                targetNotificationEmail = reader.IsDBNull(0) ? null : reader.GetString(0);
+                targetWeeklyEmail = reader.IsDBNull(1) ? null : reader.GetString(1);
+                targetWeeklyEnabled = reader.GetBoolean(2);
+                targetActive = reader.GetBoolean(3);
+                targetRole = reader.GetString(4);
+                targetOrganizationId = reader.GetInt32(5);
+                targetTenantId = reader.IsDBNull(6) ? null : reader.GetGuid(6);
+                targetObjectId = reader.IsDBNull(7) ? null : reader.GetGuid(7);
+            }
+
+            var targetAssignmentRecipient = targetNotificationEmail;
+            var targetPurchaseReminderRecipient = targetNotificationEmail;
+            var targetAdditionalCopyReminderRecipient = targetNotificationEmail;
+            var targetWeeklyRecipient = targetWeeklyEmail ?? targetNotificationEmail;
+            var targetScopeValid = targetRole == "super_admin"
+                ? targetOrganizationId == 1
+                : targetRole is "staff" or "admin" && targetOrganizationId != 1;
+            var targetWeeklyEligible = targetWeeklyEnabled && targetWeeklyRecipient is not null && targetActive &&
+                targetTenantId.HasValue && targetObjectId.HasValue && targetObjectId != Guid.Empty &&
+                allowedTenantIds.Contains(targetTenantId.Value) && targetScopeValid &&
+                OrganizationIsActive(connection, transaction, targetOrganizationId);
+
+            identities.TryGetValue(sourceId, out var identity);
+            var mappedNotification = RealEmail(identity?.NotificationEmail);
+            var sourceEmail = RealEmail(row.String("email"));
+            var weeklyEmail = RealEmail(row.String("weekly_action_summary_email"));
+            var notificationSource = bootstrapMutatedStaffUserId == targetId
+                ? "migration_bootstrap"
+                : mappedNotification is not null
+                    ? "identity_map"
+                    : sourceEmail is not null
+                        ? "staff_email"
+                        : weeklyEmail is not null
+                            ? "weekly_action_summary_email"
+                            : "none";
+
             transformations.Add(new
             {
                 entity = "staff_user",
                 sourceId,
                 notificationEmailSource = notificationSource,
-                sourceOrdinaryRecipient = sourceEmail,
+                sourceAssignmentRecipient,
+                sourcePurchaseReminderRecipient,
+                sourceAdditionalCopyReminderRecipient,
                 sourceWeeklyRecipient,
-                targetOrdinaryRecipient = notificationEmail,
+                targetAssignmentRecipient,
+                targetPurchaseReminderRecipient,
+                targetAdditionalCopyReminderRecipient,
                 targetWeeklyRecipient,
-                ordinaryRecipientChanged = !string.Equals(sourceEmail, notificationEmail, StringComparison.OrdinalIgnoreCase),
-                weeklyRecipientChanged = !string.Equals(sourceWeeklyRecipient, targetWeeklyRecipient, StringComparison.OrdinalIgnoreCase),
-                targetHasNotificationEmail = notificationEmail is not null,
+                assignmentRecipientChanged = !RecipientEquals(sourceAssignmentRecipient, targetAssignmentRecipient),
+                purchaseReminderRecipientChanged = !RecipientEquals(sourcePurchaseReminderRecipient, targetPurchaseReminderRecipient),
+                additionalCopyReminderRecipientChanged = !RecipientEquals(sourceAdditionalCopyReminderRecipient, targetAdditionalCopyReminderRecipient),
+                weeklyRecipientChanged = !RecipientEquals(sourceWeeklyRecipient, targetWeeklyRecipient),
+                sourceWeeklyEligible,
+                targetWeeklyEligible,
+                newlyWeeklyEligible = !sourceWeeklyEligible && targetWeeklyEligible,
+                targetHasNotificationEmail = targetNotificationEmail is not null,
                 targetHasWeeklyRecipient = targetWeeklyRecipient is not null
             });
         }
-        importedCounts["staff_users"] = rows.Count;
-        return mapped;
     }
+
+    private static bool IsLegacyTruthy(string? value) => value is not null && value.Length > 0;
+
+    private static string? LegacyTransportRecipient(string? value) => Clean(value);
+
+    private static bool RecipientEquals(string? first, string? second) =>
+        string.Equals(first, second, StringComparison.OrdinalIgnoreCase);
 
     private static Dictionary<string, long> ImportEmailTemplates(
         SqlConnection connection,
@@ -1076,6 +1182,7 @@ public static class MigrationImporter
         IReadOnlySet<Guid> allowedTenantIds,
         IReadOnlyDictionary<string, string> requestStatuses,
         IReadOnlyDictionary<string, string> requestCloseReasons,
+        DateTime exportedAtUtc,
         IDictionary<string, int> importedCounts,
         ICollection<object> transformations,
         ICollection<ClaimTransformation> claimTransformations)
@@ -1179,6 +1286,20 @@ public static class MigrationImporter
             mapped.Add(sourceId, targetId);
             InsertMapping(connection, transaction, "title_request", sourceId, targetId);
 
+            if (claim.RequiresMigrationAnnotation)
+            {
+                InsertClaimMigrationAnnotation(
+                    connection,
+                    transaction,
+                    targetId,
+                    sourceId,
+                    row,
+                    claim,
+                    exportedAtUtc);
+                importedCounts.TryGetValue("claim_migration_annotations", out var annotationCount);
+                importedCounts["claim_migration_annotations"] = annotationCount + 1;
+            }
+
             if (targetIsbnStatus == "found")
             {
                 var foundTagId = EnsureTag(connection, transaction, "polaris_bib_found", "Polaris BIB found", 20);
@@ -1192,7 +1313,7 @@ public static class MigrationImporter
                 targetStatus = targetIsbnStatus,
                 reason = IsbnTransformationReason(sourceIsbnStatus, targetIsbnStatus)
             });
-            if (claim.SourceClaimantId is not null)
+            if (claim.HasSourceAttribution)
             {
                 var claimTransformation = new ClaimTransformation(
                     sourceId,
@@ -1205,7 +1326,8 @@ public static class MigrationImporter
                     row.UtcDateTime("claimedAt"),
                     row.String("claimType"),
                     row.String("claimRuleId"),
-                    claim.Reason);
+                    claim.Reason,
+                    claim.RequiresMigrationAnnotation);
                 claimTransformations.Add(claimTransformation);
                 transformations.Add(new
                 {
@@ -1218,12 +1340,52 @@ public static class MigrationImporter
                     sourceClaimedAtUtc = claimTransformation.SourceClaimedAtUtc,
                     sourceClaimType = claimTransformation.SourceClaimType,
                     sourceClaimRuleId = claimTransformation.SourceClaimRuleId,
-                    reason = claim.Reason
+                    reason = claim.Reason,
+                    migrationAnnotationInserted = claim.RequiresMigrationAnnotation
                 });
             }
         }
+        importedCounts.TryAdd("claim_migration_annotations", 0);
         importedCounts["title_requests"] = rows.Count;
         return mapped;
+    }
+
+    private static void InsertClaimMigrationAnnotation(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        long targetRequestId,
+        string sourceRequestId,
+        SourceRow row,
+        ImportedClaim claim,
+        DateTime exportedAtUtc)
+    {
+        var metadata = JsonSerializer.Serialize(new
+        {
+            transform = "claim_attribution_normalization_v1",
+            sourceCollection = "title_requests",
+            sourceRecordId = sourceRequestId,
+            sourceClaimantId = claim.SourceClaimantId,
+            mappedStaffUserId = claim.MappedStaffUserId,
+            sourceDisplayName = row.String("claimedByDisplayName"),
+            sourceClaimedAtUtc = row.UtcDateTime("claimedAt"),
+            sourceClaimType = row.String("claimType"),
+            sourceClaimRuleId = row.String("claimRuleId"),
+            reason = claim.Reason
+        });
+        using var command = new SqlCommand(
+            """
+            INSERT INTO [asap].[TitleRequestEvent]
+                ([TitleRequestId], [EventType], [ActorType], [ActorName], [Message], [MetadataJson], [CreatedUtc])
+            VALUES
+                (@requestId, N'legacy', N'system', N'migration',
+                 N'Legacy claim attribution was normalized during migration.', @metadata, @createdUtc);
+            """,
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("@requestId", targetRequestId);
+        command.Parameters.AddWithValue("@metadata", metadata);
+        command.Parameters.AddWithValue("@createdUtc", exportedAtUtc);
+        command.ExecuteNonQuery();
     }
 
     private static void ImportTitleRequestTags(
@@ -1744,6 +1906,9 @@ public static class MigrationImporter
         IReadOnlyList<SourceRow> titleRequests,
         IReadOnlyDictionary<string, int> organizationIds,
         IReadOnlyDictionary<string, long> formatIds,
+        IReadOnlyDictionary<string, long> staffIds,
+        IReadOnlyDictionary<string, long> claimRuleIds,
+        IReadOnlySet<Guid> allowedTenantIds,
         IReadOnlyDictionary<string, string> requestStatuses,
         IReadOnlyDictionary<string, string> requestCloseReasons,
         long? bootstrapMutatedStaffUserId)
@@ -1829,6 +1994,15 @@ public static class MigrationImporter
                 row.String("bibid"));
             var retryCount = isbnStatus == "skipped_no_isbn" ? 0 : row.Int32("isbnCheckRetryCount") ?? 0;
             var expectedFormatId = ResolveRequestFormatId(connection, transaction, row, formatIds);
+            var expectedClaim = ResolveRequestClaim(
+                connection,
+                transaction,
+                row,
+                ResolveRequestStatus(row, requestStatuses),
+                expectedFormatId,
+                staffIds,
+                claimRuleIds,
+                allowedTenantIds);
             using var command = new SqlCommand(
                 """
                 SELECT r.[LibraryOrganizationId], r.[PatronOrganizationId], r.[StaffLibraryOrganizationIdCreatedBy],
@@ -1837,7 +2011,8 @@ public static class MigrationImporter
                        r.[Title], r.[Author], r.[Identifier], r.[Publication], r.[ExactPublicationDate],
                        r.[CustomFieldsJson], r.[AutoHold], r.[MaterialFormatId], r.[Status], r.[CloseReason], r.[BibId],
                        r.[LastPromoterCheckUtc], r.[IsbnCheckStatus], r.[IsbnCheckResult], r.[IsbnCheckRetryCount],
-                       r.[IsbnCheckLastErrorCode], r.[LastCheckedUtc], r.[CreatedUtc], r.[UpdatedUtc]
+                       r.[IsbnCheckLastErrorCode], r.[LastCheckedUtc], r.[CreatedUtc], r.[UpdatedUtc],
+                       r.[ClaimedByStaffUserId], r.[ClaimedByDisplayName], r.[ClaimedAtUtc], r.[ClaimType], r.[ClaimRuleId]
                 FROM [asap].[LegacyPocketBaseMapping] m
                 JOIN [asap].[TitleRequest] r ON r.[Id] = m.[NewId]
                 WHERE m.[EntityType] = N'title_request' AND m.[PocketBaseId] = @sourceId;
@@ -1878,7 +2053,12 @@ public static class MigrationImporter
                 StringEquals(reader, 27, isbnStatus == "error_max_retries" ? "legacy_retry_exhausted" : null) &&
                 DateEquals(reader, 28, row.UtcDateTime("lastChecked")) &&
                 DateEquals(reader, 29, row.UtcDateTime("created")) &&
-                DateEquals(reader, 30, row.UtcDateTime("updated")),
+                DateEquals(reader, 30, row.UtcDateTime("updated")) &&
+                LongEquals(reader, 31, expectedClaim.StaffUserId) &&
+                StringEquals(reader, 32, expectedClaim.DisplayName) &&
+                DateEquals(reader, 33, expectedClaim.ClaimedAtUtc) &&
+                StringEquals(reader, 34, expectedClaim.ClaimType) &&
+                LongEquals(reader, 35, expectedClaim.ClaimRuleId),
                 "title request");
         }
 
@@ -1935,6 +2115,9 @@ public static class MigrationImporter
     private static bool IntEquals(SqlDataReader reader, int ordinal, int? expected) =>
         reader.IsDBNull(ordinal) ? expected is null : reader.GetInt32(ordinal) == expected;
 
+    private static bool LongEquals(SqlDataReader reader, int ordinal, long? expected) =>
+        reader.IsDBNull(ordinal) ? expected is null : reader.GetInt64(ordinal) == expected;
+
     private static bool DateEquals(SqlDataReader reader, int ordinal, DateTime? expected) =>
         reader.IsDBNull(ordinal)
             ? expected is null
@@ -1963,6 +2146,8 @@ public static class MigrationImporter
             ["format_auto_claim_rules"] = Scalar(connection, "SELECT COUNT(*) FROM [asap].[FormatAutoClaimRule];"),
             ["title_requests"] = Scalar(connection, "SELECT COUNT(*) FROM [asap].[TitleRequest];"),
             ["title_request_events"] = Scalar(connection, "SELECT COUNT(*) FROM [asap].[TitleRequestEvent];"),
+            ["claim_migration_annotations"] = Scalar(connection,
+                "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [EventType] = N'legacy' AND JSON_VALUE([MetadataJson], '$.transform') = N'claim_attribution_normalization_v1';"),
             ["placed_bib_protection_markers"] = Scalar(connection,
                 "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [EventType] = N'legacy' AND JSON_VALUE([MetadataJson], '$.legacyBibProtection') = N'true' AND JSON_VALUE([MetadataJson], '$.transform') = N'placed_bib_protection_v1';"),
             ["legacy_mappings"] = Scalar(connection, "SELECT COUNT(*) FROM [asap].[LegacyPocketBaseMapping];"),
@@ -1997,7 +2182,8 @@ public static class MigrationImporter
         if (counts["staff_users"] != importedCounts["staff_users"] + importedCounts.GetValueOrDefault("migration_bootstrap_staff_users") ||
             counts["format_auto_claim_rules"] != importedCounts.GetValueOrDefault("format_claim_rules") ||
             counts["title_requests"] != importedCounts.GetValueOrDefault("title_requests") ||
-            counts["title_request_events"] != importedCounts.GetValueOrDefault("title_request_events") + importedCounts.GetValueOrDefault("placed_bib_protection_markers") ||
+            counts["title_request_events"] != importedCounts.GetValueOrDefault("title_request_events") + importedCounts.GetValueOrDefault("placed_bib_protection_markers") + importedCounts.GetValueOrDefault("claim_migration_annotations") ||
+            counts["claim_migration_annotations"] != importedCounts.GetValueOrDefault("claim_migration_annotations") ||
             counts["placed_bib_protection_markers"] != importedCounts.GetValueOrDefault("placed_bib_protection_markers") ||
             counts["patron_sessions"] != 0 || counts["email_outbox"] != 0 ||
             counts["invalid_active_claim_rules"] != 0 || counts["invalid_open_title_request_claims"] != 0 ||
@@ -2024,7 +2210,7 @@ public static class MigrationImporter
         if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
         var json = JsonSerializer.Serialize(new
         {
-            reportVersion = 2,
+            reportVersion = 3,
             sourceGitSha = package.Manifest.PocketBaseSourceGitSha,
             sourceSchemaVersion = package.Manifest.PocketBaseSourceSchemaVersion,
             exportedAtUtc = package.Manifest.ExportedAtUtc,
@@ -2126,6 +2312,18 @@ public static class MigrationImporter
         command.Parameters.AddWithValue("@id", organizationId);
         return Convert.ToInt32(command.ExecuteScalar()) == 1;
     }
+
+    private static bool OrganizationIsActive(SqlConnection connection, SqlTransaction transaction, int organizationId)
+    {
+        using var command = new SqlCommand(
+            "SELECT [IsActive] FROM [asap].[Organization] WHERE [Id] = @id;",
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("@id", organizationId);
+        var value = command.ExecuteScalar();
+        return value is not null and not DBNull && Convert.ToBoolean(value);
+    }
+
 
     private static int ResolveOrganizationId(
         SourceRow row,
@@ -2251,25 +2449,32 @@ public static class MigrationImporter
         var sourceType = row.String("claimType");
         var sourceRuleId = row.String("claimRuleId");
         var mappedRuleId = ResolveOptionalMapping(sourceRuleId, claimRuleIds);
+        var hasSourceAttribution = sourceClaimantId is not null || displayName is not null ||
+            claimedAt is not null || sourceType is not null || sourceRuleId is not null;
+        if (!hasSourceAttribution)
+        {
+            return new(false, false, null, null, null, null, null, null, null, "unclaimed");
+        }
         if (sourceClaimantId is null)
         {
-            return new(null, null, null, null, null, null, null, "unclaimed");
+            if (status == "closed" && displayName is not null && claimedAt is not null && sourceType is not null)
+            {
+                var historicalType = NormalizeHistoricalClaimType(sourceType, mappedStaffId, mappedRuleId);
+                return new(true, false, null, null, null, displayName, claimedAt, historicalType, mappedRuleId, "closed_claimant_unmapped");
+            }
+            return new(true, true, null, null, null, null, null, null, null, status == "closed" ? "closed_attribution_incomplete" : "claimant_unmapped");
         }
 
         if (status == "closed")
         {
             if (displayName is null || claimedAt is null || sourceType is null)
             {
-                return new(sourceClaimantId, mappedStaffId, null, null, null, null, null, "closed_attribution_incomplete");
+                return new(true, true, sourceClaimantId, mappedStaffId, null, null, null, null, null, "closed_attribution_incomplete");
             }
-            var historicalType = sourceType switch
-            {
-                "manual" => "manual",
-                "automatic_format_rule" when mappedStaffId is not null && mappedRuleId is not null => "automatic_format_rule",
-                "automatic_format_rule" => "legacy",
-                _ => throw new MigrationOperationException("claim_type_invalid", $"Unknown claim type: {sourceType}")
-            };
+            var historicalType = NormalizeHistoricalClaimType(sourceType, mappedStaffId, mappedRuleId);
             return new(
+                true,
+                false,
                 sourceClaimantId,
                 mappedStaffId,
                 mappedStaffId,
@@ -2282,11 +2487,11 @@ public static class MigrationImporter
 
         if (mappedStaffId is null)
         {
-            return new(sourceClaimantId, null, null, null, null, null, null, "claimant_unmapped");
+            return new(true, true, sourceClaimantId, null, null, null, null, null, null, "claimant_unmapped");
         }
         if (displayName is null || claimedAt is null || sourceType is null)
         {
-            return new(sourceClaimantId, mappedStaffId, null, null, null, null, null, "claim_metadata_incomplete");
+            return new(true, true, sourceClaimantId, mappedStaffId, null, null, null, null, null, "claim_metadata_incomplete");
         }
         var libraryId = row.Int32("libraryOrgId") ?? 0;
         var eligibility = StaffEligibilityReason(
@@ -2297,17 +2502,21 @@ public static class MigrationImporter
             allowedTenantIds);
         if (eligibility != "eligible")
         {
-            return new(sourceClaimantId, mappedStaffId, null, null, null, null, null, eligibility);
+            return new(true, true, sourceClaimantId, mappedStaffId, null, null, null, null, null, eligibility);
         }
         if (sourceType == "manual")
         {
-            return new(sourceClaimantId, mappedStaffId, mappedStaffId, displayName, claimedAt, "manual", null, "eligible");
+            return new(true, false, sourceClaimantId, mappedStaffId, mappedStaffId, displayName, claimedAt, "manual", null, "eligible");
         }
         if (sourceType != "automatic_format_rule")
         {
             throw new MigrationOperationException("claim_type_invalid", $"Unknown claim type: {sourceType}");
         }
-        if (mappedRuleId is null || !ActiveRuleMatches(
+        if (mappedRuleId is null)
+        {
+            return new(true, false, sourceClaimantId, mappedStaffId, mappedStaffId, displayName, claimedAt, "legacy", null, "claim_rule_unmapped_normalized");
+        }
+        if (!RuleMatchesStoredClaim(
                 connection,
                 transaction,
                 mappedRuleId.Value,
@@ -2315,9 +2524,11 @@ public static class MigrationImporter
                 formatId,
                 mappedStaffId.Value))
         {
-            return new(sourceClaimantId, mappedStaffId, null, null, null, null, null, "claim_rule_inactive_or_mismatched");
+            return new(true, false, sourceClaimantId, mappedStaffId, mappedStaffId, displayName, claimedAt, "legacy", mappedRuleId, "claim_rule_mismatch_normalized");
         }
         return new(
+            true,
+            false,
             sourceClaimantId,
             mappedStaffId,
             mappedStaffId,
@@ -2327,6 +2538,14 @@ public static class MigrationImporter
             mappedRuleId,
             "eligible");
     }
+
+    private static string NormalizeHistoricalClaimType(string sourceType, long? mappedStaffId, long? mappedRuleId) => sourceType switch
+    {
+        "manual" => "manual",
+        "automatic_format_rule" when mappedStaffId is not null && mappedRuleId is not null => "automatic_format_rule",
+        "automatic_format_rule" => "legacy",
+        _ => throw new MigrationOperationException("claim_type_invalid", $"Unknown claim type: {sourceType}")
+    };
 
     private static bool IsStaffEligibleForLibrary(
         SqlConnection connection,
@@ -2366,7 +2585,7 @@ public static class MigrationImporter
         };
     }
 
-    private static bool ActiveRuleMatches(
+    private static bool RuleMatchesStoredClaim(
         SqlConnection connection,
         SqlTransaction transaction,
         long ruleId,
@@ -2378,7 +2597,7 @@ public static class MigrationImporter
             """
             SELECT COUNT(*) FROM [asap].[FormatAutoClaimRule]
             WHERE [Id] = @id AND [LibraryOrganizationId] = @libraryId AND [MaterialFormatId] = @formatId
-              AND [StaffUserId] = @staffId AND [IsActive] = 1;
+              AND [StaffUserId] = @staffId;
             """,
             connection,
             transaction);
@@ -2570,6 +2789,8 @@ public static class MigrationImporter
     private static object DbValue<T>(T? value) where T : struct => value.HasValue ? value.Value : DBNull.Value;
 
     private sealed record ImportedClaim(
+        bool HasSourceAttribution,
+        bool RequiresMigrationAnnotation,
         string? SourceClaimantId,
         long? MappedStaffUserId,
         long? StaffUserId,
@@ -2583,14 +2804,15 @@ public static class MigrationImporter
         string SourceId,
         int LibraryOrganizationId,
         string Status,
-        string SourceClaimantId,
+        string? SourceClaimantId,
         long? MappedStaffUserId,
         long? EffectiveStaffUserId,
         string? SourceDisplayName,
         DateTime? SourceClaimedAtUtc,
         string? SourceClaimType,
         string? SourceClaimRuleId,
-        string Reason);
+        string Reason,
+        bool MigrationAnnotationInserted);
 
     private sealed record SourceEvent(
         string Id,

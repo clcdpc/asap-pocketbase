@@ -9,6 +9,7 @@
     <PackageReference Include="Hangfire.AspNetCore" />
     <PackageReference Include="Hangfire.SqlServer" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" />
     <PackageReference Include="Microsoft.SqlServer.DacFx" />
     <PackageReference Include="NLog.Web.AspNetCore" />
   </ItemGroup>

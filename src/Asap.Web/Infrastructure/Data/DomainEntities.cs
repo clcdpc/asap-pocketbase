@@ -448,6 +448,78 @@ public sealed class EmailDeliveryEvent
     public string? MetadataJson { get; set; }
 }
 
+public sealed class DeletedRequestAudit
+{
+    public long Id { get; set; }
+    public required string RequestType { get; set; }
+    public required string OriginalRequestKey { get; set; }
+    public int LibraryOrganizationId { get; set; }
+    public string? Title { get; set; }
+    public string? Author { get; set; }
+    public string? Identifier { get; set; }
+    public string? BibId { get; set; }
+    public string? Status { get; set; }
+    public string? CloseReason { get; set; }
+    public string? MaskedBarcode { get; set; }
+    public DateTime? CreatedUtc { get; set; }
+    public DateTime DeletedUtc { get; set; }
+    public long? DeletedByStaffUserId { get; set; }
+    public string? DeletedByDisplayName { get; set; }
+}
+
+public sealed class AdministrativeAudit
+{
+    public long Id { get; set; }
+    public long? ActorStaffUserId { get; set; }
+    public string? ActorName { get; set; }
+    public int? OrganizationId { get; set; }
+    public required string Action { get; set; }
+    public string? TargetType { get; set; }
+    public string? TargetId { get; set; }
+    public string? DetailsJson { get; set; }
+    public DateTime CreatedUtc { get; set; }
+}
+
+public sealed class HoldPlacementOperation
+{
+    public long Id { get; set; }
+    public long TitleRequestId { get; set; }
+    public required string PatronBarcodeSnapshot { get; set; }
+    public string? PatronIdSnapshot { get; set; }
+    public required string BibIdSnapshot { get; set; }
+    public int? PickupBranchIdSnapshot { get; set; }
+    public int? RequestingOrganizationIdSnapshot { get; set; }
+    public int? WorkstationIdSnapshot { get; set; }
+    public string? PolarisUserIdSnapshot { get; set; }
+    public int AttemptNumber { get; set; }
+    public required string State { get; set; }
+    public required string Phase { get; set; }
+    public Guid? OwnerToken { get; set; }
+    public long ExecutionEpoch { get; set; }
+    public DateTime? LeaseExpiresUtc { get; set; }
+    public DateTime RequestStartedUtc { get; set; }
+    public DateTime? CreateStartedUtc { get; set; }
+    public DateTime? CreateResponseObservedUtc { get; set; }
+    public DateTime? ReplyStartedUtc { get; set; }
+    public DateTime? ReplyResponseObservedUtc { get; set; }
+    public DateTime? CompletedUtc { get; set; }
+    public string? PolarisRequestGuid { get; set; }
+    public string? PolarisHoldId { get; set; }
+    public string? TxnGroupQualifier { get; set; }
+    public string? TxnQualifier { get; set; }
+    public string? ReplyAnswer { get; set; }
+    public string? ReplyState { get; set; }
+    public string? ProviderStatusType { get; set; }
+    public string? ProviderStatusValue { get; set; }
+    public string? ResultCode { get; set; }
+    public string? OutcomeEvidenceKind { get; set; }
+    public int RecoveryAttemptCount { get; set; }
+    public DateTime? LastRecoveryUtc { get; set; }
+    public string? LastErrorCode { get; set; }
+    public string? DetailJson { get; set; }
+    public byte[] RowVersion { get; set; } = [];
+}
+
 public sealed class LegacyPocketBaseMapping
 {
     public required string EntityType { get; set; }

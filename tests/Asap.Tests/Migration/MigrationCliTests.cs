@@ -37,7 +37,7 @@ public sealed class MigrationCliTests
         Assert.AreEqual(
             "150b30b776565194260cc327eeeffdfb46475e81",
             contract.RootElement.GetProperty("pocketBaseBaselineSha").GetString());
-        Assert.AreEqual(2, contract.RootElement.GetProperty("expectedSchemaVersion").GetInt32());
+        Assert.AreEqual(3, contract.RootElement.GetProperty("expectedSchemaVersion").GetInt32());
         Assert.AreEqual(
             "CLC.ASAP",
             contract.RootElement.GetProperty("dataProtectionApplicationName").GetString());
@@ -436,12 +436,21 @@ public sealed class MigrationCliTests
             Assert.AreEqual(64, reportDocument.RootElement.GetProperty("packageIdentitySha256").GetString()!.Length);
             var staffRecipient = reportDocument.RootElement.GetProperty("transformations").EnumerateArray().Single(item =>
                 item.GetProperty("entity").GetString() == "staff_user");
-            Assert.AreEqual("source-admin@example.org", staffRecipient.GetProperty("sourceOrdinaryRecipient").GetString());
+            Assert.AreEqual("weekly@example.org", staffRecipient.GetProperty("sourceAssignmentRecipient").GetString());
+            Assert.AreEqual("weekly@example.org", staffRecipient.GetProperty("sourcePurchaseReminderRecipient").GetString());
+            Assert.AreEqual("weekly@example.org", staffRecipient.GetProperty("sourceAdditionalCopyReminderRecipient").GetString());
             Assert.AreEqual("weekly@example.org", staffRecipient.GetProperty("sourceWeeklyRecipient").GetString());
-            Assert.AreEqual("target-notify@example.org", staffRecipient.GetProperty("targetOrdinaryRecipient").GetString());
+            Assert.AreEqual("target-notify@example.org", staffRecipient.GetProperty("targetAssignmentRecipient").GetString());
+            Assert.AreEqual("target-notify@example.org", staffRecipient.GetProperty("targetPurchaseReminderRecipient").GetString());
+            Assert.AreEqual("target-notify@example.org", staffRecipient.GetProperty("targetAdditionalCopyReminderRecipient").GetString());
             Assert.AreEqual("weekly@example.org", staffRecipient.GetProperty("targetWeeklyRecipient").GetString());
-            Assert.IsTrue(staffRecipient.GetProperty("ordinaryRecipientChanged").GetBoolean());
+            Assert.IsTrue(staffRecipient.GetProperty("assignmentRecipientChanged").GetBoolean());
+            Assert.IsTrue(staffRecipient.GetProperty("purchaseReminderRecipientChanged").GetBoolean());
+            Assert.IsTrue(staffRecipient.GetProperty("additionalCopyReminderRecipientChanged").GetBoolean());
             Assert.IsFalse(staffRecipient.GetProperty("weeklyRecipientChanged").GetBoolean());
+            Assert.IsFalse(staffRecipient.GetProperty("sourceWeeklyEligible").GetBoolean());
+            Assert.IsTrue(staffRecipient.GetProperty("targetWeeklyEligible").GetBoolean());
+            Assert.IsTrue(staffRecipient.GetProperty("newlyWeeklyEligible").GetBoolean());
 
             using var reconcileOutput = new StringWriter();
             using var reconcileError = new StringWriter();
@@ -1109,8 +1118,8 @@ public sealed class MigrationCliTests
                 INSERT INTO [polaris_organizations] VALUES ('pb-org-3', '3', 'Other Library', 'OTHER', 1);
                 INSERT INTO [staff_users] VALUES
                     ('pb-staff-same', 'same@example.org', 'same', 'Same Library', 'staff', 1, '2', 0, NULL, 0, 0, 0),
-                    ('pb-staff-inactive', 'inactive@example.org', 'inactive', 'Inactive Selector', 'staff', 0, '2', 0, NULL, 0, 0, 0),
-                    ('pb-staff-other', 'other@example.org', 'other', 'Other Library', 'admin', 1, '3', 0, NULL, 0, 0, 0);
+                    ('pb-staff-inactive', 'foreign@staff.asap.local', 'inactive', 'Inactive Selector', 'staff', 0, '2', 0, NULL, 0, 0, 0),
+                    ('pb-staff-other', 'other@example.org', 'other', 'Other Library', 'admin', 1, '3', 0, 'not-an-email', 0, 0, 0);
                 CREATE TABLE [material_formats]
                 (
                     [id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL,
@@ -1126,6 +1135,7 @@ public sealed class MigrationCliTests
                 );
                 INSERT INTO [format_claim_rules] VALUES
                     ('rule-same', '2', 'book', 'pb-staff-same', 1, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
+                    ('rule-same-inactive', '2', 'book', 'pb-staff-same', 0, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
                     ('rule-other', '2', 'book', 'pb-staff-other', 1, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
                     ('rule-unmapped', '2', 'book', 'missing-staff', 1, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
                 CREATE TABLE [title_requests]
@@ -1144,7 +1154,10 @@ public sealed class MigrationCliTests
                     ('request-super', '2', 'fmt-book', 'A20000000000004', 'Cross library administrator', 0, 'hold_placed', NULL, NULL, 'pb-staff-1', 'Source Administrator', '2029-02-04T10:00:00Z', 'manual', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
                     ('request-auto', '2', 'fmt-book', 'A20000000000005', 'Automatic rule', 0, 'suggestion', NULL, NULL, 'pb-staff-same', 'Same Library', '2029-02-05T10:00:00Z', 'automatic_format_rule', 'rule-same', '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
                     ('request-unmapped', '2', 'fmt-book', 'A20000000000006', 'Missing claimant', 0, 'hold_placed', NULL, NULL, 'missing-staff', 'Former Selector', '2029-02-06T10:00:00Z', 'manual', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
-                    ('request-closed', '2', 'fmt-book', 'A20000000000007', 'Closed history', 0, 'closed', 'rejected', NULL, 'pb-staff-inactive', 'Inactive Selector', '2029-02-07T10:00:00Z', 'manual', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
+                    ('request-closed', '2', 'fmt-book', 'A20000000000007', 'Closed history', 0, 'closed', 'rejected', NULL, 'pb-staff-inactive', 'Inactive Selector', '2029-02-07T10:00:00Z', 'manual', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
+                    ('request-auto-inactive-rule', '2', 'fmt-book', 'A20000000000008', 'Inactive historical rule', 0, 'suggestion', NULL, NULL, 'pb-staff-same', 'Same Library', '2029-02-08T10:00:00Z', 'automatic_format_rule', 'rule-same-inactive', '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
+                    ('request-metadata-open', '2', 'fmt-book', 'A20000000000009', 'Open metadata only', 0, 'suggestion', NULL, NULL, NULL, 'Former Selector', '2029-02-09T10:00:00Z', 'manual', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
+                    ('request-metadata-closed', '2', 'fmt-book', 'A20000000000010', 'Closed metadata only', 0, 'closed', 'manual', NULL, NULL, 'Former Selector', '2029-02-10T10:00:00Z', 'manual', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
                 """);
             var identityMap = Path.Combine(root, "staff-entra-identity-map.json");
             File.WriteAllText(
@@ -1175,11 +1188,15 @@ public sealed class MigrationCliTests
 
             await using var connection = new SqlConnection(target);
             await connection.OpenAsync();
-            Assert.AreEqual(3, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[TitleRequest] WHERE [Status] <> N'closed' AND [ClaimedByStaffUserId] IS NOT NULL;"));
-            Assert.AreEqual(3, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[TitleRequest] WHERE [Status] <> N'closed' AND [ClaimedByStaffUserId] IS NULL;"));
+            Assert.AreEqual(4, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[TitleRequest] WHERE [Status] <> N'closed' AND [ClaimedByStaffUserId] IS NOT NULL;"));
+            Assert.AreEqual(4, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[TitleRequest] WHERE [Status] <> N'closed' AND [ClaimedByStaffUserId] IS NULL;"));
             Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[TitleRequest] WHERE [Title] = N'Closed history' AND [Status] = N'closed' AND [ClaimedByStaffUserId] IS NOT NULL AND [ClaimedByDisplayName] = N'Inactive Selector' AND [ClaimedAtUtc] = '2029-02-07T10:00:00Z';"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[TitleRequest] WHERE [Title] = N'Inactive historical rule' AND [ClaimedByStaffUserId] IS NOT NULL AND [ClaimType] = N'automatic_format_rule' AND [ClaimRuleId] IS NOT NULL;"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[TitleRequest] WHERE [Title] = N'Closed metadata only' AND [ClaimedByStaffUserId] IS NULL AND [ClaimedByDisplayName] = N'Former Selector' AND [ClaimedAtUtc] = '2029-02-10T10:00:00Z' AND [ClaimType] = N'manual';"));
+            Assert.AreEqual(4, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [EventType] = N'legacy' AND JSON_VALUE([MetadataJson], '$.transform') = N'claim_attribution_normalization_v1';"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] e JOIN [asap].[TitleRequest] r ON r.[Id] = e.[TitleRequestId] WHERE r.[Title] = N'Open metadata only' AND JSON_VALUE(e.[MetadataJson], '$.sourceDisplayName') = N'Former Selector';"));
             Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[FormatAutoClaimRule] WHERE [IsActive] = 1 AND [StaffUserId] IS NOT NULL;"));
-            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[FormatAutoClaimRule] WHERE [IsActive] = 0 AND [StaffUserId] IS NOT NULL;"));
+            Assert.AreEqual(2, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[FormatAutoClaimRule] WHERE [IsActive] = 0 AND [StaffUserId] IS NOT NULL;"));
             Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[FormatAutoClaimRule] WHERE [IsActive] = 0 AND [StaffUserId] IS NULL;"));
 
             using var document = JsonDocument.Parse(await File.ReadAllTextAsync(report));
@@ -1191,9 +1208,29 @@ public sealed class MigrationCliTests
             Assert.AreEqual("2029-02-02T10:00:00Z", inactiveTransform.GetProperty("sourceClaimedAtUtc").GetDateTime().ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"));
             Assert.AreEqual("manual", inactiveTransform.GetProperty("sourceClaimType").GetString());
             Assert.AreEqual("claimant_inactive", inactiveTransform.GetProperty("reason").GetString());
+            var placeholderRecipient = document.RootElement.GetProperty("transformations").EnumerateArray().Single(item =>
+                item.GetProperty("entity").GetString() == "staff_user" &&
+                item.GetProperty("sourceId").GetString() == "pb-staff-inactive");
+            Assert.AreEqual("foreign@staff.asap.local", placeholderRecipient.GetProperty("sourceAssignmentRecipient").GetString());
+            Assert.AreEqual(JsonValueKind.Null, placeholderRecipient.GetProperty("targetAssignmentRecipient").ValueKind);
+            Assert.IsTrue(placeholderRecipient.GetProperty("assignmentRecipientChanged").GetBoolean());
+            var invalidWeeklyRecipient = document.RootElement.GetProperty("transformations").EnumerateArray().Single(item =>
+                item.GetProperty("entity").GetString() == "staff_user" &&
+                item.GetProperty("sourceId").GetString() == "pb-staff-other");
+            Assert.AreEqual("not-an-email", invalidWeeklyRecipient.GetProperty("sourceAssignmentRecipient").GetString());
+            Assert.AreEqual("not-an-email", invalidWeeklyRecipient.GetProperty("sourcePurchaseReminderRecipient").GetString());
+            Assert.AreEqual("other@example.org", invalidWeeklyRecipient.GetProperty("targetAssignmentRecipient").GetString());
+            var metadataTransform = document.RootElement.GetProperty("transformations").EnumerateArray().Single(item =>
+                item.GetProperty("entity").GetString() == "title_request_claim" &&
+                item.GetProperty("sourceId").GetString() == "request-metadata-open");
+            Assert.AreEqual(JsonValueKind.Null, metadataTransform.GetProperty("sourceClaimantId").ValueKind);
+            Assert.AreEqual("Former Selector", metadataTransform.GetProperty("sourceDisplayName").GetString());
+            Assert.AreEqual("claimant_unmapped", metadataTransform.GetProperty("reason").GetString());
+            Assert.IsTrue(metadataTransform.GetProperty("migrationAnnotationInserted").GetBoolean());
             var summary = document.RootElement.GetProperty("claimReconciliation").GetProperty("titleRequests").EnumerateArray().ToArray();
             Assert.IsTrue(summary.Any(item => item.GetProperty("outcome").GetString() == "cleared" && item.GetProperty("reason").GetString() == "claimant_inactive" && item.GetProperty("count").GetInt32() == 1));
             Assert.IsTrue(summary.Any(item => item.GetProperty("outcome").GetString() == "closed_history" && item.GetProperty("reason").GetString() == "closed_history_preserved" && item.GetProperty("count").GetInt32() == 1));
+            Assert.IsTrue(summary.Any(item => item.GetProperty("outcome").GetString() == "closed_history" && item.GetProperty("reason").GetString() == "closed_claimant_unmapped" && item.GetProperty("count").GetInt32() == 1));
         }
         finally
         {
@@ -1929,6 +1966,15 @@ public sealed class MigrationCliTests
             Assert.IsFalse(reportText.Contains("source-admin-secret", StringComparison.Ordinal));
             Assert.IsFalse(reportText.Contains("target-postmark-secret", StringComparison.Ordinal));
             StringAssert.Contains(reportText, "promoted_existing");
+            using (var reportDocument = JsonDocument.Parse(reportText))
+            {
+                var promotedRecipient = reportDocument.RootElement.GetProperty("transformations").EnumerateArray().Single(item =>
+                    item.GetProperty("entity").GetString() == "staff_user" &&
+                    item.GetProperty("sourceId").GetString() == "pb-staff-1");
+                Assert.AreEqual("bootstrap-notify@example.org", promotedRecipient.GetProperty("targetAssignmentRecipient").GetString());
+                Assert.IsTrue(promotedRecipient.GetProperty("targetWeeklyEligible").GetBoolean());
+                Assert.AreEqual("migration_bootstrap", promotedRecipient.GetProperty("notificationEmailSource").GetString());
+            }
 
             DeployDacpac(master, insertedDatabaseName);
             var insertedObjectId = Guid.Parse("22222222-2222-2222-2222-222222222222");

@@ -130,6 +130,12 @@ correction is cleared for commit/push. An actual green Linux CI run remains a
 separate required gate before Slice 2; neither this review nor Windows tests
 replace it. No reviewer edits occurred and no prior finding was waived.
 
+The correction was committed/pushed as
+`1e36761c771db70d0b669087d0a843b66cf5618b`. Actual Linux CI run 34731687718
+passed all 120 .NET/SQL tests with no failures/skips, frontend tests and publish
+checks. Slice 1 is now closed and Slice 2 may begin. The original failed run
+and correction review remain recorded; no history was rewritten.
+
 ### Pass 2 Result
 
 The same Terra High reviewer completed full Pass 2 over all 95 receipt files,

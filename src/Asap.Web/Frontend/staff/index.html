@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ASAP Staff</title>
+  <meta name="color-scheme" content="light">
+  <link rel="icon" href="/jpl.png">
+  <link rel="stylesheet" href="/vendor/font-awesome/4.7.0/css/font-awesome.css">
+  <link rel="stylesheet" href="/vendor/gridjs/6.2.0/theme/mermaid.min.css">
+  <link rel="stylesheet" href="styles.css?v=2">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to requests</a>
+  <header class="app-header">
+    <a class="brand" href="/staff/" aria-label="ASAP Staff home">
+      <img src="/jpl.png" alt="" width="38" height="38">
+      <span><strong>ASAP</strong><small>Staff workflow</small></span>
+    </a>
+    <div id="session-actions" class="session-actions" hidden>
+      <span id="staff-identity"></span>
+      <button id="sign-out" class="icon-button" type="button" title="Sign out" aria-label="Sign out">
+        <i class="fa fa-sign-out" aria-hidden="true"></i>
+      </button>
+    </div>
+  </header>
+
+  <main id="main-content">
+    <p id="app-status" class="status-message" role="status" aria-live="polite">Loading staff session...</p>
+
+    <section id="signed-out" class="signed-out" hidden aria-labelledby="signed-out-title">
+      <img src="/jpl.png" alt="" width="88" height="88">
+      <h1 id="signed-out-title">ASAP Staff</h1>
+      <p id="signed-out-message">Sign in with your authorized library account.</p>
+      <a class="primary-button sign-in" href="/api/asap/staff/sign-in?returnUrl=%2Fstaff%2F">
+        <i class="fa fa-windows" aria-hidden="true"></i>
+        Sign in with Microsoft
+      </a>
+    </section>
+
+    <div id="workspace" hidden>
+      <nav class="view-tabs" aria-label="Staff views">
+        <button class="view-tab active" type="button" data-view="queue" aria-current="page">
+          <i class="fa fa-list" aria-hidden="true"></i> Requests
+        </button>
+        <button class="view-tab" type="button" data-view="profile">
+          <i class="fa fa-user" aria-hidden="true"></i> Profile
+        </button>
+      </nav>
+
+      <section id="queue-view" aria-labelledby="queue-title">
+        <div class="section-heading">
+          <div>
+            <h1 id="queue-title" tabindex="-1">Title requests</h1>
+            <p id="queue-summary">Loading authorized requests...</p>
+          </div>
+          <label id="scope-field" class="compact-field" hidden>
+            <span>Library scope</span>
+            <select id="library-scope"></select>
+          </label>
+        </div>
+
+        <div id="status-tabs" class="status-tabs" role="tablist" aria-label="Request status">
+          <button type="button" role="tab" data-status="suggestion" aria-selected="true">Suggestions</button>
+          <button type="button" role="tab" data-status="outstanding_purchase" aria-selected="false">Purchases</button>
+          <button type="button" role="tab" data-status="pending_hold" aria-selected="false">Pending holds</button>
+          <button type="button" role="tab" data-status="hold_placed" aria-selected="false">Placed holds</button>
+          <button type="button" role="tab" data-status="closed" aria-selected="false">Closed</button>
+        </div>
+
+        <div class="queue-filters" aria-label="Request filters">
+          <label class="search-field">
+            <span class="sr-only">Search requests</span>
+            <i class="fa fa-search" aria-hidden="true"></i>
+            <input id="request-search" type="search" placeholder="Search title, patron, barcode, or identifier">
+          </label>
+          <label class="compact-field">
+            <span>Claims</span>
+            <select id="claim-filter">
+              <option value="all">All claims</option>
+              <option value="mine_unclaimed">Mine + unclaimed</option>
+              <option value="mine">Mine</option>
+              <option value="unclaimed">Unclaimed</option>
+            </select>
+          </label>
+          <label class="compact-field">
+            <span>Tag</span>
+            <select id="tag-filter"><option value="all">All tags</option></select>
+          </label>
+          <button id="refresh-queue" class="icon-button" type="button" title="Refresh requests" aria-label="Refresh requests">
+            <i class="fa fa-refresh" aria-hidden="true"></i>
+          </button>
+        </div>
+
+        <div id="request-grid" class="request-grid"></div>
+        <p id="queue-empty" class="empty-state" hidden>No requests match these filters.</p>
+      </section>
+
+      <section id="profile-view" aria-labelledby="profile-title" hidden>
+        <div class="section-heading">
+          <div>
+            <h1 id="profile-title" tabindex="-1">Profile</h1>
+            <p>Notification preferences for your staff account.</p>
+          </div>
+        </div>
+        <form id="profile-form" class="profile-form">
+          <label>
+            <span>Primary notification email</span>
+            <input id="notification-email" type="email" readonly aria-describedby="notification-email-help">
+            <small id="notification-email-help">Managed by Staff Access.</small>
+          </label>
+          <label>
+            <span>Weekly summary email override</span>
+            <input id="weekly-email" type="email" autocomplete="email" placeholder="Use primary email">
+          </label>
+          <label class="check-field"><input id="weekly-enabled" type="checkbox"> <span>Receive weekly action summary</span></label>
+          <label class="check-field"><input id="purchase-default" type="checkbox"> <span>Send purchase reminder by default</span></label>
+          <label class="check-field"><input id="additional-copy-default" type="checkbox"> <span>Send additional-copy reminder by default</span></label>
+          <label class="check-field"><input id="mine-default" type="checkbox"> <span>Show mine + unclaimed by default</span></label>
+          <div class="form-actions"><button class="primary-button" type="submit">Save profile</button></div>
+        </form>
+      </section>
+    </div>
+  </main>
+
+  <dialog id="request-dialog" aria-labelledby="request-dialog-title">
+    <div class="dialog-shell">
+      <header class="dialog-header">
+        <div>
+          <p id="request-dialog-kicker" class="kicker"></p>
+          <h2 id="request-dialog-title">Request</h2>
+        </div>
+        <button id="close-request" class="icon-button" type="button" title="Close details" aria-label="Close request details">
+          <i class="fa fa-times" aria-hidden="true"></i>
+        </button>
+      </header>
+      <div id="request-dialog-body" class="dialog-body"></div>
+    </div>
+  </dialog>
+
+  <script src="/vendor/gridjs/6.2.0/gridjs.umd.js"></script>
+  <script src="app.js?v=2" type="module"></script>
+</body>
+</html>

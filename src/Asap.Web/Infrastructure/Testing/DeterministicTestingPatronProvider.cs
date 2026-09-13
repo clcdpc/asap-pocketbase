@@ -1,8 +1,9 @@
 using Asap.Web.Features.Patron;
+using Asap.Web.Features.Staff;
 
 namespace Asap.Web.Infrastructure.Testing;
 
-public sealed class DeterministicTestingPatronProvider : IPatronProvider
+public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaffPolarisProvider
 {
     private static readonly IReadOnlyList<PickupBranch> Branches =
     [
@@ -76,6 +77,52 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider
             _ => new IdentifierLookupResult(IdentifierLookupOutcome.NotFound)
         };
         return Task.FromResult(result);
+    }
+
+    public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(new BibValidationResult(bibId > 0, $"Catalog title {bibId}", "Catalog author"));
+    }
+
+    public Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(
+        string barcode,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<PolarisHoldSnapshot>>([]);
+    }
+
+    public Task<HoldProviderResult> CreateHoldAsync(
+        HoldCreateCommand command,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(new HoldProviderResult(
+            HoldProviderOutcome.FinalSuccess,
+            Guid.NewGuid().ToString(),
+            (command.BibId + 100000).ToString(),
+            null,
+            null,
+            2,
+            0,
+            "testing_documented_create_success"));
+    }
+
+    public Task<HoldProviderResult> ReplyToHoldAsync(
+        HoldReplyCommand command,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(new HoldProviderResult(
+            HoldProviderOutcome.FinalSuccess,
+            command.RequestGuid.ToString(),
+            null,
+            command.TxnGroupQualifier,
+            command.TxnQualifier,
+            2,
+            0,
+            "testing_documented_reply_success"));
     }
 
     private static PatronSnapshot CreatePatron(string barcode) => new(

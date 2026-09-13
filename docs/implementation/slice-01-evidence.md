@@ -1,10 +1,10 @@
 # Slice 1 Evidence
 
-Recorded 2026-09-12. Slice 1's local tests and full Terra Pass 3 gate passed;
-the subsequent Linux remote CI failure remains under correction. See
-`slice-01-review.md` and the evidence below. Earlier checkpoint failures remain
-preserved chronologically. No production data, provider delivery, deployment,
-or release/rehearsal gate was involved.
+Recorded 2026-09-12. Slice 1 is closed after local acceptance, full Terra review
+and CI-correction closure, and the successful 120-test Linux run 34731687718.
+See `slice-01-review.md` and the evidence below. Earlier checkpoint failures
+remain preserved chronologically. No production data, provider delivery,
+deployment, or release/rehearsal gate was involved.
 
 ## Foundation Checkpoint
 
@@ -584,3 +584,9 @@ Same-Terra full Slice 1 closure review is now clean. The reviewer independently
 verified the 96-file receipt/artifact evidence and passed the 20 configuration
 tests plus the real-SQL protected-bootstrap migration test. The coherent CI
 correction may be committed; its new actual Linux CI result is still required.
+
+Correction commit `1e36761c771db70d0b669087d0a843b66cf5618b` then passed
+remote Linux run 34731687718 in 3m 42s: build, 120/120 .NET/SQL tests with zero
+skips, frontend tests, and publication checks. The actual log confirms the
+counts. Together with the same-Terra closure this satisfies Slice 1's gate;
+real Postmark and all later implementation/rehearsal gates remain outstanding.

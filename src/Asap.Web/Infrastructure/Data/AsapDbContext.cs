@@ -37,6 +37,9 @@ public sealed class AsapDbContext(DbContextOptions<AsapDbContext> options) : DbC
     public DbSet<EmailTemplate> EmailTemplates => Set<EmailTemplate>();
     public DbSet<EmailOutbox> EmailOutbox => Set<EmailOutbox>();
     public DbSet<EmailDeliveryEvent> EmailDeliveryEvents => Set<EmailDeliveryEvent>();
+    public DbSet<DeletedRequestAudit> DeletedRequestAudits => Set<DeletedRequestAudit>();
+    public DbSet<AdministrativeAudit> AdministrativeAudits => Set<AdministrativeAudit>();
+    public DbSet<HoldPlacementOperation> HoldPlacementOperations => Set<HoldPlacementOperation>();
     public DbSet<LegacyPocketBaseMapping> LegacyPocketBaseMappings => Set<LegacyPocketBaseMapping>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)

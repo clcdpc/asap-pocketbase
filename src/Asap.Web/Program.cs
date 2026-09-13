@@ -1,5 +1,6 @@
 using Asap.Security;
 using Asap.Web.Features.Email;
+using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Configuration;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Development;
@@ -106,14 +107,32 @@ if (externalConfiguration is not null)
     builder.Services.AddSingleton<PatronConfigurationService>();
     builder.Services.AddSingleton<PatronSessionService>();
     builder.Services.AddSingleton<PatronSuggestionService>();
+    builder.Services.AddTransient<IdentifierLookupJobs>();
+    builder.Services.AddSingleton<IIdentifierLookupDispatcher, IdentifierLookupDispatcher>();
+    builder.Services.AddSingleton<StaffEligibilityService>();
+    builder.Services.AddSingleton<StaffSignInService>();
+    builder.Services.AddSingleton<StaffProfileService>();
+    builder.Services.AddSingleton<StaffLifecycleService>();
+    builder.Services.AddSingleton<TitleRequestViewService>();
+    builder.Services.AddSingleton<TitleRequestMutationService>();
+    builder.Services.AddSingleton<StaffPickupService>();
+    builder.Services.AddSingleton<WorkflowProcessingGuard>();
+    builder.Services.AddSingleton<HoldPlacementService>();
+    builder.Services.AddStaffAuthentication(externalConfiguration, builder.Environment);
     if (builder.Environment.IsEnvironment("Testing") &&
         builder.Configuration.GetValue<bool>("Testing:UseDeterministicPatronProvider"))
     {
-        builder.Services.AddSingleton<IPatronProvider, Asap.Web.Infrastructure.Testing.DeterministicTestingPatronProvider>();
+        builder.Services.AddSingleton<Asap.Web.Infrastructure.Testing.DeterministicTestingPatronProvider>();
+        builder.Services.AddSingleton<IPatronProvider>(services =>
+            services.GetRequiredService<Asap.Web.Infrastructure.Testing.DeterministicTestingPatronProvider>());
+        builder.Services.AddSingleton<IStaffPolarisProvider>(services =>
+            services.GetRequiredService<Asap.Web.Infrastructure.Testing.DeterministicTestingPatronProvider>());
     }
     else
     {
-        builder.Services.AddSingleton<IPatronProvider, PolarisPatronProvider>();
+        builder.Services.AddSingleton<PolarisPatronProvider>();
+        builder.Services.AddSingleton<IPatronProvider>(services => services.GetRequiredService<PolarisPatronProvider>());
+        builder.Services.AddSingleton<IStaffPolarisProvider>(services => services.GetRequiredService<PolarisPatronProvider>());
     }
     builder.Services.AddHostedService<DataProtectionInitializer>();
     builder.Services.AddSingleton<RecipientDomainPolicy>();
@@ -125,6 +144,7 @@ if (externalConfiguration is not null)
         Path.Combine(builder.Environment.ContentRootPath, ".artifacts", "dev-email")));
     builder.Services.AddSingleton<DacpacDeploymentService>();
     builder.Services.AddHostedService<DevelopmentDatabaseInitializer>();
+    builder.Services.AddHostedService<StaffBootstrapHostedService>();
     builder.Services.AddHostedService<HangfireWorkerHostedService>();
 }
 
@@ -147,6 +167,13 @@ if (externalConfiguration is not null)
 }
 app.UseStaticFiles();
 
+if (externalConfiguration is not null)
+{
+    app.UseAuthentication();
+    app.UseMiddleware<StaffCurrentUserMiddleware>();
+    app.UseAuthorization();
+}
+
 app.MapGet("/health/live", () => Results.Json(new { status = "healthy" }));
 app.MapGet("/health/ready", async (IReadinessService readiness, CancellationToken cancellationToken) =>
 {
@@ -159,6 +186,9 @@ app.MapGet("/health/ready", async (IReadinessService readiness, CancellationToke
 if (externalConfiguration is not null)
 {
     app.MapPatronEndpoints();
+    app.MapStaffAuthenticationEndpoints();
+    app.MapStaffLifecycleEndpoints();
+    app.MapTitleRequestEndpoints();
 }
 
 app.Run();

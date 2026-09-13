@@ -7,14 +7,18 @@ using Clc.Rest;
 using Microsoft.EntityFrameworkCore;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Security;
+using Asap.Web.Features.Staff;
 
 namespace Asap.Web.Features.Patron;
 
 public sealed class PolarisPatronProvider(
     IDbContextFactory<AsapDbContext> contextFactory,
     IntegrationCredentialProtector credentialProtector,
-    IHttpClientFactory httpClientFactory) : IPatronProvider
+    IHttpClientFactory httpClientFactory) : IPatronProvider, IStaffPolarisProvider
 {
+    private static readonly HashSet<int> DocumentedCreateNoEffectStatuses =
+        [6, -4002, -4004, -4006, -4007, -4020, -4021, -4022];
+
     public async Task<PatronSnapshot> AuthenticateAsync(
         string barcode,
         string pin,
@@ -318,6 +322,310 @@ public sealed class PolarisPatronProvider(
         {
             return OperationalResult("polaris_search_operational_failure");
         }
+    }
+
+    public async Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken)
+    {
+        if (bibId <= 0)
+        {
+            return new BibValidationResult(false);
+        }
+        try
+        {
+            var (client, settings) = await CreateClientAsync(cancellationToken);
+            var branchId = settings.PickupOrganizationId is > 0
+                ? settings.PickupOrganizationId
+                : settings.OrganizationIdForRequests;
+            var response = await client.BibGetAsync(bibId, branchId, cancellationToken);
+            var data = response.Data;
+            if (response.Response?.IsSuccessStatusCode != true || data is null || data.PAPIErrorCode != 0 ||
+                data.BibGetRows.Count == 0)
+            {
+                return new BibValidationResult(false);
+            }
+            return new BibValidationResult(true, Clean(data.Title), Clean(data.Author.FirstOrDefault()));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is not PolarisOperationalException)
+        {
+            throw Operational("polaris_bib_validation_failed", exception);
+        }
+    }
+
+    public async Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(
+        string barcode,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var (client, _) = await CreateClientAsync(cancellationToken);
+            var response = await client.PatronHoldRequestsGetAsync(
+                barcode,
+                PatronHoldStatus.all,
+                password: string.Empty,
+                cancellationToken);
+            var data = response.Data;
+            if (response.Response?.IsSuccessStatusCode != true || data is null || data.PAPIErrorCode != 0)
+            {
+                throw new PolarisOperationalException("polaris_hold_read_failed", "Polaris hold data was unavailable.");
+            }
+            return data.PatronHoldRequestsGetRows
+                .Where(item => item.HoldRequestID > 0 && item.BibID > 0)
+                .Select(item => new PolarisHoldSnapshot(
+                    item.HoldRequestID,
+                    item.BibID,
+                    item.StatusID,
+                    Clean(item.StatusDescription),
+                    item.PickupBranchID))
+                .ToList();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (PolarisOperationalException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw Operational("polaris_hold_read_failed", exception);
+        }
+    }
+
+    public async Task<HoldProviderResult> CreateHoldAsync(
+        HoldCreateCommand command,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var (client, _) = await CreateClientAsync(cancellationToken);
+            var response = await client.HoldRequestCreateAsync(new HoldRequestCreateParams
+            {
+                PatronID = command.PatronId,
+                BibID = command.BibId,
+                PickupOrgID = command.PickupBranchId,
+                RequestingOrgID = command.RequestingOrganizationId,
+                WorkstationID = command.WorkstationId,
+                UserID = command.PolarisUserId
+            }, cancellationToken);
+            return NormalizeHoldResponse(
+                response.Response?.IsSuccessStatusCode == true,
+                response.Response?.Content,
+                response.Data?.StatusType,
+                response.Data?.StatusValue,
+                response.Data?.RequestGuid,
+                response.Data?.TxnGroupQualifier,
+                response.Data?.TxnQualifier,
+                isReply: false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            return new HoldProviderResult(
+                HoldProviderOutcome.Ambiguous,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                "create_transport_ambiguous",
+                exception is OperationCanceledException ? "provider_timeout" : "provider_transport_error");
+        }
+    }
+
+    public async Task<HoldProviderResult> ReplyToHoldAsync(
+        HoldReplyCommand command,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var (client, _) = await CreateClientAsync(cancellationToken);
+            var createContext = new HoldRequestCreateResult
+            {
+                RequestGuid = command.RequestGuid,
+                TxnGroupQualifier = command.TxnGroupQualifier,
+                TxnQualifier = command.TxnQualifier
+            };
+            var response = await client.HoldRequestReplyAsync(
+                createContext,
+                command.RequestingOrganizationId,
+                HoldRequestReplyAnswer.Yes,
+                HoldRequestReplyState.AcceptEvenWithExistingHolds,
+                cancellationToken);
+            return NormalizeHoldResponse(
+                response.Response?.IsSuccessStatusCode == true,
+                response.Response?.Content,
+                null,
+                null,
+                command.RequestGuid,
+                command.TxnGroupQualifier,
+                command.TxnQualifier,
+                isReply: true);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            return new HoldProviderResult(
+                HoldProviderOutcome.Ambiguous,
+                command.RequestGuid.ToString(),
+                null,
+                command.TxnGroupQualifier,
+                command.TxnQualifier,
+                null,
+                null,
+                "reply_transport_ambiguous",
+                exception is OperationCanceledException ? "provider_timeout" : "provider_transport_error");
+        }
+    }
+
+    internal static HoldProviderResult NormalizeHoldResponse(
+        bool httpSucceeded,
+        string? content,
+        int? typedStatusType,
+        int? typedStatusValue,
+        Guid? typedRequestGuid,
+        string? typedTxnGroupQualifier,
+        string? typedTxnQualifier,
+        bool isReply)
+    {
+        if (!httpSucceeded || string.IsNullOrWhiteSpace(content))
+        {
+            return Ambiguous(isReply, "provider_http_error");
+        }
+        try
+        {
+            using var document = JsonDocument.Parse(content);
+            var root = document.RootElement;
+            if (!TryGetInt32(root, ["PAPIErrorCode"], out var papiErrorCode))
+            {
+                return Ambiguous(isReply, "provider_protocol_error");
+            }
+            var statusType = ReadInt(root, "StatusType") ?? typedStatusType;
+            var statusValue = ReadInt(root, "StatusValue") ?? typedStatusValue;
+            var requestGuid = ReadString(root, "RequestGUID", "RequestGuid") ?? typedRequestGuid?.ToString();
+            var holdId = ReadString(root, "HoldRequestID", "HoldRequestId", "SysHoldRequestID");
+            var group = ReadString(root, "TxnGroupQualifier", "TxnGroupQualifer") ?? typedTxnGroupQualifier;
+            var qualifier = ReadString(root, "TxnQualifier") ?? typedTxnQualifier;
+            var common = new
+            {
+                requestGuid,
+                holdId,
+                group,
+                qualifier,
+                statusType,
+                statusValue
+            };
+            if (papiErrorCode != 0)
+            {
+                return new HoldProviderResult(
+                    HoldProviderOutcome.Ambiguous,
+                    common.requestGuid,
+                    common.holdId,
+                    common.group,
+                    common.qualifier,
+                    common.statusType,
+                    common.statusValue,
+                    isReply ? "reply_papi_error" : "create_papi_error",
+                    "provider_papi_error");
+            }
+            if (!isReply && statusType == 3 && statusValue == 5 &&
+                Guid.TryParse(requestGuid, out _) && !string.IsNullOrWhiteSpace(group) && !string.IsNullOrWhiteSpace(qualifier))
+            {
+                return new HoldProviderResult(
+                    HoldProviderOutcome.ReplyRequired,
+                    requestGuid,
+                    holdId,
+                    group,
+                    qualifier,
+                    statusType,
+                    statusValue,
+                    "create_status_5_reply_required");
+            }
+            if (statusType == 2 && statusValue.GetValueOrDefault() == 0)
+            {
+                return new HoldProviderResult(
+                    HoldProviderOutcome.FinalSuccess,
+                    requestGuid,
+                    holdId,
+                    group,
+                    qualifier,
+                    statusType,
+                    statusValue,
+                    isReply ? "documented_reply_success" : "documented_create_success");
+            }
+            if (!isReply && statusType == 1 && statusValue.HasValue &&
+                DocumentedCreateNoEffectStatuses.Contains(statusValue.Value))
+            {
+                return new HoldProviderResult(
+                    HoldProviderOutcome.DefinitiveNoEffect,
+                    requestGuid,
+                    holdId,
+                    group,
+                    qualifier,
+                    statusType,
+                    statusValue,
+                    "documented_create_rejection",
+                    $"provider_status_{statusValue.Value}");
+            }
+            return new HoldProviderResult(
+                HoldProviderOutcome.Ambiguous,
+                requestGuid,
+                holdId,
+                group,
+                qualifier,
+                statusType,
+                statusValue,
+                isReply ? "reply_status_unclassified" : "create_status_unclassified",
+                "provider_status_unclassified");
+        }
+        catch (JsonException)
+        {
+            return Ambiguous(isReply, "provider_protocol_error");
+        }
+    }
+
+    private static HoldProviderResult Ambiguous(bool isReply, string code) => new(
+        HoldProviderOutcome.Ambiguous,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        isReply ? "reply_response_ambiguous" : "create_response_ambiguous",
+        code);
+
+    private static int? ReadInt(JsonElement root, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!root.TryGetProperty(name, out var value)) continue;
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number)) return number;
+            if (value.ValueKind == JsonValueKind.String && int.TryParse(value.GetString(), out number)) return number;
+        }
+        return null;
+    }
+
+    private static string? ReadString(JsonElement root, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!root.TryGetProperty(name, out var value)) continue;
+            if (value.ValueKind == JsonValueKind.String) return Clean(value.GetString());
+            if (value.ValueKind == JsonValueKind.Number) return value.GetRawText();
+        }
+        return null;
     }
 
     private async Task<PatronSnapshot> LoadPatronAsync(

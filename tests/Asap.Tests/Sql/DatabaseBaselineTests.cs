@@ -2,6 +2,7 @@ using Asap.Web.Infrastructure.Configuration;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Development;
 using Asap.Web.Infrastructure.Health;
+using Asap.Web.Features.Staff;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -79,7 +80,7 @@ public sealed class DatabaseBaselineTests
 
         Assert.AreEqual(16, Convert.ToInt32(await Scalar(connection, "SELECT CAST(SERVERPROPERTY('ProductMajorVersion') AS int);")));
         Assert.AreEqual(160, Convert.ToInt32(await Scalar(connection, "SELECT compatibility_level FROM sys.databases WHERE name = DB_NAME();")));
-        Assert.AreEqual(2, Convert.ToInt32(await Scalar(connection, "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
+        Assert.AreEqual(3, Convert.ToInt32(await Scalar(connection, "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
         Assert.AreEqual(1, Convert.ToInt32(await Scalar(connection, "SELECT COUNT(*) FROM [asap].[DeploymentState] WHERE [Id] = 1;")));
         var expectedHash = Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(_dacpacPath))).ToLowerInvariant();
@@ -158,7 +159,7 @@ public sealed class DatabaseBaselineTests
         await Assert.ThrowsAsync<SqlException>(async () =>
             await NonQuery(
                 connection,
-                "INSERT INTO [asap].[SchemaVersion] ([Id], [Version], [UpdatedUtc]) VALUES (2, 2, SYSUTCDATETIME());"));
+                "INSERT INTO [asap].[SchemaVersion] ([Id], [Version], [UpdatedUtc]) VALUES (2, 3, SYSUTCDATETIME());"));
         await Assert.ThrowsAsync<SqlException>(async () =>
             await NonQuery(connection, "INSERT INTO [asap].[DeploymentState] ([Id]) VALUES (2);"));
 
@@ -204,7 +205,7 @@ public sealed class DatabaseBaselineTests
         await using (var connection = new SqlConnection(_databaseConnectionString))
         {
             await connection.OpenAsync();
-            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 3 WHERE [Id] = 1;");
+            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 4 WHERE [Id] = 1;");
         }
 
         try
@@ -217,7 +218,7 @@ public sealed class DatabaseBaselineTests
         {
             await using var connection = new SqlConnection(_databaseConnectionString);
             await connection.OpenAsync();
-            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 2 WHERE [Id] = 1;");
+            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 3 WHERE [Id] = 1;");
         }
     }
 
@@ -253,6 +254,78 @@ public sealed class DatabaseBaselineTests
                      2, NULL, N'staff@example.test', N'asap@example.test', N'Subject', N'<p>Body</p>',
                      N'pending', SYSUTCDATETIME());
                 """));
+    }
+
+    [TestMethod]
+    public async Task StaffEligibilityUsesDurableTupleCurrentTenantAndParticipation()
+    {
+        var tenantId = Guid.Parse("31111111-1111-1111-1111-111111111111");
+        var objectId = Guid.Parse("32222222-2222-2222-2222-222222222222");
+        await using (var connection = new SqlConnection(_databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await NonQuery(
+                connection,
+                $"""
+                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [IsActive]) VALUES (6, N'Eligibility Library', 1);
+                INSERT INTO [asap].[StaffUser]
+                    ([EntraTenantId], [EntraObjectId], [Role], [OrganizationId], [IsActive])
+                VALUES ('{tenantId}', '{objectId}', N'staff', 6, 1);
+                """);
+        }
+
+        var configuration = TestConfigurationFactory.Create();
+        configuration.Authentication.Entra.AllowedTenantIds = [tenantId.ToString()];
+        var services = new ServiceCollection()
+            .AddDbContextFactory<AsapDbContext>(options => options.UseSqlServer(_databaseConnectionString))
+            .BuildServiceProvider();
+        var service = new StaffEligibilityService(
+            services.GetRequiredService<IDbContextFactory<AsapDbContext>>(),
+            configuration);
+        var staffId = await GetStaffIdAsync(objectId);
+
+        Assert.AreEqual(
+            StaffEligibilityOutcome.Allowed,
+            (await service.EvaluateAsync(
+                new StaffIdentityEvidence(staffId, tenantId, objectId),
+                6,
+                StaffRoleRequirement.Any,
+                requireParticipation: true,
+                CancellationToken.None)).Outcome);
+        Assert.AreEqual(
+            StaffEligibilityOutcome.InvalidIdentity,
+            (await service.EvaluateAsync(
+                new StaffIdentityEvidence(staffId, tenantId, Guid.NewGuid()),
+                6,
+                StaffRoleRequirement.Any,
+                requireParticipation: true,
+                CancellationToken.None)).Outcome);
+
+        await using (var connection = new SqlConnection(_databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await NonQuery(connection, "UPDATE [asap].[Organization] SET [IsActive] = 0 WHERE [Id] = 6;");
+        }
+
+        Assert.AreEqual(
+            StaffEligibilityOutcome.Forbidden,
+            (await service.EvaluateAsync(
+                new StaffIdentityEvidence(staffId, tenantId, objectId),
+                6,
+                StaffRoleRequirement.Any,
+                requireParticipation: true,
+                CancellationToken.None)).Outcome);
+
+        async Task<long> GetStaffIdAsync(Guid id)
+        {
+            await using var connection = new SqlConnection(_databaseConnectionString);
+            await connection.OpenAsync();
+            await using var command = new SqlCommand(
+                "SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @id;",
+                connection);
+            command.Parameters.AddWithValue("@id", id);
+            return Convert.ToInt64(await command.ExecuteScalarAsync());
+        }
     }
 
     [TestMethod]

@@ -175,7 +175,7 @@ public sealed partial class PatronSuggestionService(
 
         if (suggestion.Identifier is not null)
         {
-            await RunImmediateIdentifierLookupAsync(
+            await ProcessIdentifierLookupAsync(
                 requestId,
                 suggestion.Identifier,
                 configuration.OrganizationId,
@@ -855,7 +855,7 @@ public sealed partial class PatronSuggestionService(
         return status == "pending" ? outboxId : null;
     }
 
-    private async Task RunImmediateIdentifierLookupAsync(
+    public async Task ProcessIdentifierLookupAsync(
         long requestId,
         string identifier,
         int organizationId,

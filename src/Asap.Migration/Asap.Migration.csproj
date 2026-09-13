@@ -12,7 +12,7 @@
   </ItemGroup>
   <ItemGroup>
     <AssemblyMetadata Include="PocketBaseBaselineSha" Value="150b30b776565194260cc327eeeffdfb46475e81" />
-    <AssemblyMetadata Include="ExpectedSchemaVersion" Value="2" />
+    <AssemblyMetadata Include="ExpectedSchemaVersion" Value="3" />
     <Compile Include="..\Shared\SecurityContract.cs" Link="SecurityContract.cs" />
   </ItemGroup>
 </Project>

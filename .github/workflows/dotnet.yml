@@ -59,7 +59,7 @@ jobs:
           npx playwright install --with-deps chromium
 
       - name: Run .NET and real SQL tests
-        run: dotnet test --project tests/Asap.Tests/Asap.Tests.csproj --configuration Release --no-build --minimum-expected-tests 120
+        run: dotnet test --project tests/Asap.Tests/Asap.Tests.csproj --configuration Release --no-build --minimum-expected-tests 181
 
       - name: Run legacy/frontend unit tests
         run: npm test

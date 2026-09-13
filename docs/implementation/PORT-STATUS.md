@@ -47,8 +47,8 @@ cap. Migration code and reconciliation grow with every data-owning slice.
 | Slice | Scope | Status |
 | --- | --- | --- |
 | 0 | Branch, skeleton, engineering baseline | Complete: reviewed milestone `0096777`, remote CI passed |
-| 1 | Patron login and submission | Milestone `c1b8655` plus reviewed CI correction; 120 local tests passed, Linux rerun pending |
-| 2 | Staff Entra and core request workflow | Not started |
+| 1 | Patron login and submission | Complete: `c1b8655` plus reviewed correction `1e36761`; 120 tests and remote Linux CI passed |
+| 2 | Staff Entra and core request workflow | Local slice complete: 181 tests, native/artifact checks and Terra full Pass 2 approved; milestone/remote CI next |
 | 3 | Additional-copy workflow | Not started |
 | 4 | Administration and configuration | Not started |
 | 5 | Background workflows and complete email operations | Not started |
@@ -92,6 +92,74 @@ Astra, and fresh native/browser artifact checks. The same Terra's full closure
 review is clean. The correction is cleared for commit/push and a new Linux run;
 Slice 2 remains gated on that actual result. Future-slice preparation documents
 were excluded from the Slice 1 commit.
+
+The reviewed correction `1e36761c771db70d0b669087d0a843b66cf5618b` passed
+[remote Linux CI](https://github.com/clcdpc/asap-pocketbase/actions/runs/34731687718):
+120 .NET/SQL tests, zero failures/skips, frontend tests and both publication
+checks. Slice 1 is closed. The runner's upstream Node-action deprecation
+annotation is nonblocking and does not add Node to application build/runtime.
+Fetched `origin/main` still equals the PocketBase pin. Slice 2 proceeds using
+its existing prepared packet and a fresh Sol XHigh context.
+
+Slice 2's current implementation checkpoint has a clean Release build and
+passing focused real-SQL/hosted profile, lifecycle and request-version/stage
+tests. Entra/current-policy authorization, profile and lifecycle endpoints,
+scoped request views/mutations and the initial staff Polaris adapter are in
+progress toward the complete slice. Focused pickup/create/reply/ambiguity tests
+now pass; broader concurrency/recovery, full browser/testing and independent
+Terra gates remain open. Astra's isolated native-import fixtures identified
+S2-A1 recipient-report parity, S2-A2 claim-history/attribution preservation and
+S2-A3 historical-rule claim eligibility corrections. All three now pass on a
+fresh source-built native snapshot, including the pinned-function recipient
+oracle and byte-identical equivalent fresh-target imports; see
+`slice-02-evidence.md`. This is interim acceptance, not Slice 2 completion.
+Parent inspection also identified S2-A4: same-patron/BIB list differences do
+not prove operation correlation for ambiguous hold recovery or null-ID
+enrichment. Sol is correcting that path and its tests under the existing safe
+fallback contract; this correctness finding remains open until verified.
+
+The completed Slice 2 handoff is now frozen with 46 changed code/schema/test
+files and 579 verified published payload files. Astra independently passed all
+174 tests with zero skips, final native original/expanded staff fixtures and
+their executable pinned-source recipient oracles, plus the published Web
+patron browser/SQL regression. S2-A4's corrected no-inference/F2 tests and
+S2-A5's scoped editor/barrier/mobile-grid fixes pass locally. Fresh Terra High
+`Ohm` is performing full Pass 1 against that snapshot. The review/fix/re-review
+cycle, coherent milestone and actual remote CI remain open; no Slice 2 commit
+or production-completion claim has been made.
+
+Terra Pass 1 completed with two P1 findings: staff metadata can commit after
+actor authorization changes, and manual hold resolution does not establish
+the claimed operation-specific evidence/executor exclusion. Sol is fixing the
+confirmed metadata race; a fresh bounded Astra Max consultation is specifying
+the smallest faithful manual hold-evidence boundary. Neither finding is
+waived. See `slice-02-review.md`; the same Terra will perform full Pass 2 after
+the corrections and fresh test/artifact gates.
+
+The bounded ruling is recorded: manual resolution may accept explicit,
+operation-specific operator attestation of actual external proof, with separate
+executor-exclusion evidence and server-side version/phase/ownership fencing.
+It may not turn an arbitrary reference, expired lease, or cancellation request
+into proof. Sol's metadata fix passed red/green real-SQL race tests and related
+lifecycle regressions; the hold API/form/dispatch correction is in progress.
+`hold-resolution-operator-evidence.md` records the operational trust boundary,
+which later deployment/rehearsal work must verify rather than simulate.
+
+Both Pass 1 corrections are implemented. Astra independently passed the full
+181-test suite with zero skips, verified the new 579-payload artifact and all
+frontend sources/compressed variants, and reran original/expanded native SQL
+migration plus the pinned-source recipient oracles. The twelve-state staff
+browser journey includes actual operator-resolution submission and exact SQL
+evidence/ID/epoch/once-only event/audit/outbox verification. The same Terra is
+performing full Pass 2 against this corrected 48-file freeze. No Slice 2
+milestone or production approval is claimed before that review gate.
+
+Terra's full Pass 2 is approved with no actionable findings: S2-T1 and S2-T2
+are closed. Local Slice 2 acceptance/review gates are satisfied; the coherent
+milestone and its actual remote CI are next. A fresh fetch still has no change
+from the pinned PocketBase baseline. Later-slice preparation stays out of the
+Slice 2 commit. No merge, production tag, deployment or production-completion
+claim follows from this local milestone.
 
 See `slice-00-evidence.md` for actual build, SQL, startup and publish checks.
 Milestone `00967778001e7ec8198ab4498d0fbd15ded4d984` passed the complete
