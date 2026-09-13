@@ -5,9 +5,14 @@
 Not dispatched. Follow accepted Slices 0-8 and refresh their actual tests,
 artifacts, versions, commands and evidence before implementation. This packet
 finishes the fixed sequence's existing CI/release integration, not a new plan.
-Fresh Sol High owns the slice; escalate only for demonstrated cross-cutting
-complexity. Fresh Terra High performs full Pass 1 and the same context performs
-Pass 2/3 after Sol fixes. Astra owns milestone and remote CI acceptance.
+Astra Max dispatches fresh Luna Max for the complete slice and retains that
+context through tests, confirmed-review fixes and retesting. After required
+tests, fresh Terra High independently performs full Pass 1 and retains the same
+context through document 10's unchanged full review/re-review gate. Sol is
+escalation-only under document 10's conditions. Astra verifies acceptance,
+commits/pushes the milestone and requires actual remote CI success for that exact
+commit before dispatching the next slice. Prior exact-milestone CI must be green
+before this slice is dispatched.
 
 Read root AGENTS, document 10, document 02 Slice 9, all of documents 06 and 08,
 document 14's R1-R7/F1-F3 trace, and the accepted Slice 8 release manifest and

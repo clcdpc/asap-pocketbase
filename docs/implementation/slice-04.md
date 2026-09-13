@@ -2,11 +2,17 @@
 
 ## Gate And Ownership
 
-Preparation only, not dispatched. Start only after the completed Slice 3
-milestone, tests and independent review gate. Fresh Sol XHigh implements the
-whole slice; fresh Terra High performs full-slice Pass 1 and the required
-same-reviewer fix/re-review cycle. Read the actual prior-slice code and evidence
-before extending it. The FileEmailSender exception changes only final transport;
+Preparation only, not dispatched; Slice 4 remains not started. Slice 3's
+milestone, tests, independent review and exact-milestone remote CI are complete
+under the prior Sol model. Astra Max refreshes this packet against the accepted
+code/evidence before dispatching fresh Luna Max to implement the complete slice.
+Retain that Luna context through tests, confirmed-review fixes and retesting.
+After implementation and required tests, fresh Terra High performs full-slice
+Pass 1 and the same context completes the unchanged required review/re-review
+gate in document 10. Sol is escalation-only under that document's conditions.
+Astra verifies acceptance, commits/pushes the milestone, and requires actual
+remote CI success for that exact commit before dispatching Slice 5.
+The FileEmailSender exception changes only final transport;
 real Postmark integration/webhooks remain a release/rehearsal blocker.
 
 ## Objective And References

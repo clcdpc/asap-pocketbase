@@ -5,9 +5,16 @@
 Not dispatched. Do not remove the legacy implementation or rewrite repository
 instructions before Slices 0-10 have passed their implementation/review gates.
 Refresh the actual tree, dependencies and external release blockers at dispatch.
-Fresh Sol High owns removal/documentation/test adaptation; fresh Terra High
-performs this slice's complete review/fix/re-review. Whole-application review
-afterward is a distinct required gate with fresh Terra contexts.
+Astra Max dispatches fresh Luna Max for the complete slice, including removal,
+documentation and test adaptation, and retains that context through tests,
+confirmed-review fixes and retesting. After required tests, fresh Terra High
+independently reviews the whole slice and retains the same context through
+document 10's unchanged full review/re-review gate. Sol is escalation-only under
+document 10's conditions. Astra verifies acceptance, commits/pushes the milestone
+and requires actual remote CI success for that exact commit before progression.
+Prior exact-milestone CI must be green before this slice is dispatched.
+Whole-application review afterward is a distinct required gate with fresh Terra
+contexts; its existing pass rules remain unchanged.
 
 Read root AGENTS before replacing it, document 10 in full, document 02 Slice 11
 and final sequence, documents 04/05/08 release/recovery boundaries and document
@@ -54,7 +61,7 @@ Complete all relevant tests and normal full-slice Terra Pass 1/2/3 before the
 milestone. Then Astra runs the separate whole-application review: fresh Terra
 High, varied full-app emphases, a running confirmed-finding set, three
 consecutive passes without new substantive findings within six nominal passes.
-Sol fixes confirmed blockers; a pass cap never waives a known defect.
+Luna fixes confirmed blockers; a pass cap never waives a known defect.
 
 Repository cleanup is not production completion. Actual deployed PB identity,
 required real Postmark adapter/webhook/transport tests, provider/host/isolation

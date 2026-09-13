@@ -37,23 +37,73 @@ fixes use a temporary branch from the deployed source, immediate equivalent
 
 ## Execution And Evidence
 
-Astra owns packets, integration, gates, milestone commits, and this PR. Each
-slice uses a fresh Sol High/XHigh implementer and a fresh Terra High reviewer.
-Keep that Terra context through at least two full-slice review passes; Sol
-fixes confirmed findings. Tests and independent review must pass before the
-milestone commit or next slice. Blocking findings cannot be waived by a pass
-cap. Migration code and reconciliation grow with every data-owning slice.
+### Current Execution Policy - 2026-09-13
+
+Slices 0-3 were completed under the prior Sol implementation model. Beginning
+with Slice 4, GPT-5.6 Luna Max is the default primary implementer; GPT-5.6 Terra
+High remains the independent reviewer and GPT-6 Astra Max remains orchestrator.
+GPT-5.6 Sol High is a focused escalation advisor only; Sol XHigh is exceptional
+escalation only. Sol is outside the normal slice lifecycle.
+
+Astra owns progression, slice boundaries, focused packets, cross-slice
+integration, acceptance verification, milestone commits, PR/status maintenance,
+and escalation decisions. Before every remaining slice, refresh its existing
+packet against accepted prior implementation and dispatch a fresh Luna Max
+context. Luna owns the complete slice, including C#, SQL/DACPAC, migration,
+frontend, tests, test-failure diagnosis and directly affected documentation.
+After implementation and required tests, dispatch a fresh Terra High context.
+Retain the same Luna for all confirmed-review fixes/retesting and the same
+Terra for the entire slice's full review/re-review sequence. Terra reports
+findings; it never implements its own fixes.
+
+Keep at least two full-slice Terra passes, with a third when Pass 2 finds a new
+substantive issue. A clean Pass 2 needs no ceremonial third pass. Confirmed
+findings return to the same Luna, followed by affected/full required tests and
+full same-Terra re-review. Record only nonblocking leftovers after Pass 3;
+blocking correctness, security, data-integrity, migration or material-regression
+findings cannot be waived by a pass cap. Astra verifies acceptance, commits and
+pushes the milestone only after all existing gates pass, then requires actual
+remote CI success for that exact milestone before dispatching the next slice.
+Migration code and reconciliation continue with every data-owning slice.
+
+Sol escalation requires a concrete unresolved contract contradiction or
+undetermined behavior; two focused unsuccessful Luna fixes of a substantive
+Terra correctness finding; a failing test exposing unclear cross-cutting
+concurrency/recovery/migration/security/external-operation behavior; an external
+provider/API contract unavailable from source/package/documentation; or a
+smallest fix requiring a binding architectural deviation. Fresh Sol High
+advises on root cause, smallest faithful resolution and affected invariants/tests;
+Luna implements and Terra verifies. Sol XHigh requires an unresolved blocking
+Sol High escalation or Astra's exceptional cross-system reasoning determination.
+Difficulty alone does not transfer whole-slice ownership to Sol. The complete
+policy is in `../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md`.
 
 Prepared packets and source notes are committed as clearly labeled documentation
 checkpoints. They do not certify a slice, replace its independent review, or
 authorize early implementation. Refresh each packet against accepted prior
 code before dispatch; keep application milestone commits scoped to one slice.
 
-On 2026-09-13 the user bounded this execution: finish Slice 3's required tests,
-independent Terra review/fix/re-review, milestone and remote CI, then stop with
-a clean Git working tree. Do not dispatch Slice 4. Already committed later-slice
-packets remain preparation only. This stopping point does not declare the port
-or its deferred Postmark/rehearsal/release gates complete.
+The prior 2026-09-13 instruction to finish Slice 3's tests, independent Terra
+review/fix/re-review, milestone and remote CI, then stop with a clean Git working
+tree was successfully satisfied. Implementation is intentionally paused at the
+clean Slice 3 boundary, ready to resume with Slice 4 under the new model. This
+documentation-only update does not dispatch or start Slice 4. Prepared later
+packets remain preparation only; the port and deferred Postmark/rehearsal/release
+gates are not complete.
+
+At this policy update's start, local HEAD, fetched implementation branch and
+draft PR #264 all matched `3d4a4d9fb28983fb3ac25489e9a641d9b38abdfe`; the
+working tree was clean and fetched `origin/main` still matched the behavioral
+pin. Validation for this update is documentation-only: JSON examples, local
+references, current-policy/history separation and final pack hashes. Slice 3's
+190 application/SQL/browser tests below are retained prior evidence, not rerun
+or claimed as new implementation/release validation by this update.
+
+### Accepted Slice History
+
+The following table and chronological execution entries preserve Slices 0-3's
+original evidence, including Sol ownership and interim states that were later
+closed. They do not prescribe the current remaining-slice model.
 
 | Slice | Scope | Status |
 | --- | --- | --- |

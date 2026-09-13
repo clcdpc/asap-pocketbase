@@ -7,10 +7,16 @@ Terra review/fix/re-review gates, and milestone commits. Do not start Slice 5
 implementation early. The canonical sequence remains document 02; this is a
 focused implementation packet, not a regenerated architecture or plan.
 
-A fresh Sol XHigh owns the complete slice because it includes durable queue
-progress, external-operation recovery and authorization-sensitive delivery.
-A fresh Terra High reviews the whole completed slice in the required repeated
-review/fix cycle. Astra handles milestone commits and PR progression.
+Astra Max refreshes this packet against accepted prior implementation and
+dispatches fresh Luna Max for the complete slice, including durable queues,
+external-operation recovery and authorization-sensitive delivery. Retain that
+Luna context through tests, confirmed-review fixes and retesting. After required
+tests, fresh Terra High independently reviews the whole slice and retains the
+same context through document 10's unchanged full review/re-review gate. Sol is
+escalation-only under document 10's conditions. Astra verifies acceptance,
+commits/pushes the milestone and requires actual remote CI success for that exact
+commit before dispatching the next slice. Prior exact-milestone CI must be green
+before this slice is dispatched.
 
 ## Objective And Prior Contracts
 

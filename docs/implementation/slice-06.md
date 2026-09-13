@@ -7,9 +7,15 @@ tests, Terra review/fix/re-review gates, and milestone commits. Do not start
 analytics implementation early. The canonical sequence remains document 02;
 this packet narrows implementation context without changing the agreed plan.
 
-A fresh Sol High owns the complete slice. A fresh Terra High reviews the
-completed slice, with the same Terra retained through the required full-slice
-review/fix/re-review cycle. Astra owns acceptance and the milestone commit.
+Astra Max refreshes this packet against accepted prior implementation and
+dispatches fresh Luna Max for the complete slice. Retain that Luna context
+through tests, confirmed-review fixes and retesting. After required tests,
+fresh Terra High independently reviews the whole slice and retains the same
+context through document 10's unchanged full review/re-review gate. Sol is
+escalation-only under document 10's conditions. Astra verifies acceptance,
+commits/pushes the milestone and requires actual remote CI success for that exact
+commit before dispatching the next slice. Prior exact-milestone CI must be green
+before this slice is dispatched.
 
 ## Objective And Prior Contracts
 
@@ -92,7 +98,8 @@ information. Use parameterized feature SQL/Dapper in the existing web project.
 Browser tests cover scope/range changes, stale responses across those changes
 and authentication, mobile/desktop layout, keyboard/focus and serious/critical
 axe gates. Run all relevant prior tests and end-to-end acceptance before
-Terra Pass 1. Sol fixes findings; Terra does not edit implementation.
+Terra Pass 1. The same Luna fixes confirmed findings; Terra does not edit
+implementation.
 
 Return actual changed paths, commands/results and remaining concrete risks.
 No commit, push, merge, tag, deployment or next-slice work by the implementer.

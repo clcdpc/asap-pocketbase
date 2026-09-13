@@ -28,14 +28,17 @@
 
 ## 3. Multi-model implementation roles
 
-- GPT-6 Astra Max: orchestrator and on-demand architecture advisor.
-- GPT-5.6 Sol High/XHigh: primary implementer, fresh context per vertical slice; High by default, with Astra-selected XHigh for materially difficult work.
-- GPT-5.6 Terra High: independent reviewer, fresh context per slice and fresh whole-app final context.
-- The implementer fixes reviewer findings; the reviewer does not implement its own fixes.
-- Astra owns sequencing, slice packets, progression gates, commits, and delegation.
-- Astra may delegate narrowly bounded mechanical/support work, including to Luna, without replacing Sol's slice ownership or Terra's independent review.
+- Transition: Slices 0-3 completed under the prior Sol-based model; preserve their history and acceptance. Beginning with Slice 4, use the roles below. The requested Slice 3 stop was satisfied; implementation is paused before Slice 4 (`../implementation/PORT-STATUS.md`).
+- GPT-6 Astra Max: orchestrator owning progression, slice boundaries, focused packets, cross-slice integration, acceptance verification, milestone commits, PR/status maintenance, and escalation decisions.
+- GPT-5.6 Luna Max: default primary implementer, fresh context per remaining slice and the same context retained through complete implementation, tests, test-failure diagnosis, confirmed Terra fixes and retesting. Ownership includes C#, SQL/DACPAC, migration/export/import/reconciliation, frontend, and directly affected documentation as applicable.
+- GPT-5.6 Terra High: independent reviewer, fresh context per slice retained through all required full review/re-review passes; fresh contexts for the separate final whole-app review. Review correctness/regression, callers/surrounding code, SQL/data, authorization/scope, concurrency/ordering, recovery, external side effects, migration, frontend/API contracts, tests, and unnecessary complexity/coupling.
+- Confirmed findings return to the same Luna context; Terra reports findings and never implements its own fixes. Keep the existing minimum two full-slice passes, conditional third pass, and blocking-findings rule regardless of nominal cap.
+- GPT-5.6 Sol High: fresh focused escalation advisor only for a concrete unresolved issue satisfying `02-IMPLEMENTATION-PLAN.md` section 3 / `10-CODEX-MULTI-MODEL-TASK.md`: material contract contradiction/undetermined behavior; two focused unsuccessful Luna attempts at a substantive Terra correctness finding; a failing test exposing unclear cross-cutting behavior; unavailable external provider/API contract; or a smallest fix requiring a binding architectural deviation.
+- Sol identifies root cause, smallest faithful resolution, and affected invariants/tests; Luna implements and Terra verifies. Difficult SQL, migration, concurrency, authentication, configuration, deployment, or external integration alone does not transfer whole-slice ownership to Sol.
+- GPT-5.6 Sol XHigh: exceptional escalation only after focused Sol High leaves a blocking issue unresolved, or Astra determines an exceptional cross-system reasoning problem requires it. Sol is outside the normal slice loop.
+- Astra refreshes each prepared packet against accepted prior implementation before dispatch. After Luna tests/fixes and Terra's unchanged full-review gate, Astra verifies acceptance, creates/pushes the milestone, and requires actual remote CI success for that exact commit before dispatching the next slice.
 - Astra may resolve ordinary ambiguity from the pack/current app/repository without asking the user.
-- Use a fresh Astra advisor consultation when there is material uncertainty, a meaningful tradeoff, or a contemplated deviation from the pack; do not invoke advisor mechanically for every slice.
+- Luna implements the existing contract: no unrequired repositories, MediatR, generalized workflow/messaging infrastructure, migration frameworks, layering, or speculative hardening. The model change weakens no implementation, review, testing, migration, or release gate.
 - Slice packets contain the slice objective/acceptance criteria, relevant architecture, compact global invariants, prior contracts, relevant PocketBase files/behavior, and intersecting deferred items rather than dumping the full specification.
 
 ## 4. Target runtime and project structure

@@ -1,5 +1,55 @@
 # Porting pack remediation and handoff audit
 
+## Remaining-slice execution-model transition - 2026-09-13
+
+This documentation-only update takes effect at Slice 4 on the existing
+`codex/csharp-port` branch and draft PR #264. At task start, local HEAD, the
+fetched implementation branch and PR head all matched
+`3d4a4d9fb28983fb3ac25489e9a641d9b38abdfe`; the working tree was clean and
+fetched `origin/main` matched the unchanged behavioral PocketBase pin
+`150b30b776565194260cc327eeeffdfb46475e81`.
+
+Slices 0-3 completed under the prior Sol-based implementation strategy. Their
+milestones, Sol attribution and review/CI evidence in
+`../implementation/PORT-STATUS.md` remain historical evidence. The requested
+stop after Slice 3 was satisfied; implementation is intentionally paused at
+that clean boundary, ready to resume with Slice 4. No Slice 4 implementation
+is started or certified by this update.
+
+Current policy in README, implementation-plan sections 3-4, document 10,
+decision-register section 3, PORT-STATUS, the existing prepared Slice 4-11
+packets and PR #264 now uses Astra Max orchestration, fresh Luna Max complete
+slice ownership retained through tests/fixes/retesting, and fresh independent
+Terra High retained through the slice's full review/re-review sequence. Sol
+High is a fresh focused advisor only under the concrete unresolved-issue
+conditions in documents 02/10; Sol XHigh is exceptional escalation only.
+Difficult subject matter alone does not transfer a slice to Sol.
+
+The existing minimum two full Terra passes, conditional third pass, continued
+blocking-finding resolution regardless of nominal cap, and separate final
+whole-app review remain intact. Astra refreshes prepared packets against
+accepted prior implementation, verifies acceptance, creates/pushes milestones,
+and requires actual remote CI success for each exact milestone before the next
+slice. All implementation, testing, migration, external-provider, rehearsal and
+release gates remain binding; prepared functional content is preserved.
+
+`../implementation/temporary-email-transport.md` is unchanged: FileEmailSender
+substitutes only the final provider boundary, preserves SQL outbox and
+authorization-sensitive recipient/domain/lease/fencing/idempotency/retry
+contracts, and never simulates provider/webhook success or becomes another
+subsystem. Real Rest 3-compatible cancellable `Clc.Postmark.Api` and its required
+provider/webhook/transport validation remain release/rehearsal blockers.
+
+Documentation validation for this update covers current-policy versus
+historical Sol references across the full pack and execution records, all four
+JSON examples, affected local references, and every final SHA-256 against the
+unchanged 19-payload inventory with manifest self-exclusion. No application,
+schema or source code changes, implementation/release validation, or rerun of
+Slice 3's previously certified 190 application/SQL/browser tests is claimed.
+PR #264 remains draft. The dated audit sections below, including their original
+execution-model wording and validation/archive hashes, describe earlier
+revisions and are preserved unchanged.
+
 ## Current four-finding cutover/outbox remediation - 2026-09-12
 
 This documentation-only remediation closes four confirmed review findings without reopening the settled port architecture or redesigning R1-R7/F1-F3. The pinned PocketBase baseline remains `150b30b776565194260cc327eeeffdfb46475e81`.

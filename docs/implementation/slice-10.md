@@ -4,8 +4,14 @@
 
 Not dispatched. Start after the accepted Slice 9 implementation milestone.
 Refresh the completed schema, CLI/developer reset paths and test fixtures before
-choosing the smallest implementation. Fresh Sol High owns this slice and fresh
-Terra High remains through the full required review/fix/re-review sequence.
+choosing the smallest implementation. Astra Max dispatches fresh Luna Max for
+the complete slice and retains that context through tests, confirmed-review
+fixes and retesting. After required tests, fresh Terra High independently reviews
+the whole slice and retains the same context through document 10's unchanged
+full review/re-review gate. Sol is escalation-only under document 10's conditions.
+Astra verifies acceptance, commits/pushes the milestone and requires actual
+remote CI success for that exact commit before dispatching the next slice.
+Prior exact-milestone CI must be green before this slice is dispatched.
 
 Read root AGENTS, document 10, document 02 Slice 10, document 06 sections 9/13,
 the accepted development/deployment configuration boundaries, and document 09's

@@ -8,7 +8,9 @@ The port is not an opportunity for a general rewrite beyond the backend/platform
 
 ## Source baseline
 
-Before work begins:
+The existing implementation is on `codex/csharp-port`, draft PR #264. Slices 0-3 completed under the prior Sol-based strategy; Slice 4 has not started. The requested stop after Slice 3 was satisfied, and implementation is paused at that clean boundary. Verify the current branch/PR and `../implementation/PORT-STATUS.md` before resuming. Keep the accepted milestones/evidence; do not repeat bootstrap or re-review completed slices because the model changed. The new execution model applies from Slice 4 onward.
+
+The original baseline procedure remains the source-tracking contract; branch/PR creation below was already completed:
 
 1. Fetch the current `main` and compare it with the pack's reference SHA `150b30b776565194260cc327eeeffdfb46475e81`.
 2. If `main` has moved, inspect every intervening change and update the slice packets/behavior map so urgent/current PocketBase fixes are not lost. The pinned baseline contains an unrelated `clc-carousel-manual-import-example/` subtree; explicitly exclude it from ASAP behavior/dependency/migration analysis and remove it from the port branch rather than porting it.
@@ -23,32 +25,46 @@ Before work begins:
 
 You own the full plan, integration, slice boundaries, progression, context management, acceptance verification, commits, and PR state.
 
-For each slice:
+For each remaining slice:
 
-- prepare a focused implementation packet rather than dumping the entire pack;
+- refresh the already-prepared slice packet against accepted prior implementation and prepare a focused implementation context;
 - include objective, acceptance criteria, relevant global invariants, relevant prior-slice contracts, exact current PocketBase files/behavior to preserve, migration impact, and relevant deferred/non-goal warnings;
-- create a fresh GPT-5.6 Sol High/XHigh implementation context;
-- create a fresh GPT-5.6 Terra High reviewer context;
+- dispatch a fresh GPT-5.6 Luna Max implementation context;
+- after implementation and required tests, dispatch a fresh GPT-5.6 Terra High reviewer context;
+- keep the same Luna context through implementation, tests, confirmed-review fixes and retesting;
 - keep the same Terra context through that slice's review/fix/re-review sequence;
-- create the milestone commit only after tests and review gate are satisfied.
+- verify acceptance and create the milestone commit only after all existing tests and review gates are satisfied;
+- push the milestone and require actual remote CI success for that exact commit before dispatching the next slice.
 
 Resolve ordinary ambiguity yourself from this pack, repository, existing behavior, and tests. Do **not** ask the user for routine implementation choices. Ask only if a genuinely material product/security/migration decision cannot be resolved from the pack/current system.
 
-Astra may delegate narrowly bounded mechanical or support work to another suitable model, including Luna. Such delegation must not replace Sol's required implementation ownership for a slice or weaken the independent Terra review boundary.
+Astra decides when a concrete unresolved issue meets the escalation conditions below. Sol is outside the normal implementation/review loop.
 
-### GPT-6 Astra Max - on-demand advisor
+### GPT-5.6 Luna Max - default primary implementation
 
-When there is material uncertainty, architectural tradeoff, or a contemplated deviation from this pack, obtain a fresh independent Astra Max consultation. Do not use the advisor ceremonially on every slice.
+Use a fresh Luna Max implementation context per remaining slice. It owns the complete slice, including C# implementation, SQL/DACPAC changes, migration/export/import/reconciliation, frontend integration, tests, test-failure diagnosis, directly affected documentation, and confirmed Terra fixes as applicable. Keep that same context through implementation -> tests -> Terra findings -> fixes -> retesting; do not create a fresh implementation context for each finding.
 
-### GPT-5.6 Sol High/XHigh - primary implementation
-
-Use a fresh Sol implementation context per slice. Use High reasoning by default. Astra may escalate the slice context to XHigh when the slice or confirmed review findings involve materially difficult cross-cutting correctness, migration, concurrency, security, external-operation recovery, or deployment work; do not require XHigh ceremonially for every slice. Implement the entire focused slice, including application code, DACPAC, migration mapping, tests, frontend integration, and docs impacted by that slice.
-
-When Terra reports confirmed findings, Sol fixes them. Terra does not implement its own review feedback.
+Luna implements the existing contract rather than redesigning it. Do not add repositories, MediatR, generalized workflow engines, generalized messaging infrastructure, migration frameworks, layering, speculative hardening, or other machinery the pack does not require.
 
 ### GPT-5.6 Terra High - independent review
 
-Review the completed slice adversarially, including surrounding code, callers, tests, invariants, authorization/scope, data consistency, concurrency, external failure paths, migration, and unintended coupling.
+Use a fresh Terra High context per slice after implementation and required tests, then retain it through the full required review/re-review sequence. Review the full slice, including correctness/regression, callers and surrounding code, SQL/data consistency, authorization/scope, concurrency/ordering, recovery, external side effects, migration, frontend/API contracts, tests, and unnecessary complexity/coupling. Terra reports findings; it does not implement them. Confirmed findings return to the same Luna context.
+
+### GPT-5.6 Sol High - focused escalation advisor only
+
+Use a fresh Sol High context only for a concrete unresolved issue meeting at least one of these conditions:
+
+1. The pack, existing target implementation, pinned source, and tests materially contradict each other or do not determine required behavior.
+2. Terra reports a substantive correctness problem and Luna has made two focused unsuccessful attempts to resolve it.
+3. A failing test reveals an unclear cross-cutting concurrency, recovery, migration, security, or external-operation problem.
+4. Required behavior depends on an external provider/API contract that cannot be established from available source, package, or documentation.
+5. The smallest apparent fix would require deviating from a binding architectural decision.
+
+Sol normally acts as a narrow advisor: inspect the specific problem, identify its root cause, recommend the smallest faithful resolution, and identify affected invariants/tests. Luna implements the resolution and Terra verifies it. Do not transfer an entire slice to Sol merely because it contains difficult SQL, migration, concurrency, authentication, configuration, deployment, or external-integration work.
+
+### GPT-5.6 Sol XHigh - exceptional escalation only
+
+Use only when the focused Sol High escalation still leaves a blocking problem unresolved, or Astra determines that an exceptional cross-system reasoning problem requires it. It is outside the normal slice lifecycle.
 
 ## Binding architecture
 
@@ -108,18 +124,23 @@ All R1-R7 cases in `06-TESTING-CI.md` section 10.1 and F1-F3 cases in section 10
 
 ## Slice review/fix rule
 
-For **every** vertical slice:
+For **every remaining** vertical slice, preserve the existing review-pass rules:
 
-1. Astra prepares the focused slice packet.
-2. A fresh Sol High/XHigh context implements the slice.
-3. Run all relevant tests and verify the slice end-to-end.
+1. Astra Max refreshes the prepared focused slice packet against accepted prior implementation.
+2. A fresh Luna Max context implements the complete slice.
+3. Luna runs all relevant tests and verifies the slice end-to-end.
 4. A fresh Terra High context performs Pass 1 over the full slice.
-5. Sol fixes confirmed substantive findings.
-6. The same Terra context performs Pass 2 over the full slice, including regression from fixes.
-7. If Pass 2 finds a new substantive issue, Sol fixes and the same Terra context performs Pass 3. If Pass 2 is clean, stop.
+5. The same Luna context fixes confirmed substantive findings and reruns affected/full required tests.
+6. The same Terra context performs Pass 2 over the full slice, including regression from fixes. Pass 2 is required even if Pass 1 was clean.
+7. If Pass 2 finds a new substantive issue, the same Luna fixes and reruns required tests, and the same Terra context performs Pass 3. If Pass 2 is clean, stop.
 8. After Pass 3, record only non-blocking leftovers in deferred follow-ups.
 9. Never progress with a known correctness, security, data-integrity, migration, or material-regression defect merely because the pass cap was reached.
-10. Commit the completed slice with a coherent milestone commit only after the slice gate passes.
+10. Astra verifies acceptance and commits the completed slice with a coherent milestone only after the slice gate passes.
+11. Astra pushes the milestone and requires actual remote CI success for that exact commit before dispatching the next slice; no earlier green run substitutes for it.
+
+The normal loop is Astra packet refresh -> Luna implementation/tests -> Terra full review -> same Luna fixes/retests -> same Terra full re-review, repeated as the existing gate requires -> Astra acceptance/milestone/push/exact-commit green remote CI -> next slice. Sol remains outside that loop.
+
+The user-authorized `../implementation/temporary-email-transport.md` decision remains binding: `FileEmailSender` substitutes only the final provider boundary. It does not weaken the durable SQL outbox, authorization-sensitive recipient checks, recipient-domain safety, or lease/fencing/idempotency/retry behavior; it does not simulate Postmark webhook/provider success or become another subsystem. Real Rest 3-compatible cancellable `Clc.Postmark.Api` integration and required provider/webhook/transport tests remain release/rehearsal blockers. This model-policy update executes no implementation or release validation and starts no slice.
 
 ## Required implementation slice sequence
 
