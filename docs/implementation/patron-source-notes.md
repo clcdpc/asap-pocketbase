@@ -114,10 +114,16 @@ the focused implementation; these notes do not replace executable inspection.
 `lib/polaris/pickup_preference_context.js` tries patron organization, configured
 nonzero pickup organization, configured organization, then home library for
 pickup choices, stopping at the first nonempty result. It refreshes empty
-reference data. Preferred branch precedence is CurrentPreferredPickupBranchID,
-RequestPickupBranchID, then PreferredPickupBranchID. Validation requires a
-numeric ID present in the current allowed list; missing current preference has
-an explicit warning. Effective library ownership is not the pickup-list scope.
+reference data. Its CurrentPreferred/Request/Preferred precedence applies to
+the already-normalized patron object, not independent raw response fields.
+The production login and refresh chains first use `lib/polaris/patron.js`:
+getPatronBasic reads raw RequestPickupBranchID only and derives both preference
+aliases from it. Then `orgs.attachPatronScope` provides a PatronOrgID fallback
+when that preference is missing/null/blank. Raw alternate preference fields
+are discarded. Numeric zero survives normalization as nonempty `0`, so it
+does not trigger that fallback. Validation still requires a numeric ID in the
+current allowed list; a nonselectable current preference has a warning and no
+implicit selected replacement. Effective library ownership is not pickup scope.
 
 `pb_public/patron/js/html.js` is the existing rich-text sanitizer boundary:
 DOMParser plus explicit tag/attribute allowlists and dangerous href removal.

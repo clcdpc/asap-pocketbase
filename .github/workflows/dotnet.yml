@@ -48,18 +48,21 @@ jobs:
       - name: Restore and build
         run: dotnet build Asap.sln --configuration Release
 
-      - name: Run .NET and real SQL tests
-        run: dotnet test --project tests/Asap.Tests/Asap.Tests.csproj --configuration Release --no-build --minimum-expected-tests 44
-
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
 
-      - name: Run legacy/frontend unit tests
+      - name: Install browser acceptance dependencies
         run: |
           npm ci
-          npm test
+          npx playwright install --with-deps chromium
+
+      - name: Run .NET and real SQL tests
+        run: dotnet test --project tests/Asap.Tests/Asap.Tests.csproj --configuration Release --no-build --minimum-expected-tests 118
+
+      - name: Run legacy/frontend unit tests
+        run: npm test
 
       - name: Verify publish artifacts
         shell: pwsh
@@ -68,6 +71,9 @@ jobs:
           dotnet publish src/Asap.Migration/Asap.Migration.csproj -c Release -r win-x64 --self-contained true -o .artifacts/migration
           if (Get-ChildItem .artifacts -Recurse -File | Where-Object Name -Match 'pocketbase|node(.exe)?|npm(.cmd)?') {
             throw 'Published artifacts contain a forbidden PocketBase or Node runtime file.'
+          }
+          if (Get-ChildItem .artifacts -Recurse -File | Where-Object FullName -Match 'dev-email') {
+            throw 'Published or CI artifacts contain temporary development email output.'
           }
           if (-not (Test-Path .artifacts/web/Database/Asap.Database.dacpac)) {
             throw 'Web publish is missing Asap.Database.dacpac.'

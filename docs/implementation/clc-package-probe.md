@@ -1,6 +1,8 @@
 # CLC Package Compatibility Probe
 
-Verified 2026-09-12 as a Slice 1 prerequisite, not an architecture review.
+Verified 2026-09-12 during Slice 1 preparation, not an architecture review.
+The later explicit user decision in `temporary-email-transport.md` defers this
+dependency to a release/rehearsal blocker, not an implementation blocker.
 Luna High performed the bounded probe; Astra independently reran the combined
 fake invocation. Scratch project/source are ignored under
 `.git/asap-package-probe`. No real Polaris or Postmark requests were made.
@@ -59,8 +61,10 @@ operator. A maintainable source checkout/archive with project files is enough;
 no push/publication credentials are needed. Decompilation may aid inspection
 but source reconstruction is not assumed to be a small maintainable extension.
 Before adoption, probe stalled-header/body cancellation, sending, constructor
-compatibility and credential isolation with fake transport. Until then Slice 1
-cannot pass its real Postmark path gate; Slice 0 remains independent.
+compatibility and credential isolation with fake transport. The real Postmark
+path gate remains outstanding for release/rehearsal. The user subsequently
+authorized a minimal temporary file sender so Slice 1 and later implementation
+can proceed without that package; no outbox correctness contract is relaxed.
 
 Public/authenticated GitHub searches for clcdpc Postmark and the exact package
 name returned no repository; public Bitbucket clcdpc listing exposed none.

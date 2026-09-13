@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Asap.Web.Infrastructure.Configuration;
 using Microsoft.Extensions.Configuration;
 
@@ -21,6 +22,23 @@ public sealed class ExternalConfigurationLoaderTests
 
         Assert.IsTrue(result.IsValid);
         Assert.AreEqual("Testing", result.Value!.Environment.Name);
+    }
+
+    [TestMethod]
+    public void MissingPatronLoginRateLimitUsesDocumentedDefaults()
+    {
+        var document = JsonNode.Parse(JsonSerializer.Serialize(TestConfigurationFactory.Create()))!.AsObject();
+        document.Remove("PatronLoginRateLimit");
+        using var file = TemporaryFile.WithContent(document.ToJsonString());
+
+        var result = ExternalConfigurationLoader.Load(
+            Bootstrap(file.Path),
+            Path.GetDirectoryName(file.Path)!,
+            allowFileWithinContentRoot: true);
+
+        Assert.IsTrue(result.IsValid);
+        Assert.AreEqual(20, result.Value!.PatronLoginRateLimit.PermitLimit);
+        Assert.AreEqual(300, result.Value.PatronLoginRateLimit.WindowSeconds);
     }
 
     [TestMethod]

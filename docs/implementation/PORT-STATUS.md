@@ -47,7 +47,7 @@ cap. Migration code and reconciliation grow with every data-owning slice.
 | Slice | Scope | Status |
 | --- | --- | --- |
 | 0 | Branch, skeleton, engineering baseline | Complete: reviewed milestone `0096777`, remote CI passed |
-| 1 | Patron login and submission | Packet prepared; awaiting required Postmark source/compatible build |
+| 1 | Patron login and submission | Complete: 118 tests, artifact checks and full Terra Pass 3 passed; milestone remote CI pending |
 | 2 | Staff Entra and core request workflow | Not started |
 | 3 | Additional-copy workflow | Not started |
 | 4 | Administration and configuration | Not started |
@@ -59,12 +59,28 @@ cap. Migration code and reconciliation grow with every data-owning slice.
 | 10 | Explicit synthetic seed/reset tooling | Not started |
 | 11 | Legacy removal, canonical docs, final review | Not started |
 
-Slice 1 preparation includes pinned behavior/schema notes and a draft packet.
-The CLC package probe found a real Postmark/Rest binary incompatibility with
-the current Polaris prerelease. See `clc-package-probe.md`; the required fresh
-Astra consultation confirms the focused actual-package fix. Source access or a
-corrected maintained package has been requested; no custom transport or weaker
-timeout is approved. Slice 0 is independent of that prerequisite.
+Slice 1 uses its existing packet and pinned behavior/schema notes. On
+2026-09-12 the user explicitly authorized a minimal `FileEmailSender` at only
+the final provider transport boundary. This supersedes the original Slice 1
+Postmark dependency gate, not any SQL outbox or application behavior contract.
+See `temporary-email-transport.md` and the retained compatibility evidence in
+`clc-package-probe.md`. Continue subsequent slices without waiting for Postmark;
+the real provider remains a release/rehearsal blocker.
+
+Slice 1's local handoff passed a zero-warning/error Release build, 104/104
+.NET tests with none skipped, legacy tests, real-SQL/Kestrel/Playwright patron
+journeys and published-artifact checks. Astra independently reran the full
+.NET suite and the published self-contained migration executable's positive/
+negative import and reconciliation checks. Fresh Terra High Pass 1 has reported
+findings; Sol's fixes passed 114/114 tests and corrected native-artifact checks.
+The same reviewer's full Pass 2 resolved those findings and found one remaining
+request-specific CSP issue. That fix now passes 118/118 tests, including an
+independent Astra rerun, and all fourteen pinned-source/real-HTTP CSP cases
+against a new verified publish. The same Terra completed full Pass 3 with no
+substantive finding; all six findings are resolved. See `slice-01-review.md`.
+This coherent milestone closes Slice 1's local acceptance/review gate. Remote
+CI for the new milestone must pass before Slice 2 dispatch; earlier remote CI
+does not certify the Slice 1 implementation.
 
 See `slice-00-evidence.md` for actual build, SQL, startup and publish checks.
 Milestone `00967778001e7ec8198ab4498d0fbd15ded4d984` passed the complete
@@ -80,6 +96,13 @@ Edition (64-bit), version 16.0.1200.5, default local instance with working
 Windows authentication. These checks are not application acceptance tests.
 
 ## Release Boundaries
+
+The temporary file sender is not production transport. Release/rehearsal cannot
+pass until a Rest 3-compatible `Clc.Postmark.Api` supports cancellable async
+sending, replaces `FileEmailSender`, and passes provider integration/webhook,
+transport-specific and release-validation tests. No simulated webhook or local
+file may stand in for those gates. The port is not production complete while
+this work remains outstanding.
 
 Permanent nonproduction remains PocketBase until the complete reviewed port
 is merged and tagged. Production-hostname preflight uses only a disposable

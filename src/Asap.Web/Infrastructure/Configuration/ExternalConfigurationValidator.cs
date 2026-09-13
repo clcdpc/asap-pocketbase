@@ -42,6 +42,7 @@ public static partial class ExternalConfigurationValidator
             value.Authentication?.Entra is null ||
             value.Application is null ||
             value.EmailSafety is null ||
+            value.PatronLoginRateLimit is null ||
             value.Hangfire?.ProcessingLimits is null)
         {
             errors.Add("configuration_section_missing");
@@ -59,6 +60,7 @@ public static partial class ExternalConfigurationValidator
         ValidateEntra(value.Authentication.Entra, errors);
         ValidateApplication(value.Application, errors);
         ValidateRecipientDomains(value.EmailSafety.AllowedRecipientDomains, errors);
+        ValidatePatronLoginRateLimit(value.PatronLoginRateLimit, errors);
         ValidateHangfire(value.Hangfire, errors);
 
         return errors;
@@ -227,6 +229,21 @@ public static partial class ExternalConfigurationValidator
         if (domains.Distinct(StringComparer.OrdinalIgnoreCase).Count() != domains.Count)
         {
             errors.Add("recipient_domain_duplicate");
+        }
+    }
+
+    private static void ValidatePatronLoginRateLimit(
+        PatronLoginRateLimitOptions options,
+        ICollection<string> errors)
+    {
+        if (options.PermitLimit is < 1 or > 10_000)
+        {
+            errors.Add("patron_login_rate_limit_permit_invalid");
+        }
+
+        if (options.WindowSeconds is < 1 or > 86_400)
+        {
+            errors.Add("patron_login_rate_limit_window_invalid");
         }
     }
 

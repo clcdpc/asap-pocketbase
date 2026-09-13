@@ -12,6 +12,8 @@ public sealed class ExternalConfiguration
 
     public EmailSafetyOptions EmailSafety { get; set; } = new();
 
+    public PatronLoginRateLimitOptions PatronLoginRateLimit { get; set; } = new();
+
     public HangfireOptions Hangfire { get; set; } = new();
 }
 
@@ -74,6 +76,13 @@ public sealed class ApplicationOptions
 public sealed class EmailSafetyOptions
 {
     public List<string>? AllowedRecipientDomains { get; set; }
+}
+
+public sealed class PatronLoginRateLimitOptions
+{
+    public int PermitLimit { get; set; } = 20;
+
+    public int WindowSeconds { get; set; } = 300;
 }
 
 public sealed class HangfireOptions

@@ -2,7 +2,7 @@ namespace Asap.Web.Infrastructure.Data;
 
 public sealed class SchemaVersion
 {
-    public const int ExpectedVersion = 1;
+    public const int ExpectedVersion = 2;
 
     public byte Id { get; set; }
 

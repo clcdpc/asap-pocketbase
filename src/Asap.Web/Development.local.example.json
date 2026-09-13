@@ -35,6 +35,10 @@
       "example.org"
     ]
   },
+  "PatronLoginRateLimit": {
+    "PermitLimit": 20,
+    "WindowSeconds": 300
+  },
   "Hangfire": {
     "Schedules": {
       "WorkflowProcessing": "0 * * * *",

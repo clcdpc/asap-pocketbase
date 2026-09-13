@@ -2,6 +2,7 @@ using Asap.Web.Infrastructure.Configuration;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Development;
 using Microsoft.EntityFrameworkCore;
+using Asap.Web.Infrastructure.Jobs;
 
 namespace Asap.Web.Infrastructure.Health;
 
@@ -38,9 +39,20 @@ public sealed class ReadinessService(
                 .Select(item => (int?)item.Version)
                 .SingleOrDefaultAsync(cancellationToken);
 
-            return version == SchemaVersion.ExpectedVersion
-                ? ReadinessResult.Ready
-                : ReadinessResult.NotReady("schema_version_mismatch");
+            if (version != SchemaVersion.ExpectedVersion)
+            {
+                return ReadinessResult.NotReady("schema_version_mismatch");
+            }
+
+            var hangfire = services.GetService<IHangfireSchemaCompatibilityChecker>();
+            if (hangfire is not null &&
+                await hangfire.GetActualVersionAsync(cancellationToken) !=
+                HangfireStorageConfiguration.ExpectedSchemaVersion)
+            {
+                return ReadinessResult.NotReady("hangfire_schema_version_mismatch");
+            }
+
+            return ReadinessResult.Ready;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {

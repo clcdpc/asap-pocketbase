@@ -4,7 +4,10 @@
     <AssemblyName>Asap.Web</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Clc.Polaris.Api" />
     <PackageReference Include="Cronos" />
+    <PackageReference Include="Hangfire.AspNetCore" />
+    <PackageReference Include="Hangfire.SqlServer" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
     <PackageReference Include="Microsoft.SqlServer.DacFx" />
     <PackageReference Include="NLog.Web.AspNetCore" />
@@ -16,6 +19,12 @@
   </ItemGroup>
   <ItemGroup>
     <FrontendSource Include="Frontend\**\*" />
+    <Content Include="..\..\scripts\hangfire\1.8.25\**\*"
+             Link="Database\Hangfire\1.8.25\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Remove=".artifacts\dev-email\**\*" />
+    <None Remove=".artifacts\dev-email\**\*" />
   </ItemGroup>
   <Target Name="CopyFrontendToWebRoot"
           BeforeTargets="Build;Publish">
@@ -50,6 +59,12 @@
         <RelativePath>Database\Asap.Database.dacpac</RelativePath>
         <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+  <Target Name="RemoveDevelopmentEmailFromPublish" AfterTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
+                             Condition="$([System.String]::Copy('%(ResolvedFileToPublish.RelativePath)').Contains('dev-email'))" />
     </ItemGroup>
   </Target>
 </Project>

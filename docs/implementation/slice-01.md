@@ -2,14 +2,16 @@
 
 ## Gate And Ownership
 
-Prepared ahead of dispatch. The Slice 0 gate passed at milestone
+The Slice 0 gate passed at milestone
 `00967778001e7ec8198ab4498d0fbd15ded4d984`, including 44 .NET/real-SQL tests,
 legacy tests, the Terra review/fix/re-review cycle, and remote CI. The verified
-CLC package incompatibility in `clc-package-probe.md` remains unresolved:
-Postmark source or a maintained Rest 3-compatible cancellable async build has
-been requested. Do not declare this slice complete or substitute a duplicate
-transport while that prerequisite is missing. Final package selection and
-dependency verification must be recorded before the integration gate.
+CLC package incompatibility in `clc-package-probe.md` remains unresolved, but
+the user's 2026-09-12 instruction explicitly removes it as an implementation
+blocker. Apply `temporary-email-transport.md`: only final provider sending uses
+a minimal cancellable `FileEmailSender`. All SQL outbox and application
+contracts remain binding. Real Postmark transport and provider webhook work
+remain release/rehearsal blockers; they do not prevent this slice's temporary
+transport acceptance or progression to subsequent slices.
 
 A fresh Sol XHigh context owns this
 complete slice because session serialization, outbox leases and historical
@@ -76,9 +78,11 @@ dependency. Runtime cannot provision or upgrade SQL or Hangfire schemas.
    formats. Effective library controls ownership/configuration; pickup choices
    use actual patron Polaris context. Scope trust never comes from submission
    payload. Rich text uses the approved sanitizer; plain runtime data uses DOM.
-2. Use the verified current CLC packages for protocol mechanics. Keep ASAP
-   adapters thin and test orchestration with fakes. No parallel PAPI signing or
-   Postmark transport implementation. Observe complete-operation timeout and
+2. Use the verified current CLC Polaris package for protocol mechanics. Keep
+   ASAP adapters thin and test orchestration with fakes. No parallel PAPI
+   signing or custom Postmark protocol. The explicit temporary transport
+   decision permits only the minimal file sender behind the same narrow async
+   transport boundary the eventual CLC Postmark adapter will use. Observe complete-operation timeout and
    cancellation bounds; provider failure must not become definitive not-found.
 3. Login supports source aliases and experience/home/effective-library logic,
    including actual patron-code omission behavior unless the pack overrides it.
@@ -129,6 +133,13 @@ dependency. Runtime cannot provision or upgrade SQL or Hangfire schemas.
    business state. Do not send test mail externally. If this slice creates any
    authorization-sensitive staff mail, implement the complete stored recipient
    tuple/address-kind and current-binding/scope/address revalidation contract.
+   The temporary sender must not bypass those contracts: one uniquely named
+   HTML file per logical invocation, useful escaped envelope/identifier metadata
+   and inspectable HTML body, cancellation propagated, and an ignored local
+   output directory excluded from application publish and CI artifacts. Files
+   are not durable application state. Keep ordinary tests on recording/fake
+   boundaries and add focused file-sender tests. Do not simulate provider
+   delivery/webhooks or add temporary messaging infrastructure.
 10. Add minimum Hangfire-backed outbox processing with operator-provisioned
     separate schema and runtime without DDL. Do not register unimplemented
     business jobs or claim complete job/operations administration. Health remains

@@ -1,13 +1,19 @@
 using Asap.Security;
+using Asap.Web.Features.Email;
 using Asap.Web.Infrastructure.Configuration;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Development;
 using Asap.Web.Infrastructure.Health;
+using Asap.Web.Infrastructure.Jobs;
 using Asap.Web.Infrastructure.Logging;
 using Asap.Web.Infrastructure.Security;
+using Hangfire;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using NLog.Web;
+using System.Threading.RateLimiting;
+using Asap.Web.Features.Patron;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -47,12 +53,45 @@ builder.Host.UseNLog();
 builder.Services.AddSingleton(configurationResult);
 builder.Services.AddSingleton<RuntimeInitializationState>();
 builder.Services.AddSingleton<IReadinessService, ReadinessService>();
+var patronLoginRateLimit = externalConfiguration?.PatronLoginRateLimit ?? new PatronLoginRateLimitOptions();
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddPolicy("patron-login", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = patronLoginRateLimit.PermitLimit,
+                Window = TimeSpan.FromSeconds(patronLoginRateLimit.WindowSeconds),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+    options.OnRejected = async (context, cancellationToken) =>
+    {
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+        {
+            context.HttpContext.Response.Headers.RetryAfter =
+                Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds)).ToString();
+        }
+        await context.HttpContext.Response.WriteAsJsonAsync(
+            new { message = "Too many login attempts. Please try again later." },
+            cancellationToken);
+    };
+});
 
 if (externalConfiguration is not null)
 {
     builder.Services.AddSingleton(externalConfiguration);
     builder.Services.AddDbContextFactory<AsapDbContext>(options =>
         options.UseSqlServer(externalConfiguration.ConnectionStrings.AsapDatabase));
+    builder.Services.AddHangfire(configuration => configuration
+        .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
+        .UseSimpleAssemblyNameTypeSerializer()
+        .UseRecommendedSerializerSettings()
+        .UseSqlServerStorage(
+            externalConfiguration.ConnectionStrings.HangfireDatabase,
+            HangfireStorageConfiguration.CreateRuntimeOptions()));
 
     builder.Services
         .AddDataProtection()
@@ -61,10 +100,31 @@ if (externalConfiguration is not null)
         .ProtectKeysWithCertificate(certificate!);
 
     builder.Services.AddSingleton<IntegrationCredentialProtector>();
+    builder.Services.AddSingleton(TimeProvider.System);
+    builder.Services.AddHttpClient("Polaris");
+    builder.Services.AddSingleton<PatronConfigurationService>();
+    builder.Services.AddSingleton<PatronSessionService>();
+    builder.Services.AddSingleton<PatronSuggestionService>();
+    if (builder.Environment.IsEnvironment("Testing") &&
+        builder.Configuration.GetValue<bool>("Testing:UseDeterministicPatronProvider"))
+    {
+        builder.Services.AddSingleton<IPatronProvider, Asap.Web.Infrastructure.Testing.DeterministicTestingPatronProvider>();
+    }
+    else
+    {
+        builder.Services.AddSingleton<IPatronProvider, PolarisPatronProvider>();
+    }
     builder.Services.AddHostedService<DataProtectionInitializer>();
     builder.Services.AddSingleton<RecipientDomainPolicy>();
+    builder.Services.AddSingleton(EmailOutboxRuntimeOptions.Default);
+    builder.Services.AddTransient<EmailOutboxJobs>();
+    builder.Services.AddSingleton<IEmailOutboxDispatcher, EmailOutboxDispatcher>();
+    builder.Services.AddSingleton<IHangfireSchemaCompatibilityChecker, HangfireSchemaCompatibilityChecker>();
+    builder.Services.AddSingleton<IEmailSender>(_ => new FileEmailSender(
+        Path.Combine(builder.Environment.ContentRootPath, ".artifacts", "dev-email")));
     builder.Services.AddSingleton<DacpacDeploymentService>();
     builder.Services.AddHostedService<DevelopmentDatabaseInitializer>();
+    builder.Services.AddHostedService<HangfireWorkerHostedService>();
 }
 
 var app = builder.Build();
@@ -77,6 +137,13 @@ if (!configurationResult.IsValid)
 }
 
 app.UseMiddleware<CorrelationIdMiddleware>();
+app.UseRateLimiter();
+app.UseDefaultFiles();
+if (externalConfiguration is not null)
+{
+    app.UseMiddleware<PatronContentSecurityPolicyMiddleware>();
+    app.UseMiddleware<BusinessReadinessMiddleware>();
+}
 app.UseStaticFiles();
 
 app.MapGet("/health/live", () => Results.Json(new { status = "healthy" }));
@@ -87,6 +154,11 @@ app.MapGet("/health/ready", async (IReadinessService readiness, CancellationToke
         new { status = result.IsReady ? "healthy" : "unhealthy" },
         statusCode: result.IsReady ? StatusCodes.Status200OK : StatusCodes.Status503ServiceUnavailable);
 });
+
+if (externalConfiguration is not null)
+{
+    app.MapPatronEndpoints();
+}
 
 app.Run();
 

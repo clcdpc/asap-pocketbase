@@ -64,4 +64,33 @@ public sealed class ExternalConfigurationValidatorTests
         CollectionAssert.Contains(errors.ToList(), "processing_default_page_size_invalid");
         CollectionAssert.Contains(errors.ToList(), "processing_queue_HoldPlacement_max_per_run_invalid");
     }
+
+    [TestMethod]
+    public void PatronLoginRateLimitDefaultsAreValid()
+    {
+        var value = TestConfigurationFactory.Create();
+
+        var errors = ExternalConfigurationValidator.Validate(value);
+
+        Assert.HasCount(0, errors);
+        Assert.AreEqual(20, value.PatronLoginRateLimit.PermitLimit);
+        Assert.AreEqual(300, value.PatronLoginRateLimit.WindowSeconds);
+    }
+
+    [DataRow(0, 300, "patron_login_rate_limit_permit_invalid")]
+    [DataRow(20, 0, "patron_login_rate_limit_window_invalid")]
+    [TestMethod]
+    public void PatronLoginRateLimitBoundsAreValidated(
+        int permitLimit,
+        int windowSeconds,
+        string expectedError)
+    {
+        var value = TestConfigurationFactory.Create();
+        value.PatronLoginRateLimit.PermitLimit = permitLimit;
+        value.PatronLoginRateLimit.WindowSeconds = windowSeconds;
+
+        var errors = ExternalConfigurationValidator.Validate(value);
+
+        CollectionAssert.Contains(errors.ToList(), expectedError);
+    }
 }
