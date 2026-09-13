@@ -155,6 +155,16 @@ all later findings are closed with recorded regression evidence. Local acceptanc
 and review authorize the coherent Slice 3 milestone; actual milestone CI remains
 required before recording complete closure and the clean-tree stop.
 
+## Milestone Closure
+
+Reviewed milestone `85539b0ba34937e31396181adfc87c383b8a0cd8` contains all
+25 implementation paths and four evidence/review documents. It is pushed to
+draft PR #264 and passed [remote Linux CI](https://github.com/clcdpc/asap-pocketbase/actions/runs/34755432713)
+on 2026-09-13: 190 tests with zero failures/skips, zero-warning/error build,
+legacy/frontend tests and publication checks. All Slice 3 acceptance, review
+and milestone gates are satisfied. This documentation-only closure does not
+change the reviewed implementation or start another slice.
+
 ## Stop Boundary
 
 After mandatory fixes, full re-review, tests and milestone/CI, stop at Slice 3

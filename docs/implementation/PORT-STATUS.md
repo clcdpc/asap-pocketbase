@@ -60,7 +60,7 @@ or its deferred Postmark/rehearsal/release gates complete.
 | 0 | Branch, skeleton, engineering baseline | Complete: reviewed milestone `0096777`, remote CI passed |
 | 1 | Patron login and submission | Complete: `c1b8655` plus reviewed correction `1e36761`; 120 tests and remote Linux CI passed |
 | 2 | Staff Entra and core request workflow | Complete: reviewed milestone `9f946ae`; 181 local and remote Linux CI tests pass, no skips |
-| 3 | Additional-copy workflow | Local acceptance complete: 190 tests, native/published-browser checks and full Terra Pass 5 clear; milestone/remote CI pending |
+| 3 | Additional-copy workflow | Complete: reviewed milestone `85539b0`; 190 local/remote tests, native/published-browser checks and full Terra Pass 5 clear |
 | 4 | Administration and configuration | Not started |
 | 5 | Background workflows and complete email operations | Not started |
 | 6 | Analytics | Not started |
@@ -205,9 +205,13 @@ migration fixture variants, published desktop/mobile lifecycle and delayed
 candidate/mutation regressions, and frontend/vendor/compression checks. The same
 Terra completed five full-slice review passes; all confirmed findings are fixed
 and Pass 5 is clear. See `slice-03-review.md` and `slice-03-evidence.md`. A fresh
-fetch still matches the PocketBase pin and all 19 pack hashes match. The coherent
-milestone and actual remote CI remain the final Slice 3 closure steps. Slice 4
-has not started and will not be dispatched in this execution.
+fetch still matches the PocketBase pin and all 19 pack hashes match. Milestone
+`85539b0ba34937e31396181adfc87c383b8a0cd8` is pushed to the same draft PR and
+passed [remote Linux CI](https://github.com/clcdpc/asap-pocketbase/actions/runs/34755432713)
+on 2026-09-13: zero-warning/error Release build, 190 tests with zero failures or
+skips, legacy/frontend tests and both publication checks. Slice 3 is complete.
+This execution stops here with the implementation/evidence records committed;
+Slice 4 has not started. No merge, tag, deployment or production approval follows.
 
 The temporary file sender is not production transport. Release/rehearsal cannot
 pass until a Rest 3-compatible `Clc.Postmark.Api` supports cancellable async

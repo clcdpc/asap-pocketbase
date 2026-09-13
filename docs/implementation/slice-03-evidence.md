@@ -654,3 +654,30 @@ coherent milestone and verify its actual remote CI before marking Slice 3
 complete. Stop afterward with all implementation documentation committed and a
 clean tree; do not start Slice 4. The overall port and real Postmark integration,
 provider/webhook tests, exact-artifact rehearsal and release gates remain open.
+
+## Committed Milestone And Remote CI
+
+Milestone `85539b0ba34937e31396181adfc87c383b8a0cd8`,
+`Port additional-copy workflow (slice 3)`, commits the 25 reviewed implementation
+paths and all four Slice 3 evidence/review documents: 29 files, 5,989 insertions
+and 195 deletions. It is pushed on `codex/csharp-port` to the existing draft
+PR #264. The earlier prepared implementation documents are already committed in
+`3e37a48926833a8a92045260fb92b42ef1a090ca`; no prepared packet is left untracked.
+
+The exact milestone passed [remote Linux CI](https://github.com/clcdpc/asap-pocketbase/actions/runs/34755432713)
+on 2026-09-13, completed at 11:55:18 UTC. The build-test job completed in 5m18s:
+
+- Release build: zero warnings and zero errors.
+- .NET/real-SQL/browser suite: **190 passed, zero failed, zero skipped**,
+  3m06.610s, enforcing `--minimum-expected-tests 190`.
+- Legacy/frontend unit tests: passed.
+- Web and self-contained win-x64 migration publication checks: passed,
+  including DACPAC/vendor presence and forbidden runtime/dev-email exclusions.
+
+The CI watcher exited successfully; no local acceptance process remains pending.
+Git was clean immediately after the milestone push, with local HEAD equal to
+the remote branch. The actual `.artifacts/dev-email/` output paths are ignored,
+and no local acceptance or generated email output is tracked. This final
+documentation-only receipt will be committed and pushed before stopping; it
+does not modify the accepted source/artifacts. Slice 3 is complete, Slice 4 is
+not started, and the overall production/rehearsal blockers remain unchanged.
