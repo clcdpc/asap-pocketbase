@@ -34,6 +34,29 @@ assert.match(http, /createLatestLoad/);
 assert.match(workflow, /searchParams\.get\('request'\)/);
 assert.match(workflow, /searchParams\.set\('request', id\)/);
 assert.match(workflow, /searchParams\.delete\('request'\)/);
+assert.match(index, /data-view="additional-copies"/);
+assert.match(index, /id="additional-copy-create-dialog"/);
+assert.match(index, /id="additional-copy-reminder"/);
+assert.match(workflow, /searchParams\.set\('stage', 'additional_copies'\)/);
+assert.match(workflow, /\/api\/asap\/staff\/additional-copies\?scope=/);
+assert.match(workflow, /title-requests\/\$\{request\.id\}\/additional-copy/);
+for (const operation of ['claim', 'unclaim', 'assign', 'close', 'reopen', 'delete']) {
+  assert.ok(workflow.includes(`operation === '${operation}'`) || workflow.includes(`'${operation}'`),
+    `${operation} should be wired through the AdditionalCopy UI`);
+}
+assert.match(workflow, /claimClearedReason/);
+assert.match(workflow, /createElement/);
+assert.match(workflow, /window\.requestAnimationFrame/);
+assert.equal(
+  [...workflow.matchAll(/\/api\/asap\/staff\/assignment-candidates\?libraryOrgId=/g)].length,
+  2,
+  'both assignment pickers should use the scoped candidate API'
+);
+assert.doesNotMatch(
+  workflow,
+  /authorizedJson\(`\/api\/asap\/staff\/users\?orgId=/,
+  'workflow assignment must not depend on the admin-only Staff Access endpoint'
+);
 assert.match(workflow, /pickup-options/);
 assert.match(workflow, /place-hold/);
 assert.match(workflow, /retry-identifier-check/);

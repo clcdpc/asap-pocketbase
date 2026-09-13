@@ -49,12 +49,18 @@ checkpoints. They do not certify a slice, replace its independent review, or
 authorize early implementation. Refresh each packet against accepted prior
 code before dispatch; keep application milestone commits scoped to one slice.
 
+On 2026-09-13 the user bounded this execution: finish Slice 3's required tests,
+independent Terra review/fix/re-review, milestone and remote CI, then stop with
+a clean Git working tree. Do not dispatch Slice 4. Already committed later-slice
+packets remain preparation only. This stopping point does not declare the port
+or its deferred Postmark/rehearsal/release gates complete.
+
 | Slice | Scope | Status |
 | --- | --- | --- |
 | 0 | Branch, skeleton, engineering baseline | Complete: reviewed milestone `0096777`, remote CI passed |
 | 1 | Patron login and submission | Complete: `c1b8655` plus reviewed correction `1e36761`; 120 tests and remote Linux CI passed |
 | 2 | Staff Entra and core request workflow | Complete: reviewed milestone `9f946ae`; 181 local and remote Linux CI tests pass, no skips |
-| 3 | Additional-copy workflow | Implementation started with fresh Sol XHigh; packet and stopped-source acceptance fixture prepared |
+| 3 | Additional-copy workflow | Local acceptance complete: 190 tests, native/published-browser checks and full Terra Pass 5 clear; milestone/remote CI pending |
 | 4 | Administration and configuration | Not started |
 | 5 | Background workflows and complete email operations | Not started |
 | 6 | Analytics | Not started |
@@ -192,6 +198,16 @@ Edition (64-bit), version 16.0.1200.5, default local instance with working
 Windows authentication. These checks are not application acceptance tests.
 
 ## Release Boundaries
+
+Slice 3's final source and 666-file published candidate passed independent
+acceptance: 190 .NET/SQL/browser tests with zero failures/skips, four native
+migration fixture variants, published desktop/mobile lifecycle and delayed
+candidate/mutation regressions, and frontend/vendor/compression checks. The same
+Terra completed five full-slice review passes; all confirmed findings are fixed
+and Pass 5 is clear. See `slice-03-review.md` and `slice-03-evidence.md`. A fresh
+fetch still matches the PocketBase pin and all 19 pack hashes match. The coherent
+milestone and actual remote CI remain the final Slice 3 closure steps. Slice 4
+has not started and will not be dispatched in this execution.
 
 The temporary file sender is not production transport. Release/rehearsal cannot
 pass until a Rest 3-compatible `Clc.Postmark.Api` supports cancellable async

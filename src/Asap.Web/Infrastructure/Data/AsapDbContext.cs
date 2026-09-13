@@ -31,6 +31,7 @@ public sealed class AsapDbContext(DbContextOptions<AsapDbContext> options) : DbC
     public DbSet<FormatAutoClaimRule> FormatAutoClaimRules => Set<FormatAutoClaimRule>();
     public DbSet<PatronSession> PatronSessions => Set<PatronSession>();
     public DbSet<TitleRequest> TitleRequests => Set<TitleRequest>();
+    public DbSet<AdditionalCopyRequest> AdditionalCopyRequests => Set<AdditionalCopyRequest>();
     public DbSet<TitleRequestEvent> TitleRequestEvents => Set<TitleRequestEvent>();
     public DbSet<WorkflowTag> WorkflowTags => Set<WorkflowTag>();
     public DbSet<TitleRequestWorkflowTag> TitleRequestWorkflowTags => Set<TitleRequestWorkflowTag>();

@@ -318,18 +318,18 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
                 request.Notes,
                 request.ClaimedByStaffUserId?.ToString(),
                 request.ClaimedByDisplayName,
-                request.ClaimedAtUtc,
+                AsUtc(request.ClaimedAtUtc),
                 request.ClaimType,
                 request.ClaimRuleId?.ToString(),
                 request.IsbnCheckStatus,
                 request.IsbnCheckResult,
                 request.IsbnCheckRetryCount,
                 request.IsbnCheckLastErrorCode,
-                request.LastCheckedUtc,
+                AsUtc(request.LastCheckedUtc),
                 tags.GetValueOrDefault(request.Id) ?? [],
-                phaseEnteredAt,
-                request.CreatedUtc,
-                request.UpdatedUtc,
+                AsUtc(phaseEnteredAt),
+                AsUtc(request.CreatedUtc),
+                AsUtc(request.UpdatedUtc),
                 StaffVersion.Encode(request.RowVersion),
                 capabilities,
                 operation is null ? null : new HoldOperationSummary(
@@ -341,7 +341,7 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
                     MaskBarcode(operation.PatronBarcodeSnapshot),
                     operation.BibIdSnapshot,
                     StaffVersion.Encode(operation.RowVersion),
-                    operation.LastRecoveryUtc,
+                    AsUtc(operation.LastRecoveryUtc),
                     operation.LastErrorCode,
                     staff.Role == "super_admin" && canTakeOverOperation,
                     staff.Role == "super_admin" && canResolveOperation && operation.Phase != "acquired",
@@ -374,4 +374,7 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
 
     private static string MaskBarcode(string value) =>
         value.Length <= 4 ? new string('*', value.Length) : $"{new string('*', value.Length - 4)}{value[^4..]}";
+
+    private static DateTime AsUtc(DateTime value) => DateTime.SpecifyKind(value, DateTimeKind.Utc);
+    private static DateTime? AsUtc(DateTime? value) => value.HasValue ? AsUtc(value.Value) : null;
 }

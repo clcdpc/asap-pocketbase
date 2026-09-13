@@ -93,7 +93,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .view-tab { padding: 10px 16px; color: var(--muted); background: transparent; border-radius: 4px 4px 0 0; }
 .view-tab.active { color: var(--ink); background: #fff; border-color: var(--line); border-bottom-color: #fff; margin-bottom: -1px; font-weight: 700; }
 
-#queue-view, #profile-view { padding-top: 20px; }
+#queue-view, #additional-copy-view, #profile-view { padding-top: 20px; }
 .section-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 18px; }
 .section-heading h1 { margin: 0; font-size: 1.65rem; }
 .section-heading p { margin: 4px 0 0; color: var(--muted); }
@@ -135,6 +135,8 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 dialog { width: min(900px, calc(100vw - 28px)); max-height: calc(100vh - 28px); padding: 0; border: 0; border-radius: 6px; box-shadow: 0 18px 60px rgba(0,0,0,.28); }
 dialog::backdrop { background: rgba(20, 31, 39, .58); }
 .dialog-shell { min-height: 240px; background: #fff; }
+.compact-dialog-shell { min-height: 0; }
+#additional-copy-create-dialog { width: min(520px, calc(100vw - 28px)); }
 .dialog-header { position: sticky; top: 0; z-index: 2; display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 18px 20px 14px; background: #fff; border-bottom: 1px solid var(--line); }
 .dialog-header h2 { margin: 0; font-size: 1.35rem; overflow-wrap: anywhere; }
 .kicker { margin: 0 0 3px; color: var(--brand-dark); font-size: .8rem; font-weight: 800; text-transform: uppercase; }
@@ -157,6 +159,8 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 .resolution-form .wide { grid-column: 1 / -1; }
 .inline-form { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; padding: 12px; background: var(--soft); }
 .inline-form label { display: grid; gap: 4px; flex: 1 1 220px; font-weight: 700; }
+.notes-history { margin: 18px 0 0; padding: 12px 14px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--soft); border-left: 4px solid var(--brand); font: inherit; }
+.source-link { display: inline-flex; align-items: center; gap: 7px; color: var(--brand-dark); }
 .tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .tag { padding: 3px 7px; color: #34414b; background: #e9ecef; border-radius: 3px; font-size: .78rem; }
 .sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0,0,0,0) !important; white-space: nowrap !important; border: 0 !important; }

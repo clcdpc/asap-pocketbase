@@ -80,7 +80,7 @@ public sealed class DatabaseBaselineTests
 
         Assert.AreEqual(16, Convert.ToInt32(await Scalar(connection, "SELECT CAST(SERVERPROPERTY('ProductMajorVersion') AS int);")));
         Assert.AreEqual(160, Convert.ToInt32(await Scalar(connection, "SELECT compatibility_level FROM sys.databases WHERE name = DB_NAME();")));
-        Assert.AreEqual(3, Convert.ToInt32(await Scalar(connection, "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
+        Assert.AreEqual(4, Convert.ToInt32(await Scalar(connection, "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
         Assert.AreEqual(1, Convert.ToInt32(await Scalar(connection, "SELECT COUNT(*) FROM [asap].[DeploymentState] WHERE [Id] = 1;")));
         var expectedHash = Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(_dacpacPath))).ToLowerInvariant();
@@ -205,7 +205,7 @@ public sealed class DatabaseBaselineTests
         await using (var connection = new SqlConnection(_databaseConnectionString))
         {
             await connection.OpenAsync();
-            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 4 WHERE [Id] = 1;");
+            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 5 WHERE [Id] = 1;");
         }
 
         try
@@ -218,7 +218,7 @@ public sealed class DatabaseBaselineTests
         {
             await using var connection = new SqlConnection(_databaseConnectionString);
             await connection.OpenAsync();
-            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 3 WHERE [Id] = 1;");
+            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 4 WHERE [Id] = 1;");
         }
     }
 

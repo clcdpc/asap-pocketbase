@@ -8,7 +8,7 @@
   <link rel="icon" href="/jpl.png">
   <link rel="stylesheet" href="/vendor/font-awesome/4.7.0/css/font-awesome.css">
   <link rel="stylesheet" href="/vendor/gridjs/6.2.0/theme/mermaid.min.css">
-  <link rel="stylesheet" href="styles.css?v=2">
+  <link rel="stylesheet" href="styles.css?v=3">
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to requests</a>
@@ -42,6 +42,9 @@
       <nav class="view-tabs" aria-label="Staff views">
         <button class="view-tab active" type="button" data-view="queue" aria-current="page">
           <i class="fa fa-list" aria-hidden="true"></i> Requests
+        </button>
+        <button class="view-tab" type="button" data-view="additional-copies">
+          <i class="fa fa-clone" aria-hidden="true"></i> Additional copies
         </button>
         <button class="view-tab" type="button" data-view="profile">
           <i class="fa fa-user" aria-hidden="true"></i> Profile
@@ -96,6 +99,47 @@
         <p id="queue-empty" class="empty-state" hidden>No requests match these filters.</p>
       </section>
 
+      <section id="additional-copy-view" aria-labelledby="additional-copy-title" hidden>
+        <div class="section-heading">
+          <div>
+            <h1 id="additional-copy-title" tabindex="-1">Additional copies</h1>
+            <p id="additional-copy-summary">Loading authorized tasks...</p>
+          </div>
+          <label id="additional-copy-scope-field" class="compact-field" hidden>
+            <span>Library scope</span>
+            <select id="additional-copy-library-scope"></select>
+          </label>
+        </div>
+
+        <div id="additional-copy-status-tabs" class="status-tabs" role="tablist" aria-label="Additional-copy status">
+          <button type="button" role="tab" data-copy-status="open" aria-selected="true">Open</button>
+          <button type="button" role="tab" data-copy-status="closed" aria-selected="false">Closed</button>
+        </div>
+
+        <div class="queue-filters" aria-label="Additional-copy filters">
+          <label class="search-field">
+            <span class="sr-only">Search additional-copy tasks</span>
+            <i class="fa fa-search" aria-hidden="true"></i>
+            <input id="additional-copy-search" type="search" placeholder="Search title, BIB, author, or identifier">
+          </label>
+          <label class="compact-field">
+            <span>Claims</span>
+            <select id="additional-copy-claim-filter">
+              <option value="all">All claims</option>
+              <option value="mine_unclaimed">Mine + unclaimed</option>
+              <option value="mine">Mine</option>
+              <option value="unclaimed">Unclaimed</option>
+            </select>
+          </label>
+          <button id="refresh-additional-copies" class="icon-button" type="button" title="Refresh additional copies" aria-label="Refresh additional copies">
+            <i class="fa fa-refresh" aria-hidden="true"></i>
+          </button>
+        </div>
+
+        <div id="additional-copy-grid" class="request-grid"></div>
+        <p id="additional-copy-empty" class="empty-state" hidden>No additional-copy tasks match these filters.</p>
+      </section>
+
       <section id="profile-view" aria-labelledby="profile-title" hidden>
         <div class="section-heading">
           <div>
@@ -138,7 +182,29 @@
     </div>
   </dialog>
 
+  <dialog id="additional-copy-create-dialog" aria-labelledby="additional-copy-create-title">
+    <div class="dialog-shell compact-dialog-shell">
+      <header class="dialog-header">
+        <div>
+          <p class="kicker">Independent task</p>
+          <h2 id="additional-copy-create-title">Create additional copy</h2>
+        </div>
+      </header>
+      <form id="additional-copy-create-form" class="dialog-body">
+        <p id="additional-copy-create-summary"></p>
+        <label class="check-field">
+          <input id="additional-copy-reminder" type="checkbox">
+          <span>Send me an additional-copy reminder</span>
+        </label>
+        <div class="form-actions">
+          <button id="cancel-additional-copy" class="secondary-button" type="button">Cancel</button>
+          <button class="primary-button" type="submit"><i class="fa fa-clone" aria-hidden="true"></i>Create task</button>
+        </div>
+      </form>
+    </div>
+  </dialog>
+
   <script src="/vendor/gridjs/6.2.0/gridjs.umd.js"></script>
-  <script src="app.js?v=2" type="module"></script>
+  <script src="app.js?v=3" type="module"></script>
 </body>
 </html>

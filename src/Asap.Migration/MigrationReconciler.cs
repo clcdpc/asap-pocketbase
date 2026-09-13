@@ -38,7 +38,7 @@ public static class MigrationReconciler
         {
             using var report = JsonDocument.Parse(File.ReadAllText(options.ImportReportPath));
             var root = report.RootElement;
-            if (root.GetProperty("reportVersion").GetInt32() != 3 ||
+            if (root.GetProperty("reportVersion").GetInt32() != 4 ||
                 !root.GetProperty("reconciliationPassed").GetBoolean() ||
                 !string.Equals(
                     root.GetProperty("sourceGitSha").GetString(),

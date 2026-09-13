@@ -35,7 +35,9 @@ public sealed record StaffLifecycleResult(
     string Code,
     StaffUser? User = null,
     int RulesDeactivated = 0,
-    int OpenTitleClaimsCleared = 0);
+    int OpenTitleClaimsCleared = 0,
+    int OpenAdditionalCopyClaimsCleared = 0);
+public sealed record StaffAssignmentCandidate(long Id, string DisplayName);
 
 public sealed class StaffLifecycleService(
     IDbContextFactory<AsapDbContext> contextFactory,
@@ -66,6 +68,39 @@ public sealed class StaffLifecycleService(
             .ThenBy(item => item.UserPrincipalName)
             .ThenBy(item => item.Id)
             .ToListAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<StaffAssignmentCandidate>> ListAssignmentCandidatesAsync(
+        int libraryOrganizationId,
+        CancellationToken cancellationToken)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var libraryIsActive = await context.Organizations.AsNoTracking().AnyAsync(
+            item => item.Id == libraryOrganizationId && item.Id != 1 && item.IsActive,
+            cancellationToken);
+        if (!libraryIsActive)
+        {
+            return [];
+        }
+
+        var rows = await context.StaffUsers.AsNoTracking()
+            .Where(item => item.IsActive &&
+                           item.EntraTenantId.HasValue &&
+                           item.EntraObjectId.HasValue &&
+                           allowedTenantIds.Contains(item.EntraTenantId.Value) &&
+                           (item.Role == "super_admin" && item.OrganizationId == 1 ||
+                            (item.Role == "staff" || item.Role == "admin") &&
+                            item.OrganizationId == libraryOrganizationId))
+            .OrderBy(item => item.DisplayName)
+            .ThenBy(item => item.UserPrincipalName)
+            .ThenBy(item => item.Id)
+            .Select(item => new { item.Id, item.DisplayName, item.UserPrincipalName })
+            .ToListAsync(cancellationToken);
+
+        return rows.Select(item => new StaffAssignmentCandidate(
+                item.Id,
+                item.DisplayName ?? item.UserPrincipalName ?? $"Staff {item.Id}"))
+            .ToArray();
     }
 
     public async Task<StaffLifecycleResult> CreateAsync(
@@ -475,8 +510,10 @@ public sealed class StaffLifecycleService(
                               (role == "super_admin" ? false : target.OrganizationId != organizationId));
         var rulesDeactivated = 0;
         var titleClaimsCleared = 0;
+        var additionalCopyClaimsCleared = 0;
         if (scopeContracts)
         {
+            var cleanupUtc = DateTime.UtcNow;
             var rules = await context.FormatAutoClaimRules
                 .Where(item => item.IsActive && item.StaffUserId == target.Id &&
                                (!newActive || role != "super_admin" && item.LibraryOrganizationId != organizationId))
@@ -485,7 +522,7 @@ public sealed class StaffLifecycleService(
             foreach (var rule in rules)
             {
                 rule.IsActive = false;
-                rule.DeactivatedUtc = DateTime.UtcNow;
+                rule.DeactivatedUtc = cleanupUtc;
             }
             rulesDeactivated = rules.Count;
 
@@ -501,7 +538,7 @@ public sealed class StaffLifecycleService(
                 request.ClaimedAtUtc = null;
                 request.ClaimType = null;
                 request.ClaimRuleId = null;
-                request.UpdatedUtc = DateTime.UtcNow;
+                request.UpdatedUtc = cleanupUtc;
                 context.TitleRequestEvents.Add(new TitleRequestEvent
                 {
                     TitleRequestId = request.Id,
@@ -512,10 +549,31 @@ public sealed class StaffLifecycleService(
                     ActorName = actor.DisplayName,
                     Message = "Claim cleared because the assignee's staff access changed.",
                     MetadataJson = JsonSerializer.Serialize(new { reason = "staff_scope_contracted", targetStaffUserId = target.Id }),
-                    CreatedUtc = DateTime.UtcNow
+                    CreatedUtc = cleanupUtc
                 });
             }
             titleClaimsCleared = requests.Count;
+
+            var additionalCopies = !newActive
+                ? await context.AdditionalCopyRequests.FromSqlInterpolated(
+                        $"SELECT * FROM [asap].[AdditionalCopyRequest] WITH (UPDLOCK,HOLDLOCK) WHERE [ClaimedByStaffUserId] = {target.Id} AND [Status] = N'open' ORDER BY [Id]")
+                    .ToListAsync(cancellationToken)
+                : await context.AdditionalCopyRequests.FromSqlInterpolated(
+                        $"SELECT * FROM [asap].[AdditionalCopyRequest] WITH (UPDLOCK,HOLDLOCK) WHERE [ClaimedByStaffUserId] = {target.Id} AND [Status] = N'open' AND [LibraryOrganizationId] <> {organizationId} ORDER BY [Id]")
+                    .ToListAsync(cancellationToken);
+            foreach (var request in additionalCopies)
+            {
+                request.Notes = AdditionalCopyService.AppendNote(
+                    request.Notes,
+                    AdditionalCopyService.LifecycleClaimNote(request, cleanupUtc));
+                request.ClaimedByStaffUserId = null;
+                request.ClaimedByDisplayName = null;
+                request.ClaimedAtUtc = null;
+                request.ClaimType = null;
+                request.ClaimRuleId = null;
+                request.UpdatedUtc = cleanupUtc;
+            }
+            additionalCopyClaimsCleared = additionalCopies.Count;
         }
 
         target.IsActive = newActive;
@@ -526,11 +584,16 @@ public sealed class StaffLifecycleService(
             role,
             rulesDeactivated,
             openTitleClaimsCleared = titleClaimsCleared,
-            openAdditionalCopyClaimsCleared = 0
+            openAdditionalCopyClaimsCleared = additionalCopyClaimsCleared
         });
         await context.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return new StaffLifecycleResult("updated", target, rulesDeactivated, titleClaimsCleared);
+        return new StaffLifecycleResult(
+            "updated",
+            target,
+            rulesDeactivated,
+            titleClaimsCleared,
+            additionalCopyClaimsCleared);
     }
 
     private bool CanManage(

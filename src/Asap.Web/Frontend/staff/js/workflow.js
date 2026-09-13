@@ -7,6 +7,7 @@ import {
 } from './http.js';
 
 const STATUS_LABELS = {
+  open: 'Open',
   suggestion: 'Suggestion',
   outstanding_purchase: 'Outstanding purchase',
   pending_hold: 'Pending hold',
@@ -60,10 +61,24 @@ function currentRequestParameter() {
   return new URL(window.location.href).searchParams.get('request');
 }
 
-function replaceRequestParameter(id) {
+function currentStageParameter() {
+  return new URL(window.location.href).searchParams.get('stage');
+}
+
+function replaceRequestParameter(id, additionalCopy = false) {
   const url = new URL(window.location.href);
   if (id) url.searchParams.set('request', id);
   else url.searchParams.delete('request');
+  if (additionalCopy) url.searchParams.set('stage', 'additional_copies');
+  else url.searchParams.delete('stage');
+  window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+}
+
+function replaceStageParameter(additionalCopy) {
+  const url = new URL(window.location.href);
+  url.searchParams.delete('request');
+  if (additionalCopy) url.searchParams.set('stage', 'additional_copies');
+  else url.searchParams.delete('stage');
   window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
 }
 
@@ -77,6 +92,7 @@ export function createWorkflowApp() {
     staffIdentity: document.querySelector('#staff-identity'),
     signOut: document.querySelector('#sign-out'),
     queueView: document.querySelector('#queue-view'),
+    additionalCopyView: document.querySelector('#additional-copy-view'),
     profileView: document.querySelector('#profile-view'),
     viewTabs: [...document.querySelectorAll('.view-tab')],
     statusTabs: [...document.querySelectorAll('#status-tabs [data-status]')],
@@ -89,6 +105,15 @@ export function createWorkflowApp() {
     summary: document.querySelector('#queue-summary'),
     grid: document.querySelector('#request-grid'),
     empty: document.querySelector('#queue-empty'),
+    additionalCopyStatusTabs: [...document.querySelectorAll('#additional-copy-status-tabs [data-copy-status]')],
+    additionalCopyScopeField: document.querySelector('#additional-copy-scope-field'),
+    additionalCopyScope: document.querySelector('#additional-copy-library-scope'),
+    additionalCopySearch: document.querySelector('#additional-copy-search'),
+    additionalCopyClaim: document.querySelector('#additional-copy-claim-filter'),
+    additionalCopyRefresh: document.querySelector('#refresh-additional-copies'),
+    additionalCopySummary: document.querySelector('#additional-copy-summary'),
+    additionalCopyGrid: document.querySelector('#additional-copy-grid'),
+    additionalCopyEmpty: document.querySelector('#additional-copy-empty'),
     profile: document.querySelector('#profile-form'),
     notificationEmail: document.querySelector('#notification-email'),
     weeklyEmail: document.querySelector('#weekly-email'),
@@ -100,18 +125,33 @@ export function createWorkflowApp() {
     dialogTitle: document.querySelector('#request-dialog-title'),
     dialogKicker: document.querySelector('#request-dialog-kicker'),
     dialogBody: document.querySelector('#request-dialog-body'),
-    closeDialog: document.querySelector('#close-request')
+    closeDialog: document.querySelector('#close-request'),
+    createCopyDialog: document.querySelector('#additional-copy-create-dialog'),
+    createCopyForm: document.querySelector('#additional-copy-create-form'),
+    createCopySummary: document.querySelector('#additional-copy-create-summary'),
+    createCopyReminder: document.querySelector('#additional-copy-reminder'),
+    cancelCreateCopy: document.querySelector('#cancel-additional-copy')
   };
 
   const state = {
     staff: null,
     requests: [],
+    additionalCopies: [],
     scope: 'all',
     status: 'suggestion',
+    additionalCopyStatus: 'open',
     grid: null,
+    additionalCopyGrid: null,
+    activeView: 'queue',
     selectedRequestId: null,
+    selectedRequestType: null,
+    selectedRequestVersion: null,
     returnFocus: null,
     deepLinkHandled: false,
+    additionalCopyDeepLinkHandled: false,
+    additionalCopyLoaded: false,
+    createCopyRequest: null,
+    createCopyReturnFocus: null,
     configurations: new Map()
   };
 
@@ -120,10 +160,64 @@ export function createWorkflowApp() {
     dom.status.className = `status-message${kind ? ` ${kind}` : ''}`;
   }
 
+  function cancelAssignmentCandidateLoad() {
+    latestLoads.begin('assignment-candidates').abort();
+  }
+
+  function cancelDialogMutationCompletion() {
+    latestLoads.begin('dialog-mutation').abort();
+  }
+
+  function cancelAdditionalCopyCreationCompletion() {
+    latestLoads.begin('additional-copy-create-mutation').abort();
+  }
+
+  function cancelAdditionalCopyPreviewLoad() {
+    latestLoads.begin('additional-copy-preview').abort();
+  }
+
+  function isCurrentDialogSelection(request, requestType) {
+    return !!state.staff &&
+      dom.dialog.open &&
+      state.selectedRequestType === requestType &&
+      String(state.selectedRequestId) === String(request.id);
+  }
+
+  function isCurrentDialogRequest(request, requestType) {
+    return isCurrentDialogSelection(request, requestType) &&
+      state.selectedRequestVersion === request.version;
+  }
+
+  function isCurrentDialogMutation(mutation, request, requestType) {
+    return mutation.isCurrent() && isCurrentDialogRequest(request, requestType);
+  }
+
+  function isCurrentAdditionalCopyCreation(mutation, pending) {
+    return mutation.isCurrent() &&
+      !!state.staff &&
+      dom.createCopyDialog.open &&
+      state.createCopyRequest === pending &&
+      isCurrentDialogRequest(pending.request, 'title_request');
+  }
+
   function showSignedOut(message) {
+    cancelAssignmentCandidateLoad();
+    cancelDialogMutationCompletion();
+    cancelAdditionalCopyCreationCompletion();
+    if (dom.dialog.open) dom.dialog.close();
+    if (dom.createCopyDialog.open) dom.createCopyDialog.close();
     state.staff = null;
+    state.selectedRequestId = null;
+    state.selectedRequestType = null;
+    state.selectedRequestVersion = null;
+    state.returnFocus = null;
+    state.createCopyRequest = null;
+    state.createCopyReturnFocus = null;
     latestLoads.begin('queue').abort();
+    latestLoads.begin('additional-copies').abort();
     latestLoads.begin('detail').abort();
+    latestLoads.begin('additional-copy-detail').abort();
+    latestLoads.begin('additional-copy-preview').abort();
     dom.signedOutMessage.textContent = message || 'Sign in with your authorized library account.';
     dom.signedOut.hidden = false;
     dom.workspace.hidden = true;
@@ -140,7 +234,9 @@ export function createWorkflowApp() {
     dom.staffIdentity.textContent = staff.displayName || staff.userPrincipalName || 'Staff user';
     dom.staffIdentity.title = `${statusLabel(staff.role)} · ${staff.organizationName}`;
     dom.scopeField.hidden = staff.role !== 'super_admin';
+    dom.additionalCopyScopeField.hidden = staff.role !== 'super_admin';
     dom.claim.value = staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
+    dom.additionalCopyClaim.value = staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
     populateProfile(staff);
   }
 
@@ -164,7 +260,12 @@ export function createWorkflowApp() {
       }
       showWorkspace(session.staff);
       announce('Staff session ready.');
-      await loadQueue();
+      if (currentStageParameter() === 'additional_copies') {
+        switchView('additional-copies', false);
+        await loadAdditionalCopies();
+      } else {
+        await loadQueue();
+      }
     } catch (error) {
       if (!isAbortError(error)) showSignedOut('Staff access could not be loaded. Try signing in again.');
     } finally {
@@ -173,11 +274,13 @@ export function createWorkflowApp() {
   }
 
   function populateScopes(organizations, selectedScope) {
-    dom.scope.replaceChildren(element('option', { value: 'all', text: 'All libraries' }));
-    for (const organization of organizations || []) {
-      dom.scope.append(element('option', { value: organization.id, text: organization.name }));
+    for (const select of [dom.scope, dom.additionalCopyScope]) {
+      select.replaceChildren(element('option', { value: 'all', text: 'All libraries' }));
+      for (const organization of organizations || []) {
+        select.append(element('option', { value: organization.id, text: organization.name }));
+      }
+      select.value = selectedScope;
     }
-    dom.scope.value = selectedScope;
   }
 
   function populateTags() {
@@ -193,7 +296,7 @@ export function createWorkflowApp() {
     if (!state.staff) return;
     const load = latestLoads.begin('queue');
     dom.refresh.disabled = true;
-    announce('Loading authorized requests...');
+    if (!options.silent) announce('Loading authorized requests...');
     try {
       const scope = state.staff.role === 'super_admin' ? state.scope : String(state.staff.organizationId);
       const result = await authorizedJson(`/api/asap/staff/title-requests?scope=${encodeURIComponent(scope)}`, {
@@ -205,14 +308,14 @@ export function createWorkflowApp() {
       if (state.staff.role === 'super_admin') populateScopes(result.organizations, result.scope);
       populateTags();
       renderGrid();
-      announce(`${state.requests.length} authorized requests loaded.`);
+      if (!options.silent) announce(`${state.requests.length} authorized requests loaded.`);
       if (!state.deepLinkHandled && !options.skipDeepLink) {
         state.deepLinkHandled = true;
         const deepLink = currentRequestParameter();
         if (deepLink) await openRequest(deepLink);
       }
     } catch (error) {
-      if (!isAbortError(error) && error.status !== 401) {
+      if (!options.silent && !isAbortError(error) && error.status !== 401) {
         announce(error.message || 'Requests could not be loaded.', 'error');
       }
     } finally {
@@ -227,7 +330,7 @@ export function createWorkflowApp() {
     const tag = dom.tag.value;
     return state.requests.filter(request => {
       if (request.status !== state.status) return false;
-      const mine = request.claimedByStaffUserId === state.staff.id;
+      const mine = request.claimedByStaffUserId === state.staff?.id;
       const unclaimed = !request.claimedByStaffUserId;
       if (claim === 'mine' && !mine) return false;
       if (claim === 'unclaimed' && !unclaimed) return false;
@@ -266,7 +369,7 @@ export function createWorkflowApp() {
             width: '13%',
             formatter: (cell, row) => {
               const request = state.requests.find(item => item.id === row.cells[6].data);
-              const mine = request && request.claimedByStaffUserId === state.staff.id;
+              const mine = request && request.claimedByStaffUserId === state.staff?.id;
               return window.gridjs.h('span', { className: `claim-label${mine ? ' mine' : ''}` }, cell);
             }
           },
@@ -294,9 +397,308 @@ export function createWorkflowApp() {
     }
   }
 
+  async function loadAdditionalCopies(options = {}) {
+    if (!state.staff) return;
+    const load = latestLoads.begin('additional-copies');
+    dom.additionalCopyRefresh.disabled = true;
+    if (!options.silent) announce('Loading authorized additional-copy tasks...');
+    try {
+      const scope = state.staff.role === 'super_admin' ? state.scope : String(state.staff.organizationId);
+      const result = await authorizedJson(
+        `/api/asap/staff/additional-copies?scope=${encodeURIComponent(scope)}&status=${encodeURIComponent(state.additionalCopyStatus)}`,
+        { signal: load.signal }
+      );
+      if (!load.isCurrent()) return;
+      state.additionalCopies = Array.isArray(result.items) ? result.items : [];
+      state.scope = result.scope;
+      state.additionalCopyLoaded = true;
+      if (state.staff.role === 'super_admin') populateScopes(result.availableLibraries, result.scope);
+      renderAdditionalCopyGrid();
+      if (!options.silent) announce(`${state.additionalCopies.length} authorized additional-copy tasks loaded.`);
+      if (!state.additionalCopyDeepLinkHandled && !options.skipDeepLink) {
+        state.additionalCopyDeepLinkHandled = true;
+        const deepLink = currentRequestParameter();
+        if (deepLink) await openAdditionalCopy(deepLink);
+      }
+    } catch (error) {
+      if (!options.silent && !isAbortError(error) && error.status !== 401) {
+        announce(error.message || 'Additional-copy tasks could not be loaded.', 'error');
+      }
+    } finally {
+      if (load.isCurrent()) dom.additionalCopyRefresh.disabled = false;
+      latestLoads.finish('additional-copies', load.token);
+    }
+  }
+
+  function filteredAdditionalCopies() {
+    const query = dom.additionalCopySearch.value.trim().toLocaleLowerCase();
+    const claim = dom.additionalCopyClaim.value;
+    return state.additionalCopies.filter(request => {
+      const mine = request.claimedByStaffUserId === state.staff?.id;
+      const unclaimed = !request.claimedByStaffUserId;
+      if (claim === 'mine' && !mine) return false;
+      if (claim === 'unclaimed' && !unclaimed) return false;
+      if (claim === 'mine_unclaimed' && !mine && !unclaimed) return false;
+      if (!query) return true;
+      return [request.title, request.author, request.bibid, request.identifier,
+        request.publication, request.libraryOrgName, request.claimedByDisplayName]
+        .filter(Boolean)
+        .some(value => String(value).toLocaleLowerCase().includes(query));
+    });
+  }
+
+  function renderAdditionalCopyGrid() {
+    const requests = filteredAdditionalCopies();
+    dom.additionalCopySummary.textContent = `${requests.length} ${state.additionalCopyStatus} task${requests.length === 1 ? '' : 's'}`;
+    dom.additionalCopyEmpty.hidden = requests.length !== 0;
+    const rows = requests.map(request => [
+      request.title,
+      request.bibid,
+      request.libraryOrgName,
+      request.formatLabel || request.format || 'Not recorded',
+      request.claimedByDisplayName || 'Unclaimed',
+      dateTime(request.updated),
+      request.id
+    ]);
+    if (!state.additionalCopyGrid) {
+      state.additionalCopyGrid = new window.gridjs.Grid({
+        columns: [
+          { name: 'Title', width: '27%' },
+          { name: 'BIB ID', width: '14%' },
+          { name: 'Library', width: '17%' },
+          { name: 'Format', width: '14%' },
+          {
+            name: 'Claim',
+            width: '14%',
+            formatter: (cell, row) => {
+              const request = state.additionalCopies.find(item => item.id === row.cells[6].data);
+              const mine = request && request.claimedByStaffUserId === state.staff?.id;
+              return window.gridjs.h('span', { className: `claim-label${mine ? ' mine' : ''}` }, cell);
+            }
+          },
+          { name: 'Updated', width: '13%' },
+          {
+            name: 'Open',
+            width: '74px',
+            sort: false,
+            formatter: id => window.gridjs.h('button', {
+              type: 'button',
+              className: 'grid-open additional-copy-open',
+              'aria-label': `Open additional-copy task ${id}`,
+              onClick: event => openAdditionalCopy(String(id), event.currentTarget)
+            }, [window.gridjs.h('i', { className: 'fa fa-chevron-right', 'aria-hidden': 'true' }), 'Open'])
+          }
+        ],
+        data: rows,
+        sort: true,
+        pagination: { limit: 25, summary: true },
+        language: { noRecordsFound: 'No additional-copy tasks match these filters.' }
+      });
+      state.additionalCopyGrid.render(dom.additionalCopyGrid);
+    } else {
+      state.additionalCopyGrid.updateConfig({ data: rows }).forceRender();
+    }
+  }
+
+  async function openAdditionalCopy(id, returnFocus) {
+    if (!state.staff) return;
+    cancelAssignmentCandidateLoad();
+    cancelDialogMutationCompletion();
+    cancelAdditionalCopyPreviewLoad();
+    cancelAdditionalCopyCreationCompletion();
+    state.selectedRequestId = String(id);
+    state.selectedRequestType = 'additional_copy';
+    state.selectedRequestVersion = null;
+    state.returnFocus = returnFocus || document.activeElement;
+    const load = latestLoads.begin('additional-copy-detail');
+    announce('Loading additional-copy details...');
+    try {
+      const request = await authorizedJson(`/api/asap/staff/additional-copies/${encodeURIComponent(id)}`, {
+        signal: load.signal
+      });
+      if (!load.isCurrent() || state.selectedRequestId !== String(id) || state.selectedRequestType !== 'additional_copy') return;
+      state.selectedRequestId = request.id;
+      replaceRequestParameter(request.id, true);
+      renderAdditionalCopy(request);
+      if (!dom.dialog.open) dom.dialog.showModal();
+      dom.closeDialog.focus();
+      announce(`Opened additional-copy task ${request.id}.`);
+    } catch (error) {
+      if (!isAbortError(error) && error.status !== 401) {
+        announce(error.status === 404 ? 'That additional-copy task is no longer available.' : error.message, 'error');
+      }
+    } finally {
+      latestLoads.finish('additional-copy-detail', load.token);
+    }
+  }
+
+  function renderAdditionalCopy(request, { preserveDialogMutation = false } = {}) {
+    cancelAssignmentCandidateLoad();
+    cancelAdditionalCopyPreviewLoad();
+    cancelAdditionalCopyCreationCompletion();
+    if (!preserveDialogMutation) cancelDialogMutationCompletion();
+    if (state.selectedRequestType === 'additional_copy' && String(state.selectedRequestId) === String(request.id)) {
+      state.selectedRequestVersion = request.version;
+    }
+    dom.dialogTitle.textContent = request.title;
+    dom.dialogKicker.textContent = `${request.libraryOrgName} · Additional copy ${request.id}`;
+    const body = document.createDocumentFragment();
+    body.append(
+      element('div', { className: 'detail-meta' }, [
+        element('span', { className: `status-badge${request.status === 'closed' ? ' closed' : ''}`, text: statusLabel(request.status) }),
+        element('span', { text: `Updated ${dateTime(request.updated)}` }),
+        element('span', { text: request.claimedByDisplayName ? `Claimed by ${request.claimedByDisplayName}` : 'Unclaimed' })
+      ]),
+      buildAdditionalCopyActionBar(request)
+    );
+    const details = element('dl', { className: 'detail-grid' });
+    addDetail(details, 'BIB ID', request.bibid);
+    addDetail(details, 'Format', request.formatLabel || request.format);
+    addDetail(details, 'Author', request.author);
+    addDetail(details, 'Identifier', request.identifier);
+    addDetail(details, 'Publication', request.publication);
+    addDetail(details, 'Created by', request.createdByUsername);
+    addDetail(details, 'Created', dateTime(request.created));
+    addDetail(details, 'Closed by', request.closedByUsername);
+    addDetail(details, 'Closed', dateTime(request.closedAt));
+    body.append(details);
+    if (request.sourceTitleRequest) {
+      body.append(element('a', {
+        className: 'source-link',
+        href: `/staff/?request=${encodeURIComponent(request.sourceTitleRequest)}`
+      }, [icon('external-link'), 'Open source title request']));
+    } else {
+      body.append(element('p', { text: 'The source title request is no longer available.' }));
+    }
+    if (request.notes) {
+      body.append(
+        element('h3', { text: 'Notes' }),
+        element('pre', { className: 'notes-history', text: request.notes })
+      );
+    }
+    dom.dialogBody.replaceChildren(body);
+  }
+
+  function buildAdditionalCopyActionBar(request) {
+    const bar = element('div', { className: 'action-bar', 'aria-label': 'Additional-copy actions' });
+    if (request.capabilities?.canUnclaim) {
+      bar.append(commandButton('Unclaim', 'user-times', () => mutateAdditionalCopy(request, 'unclaim', 'Task unclaimed.')));
+    } else if (request.capabilities?.canClaim) {
+      bar.append(commandButton('Claim', 'user-plus', () => mutateAdditionalCopy(request, 'claim', 'Task claimed.'), 'primary-button'));
+    }
+    if (request.capabilities?.canAssign) {
+      bar.append(commandButton('Assign', 'users', () => showAdditionalCopyAssignment(request)));
+    }
+    if (request.capabilities?.canClose) {
+      bar.append(commandButton('Close task', 'check', () => {
+        if (window.confirm('Close this additional-copy task?')) {
+          mutateAdditionalCopy(request, 'close', 'Additional-copy task closed.');
+        }
+      }, 'primary-button'));
+    }
+    if (request.capabilities?.canReopen) {
+      bar.append(commandButton('Reopen task', 'undo', () => mutateAdditionalCopy(request, 'reopen', 'Additional-copy task reopened.'), 'primary-button'));
+    }
+    if (request.capabilities?.canDelete) {
+      bar.append(commandButton('Delete task', 'trash', () => {
+        if (window.confirm('Permanently delete this closed task?')) {
+          mutateAdditionalCopy(request, 'delete', 'Additional-copy task deleted.');
+        }
+      }, 'danger-button'));
+    }
+    return bar;
+  }
+
+  async function mutateAdditionalCopy(request, operation, successMessage, extra = {}) {
+    const mutation = latestLoads.begin('dialog-mutation');
+    announce('Saving additional-copy task...');
+    try {
+      const result = await authorizedJson(`/api/asap/staff/additional-copies/${request.id}${operation === 'delete' ? '' : `/${operation}`}`, {
+        method: operation === 'delete' ? 'DELETE' : 'POST',
+        body: { version: request.version, ...extra }
+      });
+      if (operation === 'delete') {
+        await loadAdditionalCopies({ skipDeepLink: true, silent: true });
+        if (!isCurrentDialogMutation(mutation, request, 'additional_copy')) return;
+        closeDialog();
+        announce(successMessage, 'success');
+        return;
+      }
+      if (isCurrentDialogMutation(mutation, request, 'additional_copy')) {
+        renderAdditionalCopy(result, { preserveDialogMutation: true });
+      }
+      await loadAdditionalCopies({ skipDeepLink: true, silent: true });
+      if (!mutation.isCurrent() || !isCurrentDialogRequest(result, 'additional_copy')) return;
+      if (result.claimClearedReason) {
+        announce(`Task reopened; the retained claim was cleared (${result.claimClearedReason.replaceAll('_', ' ')}).`, 'success');
+      } else {
+        announce(successMessage, 'success');
+      }
+    } catch (error) {
+      if (error.status === 409) {
+        const message = error.message || 'The task changed. Review the refreshed version before trying again.';
+        await loadAdditionalCopies({ skipDeepLink: true, silent: true });
+        if (!isCurrentDialogMutation(mutation, request, 'additional_copy')) return;
+        await openAdditionalCopy(request.id);
+        if (isCurrentDialogSelection(request, 'additional_copy')) announce(message, 'error');
+      } else if (isCurrentDialogMutation(mutation, request, 'additional_copy') &&
+                 error.status !== 401 && !isAbortError(error)) {
+        announce(error.message || 'The additional-copy task could not be updated.', 'error');
+      }
+    } finally {
+      latestLoads.finish('dialog-mutation', mutation.token);
+    }
+  }
+
+  async function showAdditionalCopyAssignment(request) {
+    const load = latestLoads.begin('assignment-candidates');
+    announce('Loading eligible staff...');
+    try {
+      const result = await authorizedJson(`/api/asap/staff/assignment-candidates?libraryOrgId=${request.libraryOrgId}`, {
+        signal: load.signal
+      });
+      if (!load.isCurrent() || !isCurrentDialogRequest(request, 'additional_copy')) return;
+      const select = element('select', { 'aria-label': 'Assign additional-copy task' });
+      const candidates = result.candidates || [];
+      for (const candidate of candidates) {
+        select.append(element('option', {
+          value: candidate.id,
+          text: candidate.displayName
+        }));
+      }
+      const form = element('form', { className: 'inline-form' }, [
+        labeledInput('Assign task', select),
+        element('button', { type: 'submit', className: 'primary-button', disabled: candidates.length === 0 }, [icon('user-plus'), 'Assign'])
+      ]);
+      form.addEventListener('submit', async event => {
+        event.preventDefault();
+        if (!form.isConnected || !isCurrentDialogRequest(request, 'additional_copy')) return;
+        await mutateAdditionalCopy(request, 'assign', 'Additional-copy task assigned.', {
+          assigneeId: Number(select.value)
+        });
+      });
+      dom.dialogBody.prepend(form);
+      select.focus();
+      announce(candidates.length ? 'Choose an assignee.' : 'No eligible staff are available.');
+    } catch (error) {
+      if (load.isCurrent() && isCurrentDialogRequest(request, 'additional_copy') &&
+          error.status !== 401 && !isAbortError(error)) {
+        announce(error.message || 'Assignable staff could not be loaded.', 'error');
+      }
+    } finally {
+      latestLoads.finish('assignment-candidates', load.token);
+    }
+  }
+
   async function openRequest(id, returnFocus) {
     if (!state.staff) return;
+    cancelAssignmentCandidateLoad();
+    cancelDialogMutationCompletion();
+    cancelAdditionalCopyPreviewLoad();
+    cancelAdditionalCopyCreationCompletion();
     state.selectedRequestId = String(id);
+    state.selectedRequestType = 'title_request';
+    state.selectedRequestVersion = null;
     state.returnFocus = returnFocus || document.activeElement;
     const load = latestLoads.begin('detail');
     announce('Loading request details...');
@@ -304,11 +706,11 @@ export function createWorkflowApp() {
       const request = await authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(id)}`, {
         signal: load.signal
       });
-      if (!load.isCurrent() || state.selectedRequestId !== String(id)) return;
+      if (!load.isCurrent() || state.selectedRequestId !== String(id) || state.selectedRequestType !== 'title_request') return;
       const configuration = await loadRequestConfiguration(request.libraryOrgId, load.signal);
-      if (!load.isCurrent() || state.selectedRequestId !== String(id)) return;
+      if (!load.isCurrent() || state.selectedRequestId !== String(id) || state.selectedRequestType !== 'title_request') return;
       state.selectedRequestId = request.id;
-      replaceRequestParameter(request.id);
+      replaceRequestParameter(request.id, false);
       renderRequest(request, configuration);
       if (!dom.dialog.open) dom.dialog.showModal();
       dom.closeDialog.focus();
@@ -339,7 +741,14 @@ export function createWorkflowApp() {
     list.append(wrapper);
   }
 
-  function renderRequest(request, configuration) {
+  function renderRequest(request, configuration, { preserveDialogMutation = false } = {}) {
+    cancelAssignmentCandidateLoad();
+    cancelAdditionalCopyPreviewLoad();
+    cancelAdditionalCopyCreationCompletion();
+    if (!preserveDialogMutation) cancelDialogMutationCompletion();
+    if (state.selectedRequestType === 'title_request' && String(state.selectedRequestId) === String(request.id)) {
+      state.selectedRequestVersion = request.version;
+    }
     dom.dialogTitle.textContent = request.title;
     dom.dialogKicker.textContent = `${request.libraryOrgName} · Request ${request.id}`;
     const body = document.createDocumentFragment();
@@ -385,14 +794,12 @@ export function createWorkflowApp() {
     const bar = element('div', { className: 'action-bar', 'aria-label': 'Request actions' });
     const workflowBlocked = request.capabilities?.canChangeWorkflowState !== true;
     if (request.status !== 'closed') {
-      if (request.claimedByStaffUserId === state.staff.id) {
+      if (request.claimedByStaffUserId === state.staff?.id) {
         bar.append(commandButton('Unclaim', 'user-times', () => mutateSimple(request, 'unclaim')));
       } else if (!request.claimedByStaffUserId) {
         bar.append(commandButton('Claim', 'user-plus', () => mutateSimple(request, 'claim'), 'primary-button'));
       }
-      if (state.staff.role === 'admin' || state.staff.role === 'super_admin') {
-        bar.append(commandButton('Assign', 'users', () => showAssignment(request)));
-      }
+      bar.append(commandButton('Assign', 'users', () => showAssignment(request)));
     }
     if (request.status === 'suggestion') {
       bar.append(
@@ -410,6 +817,7 @@ export function createWorkflowApp() {
         else announce('Add and verify a BIB ID before moving this request to Pending hold.', 'error');
       }, 'primary-button', workflowBlocked));
     } else if (request.status === 'pending_hold') {
+      bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, event.currentTarget), 'secondary-button', !request.bibid));
       bar.append(commandButton('Pickup', 'map-marker', () => showPickup(request), 'secondary-button', workflowBlocked));
       if (request.autohold && request.bibid) {
         bar.append(commandButton('Place hold', 'bookmark', () => mutateSimple(request, 'place-hold'), 'primary-button', workflowBlocked));
@@ -418,6 +826,7 @@ export function createWorkflowApp() {
         bar.append(commandButton('Close duplicate', 'clone', () => runAction(request, 'closeDuplicate'), 'secondary-button', workflowBlocked));
       }
     } else if (request.status === 'hold_placed') {
+      bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, event.currentTarget), 'secondary-button', !request.bibid));
       bar.append(commandButton('Close request', 'check', () => runAction(request, 'close'), 'primary-button', workflowBlocked));
     } else if (request.status === 'closed') {
       bar.append(commandButton('Reopen', 'undo', () => runAction(request, 'reopen'), 'primary-button', workflowBlocked));
@@ -625,44 +1034,138 @@ export function createWorkflowApp() {
     }, 'Workflow action completed.');
   }
 
+  async function showAdditionalCopyPreview(request, returnFocus) {
+    cancelAdditionalCopyCreationCompletion();
+    const load = latestLoads.begin('additional-copy-preview');
+    announce('Loading additional-copy preview...');
+    try {
+      const preview = await authorizedJson(`/api/asap/staff/title-requests/${request.id}/additional-copy`, {
+        signal: load.signal
+      });
+      if (!load.isCurrent() || !isCurrentDialogRequest(request, 'title_request')) return;
+      state.createCopyRequest = { request, version: preview.version };
+      state.createCopyReturnFocus = returnFocus || document.activeElement;
+      const holdState = request.status === 'hold_placed' ? 'placed' : 'queued';
+      dom.createCopySummary.textContent = `${preview.openCount} open additional-copy task${preview.openCount === 1 ? '' : 's'} already exist for BIB ${preview.bibid}. The patron hold remains ${holdState}.`;
+      dom.createCopyReminder.checked = Boolean(preview.emailPurchaseReminderDefault);
+      dom.createCopyDialog.showModal();
+      dom.cancelCreateCopy.focus();
+      announce('Review the additional-copy task before creating it.');
+    } catch (error) {
+      if (!isAbortError(error) && error.status !== 401) {
+        announce(error.message || 'The additional-copy preview could not be loaded.', 'error');
+      }
+    } finally {
+      latestLoads.finish('additional-copy-preview', load.token);
+    }
+  }
+
+  function closeAdditionalCopyCreateDialog(options = {}) {
+    if (options.preserveMutation !== true) cancelAdditionalCopyCreationCompletion();
+    if (dom.createCopyDialog.open) dom.createCopyDialog.close();
+    state.createCopyRequest = null;
+    const returnFocus = state.createCopyReturnFocus;
+    state.createCopyReturnFocus = null;
+    if (returnFocus && returnFocus.isConnected) returnFocus.focus();
+  }
+
+  async function createAdditionalCopy(event) {
+    event.preventDefault();
+    const pending = state.createCopyRequest;
+    if (!pending) return;
+    const mutation = latestLoads.begin('additional-copy-create-mutation');
+    const submit = dom.createCopyForm.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    announce('Creating additional-copy task...');
+    try {
+      const result = await authorizedJson(`/api/asap/staff/title-requests/${pending.request.id}/additional-copy`, {
+        method: 'POST',
+        body: {
+          version: pending.version,
+          emailPurchaseReminder: dom.createCopyReminder.checked
+        }
+      });
+      const taskId = result.additionalCopyRequest?.id;
+      state.additionalCopyLoaded = false;
+      await loadQueue({ skipDeepLink: true, silent: true });
+      if (isCurrentAdditionalCopyCreation(mutation, pending)) {
+        const returnFocus = state.createCopyReturnFocus;
+        closeAdditionalCopyCreateDialog({ preserveMutation: true });
+        await openRequest(pending.request.id, returnFocus);
+        if (isCurrentDialogSelection(pending.request, 'title_request')) {
+          announce(`Additional-copy task ${taskId || ''} created.`, 'success');
+        }
+      }
+    } catch (error) {
+      if (error.status === 409) {
+        await loadQueue({ skipDeepLink: true, silent: true });
+        if (isCurrentAdditionalCopyCreation(mutation, pending)) {
+          closeAdditionalCopyCreateDialog({ preserveMutation: true });
+          await openRequest(pending.request.id);
+          if (isCurrentDialogSelection(pending.request, 'title_request')) {
+            announce(error.message || 'The request changed. Review the refreshed version before trying again.', 'error');
+          }
+        }
+      } else if (isCurrentAdditionalCopyCreation(mutation, pending) &&
+                 error.status !== 401 && !isAbortError(error)) {
+        announce(error.message || 'The additional-copy task could not be created.', 'error');
+      }
+    } finally {
+      if (mutation.isCurrent() && state.createCopyRequest === pending && submit.isConnected) {
+        submit.disabled = false;
+      }
+      latestLoads.finish('additional-copy-create-mutation', mutation.token);
+    }
+  }
+
   async function mutateRequest(request, path, body, successMessage) {
+    const mutation = latestLoads.begin('dialog-mutation');
     announce('Saving request...');
     try {
       await authorizedJson(path, { method: 'POST', body });
-      await loadQueue({ skipDeepLink: true });
+      await loadQueue({ skipDeepLink: true, silent: true });
+      if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
       await openRequest(request.id);
-      announce(successMessage, 'success');
+      if (isCurrentDialogSelection(request, 'title_request')) announce(successMessage, 'success');
     } catch (error) {
       if (error.status === 409) {
         const message = error.message || 'The request changed. Review the refreshed version before trying again.';
-        await loadQueue({ skipDeepLink: true });
+        await loadQueue({ skipDeepLink: true, silent: true });
+        if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
         await openRequest(request.id);
-        announce(message, 'error');
-      } else if (error.status !== 401 && !isAbortError(error)) {
+        if (isCurrentDialogSelection(request, 'title_request')) announce(message, 'error');
+      } else if (isCurrentDialogMutation(mutation, request, 'title_request') &&
+                 error.status !== 401 && !isAbortError(error)) {
         announce(error.message || 'The request could not be updated.', 'error');
       }
+    } finally {
+      latestLoads.finish('dialog-mutation', mutation.token);
     }
   }
 
   async function showAssignment(request) {
+    const load = latestLoads.begin('assignment-candidates');
     announce('Loading eligible staff...');
     try {
-      const result = await authorizedJson(`/api/asap/staff/users?orgId=${request.libraryOrgId}`);
+      const result = await authorizedJson(`/api/asap/staff/assignment-candidates?libraryOrgId=${request.libraryOrgId}`, {
+        signal: load.signal
+      });
+      if (!load.isCurrent() || !isCurrentDialogRequest(request, 'title_request')) return;
       const select = element('select', { 'aria-label': 'Assign to staff member' });
-      const users = (result.users || []).filter(user => user.active &&
-        (user.role === 'super_admin' || user.organizationId === request.libraryOrgId));
-      for (const user of users) {
+      const candidates = result.candidates || [];
+      for (const candidate of candidates) {
         select.append(element('option', {
-          value: user.id,
-          text: user.displayName || user.userPrincipalName || `Staff ${user.id}`
+          value: candidate.id,
+          text: candidate.displayName
         }));
       }
       const form = element('form', { className: 'inline-form' }, [
         labeledInput('Assign request', select),
-        element('button', { type: 'submit', className: 'primary-button', disabled: users.length === 0 }, [icon('user-plus'), 'Assign'])
+        element('button', { type: 'submit', className: 'primary-button', disabled: candidates.length === 0 }, [icon('user-plus'), 'Assign'])
       ]);
       form.addEventListener('submit', async event => {
         event.preventDefault();
+        if (!form.isConnected || !isCurrentDialogRequest(request, 'title_request')) return;
         await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/assign`, {
           version: request.version,
           assigneeId: Number(select.value)
@@ -670,9 +1173,14 @@ export function createWorkflowApp() {
       });
       dom.dialogBody.prepend(form);
       select.focus();
-      announce(users.length ? 'Choose an assignee.' : 'No eligible staff are available.');
+      announce(candidates.length ? 'Choose an assignee.' : 'No eligible staff are available.');
     } catch (error) {
-      if (error.status !== 401) announce(error.message || 'Assignable staff could not be loaded.', 'error');
+      if (load.isCurrent() && isCurrentDialogRequest(request, 'title_request') &&
+          error.status !== 401 && !isAbortError(error)) {
+        announce(error.message || 'Assignable staff could not be loaded.', 'error');
+      }
+    } finally {
+      latestLoads.finish('assignment-candidates', load.token);
     }
   }
 
@@ -846,18 +1354,27 @@ export function createWorkflowApp() {
   }
 
   async function mutateOperation(request, operation, action, body) {
+    const mutation = latestLoads.begin('dialog-mutation');
     announce(`${action === 'resolve' ? 'Resolving' : 'Reconciling'} hold operation...`);
     try {
       await authorizedJson(`/api/asap/staff/hold-operations/${operation.id}/${action}`, { method: 'POST', body });
-      await loadQueue({ skipDeepLink: true });
+      await loadQueue({ skipDeepLink: true, silent: true });
+      if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
       await openRequest(request.id);
-      announce('Hold recovery state updated.', 'success');
+      if (isCurrentDialogSelection(request, 'title_request')) announce('Hold recovery state updated.', 'success');
     } catch (error) {
       if (error.status === 409) {
-        await loadQueue({ skipDeepLink: true });
+        const message = error.message || 'The hold recovery changed. Review the refreshed request before trying again.';
+        await loadQueue({ skipDeepLink: true, silent: true });
+        if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
         await openRequest(request.id);
+        if (isCurrentDialogSelection(request, 'title_request')) announce(message, 'error');
+      } else if (isCurrentDialogMutation(mutation, request, 'title_request') &&
+                 error.status !== 401 && !isAbortError(error)) {
+        announce(error.message || 'Hold recovery could not be updated.', 'error');
       }
-      if (error.status !== 401) announce(error.message || 'Hold recovery could not be updated.', 'error');
+    } finally {
+      latestLoads.finish('dialog-mutation', mutation.token);
     }
   }
 
@@ -879,7 +1396,9 @@ export function createWorkflowApp() {
       state.staff = result.staff;
       populateProfile(state.staff);
       dom.claim.value = state.staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
+      dom.additionalCopyClaim.value = state.staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
       renderGrid();
+      if (state.additionalCopyLoaded) renderAdditionalCopyGrid();
       announce('Profile saved.', 'success');
     } catch (error) {
       if (error.status === 409) {
@@ -893,8 +1412,10 @@ export function createWorkflowApp() {
     }
   }
 
-  function switchView(name) {
+  function switchView(name, updateUrl = true) {
+    state.activeView = name;
     dom.queueView.hidden = name !== 'queue';
+    dom.additionalCopyView.hidden = name !== 'additional-copies';
     dom.profileView.hidden = name !== 'profile';
     for (const tab of dom.viewTabs) {
       const active = tab.dataset.view === name;
@@ -902,14 +1423,41 @@ export function createWorkflowApp() {
       if (active) tab.setAttribute('aria-current', 'page');
       else tab.removeAttribute('aria-current');
     }
-    document.querySelector(name === 'queue' ? '#queue-title' : '#profile-title').focus({ preventScroll: true });
+    if (updateUrl) replaceStageParameter(name === 'additional-copies');
+    const heading = name === 'queue'
+      ? '#queue-title'
+      : name === 'additional-copies' ? '#additional-copy-title' : '#profile-title';
+    document.querySelector(heading).focus({ preventScroll: true });
+    if (updateUrl && name === 'additional-copies' && !state.additionalCopyLoaded) {
+      loadAdditionalCopies({ skipDeepLink: true });
+    }
   }
 
   function closeDialog() {
+    cancelAssignmentCandidateLoad();
+    cancelDialogMutationCompletion();
+    cancelAdditionalCopyPreviewLoad();
+    cancelAdditionalCopyCreationCompletion();
     if (dom.dialog.open) dom.dialog.close();
+    const selectedId = state.selectedRequestId;
+    const wasAdditionalCopy = state.selectedRequestType === 'additional_copy';
+    const returnFocus = state.returnFocus;
     state.selectedRequestId = null;
-    replaceRequestParameter(null);
-    if (state.returnFocus && state.returnFocus.isConnected) state.returnFocus.focus();
+    state.selectedRequestType = null;
+    state.selectedRequestVersion = null;
+    state.returnFocus = null;
+    replaceRequestParameter(null, wasAdditionalCopy || state.activeView === 'additional-copies');
+    const ariaLabel = wasAdditionalCopy
+      ? `Open additional-copy task ${selectedId}`
+      : `Open request ${selectedId}`;
+    const liveGridButton = [...document.querySelectorAll('.grid-open')]
+      .find(button => button.getAttribute('aria-label') === ariaLabel);
+    const focusTarget = returnFocus?.isConnected ? returnFocus : liveGridButton;
+    if (focusTarget?.isConnected) {
+      window.requestAnimationFrame(() => {
+        if (focusTarget.isConnected) focusTarget.focus();
+      });
+    }
   }
 
   function bindEvents() {
@@ -921,7 +1469,14 @@ export function createWorkflowApp() {
     dom.refresh.addEventListener('click', () => loadQueue({ skipDeepLink: true }));
     dom.scope.addEventListener('change', () => {
       state.scope = dom.scope.value;
+      dom.additionalCopyScope.value = state.scope;
       loadQueue({ skipDeepLink: true });
+    });
+    dom.additionalCopyRefresh.addEventListener('click', () => loadAdditionalCopies({ skipDeepLink: true }));
+    dom.additionalCopyScope.addEventListener('change', () => {
+      state.scope = dom.additionalCopyScope.value;
+      dom.scope.value = state.scope;
+      loadAdditionalCopies({ skipDeepLink: true });
     });
     for (const tab of dom.statusTabs) {
       tab.addEventListener('click', () => {
@@ -940,12 +1495,37 @@ export function createWorkflowApp() {
     dom.search.addEventListener('input', renderGrid);
     dom.claim.addEventListener('change', renderGrid);
     dom.tag.addEventListener('change', renderGrid);
+    for (const tab of dom.additionalCopyStatusTabs) {
+      tab.addEventListener('click', () => {
+        state.additionalCopyStatus = tab.dataset.copyStatus;
+        for (const item of dom.additionalCopyStatusTabs) item.setAttribute('aria-selected', String(item === tab));
+        loadAdditionalCopies({ skipDeepLink: true });
+      });
+      tab.addEventListener('keydown', event => {
+        if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+        event.preventDefault();
+        const index = dom.additionalCopyStatusTabs.indexOf(tab);
+        const offset = event.key === 'ArrowRight' ? 1 : -1;
+        dom.additionalCopyStatusTabs[(index + offset + dom.additionalCopyStatusTabs.length) % dom.additionalCopyStatusTabs.length].focus();
+      });
+    }
+    dom.additionalCopySearch.addEventListener('input', renderAdditionalCopyGrid);
+    dom.additionalCopyClaim.addEventListener('change', renderAdditionalCopyGrid);
     dom.profile.addEventListener('submit', saveProfile);
-    for (const tab of dom.viewTabs) tab.addEventListener('click', () => switchView(tab.dataset.view));
+    for (const tab of dom.viewTabs) tab.addEventListener('click', () => {
+      if (dom.dialog.open) closeDialog();
+      switchView(tab.dataset.view);
+    });
     dom.closeDialog.addEventListener('click', closeDialog);
     dom.dialog.addEventListener('cancel', event => {
       event.preventDefault();
       closeDialog();
+    });
+    dom.createCopyForm.addEventListener('submit', createAdditionalCopy);
+    dom.cancelCreateCopy.addEventListener('click', closeAdditionalCopyCreateDialog);
+    dom.createCopyDialog.addEventListener('cancel', event => {
+      event.preventDefault();
+      closeAdditionalCopyCreateDialog();
     });
   }
 

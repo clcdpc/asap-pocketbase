@@ -320,6 +320,7 @@ public sealed class PatronJourneyTests
             RedirectStandardError = true,
             UseShellExecute = false
         };
+        startInfo.Environment["TZ"] = "America/New_York";
         startInfo.ArgumentList.Add(Path.Combine(repositoryRoot, "tests", "browser", "patron.cjs"));
         startInfo.ArgumentList.Add(baseAddress.GetLeftPart(UriPartial.Authority));
         startInfo.ArgumentList.Add(artifactDirectory);
@@ -396,6 +397,19 @@ public sealed class PatronJourneyTests
         startInfo.ArgumentList.Add(seeded.BlockedRequestId.ToString());
         startInfo.ArgumentList.Add(seeded.ResolutionRequestId.ToString());
         startInfo.ArgumentList.Add(seeded.OtherRequestId.ToString());
+        startInfo.ArgumentList.Add(seeded.CopySourceRequestId.ToString());
+        startInfo.ArgumentList.Add(seeded.InvalidClosedCopyId.ToString());
+        startInfo.ArgumentList.Add(seeded.InvalidClaimantId.ToString());
+        startInfo.ArgumentList.Add(seeded.LegacyRuleId.ToString());
+        startInfo.ArgumentList.Add(seeded.MobileCopyId.ToString());
+        startInfo.ArgumentList.Add(seeded.ForeignStaffId.ToString());
+        startInfo.ArgumentList.Add(seeded.InvalidTenantStaffId.ToString());
+        startInfo.ArgumentList.Add(seeded.UnboundStaffId.ToString());
+        startInfo.ArgumentList.Add(seeded.StaleTitleAId.ToString());
+        startInfo.ArgumentList.Add(seeded.StaleTitleBId.ToString());
+        startInfo.ArgumentList.Add(seeded.StaleCopyAId.ToString());
+        startInfo.ArgumentList.Add(seeded.StaleCopyBId.ToString());
+        startInfo.ArgumentList.Add(seeded.StaleCreateSourceId.ToString());
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Could not start the staff browser runner.");
@@ -409,7 +423,35 @@ public sealed class PatronJourneyTests
         using (var report = JsonDocument.Parse(
                    await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "staff-browser-results.json"))))
         {
-            Assert.HasCount(12, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            Assert.HasCount(18, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            Assert.AreEqual("legacy", report.RootElement.GetProperty("additionalCopy").GetProperty("inheritedClaimType").GetString());
+            Assert.AreEqual(
+                seeded.LegacyRuleId.ToString(),
+                report.RootElement.GetProperty("additionalCopy").GetProperty("inheritedClaimRuleId").GetString());
+            Assert.AreEqual(
+                "claimant_inactive",
+                report.RootElement.GetProperty("additionalCopy").GetProperty("clearedReason").GetString());
+            Assert.AreEqual(
+                seeded.StaffId.ToString(),
+                report.RootElement.GetProperty("assignmentCandidates").GetProperty("ordinaryStaffAssigned").GetString());
+            Assert.AreEqual(
+                seeded.SuperId.ToString(),
+                report.RootElement.GetProperty("assignmentCandidates").GetProperty("systemSuperAdminAssigned").GetString());
+            Assert.AreEqual(
+                seeded.ForeignStaffId.ToString(),
+                report.RootElement.GetProperty("assignmentCandidates").GetProperty("foreignStaffExcluded").GetString());
+            Assert.IsTrue(report.RootElement.GetProperty("staleAssignmentCandidates").GetProperty("titleRequestBOnly").GetBoolean());
+            Assert.IsTrue(report.RootElement.GetProperty("staleAssignmentCandidates").GetProperty("additionalCopyBOnly").GetBoolean());
+            Assert.IsTrue(report.RootElement.GetProperty("ordinaryTitleAssignment").GetProperty("desktop").GetBoolean());
+            Assert.IsTrue(report.RootElement.GetProperty("ordinaryTitleAssignment").GetProperty("mobile").GetBoolean());
+            Assert.IsTrue(report.RootElement.GetProperty("staleMutationCompletions").GetProperty("additionalCopyNonDelete").GetBoolean());
+            Assert.IsTrue(report.RootElement.GetProperty("staleMutationCompletions").GetProperty("additionalCopyConflict").GetBoolean());
+            Assert.IsTrue(report.RootElement.GetProperty("staleMutationCompletions").GetProperty("additionalCopyDelete").GetBoolean());
+            Assert.IsTrue(report.RootElement.GetProperty("staleMutationCompletions").GetProperty("titleRequestAssign").GetBoolean());
+            Assert.IsTrue(report.RootElement.GetProperty("staleMutationCompletions").GetProperty("additionalCopyCreate").GetBoolean());
+            Assert.IsTrue(report.RootElement.GetProperty("staleMutationCompletions").GetProperty("sameIdRerender").GetBoolean());
+            Assert.IsTrue(report.RootElement.GetProperty("staleMutationCompletions").GetProperty("signedOutContext").GetBoolean());
+            Assert.IsTrue(report.RootElement.GetProperty("staleMutationCompletions").GetProperty("holdOperationError").GetBoolean());
         }
 
         await using var verify = new SqlConnection(databaseConnectionString);
@@ -494,6 +536,50 @@ public sealed class PatronJourneyTests
         Assert.AreEqual(1, resolved.GetInt32(14));
         Assert.AreEqual(1, resolved.GetInt32(15));
         Assert.AreEqual(1, resolved.GetInt32(16));
+        await resolved.CloseAsync();
+
+        await using var additionalCopy = verify.CreateCommand();
+        additionalCopy.CommandText =
+            """
+            SELECT
+                (SELECT COUNT(*) FROM [asap].[TitleRequest]
+                 WHERE [Id]=@copySourceId
+                   AND [Status]=N'hold_placed'
+                   AND [Notes] LIKE N'%Additional copy request created for BIB 92905.%'),
+                (SELECT COUNT(*) FROM [asap].[EmailOutbox]
+                 WHERE [Subject]=N'ASAP additional-copy reminder'
+                   AND [BodyText] LIKE N'%Browser additional copy source (BIB 92905)%'
+                   AND [DeliveryClass]=N'staff_authorization_sensitive'),
+                (SELECT COUNT(*) FROM [asap].[DeletedRequestAudit]
+                 WHERE [RequestType]=N'additional_copy'
+                   AND [Title]=N'Browser additional copy source'
+                   AND [BibId]=N'92905'
+                   AND [MaskedBarcode] IS NULL),
+                (SELECT COUNT(*) FROM [asap].[AdditionalCopyRequest]
+                 WHERE [Id]=@invalidClosedCopyId
+                   AND [Status]=N'open'
+                   AND [ClaimedByStaffUserId] IS NULL
+                   AND [ClaimedByDisplayName] IS NULL
+                   AND [ClaimedAtUtc] IS NULL
+                   AND [ClaimType] IS NULL
+                   AND [ClaimRuleId] IS NULL
+                   AND [Notes] LIKE N'%System cleared retained claim while reopening (claimant_inactive)%'),
+                (SELECT COUNT(*) FROM [asap].[AdditionalCopyRequest]
+                 WHERE [Id]=@mobileCopyId AND [Status]=N'open' AND [ClaimedByStaffUserId] IS NULL),
+                (SELECT COUNT(*) FROM [asap].[AdditionalCopyRequest]
+                 WHERE [Title]=N'Browser additional copy source');
+            """;
+        additionalCopy.Parameters.AddWithValue("@copySourceId", seeded.CopySourceRequestId);
+        additionalCopy.Parameters.AddWithValue("@invalidClosedCopyId", seeded.InvalidClosedCopyId);
+        additionalCopy.Parameters.AddWithValue("@mobileCopyId", seeded.MobileCopyId);
+        await using var copyState = await additionalCopy.ExecuteReaderAsync();
+        Assert.IsTrue(await copyState.ReadAsync());
+        Assert.AreEqual(1, copyState.GetInt32(0));
+        Assert.AreEqual(1, copyState.GetInt32(1));
+        Assert.AreEqual(1, copyState.GetInt32(2));
+        Assert.AreEqual(1, copyState.GetInt32(3));
+        Assert.AreEqual(1, copyState.GetInt32(4));
+        Assert.AreEqual(0, copyState.GetInt32(5));
     }
 
     [TestMethod]
@@ -2144,6 +2230,828 @@ public sealed class PatronJourneyTests
             secondResult.Id,
             expectedAssignedEvents: 0,
             expectedCleanupEvents: 0);
+    }
+
+    [TestMethod]
+    public async Task StaffWorkflowTimestampsSerializeSqlUtcTicksWithZuluOffsets()
+    {
+        using var client = factory!.CreateClient();
+        using (var session = await client.GetAsync("/api/asap/staff/session"))
+        {
+            Assert.AreEqual(HttpStatusCode.OK, session.StatusCode);
+        }
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
+        AddTestingStaffHeaders(
+            client,
+            actor.Id,
+            Guid.Parse(identity.TenantId!),
+            Guid.Parse(identity.ObjectId!));
+        using (var authenticated = await client.GetAsync("/api/asap/staff/session"))
+        {
+            Assert.AreEqual(HttpStatusCode.OK, authenticated.StatusCode);
+        }
+        long titleRequestId;
+        long copyRequestId;
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var seed = connection.CreateCommand();
+            seed.CommandText =
+                """
+                DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code]=N'book');
+                INSERT INTO [asap].[TitleRequest]
+                    ([LibraryOrganizationId], [LibraryNameSnapshot], [Barcode], [Title], [AutoHold], [MaterialFormatId],
+                     [Status], [BibId], [ClaimedByStaffUserId], [ClaimedByDisplayName], [ClaimedAtUtc], [ClaimType],
+                     [IsbnCheckStatus], [LastCheckedUtc], [CreatedUtc], [UpdatedUtc])
+                VALUES
+                    (2, N'UTC Snapshot Library', N'20000000003101', N'UTC title DTO', 0, @formatId,
+                     N'hold_placed', N'93101', @actorId, N'UTC Staff Snapshot', '2026-09-01T12:14:15', N'manual',
+                     N'found', '2026-09-01T12:15:16', '2026-09-01T12:13:14', '2026-09-01T12:16:17');
+                DECLARE @titleId bigint = SCOPE_IDENTITY();
+
+                INSERT INTO [asap].[AdditionalCopyRequest]
+                    ([SourceTitleRequestId], [LibraryOrganizationId], [LibraryNameSnapshot], [BibId], [Title],
+                     [MaterialFormatId], [FormatSnapshot], [Status], [CreatedByStaffUserId], [CreatedByDisplayName],
+                     [CreatedUtc], [UpdatedUtc], [ClaimedByStaffUserId], [ClaimedByDisplayName], [ClaimedAtUtc],
+                     [ClaimType], [ClosedByStaffUserId], [ClosedByDisplayName], [ClosedUtc])
+                VALUES
+                    (@titleId, 2, N'UTC Snapshot Library', N'93101', N'UTC additional-copy DTO',
+                     @formatId, N'book', N'closed', @actorId, N'UTC Staff Snapshot',
+                     '2026-09-01T12:16:17', '2026-09-01T12:19:20', @actorId, N'UTC Staff Snapshot',
+                     '2026-09-01T12:17:18', N'manual', @actorId, N'UTC Staff Snapshot', '2026-09-01T12:18:19');
+                SELECT @titleId, CONVERT(bigint, SCOPE_IDENTITY());
+                """;
+            seed.Parameters.AddWithValue("@actorId", actor.Id);
+            await using var seeded = await seed.ExecuteReaderAsync();
+            Assert.IsTrue(await seeded.ReadAsync());
+            titleRequestId = seeded.GetInt64(0);
+            copyRequestId = seeded.GetInt64(1);
+        }
+
+        using var titleResponse = await client.GetAsync($"/api/asap/staff/title-requests/{titleRequestId}");
+        Assert.AreEqual(HttpStatusCode.OK, titleResponse.StatusCode);
+        using var title = JsonDocument.Parse(await titleResponse.Content.ReadAsStringAsync());
+        Assert.AreEqual("2026-09-01T12:13:14Z", title.RootElement.GetProperty("created").GetString());
+        Assert.AreEqual("2026-09-01T12:16:17Z", title.RootElement.GetProperty("updated").GetString());
+        Assert.AreEqual("2026-09-01T12:14:15Z", title.RootElement.GetProperty("claimedAt").GetString());
+        Assert.AreEqual("2026-09-01T12:15:16Z", title.RootElement.GetProperty("lastChecked").GetString());
+        Assert.AreEqual("2026-09-01T12:13:14Z", title.RootElement.GetProperty("phaseEnteredAt").GetString());
+
+        using var copyResponse = await client.GetAsync($"/api/asap/staff/additional-copies/{copyRequestId}");
+        Assert.AreEqual(HttpStatusCode.OK, copyResponse.StatusCode);
+        using var copy = JsonDocument.Parse(await copyResponse.Content.ReadAsStringAsync());
+        Assert.AreEqual("2026-09-01T12:16:17Z", copy.RootElement.GetProperty("created").GetString());
+        Assert.AreEqual("2026-09-01T12:19:20Z", copy.RootElement.GetProperty("updated").GetString());
+        Assert.AreEqual("2026-09-01T12:17:18Z", copy.RootElement.GetProperty("claimedAt").GetString());
+        Assert.AreEqual("2026-09-01T12:18:19Z", copy.RootElement.GetProperty("closedAt").GetString());
+
+        await using var verify = new SqlConnection(databaseConnectionString);
+        await verify.OpenAsync();
+        await using var command = verify.CreateCommand();
+        command.CommandText = "SELECT [CreatedUtc], [UpdatedUtc] FROM [asap].[AdditionalCopyRequest] WHERE [Id]=@id;";
+        command.Parameters.AddWithValue("@id", copyRequestId);
+        await using var stored = await command.ExecuteReaderAsync();
+        Assert.IsTrue(await stored.ReadAsync());
+        Assert.AreEqual(new DateTime(2026, 9, 1, 12, 16, 17, DateTimeKind.Unspecified), stored.GetDateTime(0));
+        Assert.AreEqual(new DateTime(2026, 9, 1, 12, 19, 20, DateTimeKind.Unspecified), stored.GetDateTime(1));
+    }
+
+    [TestMethod]
+    public async Task AssignmentCandidatesAllowOrdinaryStaffAndExposeOnlyCurrentEligibleRelationships()
+    {
+        var configured = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
+        using var client = factory!.CreateClient();
+        using (var startup = await client.GetAsync("/api/asap/staff/session"))
+        {
+            Assert.AreEqual(HttpStatusCode.OK, startup.StatusCode);
+        }
+        var tenantId = Guid.Parse(configured.TenantId!);
+        var actorObjectId = Guid.NewGuid();
+        var localObjectId = Guid.NewGuid();
+        var foreignObjectId = Guid.NewGuid();
+        var invalidTenantId = Guid.NewGuid();
+        var invalidTenantObjectId = Guid.NewGuid();
+        long superId;
+        long actorId;
+        long localId;
+        long foreignId;
+        long invalidTenantStaffId;
+        long unboundStaffId;
+        long taskId;
+        string taskVersion;
+
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var seed = connection.CreateCommand();
+            seed.CommandText =
+                """
+                IF NOT EXISTS (SELECT 1 FROM [asap].[Organization] WHERE [Id] = 82)
+                BEGIN
+                    INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
+                    VALUES (82, N'Candidate Foreign Library', N'CFL', 1);
+                END;
+
+                DECLARE @superId bigint = (
+                    SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @superObjectId);
+                INSERT INTO [asap].[StaffUser]
+                    ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
+                     [DisplayName], [Role], [OrganizationId], [IsActive])
+                VALUES
+                    (@tenantId, @actorObjectId, N'candidate.actor@example.org', N'CANDIDATE.ACTOR@EXAMPLE.ORG',
+                     N'Candidate Actor', N'staff', 2, 1);
+                DECLARE @actorId bigint = SCOPE_IDENTITY();
+                INSERT INTO [asap].[StaffUser]
+                    ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
+                     [DisplayName], [Role], [OrganizationId], [IsActive])
+                VALUES
+                    (@tenantId, @localObjectId, N'candidate.local@example.org', N'CANDIDATE.LOCAL@EXAMPLE.ORG',
+                     N'Candidate Local Admin', N'admin', 2, 1);
+                DECLARE @localId bigint = SCOPE_IDENTITY();
+                INSERT INTO [asap].[StaffUser]
+                    ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
+                     [DisplayName], [Role], [OrganizationId], [IsActive])
+                VALUES
+                    (@tenantId, @foreignObjectId, N'candidate.foreign@example.org', N'CANDIDATE.FOREIGN@EXAMPLE.ORG',
+                     N'Candidate Foreign Staff', N'staff', 82, 1);
+                DECLARE @foreignId bigint = SCOPE_IDENTITY();
+                INSERT INTO [asap].[StaffUser]
+                    ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
+                     [DisplayName], [Role], [OrganizationId], [IsActive])
+                VALUES
+                    (@invalidTenantId, @invalidTenantObjectId, N'candidate.tenant@example.org',
+                     N'CANDIDATE.TENANT@EXAMPLE.ORG', N'Candidate Invalid Tenant', N'staff', 2, 1);
+                DECLARE @invalidTenantStaffId bigint = SCOPE_IDENTITY();
+                INSERT INTO [asap].[StaffUser]
+                    ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
+                     [DisplayName], [Role], [OrganizationId], [IsActive])
+                VALUES
+                    (@tenantId, NULL, N'candidate.unbound@example.org', N'CANDIDATE.UNBOUND@EXAMPLE.ORG',
+                     N'Candidate Unbound Staff', N'staff', 2, 0);
+                DECLARE @unboundStaffId bigint = SCOPE_IDENTITY();
+                DECLARE @formatId bigint = (
+                    SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
+                INSERT INTO [asap].[AdditionalCopyRequest]
+                    ([LibraryOrganizationId], [LibraryNameSnapshot], [BibId], [Title], [MaterialFormatId],
+                     [FormatSnapshot], [Status], [Notes], [CreatedByStaffUserId], [CreatedByDisplayName],
+                     [CreatedUtc], [UpdatedUtc])
+                VALUES
+                    (2, N'Candidate Library Snapshot', N'candidate-api-bib', N'Candidate API task', @formatId,
+                     N'book', N'open', N'Candidate API note', @actorId, N'Candidate Actor',
+                     '2026-09-01T12:00:00', '2026-09-01T12:00:00');
+                DECLARE @taskId bigint = SCOPE_IDENTITY();
+
+                SELECT @superId, @actorId, @localId, @foreignId, @invalidTenantStaffId,
+                       @unboundStaffId, @taskId, request.[RowVersion]
+                FROM [asap].[AdditionalCopyRequest] request WHERE request.[Id] = @taskId;
+                """;
+            seed.Parameters.AddWithValue("@superObjectId", Guid.Parse(configured.ObjectId!));
+            seed.Parameters.AddWithValue("@tenantId", tenantId);
+            seed.Parameters.AddWithValue("@actorObjectId", actorObjectId);
+            seed.Parameters.AddWithValue("@localObjectId", localObjectId);
+            seed.Parameters.AddWithValue("@foreignObjectId", foreignObjectId);
+            seed.Parameters.AddWithValue("@invalidTenantId", invalidTenantId);
+            seed.Parameters.AddWithValue("@invalidTenantObjectId", invalidTenantObjectId);
+            await using var reader = await seed.ExecuteReaderAsync();
+            Assert.IsTrue(await reader.ReadAsync());
+            superId = reader.GetInt64(0);
+            actorId = reader.GetInt64(1);
+            localId = reader.GetInt64(2);
+            foreignId = reader.GetInt64(3);
+            invalidTenantStaffId = reader.GetInt64(4);
+            unboundStaffId = reader.GetInt64(5);
+            taskId = reader.GetInt64(6);
+            taskVersion = StaffVersion.Encode((byte[])reader[7]);
+        }
+
+        AddTestingStaffHeaders(client, actorId, tenantId, actorObjectId);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+
+        using (var management = await client.GetAsync("/api/asap/staff/users?orgId=2"))
+        {
+            Assert.AreEqual(HttpStatusCode.Forbidden, management.StatusCode);
+        }
+        using (var forbiddenScope = await client.GetAsync("/api/asap/staff/assignment-candidates?libraryOrgId=82"))
+        {
+            Assert.AreEqual(HttpStatusCode.Forbidden, forbiddenScope.StatusCode);
+        }
+
+        using var response = await client.GetAsync("/api/asap/staff/assignment-candidates?libraryOrgId=2");
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var candidates = body.RootElement.GetProperty("candidates").EnumerateArray().ToArray();
+        foreach (var candidate in candidates)
+        {
+            CollectionAssert.AreEquivalent(
+                new[] { "displayName", "id" },
+                candidate.EnumerateObject().Select(item => item.Name).ToArray());
+        }
+        var candidateIds = candidates.Select(item => item.GetProperty("id").GetString()).ToHashSet();
+        Assert.IsTrue(candidateIds.Contains(actorId.ToString()));
+        Assert.IsTrue(candidateIds.Contains(localId.ToString()));
+        Assert.IsTrue(candidateIds.Contains(superId.ToString()));
+        Assert.IsFalse(candidateIds.Contains(foreignId.ToString()));
+        Assert.IsFalse(candidateIds.Contains(invalidTenantStaffId.ToString()));
+        Assert.IsFalse(candidateIds.Contains(unboundStaffId.ToString()));
+
+        using var assignedResponse = await client.PostAsJsonAsync(
+            $"/api/asap/staff/additional-copies/{taskId}/assign",
+            new { version = taskVersion, assigneeId = localId });
+        Assert.AreEqual(HttpStatusCode.OK, assignedResponse.StatusCode);
+        using var assigned = JsonDocument.Parse(await assignedResponse.Content.ReadAsStringAsync());
+        Assert.AreEqual(localId.ToString(), assigned.RootElement.GetProperty("claimedByStaffUserId").GetString());
+
+        using var rejectedResponse = await client.PostAsJsonAsync(
+            $"/api/asap/staff/additional-copies/{taskId}/assign",
+            new
+            {
+                version = assigned.RootElement.GetProperty("version").GetString(),
+                assigneeId = foreignId
+            });
+        Assert.AreEqual(HttpStatusCode.BadRequest, rejectedResponse.StatusCode);
+        using var rejected = JsonDocument.Parse(await rejectedResponse.Content.ReadAsStringAsync());
+        Assert.AreEqual("assignee_ineligible", rejected.RootElement.GetProperty("code").GetString());
+
+        using var unchangedResponse = await client.GetAsync($"/api/asap/staff/additional-copies/{taskId}");
+        using var unchanged = JsonDocument.Parse(await unchangedResponse.Content.ReadAsStringAsync());
+        Assert.AreEqual(localId.ToString(), unchanged.RootElement.GetProperty("claimedByStaffUserId").GetString());
+    }
+
+    [TestMethod]
+    public async Task AdditionalCopyWorkflowPreservesLegacyRuleSourceIndependenceAndReducedAudit()
+    {
+        using (var startup = factory!.CreateClient())
+        using (var session = await startup.GetAsync("/api/asap/staff/session"))
+        {
+            Assert.AreEqual(HttpStatusCode.OK, session.StatusCode);
+        }
+        var initialActor = await ReadConfiguredSuperAdminAsync();
+        var seeded = await SeedAdditionalCopyLegacySourceAsync(initialActor.Id, "workflow");
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var service = factory.Services.GetRequiredService<AdditionalCopyService>();
+
+        var preview = await service.PreviewAsync(actor, seeded.SourceRequestId, CancellationToken.None);
+        Assert.AreEqual("loaded", preview.Code);
+        Assert.AreEqual(0, preview.Preview!.OpenCount);
+        Assert.IsTrue(preview.Preview.EmailPurchaseReminderDefault);
+        Assert.AreEqual("slice3-bib-workflow", preview.Preview.Bibid);
+
+        var created = await service.CreateAsync(
+            actor,
+            seeded.SourceRequestId,
+            new AdditionalCopyCreateInput(preview.Preview.Version, true),
+            CancellationToken.None);
+        Assert.AreEqual("created", created.Code);
+        Assert.AreEqual(0, created.OpenCountBefore);
+        Assert.AreEqual(1, created.OpenCountAfter);
+        Assert.IsTrue(created.DispatchOutboxId.HasValue);
+        CollectionAssert.Contains(dispatcher!.EnqueuedIds, created.DispatchOutboxId.Value);
+
+        var task = await service.GetAsync(actor, created.RequestId!.Value.ToString(), null, CancellationToken.None);
+        Assert.IsNotNull(task);
+        Assert.AreEqual("Frozen source library workflow", task.LibraryOrgName);
+        Assert.AreEqual("Legacy source workflow", task.Title);
+        Assert.AreEqual(seeded.CurrentClaimantId.ToString(), task.ClaimedByStaffUserId);
+        Assert.AreEqual("Current claimant snapshot workflow", task.ClaimedByDisplayName);
+        Assert.AreEqual("legacy", task.ClaimType);
+        Assert.AreEqual(seeded.HistoricalRuleId.ToString(), task.ClaimRuleId);
+
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var mutateSource = new SqlCommand(
+                "UPDATE [asap].[TitleRequest] SET [Title]=N'Changed source title', [LibraryNameSnapshot]=N'Changed source library', [UpdatedUtc]=SYSUTCDATETIME() WHERE [Id]=@id;",
+                connection);
+            mutateSource.Parameters.AddWithValue("@id", seeded.SourceRequestId);
+            Assert.AreEqual(1, await mutateSource.ExecuteNonQueryAsync());
+        }
+        task = await service.GetAsync(actor, task.Id, null, CancellationToken.None);
+        Assert.AreEqual("Frozen source library workflow", task!.LibraryOrgName);
+        Assert.AreEqual("Legacy source workflow", task.Title);
+
+        var closed = await service.SetClosedAsync(
+            actor,
+            created.RequestId.Value,
+            new VersionInput(task.Version),
+            reopen: false,
+            CancellationToken.None);
+        Assert.AreEqual("updated", closed.Code);
+        task = await service.GetAsync(actor, task.Id, null, CancellationToken.None);
+        var reopened = await service.SetClosedAsync(
+            actor,
+            created.RequestId.Value,
+            new VersionInput(task!.Version),
+            reopen: true,
+            CancellationToken.None);
+        Assert.AreEqual("updated", reopened.Code);
+        Assert.IsNull(reopened.ClaimClearedReason);
+        task = await service.GetAsync(actor, task.Id, null, CancellationToken.None);
+        Assert.AreEqual("legacy", task!.ClaimType);
+        Assert.AreEqual(seeded.HistoricalRuleId.ToString(), task.ClaimRuleId);
+        Assert.AreEqual(seeded.CurrentClaimantId.ToString(), task.ClaimedByStaffUserId);
+
+        byte[] sourceVersion;
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var closeSource = new SqlCommand(
+                "UPDATE [asap].[TitleRequest] SET [Status]=N'closed', [CloseReason]=N'manual', [UpdatedUtc]=SYSUTCDATETIME() OUTPUT inserted.[RowVersion] WHERE [Id]=@id;",
+                connection);
+            closeSource.Parameters.AddWithValue("@id", seeded.SourceRequestId);
+            sourceVersion = (byte[])(await closeSource.ExecuteScalarAsync())!;
+        }
+        var sourceDelete = await factory.Services.GetRequiredService<TitleRequestMutationService>().DeleteClosedAsync(
+            actor,
+            seeded.SourceRequestId,
+            new VersionInput(StaffVersion.Encode(sourceVersion)),
+            CancellationToken.None);
+        Assert.AreEqual("deleted", sourceDelete.Code);
+        task = await service.GetAsync(actor, task.Id, null, CancellationToken.None);
+        Assert.IsNull(task!.SourceTitleRequest);
+        Assert.AreEqual("Legacy source workflow", task.Title);
+
+        closed = await service.SetClosedAsync(
+            actor,
+            created.RequestId.Value,
+            new VersionInput(task.Version),
+            reopen: false,
+            CancellationToken.None);
+        Assert.AreEqual("updated", closed.Code);
+        task = await service.GetAsync(actor, task.Id, null, CancellationToken.None);
+        var deleted = await service.DeleteClosedAsync(
+            actor,
+            created.RequestId.Value,
+            new VersionInput(task!.Version),
+            CancellationToken.None);
+        Assert.AreEqual("deleted", deleted.Code);
+
+        await using var verify = new SqlConnection(databaseConnectionString);
+        await verify.OpenAsync();
+        await using var command = verify.CreateCommand();
+        command.CommandText =
+            """
+            SELECT
+                (SELECT COUNT(*) FROM [asap].[AdditionalCopyRequest] WHERE [Id]=@taskId),
+                (SELECT COUNT(*) FROM [asap].[DeletedRequestAudit]
+                 WHERE [RequestType]=N'additional_copy' AND [OriginalRequestKey]=CONVERT(nvarchar(64), @taskId)
+                   AND [Title]=N'Legacy source workflow' AND [BibId]=N'slice3-bib-workflow'
+                   AND [MaskedBarcode] IS NULL AND [CloseReason] IS NULL),
+                (SELECT COUNT(*) FROM [asap].[EmailOutbox]
+                 WHERE [Id]=@outboxId AND [DeliveryClass]=N'staff_authorization_sensitive'
+                   AND [RecipientStaffUserId]=@actorId AND [AuthorizationOrganizationId]=2
+                   AND [RecipientAddressKind]=N'notification_email' AND [ToAddress]=N'slice3.actor@example.org'),
+                (SELECT COUNT(*) FROM sys.columns
+                 WHERE [object_id]=OBJECT_ID(N'[asap].[DeletedRequestAudit]') AND [name]=N'Notes');
+            """;
+        command.Parameters.AddWithValue("@taskId", created.RequestId.Value);
+        command.Parameters.AddWithValue("@outboxId", created.DispatchOutboxId.Value);
+        command.Parameters.AddWithValue("@actorId", actor.Id);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.IsTrue(await reader.ReadAsync());
+        Assert.AreEqual(0, reader.GetInt32(0));
+        Assert.AreEqual(1, reader.GetInt32(1));
+        Assert.AreEqual(1, reader.GetInt32(2));
+        Assert.AreEqual(0, reader.GetInt32(3));
+    }
+
+    [TestMethod]
+    public async Task AdditionalCopyCreationRollsBackSourceTaskAndReminderAfterIntermediateFailure()
+    {
+        using (var startup = factory!.CreateClient())
+        using (var session = await startup.GetAsync("/api/asap/staff/session"))
+        {
+            Assert.AreEqual(HttpStatusCode.OK, session.StatusCode);
+        }
+        var initialActor = await ReadConfiguredSuperAdminAsync();
+        var seeded = await SeedAdditionalCopyLegacySourceAsync(initialActor.Id, "rollback");
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var service = factory.Services.GetRequiredService<AdditionalCopyService>();
+        var preview = await service.PreviewAsync(actor, seeded.SourceRequestId, CancellationToken.None);
+        Assert.AreEqual("loaded", preview.Code);
+
+        int reminderCountBefore;
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            reminderCountBefore = Convert.ToInt32(await new SqlCommand(
+                "SELECT COUNT(*) FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE N'additional-copy-reminder:%';",
+                connection).ExecuteScalarAsync());
+            await using var trigger = new SqlCommand(
+                """
+                CREATE TRIGGER [asap].[TR_Slice3RejectAdditionalCopyOutbox]
+                ON [asap].[EmailOutbox]
+                AFTER INSERT
+                AS
+                    THROW 51003, 'Slice 3 rollback probe', 1;
+                """,
+                connection);
+            await trigger.ExecuteNonQueryAsync();
+        }
+        try
+        {
+            await Assert.ThrowsAsync<DbUpdateException>(() => service.CreateAsync(
+                actor,
+                seeded.SourceRequestId,
+                new AdditionalCopyCreateInput(preview.Preview!.Version, true),
+                CancellationToken.None));
+
+            await using var verify = new SqlConnection(databaseConnectionString);
+            await verify.OpenAsync();
+            await using var command = verify.CreateCommand();
+            command.CommandText =
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM [asap].[AdditionalCopyRequest] WHERE [SourceTitleRequestId]=@sourceId),
+                    (SELECT COUNT(*) FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE N'additional-copy-reminder:%'),
+                    (SELECT [Notes] FROM [asap].[TitleRequest] WHERE [Id]=@sourceId),
+                    (SELECT [RowVersion] FROM [asap].[TitleRequest] WHERE [Id]=@sourceId);
+                """;
+            command.Parameters.AddWithValue("@sourceId", seeded.SourceRequestId);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.IsTrue(await reader.ReadAsync());
+            Assert.AreEqual(0, reader.GetInt32(0));
+            Assert.AreEqual(reminderCountBefore, reader.GetInt32(1));
+            Assert.AreEqual("Original source note rollback", reader.GetString(2));
+            CollectionAssert.AreEqual(seeded.SourceVersion, (byte[])reader[3]);
+        }
+        finally
+        {
+            await using var connection = new SqlConnection(databaseConnectionString);
+            await connection.OpenAsync();
+            await using var drop = new SqlCommand(
+                "DROP TRIGGER IF EXISTS [asap].[TR_Slice3RejectAdditionalCopyOutbox];",
+                connection);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [TestMethod]
+    public async Task AdditionalCopyAssignmentAndLifecycleRaceRevalidatesInBothLockOrders()
+    {
+        using (var startup = factory!.CreateClient())
+        using (var session = await startup.GetAsync("/api/asap/staff/session"))
+        {
+            Assert.AreEqual(HttpStatusCode.OK, session.StatusCode);
+        }
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var copies = factory.Services.GetRequiredService<AdditionalCopyService>();
+        var lifecycle = factory.Services.GetRequiredService<StaffLifecycleService>();
+
+        var assignmentFirst = await SeedAdditionalCopyRaceAsync("assignment-first", closed: false, claimed: false);
+        await using (var blockerConnection = new SqlConnection(databaseConnectionString))
+        {
+            await blockerConnection.OpenAsync();
+            await using var blockerTransaction = (SqlTransaction)await blockerConnection.BeginTransactionAsync();
+            await using (var blockTask = new SqlCommand(
+                             "SELECT [Id] FROM [asap].[AdditionalCopyRequest] WITH (UPDLOCK,HOLDLOCK) WHERE [Id]=@id;",
+                             blockerConnection,
+                             blockerTransaction))
+            {
+                blockTask.Parameters.AddWithValue("@id", assignmentFirst.TaskId);
+                Assert.AreEqual(assignmentFirst.TaskId, Convert.ToInt64(await blockTask.ExecuteScalarAsync()));
+            }
+            var assign = copies.AssignAsync(
+                actor,
+                assignmentFirst.TaskId,
+                new AssignAdditionalCopyInput(StaffVersion.Encode(assignmentFirst.TaskVersion), assignmentFirst.StaffId),
+                CancellationToken.None);
+            await Task.Delay(250);
+            Assert.IsFalse(assign.IsCompleted);
+            var deactivate = lifecycle.DeactivateAsync(
+                actor,
+                assignmentFirst.StaffId,
+                new StaffDeactivateInput(StaffVersion.Encode(assignmentFirst.StaffVersion)),
+                CancellationToken.None);
+            await Task.Delay(250);
+            Assert.IsFalse(deactivate.IsCompleted);
+            await blockerTransaction.CommitAsync();
+            Assert.AreEqual("updated", (await assign).Code);
+            var lifecycleResult = await deactivate;
+            Assert.AreEqual("updated", lifecycleResult.Code);
+            Assert.AreEqual(1, lifecycleResult.OpenAdditionalCopyClaimsCleared);
+        }
+        await AssertAdditionalCopyClaimStateAsync(
+            assignmentFirst.TaskId, null, "staff_scope_contracted", 1, assignmentFirst.StaffId);
+
+        var lifecycleFirst = await SeedAdditionalCopyRaceAsync("lifecycle-first", closed: false, claimed: false);
+        await using (var blockerConnection = new SqlConnection(databaseConnectionString))
+        {
+            await blockerConnection.OpenAsync();
+            await using var blockerTransaction = (SqlTransaction)await blockerConnection.BeginTransactionAsync();
+            await using (var blockStaff = new SqlCommand(
+                             "SELECT [Id] FROM [asap].[StaffUser] WITH (UPDLOCK,HOLDLOCK) WHERE [Id]=@id;",
+                             blockerConnection,
+                             blockerTransaction))
+            {
+                blockStaff.Parameters.AddWithValue("@id", lifecycleFirst.StaffId);
+                Assert.AreEqual(lifecycleFirst.StaffId, Convert.ToInt64(await blockStaff.ExecuteScalarAsync()));
+            }
+            var deactivate = lifecycle.DeactivateAsync(
+                actor,
+                lifecycleFirst.StaffId,
+                new StaffDeactivateInput(StaffVersion.Encode(lifecycleFirst.StaffVersion)),
+                CancellationToken.None);
+            await Task.Delay(250);
+            Assert.IsFalse(deactivate.IsCompleted);
+            var assign = copies.AssignAsync(
+                actor,
+                lifecycleFirst.TaskId,
+                new AssignAdditionalCopyInput(StaffVersion.Encode(lifecycleFirst.TaskVersion), lifecycleFirst.StaffId),
+                CancellationToken.None);
+            await Task.Delay(250);
+            Assert.IsFalse(assign.IsCompleted);
+            await blockerTransaction.CommitAsync();
+            var lifecycleResult = await deactivate;
+            Assert.AreEqual("updated", lifecycleResult.Code);
+            Assert.AreEqual(0, lifecycleResult.OpenAdditionalCopyClaimsCleared);
+            Assert.AreEqual("assignee_ineligible", (await assign).Code);
+        }
+        await AssertAdditionalCopyClaimStateAsync(
+            lifecycleFirst.TaskId, null, null, 0, lifecycleFirst.StaffId);
+    }
+
+    [TestMethod]
+    public async Task AdditionalCopyReopenAndLifecycleRaceRevalidatesInBothLockOrders()
+    {
+        using (var startup = factory!.CreateClient())
+        using (var session = await startup.GetAsync("/api/asap/staff/session"))
+        {
+            Assert.AreEqual(HttpStatusCode.OK, session.StatusCode);
+        }
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var copies = factory.Services.GetRequiredService<AdditionalCopyService>();
+        var lifecycle = factory.Services.GetRequiredService<StaffLifecycleService>();
+
+        var reopenFirst = await SeedAdditionalCopyRaceAsync("reopen-first", closed: true, claimed: true);
+        await using (var blockerConnection = new SqlConnection(databaseConnectionString))
+        {
+            await blockerConnection.OpenAsync();
+            await using var blockerTransaction = (SqlTransaction)await blockerConnection.BeginTransactionAsync();
+            await using (var blockTask = new SqlCommand(
+                             "SELECT [Id] FROM [asap].[AdditionalCopyRequest] WITH (UPDLOCK,HOLDLOCK) WHERE [Id]=@id;",
+                             blockerConnection,
+                             blockerTransaction))
+            {
+                blockTask.Parameters.AddWithValue("@id", reopenFirst.TaskId);
+                Assert.AreEqual(reopenFirst.TaskId, Convert.ToInt64(await blockTask.ExecuteScalarAsync()));
+            }
+            var reopen = copies.SetClosedAsync(
+                actor,
+                reopenFirst.TaskId,
+                new VersionInput(StaffVersion.Encode(reopenFirst.TaskVersion)),
+                reopen: true,
+                CancellationToken.None);
+            await Task.Delay(250);
+            Assert.IsFalse(reopen.IsCompleted);
+            var deactivate = lifecycle.DeactivateAsync(
+                actor,
+                reopenFirst.StaffId,
+                new StaffDeactivateInput(StaffVersion.Encode(reopenFirst.StaffVersion)),
+                CancellationToken.None);
+            await Task.Delay(250);
+            Assert.IsFalse(deactivate.IsCompleted);
+            await blockerTransaction.CommitAsync();
+            var reopenResult = await reopen;
+            Assert.AreEqual("updated", reopenResult.Code);
+            Assert.IsNull(reopenResult.ClaimClearedReason);
+            var lifecycleResult = await deactivate;
+            Assert.AreEqual("updated", lifecycleResult.Code);
+            Assert.AreEqual(1, lifecycleResult.OpenAdditionalCopyClaimsCleared);
+        }
+        await AssertAdditionalCopyClaimStateAsync(
+            reopenFirst.TaskId, null, "staff_scope_contracted", 1, reopenFirst.StaffId, "open");
+
+        var lifecycleFirst = await SeedAdditionalCopyRaceAsync("reopen-lifecycle-first", closed: true, claimed: true);
+        await using (var blockerConnection = new SqlConnection(databaseConnectionString))
+        {
+            await blockerConnection.OpenAsync();
+            await using var blockerTransaction = (SqlTransaction)await blockerConnection.BeginTransactionAsync();
+            await using (var blockStaff = new SqlCommand(
+                             "SELECT [Id] FROM [asap].[StaffUser] WITH (UPDLOCK,HOLDLOCK) WHERE [Id]=@id;",
+                             blockerConnection,
+                             blockerTransaction))
+            {
+                blockStaff.Parameters.AddWithValue("@id", lifecycleFirst.StaffId);
+                Assert.AreEqual(lifecycleFirst.StaffId, Convert.ToInt64(await blockStaff.ExecuteScalarAsync()));
+            }
+            var deactivate = lifecycle.DeactivateAsync(
+                actor,
+                lifecycleFirst.StaffId,
+                new StaffDeactivateInput(StaffVersion.Encode(lifecycleFirst.StaffVersion)),
+                CancellationToken.None);
+            await Task.Delay(250);
+            Assert.IsFalse(deactivate.IsCompleted);
+            var reopen = copies.SetClosedAsync(
+                actor,
+                lifecycleFirst.TaskId,
+                new VersionInput(StaffVersion.Encode(lifecycleFirst.TaskVersion)),
+                reopen: true,
+                CancellationToken.None);
+            await Task.Delay(250);
+            Assert.IsFalse(reopen.IsCompleted);
+            await blockerTransaction.CommitAsync();
+            var lifecycleResult = await deactivate;
+            Assert.AreEqual("updated", lifecycleResult.Code);
+            Assert.AreEqual(0, lifecycleResult.OpenAdditionalCopyClaimsCleared);
+            var reopenResult = await reopen;
+            Assert.AreEqual("updated", reopenResult.Code);
+            Assert.AreEqual("claimant_inactive", reopenResult.ClaimClearedReason);
+        }
+        await AssertAdditionalCopyClaimStateAsync(
+            lifecycleFirst.TaskId, null, "claimant_inactive", 0, lifecycleFirst.StaffId, "open");
+    }
+
+    [TestMethod]
+    public async Task AdditionalCopyReopenRetainsEveryCurrentlyEligibleRoleAndLeavesNoClaimUnclaimed()
+    {
+        using (var startup = factory!.CreateClient())
+        using (var session = await startup.GetAsync("/api/asap/staff/session"))
+        {
+            Assert.AreEqual(HttpStatusCode.OK, session.StatusCode);
+        }
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var copies = factory.Services.GetRequiredService<AdditionalCopyService>();
+
+        foreach (var (suffix, role, organizationId) in new[]
+                 {
+                     ("eligible-staff", "staff", 2),
+                     ("eligible-admin", "admin", 2),
+                     ("eligible-super", "super_admin", 1)
+                 })
+        {
+            var seeded = await SeedAdditionalCopyRaceAsync(
+                suffix,
+                closed: true,
+                claimed: true,
+                role,
+                organizationId);
+            var reopened = await copies.SetClosedAsync(
+                actor,
+                seeded.TaskId,
+                new VersionInput(StaffVersion.Encode(seeded.TaskVersion)),
+                reopen: true,
+                CancellationToken.None);
+            Assert.AreEqual("updated", reopened.Code, suffix);
+            Assert.IsNull(reopened.ClaimClearedReason, suffix);
+            var current = await copies.GetAsync(actor, seeded.TaskId.ToString(), null, CancellationToken.None);
+            Assert.AreEqual(seeded.StaffId.ToString(), current!.ClaimedByStaffUserId, suffix);
+            Assert.AreEqual("manual", current.ClaimType, suffix);
+            await AssertAdditionalCopyClaimStateAsync(
+                seeded.TaskId,
+                seeded.StaffId,
+                null,
+                0,
+                null,
+                "open",
+                expectLifecycleAudit: false);
+        }
+
+        var unclaimed = await SeedAdditionalCopyRaceAsync("eligible-no-claim", closed: true, claimed: false);
+        var noClaimReopen = await copies.SetClosedAsync(
+            actor,
+            unclaimed.TaskId,
+            new VersionInput(StaffVersion.Encode(unclaimed.TaskVersion)),
+            reopen: true,
+            CancellationToken.None);
+        Assert.AreEqual("updated", noClaimReopen.Code);
+        Assert.IsNull(noClaimReopen.ClaimClearedReason);
+        await AssertAdditionalCopyClaimStateAsync(
+            unclaimed.TaskId,
+            null,
+            null,
+            0,
+            null,
+            "open",
+            expectLifecycleAudit: false);
+    }
+
+    [TestMethod]
+    public async Task AdditionalCopyReopenAndScopeRoleChangesRevalidateInBothLockOrders()
+    {
+        using (var startup = factory!.CreateClient())
+        using (var session = await startup.GetAsync("/api/asap/staff/session"))
+        {
+            Assert.AreEqual(HttpStatusCode.OK, session.StatusCode);
+        }
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var copies = factory.Services.GetRequiredService<AdditionalCopyService>();
+        var lifecycle = factory.Services.GetRequiredService<StaffLifecycleService>();
+
+        await AssertAdditionalCopyReopenRoleChangeRaceAsync(
+            actor,
+            copies,
+            lifecycle,
+            "library-move",
+            "staff",
+            2,
+            "staff",
+            83);
+        await AssertAdditionalCopyReopenRoleChangeRaceAsync(
+            actor,
+            copies,
+            lifecycle,
+            "super-demotion",
+            "super_admin",
+            1,
+            "staff",
+            83);
+    }
+
+    [TestMethod]
+    public async Task AdditionalCopyReopenRejectsCandidateChangeAndInvalidClaimWithoutSubstitution()
+    {
+        using (var startup = factory!.CreateClient())
+        using (var session = await startup.GetAsync("/api/asap/staff/session"))
+        {
+            Assert.AreEqual(HttpStatusCode.OK, session.StatusCode);
+        }
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var copies = factory.Services.GetRequiredService<AdditionalCopyService>();
+        var seeded = await SeedAdditionalCopyCandidateChangeAsync("candidate-change");
+
+        AdditionalCopyMutationResult staleResult;
+        await using (var blockerConnection = new SqlConnection(databaseConnectionString))
+        {
+            await blockerConnection.OpenAsync();
+            await using var blockerTransaction = (SqlTransaction)await blockerConnection.BeginTransactionAsync();
+            await using (var blockOrganization = new SqlCommand(
+                             "SELECT [Id] FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id]=2;",
+                             blockerConnection,
+                             blockerTransaction))
+            {
+                Assert.AreEqual(2, Convert.ToInt32(await blockOrganization.ExecuteScalarAsync()));
+            }
+            var reopen = copies.SetClosedAsync(
+                actor,
+                seeded.TaskId,
+                new VersionInput(StaffVersion.Encode(seeded.TaskVersion)),
+                reopen: true,
+                CancellationToken.None);
+            await Task.Delay(250);
+            Assert.IsFalse(reopen.IsCompleted);
+            await using (var change = new SqlConnection(databaseConnectionString))
+            {
+                await change.OpenAsync();
+                await using var command = new SqlCommand(
+                    "UPDATE [asap].[AdditionalCopyRequest] SET [ClaimedByStaffUserId]=@staffId, [ClaimedByDisplayName]=N'Changed candidate', [ClaimedAtUtc]=SYSUTCDATETIME(), [ClaimType]=N'manual', [ClaimRuleId]=NULL, [UpdatedUtc]=SYSUTCDATETIME() WHERE [Id]=@taskId;",
+                    change);
+                command.Parameters.AddWithValue("@staffId", seeded.SecondStaffId);
+                command.Parameters.AddWithValue("@taskId", seeded.TaskId);
+                Assert.AreEqual(1, await command.ExecuteNonQueryAsync());
+            }
+            await blockerTransaction.CommitAsync();
+            staleResult = await reopen;
+        }
+        Assert.AreEqual("stale_version", staleResult.Code);
+        await AssertAdditionalCopyClaimStateAsync(
+            seeded.TaskId,
+            seeded.SecondStaffId,
+            null,
+            0,
+            null,
+            "closed",
+            expectLifecycleAudit: false);
+
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var deactivate = new SqlCommand(
+                "UPDATE [asap].[StaffUser] SET [IsActive]=0 WHERE [Id]=@id;",
+                connection);
+            deactivate.Parameters.AddWithValue("@id", seeded.SecondStaffId);
+            Assert.AreEqual(1, await deactivate.ExecuteNonQueryAsync());
+        }
+        var current = await copies.GetAsync(actor, seeded.TaskId.ToString(), null, CancellationToken.None);
+        var reopened = await copies.SetClosedAsync(
+            actor,
+            seeded.TaskId,
+            new VersionInput(current!.Version),
+            reopen: true,
+            CancellationToken.None);
+        Assert.AreEqual("updated", reopened.Code);
+        Assert.AreEqual("claimant_inactive", reopened.ClaimClearedReason);
+        await AssertAdditionalCopyClaimStateAsync(
+            seeded.TaskId,
+            null,
+            "claimant_inactive",
+            0,
+            null,
+            "open",
+            expectLifecycleAudit: false);
+
+        current = await copies.GetAsync(actor, seeded.TaskId.ToString(), null, CancellationToken.None);
+        var noOpVersion = current!.Version;
+        var noOp = await copies.SetClosedAsync(
+            actor,
+            seeded.TaskId,
+            new VersionInput(noOpVersion),
+            reopen: true,
+            CancellationToken.None);
+        Assert.AreEqual("updated", noOp.Code);
+        current = await copies.GetAsync(actor, seeded.TaskId.ToString(), null, CancellationToken.None);
+        Assert.AreEqual(noOpVersion, current!.Version);
+        Assert.IsNull(current.ClaimedByStaffUserId);
     }
 
     [TestMethod]
@@ -6448,12 +7356,345 @@ public sealed class PatronJourneyTests
         }
     }
 
+    private static async Task<AdditionalCopyLegacySourceSeed> SeedAdditionalCopyLegacySourceAsync(
+        long actorId,
+        string suffix)
+    {
+        var tenantId = Guid.Parse(TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin.TenantId!);
+        await using var connection = new SqlConnection(databaseConnectionString);
+        await connection.OpenAsync();
+        await using var seed = connection.CreateCommand();
+        seed.CommandText =
+            """
+            UPDATE [asap].[StaffUser]
+            SET [NotificationEmail]=N'slice3.actor@example.org', [AdditionalCopyReminderDefault]=1
+            WHERE [Id]=@actorId;
+
+            INSERT INTO [asap].[StaffUser]
+                ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
+                 [DisplayName], [NotificationEmail], [Role], [OrganizationId], [IsActive])
+            VALUES
+                (@tenantId, NEWID(), @suffix + N'.current@example.org', UPPER(@suffix + N'.current@example.org'),
+                 N'Current claimant ' + @suffix, @suffix + N'.current@example.org', N'staff', 2, 1);
+            DECLARE @currentId bigint = SCOPE_IDENTITY();
+
+            INSERT INTO [asap].[StaffUser]
+                ([UserPrincipalName], [NormalizedUserPrincipalName], [DisplayName], [Role], [OrganizationId], [IsActive])
+            VALUES
+                (@suffix + N'.historical@example.org', UPPER(@suffix + N'.historical@example.org'),
+                 N'Historical rule owner ' + @suffix, N'staff', 2, 0);
+            DECLARE @historicalId bigint = SCOPE_IDENTITY();
+            DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code]=N'book');
+
+            INSERT INTO [asap].[FormatAutoClaimRule]
+                ([LibraryOrganizationId], [MaterialFormatId], [StaffUserId], [IsActive], [CreatedUtc], [DeactivatedUtc])
+            VALUES (2, @formatId, @historicalId, 0, DATEADD(day, -2, SYSUTCDATETIME()), DATEADD(day, -1, SYSUTCDATETIME()));
+            DECLARE @ruleId bigint = SCOPE_IDENTITY();
+
+            INSERT INTO [asap].[TitleRequest]
+                ([LibraryOrganizationId], [LibraryNameSnapshot], [Barcode], [Title], [Author], [Identifier],
+                 [Publication], [AutoHold], [MaterialFormatId], [Status], [BibId], [Notes],
+                 [ClaimedByStaffUserId], [ClaimedByDisplayName], [ClaimedAtUtc], [ClaimType], [ClaimRuleId],
+                 [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
+            VALUES
+                (2, N'Frozen source library ' + @suffix, N'20000000003' + RIGHT(N'000' + CONVERT(nvarchar(3), ABS(CHECKSUM(@suffix)) % 1000), 3),
+                 N'Legacy source ' + @suffix, N'Slice 3 Author', N'9780000000300', N'Source publication', 1,
+                 @formatId, N'pending_hold', N'slice3-bib-' + @suffix, N'Original source note ' + @suffix,
+                 @currentId, N'Current claimant snapshot ' + @suffix, DATEADD(hour, -2, SYSUTCDATETIME()),
+                 N'legacy', @ruleId, N'found', DATEADD(day, -1, SYSUTCDATETIME()), DATEADD(hour, -1, SYSUTCDATETIME()));
+            DECLARE @sourceId bigint = SCOPE_IDENTITY();
+            SELECT @sourceId, @currentId, @ruleId, sourceRow.[RowVersion]
+            FROM [asap].[TitleRequest] sourceRow WHERE sourceRow.[Id]=@sourceId;
+            """;
+        seed.Parameters.AddWithValue("@actorId", actorId);
+        seed.Parameters.AddWithValue("@tenantId", tenantId);
+        seed.Parameters.AddWithValue("@suffix", suffix);
+        await using var reader = await seed.ExecuteReaderAsync();
+        Assert.IsTrue(await reader.ReadAsync());
+        return new AdditionalCopyLegacySourceSeed(
+            reader.GetInt64(0),
+            reader.GetInt64(1),
+            reader.GetInt64(2),
+            (byte[])reader[3]);
+    }
+
+    private static async Task AssertAdditionalCopyReopenRoleChangeRaceAsync(
+        CurrentStaff actor,
+        AdditionalCopyService copies,
+        StaffLifecycleService lifecycle,
+        string suffix,
+        string initialRole,
+        int initialOrganizationId,
+        string targetRole,
+        int targetOrganizationId)
+    {
+        var reopenFirst = await SeedAdditionalCopyRaceAsync(
+            $"{suffix}-reopen-first",
+            closed: true,
+            claimed: true,
+            initialRole,
+            initialOrganizationId);
+        await using (var blockerConnection = new SqlConnection(databaseConnectionString))
+        {
+            await blockerConnection.OpenAsync();
+            await using var blockerTransaction = (SqlTransaction)await blockerConnection.BeginTransactionAsync();
+            await using (var blockTask = new SqlCommand(
+                             "SELECT [Id] FROM [asap].[AdditionalCopyRequest] WITH (UPDLOCK,HOLDLOCK) WHERE [Id]=@id;",
+                             blockerConnection,
+                             blockerTransaction))
+            {
+                blockTask.Parameters.AddWithValue("@id", reopenFirst.TaskId);
+                Assert.AreEqual(reopenFirst.TaskId, Convert.ToInt64(await blockTask.ExecuteScalarAsync()));
+            }
+            var reopen = copies.SetClosedAsync(
+                actor,
+                reopenFirst.TaskId,
+                new VersionInput(StaffVersion.Encode(reopenFirst.TaskVersion)),
+                reopen: true,
+                CancellationToken.None);
+            await Task.Delay(250);
+            Assert.IsFalse(reopen.IsCompleted, suffix);
+            var roleChange = lifecycle.ChangeRoleAsync(
+                actor,
+                reopenFirst.StaffId,
+                new StaffRoleInput(StaffVersion.Encode(reopenFirst.StaffVersion), targetRole, targetOrganizationId),
+                CancellationToken.None);
+            await Task.Delay(250);
+            Assert.IsFalse(roleChange.IsCompleted, suffix);
+            await blockerTransaction.CommitAsync();
+            var reopenResult = await reopen;
+            Assert.AreEqual("updated", reopenResult.Code, suffix);
+            Assert.IsNull(reopenResult.ClaimClearedReason, suffix);
+            var lifecycleResult = await roleChange;
+            Assert.AreEqual("updated", lifecycleResult.Code, suffix);
+            Assert.AreEqual(1, lifecycleResult.OpenAdditionalCopyClaimsCleared, suffix);
+        }
+        await AssertAdditionalCopyClaimStateAsync(
+            reopenFirst.TaskId,
+            null,
+            "staff_scope_contracted",
+            1,
+            reopenFirst.StaffId,
+            "open");
+
+        var lifecycleFirst = await SeedAdditionalCopyRaceAsync(
+            $"{suffix}-lifecycle-first",
+            closed: true,
+            claimed: true,
+            initialRole,
+            initialOrganizationId);
+        await using (var blockerConnection = new SqlConnection(databaseConnectionString))
+        {
+            await blockerConnection.OpenAsync();
+            await using var blockerTransaction = (SqlTransaction)await blockerConnection.BeginTransactionAsync();
+            await using (var blockStaff = new SqlCommand(
+                             "SELECT [Id] FROM [asap].[StaffUser] WITH (UPDLOCK,HOLDLOCK) WHERE [Id]=@id;",
+                             blockerConnection,
+                             blockerTransaction))
+            {
+                blockStaff.Parameters.AddWithValue("@id", lifecycleFirst.StaffId);
+                Assert.AreEqual(lifecycleFirst.StaffId, Convert.ToInt64(await blockStaff.ExecuteScalarAsync()));
+            }
+            var roleChange = lifecycle.ChangeRoleAsync(
+                actor,
+                lifecycleFirst.StaffId,
+                new StaffRoleInput(StaffVersion.Encode(lifecycleFirst.StaffVersion), targetRole, targetOrganizationId),
+                CancellationToken.None);
+            await Task.Delay(250);
+            Assert.IsFalse(roleChange.IsCompleted, suffix);
+            var reopen = copies.SetClosedAsync(
+                actor,
+                lifecycleFirst.TaskId,
+                new VersionInput(StaffVersion.Encode(lifecycleFirst.TaskVersion)),
+                reopen: true,
+                CancellationToken.None);
+            await Task.Delay(250);
+            Assert.IsFalse(reopen.IsCompleted, suffix);
+            await blockerTransaction.CommitAsync();
+            var lifecycleResult = await roleChange;
+            Assert.AreEqual("updated", lifecycleResult.Code, suffix);
+            Assert.AreEqual(0, lifecycleResult.OpenAdditionalCopyClaimsCleared, suffix);
+            var reopenResult = await reopen;
+            Assert.AreEqual("updated", reopenResult.Code, suffix);
+            Assert.AreEqual("claimant_out_of_scope", reopenResult.ClaimClearedReason, suffix);
+        }
+        await AssertAdditionalCopyClaimStateAsync(
+            lifecycleFirst.TaskId,
+            null,
+            "claimant_out_of_scope",
+            0,
+            lifecycleFirst.StaffId,
+            "open");
+    }
+
+    private static async Task<AdditionalCopyRaceSeed> SeedAdditionalCopyRaceAsync(
+        string suffix,
+        bool closed,
+        bool claimed,
+        string staffRole = "staff",
+        int staffOrganizationId = 2)
+    {
+        var tenantId = Guid.Parse(TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin.TenantId!);
+        await using var connection = new SqlConnection(databaseConnectionString);
+        await connection.OpenAsync();
+        await using var seed = connection.CreateCommand();
+        seed.CommandText =
+            """
+            IF NOT EXISTS (SELECT 1 FROM [asap].[Organization] WHERE [Id]=83)
+            BEGIN
+                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
+                VALUES (83, N'Additional Copy Race Library', N'ACR', 1);
+            END;
+            INSERT INTO [asap].[StaffUser]
+                ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
+                 [DisplayName], [NotificationEmail], [Role], [OrganizationId], [IsActive])
+            VALUES
+                (@tenantId, NEWID(), @suffix + N'@example.org', UPPER(@suffix + N'@example.org'),
+                 N'Race claimant ' + @suffix, @suffix + N'@example.org', @staffRole, @staffOrganizationId, 1);
+            DECLARE @staffId bigint = SCOPE_IDENTITY();
+            DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code]=N'book');
+
+            INSERT INTO [asap].[AdditionalCopyRequest]
+                ([LibraryOrganizationId], [LibraryNameSnapshot], [BibId], [Title], [MaterialFormatId], [FormatSnapshot],
+                 [Status], [Notes], [CreatedUtc], [UpdatedUtc], [ClaimedByStaffUserId], [ClaimedByDisplayName],
+                 [ClaimedAtUtc], [ClaimType], [ClosedUtc])
+            VALUES
+                (2, N'Test Library snapshot', N'race-bib-' + @suffix, N'Race task ' + @suffix, @formatId, N'book',
+                 @status, N'Race note ' + @suffix, DATEADD(day, -1, SYSUTCDATETIME()), DATEADD(hour, -1, SYSUTCDATETIME()),
+                 CASE WHEN @claimed=1 THEN @staffId END,
+                 CASE WHEN @claimed=1 THEN N'Race claimant snapshot ' + @suffix END,
+                 CASE WHEN @claimed=1 THEN DATEADD(hour, -3, SYSUTCDATETIME()) END,
+                 CASE WHEN @claimed=1 THEN N'manual' END,
+                 CASE WHEN @closed=1 THEN DATEADD(minute, -30, SYSUTCDATETIME()) END);
+            DECLARE @taskId bigint = SCOPE_IDENTITY();
+            SELECT @staffId, @taskId, staffRow.[RowVersion], taskRow.[RowVersion]
+            FROM [asap].[StaffUser] staffRow
+            JOIN [asap].[AdditionalCopyRequest] taskRow ON taskRow.[Id]=@taskId
+            WHERE staffRow.[Id]=@staffId;
+            """;
+        seed.Parameters.AddWithValue("@tenantId", tenantId);
+        seed.Parameters.AddWithValue("@suffix", suffix);
+        seed.Parameters.AddWithValue("@status", closed ? "closed" : "open");
+        seed.Parameters.AddWithValue("@closed", closed);
+        seed.Parameters.AddWithValue("@claimed", claimed);
+        seed.Parameters.AddWithValue("@staffRole", staffRole);
+        seed.Parameters.AddWithValue("@staffOrganizationId", staffOrganizationId);
+        await using var reader = await seed.ExecuteReaderAsync();
+        Assert.IsTrue(await reader.ReadAsync());
+        return new AdditionalCopyRaceSeed(
+            reader.GetInt64(0),
+            reader.GetInt64(1),
+            (byte[])reader[2],
+            (byte[])reader[3]);
+    }
+
+    private static async Task<AdditionalCopyCandidateChangeSeed> SeedAdditionalCopyCandidateChangeAsync(string suffix)
+    {
+        var tenantId = Guid.Parse(TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin.TenantId!);
+        await using var connection = new SqlConnection(databaseConnectionString);
+        await connection.OpenAsync();
+        await using var seed = connection.CreateCommand();
+        seed.CommandText =
+            """
+            INSERT INTO [asap].[StaffUser]
+                ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
+                 [DisplayName], [Role], [OrganizationId], [IsActive])
+            VALUES
+                (@tenantId, NEWID(), @suffix + N'.first@example.org', UPPER(@suffix + N'.first@example.org'),
+                 N'First candidate', N'staff', 2, 1);
+            DECLARE @firstId bigint = SCOPE_IDENTITY();
+            INSERT INTO [asap].[StaffUser]
+                ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
+                 [DisplayName], [Role], [OrganizationId], [IsActive])
+            VALUES
+                (@tenantId, NEWID(), @suffix + N'.second@example.org', UPPER(@suffix + N'.second@example.org'),
+                 N'Second candidate', N'staff', 2, 1);
+            DECLARE @secondId bigint = SCOPE_IDENTITY();
+            DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code]=N'book');
+
+            INSERT INTO [asap].[AdditionalCopyRequest]
+                ([LibraryOrganizationId], [LibraryNameSnapshot], [BibId], [Title], [MaterialFormatId], [FormatSnapshot],
+                 [Status], [Notes], [CreatedUtc], [UpdatedUtc], [ClaimedByStaffUserId], [ClaimedByDisplayName],
+                 [ClaimedAtUtc], [ClaimType], [ClosedUtc])
+            VALUES
+                (2, N'Test Library snapshot', N'candidate-bib', N'Candidate-change task', @formatId, N'book',
+                 N'closed', N'Candidate note', DATEADD(day, -1, SYSUTCDATETIME()), DATEADD(hour, -1, SYSUTCDATETIME()),
+                 @firstId, N'First candidate snapshot', DATEADD(hour, -3, SYSUTCDATETIME()), N'manual',
+                 DATEADD(minute, -30, SYSUTCDATETIME()));
+            DECLARE @taskId bigint = SCOPE_IDENTITY();
+            SELECT @taskId, @secondId, taskRow.[RowVersion]
+            FROM [asap].[AdditionalCopyRequest] taskRow WHERE taskRow.[Id]=@taskId;
+            """;
+        seed.Parameters.AddWithValue("@tenantId", tenantId);
+        seed.Parameters.AddWithValue("@suffix", suffix);
+        await using var reader = await seed.ExecuteReaderAsync();
+        Assert.IsTrue(await reader.ReadAsync());
+        return new AdditionalCopyCandidateChangeSeed(reader.GetInt64(0), reader.GetInt64(1), (byte[])reader[2]);
+    }
+
+    private static async Task AssertAdditionalCopyClaimStateAsync(
+        long taskId,
+        long? expectedClaimantId,
+        string? expectedNoteFragment,
+        int expectedAuditCleanupCount,
+        long? expectedLifecycleTargetId,
+        string expectedStatus = "open",
+        bool expectLifecycleAudit = true)
+    {
+        await using var connection = new SqlConnection(databaseConnectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT r.[Status], r.[ClaimedByStaffUserId], r.[ClaimedByDisplayName], r.[ClaimedAtUtc], r.[ClaimType],
+                   r.[ClaimRuleId], r.[Notes],
+                   (SELECT COUNT(*) FROM [asap].[AdministrativeAudit] a
+                    WHERE a.[TargetType]=N'StaffUser'
+                      AND a.[TargetId]=CONVERT(nvarchar(100), @lifecycleTargetId)
+                      AND JSON_VALUE(a.[DetailsJson], '$.openAdditionalCopyClaimsCleared')=@expectedCleanup
+                      AND a.[CreatedUtc] >= r.[CreatedUtc])
+            FROM [asap].[AdditionalCopyRequest] r WHERE r.[Id]=@taskId;
+            """;
+        command.Parameters.AddWithValue("@taskId", taskId);
+        command.Parameters.AddWithValue("@lifecycleTargetId", (object?)expectedLifecycleTargetId ?? DBNull.Value);
+        command.Parameters.AddWithValue("@expectedCleanup", expectedAuditCleanupCount.ToString());
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.IsTrue(await reader.ReadAsync());
+        Assert.AreEqual(expectedStatus, reader.GetString(0));
+        if (expectedClaimantId.HasValue)
+        {
+            Assert.AreEqual(expectedClaimantId.Value, reader.GetInt64(1));
+        }
+        else
+        {
+            Assert.IsTrue(reader.IsDBNull(1));
+            Assert.IsTrue(reader.IsDBNull(2));
+            Assert.IsTrue(reader.IsDBNull(3));
+            Assert.IsTrue(reader.IsDBNull(4));
+            Assert.IsTrue(reader.IsDBNull(5));
+        }
+        var notes = reader.IsDBNull(6) ? null : reader.GetString(6);
+        if (expectedNoteFragment is null)
+        {
+            Assert.IsFalse(notes?.Contains("System cleared", StringComparison.Ordinal) ?? false);
+        }
+        else
+        {
+            StringAssert.Contains(notes, expectedNoteFragment);
+        }
+        Assert.AreEqual(expectLifecycleAudit ? 1 : 0, reader.GetInt32(7));
+    }
+
     private static async Task<SeededStaffBrowserState> SeedStaffBrowserStateAsync(
         Guid tenantId,
         Guid superObjectId,
         Guid staffObjectId)
     {
         const string legacyRequestId = "staffbrowserlegacy0001";
+        var invalidClaimantObjectId = Guid.NewGuid();
+        var foreignStaffObjectId = Guid.NewGuid();
+        var invalidTenantId = Guid.NewGuid();
+        var invalidTenantStaffObjectId = Guid.NewGuid();
         await using var connection = new SqlConnection(databaseConnectionString);
         await connection.OpenAsync();
         await using var seed = connection.CreateCommand();
@@ -6476,8 +7717,45 @@ public sealed class PatronJourneyTests
                 (@tenantId, @staffObjectId, N'browser.staff@example.org', N'browser.staff@example.org',
                  N'Browser Staff', N'browser.staff@example.org', N'staff', 2, 1, 0, 0, 0, 0);
             DECLARE @staffId bigint = SCOPE_IDENTITY();
+            INSERT INTO [asap].[StaffUser]
+                ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
+                 [DisplayName], [NotificationEmail], [Role], [OrganizationId], [IsActive],
+                 [WeeklyActionSummaryEnabled], [PurchaseReminderDefault], [AdditionalCopyReminderDefault],
+                 [DefaultMineUnclaimedFilter])
+            VALUES
+                (@tenantId, @invalidClaimantObjectId, N'browser.invalid-copy@example.org',
+                 N'browser.invalid-copy@example.org', N'Browser Invalid Claimant',
+                 N'browser.invalid-copy@example.org', N'staff', 2, 1, 0, 0, 0, 0);
+            DECLARE @invalidClaimantId bigint = SCOPE_IDENTITY();
+            INSERT INTO [asap].[StaffUser]
+                ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
+                 [DisplayName], [Role], [OrganizationId], [IsActive])
+            VALUES
+                (@tenantId, @foreignStaffObjectId, N'browser.foreign@example.org', N'BROWSER.FOREIGN@EXAMPLE.ORG',
+                 N'Browser Foreign Staff', N'staff', 82, 1);
+            DECLARE @foreignStaffId bigint = SCOPE_IDENTITY();
+            INSERT INTO [asap].[StaffUser]
+                ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
+                 [DisplayName], [Role], [OrganizationId], [IsActive])
+            VALUES
+                (@invalidTenantId, @invalidTenantStaffObjectId, N'browser.invalid-tenant@example.org',
+                 N'BROWSER.INVALID-TENANT@EXAMPLE.ORG', N'Browser Invalid Tenant', N'staff', 2, 1);
+            DECLARE @invalidTenantStaffId bigint = SCOPE_IDENTITY();
+            INSERT INTO [asap].[StaffUser]
+                ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
+                 [DisplayName], [Role], [OrganizationId], [IsActive])
+            VALUES
+                (@tenantId, NULL, N'browser.unbound@example.org', N'BROWSER.UNBOUND@EXAMPLE.ORG',
+                 N'Browser Unbound Staff', N'staff', 2, 0);
+            DECLARE @unboundStaffId bigint = SCOPE_IDENTITY();
             DECLARE @formatId bigint = (
                 SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
+
+            INSERT INTO [asap].[FormatAutoClaimRule]
+                ([LibraryOrganizationId], [MaterialFormatId], [StaffUserId], [IsActive], [CreatedUtc], [DeactivatedUtc])
+            VALUES
+                (2, @formatId, @invalidClaimantId, 0, '2026-08-31T12:00:00', '2026-08-31T13:00:00');
+            DECLARE @legacyRuleId bigint = SCOPE_IDENTITY();
 
             INSERT INTO [asap].[PublicationOptionSet] ([OrganizationId]) VALUES (2);
             INSERT INTO [asap].[PublicationOption]
@@ -6564,11 +7842,101 @@ public sealed class PatronJourneyTests
                  DATEADD(minute, -7, SYSUTCDATETIME()), DATEADD(minute, -6, SYSUTCDATETIME()),
                  DATEADD(minute, -5, SYSUTCDATETIME()), N'ambiguous', N'create_transport_ambiguous', 2,
                  DATEADD(minute, -4, SYSUTCDATETIME()), N'provider_timeout', N'{"providerObservation":{"result":"ambiguous"}}');
-            SELECT @superId, @staffId, @primaryId, @blockedId, @resolutionId, @otherId;
+
+            INSERT INTO [asap].[TitleRequest]
+                ([LibraryOrganizationId], [LibraryNameSnapshot], [Barcode], [Title], [Author], [Identifier],
+                 [Publication], [AutoHold], [MaterialFormatId], [Status], [BibId], [ClaimedByStaffUserId],
+                 [ClaimedByDisplayName], [ClaimedAtUtc], [ClaimType], [ClaimRuleId], [IsbnCheckStatus],
+                 [CreatedUtc], [UpdatedUtc])
+            VALUES
+                (2, N'Browser Source Library Snapshot', N'20000000002905', N'Browser additional copy source',
+                 N'Browser Copy Author', N'9780000002905', N'Browser Copy Publication', 1, @formatId,
+                 N'hold_placed', N'92905', @superId, N'Browser Legacy Claimant', '2026-09-01T12:13:14',
+                 N'legacy', @legacyRuleId, N'found', '2026-09-01T12:10:11', '2026-09-01T12:14:15');
+            DECLARE @copySourceId bigint = SCOPE_IDENTITY();
+
+            INSERT INTO [asap].[AdditionalCopyRequest]
+                ([LibraryOrganizationId], [LibraryNameSnapshot], [BibId], [Title], [Author], [Identifier],
+                 [Publication], [MaterialFormatId], [FormatSnapshot], [Status], [Notes], [CreatedByStaffUserId],
+                 [CreatedByDisplayName], [CreatedUtc], [UpdatedUtc])
+            VALUES
+                (2, N'Frozen Mobile Library', N'92905', N'Mobile browser additional copy',
+                 N'Mobile Copy Author', N'9780000002906', N'Mobile Copy Publication', @formatId, N'book',
+                 N'open', N'Mobile browser note', @staffId, N'Browser Staff',
+                 '2026-09-01T12:20:00', '2026-09-01T12:20:00');
+            DECLARE @mobileCopyId bigint = SCOPE_IDENTITY();
+
+            INSERT INTO [asap].[AdditionalCopyRequest]
+                ([SourceTitleRequestId], [LibraryOrganizationId], [LibraryNameSnapshot], [BibId], [Title],
+                 [MaterialFormatId], [FormatSnapshot], [Status], [Notes], [CreatedByStaffUserId],
+                 [CreatedByDisplayName], [CreatedUtc], [UpdatedUtc], [ClaimedByStaffUserId],
+                 [ClaimedByDisplayName], [ClaimedAtUtc], [ClaimType], [ClosedByStaffUserId],
+                 [ClosedByDisplayName], [ClosedUtc])
+            VALUES
+                (@copySourceId, 2, N'Frozen Closed Library', N'92907', N'Closed retained-claim browser task',
+                 @formatId, N'book', N'closed', N'Closed history remains intact.', @superId,
+                 N'Initial Administrator', '2026-09-01T12:30:00', '2026-09-01T12:32:00',
+                 @invalidClaimantId, N'Browser Invalid Claimant', '2026-09-01T12:30:30', N'manual',
+                 @superId, N'Initial Administrator', '2026-09-01T12:31:00');
+            DECLARE @invalidClosedCopyId bigint = SCOPE_IDENTITY();
+
+            INSERT INTO [asap].[TitleRequest]
+                ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status],
+                 [CreatedUtc], [UpdatedUtc])
+            VALUES
+                (2, N'20000000002911', N'Stale title assignment A', 0, @formatId, N'suggestion',
+                 '2026-09-01T13:00:00', '2026-09-01T13:00:00');
+            DECLARE @staleTitleAId bigint = SCOPE_IDENTITY();
+            INSERT INTO [asap].[TitleRequest]
+                ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status],
+                 [CreatedUtc], [UpdatedUtc])
+            VALUES
+                (2, N'20000000002912', N'Stale title assignment B', 0, @formatId, N'suggestion',
+                 '2026-09-01T13:01:00', '2026-09-01T13:01:00');
+            DECLARE @staleTitleBId bigint = SCOPE_IDENTITY();
+
+            INSERT INTO [asap].[AdditionalCopyRequest]
+                ([LibraryOrganizationId], [LibraryNameSnapshot], [BibId], [Title], [MaterialFormatId],
+                 [FormatSnapshot], [Status], [CreatedByStaffUserId], [CreatedByDisplayName],
+                 [CreatedUtc], [UpdatedUtc])
+            VALUES
+                (2, N'Stale Assignment Library', N'92911', N'Stale additional-copy assignment A', @formatId,
+                 N'book', N'open', @superId, N'Initial Administrator',
+                 '2026-09-01T13:02:00', '2026-09-01T13:02:00');
+            DECLARE @staleCopyAId bigint = SCOPE_IDENTITY();
+            INSERT INTO [asap].[AdditionalCopyRequest]
+                ([LibraryOrganizationId], [LibraryNameSnapshot], [BibId], [Title], [MaterialFormatId],
+                 [FormatSnapshot], [Status], [CreatedByStaffUserId], [CreatedByDisplayName],
+                 [CreatedUtc], [UpdatedUtc])
+            VALUES
+                (2, N'Stale Assignment Library', N'92912', N'Stale additional-copy assignment B', @formatId,
+                 N'book', N'open', @superId, N'Initial Administrator',
+                 '2026-09-01T13:03:00', '2026-09-01T13:03:00');
+            DECLARE @staleCopyBId bigint = SCOPE_IDENTITY();
+
+            INSERT INTO [asap].[TitleRequest]
+                ([LibraryOrganizationId], [LibraryNameSnapshot], [Barcode], [Title], [Author], [Identifier],
+                 [Publication], [AutoHold], [MaterialFormatId], [Status], [BibId], [PreferredPickupBranchId],
+                 [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
+            VALUES
+                (2, N'Stale Creation Library', N'20000000002913', N'Stale additional-copy creation source',
+                 N'Stale Creation Author', N'9780000002913', N'Stale Creation Publication', 0, @formatId,
+                 N'hold_placed', N'92913', 101, N'Main Library', N'found',
+                 '2026-09-01T13:04:00', '2026-09-01T13:04:00');
+            DECLARE @staleCreateSourceId bigint = SCOPE_IDENTITY();
+
+            SELECT @superId, @staffId, @primaryId, @blockedId, @resolutionId, @otherId,
+                   @copySourceId, @invalidClosedCopyId, @invalidClaimantId, @legacyRuleId, @mobileCopyId,
+                   @foreignStaffId, @invalidTenantStaffId, @unboundStaffId,
+                   @staleTitleAId, @staleTitleBId, @staleCopyAId, @staleCopyBId, @staleCreateSourceId;
             """;
         seed.Parameters.AddWithValue("@superObjectId", superObjectId);
         seed.Parameters.AddWithValue("@tenantId", tenantId);
         seed.Parameters.AddWithValue("@staffObjectId", staffObjectId);
+        seed.Parameters.AddWithValue("@invalidClaimantObjectId", invalidClaimantObjectId);
+        seed.Parameters.AddWithValue("@foreignStaffObjectId", foreignStaffObjectId);
+        seed.Parameters.AddWithValue("@invalidTenantId", invalidTenantId);
+        seed.Parameters.AddWithValue("@invalidTenantStaffObjectId", invalidTenantStaffObjectId);
         seed.Parameters.AddWithValue("@legacyId", legacyRequestId);
         await using var result = await seed.ExecuteReaderAsync();
         Assert.IsTrue(await result.ReadAsync());
@@ -6579,7 +7947,20 @@ public sealed class PatronJourneyTests
             result.GetInt64(2),
             result.GetInt64(3),
             result.GetInt64(4),
-            result.GetInt64(5));
+            result.GetInt64(5),
+            result.GetInt64(6),
+            result.GetInt64(7),
+            result.GetInt64(8),
+            result.GetInt64(9),
+            result.GetInt64(10),
+            result.GetInt64(11),
+            result.GetInt64(12),
+            result.GetInt64(13),
+            result.GetInt64(14),
+            result.GetInt64(15),
+            result.GetInt64(16),
+            result.GetInt64(17),
+            result.GetInt64(18));
     }
 
     private sealed record SeededStaffBrowserState(
@@ -6589,7 +7970,20 @@ public sealed class PatronJourneyTests
         long PrimaryRequestId,
         long BlockedRequestId,
         long ResolutionRequestId,
-        long OtherRequestId);
+        long OtherRequestId,
+        long CopySourceRequestId,
+        long InvalidClosedCopyId,
+        long InvalidClaimantId,
+        long LegacyRuleId,
+        long MobileCopyId,
+        long ForeignStaffId,
+        long InvalidTenantStaffId,
+        long UnboundStaffId,
+        long StaleTitleAId,
+        long StaleTitleBId,
+        long StaleCopyAId,
+        long StaleCopyBId,
+        long StaleCreateSourceId);
 
     private static async Task SeedLibraryAsync()
     {
@@ -6944,6 +8338,23 @@ public sealed class PatronJourneyTests
         long StaffId,
         long RuleId,
         byte[] StaffVersion);
+
+    private sealed record AdditionalCopyLegacySourceSeed(
+        long SourceRequestId,
+        long CurrentClaimantId,
+        long HistoricalRuleId,
+        byte[] SourceVersion);
+
+    private sealed record AdditionalCopyRaceSeed(
+        long StaffId,
+        long TaskId,
+        byte[] StaffVersion,
+        byte[] TaskVersion);
+
+    private sealed record AdditionalCopyCandidateChangeSeed(
+        long TaskId,
+        long SecondStaffId,
+        byte[] TaskVersion);
 
     private sealed record EmailOutboxState(
         string Status,

@@ -37,7 +37,7 @@ public sealed class MigrationCliTests
         Assert.AreEqual(
             "150b30b776565194260cc327eeeffdfb46475e81",
             contract.RootElement.GetProperty("pocketBaseBaselineSha").GetString());
-        Assert.AreEqual(3, contract.RootElement.GetProperty("expectedSchemaVersion").GetInt32());
+        Assert.AreEqual(4, contract.RootElement.GetProperty("expectedSchemaVersion").GetInt32());
         Assert.AreEqual(
             "CLC.ASAP",
             contract.RootElement.GetProperty("dataProtectionApplicationName").GetString());
@@ -1724,54 +1724,114 @@ public sealed class MigrationCliTests
     }
 
     [TestMethod]
-    public void ImportBlocksPopulatedDomainsNotOwnedByThisSlice()
+    [DoNotParallelize]
+    public async Task ImportPreservesAdditionalCopyHistoryAndUsesCreatedWhenUpdatedIsMissing()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-future-domain-{Guid.NewGuid():N}");
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-additional-copy-{Guid.NewGuid():N}");
+        var databaseName = $"AsapMigrationAdditionalCopy_{Guid.NewGuid():N}";
+        var master = new SqlConnectionStringBuilder(
+            Environment.GetEnvironmentVariable("ASAP_TEST_SQL_CONNECTION_STRING") ??
+            "Server=localhost;Database=master;Integrated Security=True;TrustServerCertificate=True")
+        {
+            InitialCatalog = "master"
+        }.ConnectionString;
+        var target = new SqlConnectionStringBuilder(master) { InitialCatalog = databaseName }.ConnectionString;
+        var environmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        var bibId = new string('9', 128);
+        var publication = new string('P', 128);
         Directory.CreateDirectory(root);
         try
         {
-            var cases = new[]
-            {
-                (Collection: "additional_copy_requests", Sql: "CREATE TABLE [additional_copy_requests] ([id] TEXT NOT NULL PRIMARY KEY); INSERT INTO [additional_copy_requests] VALUES ('copy-1');"),
-                (Collection: "deleted_request_audit", Sql: "CREATE TABLE [deleted_request_audit] ([id] TEXT NOT NULL PRIMARY KEY); INSERT INTO [deleted_request_audit] VALUES ('audit-1');")
-            };
-            foreach (var item in cases)
-            {
-                var caseRoot = Path.Combine(root, item.Collection);
-                Directory.CreateDirectory(caseRoot);
-                var package = CreateMinimalPackage(caseRoot, item.Sql);
-                var map = Path.Combine(caseRoot, "map.json");
-                File.WriteAllText(map, "{\"users\":[]}");
-                var report = Path.Combine(caseRoot, "report.json");
-                var environmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
-                Environment.SetEnvironmentVariable(environmentName, "not-a-connection-string");
-                try
-                {
-                    using var error = new StringWriter();
-                    var exitCode = MigrationCli.Run(
-                        [
-                            "import", "--package", package,
-                            "--connection-string-env", environmentName,
-                            "--staff-identity-map", map,
-                            "--allowed-tenant-ids", "00000000-0000-0000-0000-000000000002",
-                            "--report", report
-                        ],
-                        TextWriter.Null,
-                        error);
+            var package = CreateMinimalPackage(
+                root,
+                $$"""
+                CREATE TABLE [additional_copy_requests]
+                (
+                    [id] TEXT NOT NULL PRIMARY KEY,
+                    [sourceTitleRequest] TEXT,
+                    [libraryOrgId] TEXT NOT NULL,
+                    [libraryOrgName] TEXT,
+                    [bibid] TEXT NOT NULL,
+                    [title] TEXT,
+                    [author] TEXT,
+                    [format] TEXT,
+                    [identifier] TEXT,
+                    [publication] TEXT,
+                    [status] TEXT NOT NULL,
+                    [notes] TEXT,
+                    [createdByStaff] TEXT,
+                    [createdByUsername] TEXT,
+                    [closedByStaff] TEXT,
+                    [closedByUsername] TEXT,
+                    [closedAt] TEXT,
+                    [created] TEXT,
+                    [updated] TEXT,
+                    [claimedByStaffUserId] TEXT,
+                    [claimedByDisplayName] TEXT,
+                    [claimedAt] TEXT
+                );
+                INSERT INTO [additional_copy_requests] VALUES
+                    ('copy-boundary', '', '2', 'Frozen library', '{{bibId}}', 'Frozen title', 'Frozen author',
+                     'book', 'COPY-BOUNDARY', '{{publication}}', 'closed', '<p>Frozen notes</p>',
+                     'pb-staff-1', 'Historical creator', '', '', '2030-01-03T06:07:08Z',
+                     '2030-01-02T03:04:05Z', NULL, '', '', '');
+                """);
+            DeployDacpac(master, databaseName);
+            var identityMap = Path.Combine(root, "staff-map.json");
+            await File.WriteAllTextAsync(
+                identityMap,
+                """
+                {"users":[{"pocketBaseStaffUserId":"pb-staff-1","tenantId":"00000000-0000-0000-0000-000000000002","objectId":"00000000-0000-0000-0000-000000000011","userPrincipalName":"admin@example.org"}]}
+                """);
+            var report = Path.Combine(root, "report.json");
+            Environment.SetEnvironmentVariable(environmentName, target);
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+            var exitCode = MigrationCli.Run(
+                [
+                    "import", "--package", package,
+                    "--connection-string-env", environmentName,
+                    "--staff-identity-map", identityMap,
+                    "--allowed-tenant-ids", "00000000-0000-0000-0000-000000000002",
+                    "--report", report
+                ],
+                output,
+                error);
+            Assert.AreEqual(0, exitCode, error.ToString());
 
-                    Assert.AreEqual(1, exitCode, item.Collection);
-                    StringAssert.Contains(error.ToString(), "source_domain_not_supported", item.Collection);
-                    StringAssert.Contains(error.ToString(), item.Collection, item.Collection);
-                    Assert.IsFalse(File.Exists(report), item.Collection);
-                }
-                finally
-                {
-                    Environment.SetEnvironmentVariable(environmentName, null);
-                }
-            }
+            await using var connection = new SqlConnection(target);
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT [BibId], [Publication], [CreatedUtc], [UpdatedUtc], [ClosedUtc],
+                       [ClosedByStaffUserId], [ClosedByDisplayName], [ClaimType], [ClaimRuleId]
+                FROM [asap].[AdditionalCopyRequest];
+                """;
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.IsTrue(await reader.ReadAsync());
+            Assert.AreEqual(bibId, reader.GetString(0));
+            Assert.AreEqual(publication, reader.GetString(1));
+            Assert.AreEqual(reader.GetDateTime(2), reader.GetDateTime(3));
+            Assert.AreEqual(new DateTime(2030, 1, 3, 6, 7, 8), reader.GetDateTime(4));
+            Assert.IsTrue(reader.IsDBNull(5));
+            Assert.IsTrue(reader.IsDBNull(6));
+            Assert.IsTrue(reader.IsDBNull(7));
+            Assert.IsTrue(reader.IsDBNull(8));
+            await reader.DisposeAsync();
+
+            using var reportDocument = JsonDocument.Parse(await File.ReadAllTextAsync(report));
+            Assert.AreEqual(4, reportDocument.RootElement.GetProperty("reportVersion").GetInt32());
+            Assert.AreEqual(1, reportDocument.RootElement.GetProperty("importedCounts")
+                .GetProperty("additional_copy_requests").GetInt32());
+            Assert.IsTrue(reportDocument.RootElement.GetProperty("transformations").EnumerateArray().Any(item =>
+                item.GetProperty("entity").GetString() == "additional_copy_updated_timestamp" &&
+                item.GetProperty("reason").GetString() == "missing_updated_uses_created"));
         }
         finally
         {
+            Environment.SetEnvironmentVariable(environmentName, null);
+            await DropDatabaseAsync(master, databaseName);
             Directory.Delete(root, recursive: true);
         }
     }

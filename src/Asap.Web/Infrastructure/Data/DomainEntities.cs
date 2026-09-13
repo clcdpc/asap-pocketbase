@@ -359,6 +359,37 @@ public sealed class TitleRequest
     public byte[] RowVersion { get; set; } = [];
 }
 
+public sealed class AdditionalCopyRequest
+{
+    public long Id { get; set; }
+    public string? LegacyId { get; set; }
+    public long? SourceTitleRequestId { get; set; }
+    public int LibraryOrganizationId { get; set; }
+    public string? LibraryNameSnapshot { get; set; }
+    public required string BibId { get; set; }
+    public required string Title { get; set; }
+    public string? Author { get; set; }
+    public string? Identifier { get; set; }
+    public string? Publication { get; set; }
+    public long? MaterialFormatId { get; set; }
+    public string? FormatSnapshot { get; set; }
+    public required string Status { get; set; }
+    public string? Notes { get; set; }
+    public long? CreatedByStaffUserId { get; set; }
+    public string? CreatedByDisplayName { get; set; }
+    public DateTime CreatedUtc { get; set; }
+    public DateTime UpdatedUtc { get; set; }
+    public long? ClaimedByStaffUserId { get; set; }
+    public string? ClaimedByDisplayName { get; set; }
+    public DateTime? ClaimedAtUtc { get; set; }
+    public string? ClaimType { get; set; }
+    public long? ClaimRuleId { get; set; }
+    public long? ClosedByStaffUserId { get; set; }
+    public string? ClosedByDisplayName { get; set; }
+    public DateTime? ClosedUtc { get; set; }
+    public byte[] RowVersion { get; set; } = [];
+}
+
 public sealed class TitleRequestEvent
 {
     public long Id { get; set; }

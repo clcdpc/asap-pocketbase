@@ -115,6 +115,7 @@ if (externalConfiguration is not null)
     builder.Services.AddSingleton<StaffLifecycleService>();
     builder.Services.AddSingleton<TitleRequestViewService>();
     builder.Services.AddSingleton<TitleRequestMutationService>();
+    builder.Services.AddSingleton<AdditionalCopyService>();
     builder.Services.AddSingleton<StaffPickupService>();
     builder.Services.AddSingleton<WorkflowProcessingGuard>();
     builder.Services.AddSingleton<HoldPlacementService>();
@@ -189,6 +190,7 @@ if (externalConfiguration is not null)
     app.MapStaffAuthenticationEndpoints();
     app.MapStaffLifecycleEndpoints();
     app.MapTitleRequestEndpoints();
+    app.MapAdditionalCopyEndpoints();
 }
 
 app.Run();

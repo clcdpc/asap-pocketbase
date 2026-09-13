@@ -5,8 +5,8 @@ namespace Asap.Migration;
 public static class MigrationContract
 {
     public const string PocketBaseBaselineSha = "150b30b776565194260cc327eeeffdfb46475e81";
-    public const int ExpectedSchemaVersion = 3;
-    public const string ContractVersion = "slice-02";
+    public const int ExpectedSchemaVersion = 4;
+    public const string ContractVersion = "slice-03";
 
     public static object Describe() => new
     {
@@ -19,8 +19,9 @@ public static class MigrationContract
         {
             "stopped_sqlite_export",
             "hashed_package_validation",
-            "fresh_sql_import_and_reconciliation"
+            "fresh_sql_import_and_reconciliation",
+            "additional_copy_workflow"
         },
-        note = "Slice 2 export, validation, fresh-target import, and reconciliation are implemented for the domains owned by this slice."
+        note = "Slice 3 includes the AdditionalCopy workflow and its stopped-PocketBase migration contract."
     };
 }

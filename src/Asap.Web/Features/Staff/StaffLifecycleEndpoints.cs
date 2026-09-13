@@ -6,6 +6,8 @@ public static class StaffLifecycleEndpoints
 {
     public static IEndpointRouteBuilder MapStaffLifecycleEndpoints(this IEndpointRouteBuilder endpoints)
     {
+        endpoints.MapGet("/api/asap/staff/assignment-candidates", AssignmentCandidatesAsync)
+            .RequireAuthorization();
         var group = endpoints.MapGroup("/api/asap/staff/users")
             .RequireAuthorization();
         group.MapGet("", ListAsync);
@@ -15,6 +17,31 @@ public static class StaffLifecycleEndpoints
         group.MapDelete("/{id:long}", DeactivateAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/rebind", RebindAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         return endpoints;
+    }
+
+    private static async Task<IResult> AssignmentCandidatesAsync(
+        HttpContext context,
+        int libraryOrgId,
+        StaffLifecycleService lifecycle,
+        CancellationToken cancellationToken)
+    {
+        var actor = StaffAuthenticationEndpoints.RequireCurrentStaff(context);
+        if (libraryOrgId <= 1 || actor.Role != "super_admin" && actor.OrganizationId != libraryOrgId)
+        {
+            return Results.Json(
+                new { code = "staff_scope_forbidden", message = "Staff access is not available for this library." },
+                statusCode: StatusCodes.Status403Forbidden);
+        }
+
+        var candidates = await lifecycle.ListAssignmentCandidatesAsync(libraryOrgId, cancellationToken);
+        return Results.Json(new
+        {
+            candidates = candidates.Select(item => new
+            {
+                id = item.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                item.DisplayName
+            })
+        });
     }
 
     private static async Task<IResult> ListAsync(
@@ -106,7 +133,7 @@ public static class StaffLifecycleEndpoints
                 {
                     rulesDeactivated = result.RulesDeactivated,
                     openTitleClaimsCleared = result.OpenTitleClaimsCleared,
-                    openAdditionalCopyClaimsCleared = 0
+                    openAdditionalCopyClaimsCleared = result.OpenAdditionalCopyClaimsCleared
                 }
             }, statusCode: successStatus),
             "not_found" or "organization_not_found" => Results.NotFound(new { code = result.Code }),

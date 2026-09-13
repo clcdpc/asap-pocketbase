@@ -37,7 +37,6 @@ public static class MigrationImporter
     public static MigrationImportResult Import(MigrationImportOptions options)
     {
         var package = MigrationPackageValidator.Validate(options.PackagePath);
-        ValidateSliceDomainCoverage(package);
         ValidateOptions(options, package);
         var operationalConfiguration = options.ExternalConfigurationPath is null
             ? null
@@ -52,6 +51,7 @@ public static class MigrationImporter
         var importedCounts = new SortedDictionary<string, int>(StringComparer.Ordinal);
         var transformations = new List<object>();
         var claimTransformations = new List<ClaimTransformation>();
+        var additionalCopyClaimTransformations = new List<ClaimTransformation>();
         var placementTransformations = new List<PlacementTransformation>();
         MigrationSemanticReconciliation semanticReconciliation;
         transformations.AddRange(ValidateConfigurationSourceFields(package));
@@ -170,6 +170,34 @@ public static class MigrationImporter
                 importedCounts,
                 transformations,
                 claimTransformations);
+            var additionalCopyRows = MigrationPackageReader.ReadRows(
+                package,
+                "additional-copy-requests.json",
+                "additional_copy_requests");
+            var additionalCopyIds = ImportAdditionalCopies(
+                connection,
+                transaction,
+                additionalCopyRows,
+                requestIds,
+                organizationIds,
+                formatIds,
+                staffIds,
+                options.AllowedTenantIds,
+                package.Manifest.ExportedAtUtc.UtcDateTime,
+                importedCounts,
+                transformations,
+                additionalCopyClaimTransformations);
+            var deletedAuditRows = MigrationPackageReader.ReadRows(
+                package,
+                "deleted-request-audit.json",
+                "deleted_request_audit");
+            ImportDeletedRequestAudit(
+                connection,
+                transaction,
+                deletedAuditRows,
+                staffIds,
+                importedCounts,
+                transformations);
             ImportTitleRequestTags(
                 connection,
                 transaction,
@@ -204,6 +232,9 @@ public static class MigrationImporter
                 staffUsers,
                 identityMap,
                 titleRequestRows,
+                requestIds,
+                additionalCopyRows,
+                deletedAuditRows,
                 organizationIds,
                 formatIds,
                 staffIds,
@@ -236,28 +267,10 @@ public static class MigrationImporter
             packageIdentity,
             transformations,
             claimTransformations,
+            additionalCopyClaimTransformations,
             placementTransformations,
             semanticReconciliation);
         return new MigrationImportResult(importedCounts, true);
-    }
-
-    private static void ValidateSliceDomainCoverage(ValidatedMigrationPackage package)
-    {
-        var deferredCollections = new[]
-        {
-            (File: "additional-copy-requests.json", Collection: "additional_copy_requests"),
-            (File: "deleted-request-audit.json", Collection: "deleted_request_audit")
-        };
-        foreach (var item in deferredCollections)
-        {
-            var count = MigrationPackageReader.ReadRowsOrEmpty(package, item.File, item.Collection).Count;
-            if (count != 0)
-            {
-                throw new MigrationOperationException(
-                    "source_domain_not_supported",
-                    $"Source collection {item.Collection} contains {count} row(s) owned by a later migration slice.");
-            }
-        }
     }
 
     private static IReadOnlyList<object> ValidateConfigurationSourceFields(ValidatedMigrationPackage package)
@@ -479,6 +492,8 @@ public static class MigrationImporter
                 (SELECT COUNT(*) FROM [asap].[Organization] WHERE [Id] <> 1),
                 (SELECT COUNT(*) FROM [asap].[StaffUser]),
                 (SELECT COUNT(*) FROM [asap].[TitleRequest]),
+                (SELECT COUNT(*) FROM [asap].[AdditionalCopyRequest]),
+                (SELECT COUNT(*) FROM [asap].[DeletedRequestAudit]),
                 (SELECT COUNT(*) FROM [asap].[PatronSession]),
                 (SELECT COUNT(*) FROM [asap].[EmailOutbox]),
                 (SELECT COUNT(*) FROM [asap].[EmailDeliveryEvent]),
@@ -491,7 +506,7 @@ public static class MigrationImporter
         {
             throw new MigrationOperationException("target_schema_version_mismatch", "Target application schema version is incompatible.");
         }
-        if (Enumerable.Range(1, 7).Any(index => reader.GetInt32(index) != 0))
+        if (Enumerable.Range(1, 9).Any(index => reader.GetInt32(index) != 0))
         {
             throw new MigrationOperationException("target_not_fresh", "Target contains runtime, business, or prior migration rows.");
         }
@@ -1350,6 +1365,325 @@ public static class MigrationImporter
         return mapped;
     }
 
+    private static Dictionary<string, long> ImportAdditionalCopies(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        IReadOnlyList<SourceRow> rows,
+        IReadOnlyDictionary<string, long> requestIds,
+        IReadOnlyDictionary<string, int> organizationIds,
+        IReadOnlyDictionary<string, long> formatIds,
+        IReadOnlyDictionary<string, long> staffIds,
+        IReadOnlySet<Guid> allowedTenantIds,
+        DateTime exportedAtUtc,
+        IDictionary<string, int> importedCounts,
+        ICollection<object> transformations,
+        ICollection<ClaimTransformation> claimTransformations)
+    {
+        var mapped = new Dictionary<string, long>(StringComparer.Ordinal);
+        var validOrganizationIds = organizationIds.Values.ToHashSet();
+        foreach (var row in rows.OrderBy(item => item.RequiredString("id"), StringComparer.Ordinal))
+        {
+            var sourceId = row.RequiredString("id");
+            var libraryId = row.Int32("libraryOrgId") ?? throw new MigrationOperationException(
+                "additional_copy_library_missing",
+                $"Additional-copy request {sourceId} has no library.");
+            if (!validOrganizationIds.Contains(libraryId))
+            {
+                throw new MigrationOperationException(
+                    "additional_copy_library_unresolved",
+                    $"Additional-copy request {sourceId} references an unknown library.");
+            }
+            var status = NormalizeAdditionalCopyStatus(row.RequiredString("status"));
+            var createdUtc = row.UtcDateTime("created") ?? throw new MigrationOperationException(
+                "additional_copy_created_missing",
+                $"Additional-copy request {sourceId} has no creation timestamp.");
+            var updatedUtc = row.UtcDateTime("updated") ?? createdUtc;
+            var closedUtc = row.UtcDateTime("closedAt");
+            var closedDisplayName = row.String("closedByUsername");
+            if ((status == "closed") != closedUtc.HasValue)
+            {
+                throw new MigrationOperationException(
+                    "additional_copy_close_state_invalid",
+                    $"Additional-copy request {sourceId} has inconsistent close attribution.");
+            }
+            var sourceTitleRequestId = ResolveOptionalMapping(row.String("sourceTitleRequest"), requestIds);
+            var materialFormatId = ResolveAdditionalCopyFormatId(connection, transaction, row);
+            var claim = ResolveAdditionalCopyClaim(
+                connection,
+                transaction,
+                row,
+                status,
+                staffIds,
+                allowedTenantIds);
+            var notes = AdditionalCopyNotes(row, claim, exportedAtUtc);
+            using var command = new SqlCommand(
+                """
+                INSERT INTO [asap].[AdditionalCopyRequest]
+                    ([LegacyId], [SourceTitleRequestId], [LibraryOrganizationId], [LibraryNameSnapshot],
+                     [BibId], [Title], [Author], [Identifier], [Publication], [MaterialFormatId], [FormatSnapshot],
+                     [Status], [Notes], [CreatedByStaffUserId], [CreatedByDisplayName], [CreatedUtc], [UpdatedUtc],
+                     [ClaimedByStaffUserId], [ClaimedByDisplayName], [ClaimedAtUtc], [ClaimType], [ClaimRuleId],
+                     [ClosedByStaffUserId], [ClosedByDisplayName], [ClosedUtc])
+                OUTPUT inserted.[Id]
+                VALUES
+                    (@legacyId, @sourceTitleRequestId, @libraryId, @libraryName,
+                     @bibId, @title, @author, @identifier, @publication, @materialFormatId, @formatSnapshot,
+                     @status, @notes, @createdByStaffUserId, @createdByDisplayName, @createdUtc, @updatedUtc,
+                     @claimedByStaffUserId, @claimedByDisplayName, @claimedAtUtc, NULL, NULL,
+                     @closedByStaffUserId, @closedByDisplayName, @closedUtc);
+                """,
+                connection,
+                transaction);
+            command.Parameters.AddWithValue("@legacyId", sourceId);
+            command.Parameters.AddWithValue("@sourceTitleRequestId", DbValue(sourceTitleRequestId));
+            command.Parameters.AddWithValue("@libraryId", libraryId);
+            command.Parameters.AddWithValue("@libraryName", DbString(row.Text("libraryOrgName")));
+            command.Parameters.AddWithValue("@bibId", row.RequiredString("bibid"));
+            command.Parameters.AddWithValue("@title", row.RequiredText("title"));
+            command.Parameters.AddWithValue("@author", DbString(row.Text("author")));
+            command.Parameters.AddWithValue("@identifier", DbString(row.String("identifier")));
+            command.Parameters.AddWithValue("@publication", DbString(row.Text("publication")));
+            command.Parameters.AddWithValue("@materialFormatId", DbValue(materialFormatId));
+            command.Parameters.AddWithValue("@formatSnapshot", DbString(row.String("format")));
+            command.Parameters.AddWithValue("@status", status);
+            command.Parameters.AddWithValue("@notes", DbString(notes));
+            command.Parameters.AddWithValue("@createdByStaffUserId", DbValue(ResolveOptionalMapping(row.String("createdByStaff"), staffIds)));
+            command.Parameters.AddWithValue("@createdByDisplayName", DbString(row.String("createdByUsername")));
+            command.Parameters.AddWithValue("@createdUtc", createdUtc);
+            command.Parameters.AddWithValue("@updatedUtc", updatedUtc);
+            command.Parameters.AddWithValue("@claimedByStaffUserId", DbValue(claim.StaffUserId));
+            command.Parameters.AddWithValue("@claimedByDisplayName", DbString(claim.DisplayName));
+            command.Parameters.AddWithValue("@claimedAtUtc", DbValue(claim.ClaimedAtUtc));
+            command.Parameters.AddWithValue("@closedByStaffUserId", DbValue(ResolveOptionalMapping(row.String("closedByStaff"), staffIds)));
+            command.Parameters.AddWithValue("@closedByDisplayName", DbString(closedDisplayName));
+            command.Parameters.AddWithValue("@closedUtc", DbValue(closedUtc));
+            var targetId = Convert.ToInt64(command.ExecuteScalar());
+            mapped.Add(sourceId, targetId);
+            InsertMapping(connection, transaction, "additional_copy", sourceId, targetId);
+
+            if (claim.RequiresMigrationAnnotation)
+            {
+                importedCounts.TryGetValue("additional_copy_claim_migration_annotations", out var annotationCount);
+                importedCounts["additional_copy_claim_migration_annotations"] = annotationCount + 1;
+            }
+            if (claim.HasSourceAttribution)
+            {
+                var transformation = new ClaimTransformation(
+                    sourceId,
+                    libraryId,
+                    status,
+                    claim.SourceClaimantId,
+                    claim.MappedStaffUserId,
+                    claim.StaffUserId,
+                    row.String("claimedByDisplayName"),
+                    row.UtcDateTime("claimedAt"),
+                    null,
+                    null,
+                    claim.Reason,
+                    claim.RequiresMigrationAnnotation);
+                claimTransformations.Add(transformation);
+                transformations.Add(new
+                {
+                    entity = "additional_copy_claim",
+                    sourceId,
+                    sourceClaimantId = claim.SourceClaimantId,
+                    mappedStaffUserId = claim.MappedStaffUserId,
+                    effectiveStaffUserId = claim.StaffUserId,
+                    sourceDisplayName = transformation.SourceDisplayName,
+                    sourceClaimedAtUtc = transformation.SourceClaimedAtUtc,
+                    reason = claim.Reason,
+                    migrationAnnotationInserted = claim.RequiresMigrationAnnotation
+                });
+            }
+            if (!row.HasValue("updated"))
+            {
+                transformations.Add(new
+                {
+                    entity = "additional_copy_updated_timestamp",
+                    sourceId,
+                    sourceUpdatedUtc = (DateTime?)null,
+                    targetUpdatedUtc = updatedUtc,
+                    reason = "missing_updated_uses_created"
+                });
+            }
+        }
+        importedCounts.TryAdd("additional_copy_claim_migration_annotations", 0);
+        importedCounts["additional_copy_requests"] = rows.Count;
+        return mapped;
+    }
+
+    private static void ImportDeletedRequestAudit(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        IReadOnlyList<SourceRow> rows,
+        IReadOnlyDictionary<string, long> staffIds,
+        IDictionary<string, int> importedCounts,
+        ICollection<object> transformations)
+    {
+        foreach (var row in rows.OrderBy(item => item.RequiredString("id"), StringComparer.Ordinal))
+        {
+            var sourceId = row.RequiredString("id");
+            var originalKey = row.RequiredString("titleRequestId");
+            var barcode = row.String("barcode");
+            var requestType = barcode is null ? "additional_copy" : "title_request";
+            var createdUtc = ParseUtcText(
+                row.JsonPropertyString("snapshot", "created"),
+                "deleted_request_created_invalid");
+            using var command = new SqlCommand(
+                """
+                INSERT INTO [asap].[DeletedRequestAudit]
+                    ([RequestType], [OriginalRequestKey], [LibraryOrganizationId], [Title], [Author], [Identifier],
+                     [BibId], [Status], [CloseReason], [MaskedBarcode], [CreatedUtc], [DeletedUtc],
+                     [DeletedByStaffUserId], [DeletedByDisplayName])
+                OUTPUT inserted.[Id]
+                VALUES
+                    (@requestType, @originalKey, @libraryId, @title, @author, @identifier,
+                     @bibId, @status, @closeReason, @maskedBarcode, @createdUtc, @deletedUtc,
+                     @deletedByStaffUserId, @deletedByDisplayName);
+                """,
+                connection,
+                transaction);
+            command.Parameters.AddWithValue("@requestType", requestType);
+            command.Parameters.AddWithValue("@originalKey", originalKey);
+            command.Parameters.AddWithValue("@libraryId", row.Int32("libraryOrgId") ?? throw new MigrationOperationException(
+                "deleted_request_library_missing",
+                $"Deleted-request audit {sourceId} has no library."));
+            command.Parameters.AddWithValue("@title", DbString(row.Text("title")));
+            command.Parameters.AddWithValue("@author", DbString(row.Text("author")));
+            command.Parameters.AddWithValue("@identifier", DbString(row.String("identifier")));
+            command.Parameters.AddWithValue("@bibId", DbString(row.String("bibid")));
+            command.Parameters.AddWithValue("@status", DbString(row.String("status")));
+            command.Parameters.AddWithValue("@closeReason", DbString(row.String("closeReason")));
+            command.Parameters.AddWithValue("@maskedBarcode", DbString(MaskBarcode(barcode)));
+            command.Parameters.AddWithValue("@createdUtc", DbValue(createdUtc));
+            command.Parameters.AddWithValue("@deletedUtc", row.UtcDateTime("deletedAt") ?? throw new MigrationOperationException(
+                "deleted_request_timestamp_missing",
+                $"Deleted-request audit {sourceId} has no deletion timestamp."));
+            command.Parameters.AddWithValue("@deletedByStaffUserId", DbValue(ResolveOptionalMapping(row.String("deletedByStaff"), staffIds)));
+            command.Parameters.AddWithValue("@deletedByDisplayName", DbString(row.String("deletedByUsername")));
+            var targetId = Convert.ToInt64(command.ExecuteScalar());
+            InsertMapping(connection, transaction, "deleted_request_audit", sourceId, targetId);
+        }
+        importedCounts["deleted_request_audit"] = rows.Count;
+        transformations.Add(new
+        {
+            entity = "deleted_request_audit",
+            sourceRows = rows.Count,
+            targetRows = rows.Count,
+            reason = "reduced_audit_excludes_sensitive_and_freeform_fields"
+        });
+    }
+
+    private static ImportedClaim ResolveAdditionalCopyClaim(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        SourceRow row,
+        string status,
+        IReadOnlyDictionary<string, long> staffIds,
+        IReadOnlySet<Guid> allowedTenantIds)
+    {
+        var sourceClaimantId = row.String("claimedByStaffUserId");
+        var mappedStaffId = ResolveOptionalMapping(sourceClaimantId, staffIds);
+        var displayName = row.String("claimedByDisplayName");
+        var claimedAt = row.UtcDateTime("claimedAt");
+        var hasAttribution = sourceClaimantId is not null || displayName is not null || claimedAt.HasValue;
+        if (!hasAttribution)
+        {
+            return new(false, false, null, null, null, null, null, null, null, "unclaimed");
+        }
+        if (status == "closed")
+        {
+            if (displayName is null || !claimedAt.HasValue)
+            {
+                return new(true, false, sourceClaimantId, mappedStaffId, null, null, null, null, null, "closed_attribution_incomplete");
+            }
+            return new(
+                true,
+                false,
+                sourceClaimantId,
+                mappedStaffId,
+                mappedStaffId,
+                displayName,
+                claimedAt,
+                null,
+                null,
+                mappedStaffId.HasValue ? "closed_history_preserved" : "closed_claimant_unmapped");
+        }
+        if (sourceClaimantId is null || !mappedStaffId.HasValue)
+        {
+            return new(true, true, sourceClaimantId, mappedStaffId, null, null, null, null, null, "claimant_unmapped");
+        }
+        if (displayName is null || !claimedAt.HasValue)
+        {
+            return new(true, true, sourceClaimantId, mappedStaffId, null, null, null, null, null, "claim_metadata_incomplete");
+        }
+        var reason = StaffEligibilityReason(
+            connection,
+            transaction,
+            mappedStaffId.Value,
+            row.Int32("libraryOrgId") ?? 0,
+            allowedTenantIds);
+        return reason == "eligible"
+            ? new(true, false, sourceClaimantId, mappedStaffId, mappedStaffId, displayName, claimedAt, null, null, reason)
+            : new(true, true, sourceClaimantId, mappedStaffId, null, null, null, null, null, reason);
+    }
+
+    private static string? AdditionalCopyNotes(SourceRow row, ImportedClaim claim, DateTime exportedAtUtc)
+    {
+        var notes = row.Text("notes");
+        if (!claim.RequiresMigrationAnnotation)
+        {
+            return notes;
+        }
+        var claimantId = claim.SourceClaimantId ?? "unmapped";
+        var displayName = row.String("claimedByDisplayName") ?? "unknown";
+        var claimedAt = row.UtcDateTime("claimedAt")?.ToString("O") ?? "unknown";
+        var annotation = $"[{exportedAtUtc:O}] [ASAP migration:additional_copy_claim_v1] Cleared open claim ({claim.Reason}). Previous claimant ID: {claimantId}; display: {displayName.Replace('\r', ' ').Replace('\n', ' ')}; claimed at: {claimedAt}.";
+        return string.IsNullOrWhiteSpace(notes) ? annotation : $"{notes.TrimEnd()}\n{annotation}";
+    }
+
+    private static long? ResolveAdditionalCopyFormatId(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        SourceRow row)
+    {
+        var sourceFormat = row.String("format");
+        if (sourceFormat is null)
+        {
+            return null;
+        }
+        var code = NormalizeFormatCode(sourceFormat);
+        var libraryId = row.Int32("libraryOrgId") ?? 0;
+        return FindFormatId(connection, transaction, libraryId, code) ?? FindFormatId(connection, transaction, 1, code);
+    }
+
+    private static string NormalizeAdditionalCopyStatus(string value) => value.Trim().ToLowerInvariant() switch
+    {
+        "open" => "open",
+        "closed" => "closed",
+        var invalid => throw new MigrationOperationException(
+            "additional_copy_status_invalid",
+            $"Unknown additional-copy status: {invalid}")
+    };
+
+    private static DateTime? ParseUtcText(string? value, string errorCode)
+    {
+        if (value is null) return null;
+        if (DateTimeOffset.TryParse(
+                value,
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                out var parsed))
+        {
+            return parsed.UtcDateTime;
+        }
+        throw new MigrationOperationException(errorCode, $"Invalid source UTC timestamp: {value}");
+    }
+
+    private static string? MaskBarcode(string? value) => value is null
+        ? null
+        : value.Length <= 4 ? new string('*', value.Length) : $"***{value[^4..]}";
+
     private static void InsertClaimMigrationAnnotation(
         SqlConnection connection,
         SqlTransaction transaction,
@@ -1904,6 +2238,9 @@ public static class MigrationImporter
         IReadOnlyList<SourceRow> staffUsers,
         IReadOnlyDictionary<string, StaffIdentity> identities,
         IReadOnlyList<SourceRow> titleRequests,
+        IReadOnlyDictionary<string, long> requestIds,
+        IReadOnlyList<SourceRow> additionalCopies,
+        IReadOnlyList<SourceRow> deletedAuditRows,
         IReadOnlyDictionary<string, int> organizationIds,
         IReadOnlyDictionary<string, long> formatIds,
         IReadOnlyDictionary<string, long> staffIds,
@@ -2062,6 +2399,103 @@ public static class MigrationImporter
                 "title request");
         }
 
+        foreach (var row in additionalCopies)
+        {
+            var sourceId = row.RequiredString("id");
+            var status = NormalizeAdditionalCopyStatus(row.RequiredString("status"));
+            var expectedClaim = ResolveAdditionalCopyClaim(
+                connection,
+                transaction,
+                row,
+                status,
+                staffIds,
+                allowedTenantIds);
+            var expectedSourceId = ResolveOptionalMapping(row.String("sourceTitleRequest"), requestIds);
+            var expectedFormatId = ResolveAdditionalCopyFormatId(connection, transaction, row);
+            var createdUtc = row.UtcDateTime("created") ?? throw new MigrationOperationException(
+                "reconciliation_failed",
+                $"Additional-copy request {sourceId} has no creation timestamp.");
+            using var command = new SqlCommand(
+                """
+                SELECT r.[SourceTitleRequestId], r.[LibraryOrganizationId], r.[LibraryNameSnapshot],
+                       r.[BibId], r.[Title], r.[Author], r.[Identifier], r.[Publication],
+                       r.[MaterialFormatId], r.[FormatSnapshot], r.[Status], r.[Notes],
+                       r.[CreatedByStaffUserId], r.[CreatedByDisplayName], r.[CreatedUtc], r.[UpdatedUtc],
+                       r.[ClaimedByStaffUserId], r.[ClaimedByDisplayName], r.[ClaimedAtUtc], r.[ClaimType], r.[ClaimRuleId],
+                       r.[ClosedByStaffUserId], r.[ClosedByDisplayName], r.[ClosedUtc]
+                FROM [asap].[LegacyPocketBaseMapping] m
+                JOIN [asap].[AdditionalCopyRequest] r ON r.[Id] = m.[NewId]
+                WHERE m.[EntityType] = N'additional_copy' AND m.[PocketBaseId] = @sourceId;
+                """,
+                connection,
+                transaction);
+            command.Parameters.AddWithValue("@sourceId", sourceId);
+            using var reader = command.ExecuteReader();
+            EnsureSemantic(reader.Read(), "additional-copy request");
+            EnsureSemantic(
+                LongEquals(reader, 0, expectedSourceId) &&
+                reader.GetInt32(1) == row.Int32("libraryOrgId") &&
+                StringEquals(reader, 2, row.Text("libraryOrgName")) &&
+                StringEquals(reader, 3, row.RequiredString("bibid")) &&
+                StringEquals(reader, 4, row.RequiredText("title")) &&
+                StringEquals(reader, 5, row.Text("author")) &&
+                StringEquals(reader, 6, row.String("identifier")) &&
+                StringEquals(reader, 7, row.Text("publication")) &&
+                LongEquals(reader, 8, expectedFormatId) &&
+                StringEquals(reader, 9, row.String("format")) &&
+                StringEquals(reader, 10, status) &&
+                StringEquals(reader, 11, AdditionalCopyNotes(row, expectedClaim, package.Manifest.ExportedAtUtc.UtcDateTime)) &&
+                LongEquals(reader, 12, ResolveOptionalMapping(row.String("createdByStaff"), staffIds)) &&
+                StringEquals(reader, 13, row.String("createdByUsername")) &&
+                DateEquals(reader, 14, createdUtc) &&
+                DateEquals(reader, 15, row.UtcDateTime("updated") ?? createdUtc) &&
+                LongEquals(reader, 16, expectedClaim.StaffUserId) &&
+                StringEquals(reader, 17, expectedClaim.DisplayName) &&
+                DateEquals(reader, 18, expectedClaim.ClaimedAtUtc) &&
+                StringEquals(reader, 19, null) &&
+                LongEquals(reader, 20, null) &&
+                LongEquals(reader, 21, ResolveOptionalMapping(row.String("closedByStaff"), staffIds)) &&
+                StringEquals(reader, 22, row.String("closedByUsername")) &&
+                DateEquals(reader, 23, row.UtcDateTime("closedAt")),
+                "additional-copy request");
+        }
+
+        foreach (var row in deletedAuditRows)
+        {
+            var sourceId = row.RequiredString("id");
+            var barcode = row.String("barcode");
+            using var command = new SqlCommand(
+                """
+                SELECT a.[RequestType], a.[OriginalRequestKey], a.[LibraryOrganizationId], a.[Title], a.[Author],
+                       a.[Identifier], a.[BibId], a.[Status], a.[CloseReason], a.[MaskedBarcode], a.[CreatedUtc],
+                       a.[DeletedUtc], a.[DeletedByStaffUserId], a.[DeletedByDisplayName]
+                FROM [asap].[LegacyPocketBaseMapping] m
+                JOIN [asap].[DeletedRequestAudit] a ON a.[Id] = m.[NewId]
+                WHERE m.[EntityType] = N'deleted_request_audit' AND m.[PocketBaseId] = @sourceId;
+                """,
+                connection,
+                transaction);
+            command.Parameters.AddWithValue("@sourceId", sourceId);
+            using var reader = command.ExecuteReader();
+            EnsureSemantic(reader.Read(), "deleted-request audit");
+            EnsureSemantic(
+                StringEquals(reader, 0, barcode is null ? "additional_copy" : "title_request") &&
+                StringEquals(reader, 1, row.RequiredString("titleRequestId")) &&
+                reader.GetInt32(2) == row.Int32("libraryOrgId") &&
+                StringEquals(reader, 3, row.Text("title")) &&
+                StringEquals(reader, 4, row.Text("author")) &&
+                StringEquals(reader, 5, row.String("identifier")) &&
+                StringEquals(reader, 6, row.String("bibid")) &&
+                StringEquals(reader, 7, row.String("status")) &&
+                StringEquals(reader, 8, row.String("closeReason")) &&
+                StringEquals(reader, 9, MaskBarcode(barcode)) &&
+                DateEquals(reader, 10, ParseUtcText(row.JsonPropertyString("snapshot", "created"), "deleted_request_created_invalid")) &&
+                DateEquals(reader, 11, row.UtcDateTime("deletedAt")) &&
+                LongEquals(reader, 12, ResolveOptionalMapping(row.String("deletedByStaff"), staffIds)) &&
+                StringEquals(reader, 13, row.String("deletedByUsername")),
+                "deleted-request audit");
+        }
+
         var brandingRows = MigrationPackageReader.ReadRows(package, "branding.json", "branding");
         foreach (var row in brandingRows)
         {
@@ -2090,6 +2524,8 @@ public static class MigrationImporter
             organizations.Count,
             staffUsers.Count,
             titleRequests.Count,
+            additionalCopies.Count,
+            deletedAuditRows.Count,
             brandingRows.Count,
             true);
     }
@@ -2145,11 +2581,15 @@ public static class MigrationImporter
             ["staff_users"] = Scalar(connection, "SELECT COUNT(*) FROM [asap].[StaffUser];"),
             ["format_auto_claim_rules"] = Scalar(connection, "SELECT COUNT(*) FROM [asap].[FormatAutoClaimRule];"),
             ["title_requests"] = Scalar(connection, "SELECT COUNT(*) FROM [asap].[TitleRequest];"),
+            ["additional_copy_requests"] = Scalar(connection, "SELECT COUNT(*) FROM [asap].[AdditionalCopyRequest];"),
+            ["deleted_request_audit"] = Scalar(connection, "SELECT COUNT(*) FROM [asap].[DeletedRequestAudit];"),
             ["title_request_events"] = Scalar(connection, "SELECT COUNT(*) FROM [asap].[TitleRequestEvent];"),
             ["claim_migration_annotations"] = Scalar(connection,
                 "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [EventType] = N'legacy' AND JSON_VALUE([MetadataJson], '$.transform') = N'claim_attribution_normalization_v1';"),
             ["placed_bib_protection_markers"] = Scalar(connection,
                 "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [EventType] = N'legacy' AND JSON_VALUE([MetadataJson], '$.legacyBibProtection') = N'true' AND JSON_VALUE([MetadataJson], '$.transform') = N'placed_bib_protection_v1';"),
+            ["additional_copy_claim_migration_annotations"] = Scalar(connection,
+                "SELECT COUNT(*) FROM [asap].[AdditionalCopyRequest] WHERE [Notes] LIKE N'%[[]ASAP migration:additional_copy_claim_v1]%';"),
             ["legacy_mappings"] = Scalar(connection, "SELECT COUNT(*) FROM [asap].[LegacyPocketBaseMapping];"),
             ["patron_sessions"] = Scalar(connection, "SELECT COUNT(*) FROM [asap].[PatronSession];"),
             ["email_outbox"] = Scalar(connection, "SELECT COUNT(*) FROM [asap].[EmailOutbox];"),
@@ -2177,16 +2617,31 @@ public static class MigrationImporter
                        NOT ((s.[Role] IN (N'staff', N'admin') AND s.[OrganizationId] = r.[LibraryOrganizationId]) OR
                             (s.[Role] = N'super_admin' AND s.[OrganizationId] = 1)));
                 """, allowedTenantIds),
+            ["invalid_open_additional_copy_claims"] = ScalarWithAllowedTenants(connection,
+                """
+                SELECT COUNT(*)
+                FROM [asap].[AdditionalCopyRequest] r
+                LEFT JOIN [asap].[StaffUser] s ON s.[Id] = r.[ClaimedByStaffUserId]
+                WHERE r.[Status] = N'open' AND r.[ClaimedByStaffUserId] IS NOT NULL
+                  AND (s.[Id] IS NULL OR s.[IsActive] = 0 OR s.[EntraTenantId] IS NULL OR s.[EntraObjectId] IS NULL OR
+                       s.[EntraTenantId] NOT IN ({allowedTenants}) OR
+                       NOT ((s.[Role] IN (N'staff', N'admin') AND s.[OrganizationId] = r.[LibraryOrganizationId]) OR
+                            (s.[Role] = N'super_admin' AND s.[OrganizationId] = 1)));
+                """, allowedTenantIds),
             ["invalid_found_requests"] = Scalar(connection, "SELECT COUNT(*) FROM [asap].[TitleRequest] WHERE [IsbnCheckStatus] = N'found' AND NULLIF(LTRIM(RTRIM([BibId])), N'') IS NULL;")
         };
         if (counts["staff_users"] != importedCounts["staff_users"] + importedCounts.GetValueOrDefault("migration_bootstrap_staff_users") ||
             counts["format_auto_claim_rules"] != importedCounts.GetValueOrDefault("format_claim_rules") ||
             counts["title_requests"] != importedCounts.GetValueOrDefault("title_requests") ||
+            counts["additional_copy_requests"] != importedCounts.GetValueOrDefault("additional_copy_requests") ||
+            counts["deleted_request_audit"] != importedCounts.GetValueOrDefault("deleted_request_audit") ||
             counts["title_request_events"] != importedCounts.GetValueOrDefault("title_request_events") + importedCounts.GetValueOrDefault("placed_bib_protection_markers") + importedCounts.GetValueOrDefault("claim_migration_annotations") ||
             counts["claim_migration_annotations"] != importedCounts.GetValueOrDefault("claim_migration_annotations") ||
             counts["placed_bib_protection_markers"] != importedCounts.GetValueOrDefault("placed_bib_protection_markers") ||
+            counts["additional_copy_claim_migration_annotations"] != importedCounts.GetValueOrDefault("additional_copy_claim_migration_annotations") ||
             counts["patron_sessions"] != 0 || counts["email_outbox"] != 0 ||
             counts["invalid_active_claim_rules"] != 0 || counts["invalid_open_title_request_claims"] != 0 ||
+            counts["invalid_open_additional_copy_claims"] != 0 ||
             counts["invalid_found_requests"] != 0)
         {
             throw new MigrationOperationException("reconciliation_failed", "Target counts or excluded runtime state do not reconcile.");
@@ -2203,6 +2658,7 @@ public static class MigrationImporter
         string packageIdentity,
         IReadOnlyCollection<object> transformations,
         IReadOnlyCollection<ClaimTransformation> claimTransformations,
+        IReadOnlyCollection<ClaimTransformation> additionalCopyClaimTransformations,
         IReadOnlyCollection<PlacementTransformation> placementTransformations,
         MigrationSemanticReconciliation semanticReconciliation)
     {
@@ -2210,7 +2666,7 @@ public static class MigrationImporter
         if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
         var json = JsonSerializer.Serialize(new
         {
-            reportVersion = 3,
+            reportVersion = 4,
             sourceGitSha = package.Manifest.PocketBaseSourceGitSha,
             sourceSchemaVersion = package.Manifest.PocketBaseSourceSchemaVersion,
             exportedAtUtc = package.Manifest.ExportedAtUtc,
@@ -2222,6 +2678,28 @@ public static class MigrationImporter
             claimReconciliation = new
             {
                 titleRequests = claimTransformations
+                    .GroupBy(item => new
+                    {
+                        item.LibraryOrganizationId,
+                        item.Status,
+                        Outcome = item.Status == "closed"
+                            ? "closed_history"
+                            : item.EffectiveStaffUserId is null ? "cleared" : "preserved",
+                        item.Reason
+                    })
+                    .OrderBy(group => group.Key.LibraryOrganizationId)
+                    .ThenBy(group => group.Key.Status, StringComparer.Ordinal)
+                    .ThenBy(group => group.Key.Outcome, StringComparer.Ordinal)
+                    .ThenBy(group => group.Key.Reason, StringComparer.Ordinal)
+                    .Select(group => new
+                    {
+                        libraryOrganizationId = group.Key.LibraryOrganizationId,
+                        status = group.Key.Status,
+                        outcome = group.Key.Outcome,
+                        reason = group.Key.Reason,
+                        count = group.Count()
+                    }),
+                additionalCopies = additionalCopyClaimTransformations
                     .GroupBy(item => new
                     {
                         item.LibraryOrganizationId,
@@ -2849,6 +3327,8 @@ public static class MigrationImporter
         int organizations,
         int staffUsers,
         int titleRequests,
+        int additionalCopies,
+        int deletedRequestAudits,
         int brandingAssets,
         bool passed);
 

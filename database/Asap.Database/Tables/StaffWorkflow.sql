@@ -7,7 +7,7 @@ CREATE TABLE [asap].[DeletedRequestAudit]
     [Title] nvarchar(500) NULL,
     [Author] nvarchar(500) NULL,
     [Identifier] nvarchar(100) NULL,
-    [BibId] nvarchar(100) NULL,
+    [BibId] nvarchar(128) NULL,
     [Status] nvarchar(32) NULL,
     [CloseReason] nvarchar(64) NULL,
     [MaskedBarcode] nvarchar(50) NULL,
