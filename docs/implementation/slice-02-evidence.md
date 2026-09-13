@@ -6,6 +6,12 @@ clearance. Fresh Sol XHigh Raman implemented the slice. The predecessor is
 `1e36761c771db70d0b669087d0a843b66cf5618b` with 120 passing Linux CI tests;
 see Slice 1's separate review and evidence records.
 
+Milestone `9f946aed4b091a82407ac929345819d0a0c87b10` passed actual
+[remote Linux CI](https://github.com/clcdpc/asap-pocketbase/actions/runs/34744506275)
+on 2026-09-13. Release has zero warnings/errors; all 181 .NET/SQL/browser tests
+passed with zero skips, followed by legacy/frontend and publication gates.
+This closes the milestone's remote gate, not the outstanding release blockers.
+
 ## Independent Staff Fixture
 
 Astra copied the stopped, already-known synthetic PocketBase `dated-data`
@@ -317,6 +323,14 @@ Terra completed full Pass 2 with no actionable finding, approving the slice
 and closing S2-T1/S2-T2 after Sol's fixes. Astra fetched `main` again; it still
 matches the PocketBase pin. The local milestone gate is satisfied. Actual
 remote CI for the forthcoming Slice 2 commit remains required before Slice 3.
+
+Reviewed milestone `9f946aed4b091a82407ac929345819d0a0c87b10` was committed
+and pushed to `codex/csharp-port` on the same draft PR 264. It contains exactly
+the reviewed 48-file implementation/CI set plus nine current evidence/docs
+files. Staged whitespace checks passed. Future-slice packets/source notes and
+all ignored fixtures/artifacts remain outside the commit. Its actual remote
+CI result was pending at commit time; the passing exact-commit run is recorded
+at the top of this document.
 
 ## Final Freeze And Parent Verification
 

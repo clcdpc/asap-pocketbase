@@ -44,12 +44,17 @@ fixes confirmed findings. Tests and independent review must pass before the
 milestone commit or next slice. Blocking findings cannot be waived by a pass
 cap. Migration code and reconciliation grow with every data-owning slice.
 
+Prepared packets and source notes are committed as clearly labeled documentation
+checkpoints. They do not certify a slice, replace its independent review, or
+authorize early implementation. Refresh each packet against accepted prior
+code before dispatch; keep application milestone commits scoped to one slice.
+
 | Slice | Scope | Status |
 | --- | --- | --- |
 | 0 | Branch, skeleton, engineering baseline | Complete: reviewed milestone `0096777`, remote CI passed |
 | 1 | Patron login and submission | Complete: `c1b8655` plus reviewed correction `1e36761`; 120 tests and remote Linux CI passed |
-| 2 | Staff Entra and core request workflow | Local slice complete: 181 tests, native/artifact checks and Terra full Pass 2 approved; milestone/remote CI next |
-| 3 | Additional-copy workflow | Not started |
+| 2 | Staff Entra and core request workflow | Complete: reviewed milestone `9f946ae`; 181 local and remote Linux CI tests pass, no skips |
+| 3 | Additional-copy workflow | Implementation started with fresh Sol XHigh; packet and stopped-source acceptance fixture prepared |
 | 4 | Administration and configuration | Not started |
 | 5 | Background workflows and complete email operations | Not started |
 | 6 | Analytics | Not started |
@@ -160,6 +165,18 @@ milestone and its actual remote CI are next. A fresh fetch still has no change
 from the pinned PocketBase baseline. Later-slice preparation stays out of the
 Slice 2 commit. No merge, production tag, deployment or production-completion
 claim follows from this local milestone.
+
+Slice 2 milestone `9f946aed4b091a82407ac929345819d0a0c87b10` is pushed to
+the same draft PR: 57 coherent files, including 48 reviewed implementation/CI
+files and current evidence/docs. Future-slice preparation is excluded. Await
+actual CI for this exact commit before starting fresh Sol Slice 3; no previous
+green run is substituted for that gate.
+
+That exact milestone passed [remote Linux CI](https://github.com/clcdpc/asap-pocketbase/actions/runs/34744506275)
+on 2026-09-13: zero-warning/error Release build, 181 .NET/real-SQL/browser
+tests passed with zero failures/skips, legacy/frontend tests and publish checks.
+Slice 2 is closed. Fresh Sol XHigh now implements Slice 3 from its focused
+packet; the retained Slice 2 implementation/reviewer contexts are closed.
 
 See `slice-00-evidence.md` for actual build, SQL, startup and publish checks.
 Milestone `00967778001e7ec8198ab4498d0fbd15ded4d984` passed the complete

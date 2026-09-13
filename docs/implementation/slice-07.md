@@ -1,0 +1,151 @@
+# Slice 7: Migration Hardening And Legacy Links
+
+## Preparation Only
+
+Not dispatched. Refresh after Slices 1-6 pass their complete tests, Terra
+review/fix/re-review gates and milestone commits. This packet narrows the
+existing sequence; it does not start migration from scratch or replace the
+authoritative plan. Record the actual prior milestone SHAs, schema version,
+CLI contracts, import/reconciliation coverage and remaining domain gaps at
+dispatch. A fresh Sol XHigh owns the complete slice; a fresh Terra High
+reviews it independently and remains through all required re-review passes.
+
+## Objective And Authority
+
+Consolidate the migration code developed with each data-owning slice into the
+complete stopped-source, two-host export/validate/import/reconcile workflow.
+Finish scoped legacy request-link resolution and browser URL normalization.
+Prove required source-to-target semantics and deterministic intentional
+transforms, not just table counts or post-import target fingerprints.
+
+Read root AGENTS, document 10, document 02 Slice 7, all of document 04,
+document 03's imported models, document 13's full settings inventory,
+document 06's migration/R1-R7/F1-F3 cases, document 07's deep-link contracts,
+and documents 05/08's offline preparation and exact-artifact gates. Reuse the
+accepted prior-slice entities, authorization, image validation, credentials,
+SQL constraints and targeted data-access patterns. No migration framework,
+resume-in-place engine, running-source extraction service or delta sync.
+
+Inspect exact PocketBase `150b30b776565194260cc327eeeffdfb46475e81` schema
+migrations and domain writers/resolvers whenever the stored shape is material.
+Exclude the removed carousel example. `migration-source-notes.md`, prior
+domain source notes and recorded acceptance fixtures are reading aids only.
+Verify newly fetched source changes and the actual frozen deployed SHA; do
+not label an unverified source or synthetic fixture production evidence.
+
+## Source And Package Boundary
+
+1. Export directly from stopped SQLite and associated file storage without
+   starting PocketBase. Require explicit stopped-source confirmation and the
+   effective legacy environment needed by the pinned resolvers. Preserve
+   source SHA/schema/snapshot identification, frozen export time, UTF-8 JSON,
+   record counts and file lengths/hashes in a validated immutable package.
+2. Include actual supported branding bytes, not filenames alone. Unsupported
+   or invalid images must block with actionable restricted diagnostics. Do
+   not mutate the old source to make it fit a target assumption.
+3. Keep effective system/global SQL fallback values separate from library
+   domain exports and the operational cron/limit artifact. Exercise existing
+   blank Staff URL versus missing-record initialization, exact environment
+   precedence and the pinned normalization helpers. Secrets in effective
+   artifacts have provenance/hasValue only, never plaintext or fingerprints.
+4. Preserve all eight logical queue mappings and four legacy schedules with
+   global/timeout/queue-specific precedence. Account explicitly for configured
+   retired hourly identifier overrides. Compare effective target external
+   configuration before workers can start; a changed value needs a reported
+   intentional decision, not silent fallback.
+5. Keep packages, identity-map working copies and restricted reports out of
+   Git, release/CI artifacts and ordinary logs. Document trusted transfer,
+   minimal ACLs and deliberate post-success cleanup. Do not add package
+   encryption or another secret-storage product beyond the agreed contract.
+
+## Import And Reconciliation
+
+- Enforce a fresh target with only permitted structural/static DACPAC seeds.
+  Reject bootstrap/runtime/business data and any target used for hostname
+  preflight. Import does not start the web application or Hangfire. Failed
+  imports require target reset/recreation, not resume-in-place guessing.
+- Validate all active staff against the explicit operator identity map and
+  exact target allowed tenants. Never derive durable identity from UPN/email.
+  Preserve inactive-library relationships and staff activity independently.
+  Report recipient precedence, preference preservation and old-versus-target
+  ordinary/weekly recipient eligibility, including newly eligible summaries.
+- Prove an active, bound, allowed-tenant system super-admin after staff import.
+  With none, explicitly promote the matching configured bootstrap tuple or
+  insert the target-only identity, report it and re-run the common predicate.
+  Cover both paths and invalid/duplicate bindings; normal startup is no repair.
+- Map open claimants before applying current activity/identity/scope rules.
+  Preserve otherwise eligible dormant-library claims. Clear only specified
+  invalid effective fields, preserve deterministic history/report provenance,
+  keep closed attribution and never auto-assign substitutes. Reconcile both
+  request types separately and active auto-claim rules independently.
+- Account for every populated configuration field under document 13 or an
+  explicit intentional-drop rule. Preserve sparse overrides, whole-set
+  inheritance/replacement, library-owned records and current effective values.
+  Legacy SMTP credentials are not Postmark credentials. Target-only provider
+  input uses a secure prompt/environment boundary and Data Protection only.
+- Complete exhaustive identifier-state normalization, found/BIB/tag checks,
+  request status/close aliases, unknown-event-to-legacy mapping and strict
+  actor validation. Preserve required original timestamps; do not fabricate
+  missing event dates from export/import time. Frozen export time is allowed
+  for deterministic migration annotations, not missing business history.
+- Normalize every placement-evidence class before target event mapping:
+  current placement, explicit success, transitions into/from placement, and
+  all five terminal hold reasons. Preserve deterministic source provenance,
+  known/null BIB protection and ambiguity blockers, without fake operations,
+  provider success or invented final HoldRequestIDs. Prove protection after
+  reopen followed by a separate identifier/BIB edit.
+- Reconcile values, identities, relationships, assets, eligibility, scoped
+  status/format counts, reductions and every deterministic conversion. Bind
+  the report to the exact immutable package. A different validly hashed
+  package or same-count target value mutation must fail. Initial semantic
+  parity is distinct from subsequent target drift detection.
+- Sessions, old auth tokens, outbox, queue cursors and target hold-operation
+  journals begin empty. Import historical delivery/audit data without sending
+  mail or synthesizing pending work. Never report unsupported domains as
+  successfully imported merely because their source files were retained.
+
+## Legacy Links
+
+Inspect pinned `lib/route_utils.js`,
+`pb_public/staff/js/app/url-utils.js` and their actual callers. Preserve
+`stage`/`status` aliases and the existing `request` parameter. Use temporary
+type-qualified LegacyPocketBaseMapping to resolve title versus additional-copy
+IDs, then apply current staff eligibility and SQL scope before disclosure.
+Mapping is not authorization. Unknown/deleted/out-of-scope links preserve the
+normal nondisclosing failure behavior. Replace the browser URL with the new
+invariant decimal bigint ID without losing supported navigation parameters;
+keep IDs as strings to avoid JavaScript precision loss. Cleanup remains an
+explicit operator action after the reference window, not an automatic purge.
+
+## Blocking Acceptance And Release Boundaries
+
+Use real stopped-source packages and disposable SQL targets, with independent
+positive and malformed/conflicting fixtures. Test repeat imports into fresh
+targets for identical transformations/reports and source timestamp/asset
+preservation. Include all document 04 reconciliation populations and R/F
+remediation cases, protected credentials, failure rollback/fresh-target rules,
+missing-date diagnostics, both bootstrap paths and effective configuration.
+
+Publish one self-contained win-x64 migration artifact including SQLite native
+dependencies; it must export on a representative old host and validate/import/
+reconcile on the target host without requiring a .NET runtime on the old one.
+Local source-build success is not representative-host or final rehearsal
+evidence. Exercise behavior through the actual published native executable,
+not only its version command or the framework-dependent test assembly. Slice 1
+acceptance caught a stale win-x64 `--no-build` publish despite green source
+tests; build the intended RID and verify the published DLLs and behavior.
+Browser checks cover both link types, normal authorization, aliases,
+URL replacement, unknown/deleted records and non-lossy large IDs.
+
+The temporary FileEmailSender exception remains only at final transport.
+Real Rest 3-compatible cancellable Postmark integration, provider/webhook
+tests and release validation are still release/rehearsal blockers. Actual
+production source shape, deployed SHA and operator inputs must be verified;
+synthetic fixtures cannot satisfy those gates. Do not merge, tag, rehearse on
+permanent nonproduction or enable production writes as part of this slice.
+
+Run all relevant prior tests and end-to-end gates before Terra Pass 1. Sol
+fixes confirmed findings; the same Terra performs full-slice Pass 2/3. Return
+actual changed files, commands/results and remaining risks without committing
+or proceeding to Slice 8. Astra accepts and creates the milestone only when
+the gate passes.
