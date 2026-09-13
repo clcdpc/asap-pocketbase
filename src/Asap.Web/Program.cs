@@ -20,7 +20,8 @@ var builder = WebApplication.CreateBuilder(args);
 var configurationResult = ExternalConfigurationLoader.Load(
     builder.Configuration,
     builder.Environment.ContentRootPath,
-    allowFileWithinContentRoot: builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"));
+    allowFileWithinContentRoot: builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"),
+    allowSqlAuthenticationForTesting: builder.Environment.IsEnvironment("Testing"));
 
 var externalConfiguration = configurationResult.Value;
 var certificate = externalConfiguration is null

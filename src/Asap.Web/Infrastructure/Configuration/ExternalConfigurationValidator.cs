@@ -33,7 +33,9 @@ public static partial class ExternalConfigurationValidator
         ],
         StringComparer.Ordinal);
 
-    public static IReadOnlyList<string> Validate(ExternalConfiguration value)
+    public static IReadOnlyList<string> Validate(
+        ExternalConfiguration value,
+        bool allowSqlAuthenticationForTesting = false)
     {
         var errors = new List<string>();
 
@@ -55,8 +57,16 @@ public static partial class ExternalConfigurationValidator
             errors.Add("environment_is_nonproduction_missing");
         }
 
-        ValidateConnectionString(value.ConnectionStrings.AsapDatabase, "asap_database", errors);
-        ValidateConnectionString(value.ConnectionStrings.HangfireDatabase, "hangfire_database", errors);
+        ValidateConnectionString(
+            value.ConnectionStrings.AsapDatabase,
+            "asap_database",
+            allowSqlAuthenticationForTesting,
+            errors);
+        ValidateConnectionString(
+            value.ConnectionStrings.HangfireDatabase,
+            "hangfire_database",
+            allowSqlAuthenticationForTesting,
+            errors);
         ValidateEntra(value.Authentication.Entra, errors);
         ValidateApplication(value.Application, errors);
         ValidateRecipientDomains(value.EmailSafety.AllowedRecipientDomains, errors);
@@ -103,6 +113,7 @@ public static partial class ExternalConfigurationValidator
     private static void ValidateConnectionString(
         string? connectionString,
         string name,
+        bool allowSqlAuthenticationForTesting,
         ICollection<string> errors)
     {
         if (string.IsNullOrWhiteSpace(connectionString))
@@ -119,7 +130,7 @@ public static partial class ExternalConfigurationValidator
                 errors.Add($"{name}_connection_invalid");
             }
 
-            if (!builder.IntegratedSecurity)
+            if (!builder.IntegratedSecurity && !allowSqlAuthenticationForTesting)
             {
                 errors.Add($"{name}_integrated_security_required");
             }

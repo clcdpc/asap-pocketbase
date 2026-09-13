@@ -78,7 +78,7 @@ the legacy-only case pass without regressing this existing behavior.
 
 ## Review Gate
 
-### Final Result
+### Local Pass 3 Result
 
 The same Terra High reviewer completed full Pass 3 with no confirmed
 substantive defect. S1-R1 through S1-R6 are resolved, including the corrected
@@ -92,6 +92,43 @@ Slice 1's required tests and independent review/fix/re-review gate are
 satisfied. Astra may now create its coherent milestone and verify remote CI
 before dispatching Slice 2. Real Postmark/provider-webhook work remains the
 explicit release/rehearsal blocker; this is not production-completion approval.
+
+### Remote CI Correction
+
+The locally accepted milestone `c1b86558ad3b2a7270c6cf1d1bfa7830911d7f44`
+was pushed, then remote run 34730692517 failed: 77 passed, 41 failed, no skips.
+One migration credential test opens unsupported Unix LocalMachine/My before
+trying CurrentUser/My. Forty patron tests fail during factory setup because
+the actual SQL-authenticated Linux CI connection is rejected by the external
+configuration validator, leaving the asserted worker registration absent.
+The latter assertion must not simply become optional.
+
+The same Sol retains ownership for narrow correction and regressions. Preserve
+Windows production certificate/private-key requirements and Integrated Security;
+any CI SQL-authentication allowance must be governed only by the trusted Testing
+host, never an external JSON environment label or IsNonProduction flag. Tests
+remain real SQL without skips or a runner switch. Same-Terra closure review is
+required before the correction commit; the nominal pass cap cannot waive a
+known failure. No Slice 2 implementation starts until remote CI succeeds.
+
+Sol's correction now uses the existing Web certificate lookup semantics in
+migration and passes a Testing allowance from the trusted host only, defaulting
+the loader/validator to strict Integrated Security. Two focused regressions
+prove SQL authentication requires that caller-supplied allowance and cannot be
+enabled by external JSON. The existing missing-worker assertion is unchanged.
+Release build and complete 120-test suite pass; Astra independently reran
+120/120 with no skips in 1m 39s. New source-built artifacts pass the recorded
+browser/CSP/native-migration checks. The same Terra is requested for full
+closure review against the 96-file receipt in the review packet. Linux CI is
+still outstanding, not inferred from the Windows results.
+
+The same Terra completed full Slice 1 closure review with no actionable defect
+or regression. It verified all 96 receipt files with zero mismatches, the new
+artifact hashes/counts/exclusions, 20 focused configuration tests and the real-
+SQL current-user-certificate bootstrap migration test, all without skips. The
+correction is cleared for commit/push. An actual green Linux CI run remains a
+separate required gate before Slice 2; neither this review nor Windows tests
+replace it. No reviewer edits occurred and no prior finding was waived.
 
 ### Pass 2 Result
 

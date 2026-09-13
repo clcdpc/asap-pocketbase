@@ -7,7 +7,8 @@ public static class ExternalConfigurationLoader
     public static ConfigurationLoadResult Load(
         IConfiguration bootstrapConfiguration,
         string contentRootPath,
-        bool allowFileWithinContentRoot)
+        bool allowFileWithinContentRoot,
+        bool allowSqlAuthenticationForTesting = false)
     {
         var configuredPath = bootstrapConfiguration["Asap:ConfigFile"];
         if (string.IsNullOrWhiteSpace(configuredPath))
@@ -45,7 +46,9 @@ public static class ExternalConfigurationLoader
 
             var value = new ExternalConfiguration();
             externalRoot.Bind(value);
-            var errors = ExternalConfigurationValidator.Validate(value);
+            var errors = ExternalConfigurationValidator.Validate(
+                value,
+                allowSqlAuthenticationForTesting);
 
             return new ConfigurationLoadResult(
                 errors.Count == 0 ? value : null,

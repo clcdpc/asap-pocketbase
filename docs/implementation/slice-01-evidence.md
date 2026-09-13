@@ -1,9 +1,10 @@
 # Slice 1 Evidence
 
-Recorded 2026-09-12. Slice 1's final tests and full Terra Pass 3 gate passed;
-see `slice-01-review.md` and the final acceptance below. Earlier checkpoint
-failures remain preserved chronologically. No production data, provider
-delivery, deployment, or release/rehearsal gate was involved.
+Recorded 2026-09-12. Slice 1's local tests and full Terra Pass 3 gate passed;
+the subsequent Linux remote CI failure remains under correction. See
+`slice-01-review.md` and the evidence below. Earlier checkpoint failures remain
+preserved chronologically. No production data, provider delivery, deployment,
+or release/rehearsal gate was involved.
 
 ## Foundation Checkpoint
 
@@ -558,3 +559,28 @@ The real Rest 3-compatible, cancellable `Clc.Postmark.Api` integration remains
 a release/rehearsal blocker. File output does not prove provider delivery,
 webhooks, provider-specific tests, or production readiness. See
 `temporary-email-transport.md` for the explicit deferred work.
+
+## Remote CI Failure
+
+The reviewed milestone `c1b86558ad3b2a7270c6cf1d1bfa7830911d7f44` was pushed
+to PR #264. Run 34730692517 built successfully on Linux and installed browser
+dependencies, but .NET/SQL tests finished with 77 passed, 41 failed and no skips
+in 1m 36s. Frontend and publication steps did not run. The failed log is retained
+locally as `.git/asap-slice-01-ci-34730692517.log`; see `slice-01-review.md` for
+the two concrete root causes and correction boundary. The earlier Windows
+acceptance is not evidence that Linux CI passed. Sol and Terra remain assigned
+to close this before Slice 2; no production or release gate is claimed.
+
+The narrow correction subsequently passed Sol's zero-warning/error Release
+build, 120/120 .NET tests, 20 focused configuration tests, credential-protected
+bootstrap migration, npm, published browser/SQL, 14-case CSP and native migration
+acceptance. Astra independently reran all 120 tests with no skips in 1m 39s and
+verified the fresh source-built artifacts' exact hashes/exclusions. See the CI
+closure dispatch in `slice-01-review-packet.md` for receipt, artifact and run
+identities. Same-Terra review and actual Linux CI remain required before closing
+the correction; Windows results alone do not satisfy that gate.
+
+Same-Terra full Slice 1 closure review is now clean. The reviewer independently
+verified the 96-file receipt/artifact evidence and passed the 20 configuration
+tests plus the real-SQL protected-bootstrap migration test. The coherent CI
+correction may be committed; its new actual Linux CI result is still required.

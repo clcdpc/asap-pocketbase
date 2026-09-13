@@ -47,7 +47,7 @@ cap. Migration code and reconciliation grow with every data-owning slice.
 | Slice | Scope | Status |
 | --- | --- | --- |
 | 0 | Branch, skeleton, engineering baseline | Complete: reviewed milestone `0096777`, remote CI passed |
-| 1 | Patron login and submission | Complete: 118 tests, artifact checks and full Terra Pass 3 passed; milestone remote CI pending |
+| 1 | Patron login and submission | Milestone `c1b8655` plus reviewed CI correction; 120 local tests passed, Linux rerun pending |
 | 2 | Staff Entra and core request workflow | Not started |
 | 3 | Additional-copy workflow | Not started |
 | 4 | Administration and configuration | Not started |
@@ -81,6 +81,17 @@ substantive finding; all six findings are resolved. See `slice-01-review.md`.
 This coherent milestone closes Slice 1's local acceptance/review gate. Remote
 CI for the new milestone must pass before Slice 2 dispatch; earlier remote CI
 does not certify the Slice 1 implementation.
+
+Slice 1 milestone: `c1b86558ad3b2a7270c6cf1d1bfa7830911d7f44`, pushed to the
+same draft PR. Its [remote CI run](https://github.com/clcdpc/asap-pocketbase/actions/runs/34730692517)
+failed with 77 passing and 41 failing tests, none skipped. Migration certificate
+lookup opened an unsupported Unix machine store; patron application setup also
+rejected the SQL-authenticated Linux CI database. Sol's narrow corrections and
+security-boundary regressions pass 120/120 local tests, independently rerun by
+Astra, and fresh native/browser artifact checks. The same Terra's full closure
+review is clean. The correction is cleared for commit/push and a new Linux run;
+Slice 2 remains gated on that actual result. Future-slice preparation documents
+were excluded from the Slice 1 commit.
 
 See `slice-00-evidence.md` for actual build, SQL, startup and publish checks.
 Milestone `00967778001e7ec8198ab4498d0fbd15ded4d984` passed the complete

@@ -25,6 +25,33 @@ public sealed class ExternalConfigurationLoaderTests
     }
 
     [TestMethod]
+    public void SqlAuthenticationAllowanceComesFromTrustedHostNotJson()
+    {
+        var configuration = TestConfigurationFactory.Create(isNonProduction: true);
+        configuration.Environment.Name = "Testing";
+        configuration.ConnectionStrings.AsapDatabase =
+            "Server=localhost;Database=AsapTests;User ID=sa;Password=test-only-secret;TrustServerCertificate=True";
+        configuration.ConnectionStrings.HangfireDatabase = configuration.ConnectionStrings.AsapDatabase;
+        using var file = TemporaryFile.WithContent(JsonSerializer.Serialize(configuration));
+
+        var strictResult = ExternalConfigurationLoader.Load(
+            Bootstrap(file.Path),
+            Path.GetDirectoryName(file.Path)!,
+            allowFileWithinContentRoot: true);
+        Assert.IsFalse(strictResult.IsValid);
+        CollectionAssert.Contains(
+            strictResult.Errors.ToList(),
+            "asap_database_integrated_security_required");
+
+        var trustedTestingResult = ExternalConfigurationLoader.Load(
+            Bootstrap(file.Path),
+            Path.GetDirectoryName(file.Path)!,
+            allowFileWithinContentRoot: true,
+            allowSqlAuthenticationForTesting: true);
+        Assert.IsTrue(trustedTestingResult.IsValid);
+    }
+
+    [TestMethod]
     public void MissingPatronLoginRateLimitUsesDocumentedDefaults()
     {
         var document = JsonNode.Parse(JsonSerializer.Serialize(TestConfigurationFactory.Create()))!.AsObject();

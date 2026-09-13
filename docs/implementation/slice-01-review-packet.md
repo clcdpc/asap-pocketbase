@@ -1,5 +1,37 @@
 # Slice 1 Independent Review Packet
 
+## CI Closure Dispatch
+
+After the clean local Pass 3 and pushed milestone `c1b8655`, remote Linux run
+34730692517 exposed two defects documented in `slice-01-review.md`. Sol's
+narrow correction is ready for same-Terra full-slice closure review. The
+nominal pass cap does not permit waiving these known failures. Implementation
+files and shared builds are frozen; no new slice or architecture review starts.
+
+The current whole-slice receipt is
+`.git/asap-slice-01-review-state-ci-fix.json`: 96 non-documentation files,
+SHA-256 `fc3cf785608f9f356fc2bfc0cd06bda31fda98a1fb5e36373cfcd8e26d572d11`.
+Seven files changed since Pass 3: migration certificate lookup, configuration
+loader/validator, Program registration, their two unit-test files, and CI's
+minimum test count. Review the complete slice and surrounding behavior,
+especially strict non-Testing validation, untrusted JSON flags, certificate
+private-key/lookup/fail-closed behavior, and migration protection compatibility.
+
+Sol reports zero-warning/error Release build, 120/120 .NET, npm/browser and
+published native CLI acceptance. Astra independently reran all 120 tests with
+none skipped in 1m 39s and verified vendor/Hangfire hashes, artifact exclusions
+and fourteen pinned CSP oracle cases. Fresh source-built output is
+`.artifacts/slice-01-handoff-20260912-ci-fix-verified/`:
+
+- Web DLL: `460d41e469c8e3a7b4ade939f3449072889ecb1a13c3ee03ac73ef82b3388ef2`.
+- Migration DLL: `88b80d28280c96af1016294ba20d4b3d46cc299c1b870b982cd3efe24afa8bdf`.
+- DACPAC: `6a94ca03dd4f3c34e1d8dc844103ea953cb317c10b54aca502383a0075f2fd60`.
+
+Published acceptance: CSP run `5ddff85ba861459aaf8e685ddda6a6d1`, browser/SQL
+run `1eae8a5db6c542dab1af4c839dd7c211`, native migration run
+`89555545db514bbc96ffd3ab61866a6e`. Remote Linux CI has not yet rerun. Review
+clearance precedes the correction commit/push; actual green CI precedes Slice 2.
+
 ## Pass 3 Dispatch State
 
 The same Terra High reviewer returns for full Pass 3 after S1-R6 remediation.
