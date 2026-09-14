@@ -1,5 +1,58 @@
 # Slice 4 Conversation Handoff
 
+## Current Slice 4 Stop Boundary
+
+All final candidate-c local gates and the retained Terra's full Pass 2 are
+clean; the Pass-1 P1 is closed. Astra verified the complete acceptance evidence.
+Only the coherent milestone push and actual exact-SHA remote CI remain at the
+time of this commit. Their final result is recorded in the
+[Slice 4 acceptance record](https://github.com/clcdpc/asap-pocketbase/pull/264#issuecomment-5665538639).
+After exact-SHA CI is green, STOP with PR #264 draft. Do not start or dispatch
+Slice 5, merge, tag, deploy or perform cutover. Do not repeat the historical
+Step-4 pause or launch another review merely because old notes below say pending.
+
+## Corrective Continuation History
+
+The 2026-09-14 corrective request supersedes the earlier Step-4 pause below.
+Work resumed from exact checkpoint `42e65cd3773cf57557e908fe79e01d77d58bac2f`;
+PR #264 remains draft on `codex/csharp-port`, and fetched main still equals
+the behavioral pin. Retain Luna Max Jason
+(`01a09b0c-a918-7640-ac4a-6ed90d644f76`) for all implementation fixes and tests.
+
+The requested corrections and focused regressions are implemented; see
+`slice-04-corrective-notes.md`. First isolated candidate `corrective-20260914a`
+passed the clean Release build but failed the existing mobile AdditionalCopy
+focus-return browser assertion (225/226 .NET tests passed, no skips). That red
+evidence is retained. The same Luna corrected the actual asynchronous Grid.js
+focus races; the unchanged browser journey and all nine new isolated focus
+scenarios pass, as do all 172 Node test files. The failed candidate remains red.
+
+Fresh replacement `corrective-20260914b` was fully published and validated:
+226/226 .NET cases, zero skips, 172 Node files, clean Release, complete native
+four-fixture exports/oracles/imports/reconciliation, and final published batch
+`corrective-20260914b2` (12 modes, 103 browser states, 14 CSP cases). All receipt
+paths/hashes retain the candidate-b names in the local receipts. The review
+packet now identifies candidate c. Those b gates ran on frozen code;
+the freeze was subsequently lifted for the confirmed review finding below.
+
+Astra's fresh corrective review was clear. Fresh Terra High Laplace
+(`01a0a00a-8fac-74a0-a536-480f5bde0852`) completed full Pass 1 with one P1:
+global-super-admin TitleRequest cleanup can race another library admin's
+unclaim/reassignment. Astra confirmed that cross-library distinct-claimant
+case and returned it to the same Luna for locking and real-SQL tests. The fix
+and eight new SQL cases passed. Fresh candidate `corrective-20260914c` now
+passes every complete local gate: Release, 234 .NET cases with zero skips,
+172 Node files, four native fixtures/oracles and 12 published browser modes
+(103 states, 14 CSP cases). Current hashes are in the review packet. The same
+Terra completed mandatory full Pass 2 clean. No further substantive finding
+requires another fix/re-review cycle; the retained contexts were not replaced.
+
+Final-byte, native fixture/oracle, browser/accessibility, retained Terra
+review/re-review and Astra local acceptance gates are complete. Follow only
+the exact-milestone remote CI gate and stop boundary above. The sections below record
+the earlier checkpoints and retained acceptance tooling; they are historical,
+not instructions to repeat the old pause after Step 4.
+
 ## Checkpoint, Not Acceptance
 
 On 2026-09-13 the user explicitly requested committing and pushing the incomplete

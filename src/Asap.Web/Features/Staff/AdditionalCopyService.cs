@@ -193,10 +193,6 @@ public sealed class AdditionalCopyService(
         {
             return new AdditionalCopyMutationResult("invalid_version");
         }
-        var readiness = input.EmailPurchaseReminder
-            ? await emailSender.CheckReadinessAsync(actor.OrganizationId, cancellationToken)
-            : EmailTransportReadiness.NotConfigured;
-
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var snapshot = await context.TitleRequests.AsNoTracking()
             .Where(item => item.Id == sourceRequestId)
@@ -210,6 +206,9 @@ public sealed class AdditionalCopyService(
             return new AdditionalCopyMutationResult("not_found");
         }
 
+        var readiness = input.EmailPurchaseReminder
+            ? await emailSender.CheckReadinessAsync(snapshot.LibraryOrganizationId, cancellationToken)
+            : EmailTransportReadiness.NotConfigured;
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         var locked = await LockRelationshipContextAsync(
             context,
@@ -353,16 +352,15 @@ public sealed class AdditionalCopyService(
         {
             return new AdditionalCopyMutationResult("invalid_version");
         }
-        var readiness = assigneeId.HasValue
-            ? await emailSender.CheckReadinessAsync(actor.OrganizationId, cancellationToken)
-            : EmailTransportReadiness.NotConfigured;
-
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var snapshot = await ReadTaskSnapshotAsync(context, requestId, cancellationToken);
         if (snapshot is null)
         {
             return new AdditionalCopyMutationResult("not_found");
         }
+        var readiness = assigneeId.HasValue
+            ? await emailSender.CheckReadinessAsync(snapshot.LibraryOrganizationId, cancellationToken)
+            : EmailTransportReadiness.NotConfigured;
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         var targetId = assigneeId ?? actor.Id;
         var locked = await LockRelationshipContextAsync(
@@ -389,7 +387,7 @@ public sealed class AdditionalCopyService(
         if (unclaim)
         {
             if (request.ClaimedByStaffUserId.HasValue &&
-                request.ClaimedByStaffUserId != actor.Id && actor.Role == "staff")
+                request.ClaimedByStaffUserId != actor.Id && locked.Staff[actor.Id].Role == "staff")
             {
                 return new AdditionalCopyMutationResult("claim_forbidden");
             }
@@ -538,6 +536,10 @@ public sealed class AdditionalCopyService(
         {
             return new AdditionalCopyMutationResult("delete_requires_closed");
         }
+        if (locked.Staff[actor.Id].Role is not ("admin" or "super_admin"))
+        {
+            return new AdditionalCopyMutationResult("delete_forbidden");
+        }
         context.DeletedRequestAudits.Add(new DeletedRequestAudit
         {
             RequestType = "additional_copy",
@@ -594,10 +596,12 @@ public sealed class AdditionalCopyService(
     }
 
     private bool IsSameCurrentActor(CurrentStaff actor, StaffUser row) =>
+        row.EntraTenantId != Guid.Empty && row.EntraObjectId != Guid.Empty &&
         row.EntraTenantId == actor.EntraTenantId && row.EntraObjectId == actor.EntraObjectId;
 
     private bool IsRelationshipEligible(StaffUser row, int organizationId) =>
         row.IsActive && row.EntraTenantId.HasValue && row.EntraObjectId.HasValue &&
+        row.EntraTenantId != Guid.Empty && row.EntraObjectId != Guid.Empty &&
         allowedTenantIds.Contains(row.EntraTenantId.Value) &&
         (row.Role == "super_admin" && row.OrganizationId == 1 ||
          row.Role is "staff" or "admin" && row.OrganizationId == organizationId);
@@ -617,6 +621,7 @@ public sealed class AdditionalCopyService(
             return "claimant_unmapped";
         }
         if (!candidate.IsActive || !candidate.EntraTenantId.HasValue || !candidate.EntraObjectId.HasValue ||
+            candidate.EntraTenantId == Guid.Empty || candidate.EntraObjectId == Guid.Empty ||
             !allowedTenantIds.Contains(candidate.EntraTenantId.Value))
         {
             return "claimant_inactive";

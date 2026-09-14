@@ -665,6 +665,8 @@ public sealed partial class PatronSuggestionService(
               AND [IsActive] = 1
               AND [EntraTenantId] IS NOT NULL
               AND [EntraObjectId] IS NOT NULL
+              AND [EntraTenantId] <> @emptyGuid
+              AND [EntraObjectId] <> @emptyGuid
               AND
               (
                   ([Role] IN (N'staff', N'admin') AND [OrganizationId] = @organizationId) OR
@@ -675,6 +677,7 @@ public sealed partial class PatronSuggestionService(
             transaction);
         Add(command, "@staffId", SqlDbType.BigInt, candidate.StaffUserId);
         Add(command, "@organizationId", SqlDbType.Int, organizationId);
+        Add(command, "@emptyGuid", SqlDbType.UniqueIdentifier, Guid.Empty);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
         {

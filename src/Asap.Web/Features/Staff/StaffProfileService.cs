@@ -34,16 +34,22 @@ public sealed class StaffProfileService(
         }
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        var row = await context.StaffUsers.SingleOrDefaultAsync(
-            item => item.Id == currentStaff.Id,
-            cancellationToken);
-        if (row is null || !row.IsActive ||
-            row.EntraTenantId != currentStaff.EntraTenantId ||
-            row.EntraObjectId != currentStaff.EntraObjectId)
+        var organizationId = await context.StaffUsers.AsNoTracking().Where(item => item.Id == currentStaff.Id)
+            .Select(item => (int?)item.OrganizationId).SingleOrDefaultAsync(cancellationToken);
+        if (!organizationId.HasValue)
         {
             return new StaffMutationResult("staff_session_invalid");
         }
-
+        await using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, cancellationToken);
+        var organization = await context.Organizations.FromSqlInterpolated(
+                $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {organizationId.Value}")
+            .SingleOrDefaultAsync(cancellationToken);
+        if (organization is null) return new StaffMutationResult("staff_session_invalid");
+        var locked = await eligibility.RevalidateLockedAsync(context, currentStaff, null, StaffRoleRequirement.Any,
+            true, new HashSet<int> { organization.Id }, cancellationToken);
+        if (locked.Outcome != StaffEligibilityOutcome.Allowed) return new StaffMutationResult(locked.Code);
+        var row = context.StaffUsers.Local.Single(item => item.Id == currentStaff.Id);
+        if (!row.RowVersion.SequenceEqual(expectedVersion)) return new StaffMutationResult("stale_version");
         context.Entry(row).Property(item => item.RowVersion).OriginalValue = expectedVersion;
         row.WeeklyActionSummaryEnabled = input.WeeklyActionSummaryEnabled;
         row.WeeklyActionSummaryEmail = weeklyEmail;
@@ -54,21 +60,22 @@ public sealed class StaffProfileService(
         try
         {
             await context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
         }
         catch (DbUpdateConcurrencyException)
         {
             return new StaffMutationResult("stale_version");
         }
 
-        var refreshed = await eligibility.EvaluateAsync(
-            new StaffIdentityEvidence(currentStaff.Id, currentStaff.EntraTenantId, currentStaff.EntraObjectId),
-            null,
-            StaffRoleRequirement.Any,
-            requireParticipation: true,
-            cancellationToken);
-        return refreshed.Outcome == StaffEligibilityOutcome.Allowed
-            ? new StaffMutationResult("updated", refreshed.Staff)
-            : new StaffMutationResult(refreshed.Code);
+        return new StaffMutationResult("updated", locked.Staff! with
+        {
+            WeeklyActionSummaryEnabled = row.WeeklyActionSummaryEnabled,
+            WeeklyActionSummaryEmail = row.WeeklyActionSummaryEmail,
+            PurchaseReminderDefault = row.PurchaseReminderDefault,
+            AdditionalCopyReminderDefault = row.AdditionalCopyReminderDefault,
+            DefaultMineUnclaimedFilter = row.DefaultMineUnclaimedFilter,
+            RowVersion = row.RowVersion
+        });
     }
 }
 

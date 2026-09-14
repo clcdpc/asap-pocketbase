@@ -37,6 +37,72 @@ fixes use a temporary branch from the deployed source, immediate equivalent
 
 ## Execution And Evidence
 
+### Slice 4 Final Local Acceptance - 2026-09-14
+
+All corrective and Step-5 local gates passed on candidate c. The retained
+Terra High completed full Pass 2 clean and closed the Pass-1 cleanup race;
+the same Luna implemented and retested every confirmed finding. Astra verified
+the complete source, publication, SQL, migration, browser and review evidence.
+No substantive finding remains. See `slice-04-review.md` and the current
+`slice-04-review-packet.md` for exact evidence and residual provider boundaries.
+
+The coherent milestone is ready to commit and push. Final Slice 4 certification
+requires remote CI green for that exact SHA, not checkpoint CI. The milestone
+SHA and actual run result are maintained in the
+[Slice 4 acceptance record](https://github.com/clcdpc/asap-pocketbase/pull/264#issuecomment-5665538639),
+so recording the result does not create a different, untested milestone SHA.
+Stop after that gate. PR #264 stays draft; Slice 5 is not started or dispatched.
+No merge, tag, deployment or production cutover is authorized.
+
+### Slice 4 Corrective Pass - 2026-09-14
+
+The authorized pre-Slice-5 corrective pass started from clean local/remote/PR
+head `42e65cd3773cf57557e908fe79e01d77d58bac2f`. Fetch and PR inspection confirmed
+`codex/csharp-port`, draft PR #264, and `origin/main` still exactly equal to
+behavioral pin `150b30b776565194260cc327eeeffdfb46475e81`; no source change needed
+propagation. Full Slice 4 review still starts at `4769a8a8750c315e319824355d4508073bd43546`.
+
+The same Luna Max implementation context has corrected lifecycle activity and
+destination authorization, locked workflow privileges, durable identity and
+readable metadata, existing-cookie recovery, business-library email readiness,
+complete canonical settings versions and hidden submission templates. The
+bounded related sweep also corrected profile participation serialization,
+unusable identity assignment/invariant predicates, settings lock ordering and
+stale sign-in metadata after rebind. See `slice-04-corrective-notes.md` for
+implementation and focused regression evidence. Migration mapping and schema
+are unchanged by this corrective pass; FileEmailSender remains authorized.
+
+The first isolated candidate `corrective-20260914a` built Release with zero
+warnings/errors but failed one of 226 tests (225 passed, zero skipped): the
+existing mobile AdditionalCopy dialog focus-return browser assertion. This is
+retained red evidence, not a certified publication. The retained implementer
+reproduced and corrected both delayed-opener and replaced-opener focus races
+using the pinned Grid.js. The unchanged SQL-backed browser journey passed
+(18 accessibility/layout/image states), all nine new isolated focus scenarios
+passed, and the complete Node suite passed all 172 files. No existing browser
+assertion was weakened. A replacement isolated candidate was required.
+
+Replacement candidate `corrective-20260914b` passed clean Release, 226/226 .NET
+tests with no skips, 172 Node files, fresh Web/native publications and matching
+source/DACPAC/asset hashes. All four fresh stopped exports, pinned oracles and
+native positive/negative checks passed. Published batch `corrective-20260914b2`
+passed 12 modes, 103 browser states and 14 CSP cases. Astra's post-validation
+corrective review found no remaining substantive issue. See the review packet
+and evidence for exact receipts and the retained failed-harness history.
+
+Fresh Terra High Laplace (`01a0a00a-8fac-74a0-a536-480f5bde0852`) completed full
+Pass 1 with a P1 distinct-claimant TitleRequest cleanup race for global
+super-admin scope contraction. Astra confirmed the cross-library case and
+returned it to the retained Luna for held request locking and real-SQL tests.
+The fix and eight SQL ordering cases passed. Fresh candidate c then passed
+clean Release, 234/234 .NET tests with zero skips, all 172 Node files, all four
+fresh native fixtures/oracles and 12 published browser modes (103 states,
+14 CSP cases). Candidate b remains historical green. The same Terra's full
+Pass 2 is now clean and Astra's acceptance audit is complete. Milestone push
+and exact-SHA CI remain the final gate recorded above.
+The Step-4 entries below are historical checkpoints, not final acceptance.
+Slice 5 has not started; no merge, tag, deployment or cutover is authorized.
+
 ### Slice 4 Step 1-4 WIP Checkpoint - 2026-09-14
 
 Implementation resumed from PR #264 checkpoint
@@ -218,7 +284,7 @@ closed. They do not prescribe the current remaining-slice model.
 | 1 | Patron login and submission | Complete: `c1b8655` plus reviewed correction `1e36761`; 120 tests and remote Linux CI passed |
 | 2 | Staff Entra and core request workflow | Complete: reviewed milestone `9f946ae`; 181 local and remote Linux CI tests pass, no skips |
 | 3 | Additional-copy workflow | Complete: reviewed milestone `85539b0`; 190 local/remote tests, native/published-browser checks and full Terra Pass 5 clear |
-| 4 | Administration and configuration | Incomplete WIP checkpoint paused after step 4; final step-5 freeze/native/full-suite/Terra/CI gates pending |
+| 4 | Administration and configuration | Final local gates and full Terra Pass 2 clean; exact milestone and CI result in the [acceptance record](https://github.com/clcdpc/asap-pocketbase/pull/264#issuecomment-5665538639) |
 | 5 | Background workflows and complete email operations | Not started |
 | 6 | Analytics | Not started |
 | 7 | Migration hardening and legacy links | Not started |
@@ -367,8 +433,10 @@ fetch still matches the PocketBase pin and all 19 pack hashes match. Milestone
 passed [remote Linux CI](https://github.com/clcdpc/asap-pocketbase/actions/runs/34755432713)
 on 2026-09-13: zero-warning/error Release build, 190 tests with zero failures or
 skips, legacy/frontend tests and both publication checks. Slice 3 is complete.
-This execution stops here with the implementation/evidence records committed;
-Slice 4 has not started. No merge, tag, deployment or production approval follows.
+That was the accepted Slice 3 stop boundary. Slice 4 subsequently completed
+the corrective/local acceptance gates recorded above; its exact-milestone CI
+gate is recorded separately. No merge, tag, deployment or production approval
+follows from a slice milestone.
 
 The temporary file sender is not production transport. Release/rehearsal cannot
 pass until a Rest 3-compatible `Clc.Postmark.Api` supports cancellable async

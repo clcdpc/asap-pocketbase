@@ -960,13 +960,13 @@ public sealed class HoldPlacementService(
         }
 
         patron ??= await TryRefreshPatronAsync(snapshot.PatronBarcodeSnapshot, cancellationToken);
-        var readiness = await emailSender.CheckReadinessAsync(1, cancellationToken);
         long? outboxId = null;
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         var requestSnapshot = await context.TitleRequests.AsNoTracking()
             .SingleOrDefaultAsync(item => item.Id == snapshot.TitleRequestId, cancellationToken);
         if (requestSnapshot is null) return new HoldPlacementResult("not_found", owner.Id);
+        var readiness = await emailSender.CheckReadinessAsync(requestSnapshot.LibraryOrganizationId, cancellationToken);
+        await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         _ = await context.Organizations.FromSqlInterpolated(
                 $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {requestSnapshot.LibraryOrganizationId}")
             .SingleAsync(cancellationToken);
@@ -982,7 +982,8 @@ public sealed class HoldPlacementService(
         {
             return new HoldPlacementResult("operation_ownership_lost", owner.Id);
         }
-        if (request.BibId != operation.BibIdSnapshot || request.Status != "pending_hold")
+        if (request.LibraryOrganizationId != requestSnapshot.LibraryOrganizationId ||
+            request.BibId != operation.BibIdSnapshot || request.Status != "pending_hold")
         {
             await RequireOperatorInTransactionAsync(operation, now, "request_state_conflict");
             await context.SaveChangesAsync(cancellationToken);
@@ -1267,6 +1268,7 @@ public sealed class HoldPlacementService(
 
     private bool IsCurrentAndEligible(CurrentStaff actor, StaffUser row, int organizationId) =>
         row.IsActive && row.EntraTenantId == actor.EntraTenantId && row.EntraObjectId == actor.EntraObjectId &&
+        row.EntraTenantId != Guid.Empty && row.EntraObjectId != Guid.Empty &&
         row.EntraTenantId.HasValue && allowedTenantIds.Contains(row.EntraTenantId.Value) &&
         (row.Role == "super_admin" && row.OrganizationId == 1 ||
          row.Role is "staff" or "admin" && row.OrganizationId == organizationId);
@@ -1274,6 +1276,7 @@ public sealed class HoldPlacementService(
     private bool IsCurrentSuperAdmin(CurrentStaff actor, StaffUser row) =>
         row.IsActive && row.Role == "super_admin" && row.OrganizationId == 1 &&
         row.EntraTenantId == actor.EntraTenantId && row.EntraObjectId == actor.EntraObjectId &&
+        row.EntraTenantId != Guid.Empty && row.EntraObjectId != Guid.Empty &&
         row.EntraTenantId.HasValue && allowedTenantIds.Contains(row.EntraTenantId.Value);
 
     private static List<PolarisHoldSnapshot> ActiveSameBibHolds(

@@ -1,5 +1,143 @@
 # Slice 4 Implementation And Acceptance Evidence
 
+## Corrective Gate - 2026-09-14
+
+Current corrective starting SHA: `42e65cd3773cf57557e908fe79e01d77d58bac2f`.
+Local HEAD, fetched implementation branch and draft PR #264 agreed exactly.
+Fetched `origin/main` remains behavioral pin
+`150b30b776565194260cc327eeeffdfb46475e81`; no intervening source correction
+required propagation. The full Slice 4 review base remains `4769a8a8750c315e319824355d4508073bd43546`.
+
+`slice-04-corrective-notes.md` records the retained Luna Max implementation,
+focused SQL/frontend tests and bounded additional findings. This pass changes
+neither the DACPAC schema nor migration mappings. It preserves the final-only
+FileEmailSender substitution and does not implement Slice 5 notification types.
+
+The first fresh isolated candidate, `corrective-20260914a`, used a complete
+nonignored source snapshot at `.git/s4-candidate-corrective-20260914a`. Its clean
+Release build passed with zero warnings/errors. The complete .NET/real-SQL run
+was 225/226, zero skipped; the sole failure was the existing mobile
+AdditionalCopy unclaim/Escape focus-return wait in `tests/browser/staff.cjs`.
+Logs are retained under
+`.artifacts/slice-04-candidate-corrective-20260914a/validation`. Publication did
+not proceed. This red run is not counted as final-byte acceptance.
+
+The retained implementer reproduced two focus races using the actual pinned
+Grid.js: the opener arriving after the old focus timers expire, and an opener
+being replaced after receiving focus. One scoped DOM observer follows the
+opener until deliberate focus, navigation, a new modal or authentication state
+changes; existing browser assertions remain unchanged. Deterministic red logs
+are `TestResults/corrective-browser-focus-node-red.log` and
+`corrective-browser-focus-replacement-red.log`. Nine isolated Node scenarios
+passed in `corrective-browser-focus-isolated-green.log`; the unchanged SQL
+browser journey passed 1/1 in `corrective-browser-focus-final-green.trx`, with
+18 accessibility/layout/image states at
+`.artifacts/browser/staff-dd3a73b0ed6747a0a78a6bb3fdfb4901`.
+
+The first full Node attempt exposed scheduled Grid.js work sharing replaced
+JSDOM globals between the new scenarios; each now runs in a fresh process.
+The complete rerun passed all 172 files in
+`TestResults/corrective-focus-final-node2.log`. Existing Git `grep`/`true`
+utilities were on PATH so the legacy Dao guard executed without its earlier
+missing-tool noise. The final candidate harness retains that environment and
+requires at least 226 .NET tests plus a machine-readable TRX report.
+
+The replacement isolated candidate `corrective-20260914b` passed the clean
+Release build with zero warnings/errors, all 226 .NET cases with zero skips
+(138 integration, 88 unit, including 19 migration cases), and all 172 Node files.
+It contains fresh Web and self-contained `win-x64` migration publications.
+The tested Web assembly equals the published assembly; all 745 source inputs
+remained unchanged during the gates. The 590-file candidate inventory includes
+validation receipts. All 45 frontend files, 76 compressed payloads, 17 vendor
+hashes and both DACPAC copies verified. Historical b hashes remain in its
+immutable local receipts; the review packet now identifies candidate c.
+
+All four stopped fixtures were freshly exported by those candidate native
+bytes. Original/edge imported and reconciled 115/116 records, passed 161/164
+independent checks, and rejected deliberate same-count reconciliation drift.
+The populated-unmapped-setting and ambiguous-sender variants each passed three
+negative checks without importing business data. Every package passed the
+12-module/four-scope pinned configuration oracle and the four-module runtime
+oracle (including eight effective queue limits). Durable identity mapping,
+trimmed/normalized readable UPN and separate NotificationEmail were explicitly
+verified in both positive native imports. No source database changed.
+
+The first final published-browser batch passed staff administration and cookie
+recovery, then stopped before patron execution because an empty optional
+environment value selected a directory instead of `journey.cjs`. The red batch
+is retained at `.git/asap-slice-04-final-browsers-corrective-20260914b`.
+The runner now selects the patron script and SQL assertion flag explicitly.
+All 12 modes passed as `corrective-20260914b2` against unchanged bytes: 103
+desktop/mobile browser states and 14 pinned CSP cases. Applicable serious/
+critical axe, overflow and image checks all passed. Astra separately inspected
+the final Staff Access, recovery, different-account and patron screenshots.
+The complete receipt is
+`.git/asap-slice-04-final-browsers-corrective-20260914b2/receipt.json`, SHA-256
+`cc632d154926765e8066712cb4b3a48f9b44f9ec12c256420e54d4f9583a8bc6`.
+
+Astra then performed the required fresh corrective reread over lifecycle,
+locked authority, identity metadata, recovery, readiness, settings versions,
+template hiding, related guards and migration compatibility. No substantive
+issue remained; detailed scope and ruled-out concerns are in `slice-04-review.md`.
+Terra full Pass 1 subsequently found one substantive TitleRequest cleanup race
+for a global super-admin claimant and a distinct administrator in another
+library. Astra confirmed that narrower case and returned it to the retained
+Luna. Held request locks and deterministic real-SQL coverage for both orderings
+are required before a fresh candidate and the same Terra's full Pass 2.
+The existing settings-rule cleanup shares Organization 1 serialization and
+does not require a speculative parallel correction. Candidate b is historical
+green evidence, not acceptance of the upcoming fix. Earlier entries below
+retain their original historical scope; they do not claim these corrections
+were present at the Step-4 checkpoint.
+
+The retained Luna reproduced the review race in four of eight SQL cases;
+all four opposite orderings passed. The two title cleanup queries now retain
+update/hold locks in Id order, matching existing copy cleanup. All eight cases
+then passed, including exact cleanup, event and audit counts and preservation
+of closed history. `slice-04-review.md` records Astra's adjudication and the
+red/green receipts. The complete suite now has 234 cases. The same focused
+validation also found and corrected one HTTP test's bootstrap-before-seed
+ordering, with unchanged assertions and a standalone passing rerun.
+
+### Fresh Post-Review Candidate C
+
+`corrective-20260914c` freshly passed every complete local gate after the Terra
+fix and test-fixture corrections: clean Release with zero warnings/errors,
+234/234 .NET tests with zero skips (146 integration, 88 unit, including all 19
+migration cases), and all 172 Node files. All 746 snapshot inputs remained
+unchanged through the run. Fresh Web and self-contained `win-x64` migration
+publications have matching DACPACs; the tested Web assembly matches publication.
+All 45 frontend files, 76 compressed variants and 17 vendor hashes passed.
+
+All four stopped fixtures were freshly re-exported using candidate c. Every
+pinned configuration/runtime oracle passed; original/edge imported 115/116
+records and passed 161/164 checks including deliberate drift rejection.
+Unmapped-setting and sender-conflict variants each passed three rejection
+checks. Source databases were unchanged, and fresh manifest hashes match the
+same logical packages from b. No business configuration mapping changed.
+
+All 12 freshly published browser modes passed: 103 desktop/mobile states and
+14 pinned CSP cases, with no applicable serious/critical axe, overflow or image
+failure. Astra inspected representative Staff Access, forbidden-cookie recovery,
+different-account and patron form screenshots and verified all 164 referenced
+browser evidence hashes. The independent source/artifact audit matched all
+659 non-document inputs, all 590 candidate files and four native receipts.
+Exact candidate-c paths/hashes and coverage are in `slice-04-review-packet.md`.
+
+The retained Terra subsequently performed full Pass 2 over the complete
+Slice 4 base, not only the cleanup correction. Pass 2 is clean and the P1 is
+closed. It independently matched all 51 source receipt hashes, 164 browser
+evidence hashes, final TRX counts and packet receipt hashes without rerunning
+providers or changing files. Astra verified the complete acceptance evidence,
+including all 19 unchanged authoritative pack payload hashes and a fresh
+fetch showing no main change beyond the pin. The local review gate is satisfied.
+
+Final certification still requires the coherent milestone's actual remote CI.
+The exact SHA and run result are recorded in the
+[Slice 4 acceptance record](https://github.com/clcdpc/asap-pocketbase/pull/264#issuecomment-5665538639)
+after push, avoiding a second documentation commit that would change the SHA
+being certified. No earlier WIP CI is substituted; Slice 5 remains unstarted.
+
 ## State And Ownership
 
 Implementation resumed 2026-09-13 from clean PR #264 head

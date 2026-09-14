@@ -92,7 +92,7 @@ public static class StaffAuthenticationRegistration
                 identity.AddClaim(new Claim(StaffClaims.StaffUserId, staff.Id.ToString()));
                 await context.HttpContext.RequestServices.GetRequiredService<StaffSignInService>()
                     .RecordSuccessfulSignInAsync(
-                        staff.Id,
+                        new StaffIdentityEvidence(staff.Id, tenantId, objectId),
                         principal.FindFirstValue("preferred_username") ?? principal.FindFirstValue(ClaimTypes.Upn),
                         principal.FindFirstValue("name") ?? principal.FindFirstValue(ClaimTypes.Name),
                         context.HttpContext.RequestAborted);

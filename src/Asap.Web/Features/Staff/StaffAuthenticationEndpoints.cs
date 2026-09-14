@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 
 namespace Asap.Web.Features.Staff;
 
@@ -11,6 +12,10 @@ public static class StaffAuthenticationEndpoints
         {
             var tokens = antiforgery.GetAndStoreTokens(context);
             var staff = context.Items[StaffCurrentUserMiddleware.ItemKey] as CurrentStaff;
+            if (context.Items[StaffCurrentUserMiddleware.ForbiddenItemKey] is string code)
+            {
+                return Results.Json(new { authenticated = true, accessAllowed = false, code, antiforgeryToken = tokens.RequestToken });
+            }
             return Results.Json(staff is null
                 ? new
                 {
@@ -20,6 +25,7 @@ public static class StaffAuthenticationEndpoints
                 : new
                 {
                     authenticated = true,
+                    accessAllowed = true,
                     antiforgeryToken = tokens.RequestToken,
                     staff = ToSessionDto(staff)
                 });
@@ -29,7 +35,7 @@ public static class StaffAuthenticationEndpoints
         {
             var target = LocalReturnUrl(returnUrl);
             return Results.Challenge(
-                new AuthenticationProperties { RedirectUri = target },
+                new OpenIdConnectChallengeProperties { RedirectUri = target, Prompt = "select_account" },
                 ["AsapEntra"]);
         }).AllowAnonymous();
 
@@ -104,6 +110,9 @@ public static class StaffAuthenticationEndpoints
             "staff_session_invalid" => Results.Json(
                 new { code = result.Code },
                 statusCode: StatusCodes.Status401Unauthorized),
+            "staff_scope_forbidden" => Results.Json(
+                new { code = result.Code, accessAllowed = false },
+                statusCode: StatusCodes.Status403Forbidden),
             _ => Results.BadRequest(new { code = result.Code, message = "The profile values are invalid." })
         };
     }

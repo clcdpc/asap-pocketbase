@@ -287,6 +287,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     const prompts = [
       '11111111-1111-1111-1111-111111111111',
       '44444444-4444-4444-4444-444444444444',
+      'rebound@example.org',
       'Correct imported identity'
     ];
     window.prompt = () => prompts.shift();
@@ -294,6 +295,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     await waitFor(() => Boolean(rebindBody));
     assert.strictEqual(rebindBody.version, 'user-version-20');
     assert.strictEqual(rebindBody.confirmed, true);
+    assert.strictEqual(rebindBody.userPrincipalName, 'rebound@example.org');
     assert.strictEqual(rebindBody.reason, 'Correct imported identity');
 
     const inactiveRow = [...document.querySelectorAll('.settings-staff-row')]
@@ -332,6 +334,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     assert.ok(adminRequests.includes('/api/asap/staff/audit?limit=50&organizationId=2'));
     assert.strictEqual(document.getElementById('staff-add-role').textContent.includes('Super admin'), false);
     assert.strictEqual(document.getElementById('staff-add-organization').disabled, true);
+    assert.ok([...document.querySelectorAll('.settings-staff-row button')].some(button => button.textContent === 'Rebind identity'));
     admin.dom.window.close();
 
     console.log('Settings Staff Access roster, lifecycle, audit, and scope checks passed');

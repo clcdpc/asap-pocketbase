@@ -3,7 +3,8 @@ import {
   isAbortError,
   latestLoads,
   loadStaffSession,
-  onSessionInvalid
+  onSessionInvalid,
+  onAccessUnavailable
 } from './http.js';
 import { createSettingsController } from './settings.js';
 
@@ -150,6 +151,7 @@ export function createWorkflowApp() {
     selectedRequestType: null,
     selectedRequestVersion: null,
     returnFocus: null,
+    cancelFocusReturn: null,
     deepLinkHandled: false,
     additionalCopyDeepLinkHandled: false,
     additionalCopyLoaded: false,
@@ -186,6 +188,11 @@ export function createWorkflowApp() {
     latestLoads.begin('additional-copy-preview').abort();
   }
 
+  function cancelDialogFocusReturn() {
+    state.cancelFocusReturn?.();
+    state.cancelFocusReturn = null;
+  }
+
   function isCurrentDialogSelection(request, requestType) {
     return !!state.staff &&
       dom.dialog.open &&
@@ -211,6 +218,7 @@ export function createWorkflowApp() {
   }
 
   function showSignedOut(message) {
+    cancelDialogFocusReturn();
     cancelAssignmentCandidateLoad();
     cancelDialogMutationCompletion();
     cancelAdditionalCopyCreationCompletion();
@@ -252,6 +260,13 @@ export function createWorkflowApp() {
     populateProfile(staff);
   }
 
+  function showAccessUnavailable() {
+    showSignedOut('Staff access is not currently available. Sign out or use a different authorized Microsoft account.');
+    dom.sessionActions.hidden = false;
+    dom.staffIdentity.textContent = 'Access unavailable';
+    dom.staffIdentity.title = '';
+  }
+
   function populateProfile(staff) {
     dom.notificationEmail.value = staff.notificationEmail || '';
     dom.weeklyEmail.value = staff.weeklyActionSummaryEmail || '';
@@ -268,6 +283,10 @@ export function createWorkflowApp() {
       if (!load.isCurrent()) return;
       if (!session.authenticated) {
         showSignedOut();
+        return;
+      }
+      if (session.accessAllowed === false) {
+        showAccessUnavailable();
         return;
       }
       showWorkspace(session.staff);
@@ -516,6 +535,7 @@ export function createWorkflowApp() {
 
   async function openAdditionalCopy(id, returnFocus) {
     if (!state.staff) return;
+    cancelDialogFocusReturn();
     cancelAssignmentCandidateLoad();
     cancelDialogMutationCompletion();
     cancelAdditionalCopyPreviewLoad();
@@ -706,6 +726,7 @@ export function createWorkflowApp() {
 
   async function openRequest(id, returnFocus) {
     if (!state.staff) return;
+    cancelDialogFocusReturn();
     cancelAssignmentCandidateLoad();
     cancelDialogMutationCompletion();
     cancelAdditionalCopyPreviewLoad();
@@ -1417,6 +1438,10 @@ export function createWorkflowApp() {
     } catch (error) {
       if (error.status === 409) {
         const session = await loadStaffSession();
+        if (session.accessAllowed === false) {
+          showAccessUnavailable();
+          return;
+        }
         if (session.authenticated) {
           state.staff = session.staff;
           populateProfile(session.staff);
@@ -1427,6 +1452,7 @@ export function createWorkflowApp() {
   }
 
   function switchView(name, updateUrl = true) {
+    cancelDialogFocusReturn();
     state.activeView = name;
     dom.queueView.hidden = name !== 'queue';
     dom.additionalCopyView.hidden = name !== 'additional-copies';
@@ -1453,6 +1479,7 @@ export function createWorkflowApp() {
   }
 
   function closeDialog() {
+    cancelDialogFocusReturn();
     cancelAssignmentCandidateLoad();
     cancelDialogMutationCompletion();
     cancelAdditionalCopyPreviewLoad();
@@ -1461,6 +1488,10 @@ export function createWorkflowApp() {
     const selectedId = state.selectedRequestId;
     const wasAdditionalCopy = state.selectedRequestType === 'additional_copy';
     const returnFocus = state.returnFocus;
+    const staff = state.staff;
+    const view = state.activeView;
+    const scope = state.scope;
+    const status = wasAdditionalCopy ? state.additionalCopyStatus : state.status;
     state.selectedRequestId = null;
     state.selectedRequestType = null;
     state.selectedRequestVersion = null;
@@ -1469,24 +1500,54 @@ export function createWorkflowApp() {
     const ariaLabel = wasAdditionalCopy
       ? `Open additional-copy task ${selectedId}`
       : `Open request ${selectedId}`;
+    const grid = wasAdditionalCopy ? dom.additionalCopyGrid : dom.grid;
+    let frame;
+    let focusedReturnTarget;
     const focusReturnButton = () => {
-      const liveGridButton = [...document.querySelectorAll('.grid-open')]
+      if (state.staff !== staff || !staff || state.activeView !== view || state.scope !== scope ||
+          (wasAdditionalCopy ? state.additionalCopyStatus : state.status) !== status ||
+          dom.dialog.open || state.selectedRequestId !== null) {
+        cancelDialogFocusReturn();
+        return;
+      }
+      const liveGridButton = [...grid.querySelectorAll('.grid-open')]
         .find(button => button.getAttribute('aria-label') === ariaLabel);
-      const focusTarget = returnFocus?.isConnected ? returnFocus : liveGridButton;
-      if (focusTarget?.isConnected) focusTarget.focus();
+      const focusTarget = liveGridButton ||
+        (returnFocus?.isConnected && !dom.dialog.contains(returnFocus) ? returnFocus : null);
+      if (focusTarget) {
+        focusedReturnTarget = focusTarget;
+        focusTarget.focus();
+      }
     };
-    window.requestAnimationFrame(() => {
-      focusReturnButton();
-      window.setTimeout(focusReturnButton, 0);
-    });
+    const focusMoved = event => {
+      if (event.target !== focusedReturnTarget && !dom.dialog.contains(event.target)) cancelDialogFocusReturn();
+    };
+    // Grid.js may first render old rows, then replace them. Follow the opener until focus moves elsewhere.
+    const observer = new window.MutationObserver(focusReturnButton);
+    state.cancelFocusReturn = () => {
+      observer.disconnect();
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener('focusin', focusMoved);
+    };
+    observer.observe(grid, { childList: true, subtree: true });
+    document.addEventListener('focusin', focusMoved);
+    frame = window.requestAnimationFrame(focusReturnButton);
   }
 
   function bindEvents() {
     onSessionInvalid(() => showSignedOut('Your staff session ended or no longer has access. Sign in again.'));
+    onAccessUnavailable(showAccessUnavailable);
     settingsController.bind();
     dom.signOut.addEventListener('click', async () => {
-      try { await authorizedJson('/api/asap/staff/sign-out', { method: 'POST' }); } catch { /* Local UI still returns to sign-in. */ }
-      showSignedOut('You are signed out.');
+      try {
+        await authorizedJson('/api/asap/staff/sign-out', { method: 'POST' });
+        showSignedOut('You are signed out.');
+      } catch (error) {
+        if (error.status !== 401) {
+          dom.signedOutMessage.textContent = 'Sign out did not complete. Please try again.';
+          announce('Sign out did not complete. Please try again.', 'error');
+        }
+      }
     });
     dom.refresh.addEventListener('click', () => loadQueue({ skipDeepLink: true }));
     dom.scope.addEventListener('change', () => {

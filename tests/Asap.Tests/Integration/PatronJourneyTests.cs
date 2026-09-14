@@ -33,7 +33,7 @@ namespace Asap.Tests.Integration;
 
 [TestClass]
 [DoNotParallelize]
-public sealed class PatronJourneyTests
+public sealed partial class PatronJourneyTests
 {
     private static string databaseName = null!;
     private static string masterConnectionString = null!;
@@ -1385,6 +1385,7 @@ public sealed class PatronJourneyTests
     [TestMethod]
     public async Task AdministrationAuditAndSystemSettingsHttpScopeRespectCurrentStaffRole()
     {
+        using var client = factory!.CreateClient();
         var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
         var tenantId = Guid.Parse(identity.TenantId!);
         var objectId = Guid.NewGuid();
@@ -1409,7 +1410,6 @@ public sealed class PatronJourneyTests
 
         try
         {
-            using var client = factory!.CreateClient();
             AddTestingStaffHeaders(client, adminId, tenantId, objectId);
             client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
 
@@ -1600,7 +1600,7 @@ public sealed class PatronJourneyTests
 
             await restartedFactory.Services.GetRequiredService<StaffSignInService>()
                 .RecordSuccessfulSignInAsync(
-                    staffId,
+                    new StaffIdentityEvidence(staffId, staffTenantId, originalObjectId),
                     " refreshed.staff@example.org ",
                     " Refreshed Staff ",
                     CancellationToken.None);
@@ -1756,6 +1756,7 @@ public sealed class PatronJourneyTests
                 version = targetVersion,
                 tenantId = identity.TenantId,
                 objectId = newObjectId,
+                userPrincipalName = "rebound@example.org",
                 confirmed = false,
                 reason = "Reviewed the corrected enterprise identity."
             });
@@ -1768,6 +1769,7 @@ public sealed class PatronJourneyTests
                 version = targetVersion,
                 tenantId = identity.TenantId,
                 objectId = identity.ObjectId,
+                userPrincipalName = "rebound@example.org",
                 confirmed = true,
                 reason = "This duplicate must be rejected."
             });
@@ -1785,6 +1787,7 @@ public sealed class PatronJourneyTests
                 version = targetVersion,
                 tenantId = identity.TenantId,
                 objectId = newObjectId,
+                userPrincipalName = "rebound@example.org",
                 confirmed = true,
                 reason
             });
@@ -2007,7 +2010,7 @@ public sealed class PatronJourneyTests
 
         await factory.Services.GetRequiredService<StaffSignInService>()
             .RecordSuccessfulSignInAsync(
-                staffId,
+                new StaffIdentityEvidence(staffId, newTenantId, newObjectId),
                 " refreshed.workflow.staff@example.org ",
                 " Refreshed Workflow Staff ",
                 CancellationToken.None);

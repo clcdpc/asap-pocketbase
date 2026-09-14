@@ -171,18 +171,20 @@ public sealed class AdministrationService(
             : await LoadAutoClaimRulesAsync(context, organizationId, cancellationToken);
         var autoClaimStaff = organizationId == 1
             ? Array.Empty<object>()
-            : await context.StaffUsers.AsNoTracking()
+            : (await context.StaffUsers.AsNoTracking()
                 .Where(item => item.IsActive &&
                     (((item.Role == "staff" || item.Role == "admin") && item.OrganizationId == organizationId) ||
                      (item.Role == "super_admin" && item.OrganizationId == 1)))
                 .OrderBy(item => item.DisplayName)
                 .ThenBy(item => item.UserPrincipalName)
+                .ToListAsync(cancellationToken))
+                .Where(item => staffEligibility.IsAssignmentEligible(item, organizationId))
                 .Select(item => (object)new
                 {
                     id = item.Id.ToString(),
                     label = item.DisplayName ?? item.UserPrincipalName ?? $"Staff {item.Id}"
                 })
-                .ToArrayAsync(cancellationToken);
+                .ToArray();
         var branding = await context.Branding.AsNoTracking()
             .SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
         var systemBranding = organizationId == 1
@@ -297,18 +299,21 @@ public sealed class AdministrationService(
         await using var transaction = await context.Database.BeginTransactionAsync(
             System.Data.IsolationLevel.Serializable,
             cancellationToken);
-        var additionalOrganizationIds = organizationId == 1 && HasParticipationPayload(payload)
-            ? await context.Organizations.AsNoTracking()
-                .Where(item => item.Id > 1)
-                .Select(item => item.Id)
-                .ToListAsync(cancellationToken)
+        var autoClaimStaffIds = organizationId != 1 &&
+            TryGetAny(payload, out var autoClaimRules, "autoClaimRules", "formatClaimRules") &&
+            autoClaimRules.ValueKind == JsonValueKind.Array
+            ? autoClaimRules.EnumerateArray()
+                .Select(item => GetLong(item, "staffUserId") ?? GetLong(item, "staffId"))
+                .Where(item => item.HasValue).Select(item => item!.Value).ToArray()
             : [];
         var locked = await LockAndRevalidateActorAsync(
             context,
             actor,
             organizationId,
-            additionalOrganizationIds,
-            cancellationToken);
+            [],
+            cancellationToken,
+            includeAllOrganizations: organizationId == 1,
+            additionalStaffIds: autoClaimStaffIds);
         if (locked.Failure is not null)
         {
             return locked.Failure;
@@ -774,7 +779,8 @@ public sealed class AdministrationService(
             actor,
             organizationId,
             [],
-            cancellationToken);
+            cancellationToken,
+            includeAllOrganizations: organizationId == 1);
         if (locked.Failure is not null)
         {
             return locked.Failure;
@@ -1138,8 +1144,19 @@ public sealed class AdministrationService(
         int targetOrganizationId,
         IEnumerable<int> additionalOrganizationIds,
         CancellationToken cancellationToken,
-        StaffRoleRequirement roleRequirement = StaffRoleRequirement.Admin)
+        StaffRoleRequirement roleRequirement = StaffRoleRequirement.Admin,
+        bool includeAllOrganizations = false,
+        IEnumerable<long>? additionalStaffIds = null)
     {
+        if (includeAllOrganizations)
+        {
+            // System versions include every participation row. Org1 also serializes
+            // reference additions, so enumerate and lock that set before any Staff row.
+            await LockOrganizationAsync(context, 1, cancellationToken);
+            additionalOrganizationIds = additionalOrganizationIds.Concat(
+                await context.Organizations.AsNoTracking().Where(item => item.Id > 1)
+                    .OrderBy(item => item.Id).Select(item => item.Id).ToListAsync(cancellationToken)).ToArray();
+        }
         var organizationIds = new[] { 1, actor.OrganizationId, targetOrganizationId }
             .Concat(additionalOrganizationIds)
             .Where(item => item > 0)
@@ -1154,6 +1171,16 @@ public sealed class AdministrationService(
         if (!organizations.ContainsKey(actor.OrganizationId))
         {
             return (organizations, new AdministrationResult("staff_session_invalid"));
+        }
+
+        if (additionalStaffIds is not null)
+        {
+            foreach (var staffId in additionalStaffIds.Append(actor.Id).Distinct().Order())
+            {
+                await context.StaffUsers.FromSqlInterpolated(
+                        $"SELECT * FROM [asap].[StaffUser] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {staffId}")
+                    .SingleOrDefaultAsync(cancellationToken);
+            }
         }
 
         var eligibility = await staffEligibility.RevalidateLockedAsync(
@@ -1196,10 +1223,6 @@ public sealed class AdministrationService(
         result.Outcome == StaffEligibilityOutcome.InvalidIdentity
             ? new AdministrationResult("staff_session_invalid")
             : new AdministrationResult("staff_scope_forbidden");
-
-    private static bool HasParticipationPayload(JsonElement payload) =>
-        TryGetAny(GetObject(payload, "systemSettings", "system"), out _, "enabledLibraryOrgIds", "enabledLibraries") ||
-        TryGetAny(payload, out _, "enabledLibraryOrgIds", "enabledLibraries");
 
     private async Task<AdministrationResult?> ValidatePatronCodePayloadAsync(
         JsonElement payload,
@@ -2207,27 +2230,28 @@ public sealed class AdministrationService(
 
         await AddVersionsAsync(
             context.Organizations.AsNoTracking()
-                .Where(item => item.Id == 1 || item.Id == organizationId),
+                .Where(item => organizationId == 1 || item.Id == 1 || item.Id == organizationId).OrderBy(item => item.Id),
             item => item.RowVersion);
-        await AddVersionsAsync(context.SystemSettings.AsNoTracking(), item => item.RowVersion);
-        await AddVersionsAsync(context.PolarisSettings.AsNoTracking(), item => item.RowVersion);
-        await AddVersionsAsync(context.WorkflowSettings.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId), item => item.RowVersion);
-        await AddVersionsAsync(context.PatronSettings.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId), item => item.RowVersion);
-        await AddVersionsAsync(context.EmailSettings.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId), item => item.RowVersion);
-        await AddVersionsAsync(context.CommonCreatorSets.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId), item => item.RowVersion);
-        await AddVersionsAsync(context.PatronCodeEligibilitySets.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId), item => item.RowVersion);
-        await AddVersionsAsync(context.PublicationOptionSets.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId), item => item.RowVersion);
-        await AddVersionsAsync(context.ExternalSearchProviders.AsNoTracking(), item => item.RowVersion);
-        await AddVersionsAsync(context.ExternalSearchProviderOverrides.AsNoTracking().Where(item => item.LibraryOrganizationId == organizationId), item => item.RowVersion);
-        await AddVersionsAsync(context.PatronCustomFields.AsNoTracking().Where(item => item.LibraryOrganizationId == organizationId), item => item.RowVersion);
-        await AddVersionsAsync(context.MaterialFormats.AsNoTracking().Where(item => item.OwnerOrganizationId == 1 || item.OwnerOrganizationId == organizationId), item => item.RowVersion);
-        await AddVersionsAsync(context.MaterialFormatOverrides.AsNoTracking().Where(item => item.LibraryOrganizationId == organizationId), item => item.RowVersion);
-        await AddVersionsAsync(context.MaterialFormatCustomFieldRules.AsNoTracking().Where(item => item.LibraryOrganizationId == organizationId), item => item.RowVersion);
-        await AddVersionsAsync(context.FormatAutoClaimRules.AsNoTracking().Where(item => item.LibraryOrganizationId == organizationId), item => item.RowVersion);
-        await AddVersionsAsync(context.EmailTemplates.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId), item => item.RowVersion);
-        await AddVersionsAsync(context.Branding.AsNoTracking().Where(item => item.OrganizationId == organizationId), item => item.RowVersion);
+        await AddVersionsAsync(context.SystemSettings.AsNoTracking().OrderBy(item => item.OrganizationId), item => item.RowVersion);
+        await AddVersionsAsync(context.PolarisSettings.AsNoTracking().OrderBy(item => item.OrganizationId), item => item.RowVersion);
+        await AddVersionsAsync(context.WorkflowSettings.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId), item => item.RowVersion);
+        await AddVersionsAsync(context.PatronSettings.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId), item => item.RowVersion);
+        await AddVersionsAsync(context.EmailSettings.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId), item => item.RowVersion);
+        await AddVersionsAsync(context.CommonCreatorSets.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId), item => item.RowVersion);
+        await AddVersionsAsync(context.PatronCodeEligibilitySets.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId), item => item.RowVersion);
+        await AddVersionsAsync(context.PublicationOptionSets.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId), item => item.RowVersion);
+        await AddVersionsAsync(context.ExternalSearchProviders.AsNoTracking().OrderBy(item => item.Id), item => item.RowVersion);
+        await AddVersionsAsync(context.ExternalSearchProviderOverrides.AsNoTracking().Where(item => item.LibraryOrganizationId == organizationId).OrderBy(item => item.ExternalSearchProviderId), item => item.RowVersion);
+        await AddVersionsAsync(context.PatronCustomFields.AsNoTracking().Where(item => item.LibraryOrganizationId == organizationId).OrderBy(item => item.Id), item => item.RowVersion);
+        await AddVersionsAsync(context.MaterialFormats.AsNoTracking().Where(item => item.OwnerOrganizationId == 1 || item.OwnerOrganizationId == organizationId).OrderBy(item => item.Id), item => item.RowVersion);
+        await AddVersionsAsync(context.MaterialFormatOverrides.AsNoTracking().Where(item => item.LibraryOrganizationId == organizationId).OrderBy(item => item.MaterialFormatId), item => item.RowVersion);
+        await AddVersionsAsync(context.MaterialFormatCustomFieldRules.AsNoTracking().Where(item => item.LibraryOrganizationId == organizationId).OrderBy(item => item.MaterialFormatId).ThenBy(item => item.PatronCustomFieldId), item => item.RowVersion);
+        await AddVersionsAsync(context.FormatAutoClaimRules.AsNoTracking().Where(item => item.LibraryOrganizationId == organizationId).OrderBy(item => item.Id), item => item.RowVersion);
+        await AddVersionsAsync(context.EmailTemplates.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId).OrderBy(item => item.Id), item => item.RowVersion);
+        await AddVersionsAsync(context.Branding.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId), item => item.RowVersion);
+        parts.Add(JsonSerializer.Serialize(await context.PatronEmbedAllowedOrigins.AsNoTracking().Where(item => item.OrganizationId == 1).OrderBy(item => item.NormalizedOrigin).Select(item => new { item.Origin, item.NormalizedOrigin }).ToListAsync(cancellationToken)));
         parts.Add(JsonSerializer.Serialize(await context.CommonCreatorTerms.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId).OrderBy(item => item.Id).Select(item => new { item.OrganizationId, item.Value, item.SortOrder }).ToListAsync(cancellationToken)));
-        parts.Add(JsonSerializer.Serialize(await context.PatronCodeEligibilityMembers.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId).OrderBy(item => item.PatronCodeId).Select(item => new { item.OrganizationId, item.PatronCodeId }).ToListAsync(cancellationToken)));
+        parts.Add(JsonSerializer.Serialize(await context.PatronCodeEligibilityMembers.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId).ThenBy(item => item.PatronCodeId).Select(item => new { item.OrganizationId, item.PatronCodeId }).ToListAsync(cancellationToken)));
         parts.Add(JsonSerializer.Serialize(await context.PublicationOptions.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId).OrderBy(item => item.Id).Select(item => new { item.OrganizationId, item.OptionKey, item.Label, item.IsEnabled, item.SortOrder }).ToListAsync(cancellationToken)));
         parts.Add(JsonSerializer.Serialize(await context.PatronCustomFieldOptions.AsNoTracking().Where(item => context.PatronCustomFields.Any(field => field.Id == item.PatronCustomFieldId && field.LibraryOrganizationId == organizationId)).OrderBy(item => item.Id).Select(item => new { item.PatronCustomFieldId, item.OptionKey, item.Label, item.IsEnabled, item.SortOrder }).ToListAsync(cancellationToken)));
         return Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("|", parts))));
@@ -2883,10 +2907,8 @@ public sealed class AdministrationService(
             var staffId = GetLong(item, "staffUserId") ?? GetLong(item, "staffId");
             if (!staffId.HasValue) throw new InvalidOperationException("An active auto-claim rule requires a staff user.");
             if (desired.ContainsKey(formatId.Value)) throw new InvalidOperationException("Only one active auto-claim rule is allowed per format.");
-            var staff = await context.StaffUsers.AsNoTracking().SingleOrDefaultAsync(itemRow => itemRow.Id == staffId.Value, cancellationToken);
-            if (staff is null || !staff.IsActive ||
-                (staff.Role is not ("staff" or "admin") || staff.OrganizationId != organizationId) &&
-                (staff.Role != "super_admin" || staff.OrganizationId != 1))
+            var staff = context.StaffUsers.Local.SingleOrDefault(itemRow => itemRow.Id == staffId.Value);
+            if (staff is null || !staffEligibility.IsAssignmentEligible(staff, organizationId))
             {
                 throw new InvalidOperationException("The auto-claim staff user is not active or is outside the selected scope.");
             }

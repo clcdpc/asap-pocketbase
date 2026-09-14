@@ -5,6 +5,7 @@ namespace Asap.Web.Features.Staff;
 public sealed class StaffCurrentUserMiddleware(RequestDelegate next)
 {
     public const string ItemKey = "Asap.CurrentStaff";
+    public const string ForbiddenItemKey = "Asap.StaffAccessForbidden";
 
     public async Task InvokeAsync(HttpContext context, StaffEligibilityService eligibility)
     {
@@ -18,6 +19,7 @@ public sealed class StaffCurrentUserMiddleware(RequestDelegate next)
 
         if (!StaffClaims.TryRead(context.User, out var evidence))
         {
+            await context.SignOutAsync("AsapStaffCookie");
             await RejectAsync(context, "staff_session_invalid");
             return;
         }
@@ -37,8 +39,16 @@ public sealed class StaffCurrentUserMiddleware(RequestDelegate next)
 
         if (result.Outcome == StaffEligibilityOutcome.Forbidden)
         {
+            if (context.Request.Path.Equals("/api/asap/staff/session", StringComparison.OrdinalIgnoreCase) ||
+                context.Request.Path.Equals("/api/asap/staff/sign-in", StringComparison.OrdinalIgnoreCase) ||
+                context.Request.Path.Equals("/api/asap/staff/sign-out", StringComparison.OrdinalIgnoreCase))
+            {
+                context.Items[ForbiddenItemKey] = result.Code;
+                await next(context);
+                return;
+            }
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
-            await context.Response.WriteAsJsonAsync(new { code = result.Code, message = "Access is not currently available." }, context.RequestAborted);
+            await context.Response.WriteAsJsonAsync(new { code = result.Code, accessAllowed = false, message = "Access is not currently available." }, context.RequestAborted);
             return;
         }
 

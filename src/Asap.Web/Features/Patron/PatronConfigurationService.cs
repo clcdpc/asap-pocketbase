@@ -417,6 +417,7 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
                     item => item.OrganizationId == organizationId && item.SourceTemplateId == system.Id,
                     cancellationToken);
         var selected = library ?? system;
+        if (system.IsHidden || selected.IsHidden) return null;
         var subject = Inherit(selected.SubjectTemplate, system.SubjectTemplate);
         var body = Inherit(selected.BodyTemplate, system.BodyTemplate);
         return subject is null || body is null

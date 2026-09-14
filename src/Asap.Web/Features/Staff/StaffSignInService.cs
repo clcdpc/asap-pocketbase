@@ -6,13 +6,16 @@ namespace Asap.Web.Features.Staff;
 public sealed class StaffSignInService(IDbContextFactory<AsapDbContext> contextFactory)
 {
     public async Task RecordSuccessfulSignInAsync(
-        long staffUserId,
+        StaffIdentityEvidence evidence,
         string? userPrincipalName,
         string? displayName,
         CancellationToken cancellationToken)
     {
+        if (evidence.TenantId == Guid.Empty || evidence.ObjectId == Guid.Empty) return;
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        var staff = await context.StaffUsers.SingleAsync(item => item.Id == staffUserId, cancellationToken);
+        var staff = await context.StaffUsers.SingleOrDefaultAsync(item => item.Id == evidence.StaffUserId &&
+            item.IsActive && item.EntraTenantId == evidence.TenantId && item.EntraObjectId == evidence.ObjectId, cancellationToken);
+        if (staff is null) return;
         var normalizedUpn = Clean(userPrincipalName);
         var normalizedDisplayName = Clean(displayName);
         if (normalizedUpn is not null)

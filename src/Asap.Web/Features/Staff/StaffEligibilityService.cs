@@ -51,6 +51,13 @@ public sealed class StaffEligibilityService(
         .Select(Guid.Parse)
         .ToHashSet();
 
+    public bool IsAssignmentEligible(StaffUser row, int organizationId) =>
+        row.IsActive && row.EntraTenantId.HasValue && row.EntraObjectId.HasValue &&
+        row.EntraTenantId != Guid.Empty && row.EntraObjectId != Guid.Empty &&
+        allowedTenantIds.Contains(row.EntraTenantId.Value) &&
+        (row.Role == "super_admin" && row.OrganizationId == 1 ||
+         row.Role is "staff" or "admin" && row.OrganizationId == organizationId);
+
     public async Task<StaffEligibilityResult> EvaluateAsync(
         StaffIdentityEvidence evidence,
         int? requestedOrganizationId,
@@ -58,6 +65,7 @@ public sealed class StaffEligibilityService(
         bool requireParticipation,
         CancellationToken cancellationToken)
     {
+        if (evidence.TenantId == Guid.Empty || evidence.ObjectId == Guid.Empty) return Invalid();
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var row = await LoadAsync(context, evidence.StaffUserId, cancellationToken);
         if (row is null ||
@@ -85,7 +93,7 @@ public sealed class StaffEligibilityService(
         bool requireParticipation,
         CancellationToken cancellationToken)
     {
-        if (!allowedTenantIds.Contains(tenantId))
+        if (tenantId == Guid.Empty || objectId == Guid.Empty || !allowedTenantIds.Contains(tenantId))
         {
             return Invalid();
         }
@@ -131,6 +139,7 @@ public sealed class StaffEligibilityService(
             !row.IsActive ||
             !row.EntraTenantId.HasValue ||
             !row.EntraObjectId.HasValue ||
+            row.EntraTenantId == Guid.Empty || row.EntraObjectId == Guid.Empty ||
             row.EntraTenantId.Value != ticket.EntraTenantId ||
             row.EntraObjectId.Value != ticket.EntraObjectId ||
             !allowedTenantIds.Contains(row.EntraTenantId.Value))
@@ -194,6 +203,7 @@ public sealed class StaffEligibilityService(
         return candidates.Any(item =>
             item.EntraTenantId.HasValue &&
             item.EntraObjectId.HasValue &&
+            item.EntraTenantId != Guid.Empty && item.EntraObjectId != Guid.Empty &&
             allowedTenantIds.Contains(item.EntraTenantId.Value));
     }
 
@@ -239,7 +249,8 @@ public sealed class StaffEligibilityService(
          join organization in context.Organizations.AsNoTracking()
              on staff.OrganizationId equals organization.Id
          where staff.Id == staffUserId && staff.IsActive &&
-               staff.EntraTenantId != null && staff.EntraObjectId != null
+               staff.EntraTenantId != null && staff.EntraObjectId != null &&
+               staff.EntraTenantId != Guid.Empty && staff.EntraObjectId != Guid.Empty
          select new CurrentStaff(
              staff.Id,
              staff.EntraTenantId!.Value,

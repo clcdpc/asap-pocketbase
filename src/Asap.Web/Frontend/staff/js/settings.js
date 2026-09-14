@@ -805,7 +805,9 @@ export function createSettingsController({
       });
 
       const actions = [saveMetadata, saveRole, lifecycle];
-      if (state.staff?.role === 'super_admin') {
+      if (state.staff?.role === 'super_admin' ||
+          (state.staff?.role === 'admin' && property(user, 'role') !== 'super_admin' &&
+           String(property(user, 'organizationId')) === String(state.staff.organizationId))) {
         const rebind = node('button', {
           type: 'button',
           className: 'secondary-button',
@@ -1127,6 +1129,11 @@ export function createSettingsController({
     if (!tenantId) return;
     const objectId = clean(window.prompt('Enter the new Entra object ID.', property(user, 'objectId') || ''));
     if (!objectId) return;
+    const userPrincipalName = clean(window.prompt('Enter the readable user principal name for this identity.', property(user, 'userPrincipalName') || ''));
+    if (!userPrincipalName) {
+      setStaffStatus('A user principal name is required before rebinding a staff identity.', 'error');
+      return;
+    }
     const reason = clean(window.prompt('Reason for rebinding this staff identity.'));
     if (!reason) {
       setStaffStatus('A reason is required before rebinding a staff identity.', 'error');
@@ -1139,6 +1146,7 @@ export function createSettingsController({
         version,
         tenantId,
         objectId,
+        userPrincipalName,
         confirmed: true,
         reason
       }
