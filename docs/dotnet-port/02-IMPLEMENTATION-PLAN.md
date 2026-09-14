@@ -93,7 +93,7 @@ For each remaining slice beginning with Slice 5:
 
 1. Astra Max refreshes the prepared focused slice packet against accepted prior slices.
 2. Normally a fresh Luna High context implements the complete slice under document 10's escalation/context-rotation rules.
-3. Luna runs all relevant tests and verification, including end-to-end verification where applicable.
+3. Luna runs all relevant tests and verification, including end-to-end verification where applicable. After implementation and all required pre-review gates, a user-directed task may stop at a pushed review-candidate checkpoint under document 10's commit policy. Label it `implemented / ready for independent review`; Terra has not run, and neither the candidate nor its CI accepts the slice or permits later-slice progression. Resume with the review/fix/acceptance steps below.
 4. A fresh Terra High context performs **Pass 1** over the entire slice, not merely the diff fragment most recently changed.
 5. A Pass 1 with no substantive finding permits Astra acceptance verification without ceremonial full Pass 2. Astra may request focused confirmation of a particular high-risk invariant.
 6. Confirmed substantive findings return to the current Luna implementation context for fixes and affected/full required tests. Terra performs focused re-review of each fix, affected callers/invariants, regression surface, added/changed tests and interactions among fixes. Repeat as needed. Require another full-slice review for a systemic finding, broad/shared infrastructure changes, material authorization/concurrency/migration architecture changes, several unrelated changed areas, a new unrelated substantive defect found during focused re-review, or a regression surface Astra/Terra cannot confidently bound.

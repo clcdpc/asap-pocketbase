@@ -37,6 +37,26 @@ fixes use a temporary branch from the deployed source, immediate equivalent
 
 ## Execution And Evidence
 
+### Pre-Slice-5 Documentation Cleanup - 2026-09-14
+
+Started from `5c3553254c31f7b41d61025318a410de6f809a05`, with local/remote/PR
+heads matching, no later commits and its exact-SHA CI green. Accepted Slice 4
+`417c72430652a35bc8fc1da549ae270eabc86429` remains in history; fetched `main`
+still matches the PocketBase pin. The deployed production SHA remains unverified.
+
+Document 10 now permits a user-directed pushed review candidate after all
+pre-review gates, labeled `implemented / ready for independent review`, with
+Terra not yet run. It is not acceptance or permission to start a later slice;
+the accepted milestone still needs review/fixes, Astra acceptance and its own
+exact-SHA CI. `slice-05.md` enumerates the complete pre-review suites,
+publications, native/browser/accessibility and artifact checks. Context rotation
+preserves the checkout and required local harnesses/evidence under document 10.
+The PR description is a concise current summary; historical execution evidence
+remains in this repository. Slice 5 is not started or dispatched, and no review
+candidate is created by this documentation-only cleanup. PR #264 remains draft;
+no application acceptance suite, merge, tag, deployment, rehearsal or cutover
+is performed by this task.
+
 ### Current Execution Policy - Beginning With Slice 5 (2026-09-14)
 
 This documentation-only refinement starts from accepted Slice 4 milestone

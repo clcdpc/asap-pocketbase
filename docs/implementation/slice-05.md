@@ -13,7 +13,8 @@ queues, external-operation recovery and authorization-sensitive delivery.
 [Document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) governs bounded Luna Max
 escalation, optional context rotation with concise handoffs, compact evidence
 receipts, and Astra-first specialist escalation; Sol remains advisory only.
-After required tests, fresh Terra High independently reviews the whole slice.
+After the complete pre-review gates below, fresh Terra High independently reviews
+the whole slice unless the user directs a review-candidate stop under document 10.
 A clean Pass 1 needs no ceremonial full Pass 2; fixes receive focused re-review
 unless document 10's full-review triggers apply. Astra verifies acceptance,
 commits/pushes the milestone and requires actual remote CI success for that exact
@@ -139,8 +140,40 @@ summary idempotency and operation barriers/recovery. Fake provider tests must
 exercise every irreversible-boundary failure, not merely happy paths. Include
 strict clock/DST, timeout cap, exact tracked-hold identity and aggregate search
 failure cases. Browser-check operations/email/retry and protected controls on
-desktop/mobile with serious/critical axe gates. Run existing relevant tests,
-build/publish and artifact-exclusion checks before Terra Pass 1.
+desktop/mobile with serious/critical axe gates.
+
+## Pre-Review Validation
+
+Before Slice 5 is `implemented / ready for independent review`, all of the
+following applicable gates must pass against the final candidate. Focused tests
+alone do not satisfy this boundary:
+
+- Clean Release build with zero warnings/errors.
+- Complete .NET test suite and complete real-SQL integration suite, with zero
+  unexplained skips.
+- Complete Node/frontend test suite.
+- Fresh Web publication and fresh self-contained `win-x64` migration publication.
+- Required native migration/export/import/reconciliation fixtures and oracles.
+- Required published-browser journeys, applicable desktop/mobile checks, and
+  the serious/critical axe accessibility gate.
+- Application artifact/exclusion checks and required DACPAC/source/artifact
+  verification.
+- `git diff --check`.
+
+Retain full detailed logs as evidence and return compact command/result/count/
+hash/path/warning receipts under document 10. Preserve the detailed tests above
+and the established fake-provider/real-SQL distinction. Use the existing Testing
+browser-auth boundary and retain required real-cookie/OIDC regression coverage;
+these gates add no live Entra browser authentication or live Postmark requirement.
+The documented temporary transport and later real-provider release gates remain.
+
+At the user's direction, Astra may push `WIP Slice 5 review candidate` at this
+boundary. `PORT-STATUS.md`/handoff material must say
+`implemented / ready for independent review` and state that Terra has not run.
+The candidate is not an accepted milestone; its CI cannot authorize Slice 6 or
+replace the accepted milestone's own exact-SHA CI. Resume with document 10's
+independent Terra review, fixes and Astra acceptance before creating the accepted
+milestone.
 
 Return actual changed paths, commands/results and remaining concrete risks.
 No commit, push, merge, tag, deployment or next-slice work by the implementer.

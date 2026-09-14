@@ -30,7 +30,7 @@ For each remaining slice:
 - refresh the already-prepared slice packet against accepted prior implementation and prepare a focused implementation context;
 - include objective, acceptance criteria, relevant global invariants, relevant prior-slice contracts, exact current PocketBase files/behavior to preserve, migration impact, and relevant deferred/non-goal warnings;
 - normally dispatch a fresh GPT-5.6 Luna High implementation context;
-- after implementation and required tests, dispatch a fresh GPT-5.6 Terra High reviewer context;
+- after implementation and all required pre-review gates, dispatch a fresh GPT-5.6 Terra High reviewer context unless the user directed a review-candidate stop under the commit policy below;
 - keep the Luna context while efficient and useful; rotate with a concise handoff when the context-management rule below warrants it;
 - keep the same Terra context through that slice's review/fix/re-review sequence;
 - verify acceptance and create the milestone commit only after all existing tests and review gates are satisfied;
@@ -102,6 +102,8 @@ Before rotation, create a concise handoff containing only:
 - exact next action.
 
 Do not paste large logs or prior conversations into the handoff. The new context must inspect current code before editing; the handoff does not substitute for the repository.
+
+Model-context rotation does not imply changing the checkout or environment. Preserve the current checkout and any local-only harnesses, fixtures, receipts, or evidence required by the slice; do not move to a fresh worktree/checkout merely because the model context rotates. If an environment change is unavoidable, explicitly recreate and rerun any required local-only evidence before relying on it. Do not claim prior evidence that is no longer available.
 
 ## Evidence and acceptance verification
 
@@ -179,7 +181,7 @@ For **every remaining** vertical slice beginning with Slice 5:
 
 1. Astra Max refreshes the prepared focused slice packet against accepted prior implementation.
 2. Normally a fresh Luna High context implements the complete slice, with bounded escalation/context rotation under the rules above.
-3. Luna runs all relevant tests and verifies the slice end-to-end.
+3. Luna runs all required pre-review gates and verifies the slice end-to-end. At the user's direction, stop here at a pushed review-candidate checkpoint under the commit policy below; otherwise continue to Terra.
 4. A fresh Terra High context performs Pass 1 over the full slice.
 5. If Pass 1 has no substantive finding, no ceremonial full Pass 2 is required. Astra may proceed to acceptance verification or request focused confirmation of a particular high-risk invariant.
 6. Confirmed substantive findings go to the current Luna implementation context for fixes and affected/full required tests.
@@ -219,6 +221,10 @@ At each milestone the .NET branch must build, tests must be green, and all featu
 ## Commit policy
 
 Commit by completed vertical slice/meaningful milestone. Keep coherent slice changes together. Do not manufacture tiny commits for every file or reviewer fix; do not let unrelated multi-slice work accumulate into one giant final commit.
+
+At the user's direction, Astra may commit and push a review-candidate checkpoint after implementation and all required pre-review gates, before Terra runs. Use a clearly nonfinal message such as `WIP Slice 5 review candidate`. `../implementation/PORT-STATUS.md` and handoff material must label it `implemented / ready for independent review`, not `accepted`, and state that Terra has not run yet.
+
+A review candidate is not an accepted slice milestone and does not satisfy the independent Terra gate. Its remote CI cannot substitute for the accepted milestone's exact-SHA CI, and no later slice may start from merely a candidate. Resume from that candidate with the normal independent Terra review/fix/acceptance process. Create the accepted milestone only after required review/fixes and Astra acceptance; only that accepted milestone's own successful exact-SHA remote CI satisfies the progression gate.
 
 ## Final whole-app review
 

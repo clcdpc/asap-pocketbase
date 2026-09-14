@@ -21,7 +21,7 @@
 - Rename the repository to `clcdpc/asap` only after the first .NET production deployment is validated.
 - Use canonical names: `Asap.sln`, `Asap.Web`, `Asap.Database`, `Asap.Migration`, and `Asap.Tests`.
 - Organize `Asap.Web` primarily by feature, not global technical layers.
-- Commit at completed vertical-slice/meaningful-milestone boundaries.
+- Commit at completed vertical-slice/meaningful-milestone boundaries. A user-directed pre-review checkpoint may be pushed under document 10's review-candidate rule; it is not an accepted milestone and cannot satisfy independent review or exact-milestone CI progression.
 - Every slice must leave the .NET branch buildable, runnable, and green; unimplemented features may be absent/disabled rather than broken.
 - Beginning with Slice 5, every slice requires one fresh independent Terra High review of the full slice. A clean Pass 1 needs no ceremonial full Pass 2; confirmed fixes receive focused re-review unless document 10's full-review triggers apply. Repeat as needed without a numeric cap permitting a known blocking correctness/security/data-integrity/migration/authorization/concurrency/material-regression defect.
 - Final whole-app review stops after three consecutive passes with no new substantive findings, maximum six passes; blocking issues still must be fixed.
