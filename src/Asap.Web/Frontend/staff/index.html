@@ -49,6 +49,9 @@
         <button class="view-tab" type="button" data-view="profile">
           <i class="fa fa-user" aria-hidden="true"></i> Profile
         </button>
+        <button id="operations-view-tab" class="view-tab" type="button" data-view="operations" hidden>
+          <i class="fa fa-cogs" aria-hidden="true"></i> Operations
+        </button>
         <button id="settings-view-tab" class="view-tab" type="button" data-view="settings" hidden>
           <i class="fa fa-sliders" aria-hidden="true"></i> Settings
         </button>
@@ -166,6 +169,36 @@
           <label class="check-field"><input id="mine-default" type="checkbox"> <span>Show mine + unclaimed by default</span></label>
           <div class="form-actions"><button class="primary-button" type="submit">Save profile</button></div>
         </form>
+      </section>
+
+      <section id="operations-view" aria-labelledby="operations-title" hidden>
+        <div class="section-heading">
+          <div>
+            <h1 id="operations-title" tabindex="-1">Operations</h1>
+            <p>Run scoped workflow work and inspect delivery state.</p>
+          </div>
+          <label id="operations-scope-field" class="compact-field" hidden>
+            <span>Run scope</span>
+            <select id="operations-scope"></select>
+          </label>
+        </div>
+        <div class="operations-actions" aria-label="Workflow operations">
+          <button id="run-workflow-now" class="primary-button" type="button"><i class="fa fa-play" aria-hidden="true"></i> Run workflow now</button>
+          <button id="run-weekly-now" class="secondary-button" type="button"><i class="fa fa-envelope" aria-hidden="true"></i> Run weekly summary</button>
+          <button id="force-weekly-now" class="secondary-button" type="button"><i class="fa fa-repeat" aria-hidden="true"></i> Force weekly summary</button>
+          <button id="send-test-email" class="secondary-button" type="button"><i class="fa fa-paper-plane" aria-hidden="true"></i> Send test email</button>
+          <button id="refresh-operations" class="icon-button" type="button" title="Refresh operations" aria-label="Refresh operations"><i class="fa fa-refresh" aria-hidden="true"></i></button>
+        </div>
+        <div class="operations-columns">
+          <section class="operations-panel" aria-labelledby="queue-progress-title">
+            <h2 id="queue-progress-title">Queue progress</h2>
+            <div id="queue-progress-table" class="operations-table" aria-live="polite"></div>
+          </section>
+          <section class="operations-panel" aria-labelledby="email-operations-title">
+            <h2 id="email-operations-title">Email operations</h2>
+            <div id="email-operations-table" class="operations-table" aria-live="polite"></div>
+          </section>
+        </div>
       </section>
 
       <section id="settings-view" aria-labelledby="settings-title" hidden>

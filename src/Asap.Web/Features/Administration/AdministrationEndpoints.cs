@@ -1,5 +1,8 @@
 using Asap.Shared;
 using Asap.Web.Features.Staff;
+using Asap.Web.Features.Email;
+using Asap.Web.Infrastructure.Jobs;
+using Hangfire;
 
 namespace Asap.Web.Features.Administration;
 
@@ -50,6 +53,22 @@ public static class AdministrationEndpoints
             .RequireAuthorization();
         endpoints.MapGet("/api/asap/staff/audit", ListAuditAsync)
             .RequireAuthorization();
+        endpoints.MapPost("/api/asap/staff/workflow/run-now", RunWorkflowNowAsync)
+            .RequireAuthorization()
+            .AddEndpointFilter<StaffAntiforgeryFilter>();
+        endpoints.MapPost("/api/asap/staff/workflow/weekly-summary/run-now", RunWeeklySummaryNowAsync)
+            .RequireAuthorization()
+            .AddEndpointFilter<StaffAntiforgeryFilter>();
+        endpoints.MapPost("/api/asap/staff/email-operations/test", QueueTestEmailAsync)
+            .RequireAuthorization()
+            .AddEndpointFilter<StaffAntiforgeryFilter>();
+        endpoints.MapGet("/api/asap/staff/workflow/queues", ListQueueProgressAsync)
+            .RequireAuthorization();
+        endpoints.MapGet("/api/asap/staff/email-operations", ListEmailOperationsAsync)
+            .RequireAuthorization();
+        endpoints.MapPost("/api/asap/staff/email-operations/{id:long}/retry", RetryEmailAsync)
+            .RequireAuthorization()
+            .AddEndpointFilter<StaffAntiforgeryFilter>();
         return endpoints;
     }
 
@@ -274,6 +293,132 @@ public static class AdministrationEndpoints
             organizationId,
             limit ?? 100,
             cancellationToken));
+
+    private static IResult RunWorkflowNowAsync(
+        HttpContext context,
+        int? organizationId,
+        IBackgroundJobClient jobs)
+    {
+        var actor = StaffAuthenticationEndpoints.RequireCurrentStaff(context);
+        if (actor.Role is not ("admin" or "super_admin") ||
+            actor.Role != "super_admin" && organizationId.HasValue && organizationId != actor.OrganizationId ||
+            actor.Role != "super_admin" && actor.OrganizationId <= 1)
+        {
+            return Results.Json(new { code = "staff_scope_forbidden" }, statusCode: StatusCodes.Status403Forbidden);
+        }
+        var effectiveScope = actor.Role == "super_admin" ? organizationId : actor.OrganizationId;
+        var evidence = new StaffJobEvidence(actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+        var jobId = jobs.Enqueue<BackgroundWorkflowJobs>(job =>
+            job.ProcessManualWorkflowAsync(evidence, effectiveScope ?? 1, CancellationToken.None));
+        return Results.Accepted(value: new { code = "queued", jobId, organizationId = effectiveScope ?? 1 });
+    }
+
+    private static IResult RunWeeklySummaryNowAsync(
+        HttpContext context,
+        int? organizationId,
+        IBackgroundJobClient jobs)
+    {
+        var actor = StaffAuthenticationEndpoints.RequireCurrentStaff(context);
+        if (actor.Role is not ("admin" or "super_admin") ||
+            actor.Role != "super_admin" && organizationId.HasValue && organizationId != actor.OrganizationId ||
+            actor.Role != "super_admin" && actor.OrganizationId <= 1)
+        {
+            return Results.Json(new { code = "staff_scope_forbidden" }, statusCode: StatusCodes.Status403Forbidden);
+        }
+
+        var effectiveScope = actor.Role == "super_admin" ? organizationId : actor.OrganizationId;
+        var manualRunId = Guid.NewGuid().ToString("N");
+        var evidence = new StaffJobEvidence(actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+        var jobId = jobs.Enqueue<BackgroundWorkflowJobs>(job =>
+            job.SendForcedWeeklyStaffSummaryAsync(evidence, effectiveScope, manualRunId, CancellationToken.None));
+        return Results.Accepted(value: new
+        {
+            code = "queued",
+            jobId,
+            manualRunId,
+            organizationId = effectiveScope ?? 1
+        });
+    }
+
+    private static async Task<IResult> ListQueueProgressAsync(
+        HttpContext context,
+        int? organizationId,
+        QueueProgressService progress,
+        CancellationToken cancellationToken)
+    {
+        var actor = StaffAuthenticationEndpoints.RequireCurrentStaff(context);
+        if (actor.Role != "super_admin" && organizationId.HasValue && organizationId != actor.OrganizationId)
+        {
+            return Results.Json(new { code = "staff_scope_forbidden" }, statusCode: StatusCodes.Status403Forbidden);
+        }
+        var scope = organizationId ?? (actor.Role == "super_admin" ? 1 : actor.OrganizationId);
+        var items = new List<object>();
+        foreach (var queue in QueueNames.Configured.Append(QueueNames.HoldRecovery))
+        {
+            var snapshot = await progress.GetSnapshotAsync(queue, scope, cancellationToken);
+            if (snapshot is not null) items.Add(snapshot);
+        }
+        return Results.Json(new { scopeOrganizationId = scope, items });
+    }
+
+    private static async Task<IResult> ListEmailOperationsAsync(
+        HttpContext context,
+        int? organizationId,
+        string? status,
+        EmailOperationsService service,
+        CancellationToken cancellationToken)
+    {
+        var actor = StaffAuthenticationEndpoints.RequireCurrentStaff(context);
+        if (!EmailOperationsService.CanOperate(actor))
+        {
+            return Results.Json(new { code = "staff_scope_forbidden" }, statusCode: StatusCodes.Status403Forbidden);
+        }
+        if (actor.Role != "super_admin" && organizationId.HasValue && organizationId != actor.OrganizationId)
+        {
+            return Results.Json(new { code = "staff_scope_forbidden" }, statusCode: StatusCodes.Status403Forbidden);
+        }
+        var items = await service.ListAsync(actor, organizationId, status, cancellationToken);
+        return Results.Json(new { items });
+    }
+
+    private static async Task<IResult> QueueTestEmailAsync(
+        HttpContext context,
+        int? organizationId,
+        EmailOperationsService service,
+        CancellationToken cancellationToken)
+    {
+        var result = await service.QueueTestAsync(
+            StaffAuthenticationEndpoints.RequireCurrentStaff(context), organizationId, cancellationToken);
+        var status = result.Code switch
+        {
+            "queued" => StatusCodes.Status202Accepted,
+            "suppressed" => StatusCodes.Status200OK,
+            "staff_scope_forbidden" => StatusCodes.Status403Forbidden,
+            "organization_inactive" => StatusCodes.Status409Conflict,
+            _ => StatusCodes.Status400BadRequest
+        };
+        return Results.Json(new { code = result.Code, data = result.Data }, statusCode: status);
+    }
+
+    private static async Task<IResult> RetryEmailAsync(
+        HttpContext context,
+        long id,
+        AdministrationVersionInput input,
+        EmailOperationsService service,
+        CancellationToken cancellationToken)
+    {
+        var result = await service.RetryAsync(
+            StaffAuthenticationEndpoints.RequireCurrentStaff(context), id, input.Version, cancellationToken);
+        var status = result.Code switch
+        {
+            "queued" => StatusCodes.Status202Accepted,
+            "not_found" => StatusCodes.Status404NotFound,
+            "staff_scope_forbidden" => StatusCodes.Status403Forbidden,
+            "stale_version" or "email_not_retryable" => StatusCodes.Status409Conflict,
+            _ => StatusCodes.Status400BadRequest
+        };
+        return Results.Json(new { code = result.Code, data = result.Data }, statusCode: status);
+    }
 
     private static IResult ToResult(AdministrationResult result)
     {

@@ -96,6 +96,17 @@ export function createWorkflowApp() {
     queueView: document.querySelector('#queue-view'),
     additionalCopyView: document.querySelector('#additional-copy-view'),
     profileView: document.querySelector('#profile-view'),
+    operationsView: document.querySelector('#operations-view'),
+    operationsTab: document.querySelector('#operations-view-tab'),
+    operationsScopeField: document.querySelector('#operations-scope-field'),
+    operationsScope: document.querySelector('#operations-scope'),
+    runWorkflowNow: document.querySelector('#run-workflow-now'),
+    runWeeklyNow: document.querySelector('#run-weekly-now'),
+    forceWeeklyNow: document.querySelector('#force-weekly-now'),
+    sendTestEmail: document.querySelector('#send-test-email'),
+    refreshOperations: document.querySelector('#refresh-operations'),
+    queueProgressTable: document.querySelector('#queue-progress-table'),
+    emailOperationsTable: document.querySelector('#email-operations-table'),
     settingsView: document.querySelector('#settings-view'),
     settingsTab: document.querySelector('#settings-view-tab'),
     viewTabs: [...document.querySelectorAll('.view-tab')],
@@ -155,6 +166,8 @@ export function createWorkflowApp() {
     deepLinkHandled: false,
     additionalCopyDeepLinkHandled: false,
     additionalCopyLoaded: false,
+    operationsScope: 'all',
+    operationsLoaded: false,
     createCopyRequest: null,
     createCopyReturnFocus: null,
     configurations: new Map()
@@ -233,6 +246,8 @@ export function createWorkflowApp() {
     state.createCopyReturnFocus = null;
     latestLoads.begin('queue').abort();
     latestLoads.begin('additional-copies').abort();
+    latestLoads.begin('operations').abort();
+    latestLoads.begin('operations-mutation').abort();
     latestLoads.begin('detail').abort();
     latestLoads.begin('additional-copy-detail').abort();
     latestLoads.begin('additional-copy-preview').abort();
@@ -254,6 +269,14 @@ export function createWorkflowApp() {
     dom.staffIdentity.title = `${statusLabel(staff.role)} · ${staff.organizationName}`;
     dom.scopeField.hidden = staff.role !== 'super_admin';
     dom.additionalCopyScopeField.hidden = staff.role !== 'super_admin';
+    dom.operationsTab.hidden = staff.role !== 'admin' && staff.role !== 'super_admin';
+    dom.operationsScopeField.hidden = staff.role !== 'super_admin';
+    state.operationsScope = staff.role === 'super_admin' ? 'all' : String(staff.organizationId);
+    dom.operationsScope.replaceChildren(element('option', {
+      value: state.operationsScope,
+      text: staff.role === 'super_admin' ? 'All libraries' : 'My library'
+    }));
+    dom.operationsScope.value = state.operationsScope;
     settingsController.setStaff(staff);
     dom.claim.value = staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
     dom.additionalCopyClaim.value = staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
@@ -293,6 +316,9 @@ export function createWorkflowApp() {
       announce('Staff session ready.');
       if (currentStageParameter() === 'settings' && session.staff.role !== 'staff') {
         switchView('settings', false);
+      } else if (currentStageParameter() === 'operations' && session.staff.role !== 'staff') {
+        switchView('operations', false);
+        await loadOperations();
       } else if (currentStageParameter() === 'additional_copies') {
         switchView('additional-copies', false);
         await loadAdditionalCopies();
@@ -308,11 +334,28 @@ export function createWorkflowApp() {
 
   function populateScopes(organizations, selectedScope) {
     for (const select of [dom.scope, dom.additionalCopyScope]) {
+      if (!select) continue;
       select.replaceChildren(element('option', { value: 'all', text: 'All libraries' }));
       for (const organization of organizations || []) {
         select.append(element('option', { value: organization.id, text: organization.name }));
       }
       select.value = selectedScope;
+    }
+    if (dom.operationsScope) {
+      const operationScope = state.staff?.role === 'super_admin'
+        ? state.operationsScope
+        : String(state.staff?.organizationId || selectedScope);
+      const knownScopes = new Set(['all', ...(organizations || []).map(item => String(item.id))]);
+      const reconciledScope = knownScopes.has(String(operationScope)) ? String(operationScope) : String(selectedScope);
+      dom.operationsScope.replaceChildren(element('option', { value: 'all', text: 'All libraries' }));
+      for (const organization of organizations || []) {
+        dom.operationsScope.append(element('option', {
+          value: organization.id,
+          text: organization.name || organization.displayName || String(organization.id)
+        }));
+      }
+      dom.operationsScope.value = reconciledScope;
+      state.operationsScope = reconciledScope;
     }
   }
 
@@ -354,6 +397,145 @@ export function createWorkflowApp() {
     } finally {
       if (load.isCurrent()) dom.refresh.disabled = false;
       latestLoads.finish('queue', load.token);
+    }
+  }
+
+  function operationsQuery(scope = state.operationsScope) {
+    return scope && scope !== 'all' ? `?organizationId=${encodeURIComponent(scope)}` : '';
+  }
+
+  function renderOperationsTable(container, columns, rows, emptyText) {
+    if (!rows.length) {
+      container.replaceChildren(element('p', { className: 'operations-empty', text: emptyText }));
+      return;
+    }
+    const table = element('table');
+    const head = element('thead');
+    const headerRow = element('tr');
+    for (const column of columns) headerRow.append(element('th', { scope: 'col', text: column.label }));
+    head.append(headerRow);
+    const body = element('tbody');
+    for (const row of rows) {
+      const tr = element('tr');
+      for (const column of columns) {
+        const value = column.render ? column.render(row) : element('span', { text: text(row[column.key]) });
+        tr.append(element('td', {}, value));
+      }
+      body.append(tr);
+    }
+    table.append(head, body);
+    container.replaceChildren(table);
+  }
+
+  function renderOperations(data) {
+    renderOperationsTable(
+      dom.queueProgressTable,
+      [
+        { label: 'Queue', key: 'queueName' },
+        { label: 'Cycle watermark', render: row => element('span', { text: row.cycleMaxId === null ? 'None' : String(row.cycleMaxId) }) },
+        { label: 'State', render: row => element('span', {
+          text: row.cycleMaxId === 0 ? 'Empty' : row.cycleMaxId === null
+            ? row.lastOutcomeCode === 'cycle_complete' ? 'Completed' : 'Idle'
+            : 'Active'
+        }) },
+        { label: 'Cursor', render: row => element('span', {
+          text: row.lastCreatedUtc ? `${dateTime(row.lastCreatedUtc)} / ${text(row.lastItemId)}` : 'None'
+        }) },
+        { label: 'Last outcome', render: row => element('span', { text: text(row.lastOutcomeCode, 'Not recorded') }) },
+        { label: 'Updated', render: row => element('time', { text: dateTime(row.updatedUtc), datetime: row.updatedUtc }) }
+      ],
+      data.queue?.items || [],
+      'No queue progress has been recorded for this scope.'
+    );
+    renderOperationsTable(
+      dom.emailOperationsTable,
+      [
+        { label: 'Created', render: row => element('time', { text: dateTime(row.createdUtc), datetime: row.createdUtc }) },
+        { label: 'Status', key: 'status' },
+        { label: 'Type', key: 'deliveryClass' },
+        { label: 'Error', render: row => element('span', { text: row.lastErrorCode || row.suppressionReason || 'None' }) },
+        { label: 'Action', render: row => {
+          if (row.status !== 'failed') return element('span', { text: 'No action' });
+          return commandButton('Retry', 'refresh', () => retryEmail(row), 'secondary-button');
+        } }
+      ],
+      data.email?.items || [],
+      'No email operations have been recorded for this scope.'
+    );
+  }
+
+  async function loadOperations(options = {}) {
+    if (!state.staff || (state.staff.role !== 'admin' && state.staff.role !== 'super_admin')) return;
+    const load = latestLoads.begin('operations');
+    const requestedScope = state.operationsScope;
+    dom.refreshOperations.disabled = true;
+    if (!options.silent) announce('Loading workflow operations...');
+    try {
+      const query = operationsQuery(requestedScope);
+      const [queue, email, organizationResult] = await Promise.all([
+        authorizedJson(`/api/asap/staff/workflow/queues${query}`, { signal: load.signal }),
+        authorizedJson(`/api/asap/staff/email-operations${query}`, { signal: load.signal }),
+        state.staff.role === 'super_admin'
+          ? authorizedJson('/api/asap/staff/organizations', { signal: load.signal })
+          : Promise.resolve(null)
+      ]);
+      if (!load.isCurrent() || requestedScope !== state.operationsScope) return;
+      if (state.staff.role === 'super_admin' && Array.isArray(organizationResult)) {
+        populateScopes(organizationResult.filter(item => Number(item.id) > 1), requestedScope);
+      }
+      renderOperations({ queue, email });
+      state.operationsLoaded = true;
+      if (!options.silent) announce('Workflow operations loaded.');
+    } catch (error) {
+      if (load.isCurrent() && requestedScope === state.operationsScope &&
+          !options.silent && !isAbortError(error) && error.status !== 401) {
+        announce(error.message || 'Workflow operations could not be loaded.', 'error');
+      }
+    } finally {
+      if (load.isCurrent()) dom.refreshOperations.disabled = false;
+      latestLoads.finish('operations', load.token);
+    }
+  }
+
+  async function runOperation(path, message) {
+    const load = latestLoads.begin('operations-mutation');
+    const requestedScope = state.operationsScope;
+    const scopeQuery = operationsQuery();
+    const query = scopeQuery ? `${path.includes('?') ? '&' : '?'}${scopeQuery.slice(1)}` : '';
+    try {
+      const result = await authorizedJson(`${path}${query}`, { method: 'POST', signal: load.signal });
+      if (!load.isCurrent() || requestedScope !== state.operationsScope) return;
+      await loadOperations({ silent: true });
+      announce(result.manualRunId ? `${message} Run ${result.manualRunId} queued.` : message, 'success');
+    } catch (error) {
+      if (load.isCurrent() && requestedScope === state.operationsScope &&
+          !isAbortError(error) && error.status !== 401) {
+        announce(error.message || 'The operation could not be queued.', 'error');
+      }
+    } finally {
+      latestLoads.finish('operations-mutation', load.token);
+    }
+  }
+
+  async function retryEmail(row) {
+    const load = latestLoads.begin('operations-mutation');
+    const requestedScope = state.operationsScope;
+    try {
+      await authorizedJson(`/api/asap/staff/email-operations/${encodeURIComponent(row.id)}/retry`, {
+        method: 'POST',
+        body: { version: row.version },
+        signal: load.signal
+      });
+      if (!load.isCurrent() || requestedScope !== state.operationsScope) return;
+      await loadOperations({ silent: true });
+      announce('Email retry queued.', 'success');
+    } catch (error) {
+      if (load.isCurrent() && requestedScope === state.operationsScope &&
+          !isAbortError(error) && error.status !== 401) {
+        announce(error.message || 'Email retry could not be queued.', 'error');
+      }
+    } finally {
+      latestLoads.finish('operations-mutation', load.token);
     }
   }
 
@@ -1457,6 +1639,7 @@ export function createWorkflowApp() {
     dom.queueView.hidden = name !== 'queue';
     dom.additionalCopyView.hidden = name !== 'additional-copies';
     dom.profileView.hidden = name !== 'profile';
+    dom.operationsView.hidden = name !== 'operations';
     dom.settingsView.hidden = name !== 'settings';
     for (const tab of dom.viewTabs) {
       const active = tab.dataset.view === name;
@@ -1465,16 +1648,17 @@ export function createWorkflowApp() {
       else tab.removeAttribute('aria-current');
     }
     if (updateUrl) replaceStageParameter(
-      name === 'additional-copies' ? 'additional_copies' : name === 'settings' ? 'settings' : null
+      name === 'additional-copies' ? 'additional_copies' : name === 'settings' ? 'settings' : name === 'operations' ? 'operations' : null
     );
     const heading = name === 'queue'
       ? '#queue-title'
       : name === 'additional-copies' ? '#additional-copy-title'
-        : name === 'profile' ? '#profile-title' : '#settings-title';
+      : name === 'profile' ? '#profile-title' : name === 'operations' ? '#operations-title' : '#settings-title';
     document.querySelector(heading).focus({ preventScroll: true });
     if (updateUrl && name === 'additional-copies' && !state.additionalCopyLoaded) {
       loadAdditionalCopies({ skipDeepLink: true });
     }
+    if (updateUrl && name === 'operations') loadOperations();
     if (name === 'settings') settingsController.activate();
   }
 
@@ -1561,6 +1745,19 @@ export function createWorkflowApp() {
       dom.scope.value = state.scope;
       loadAdditionalCopies({ skipDeepLink: true });
     });
+    dom.operationsScope.addEventListener('change', () => {
+      state.operationsScope = dom.operationsScope.value;
+      loadOperations();
+    });
+    dom.runWorkflowNow.addEventListener('click', () =>
+      runOperation('/api/asap/staff/workflow/run-now', 'Workflow run'));
+    dom.runWeeklyNow.addEventListener('click', () =>
+      runOperation('/api/asap/staff/workflow/weekly-summary/run-now?force=false', 'Weekly summary'));
+    dom.forceWeeklyNow.addEventListener('click', () =>
+      runOperation('/api/asap/staff/workflow/weekly-summary/run-now?force=true', 'Forced weekly summary'));
+    dom.sendTestEmail.addEventListener('click', () =>
+      runOperation('/api/asap/staff/email-operations/test', 'Test email'));
+    dom.refreshOperations.addEventListener('click', () => loadOperations());
     for (const tab of dom.statusTabs) {
       tab.addEventListener('click', () => {
         state.status = tab.dataset.status;

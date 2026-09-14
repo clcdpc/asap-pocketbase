@@ -1,11 +1,119 @@
 # Slice 5: Background Workflows And Email Operations
 
-## Preparation Only
+## Refreshed Implementation Packet - 2026-09-14
 
-Not dispatched. Refresh this packet after Slices 1-4 pass their complete tests,
-Terra review/fix/re-review gates, and milestone commits. Do not start Slice 5
-implementation early. The canonical sequence remains document 02; this is a
-focused implementation packet, not a regenerated architecture or plan.
+The user has authorized complete Slice 5 implementation, all pre-review gates,
+independent Terra review and necessary fixes/re-review, Astra acceptance, one
+coherent milestone commit/push, and successful remote CI for that exact SHA.
+Do not stop at a review candidate. Stop after accepted Slice 5; Slice 6 must not
+start. PR #264 remains draft, with no merge, tag, deployment, rehearsal or cutover.
+The canonical sequence remains document 02; this packet does not replace it.
+
+### Verified Starting Boundary
+
+- Repository/checkout: `clcdpc/asap-pocketbase`, existing
+  `C:\Users\mfields\code\asap-pocketbase`, branch `codex/csharp-port`.
+- Starting local HEAD, fetched branch and PR head all equal
+  `ae706931da09d2781add4b96bbca9cfc4f768011`; the worktree was clean.
+  No later commits or unexpected Slice 5 implementation exist.
+- Accepted Slice 4 milestone `417c72430652a35bc8fc1da549ae270eabc86429`
+  remains an ancestor. Its exact-SHA CI is recorded in the existing acceptance
+  record; Slices 0-4 are accepted and are not being re-reviewed.
+- Current-head [CI run 34881551700](https://github.com/clcdpc/asap-pocketbase/actions/runs/34881551700)
+  completed successfully. PR #264 is open, draft, mergeable and based on main.
+- Fetched `origin/main` equals behavioral pin
+  `150b30b776565194260cc327eeeffdfb46475e81`; no intervening PocketBase
+  changes require propagation. The deployed production SHA remains unverified.
+- App and migration expected schema version: `5`; migration contract:
+  `slice-05`. The Slice 5 DACPAC must be freshly published after the
+  QueueProgress schema addition. DACPAC owns `[asap]`; pinned Hangfire 1.8.25
+  owns its separate schema.
+  DACPAC owns `[asap]`; pinned Hangfire 1.8.25 owns its separate schema.
+  QueueProgress uses the prescribed scalar composite key `(QueueName,
+  ScopeOrganizationId)` shape; `ScopeOrganizationId=1` is the all-libraries
+  scope, `CycleMaxId` is nullable with zero representing an empty cycle, and
+  rowversion fences checkpoint updates.
+
+### Existing Implementation To Extend
+
+- `Infrastructure/Jobs/WorkflowProcessingGuard.cs` owns distributed resource
+  `ASAP:WorkflowProcessing` through the selected Hangfire storage. Reconcile and
+  operator resolution already use it. Preserve that resource and avoid nested
+  acquisition when the hourly orchestrator invokes the existing services.
+  Other logical jobs need one common guard across scheduled/manual scopes.
+- `HangfireWorkerHostedService` currently registers only the outbox sweep and
+  starts the `asap-email` worker queue. Expand it to the authoritative seven
+  schedules, business timezone and required execution queues. Startup schema,
+  initialization and usable-staff checks remain in force; no runtime DDL.
+- `Features/Staff/HoldPlacementService.cs` already implements interactive
+  acquisition, SQL-clock owner/epoch/lease, heartbeat, durable create/reply
+  phases, result completion, adoption, explicit reconciliation/operator
+  resolution, and proven null-to-final-ID enrichment. Add background entry
+  points to that lifecycle, including inactive-library acquired recovery.
+  Preserve `hold-resolution-operator-evidence.md` and the accepted S2-T1 ruling.
+- `TitleRequestMutationService`, `AdditionalCopyService`, `StaffLifecycleService`
+  and `StaffEligibilityService` provide current actor/participation/claim
+  serialization. Use Organization -> StaffUser -> request/task -> dependent rows
+  when needed; QueueProgress updates come last. Do not create synthetic staff
+  authorization for scheduled work or hold SQL transactions across providers.
+- `PatronSuggestionService.ProcessIdentifierLookupAsync` and
+  `IdentifierLookupJobs` already supply the immediate identifier path. Complete
+  one canonical implementation, preserving callers and reset/tag semantics.
+  `IPatronProvider` currently spells the successful zero-result outcome
+  `NotFound`; the Slice 5 boundary must expose `DefinitiveNotFound` as specified.
+  Audit aggregate search failures and operational-stop propagation.
+- `PolarisPatronProvider` implements `IPatronProvider`, `IStaffPolarisProvider`
+  and `IPolarisReferenceProvider` using pinned `Clc.Polaris.Api` 4.0.0-beta.3.
+  Current staff boundary includes BIB validation, patron hold snapshots,
+  create and reply. Extend only the provider evidence needed for checkout and
+  exact-hold tracking; inspect the installed package when typed results omit it.
+  No automatic GUID-to-final-ID recovery guarantee is established.
+- `Features/Email/EmailOutboxJobs.cs` already claims/delivers, sweeps due work,
+  reclaims expired leases, fences completion, applies domain protection and
+  validates sensitive staff tuple/address kind. Keep its five states and
+  complete timing/retry/manual operations/retention and lifecycle-race coverage.
+  `RecipientDomainPolicy`, `PatronEmailTemplateRenderer`, `IEmailSender` and
+  `IEmailOutboxDispatcher` are the existing boundaries; extend their callers.
+- `AdministrationService`/endpoints provide scoped typed settings, organization
+  refresh, participation changes and patron-code reference operations. Existing
+  vanilla `Frontend/staff` has settings/profile/request and hold-resolution UI.
+  Add usable scoped Run Now, queue/recovery diagnostics, failed-email inspection
+  and Retry, durable Test email, and protected Hangfire dashboard access.
+  Preserve shared requests, stale-scope guards, safe DOM and focus behavior.
+
+### Migration And Evidence Starting Point
+
+`Asap.Migration` already exports frozen source packages, imports/reconciles
+processing fields and historical delivery audit, enforces identifier/placed-BIB
+evidence, reports recipient deltas, and validates effective runtime/operational
+configuration. `MigrationOperationalConfiguration` checks four source schedules,
+eight mapped queues, global/timeout precedence and retired hourly ISBN overrides.
+Complete Slice 5 gaps within these files; preserve deterministic transforms and
+prove empty target Hangfire/session/QueueProgress/operation/outbox runtime state.
+Do not reimplement the accepted migration framework.
+
+Retain existing ignored fixtures, source snapshots, harnesses and receipts:
+
+- `.git/asap-slice-04-candidate.ps1`, `asap-slice-04-final-fixtures.ps1`,
+  `asap-slice-04-final-browsers.ps1`, `asap-slice-04-verification.cjs`;
+- `.git/asap-real-pb-source`, `.git/asap-admin-migration-acceptance`,
+  `.git/asap-staff-migration-acceptance`, `.git/asap-patron-browser-probe`;
+- `.git/asap-slice-04-runtime-oracle.cjs` and the existing configuration oracle;
+- `.artifacts/slice-04-candidate-corrective-20260914d` and corresponding
+  `.git/asap-slice-04-*-corrective-20260914d` receipts.
+
+The accepted prior evidence is 234/234 .NET tests (146 integration, 88 unit;
+19 migration cases), zero skips; 172 Node files; fresh Web/native publications;
+four native fixture/oracle runs (161/164/3/3 checks); and 12 published-browser
+modes (103 states and 14 CSP cases). These are prior-slice baselines, not Slice 5
+results. Adapt retained harnesses under fresh Slice 5 names without overwriting
+historical evidence; run the complete required gates for final candidate bytes.
+
+The only approved temporary transport substitution remains `FileEmailSender`
+at the final provider boundary. Real cancellable Rest 3-compatible CLC Postmark,
+webhook/provider and release/rehearsal checks remain explicitly deferred release
+requirements, not Slice 5 blockers or permission to fake provider delivery.
+Analytics and all other later-slice work remain outside this implementation.
 
 Astra Max refreshes this packet against accepted prior implementation and
 normally dispatches fresh Luna High for the complete slice, including durable

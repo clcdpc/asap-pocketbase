@@ -94,7 +94,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .view-tab { padding: 10px 16px; color: var(--muted); background: transparent; border-radius: 4px 4px 0 0; }
 .view-tab.active { color: var(--ink); background: #fff; border-color: var(--line); border-bottom-color: #fff; margin-bottom: -1px; font-weight: 700; }
 
-#queue-view, #additional-copy-view, #profile-view { padding-top: 20px; }
+#queue-view, #additional-copy-view, #profile-view, #operations-view { padding-top: 20px; }
 #settings-view { padding-top: 20px; }
 .section-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 18px; }
 .section-heading h1 { margin: 0; font-size: 1.65rem; }
@@ -133,6 +133,17 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .check-field { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; }
 .check-field input { min-height: auto; width: 18px; height: 18px; margin-top: 2px; }
 .form-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
+
+.operations-actions { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; padding: 4px 0 20px; }
+.operations-actions .icon-button { color: var(--brand-dark); background: #fff; }
+.operations-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.operations-panel { min-width: 0; padding: 16px; background: #fff; border: 1px solid var(--line); border-top: 3px solid var(--brand); }
+.operations-panel h2 { margin: 0 0 12px; font-size: 1.2rem; }
+.operations-table { overflow-x: auto; }
+.operations-table table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+.operations-table th, .operations-table td { padding: 8px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+.operations-table th { color: var(--muted); font-size: .78rem; text-transform: uppercase; }
+.operations-empty { margin: 0; color: var(--muted); }
 
 .settings-message { min-height: 24px; margin: 0 0 12px; color: var(--muted); }
 .settings-message.error { color: var(--danger); font-weight: 700; }
@@ -279,6 +290,7 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
   main { padding-inline: 10px; }
   .section-heading { align-items: stretch; flex-direction: column; gap: 12px; }
   .queue-filters { align-items: stretch; flex-wrap: wrap; }
+  .operations-columns { grid-template-columns: 1fr; }
   .search-field { flex-basis: 100%; }
   .compact-field { flex: 1 1 150px; }
   .compact-field select { min-width: 0; width: 100%; }

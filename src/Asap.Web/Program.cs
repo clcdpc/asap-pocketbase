@@ -120,6 +120,9 @@ if (externalConfiguration is not null)
     builder.Services.AddSingleton<AdditionalCopyService>();
     builder.Services.AddSingleton<StaffPickupService>();
     builder.Services.AddSingleton<WorkflowProcessingGuard>();
+    builder.Services.AddSingleton<QueueProgressService>();
+    builder.Services.AddSingleton<WorkflowProcessingService>();
+    builder.Services.AddTransient<BackgroundWorkflowJobs>();
     builder.Services.AddSingleton<HoldPlacementService>();
     builder.Services.AddStaffAuthentication(externalConfiguration, builder.Environment);
     if (builder.Environment.IsEnvironment("Testing") &&
@@ -144,6 +147,7 @@ if (externalConfiguration is not null)
     builder.Services.AddSingleton<RecipientDomainPolicy>();
     builder.Services.AddSingleton(EmailOutboxRuntimeOptions.Default);
     builder.Services.AddTransient<EmailOutboxJobs>();
+    builder.Services.AddSingleton<EmailOperationsService>();
     builder.Services.AddSingleton<IEmailOutboxDispatcher, EmailOutboxDispatcher>();
     builder.Services.AddSingleton<IHangfireSchemaCompatibilityChecker, HangfireSchemaCompatibilityChecker>();
     builder.Services.AddSingleton<IEmailSender>(_ => new FileEmailSender(
@@ -197,6 +201,12 @@ if (externalConfiguration is not null)
     app.MapAdministrationEndpoints();
     app.MapTitleRequestEndpoints();
     app.MapAdditionalCopyEndpoints();
+    app.UseHangfireDashboard(
+        "/hangfire",
+        new Hangfire.DashboardOptions
+        {
+            Authorization = [new Asap.Web.Infrastructure.Jobs.HangfireDashboardAuthorizationFilter()]
+        });
 }
 
 app.Run();

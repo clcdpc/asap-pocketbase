@@ -5,8 +5,8 @@ namespace Asap.Migration;
 public static class MigrationContract
 {
     public const string PocketBaseBaselineSha = "150b30b776565194260cc327eeeffdfb46475e81";
-    public const int ExpectedSchemaVersion = 4;
-    public const string ContractVersion = "slice-04";
+    public const int ExpectedSchemaVersion = 5;
+    public const string ContractVersion = "slice-05";
 
     public static object Describe() => new
     {
@@ -24,8 +24,11 @@ public static class MigrationContract
             "relational_administration_configuration",
             "scoped_inheritance_and_reset",
             "polaris_reference_sync",
-            "settings_semantic_reconciliation"
+            "settings_semantic_reconciliation",
+            "background_workflow_operations",
+            "queue_progress_runtime_starts_empty",
+            "email_outbox_operations"
         },
-        note = "Slice 4 includes relational administration/configuration, scoped inheritance/reset, and semantic migration reconciliation."
+        note = "Slice 5 includes bounded background workflows, durable outbox operations, and migration parity for operational configuration."
     };
 }

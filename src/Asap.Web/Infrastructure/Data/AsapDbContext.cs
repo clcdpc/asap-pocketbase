@@ -30,6 +30,7 @@ public sealed class AsapDbContext(DbContextOptions<AsapDbContext> options) : DbC
     public DbSet<MaterialFormatCustomFieldRule> MaterialFormatCustomFieldRules => Set<MaterialFormatCustomFieldRule>();
     public DbSet<FormatAutoClaimRule> FormatAutoClaimRules => Set<FormatAutoClaimRule>();
     public DbSet<PatronSession> PatronSessions => Set<PatronSession>();
+    public DbSet<QueueProgress> QueueProgress => Set<QueueProgress>();
     public DbSet<TitleRequest> TitleRequests => Set<TitleRequest>();
     public DbSet<AdditionalCopyRequest> AdditionalCopyRequests => Set<AdditionalCopyRequest>();
     public DbSet<TitleRequestEvent> TitleRequestEvents => Set<TitleRequestEvent>();
@@ -55,6 +56,8 @@ public sealed class AsapDbContext(DbContextOptions<AsapDbContext> options) : DbC
         });
 
         modelBuilder.Entity<Organization>().Property(value => value.Id).ValueGeneratedNever();
+        modelBuilder.Entity<QueueProgress>().HasKey(value => new { value.QueueName, value.ScopeOrganizationId });
+        modelBuilder.Entity<QueueProgress>().Property(value => value.UpdatedUtc).HasColumnType("datetime2(7)");
         modelBuilder.Entity<SystemSettings>().HasKey(value => value.OrganizationId);
         modelBuilder.Entity<PolarisSettings>().HasKey(value => value.OrganizationId);
         modelBuilder.Entity<WorkflowSettings>().HasKey(value => value.OrganizationId);

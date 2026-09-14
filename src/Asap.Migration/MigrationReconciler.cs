@@ -59,6 +59,17 @@ public static class MigrationReconciler
                     "The reconciliation report does not identify this immutable export package.");
             }
 
+            var expectedQueueProgress = root.GetProperty("targetCounts")
+                .GetProperty("queue_progress")
+                .GetInt32();
+            var actualQueueProgress = ReadQueueProgressCount(options.ConnectionString);
+            if (actualQueueProgress != expectedQueueProgress)
+            {
+                throw new MigrationOperationException(
+                    "reconciliation_failed",
+                    $"QueueProgress runtime count changed: report={expectedQueueProgress}, target={actualQueueProgress}.");
+            }
+
             var expectedFingerprint = root.GetProperty("targetFingerprintSha256").GetString();
             var actualFingerprint = ComputeTargetFingerprint(options.ConnectionString);
             if (string.IsNullOrWhiteSpace(expectedFingerprint) ||
@@ -108,6 +119,14 @@ public static class MigrationReconciler
             }
         }
         return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+    }
+
+    private static int ReadQueueProgressCount(string connectionString)
+    {
+        using var connection = new SqlConnection(connectionString);
+        connection.Open();
+        using var command = new SqlCommand("SELECT COUNT(*) FROM [asap].[QueueProgress];", connection);
+        return Convert.ToInt32(command.ExecuteScalar());
     }
 
     private static IReadOnlyList<TargetTable> ReadTables(SqlConnection connection)

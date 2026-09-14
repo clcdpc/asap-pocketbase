@@ -38,7 +38,8 @@ public sealed record PickupBranch(int Id, string Label);
 public enum IdentifierLookupOutcome
 {
     Found,
-    NotFound,
+    DefinitiveNotFound,
+    NotFound = DefinitiveNotFound,
     TransientFailure,
     OperationalFailure
 }

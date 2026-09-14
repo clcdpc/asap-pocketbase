@@ -47,6 +47,10 @@ internal sealed record LockedAutoClaimTarget(long StaffUserId, string DisplayNam
 
 internal sealed class AutoClaimCandidateChangedException : Exception;
 
+internal sealed record IdentifierLookupProcessingResult(
+    IdentifierLookupOutcome Outcome,
+    byte[]? QueueProgressVersion = null);
+
 public sealed partial class PatronSuggestionService(
     ExternalConfiguration externalConfiguration,
     PatronConfigurationService configurationService,
@@ -57,6 +61,32 @@ public sealed partial class PatronSuggestionService(
     TimeProvider timeProvider,
     ILogger<PatronSuggestionService> logger)
 {
+    private const string IdentifierMutationBarrierPredicate = """
+              AND [Status] = N'suggestion'
+              AND NOT EXISTS
+              (
+                  SELECT 1
+                  FROM [asap].[HoldPlacementOperation] AS incomplete
+                  WHERE incomplete.[TitleRequestId] = request.[Id]
+                    AND incomplete.[CompletedUtc] IS NULL
+              )
+              AND NOT EXISTS
+              (
+                  SELECT 1
+                  FROM [asap].[HoldPlacementOperation] AS successful
+                  WHERE successful.[TitleRequestId] = request.[Id]
+                    AND successful.[State] = N'succeeded'
+              )
+              AND NOT EXISTS
+              (
+                  SELECT 1
+                  FROM [asap].[TitleRequestEvent] AS legacy
+                  WHERE legacy.[TitleRequestId] = request.[Id]
+                    AND ISJSON(legacy.[MetadataJson]) = 1
+                    AND JSON_VALUE(legacy.[MetadataJson], '$.legacyBibProtection') = N'true'
+              )
+        """;
+
     private readonly string connectionString = externalConfiguration.ConnectionStrings.AsapDatabase!;
     private readonly HashSet<Guid> allowedTenantIds = externalConfiguration.Authentication.Entra.AllowedTenantIds!
         .Select(Guid.Parse)
@@ -955,11 +985,57 @@ public sealed partial class PatronSuggestionService(
         return status == "pending" ? outboxId : null;
     }
 
-    public async Task ProcessIdentifierLookupAsync(
+    public async Task<IdentifierLookupOutcome> ProcessIdentifierLookupAsync(
         long requestId,
         string identifier,
         int organizationId,
         byte[] expectedRowVersion,
+        CancellationToken cancellationToken) =>
+        (await ProcessIdentifierLookupCoreAsync(
+            requestId,
+            identifier,
+            organizationId,
+            expectedRowVersion,
+            queueName: null,
+            queueScope: null,
+            expectedQueueVersion: null,
+            queueCreatedUtc: null,
+            queueItemId: null,
+            cancellationToken)).Outcome;
+
+    internal Task<IdentifierLookupProcessingResult> ProcessIdentifierLookupForQueueAsync(
+        long requestId,
+        string identifier,
+        int organizationId,
+        byte[] expectedRowVersion,
+        string queueName,
+        int queueScope,
+        byte[] expectedQueueVersion,
+        DateTime queueCreatedUtc,
+        long queueItemId,
+        CancellationToken cancellationToken) =>
+        ProcessIdentifierLookupCoreAsync(
+            requestId,
+            identifier,
+            organizationId,
+            expectedRowVersion,
+            queueName,
+            queueScope,
+            expectedQueueVersion,
+            queueCreatedUtc,
+            queueItemId,
+            cancellationToken);
+
+    private async Task<IdentifierLookupProcessingResult> ProcessIdentifierLookupCoreAsync(
+        long requestId,
+        string identifier,
+        int organizationId,
+        byte[] expectedRowVersion,
+        string? queueName,
+        int? queueScope,
+        byte[]? expectedQueueVersion,
+        DateTime? queueCreatedUtc,
+        long? queueItemId,
         CancellationToken cancellationToken)
     {
         IdentifierLookupResult result;
@@ -977,7 +1053,17 @@ public sealed partial class PatronSuggestionService(
                 exception,
                 "Immediate identifier lookup failed for title request {TitleRequestId}.",
                 requestId);
-            return;
+            result = new IdentifierLookupResult(
+                IdentifierLookupOutcome.OperationalFailure,
+                ErrorCode: "polaris_identifier_lookup_failed");
+        }
+
+        if (result.Outcome == IdentifierLookupOutcome.OperationalFailure)
+        {
+            logger.LogError(
+                "Operational identifier lookup failure for title request {TitleRequestId}: {ErrorCode}",
+                requestId,
+                result.ErrorCode ?? "polaris_search_operational_failure");
         }
 
         await using var connection = new SqlConnection(connectionString);
@@ -998,21 +1084,23 @@ public sealed partial class PatronSuggestionService(
             if (await organization.ExecuteScalarAsync(cancellationToken) is not true)
             {
                 await transaction.RollbackAsync(cancellationToken);
-                return;
+                return new IdentifierLookupProcessingResult(result.Outcome);
             }
         }
 
-        string currentTitle;
-        string? currentAuthor;
+        string currentTitle = null!;
+        string? currentAuthor = null;
+        var requestFound = false;
         await using (var request = new SqlCommand(
-            """
-            SELECT [Title], [Author]
-            FROM [asap].[TitleRequest] WITH (UPDLOCK, HOLDLOCK)
-            WHERE [Id] = @requestId
-              AND [LibraryOrganizationId] = @organizationId
-              AND [Identifier] = @identifier
-              AND [IsbnCheckStatus] = N'pending'
-              AND [RowVersion] = @rowVersion;
+            $"""
+            SELECT request.[Title], request.[Author]
+            FROM [asap].[TitleRequest] AS request WITH (UPDLOCK, HOLDLOCK)
+            WHERE request.[Id] = @requestId
+              AND request.[LibraryOrganizationId] = @organizationId
+              AND request.[Identifier] = @identifier
+              AND request.[IsbnCheckStatus] = N'pending'
+              AND [RowVersion] = @rowVersion
+            {IdentifierMutationBarrierPredicate};
             """,
             connection,
             transaction))
@@ -1022,20 +1110,40 @@ public sealed partial class PatronSuggestionService(
             Add(request, "@identifier", SqlDbType.NVarChar, identifier, 100);
             Add(request, "@rowVersion", SqlDbType.Timestamp, expectedRowVersion, 8);
             await using var reader = await request.ExecuteReaderAsync(cancellationToken);
-            if (!await reader.ReadAsync(cancellationToken))
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                requestFound = true;
+                currentTitle = reader.GetString(0);
+                currentAuthor = reader.IsDBNull(1) ? null : reader.GetString(1);
+            }
+        }
+        if (!requestFound)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new IdentifierLookupProcessingResult(result.Outcome);
+        }
+
+        if (queueName is not null)
+        {
+            await using var progress = new SqlCommand(
+                "SELECT [RowVersion] FROM [asap].[QueueProgress] WITH (UPDLOCK, HOLDLOCK) WHERE [QueueName] = @queueName AND [ScopeOrganizationId] = @scope;",
+                connection,
+                transaction);
+            Add(progress, "@queueName", SqlDbType.NVarChar, queueName, 64);
+            Add(progress, "@scope", SqlDbType.Int, queueScope);
+            var currentQueueVersion = await progress.ExecuteScalarAsync(cancellationToken);
+            if (currentQueueVersion is not byte[] currentVersion || expectedQueueVersion is null ||
+                !currentVersion.SequenceEqual(expectedQueueVersion))
             {
                 await transaction.RollbackAsync(cancellationToken);
-                return;
+                return new IdentifierLookupProcessingResult(result.Outcome);
             }
-
-            currentTitle = reader.GetString(0);
-            currentAuthor = reader.IsDBNull(1) ? null : reader.GetString(1);
         }
 
         var status = result.Outcome switch
         {
             IdentifierLookupOutcome.Found when !string.IsNullOrWhiteSpace(result.BibId) => "found",
-            IdentifierLookupOutcome.NotFound => "not_found",
+            IdentifierLookupOutcome.DefinitiveNotFound => "not_found",
             IdentifierLookupOutcome.TransientFailure => "pending",
             _ => null
         };
@@ -1063,15 +1171,15 @@ public sealed partial class PatronSuggestionService(
 
         var affected = 0;
         await using (var update = new SqlCommand(
-            """
-            UPDATE [asap].[TitleRequest]
+            $"""
+            UPDATE request
             SET [IsbnCheckStatus] =
                     CASE
                         WHEN @status IS NULL THEN [IsbnCheckStatus]
                         WHEN @retryIncrement = 1 AND [IsbnCheckRetryCount] + 1 >= 5 THEN N'error_max_retries'
                         ELSE @status
                     END,
-                [BibId] = CASE WHEN @status = N'found' THEN @bibId ELSE [BibId] END,
+                [BibId] = CASE WHEN @status IN (N'found', N'not_found') THEN @bibId ELSE [BibId] END,
                 [Title] = CASE WHEN @status = N'found' THEN @title ELSE [Title] END,
                 [Author] = CASE WHEN @status = N'found' THEN @author ELSE [Author] END,
                 [IsbnCheckResult] =
@@ -1088,11 +1196,13 @@ public sealed partial class PatronSuggestionService(
                          ELSE [Notes] + CHAR(13) + CHAR(10) + @note END,
                 [LastCheckedUtc] = SYSUTCDATETIME(),
                 [UpdatedUtc] = SYSUTCDATETIME()
-            WHERE [Id] = @requestId
-              AND [LibraryOrganizationId] = @organizationId
-              AND [Identifier] = @identifier
-              AND [IsbnCheckStatus] = N'pending'
-              AND [RowVersion] = @rowVersion;
+            FROM [asap].[TitleRequest] AS request
+            WHERE request.[Id] = @requestId
+              AND request.[LibraryOrganizationId] = @organizationId
+              AND request.[Identifier] = @identifier
+              AND request.[IsbnCheckStatus] = N'pending'
+              AND request.[RowVersion] = @rowVersion
+            {IdentifierMutationBarrierPredicate};
             """,
             connection,
             transaction))
@@ -1111,8 +1221,13 @@ public sealed partial class PatronSuggestionService(
             affected = await update.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        if (affected == 1 &&
-            (status == "found" || status == "not_found" && !result.FilteredByMaterialType))
+        if (affected != 1)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new IdentifierLookupProcessingResult(result.Outcome);
+        }
+
+        if (status == "found" || status == "not_found" && !result.FilteredByMaterialType)
         {
             await using var tag = new SqlCommand(
                 """
@@ -1139,7 +1254,7 @@ public sealed partial class PatronSuggestionService(
             await tag.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        if (affected == 1 && result.MultipleMatches)
+        if (result.MultipleMatches)
         {
             await using var multiple = new SqlCommand(
                 """
@@ -1160,7 +1275,48 @@ public sealed partial class PatronSuggestionService(
             await multiple.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        byte[]? queueProgressVersion = null;
+        if (queueName is not null)
+        {
+            await using var progress = new SqlCommand(
+                """
+                UPDATE [asap].[QueueProgress]
+                SET [LastCreatedUtc] = @createdUtc,
+                    [LastItemId] = @itemId,
+                    [LastOutcomeItemId] = @itemId,
+                    [LastOutcomeCode] = @outcome,
+                    [LastOutcomeUtc] = SYSUTCDATETIME(),
+                    [UpdatedUtc] = SYSUTCDATETIME()
+                OUTPUT inserted.[RowVersion]
+                WHERE [QueueName] = @queueName
+                  AND [ScopeOrganizationId] = @scope
+                  AND [RowVersion] = @rowVersion;
+                """,
+                connection,
+                transaction);
+            Add(progress, "@createdUtc", SqlDbType.DateTime2, queueCreatedUtc);
+            Add(progress, "@itemId", SqlDbType.BigInt, queueItemId);
+            Add(
+                progress,
+                "@outcome",
+                SqlDbType.NVarChar,
+                result.Outcome == IdentifierLookupOutcome.OperationalFailure ? "operational_failure" : "processed",
+                64);
+            Add(progress, "@queueName", SqlDbType.NVarChar, queueName, 64);
+            Add(progress, "@scope", SqlDbType.Int, queueScope);
+            Add(progress, "@rowVersion", SqlDbType.Timestamp, expectedQueueVersion, 8);
+            var updatedQueueVersion = await progress.ExecuteScalarAsync(cancellationToken);
+            if (updatedQueueVersion is not byte[])
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return new IdentifierLookupProcessingResult(result.Outcome);
+            }
+
+            queueProgressVersion = (byte[])updatedQueueVersion;
+        }
+
         await transaction.CommitAsync(cancellationToken);
+        return new IdentifierLookupProcessingResult(result.Outcome, queueProgressVersion);
     }
 
     private static ValidatedSuggestion Validate(

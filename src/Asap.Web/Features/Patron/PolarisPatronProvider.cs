@@ -359,7 +359,7 @@ public sealed class PolarisPatronProvider(
             if (rows.Length == 0)
             {
                 return new IdentifierLookupResult(
-                    IdentifierLookupOutcome.NotFound,
+                    IdentifierLookupOutcome.DefinitiveNotFound,
                     FilteredByMaterialType: filteredByMaterialType);
             }
 
@@ -462,14 +462,21 @@ public sealed class PolarisPatronProvider(
             {
                 throw new PolarisOperationalException("polaris_hold_read_failed", "Polaris hold data was unavailable.");
             }
+            if (data.PatronHoldRequestsGetRows.Any(item => item.HoldRequestID <= 0 || item.BibID <= 0))
+            {
+                throw new PolarisOperationalException(
+                    "polaris_hold_read_failed",
+                    "Polaris returned an incomplete hold row.");
+            }
+
             return data.PatronHoldRequestsGetRows
-                .Where(item => item.HoldRequestID > 0 && item.BibID > 0)
                 .Select(item => new PolarisHoldSnapshot(
                     item.HoldRequestID,
                     item.BibID,
                     item.StatusID,
                     Clean(item.StatusDescription),
-                    item.PickupBranchID))
+                    item.PickupBranchID,
+                    barcode))
                 .ToList();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -483,6 +490,48 @@ public sealed class PolarisPatronProvider(
         catch (Exception exception)
         {
             throw Operational("polaris_hold_read_failed", exception);
+        }
+    }
+
+    public async Task<IReadOnlyList<PolarisCheckoutSnapshot>> GetPatronCheckoutsAsync(
+        string barcode,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var (client, _) = await CreateClientAsync(cancellationToken);
+            var response = await client.PatronItemsOutGetAsync(
+                barcode,
+                PatronItemsOutGetStatus.All,
+                password: string.Empty,
+                cancellationToken);
+            var data = response.Data;
+            if (response.Response?.IsSuccessStatusCode != true || data is null || data.PAPIErrorCode != 0)
+            {
+                throw new PolarisOperationalException("polaris_checkout_read_failed", "Polaris checkout data was unavailable.");
+            }
+            if (data.PatronItemsOutGetRows.Any(item => item.BibID <= 0))
+            {
+                throw new PolarisOperationalException(
+                    "polaris_checkout_read_failed",
+                    "Polaris returned an incomplete checkout row.");
+            }
+
+            return data.PatronItemsOutGetRows
+                .Select(item => new PolarisCheckoutSnapshot(item.BibID, PatronBarcode: barcode))
+                .ToArray();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (PolarisOperationalException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw Operational("polaris_checkout_read_failed", exception);
         }
     }
 

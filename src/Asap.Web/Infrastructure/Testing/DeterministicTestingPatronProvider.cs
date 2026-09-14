@@ -109,7 +109,7 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
             "OPERATIONAL" => new IdentifierLookupResult(
                 IdentifierLookupOutcome.OperationalFailure,
                 ErrorCode: "testing_operational"),
-            _ => new IdentifierLookupResult(IdentifierLookupOutcome.NotFound)
+            _ => new IdentifierLookupResult(IdentifierLookupOutcome.DefinitiveNotFound)
         };
         return Task.FromResult(result);
     }

@@ -497,7 +497,8 @@ public static class MigrationImporter
                 (SELECT COUNT(*) FROM [asap].[PatronSession]),
                 (SELECT COUNT(*) FROM [asap].[EmailOutbox]),
                 (SELECT COUNT(*) FROM [asap].[EmailDeliveryEvent]),
-                (SELECT COUNT(*) FROM [asap].[LegacyPocketBaseMapping]);
+                (SELECT COUNT(*) FROM [asap].[LegacyPocketBaseMapping]),
+                (SELECT COUNT(*) FROM [asap].[QueueProgress]);
             """,
             connection,
             transaction);
@@ -506,7 +507,7 @@ public static class MigrationImporter
         {
             throw new MigrationOperationException("target_schema_version_mismatch", "Target application schema version is incompatible.");
         }
-        if (Enumerable.Range(1, 9).Any(index => reader.GetInt32(index) != 0))
+        if (Enumerable.Range(1, 10).Any(index => reader.GetInt32(index) != 0))
         {
             throw new MigrationOperationException("target_not_fresh", "Target contains runtime, business, or prior migration rows.");
         }
@@ -2596,6 +2597,7 @@ public static class MigrationImporter
             ["legacy_mappings"] = Scalar(connection, "SELECT COUNT(*) FROM [asap].[LegacyPocketBaseMapping];"),
             ["patron_sessions"] = Scalar(connection, "SELECT COUNT(*) FROM [asap].[PatronSession];"),
             ["email_outbox"] = Scalar(connection, "SELECT COUNT(*) FROM [asap].[EmailOutbox];"),
+            ["queue_progress"] = Scalar(connection, "SELECT COUNT(*) FROM [asap].[QueueProgress];"),
             ["hold_placement_operations"] = 0,
             ["invalid_active_claim_rules"] = ScalarWithAllowedTenants(connection,
                 """
@@ -2642,7 +2644,7 @@ public static class MigrationImporter
             counts["claim_migration_annotations"] != importedCounts.GetValueOrDefault("claim_migration_annotations") ||
             counts["placed_bib_protection_markers"] != importedCounts.GetValueOrDefault("placed_bib_protection_markers") ||
             counts["additional_copy_claim_migration_annotations"] != importedCounts.GetValueOrDefault("additional_copy_claim_migration_annotations") ||
-            counts["patron_sessions"] != 0 || counts["email_outbox"] != 0 ||
+            counts["patron_sessions"] != 0 || counts["email_outbox"] != 0 || counts["queue_progress"] != 0 ||
             counts["invalid_active_claim_rules"] != 0 || counts["invalid_open_title_request_claims"] != 0 ||
             counts["invalid_open_additional_copy_claims"] != 0 ||
             counts["invalid_found_requests"] != 0)

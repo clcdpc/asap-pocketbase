@@ -55,22 +55,63 @@ public sealed class HangfireWorkerHostedService(
                 return;
             }
 
-            var cron = configuration.Hangfire.Schedules!["EmailOutboxSweep"];
+            var schedules = configuration.Hangfire.Schedules!;
+            var recurringOptions = new RecurringJobOptions
+            {
+                TimeZone = TimeZoneInfo.FindSystemTimeZoneById(configuration.Application.BusinessTimeZone!)
+            };
             using (new JobStorageScope(storage))
             {
+                RecurringJob.AddOrUpdate<BackgroundWorkflowJobs>(
+                    "asap-workflow-processing",
+                    "asap-workflow",
+                    worker => worker.ProcessWorkflowAsync(null, CancellationToken.None),
+                    schedules["WorkflowProcessing"],
+                    recurringOptions);
+                RecurringJob.AddOrUpdate<BackgroundWorkflowJobs>(
+                    "asap-identifier-processing",
+                    "asap-identifier",
+                    worker => worker.ProcessIdentifierAsync(CancellationToken.None),
+                    schedules["IdentifierProcessing"],
+                    recurringOptions);
+                RecurringJob.AddOrUpdate<BackgroundWorkflowJobs>(
+                    "asap-organization-refresh",
+                    "asap-admin",
+                    worker => worker.RefreshOrganizationsAsync(CancellationToken.None),
+                    schedules["OrganizationRefresh"],
+                    recurringOptions);
+                RecurringJob.AddOrUpdate<BackgroundWorkflowJobs>(
+                    "asap-weekly-staff-summary",
+                    "asap-admin",
+                    worker => worker.SendWeeklyStaffSummaryAsync(null, null, CancellationToken.None),
+                    schedules["WeeklyStaffSummary"],
+                    recurringOptions);
                 RecurringJob.AddOrUpdate<EmailOutboxJobs>(
                     "asap-email-outbox-sweep",
                     "asap-email",
                     worker => worker.SweepAsync(CancellationToken.None),
-                    cron);
+                    schedules["EmailOutboxSweep"],
+                    recurringOptions);
+                RecurringJob.AddOrUpdate<BackgroundWorkflowJobs>(
+                    "asap-patron-session-cleanup",
+                    "asap-admin",
+                    worker => worker.CleanupSessionsAsync(CancellationToken.None),
+                    schedules["PatronSessionCleanup"],
+                    recurringOptions);
+                RecurringJob.AddOrUpdate<BackgroundWorkflowJobs>(
+                    "asap-email-payload-cleanup",
+                    "asap-admin",
+                    worker => worker.CleanupEmailPayloadsAsync(CancellationToken.None),
+                    schedules["EmailPayloadCleanup"],
+                    recurringOptions);
             }
 
             server = new BackgroundJobServer(
                 new BackgroundJobServerOptions
                 {
-                    Queues = ["asap-email"],
-                    WorkerCount = 1,
-                    ServerName = $"{Environment.MachineName}:asap-email"
+                    Queues = ["asap-workflow", "asap-identifier", "asap-admin", "asap-email"],
+                    WorkerCount = 4,
+                    ServerName = $"{Environment.MachineName}:asap-slice5"
                 },
                 storage);
         }

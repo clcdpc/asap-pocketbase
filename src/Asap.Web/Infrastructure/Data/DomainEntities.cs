@@ -315,6 +315,20 @@ public sealed class PatronSession
     public DateTime? RevokedUtc { get; set; }
 }
 
+public sealed class QueueProgress
+{
+    public required string QueueName { get; set; }
+    public int ScopeOrganizationId { get; set; }
+    public long? CycleMaxId { get; set; }
+    public DateTime? LastCreatedUtc { get; set; }
+    public long? LastItemId { get; set; }
+    public long? LastOutcomeItemId { get; set; }
+    public string? LastOutcomeCode { get; set; }
+    public DateTime? LastOutcomeUtc { get; set; }
+    public DateTime UpdatedUtc { get; set; }
+    public byte[] RowVersion { get; set; } = [];
+}
+
 public sealed class TitleRequest
 {
     public long Id { get; set; }

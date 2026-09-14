@@ -37,6 +37,19 @@ fixes use a temporary branch from the deployed source, immediate equivalent
 
 ## Execution And Evidence
 
+### Slice 5 Interrupted WIP Checkpoint - 2026-09-14
+
+Slices 0-4 remain accepted. Slice 5 is **IN PROGRESS**, not review-ready and not
+an accepted milestone; Terra review has not started. The user stopped the run
+and requested preservation only. The WIP checkpoint containing
+[`slice-05-handoff.md`](slice-05-handoff.md) has parent
+`ae706931da09d2781add4b96bbca9cfc4f768011`; its exact SHA is recorded in PR #264.
+The handoff records implemented drafts, incomplete/unrun tests, failed full-run
+results and local evidence to preserve. Any WIP CI is diagnostic only.
+No acceptance gates or implementation fixes were run for checkpointing.
+Slice 6 has not started. PR #264 remains draft; no merge/tag/deploy/rehearsal
+or cutover occurred. Earlier dated entries below are historical.
+
 ### Pre-Slice-5 Documentation Cleanup - 2026-09-14
 
 Started from `5c3553254c31f7b41d61025318a410de6f809a05`, with local/remote/PR

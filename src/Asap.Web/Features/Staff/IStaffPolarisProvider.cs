@@ -1,7 +1,16 @@
+using Asap.Web.Features.Patron;
+
 namespace Asap.Web.Features.Staff;
 
 public interface IStaffPolarisProvider
 {
+    Task<IReadOnlyList<PolarisOrganizationSnapshot>> GetOrganizationsAsync(
+        CancellationToken cancellationToken) =>
+        Task.FromException<IReadOnlyList<PolarisOrganizationSnapshot>>(
+            new PolarisOperationalException(
+                "polaris_organization_read_unimplemented",
+                "The selected Polaris provider does not implement organization reference reads."));
+
     Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(
@@ -15,6 +24,14 @@ public interface IStaffPolarisProvider
     Task<HoldProviderResult> ReplyToHoldAsync(
         HoldReplyCommand command,
         CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<PolarisCheckoutSnapshot>> GetPatronCheckoutsAsync(
+        string barcode,
+        CancellationToken cancellationToken) =>
+        Task.FromException<IReadOnlyList<PolarisCheckoutSnapshot>>(
+            new PolarisOperationalException(
+                "polaris_checkout_read_unimplemented",
+                "The selected Polaris provider does not implement checkout evidence."));
 }
 
 public sealed record BibValidationResult(bool IsValid, string? Title = null, string? Author = null);
@@ -24,7 +41,13 @@ public sealed record PolarisHoldSnapshot(
     int BibId,
     int StatusId,
     string? StatusDescription,
-    int PickupBranchId);
+    int PickupBranchId,
+    string? PatronBarcode = null);
+
+public sealed record PolarisCheckoutSnapshot(
+    int BibId,
+    string? HoldRequestId = null,
+    string? PatronBarcode = null);
 
 public sealed record HoldCreateCommand(
     int PatronId,

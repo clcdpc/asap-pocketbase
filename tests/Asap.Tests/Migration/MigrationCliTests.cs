@@ -37,7 +37,7 @@ public sealed class MigrationCliTests
         Assert.AreEqual(
             "150b30b776565194260cc327eeeffdfb46475e81",
             contract.RootElement.GetProperty("pocketBaseBaselineSha").GetString());
-        Assert.AreEqual(4, contract.RootElement.GetProperty("expectedSchemaVersion").GetInt32());
+        Assert.AreEqual(5, contract.RootElement.GetProperty("expectedSchemaVersion").GetInt32());
         Assert.AreEqual(
             "CLC.ASAP",
             contract.RootElement.GetProperty("dataProtectionApplicationName").GetString());
@@ -399,6 +399,42 @@ public sealed class MigrationCliTests
             }
 
             Environment.SetEnvironmentVariable(connectionEnvironmentName, target);
+            await using (var dirtyConnection = new SqlConnection(target))
+            {
+                await dirtyConnection.OpenAsync();
+                await using var dirtyInsert = dirtyConnection.CreateCommand();
+                dirtyInsert.CommandText =
+                    """
+                    INSERT INTO [asap].[QueueProgress]
+                        ([QueueName], [ScopeOrganizationId], [CycleMaxId], [LastCreatedUtc], [LastItemId],
+                         [LastOutcomeItemId], [LastOutcomeCode], [LastOutcomeUtc], [UpdatedUtc])
+                    VALUES (N'IdentifierProcessing', 1, 42, '2030-01-02T03:04:00Z', 42,
+                            42, N'processed', '2030-01-02T03:04:01Z', '2030-01-02T03:04:02Z');
+                    """;
+                await dirtyInsert.ExecuteNonQueryAsync();
+            }
+            using (var dirtyError = new StringWriter())
+            {
+                var dirtyExitCode = MigrationCli.Run(
+                    [
+                        "import", "--package", package,
+                        "--connection-string-env", connectionEnvironmentName,
+                        "--staff-identity-map", identityMap,
+                        "--allowed-tenant-ids", tenantId.ToString(),
+                        "--report", Path.Combine(root, "dirty-target-report.json")
+                    ],
+                    TextWriter.Null,
+                    dirtyError);
+                Assert.AreEqual(1, dirtyExitCode);
+                StringAssert.Contains(dirtyError.ToString(), "target_not_fresh");
+            }
+            await using (var cleanConnection = new SqlConnection(target))
+            {
+                await cleanConnection.OpenAsync();
+                await using var cleanDelete = cleanConnection.CreateCommand();
+                cleanDelete.CommandText = "DELETE FROM [asap].[QueueProgress];";
+                await cleanDelete.ExecuteNonQueryAsync();
+            }
             using var output = new StringWriter();
             using var error = new StringWriter();
             var exitCode = MigrationCli.Run(
@@ -421,6 +457,7 @@ public sealed class MigrationCliTests
             Assert.AreEqual(2, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[LegacyPocketBaseMapping] WHERE [EntityType] IN (N'organization', N'staff_user');"));
             Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[PatronSession];"));
             Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[EmailOutbox];"));
+            Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[QueueProgress];"));
             await using (var staffUrl = connection.CreateCommand())
             {
                 staffUrl.CommandText =
@@ -434,6 +471,7 @@ public sealed class MigrationCliTests
             Assert.AreEqual(1, reportDocument.RootElement.GetProperty("importedCounts").GetProperty("staff_users").GetInt32());
             Assert.AreEqual(64, reportDocument.RootElement.GetProperty("targetFingerprintSha256").GetString()!.Length);
             Assert.AreEqual(64, reportDocument.RootElement.GetProperty("packageIdentitySha256").GetString()!.Length);
+            Assert.AreEqual(0, reportDocument.RootElement.GetProperty("targetCounts").GetProperty("queue_progress").GetInt32());
             var staffRecipient = reportDocument.RootElement.GetProperty("transformations").EnumerateArray().Single(item =>
                 item.GetProperty("entity").GetString() == "staff_user");
             Assert.AreEqual("weekly@example.org", staffRecipient.GetProperty("sourceAssignmentRecipient").GetString());
@@ -463,6 +501,41 @@ public sealed class MigrationCliTests
                 reconcileOutput,
                 reconcileError), reconcileError.ToString());
             StringAssert.Contains(reconcileOutput.ToString(), "Reconciliation succeeded");
+
+            await using (var firstCycle = connection.CreateCommand())
+            {
+                firstCycle.CommandText =
+                    """
+                    INSERT INTO [asap].[QueueProgress]
+                        ([QueueName], [ScopeOrganizationId], [CycleMaxId], [UpdatedUtc])
+                    VALUES (N'IdentifierProcessing', 1, 0, '2030-01-02T03:04:05Z');
+                    SELECT [CycleMaxId], [LastCreatedUtc], [LastItemId]
+                    FROM [asap].[QueueProgress]
+                    WHERE [QueueName] = N'IdentifierProcessing' AND [ScopeOrganizationId] = 1;
+                    """;
+                await using var cycleReader = await firstCycle.ExecuteReaderAsync();
+                Assert.IsTrue(await cycleReader.ReadAsync());
+                Assert.AreEqual(0L, cycleReader.GetInt64(0), "QueueProgress schema preserves a zero watermark for an empty cycle.");
+                Assert.IsTrue(await cycleReader.IsDBNullAsync(1));
+                Assert.IsTrue(await cycleReader.IsDBNullAsync(2));
+            }
+            using (var queueDriftError = new StringWriter())
+            {
+                Assert.AreEqual(1, MigrationCli.Run(
+                    [
+                        "reconcile", "--package", package,
+                        "--connection-string-env", connectionEnvironmentName,
+                        "--report", report
+                    ],
+                    TextWriter.Null,
+                    queueDriftError));
+                StringAssert.Contains(queueDriftError.ToString(), "QueueProgress runtime count changed");
+            }
+            await using (var clearCycle = connection.CreateCommand())
+            {
+                clearCycle.CommandText = "DELETE FROM [asap].[QueueProgress];";
+                await clearCycle.ExecuteNonQueryAsync();
+            }
 
             DeployDacpac(master, secondDatabaseName);
             Environment.SetEnvironmentVariable(secondConnectionEnvironmentName, secondTarget);

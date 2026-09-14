@@ -44,7 +44,8 @@ public sealed class HoldPlacementService(
     IEmailSender emailSender,
     RecipientDomainPolicy recipientDomainPolicy,
     IEmailOutboxDispatcher outboxDispatcher,
-    WorkflowProcessingGuard workflowProcessingGuard)
+    WorkflowProcessingGuard workflowProcessingGuard,
+    TimeProvider timeProvider)
 {
     private static readonly TimeSpan LeaseDuration = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(30);
@@ -52,6 +53,8 @@ public sealed class HoldPlacementService(
     private readonly HashSet<Guid> allowedTenantIds = configuration.Authentication.Entra.AllowedTenantIds!
         .Select(Guid.Parse)
         .ToHashSet();
+    private readonly TimeZoneInfo businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(
+        configuration.Application.BusinessTimeZone!);
 
     public async Task<HoldPlacementResult> PlaceAsync(
         CurrentStaff actor,
@@ -64,12 +67,153 @@ public sealed class HoldPlacementService(
             return new HoldPlacementResult("invalid_version");
         }
 
-        var acquisition = await AcquireAsync(actor, requestId, expectedVersion, cancellationToken);
+        var acquisition = await AcquireAsync(
+            actor,
+            requestId,
+            expectedVersion,
+            queueName: null,
+            queueScope: null,
+            expectedQueueVersion: null,
+            cancellationToken);
         if (acquisition.Code != "acquired")
         {
             return new HoldPlacementResult(acquisition.Code, acquisition.OperationId);
         }
-        return await ExecuteOwnedAsync(acquisition.Owner!, actor, cancellationToken);
+        return await ExecuteOwnedAsync(acquisition.Owner!, actor, null, cancellationToken);
+    }
+
+    public async Task<HoldPlacementResult> PlaceBackgroundAsync(
+        long requestId,
+        byte[] expectedVersion,
+        CancellationToken cancellationToken,
+        StaffIdentityEvidence? manualActorEvidence = null)
+    {
+        var acquisition = await AcquireAsync(
+            null,
+            requestId,
+            expectedVersion,
+            queueName: null,
+            queueScope: null,
+            expectedQueueVersion: null,
+            cancellationToken,
+            manualActorEvidence);
+        if (acquisition.Code != "acquired")
+        {
+            return new HoldPlacementResult(acquisition.Code, acquisition.OperationId);
+        }
+        return await ExecuteOwnedAsync(acquisition.Owner!, null, manualActorEvidence, cancellationToken);
+    }
+
+    public async Task<HoldPlacementResult> PlaceBackgroundAsync(
+        long requestId,
+        byte[] expectedVersion,
+        string queueName,
+        int queueScope,
+        byte[] expectedQueueVersion,
+        CancellationToken cancellationToken,
+        StaffIdentityEvidence? manualActorEvidence = null)
+    {
+        var acquisition = await AcquireAsync(
+            null,
+            requestId,
+            expectedVersion,
+            queueName,
+            queueScope,
+            expectedQueueVersion,
+            cancellationToken,
+            manualActorEvidence);
+        if (acquisition.Code != "acquired")
+        {
+            return new HoldPlacementResult(acquisition.Code, acquisition.OperationId);
+        }
+        return await ExecuteOwnedAsync(acquisition.Owner!, null, manualActorEvidence, cancellationToken);
+    }
+
+    public async Task<int> RecoverBackgroundAsync(CancellationToken cancellationToken)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var operationIds = await context.HoldPlacementOperations.AsNoTracking()
+            .Where(item => item.CompletedUtc == null && item.State != "operator_required")
+            .OrderBy(item => item.RequestStartedUtc)
+            .ThenBy(item => item.Id)
+            .Select(item => item.Id)
+            .Take(100)
+            .ToListAsync(cancellationToken);
+        var recovered = 0;
+        foreach (var operationId in operationIds)
+        {
+            var result = await RecoverBackgroundOperationAsync(operationId, scopeOrganizationId: null, cancellationToken);
+            if (result.Code is "updated" or "hold_operator_required") recovered++;
+        }
+        return recovered;
+    }
+
+    public async Task<HoldPlacementResult> RecoverBackgroundOperationAsync(
+        long operationId,
+        int? scopeOrganizationId,
+        CancellationToken cancellationToken)
+    {
+        var scope = QueueProgressService.NormalizeScope(scopeOrganizationId);
+        await using (var preContext = await contextFactory.CreateDbContextAsync(cancellationToken))
+        {
+            var operationSnapshot = await preContext.HoldPlacementOperations.AsNoTracking()
+                .SingleOrDefaultAsync(item => item.Id == operationId, cancellationToken);
+            var request = operationSnapshot is null
+                ? null
+                : await preContext.TitleRequests.AsNoTracking()
+                    .SingleOrDefaultAsync(item => item.Id == operationSnapshot.TitleRequestId, cancellationToken);
+            if (request is null || scope != 1 && request.LibraryOrganizationId != scope)
+            {
+                return new HoldPlacementResult("recovery_scope_changed", operationId);
+            }
+        }
+
+        OwnedOperation owner;
+        string phase;
+        await using (var context = await contextFactory.CreateDbContextAsync(cancellationToken))
+        await using (var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken))
+        {
+            var operationSnapshot = await context.HoldPlacementOperations.AsNoTracking()
+                .SingleOrDefaultAsync(item => item.Id == operationId, cancellationToken);
+            var requestSnapshot = operationSnapshot is null
+                ? null
+                : await context.TitleRequests.AsNoTracking()
+                    .SingleOrDefaultAsync(item => item.Id == operationSnapshot.TitleRequestId, cancellationToken);
+            if (requestSnapshot is null || scope != 1 && requestSnapshot.LibraryOrganizationId != scope)
+            {
+                return new HoldPlacementResult("recovery_scope_changed", operationId);
+            }
+            _ = await context.Organizations.FromSqlInterpolated(
+                    $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {requestSnapshot.LibraryOrganizationId}")
+                .SingleOrDefaultAsync(cancellationToken);
+            _ = await context.TitleRequests.FromSqlInterpolated(
+                    $"SELECT * FROM [asap].[TitleRequest] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {requestSnapshot.Id}")
+                .SingleOrDefaultAsync(cancellationToken);
+            var operation = await context.HoldPlacementOperations.FromSqlInterpolated(
+                    $"SELECT * FROM [asap].[HoldPlacementOperation] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {operationId}")
+                .SingleOrDefaultAsync(cancellationToken);
+            if (operation is null || operation.CompletedUtc.HasValue) return new HoldPlacementResult("not_found", operationId);
+            if (operation.State == "operator_required") return new HoldPlacementResult("hold_operator_required", operationId);
+            var now = await SqlClockAsync(context, cancellationToken);
+            if (operation.OwnerToken.HasValue && operation.LeaseExpiresUtc > now)
+            {
+                return new HoldPlacementResult("hold_operation_owned", operationId);
+            }
+            operation.OwnerToken = Guid.NewGuid();
+            operation.ExecutionEpoch++;
+            operation.LeaseExpiresUtc = now.Add(LeaseDuration);
+            operation.State = operation.Phase is "acquired" or "reply_ready" or "result_recorded"
+                ? "in_progress"
+                : "ambiguous";
+            owner = new OwnedOperation(operation.Id, operation.OwnerToken.Value, operation.ExecutionEpoch, IsRecovery: true);
+            phase = operation.Phase;
+            await context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+
+        return phase is "create_started" or "reply_started"
+            ? await ObserveMarkedAmbiguityAsync(owner, cancellationToken)
+            : await ExecuteOwnedAsync(owner, null, null, cancellationToken);
     }
 
     public async Task<HoldPlacementResult> ReconcileAsync(
@@ -156,7 +300,7 @@ public sealed class HoldPlacementService(
 
         return phase is "create_started" or "reply_started"
             ? await ObserveMarkedAmbiguityAsync(owner, cancellationToken)
-            : await ExecuteOwnedAsync(owner, actor, cancellationToken);
+            : await ExecuteOwnedAsync(owner, actor, null, cancellationToken);
     }
 
     public async Task<HoldPlacementResult> ResolveAsync(
@@ -580,29 +724,52 @@ public sealed class HoldPlacementService(
     }
 
     private async Task<AcquisitionResult> AcquireAsync(
-        CurrentStaff actor,
+        CurrentStaff? actor,
         long requestId,
         byte[] expectedVersion,
-        CancellationToken cancellationToken)
+        string? queueName,
+        int? queueScope,
+        byte[]? expectedQueueVersion,
+        CancellationToken cancellationToken,
+        StaffIdentityEvidence? manualActorEvidence = null)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         var snapshot = await context.TitleRequests.AsNoTracking()
             .SingleOrDefaultAsync(item => item.Id == requestId, cancellationToken);
-        if (snapshot is null || !TitleRequestViewService.CanAccess(actor, snapshot.LibraryOrganizationId))
+        if (snapshot is null || actor is not null && !TitleRequestViewService.CanAccess(actor, snapshot.LibraryOrganizationId))
         {
             return new AcquisitionResult("not_found");
+        }
+        if (!await LockManualOrganizationsAsync(context, manualActorEvidence, snapshot.LibraryOrganizationId, cancellationToken))
+        {
+            return new AcquisitionResult("staff_scope_forbidden");
         }
         var organization = await context.Organizations.FromSqlInterpolated(
                 $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {snapshot.LibraryOrganizationId}")
             .SingleOrDefaultAsync(cancellationToken);
         if (organization?.IsActive != true) return new AcquisitionResult("organization_inactive");
-        var staff = await context.StaffUsers.FromSqlInterpolated(
-                $"SELECT * FROM [asap].[StaffUser] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {actor.Id}")
-            .SingleOrDefaultAsync(cancellationToken);
-        if (staff is null || !IsCurrentAndEligible(actor, staff, snapshot.LibraryOrganizationId))
+        var staff = actor is null
+            ? null
+            : await context.StaffUsers.FromSqlInterpolated(
+                    $"SELECT * FROM [asap].[StaffUser] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {actor.Id}")
+                .SingleOrDefaultAsync(cancellationToken);
+        if (actor is not null && (staff is null || !IsCurrentAndEligible(actor, staff, snapshot.LibraryOrganizationId)))
         {
             return new AcquisitionResult("staff_scope_forbidden");
+        }
+        if (manualActorEvidence is not null)
+        {
+            var manualStaff = await context.StaffUsers.FromSqlInterpolated(
+                    $"SELECT * FROM [asap].[StaffUser] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {manualActorEvidence.StaffUserId}")
+                .SingleOrDefaultAsync(cancellationToken);
+            var permitted = manualStaff is not null && manualStaff.IsActive &&
+                manualStaff.EntraTenantId == manualActorEvidence.TenantId &&
+                manualStaff.EntraObjectId == manualActorEvidence.ObjectId &&
+                manualStaff.EntraTenantId.HasValue && allowedTenantIds.Contains(manualStaff.EntraTenantId.Value) &&
+                (manualStaff.Role == "super_admin" && manualStaff.OrganizationId == 1 ||
+                 manualStaff.Role == "admin" && manualStaff.OrganizationId == snapshot.LibraryOrganizationId);
+            if (!permitted) return new AcquisitionResult("staff_scope_forbidden");
         }
         var request = await context.TitleRequests.FromSqlInterpolated(
                 $"SELECT * FROM [asap].[TitleRequest] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {requestId}")
@@ -624,6 +791,29 @@ public sealed class HoldPlacementService(
             .Where(item => item.TitleRequestId == requestId)
             .Select(item => (int?)item.AttemptNumber)
             .MaxAsync(cancellationToken) ?? 0;
+        var settings = await EffectiveWorkflowAsync(context, request.LibraryOrganizationId, cancellationToken);
+        if (settings.PendingHoldTimeoutEnabled == true && settings.PendingHoldTimeoutDays.HasValue &&
+            TimeoutSemantics.IsExpired(
+                request.UpdatedUtc,
+                timeProvider.GetUtcNow(),
+                businessTimeZone,
+                settings.PendingHoldTimeoutDays.Value))
+        {
+            return new AcquisitionResult("hold_timeout_due");
+        }
+
+        if (queueName is not null)
+        {
+            var progress = await context.QueueProgress.FromSqlInterpolated(
+                    $"SELECT * FROM [asap].[QueueProgress] WITH (UPDLOCK,HOLDLOCK) WHERE [QueueName] = {queueName} AND [ScopeOrganizationId] = {QueueProgressService.NormalizeScope(queueScope)}")
+                .SingleOrDefaultAsync(cancellationToken);
+            if (progress is null || expectedQueueVersion is null ||
+                !progress.RowVersion.SequenceEqual(expectedQueueVersion))
+            {
+                return new AcquisitionResult("stale_progress_fence");
+            }
+        }
+
         var now = await SqlClockAsync(context, cancellationToken);
         var token = Guid.NewGuid();
         var operation = new HoldPlacementOperation
@@ -649,6 +839,7 @@ public sealed class HoldPlacementService(
     private async Task<HoldPlacementResult> ExecuteOwnedAsync(
         OwnedOperation owner,
         CurrentStaff? actor,
+        StaffIdentityEvidence? manualActorEvidence,
         CancellationToken cancellationToken)
     {
         var operation = await LoadOperationAsync(owner.Id, cancellationToken);
@@ -656,11 +847,11 @@ public sealed class HoldPlacementService(
 
         if (operation.Phase == "result_recorded")
         {
-            return await CompleteRecordedResultAsync(owner, actor, null, cancellationToken);
+            return await CompleteRecordedResultAsync(owner, actor, null, cancellationToken, manualActorEvidence);
         }
         if (operation.Phase == "reply_ready")
         {
-            return await ExecuteReplyAsync(owner, actor, null, cancellationToken);
+            return await ExecuteReplyAsync(owner, actor, null, cancellationToken, manualActorEvidence);
         }
         if (operation.Phase is "create_started" or "reply_started")
         {
@@ -692,7 +883,7 @@ public sealed class HoldPlacementService(
             {
                 return new HoldPlacementResult("operation_ownership_lost", owner.Id);
             }
-            return await CompleteRecordedResultAsync(owner, actor, patron, cancellationToken);
+            return await CompleteRecordedResultAsync(owner, actor, patron, cancellationToken, manualActorEvidence);
         }
         if (activeSameBib.Count > 1)
         {
@@ -754,9 +945,9 @@ public sealed class HoldPlacementService(
         if (!persisted) return new HoldPlacementResult("operation_ownership_lost", owner.Id);
         return createResult.Outcome switch
         {
-            HoldProviderOutcome.ReplyRequired => await ExecuteReplyAsync(owner, actor, patron, cancellationToken),
+            HoldProviderOutcome.ReplyRequired => await ExecuteReplyAsync(owner, actor, patron, cancellationToken, manualActorEvidence),
             HoldProviderOutcome.FinalSuccess or HoldProviderOutcome.DefinitiveNoEffect =>
-                await CompleteRecordedResultAsync(owner, actor, patron, cancellationToken),
+                await CompleteRecordedResultAsync(owner, actor, patron, cancellationToken, manualActorEvidence),
             _ => await ObserveMarkedAmbiguityAsync(owner, cancellationToken)
         };
     }
@@ -765,7 +956,8 @@ public sealed class HoldPlacementService(
         OwnedOperation owner,
         CurrentStaff? actor,
         PatronSnapshot? patron,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        StaffIdentityEvidence? manualActorEvidence = null)
     {
         var operation = await LoadOperationAsync(owner.Id, cancellationToken);
         if (operation is null || operation.Phase != "reply_ready" ||
@@ -824,7 +1016,7 @@ public sealed class HoldPlacementService(
         return replyResult.Outcome switch
         {
             HoldProviderOutcome.FinalSuccess or HoldProviderOutcome.DefinitiveNoEffect =>
-                await CompleteRecordedResultAsync(owner, actor, patron, cancellationToken),
+                await CompleteRecordedResultAsync(owner, actor, patron, cancellationToken, manualActorEvidence),
             _ => await ObserveMarkedAmbiguityAsync(owner, cancellationToken)
         };
     }
@@ -948,7 +1140,8 @@ public sealed class HoldPlacementService(
         OwnedOperation owner,
         CurrentStaff? actor,
         PatronSnapshot? patron,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        StaffIdentityEvidence? manualActorEvidence = null)
     {
         var snapshot = await LoadOperationAsync(owner.Id, cancellationToken);
         if (snapshot is null) return new HoldPlacementResult("operation_not_available", owner.Id);
@@ -967,9 +1160,31 @@ public sealed class HoldPlacementService(
         if (requestSnapshot is null) return new HoldPlacementResult("not_found", owner.Id);
         var readiness = await emailSender.CheckReadinessAsync(requestSnapshot.LibraryOrganizationId, cancellationToken);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+        if (!await LockManualOrganizationsAsync(
+                context,
+                manualActorEvidence,
+                requestSnapshot.LibraryOrganizationId,
+                cancellationToken))
+        {
+            return new HoldPlacementResult("staff_scope_forbidden", owner.Id);
+        }
         _ = await context.Organizations.FromSqlInterpolated(
                 $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {requestSnapshot.LibraryOrganizationId}")
             .SingleAsync(cancellationToken);
+        StaffUser? manualStaff = null;
+        if (manualActorEvidence is not null)
+        {
+            manualStaff = await context.StaffUsers.FromSqlInterpolated(
+                    $"SELECT * FROM [asap].[StaffUser] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {manualActorEvidence.StaffUserId}")
+                .SingleOrDefaultAsync(cancellationToken);
+            var permitted = manualStaff is not null && manualStaff.IsActive &&
+                manualStaff.EntraTenantId == manualActorEvidence.TenantId &&
+                manualStaff.EntraObjectId == manualActorEvidence.ObjectId &&
+                manualStaff.EntraTenantId.HasValue && allowedTenantIds.Contains(manualStaff.EntraTenantId.Value) &&
+                (manualStaff.Role == "super_admin" && manualStaff.OrganizationId == 1 ||
+                 manualStaff.Role == "admin" && manualStaff.OrganizationId == requestSnapshot.LibraryOrganizationId);
+            if (!permitted) return new HoldPlacementResult("staff_scope_forbidden", owner.Id);
+        }
         var request = await context.TitleRequests.FromSqlInterpolated(
                 $"SELECT * FROM [asap].[TitleRequest] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {snapshot.TitleRequestId}")
             .SingleAsync(cancellationToken);
@@ -981,6 +1196,19 @@ public sealed class HoldPlacementService(
             operation.LeaseExpiresUtc <= now || operation.Phase != "result_recorded" || operation.ResultCode != "success")
         {
             return new HoldPlacementResult("operation_ownership_lost", owner.Id);
+        }
+        var timeoutSettings = await EffectiveWorkflowAsync(context, request.LibraryOrganizationId, cancellationToken);
+        if (timeoutSettings.PendingHoldTimeoutEnabled == true && timeoutSettings.PendingHoldTimeoutDays.HasValue &&
+            TimeoutSemantics.IsExpired(
+                request.UpdatedUtc,
+                timeProvider.GetUtcNow(),
+                businessTimeZone,
+                timeoutSettings.PendingHoldTimeoutDays.Value))
+        {
+            await RequireOperatorInTransactionAsync(operation, now, "hold_timeout_due");
+            await context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return new HoldPlacementResult("hold_timeout_due", owner.Id);
         }
         if (request.LibraryOrganizationId != requestSnapshot.LibraryOrganizationId ||
             request.BibId != operation.BibIdSnapshot || request.Status != "pending_hold")
@@ -994,7 +1222,8 @@ public sealed class HoldPlacementService(
         request.Status = "hold_placed";
         request.CloseReason = null;
         request.UpdatedUtc = now;
-        var actorName = actor?.DisplayName ?? actor?.UserPrincipalName;
+        var actorName = actor?.DisplayName ?? actor?.UserPrincipalName ??
+            manualStaff?.DisplayName ?? manualStaff?.UserPrincipalName;
         var note = "Hold placed in Polaris.";
         request.Notes = AppendNote(request.Notes, note);
         context.TitleRequestEvents.Add(new TitleRequestEvent
@@ -1002,8 +1231,8 @@ public sealed class HoldPlacementService(
             TitleRequestId = request.Id,
             EventType = "hold_placed",
             Status = "hold_placed",
-            ActorType = actor is null ? "system" : "staff",
-            StaffUserId = actor?.Id,
+            ActorType = actor is null && manualStaff is null ? "system" : "staff",
+            StaffUserId = actor?.Id ?? manualStaff?.Id,
             ActorName = actorName,
             Message = note,
             MetadataJson = JsonSerializer.Serialize(new
@@ -1279,17 +1508,49 @@ public sealed class HoldPlacementService(
         row.EntraTenantId != Guid.Empty && row.EntraObjectId != Guid.Empty &&
         row.EntraTenantId.HasValue && allowedTenantIds.Contains(row.EntraTenantId.Value);
 
+    private static async Task<bool> LockManualOrganizationsAsync(
+        AsapDbContext context,
+        StaffIdentityEvidence? evidence,
+        int targetOrganizationId,
+        CancellationToken cancellationToken)
+    {
+        if (evidence is null) return true;
+        foreach (var organizationId in new[] { 1, targetOrganizationId }.Distinct().Order())
+        {
+            var organization = await context.Organizations.FromSqlInterpolated(
+                    $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {organizationId}")
+                .SingleOrDefaultAsync(cancellationToken);
+            if (organization is null) return false;
+        }
+        return true;
+    }
+
     private static List<PolarisHoldSnapshot> ActiveSameBibHolds(
         IReadOnlyList<PolarisHoldSnapshot> holds,
         string bibId) =>
         holds.Where(item => item.BibId.ToString() == bibId && !IsTerminal(item.StatusDescription)).ToList();
 
+    private static async Task<WorkflowSettings> EffectiveWorkflowAsync(
+        AsapDbContext context,
+        int organizationId,
+        CancellationToken cancellationToken)
+    {
+        var system = await context.WorkflowSettings.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.OrganizationId == 1, cancellationToken) ?? new WorkflowSettings();
+        var library = organizationId == 1
+            ? null
+            : await context.WorkflowSettings.AsNoTracking()
+                .SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
+        return new WorkflowSettings
+        {
+            OrganizationId = organizationId,
+            PendingHoldTimeoutEnabled = library?.PendingHoldTimeoutEnabled ?? system.PendingHoldTimeoutEnabled,
+            PendingHoldTimeoutDays = library?.PendingHoldTimeoutDays ?? system.PendingHoldTimeoutDays
+        };
+    }
+
     private static bool IsTerminal(string? status) =>
-        status?.Contains("cancel", StringComparison.OrdinalIgnoreCase) == true ||
-        status?.Contains("expire", StringComparison.OrdinalIgnoreCase) == true ||
-        status?.Contains("unclaim", StringComparison.OrdinalIgnoreCase) == true ||
-        status?.Contains("filled", StringComparison.OrdinalIgnoreCase) == true ||
-        status?.Contains("deleted", StringComparison.OrdinalIgnoreCase) == true;
+        status?.Trim().ToLowerInvariant() is "unclaimed" or "cancelled" or "expired";
 
     private static string ResultCode(HoldProviderResult result) => result.Outcome switch
     {
