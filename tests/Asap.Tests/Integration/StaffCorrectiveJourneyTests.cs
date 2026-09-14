@@ -5,12 +5,15 @@ using Asap.Web.Features.Email;
 using Asap.Web.Features.Patron;
 using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Data;
+using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 
 namespace Asap.Tests.Integration;
@@ -275,7 +278,7 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task ForbiddenStaffCookieCanRecoverSessionSignOutAndChallengeInDevelopment()
+    public async Task ForbiddenStaffCookieCanRecoverSessionSignOutAndChallengeWithRealCookieAuthentication()
     {
         using var startup = factory!.CreateClient();
         await startup.GetAsync("/api/asap/staff/session");
@@ -287,14 +290,18 @@ public sealed partial class PatronJourneyTests
             await context.SaveChangesAsync();
         }
         var staff = await CreateCorrectiveStaffAsync(superAdmin, "staff", 91903);
-        await using var development = factory.WithWebHostBuilder(builder =>
+        await using var cookieApplication = factory.WithWebHostBuilder(builder =>
         {
-            builder.UseEnvironment("Development");
             builder.ConfigureServices(services =>
             {
-                // The fixture already deployed the real DACPAC to its isolated SQL database.
-                services.Remove(services.Single(item => item.ServiceType == typeof(IHostedService) &&
-                    item.ImplementationType == typeof(Asap.Web.Infrastructure.Development.DevelopmentDatabaseInitializer)));
+                // Keep Testing for CI's SQL connection, but exercise the real secure cookie/antiforgery/OIDC boundary.
+                services.PostConfigure<AuthenticationOptions>(options =>
+                    options.DefaultAuthenticateScheme = StaffAuthenticationRegistration.CookieScheme);
+                services.PostConfigure<AntiforgeryOptions>(options =>
+                {
+                    options.Cookie.Name = "__Host-ASAP-AF";
+                    options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+                });
                 services.PostConfigure<OpenIdConnectOptions>(StaffAuthenticationRegistration.EntraScheme,
                     options => options.Configuration = new OpenIdConnectConfiguration
                     {
@@ -304,15 +311,31 @@ public sealed partial class PatronJourneyTests
                     });
             });
         });
-        using var client = development.CreateClient(new WebApplicationFactoryClientOptions
+        using var client = cookieApplication.CreateClient(new WebApplicationFactoryClientOptions
         {
             BaseAddress = new Uri("https://localhost"), AllowAutoRedirect = false, HandleCookies = true
         });
-        var protectedCookie = ProtectStaffCookie(development, staff.Id, staff.EntraTenantId!.Value, staff.EntraObjectId!.Value);
+        Assert.AreEqual("Testing", cookieApplication.Services.GetRequiredService<IWebHostEnvironment>().EnvironmentName,
+            "The real-SQL fixture must retain its trusted Testing host allowance on every platform.");
+        var schemes = cookieApplication.Services.GetRequiredService<IAuthenticationSchemeProvider>();
+        var authenticate = await schemes.GetDefaultAuthenticateSchemeAsync();
+        Assert.AreEqual(StaffAuthenticationRegistration.CookieScheme, authenticate!.Name);
+        Assert.AreEqual(typeof(CookieAuthenticationHandler), authenticate.HandlerType);
+        var challengeScheme = await schemes.GetDefaultChallengeSchemeAsync();
+        Assert.AreEqual(StaffAuthenticationRegistration.EntraScheme, challengeScheme!.Name);
+        Assert.AreEqual(typeof(OpenIdConnectHandler), challengeScheme.HandlerType);
+        var protectedCookie = ProtectStaffCookie(cookieApplication, staff.Id, staff.EntraTenantId!.Value, staff.EntraObjectId!.Value);
         client.DefaultRequestHeaders.Add("Cookie", $"__Host-ASAP.Staff={protectedCookie}");
+        Assert.IsFalse(client.DefaultRequestHeaders.Any(header => header.Key.StartsWith("X-ASAP-Test-", StringComparison.OrdinalIgnoreCase)),
+            "This journey must authenticate only the protected cookie, never a testing identity header.");
         using (var activeSession = await client.GetAsync("/api/asap/staff/session"))
         {
             Assert.AreEqual(HttpStatusCode.OK, activeSession.StatusCode);
+            var antiforgeryCookie = activeSession.Headers.GetValues("Set-Cookie")
+                .Single(value => value.StartsWith("__Host-ASAP-AF=", StringComparison.Ordinal)).ToLowerInvariant();
+            StringAssert.Contains(antiforgeryCookie, "; secure");
+            StringAssert.Contains(antiforgeryCookie, "; path=/");
+            StringAssert.Contains(antiforgeryCookie, "; httponly");
             using var body = JsonDocument.Parse(await activeSession.Content.ReadAsStringAsync());
             Assert.IsTrue(body.RootElement.GetProperty("authenticated").GetBoolean());
         }
@@ -361,7 +384,7 @@ public sealed partial class PatronJourneyTests
             using var body = JsonDocument.Parse(await anonymous.Content.ReadAsStringAsync());
             Assert.IsFalse(body.RootElement.GetProperty("authenticated").GetBoolean());
         }
-        client.DefaultRequestHeaders.Add("Cookie", $"__Host-ASAP.Staff={ProtectStaffCookie(development, superAdmin.Id, superAdmin.EntraTenantId, superAdmin.EntraObjectId)}");
+        client.DefaultRequestHeaders.Add("Cookie", $"__Host-ASAP.Staff={ProtectStaffCookie(cookieApplication, superAdmin.Id, superAdmin.EntraTenantId, superAdmin.EntraObjectId)}");
         using var replacement = await client.GetAsync("/api/asap/staff/session");
         using var replacementBody = JsonDocument.Parse(await replacement.Content.ReadAsStringAsync());
         Assert.IsTrue(replacementBody.RootElement.GetProperty("accessAllowed").GetBoolean());

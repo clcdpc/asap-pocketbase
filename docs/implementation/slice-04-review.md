@@ -7,9 +7,10 @@ Full Slice 4 base: `4769a8a8750c315e319824355d4508073bd43546`.
 Behavioral PocketBase pin: `150b30b776565194260cc327eeeffdfb46475e81`.
 Pass 1 candidate: `corrective-20260914b`; full Pass 2 candidate:
 `corrective-20260914c`. Both have 51 changed/new code paths from the full-slice
-base. `slice-04-review-packet.md` identifies current candidate-c source,
-artifact, native fixture and browser receipts. Documentation is completed
-after publication; no candidate-c code changed after its complete gates.
+base. CI-corrected full Pass 3 candidate: `corrective-20260914d`, 52 paths.
+`slice-04-review-packet.md` identifies current candidate-d source, artifact,
+native fixture and browser receipts. Documentation is completed after
+publication; no candidate-d code changed after its complete gates.
 
 ## Astra Corrective Review
 
@@ -151,7 +152,7 @@ Its full reread covered locked authority, lifecycle/invariant ordering,
 identity/recovery, readiness/outbox scope, aggregate versions/inheritance,
 hidden templates, migration, frontend safety and focus-race behavior.
 
-## Astra Acceptance And Final Gate
+## Candidate C Local Acceptance (Historical)
 
 Astra independently verified the complete candidate-c evidence and reviewed
 the confirmed fix and test-fixture changes. All requested findings are resolved
@@ -169,3 +170,76 @@ does not substitute for that gate. STOP after success; Slice 5 has not started.
 No merge, tag, deployment or cutover follows. Protected-ticket/real-handler
 browser coverage is not live Entra login; FileEmailSender is not real-provider
 email certification, and the documented release/rehearsal blockers remain.
+
+## Exact-Milestone CI Follow-Up
+
+Candidate c became attempted milestone
+`c147c3501db2c852781b21af4826ce589dab622c`; exact remote run 34855842335 failed
+with 233 passing tests, one failure and zero skips. The new Development recovery test cannot use CI's
+SQL-authenticated Testing database. The existing validation correctly rejects
+that combination, leaving no worker registration for the fixture's strict
+lookup. This is a test-host mismatch, not a product-policy exception.
+
+Astra confirmed the loader/validator rule and existing protected-cookie test
+pattern. The retained Luna is making the bounded fixture correction: genuine
+cookie/OIDC handlers in Testing, secure antiforgery options, unchanged recovery
+assertions and explicit normal-Development authentication registration checks.
+No product configuration or auth relaxation, skip or fake handler is authorized.
+Fresh complete gates and the same Terra's additional full pass are required.
+The clean Pass 2 is historical review of c, not acceptance of a CI-failing SHA.
+
+The bounded test-only correction is implemented. Astra inspected both test
+diffs: the fixture explicitly selects actual CookieAuthenticationHandler and
+OpenIdConnectHandler, retains secure antiforgery and all original assertions,
+and refuses testing identity headers. The existing environment-loop unit
+continues proving no test identity handler in normal Development/Production
+and now verifies their genuine handlers/default sign-in/challenge too.
+No product or validation-policy change was made. Focused tests passed 17/17;
+full local .NET passed 234/234, zero skips; Node passed 172/172 and clean
+Release had zero warnings/errors. Fresh candidate-d gates and full Pass 3
+remain mandatory before another milestone/CI attempt.
+
+## Full Pass 3 Candidate Ready
+
+Fresh candidate d passed clean Release, 234/234 .NET/real-SQL cases with zero
+skips, all 172 Node files, four fresh native fixture/oracle runs and all 12
+published browser modes (103 states and 14 CSP cases). Astra inspected the
+test-only host correction and confirmed unchanged product configuration,
+normal Development/Production auth, SQL-auth guard, recovery assertions and
+published Development recovery. Its audit matched all 659 non-document inputs,
+590 candidate files, 52 full-slice code hashes, four native receipts and 164
+browser evidence files, and visually checked the final desktop/mobile images.
+The 19 authoritative pack hashes are unchanged. Fresh fetch still shows main
+exactly at the pin; local, remote and draft PR head remain attempted c147c35.
+
+The same Terra High must now perform full Pass 3 over the entire delta from
+4769a8a, surrounding callers and every requested correction, including the
+new CI fixture change. No source/provider/build writes or replacement reviewer
+are authorized. A clean pass and Astra acceptance must precede the replacement
+milestone; only that milestone's exact-SHA successful remote CI closes Slice 4.
+
+## Pass 3 - Clean And Astra Acceptance
+
+The same Terra High completed full Pass 3 over the entire Slice 4 delta from
+4769a8a, all corrective findings and surrounding callers. No substantive
+findings remain. The CI fixture correction is sound: genuine cookie/OIDC
+handlers, HTTPS and secure antiforgery, no identity headers, every recovery
+assertion, and unchanged normal Development/Production policy. The prior P1
+remains closed with ordered held title locks and eight distinct-actor SQL cases.
+
+Terra independently matched all 52 code hashes, the candidate/artifact/native/
+browser receipt hashes, all 164 browser evidence files, the 234/234 zero-failure/
+skip TRX and zero-warning/error Release log. It did not write source or outputs,
+rerun shared gates/providers, or substitute a new reviewer. Luna and Terra
+remained the same retained contexts through every correction and review.
+
+Astra inspected the exact two-test diff and independently verified every
+candidate-d local gate, source/artifact/fixture/oracle/browser provenance and
+representative final screenshots. All nine corrective dispositions remain
+resolved as recorded above. No product or test bytes changed after candidate d
+passed; only acceptance documentation was completed. The local acceptance
+gate is satisfied. Create/push the coherent replacement milestone and require
+actual successful remote CI for that exact SHA, recording both in the
+[Slice 4 acceptance record](https://github.com/clcdpc/asap-pocketbase/pull/264#issuecomment-5665538639).
+The failed c147c35 run is not certification. After exact-SHA success, STOP with
+PR #264 draft and Slice 5 unstarted. No merge, tag, deployment or cutover.

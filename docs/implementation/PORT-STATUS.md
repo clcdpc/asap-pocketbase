@@ -37,7 +37,42 @@ fixes use a temporary branch from the deployed source, immediate equivalent
 
 ## Execution And Evidence
 
-### Slice 4 Final Local Acceptance - 2026-09-14
+### Slice 4 Replacement Candidate D - 2026-09-14
+
+The bounded CI fixture correction below is implemented with no product,
+schema, migration, workflow or configuration-policy change. Fresh candidate
+`corrective-20260914d` passed clean Release (zero warnings/errors), 234/234
+.NET/real-SQL tests with zero skips, 172/172 Node files, fresh Web/native
+publications and hashes, four native fixture/oracle runs (161/164/3/3 checks),
+and all 12 published-browser modes (103 states and 14 CSP cases).
+Astra verified the complete source/artifact/native/browser evidence and final
+desktop/mobile screenshots. The same Terra completed full Pass 3 clean;
+all local acceptance gates are satisfied. The replacement milestone and that
+exact SHA's remote CI outcome are maintained in the acceptance record below.
+Require its successful exact-SHA run before final certification and then STOP.
+No earlier local-green candidate or failed milestone certifies Slice 4.
+
+### Slice 4 Exact-Milestone CI Correction
+
+Attempted milestone `c147c3501db2c852781b21af4826ce589dab622c` was committed
+and pushed after the local gates and clean full Terra Pass 2 below. Exact
+[CI run 34855842335](https://github.com/clcdpc/asap-pocketbase/actions/runs/34855842335)
+failed with 233 passing .NET tests, one failure and zero skips, so it is NOT accepted Slice 4.
+The recovery test switched its host to Development while Linux CI uses SQL
+authentication, which the unchanged application correctly permits only in
+Testing. Invalid startup configuration caused a strict fixture service lookup
+to fail before the cookie assertions. This is a test-host mismatch, not
+permission to weaken Development/production configuration or authentication.
+
+The retained Luna corrected only the fixture to select genuine cookie and
+OIDC handlers in its CI-compatible host, retaining secure antiforgery and all
+recovery assertions. Fresh complete candidate-d gates and the retained Terra's
+additional full review subsequently passed. A replacement milestone's own
+exact-SHA green CI is required; c147c35 remains a failed attempted milestone.
+The acceptance record linked below remains the final-SHA/run record.
+Slice 5 is not started; PR #264 remains draft.
+
+### Slice 4 Candidate C Local Gate (Historical)
 
 All corrective and Step-5 local gates passed on candidate c. The retained
 Terra High completed full Pass 2 clean and closed the Pass-1 cleanup race;
@@ -46,9 +81,9 @@ the complete source, publication, SQL, migration, browser and review evidence.
 No substantive finding remains. See `slice-04-review.md` and the current
 `slice-04-review-packet.md` for exact evidence and residual provider boundaries.
 
-The coherent milestone is ready to commit and push. Final Slice 4 certification
-requires remote CI green for that exact SHA, not checkpoint CI. The milestone
-SHA and actual run result are maintained in the
+The subsequent coherent milestone failed its exact CI as recorded above.
+Final Slice 4 certification requires the replacement milestone's remote CI
+green, not checkpoint CI. The final SHA and actual run result are maintained in the
 [Slice 4 acceptance record](https://github.com/clcdpc/asap-pocketbase/pull/264#issuecomment-5665538639),
 so recording the result does not create a different, untested milestone SHA.
 Stop after that gate. PR #264 stays draft; Slice 5 is not started or dispatched.
@@ -284,7 +319,7 @@ closed. They do not prescribe the current remaining-slice model.
 | 1 | Patron login and submission | Complete: `c1b8655` plus reviewed correction `1e36761`; 120 tests and remote Linux CI passed |
 | 2 | Staff Entra and core request workflow | Complete: reviewed milestone `9f946ae`; 181 local and remote Linux CI tests pass, no skips |
 | 3 | Additional-copy workflow | Complete: reviewed milestone `85539b0`; 190 local/remote tests, native/published-browser checks and full Terra Pass 5 clear |
-| 4 | Administration and configuration | Final local gates and full Terra Pass 2 clean; exact milestone and CI result in the [acceptance record](https://github.com/clcdpc/asap-pocketbase/pull/264#issuecomment-5665538639) |
+| 4 | Administration and configuration | Candidate-d final local gates and retained Terra full Pass 3 clean; final milestone and exact-SHA CI result in the [acceptance record](https://github.com/clcdpc/asap-pocketbase/pull/264#issuecomment-5665538639) |
 | 5 | Background workflows and complete email operations | Not started |
 | 6 | Analytics | Not started |
 | 7 | Migration hardening and legacy links | Not started |

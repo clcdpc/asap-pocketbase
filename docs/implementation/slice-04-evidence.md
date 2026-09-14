@@ -122,7 +122,9 @@ failure. Astra inspected representative Staff Access, forbidden-cookie recovery,
 different-account and patron form screenshots and verified all 164 referenced
 browser evidence hashes. The independent source/artifact audit matched all
 659 non-document inputs, all 590 candidate files and four native receipts.
-Exact candidate-c paths/hashes and coverage are in `slice-04-review-packet.md`.
+Exact candidate-c paths/hashes and coverage remain in the
+[candidate-c packet](https://github.com/clcdpc/asap-pocketbase/blob/c147c3501db2c852781b21af4826ce589dab622c/docs/implementation/slice-04-review-packet.md)
+and its immutable local receipts. The current packet now identifies d.
 
 The retained Terra subsequently performed full Pass 2 over the complete
 Slice 4 base, not only the cleanup correction. Pass 2 is clean and the P1 is
@@ -137,6 +139,88 @@ The exact SHA and run result are recorded in the
 [Slice 4 acceptance record](https://github.com/clcdpc/asap-pocketbase/pull/264#issuecomment-5665538639)
 after push, avoiding a second documentation commit that would change the SHA
 being certified. No earlier WIP CI is substituted; Slice 5 remains unstarted.
+
+### Exact-Milestone CI Failure
+
+Attempted milestone `c147c3501db2c852781b21af4826ce589dab622c` was pushed after
+the complete candidate-c gates and clean full Pass 2. Exact remote run
+34855842335 failed: 233 passed, one failed, zero skipped. The sole failure was
+`ForbiddenStaffCookieCanRecoverSessionSignOutAndChallengeInDevelopment` during
+host construction, before its cookie assertions. Linux CI uses SQL
+authentication; changing that test host to Development correctly invalidated
+configuration, then the fixture's strict worker lookup threw. Windows local
+and published Development checks used integrated authentication and passed.
+
+The failed log and run metadata are retained in
+`.git/asap-slice-04-ci-c147c35-failed.log` and
+`.git/asap-slice-04-ci-c147c35-result.json`. No product policy or assertion may
+be weakened to pass. The retained Luna will select the already-registered
+genuine cookie/OIDC handlers in the trusted Testing host, retaining secure
+antiforgery options and all recovery checks. Fresh complete gates and retained
+Terra full review precede a replacement milestone and exact-SHA CI. Candidate
+c remains accurate local evidence, not final Slice 4 acceptance.
+
+The fixture correction is now implemented only in
+`StaffCorrectiveJourneyTests.cs` and `StaffAuthenticationTests.cs`.
+`ForbiddenStaffCookieCanRecoverSessionSignOutAndChallengeWithRealCookieAuthentication`
+asserts the trusted Testing host, genuine Cookie/OIDC handler types, no testing
+identity headers, and actual secure/path/httponly antiforgery cookie flags.
+Every original recovery assertion remains. The environment-loop unit also
+verifies the genuine handlers and default sign-in/challenge in Development
+and Production. No application, schema, CI policy or SQL-auth guard changed.
+
+Local `TestResults/corrective-ci-cookie-*` receipts record clean Release with
+zero warnings/errors, 17/17 focused auth/config/cookie tests, all 234 .NET/SQL
+cases with zero skips (including 19 migration cases), and all 172 Node files.
+Owned sessions ended and source was refrozen for candidate d. Local SQL used
+Windows integrated authentication; replacement Linux SQL-auth CI is still
+required. No test login or server authentication policy was changed.
+
+### Fresh CI-Corrected Candidate D
+
+`corrective-20260914d` freshly repeated every final-byte gate from attempted
+milestone c147c35 plus the two test-only corrections. Clean isolated Release
+passed with zero warnings/errors; complete .NET passed 234/234, zero skipped
+(146 integration, 88 unit, including 19 migration cases); Node passed all 172
+files. All 746 source inputs stayed unchanged during build/test/publication.
+Fresh Web and self-contained `win-x64` migration publications passed the
+590-file inventory, tested/published assembly equality, 45 frontend copies,
+76 compressed payloads, 17 vendor hashes and matching DACPAC checks.
+
+Four fresh stopped exports passed both pinned oracles. Original and edge
+again imported/reconciled 115/116 records with 161/164 checks and intentional
+drift rejection; unmapped-setting and sender-conflict variants passed three
+controlled-rejection checks each. Source database and manifest hashes match
+the earlier logical packages. No source database was modified. Both positive
+imports verify durable identity, readable metadata and separate NotificationEmail.
+The DACPAC differs from c only in Origin.xml build metadata, not schema or SQL.
+
+Every fresh published mode passed: 12 modes, 103 desktop/mobile states and
+14 pinned CSP cases. Applicable serious/critical axe, overflow and image
+checks passed, with no development email output or diagnostic interception.
+Astra inspected the final Staff Access, recovery, different-account and patron
+screenshots; the independent audit matched 659 non-document inputs, all 590
+candidate files, 52 full-slice code paths, all four native receipts and all
+164 browser evidence files. All 19 authoritative pack hashes still match.
+Current exact paths and hashes are in `slice-04-review-packet.md`.
+
+The published Development cookie journey remains unchanged and green. The
+CI-compatible HTTP test still exercises genuine cookie/antiforgery/OIDC
+handlers, not a testing identity header. Neither test claims live Entra login.
+The retained Terra subsequently completed additional full Pass 3 clean over
+the entire Slice 4 delta and surrounding callers. It independently verified
+52 code hashes, the candidate/artifact/native/browser receipt hashes, all 164
+browser evidence files, the 234-case zero-failure/skip TRX and clean Release
+log. It confirmed the CI fixture correction preserves the real handlers and
+all assertions, with unchanged product policy and the prior P1 still closed.
+Astra verified the complete candidate-d acceptance evidence and no code/test
+changes after its freeze. See `slice-04-review.md` for the final local gate.
+
+The replacement milestone must still have its own exact-SHA successful remote
+CI. Its actual SHA and outcome are maintained in the linked acceptance record,
+without generating another documentation SHA after certification. The failed
+c147c35 milestone and clean candidate-c review remain historical, not final
+certification. Stop after the replacement exact-SHA green gate; no Slice 5.
 
 ## State And Ownership
 

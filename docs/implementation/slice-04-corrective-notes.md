@@ -64,7 +64,7 @@ split into four partial files for the bounded corrective cases:
 
 | File | Coverage |
 | --- | --- |
-| `StaffCorrectiveJourneyTests.cs` | Existing/resulting lifecycle scope; inactive role edits and re-add; durable identity/rebind/label/notification/cookie behavior; stale sign-in cannot overwrite a rebound label; last usable admin with historical empty GUID; unusable explicit/automatic assignees; atomic rule/title/copy/audit rollback and closed history; profile participation; real Development cookie/antiforgery/OIDC recovery |
+| `StaffCorrectiveJourneyTests.cs` | Existing/resulting lifecycle scope; inactive role edits and re-add; durable identity/rebind/label/notification/cookie behavior; stale sign-in cannot overwrite a rebound label; last usable admin with historical empty GUID; unusable explicit/automatic assignees; atomic rule/title/copy/audit rollback and closed history; profile participation; real cookie/antiforgery/OIDC recovery (CI host correction below) |
 | `WorkflowAuthorizationCorrectiveTests.cs` | Title and copy privileged unclaim/delete, demotion/deactivation/move, both serial orderings: 24 actor/lifecycle interleavings plus eight distinct-actor/global-claimant cleanup cases with actual SQL blocking observations |
 | `ConfigurationCorrectiveJourneyTests.cs` | Stable versions and stale rejection for origins/participation/branding; physical-index order independence; settings/branding Organization-before-Staff locking; five submission template visibility/lineage modes with committed business state |
 | `EmailScopeCorrectiveJourneyTests.cs` | Staff/admin/system-actor readiness owner across title/copy/hold intents, configured/unconfigured outcomes and provider-outside-lock proof; actual effective sender default/override/missing configuration at the readiness boundary |
@@ -257,3 +257,30 @@ Implementation source is re-frozen for Astra's fresh candidate C full 234-case
 .NET/Node/publication/native/browser gates and the retained Terra full Pass 2.
 This is a corrected local checkpoint, not final Slice 4 acceptance. All red
 receipts remain retained; no commit, push, branch or Slice 5 work was performed.
+
+## Exact-CI Cookie Fixture Follow-Up
+
+After the candidate-c local gates and clean retained-Terra full Pass 2, Astra
+pushed attempted milestone c147c35. Exact CI run 34855842335 failed with 233
+passing cases, one failure and zero skips. The new recovery fixture selected
+Development, but CI's SQL-authenticated connection is correctly permitted only
+in Testing. Host construction failed before the cookie assertions; neither
+application policy nor the shared strict worker lookup required a change.
+
+The retained Luna kept the trusted Testing host and explicitly selected the
+existing real cookie authentication handler, preserving the real OIDC challenge
+and deterministic discovery metadata. Local secure antiforgery options and
+assertions prove the actual secure/path/httponly cookie; handler type assertions
+and absence of test identity headers protect the intended boundary. Every
+original participation-loss/recovery assertion remains. The existing unit
+environment loop additionally checks genuine cookie/OIDC handlers and default
+sign-in/challenge in Testing, Development and Production. Normal application
+auth/configuration, schema, migration and the CI workflow are unchanged.
+
+`TestResults/corrective-ci-cookie-*` records clean Release with zero warnings/
+errors, 17/17 focused tests, all 234 .NET/real-SQL cases with zero skips and all
+172 Node files. All owned command sessions ended and source was refrozen.
+Astra's fresh candidate-d gates and retained-Terra full Pass 3 are recorded in
+the current evidence/review documents. Published Development cookie recovery
+still uses the unchanged real handler; no live Entra login is claimed. The
+failed c147c35 milestone is not final acceptance, and Slice 5 has not started.

@@ -2,17 +2,30 @@
 
 ## Gate State
 
-Corrective candidate `corrective-20260914c`, frozen from reviewed Step-4 checkpoint
-`42e65cd3773cf57557e908fe79e01d77d58bac2f`, 2026-09-14. Complete Release,
-.NET/real-SQL/Node, native fixture and published-browser gates have passed.
-Astra's fresh post-validation corrective review found no remaining substantive
-issue. Terra full Pass 1 then found the cross-library global-super-admin
-TitleRequest cleanup race recorded in `slice-04-review.md`. The retained Luna
-fixed it with held request locks and eight real-SQL ordering cases. Candidate
-c freshly repeats every complete gate after that fix and the two test-fixture
-corrections. The same Terra's full Pass 2 is clean and P1 is closed. Candidate b remains
-historical green evidence, not acceptance of the later corrections.
-GPT-5.6 Luna Max
+Current candidate `corrective-20260914d` is frozen from attempted milestone
+`c147c3501db2c852781b21af4826ce589dab622c` on 2026-09-14. The original corrective
+start remains `42e65cd3773cf57557e908fe79e01d77d58bac2f`. Every fresh complete
+Release/.NET/real-SQL/Node, publication, native fixture/oracle and published
+browser gate has passed. Astra independently checked the complete evidence.
+The retained Terra completed full Pass 3 clean, not only a review of the CI fix.
+The final milestone and its exact-SHA remote CI outcome belong in the linked
+acceptance record; no earlier run substitutes for that remaining remote gate.
+
+Candidate c and clean full Pass 2 remain historical local-green evidence.
+Attempted milestone c147c35 failed exact CI run 34855842335: 233 passed, one
+failed, zero skipped. The Development recovery test host could not use CI's
+Testing-only SQL authentication. The retained Luna corrected only the test
+host to select genuine cookie/OIDC handlers in Testing, retain secure
+antiforgery and every recovery assertion, and verify normal Development and
+Production authentication registration. Product policy is unchanged.
+The candidate-c packet and hashes remain in the
+[historical packet](https://github.com/clcdpc/asap-pocketbase/blob/c147c3501db2c852781b21af4826ce589dab622c/docs/implementation/slice-04-review-packet.md).
+
+Terra Pass 1's cross-library global-super-admin TitleRequest cleanup race is
+closed by ordered held request locks and eight real-SQL ordering cases. Full
+Pass 2 was clean; the additional test change and CI failure required this fresh
+full pass, which is now clean. No earlier candidate or CI run
+certifies the replacement. GPT-5.6 Luna Max
 Jason (`01a09b0c-a918-7640-ac4a-6ed90d644f76`)
 retains implementation, tests and confirmed-fix ownership. Astra owns acceptance,
 this packet, the milestone and exact-SHA remote CI. The same Luna context has
@@ -39,24 +52,28 @@ after push. A prior checkpoint run cannot certify this milestone.
 
 ## Candidate Receipts
 
-Candidate root: `.artifacts/slice-04-candidate-corrective-20260914c`.
-Source snapshot: `.git/s4-candidate-corrective-20260914c`.
+Candidate root: `.artifacts/slice-04-candidate-corrective-20260914d`.
+Source snapshot: `.git/s4-candidate-corrective-20260914d`.
 
-- Source/build/publication receipt: `.git/asap-slice-04-candidate-corrective-20260914c.json`,
-  SHA-256 `8954dbdb0fcb4f0179d0c73405a6fc2e6c2f32d9596225c34649d81d069e5229`.
+- Source/build/publication receipt: `.git/asap-slice-04-candidate-corrective-20260914d.json`,
+  SHA-256 `16a7b698a55ff0a8aeb77d98c4b0bef3997918b5c9e3143d7531a5eac0686eb9`.
   All 746 input files remained unchanged during the gates; tested Web assembly
   equals the published assembly. The 590-file inventory includes validation receipts.
-- Full-slice code receipt: `.git/asap-slice-04-review-state-corrective-20260914c.json`,
-  SHA-256 `9e18d0eec160f100c0ddb089e2fc75c1c8b6fb46c62c01ceab55eb1c7d67789d`;
-  51 changed/new code paths from the full review base. Documents remain in review.
-- Artifact receipt: `.git/asap-slice-04-artifact-inventory-corrective-20260914c.json`,
-  SHA-256 `7aa3db4ee0c84deb42442cd3d5284d64bf41ab62c21b06baadfd551525f1052f`.
+- Full-slice code receipt: `.git/asap-slice-04-review-state-corrective-20260914d.json`,
+  SHA-256 `ee29a846313739760554339d43183e424ecbe054f0bed3a13a0d9ba99f190f08`;
+  52 changed/new code paths from the full review base. Documents remain in review.
+- Artifact receipt: `.git/asap-slice-04-artifact-inventory-corrective-20260914d.json`,
+  SHA-256 `c1acf2943bb088c9e1f38c60a6e073ee1d0f4e55e815d8ccd4d36fe0428da553`.
   All 45 frontend files, 76 compressed payloads and 17 vendored files verified;
   no PocketBase/Node/development-email runtime payload was published.
-- Both DACPAC copies: `740a781e451e5c91e6fff56e23a3d2341f469fdeab8f45c564be1045c0253d8f`.
-- Web assembly: `33776c57bfbc30ee70bbcd829330e9000dd6bb9b65db89bbf90d4d82bbe58b27`.
+- Both DACPAC copies: `8a34724436e04d5328c0515197e7041322a3ce0e9efb2daaaf36c20dc0295e09`.
+- Web assembly: `2f61f96ace38091ae7f16b4f1ae46fb9cc1cb4623ad100f24adf37498e60d96b`.
 - Native executable: `6e07a579a3efc88b3edf70f79a636fafde89723e62fae270dfe2f0022facc11d`.
-- Native DLL: `d32d3e3066eb0aad197018fd2835a6c49b1019aef05e122011e920a508381689`.
+- Native DLL: `b872a1f5d11752581bfc8049c389d98804f25dd602c2740a81a9bb115f2fe5fd`.
+
+The candidate-d DACPAC differs from c only in `Origin.xml` build metadata;
+model, post-deployment SQL, DAC metadata and content types are byte-identical.
+No product, schema, migration mapping or CI workflow changed after c147c35.
 
 Validation in the candidate's `validation/` directory: clean Release with zero
 warnings/errors; complete .NET 234/234, zero skipped (146 integration, 88 unit,
@@ -67,8 +84,8 @@ changing the existing browser assertions. Its final setup also passed 12 full
 repetitions (108/108) after the observed Grid.js fixture race was corrected.
 
 Fresh stopped-fixture receipt:
-`.git/asap-slice-04-final-fixtures-corrective-20260914c/receipt.json`, SHA-256
-`6704bd5651fb4b31faf72dc43d142dc532a050e5be833a74a36ef6fb38f7ef88`.
+`.git/asap-slice-04-final-fixtures-corrective-20260914d/receipt.json`, SHA-256
+`eb21a4870381b9fe72151c828fcc25ad7844d3a6fb8d11d82b59cdaafb1a4445`.
 All four exports use the candidate native executable, matching DACPAC and exact
 behavioral pin. Each passes the 12-module/four-scope configuration oracle and
 four-module runtime/eight-queue oracle. Original/edge imports passed 161/164
@@ -83,12 +100,12 @@ checks. These are configuration/runtime oracles, not Slice 5 job execution.
 | Unmapped | `307966b73acabb6ea1fb310792a6bbd735221b0dd154ea7f72dfcfce894b01a9` | `7d67547489377a50d0d379c9c68d8e3f57e6710b3d49c4edf01635de0cc0d33b` |
 | Sender conflict | `8bd6d612a7bc9cce1a9d5e0e5d9571c20466926e719d379255bdd45b7ff1065b` | `b9655e765a2e9bcf65c1dc97d1f419e429f182f54d35d42e9bff54027a6b4d91` |
 
-Historical candidate a/b and failed local-harness evidence is retained in
+Historical candidates a/b/c and failed local-harness/CI evidence are retained in
 `slice-04-evidence.md` and `slice-04-corrective-notes.md`; no failed run is counted
-as acceptance. Fresh complete published batch `corrective-20260914c` used the
-candidate-c bytes throughout. Receipt:
-`.git/asap-slice-04-final-browsers-corrective-20260914c/receipt.json`, SHA-256
-`0ffa96544413561bbcb70e6a565e2e8d02ed96f346922b33111153d125aff0ad`.
+as acceptance. Fresh complete published batch `corrective-20260914d` used the
+candidate-d bytes throughout. Receipt:
+`.git/asap-slice-04-final-browsers-corrective-20260914d/receipt.json`, SHA-256
+`3e115ea23474edbfba8668371d367cf56c0de1881a41c6d9feb43ddb5f52799c`.
 All 12 modes passed: administration (23 cases/17 states), real-cookie recovery
 (4 cases/10 states), five patron template configurations (10 states each),
 AdditionalCopy lifecycle (10 states), ordinary-staff assignment (6 states),

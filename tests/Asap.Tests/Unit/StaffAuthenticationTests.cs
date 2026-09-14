@@ -1,8 +1,11 @@
 using Asap.Web.Features.Staff;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 
 namespace Asap.Tests.Unit;
@@ -71,6 +74,15 @@ public sealed class StaffAuthenticationTests
                 expected,
                 schemes.Any(item => item.Name == TestingStaffAuthenticationHandler.SchemeName),
                 environmentName);
+            Assert.AreEqual(typeof(CookieAuthenticationHandler),
+                schemes.Single(item => item.Name == StaffAuthenticationRegistration.CookieScheme).HandlerType,
+                environmentName);
+            Assert.AreEqual(typeof(OpenIdConnectHandler),
+                schemes.Single(item => item.Name == StaffAuthenticationRegistration.EntraScheme).HandlerType,
+                environmentName);
+            var options = provider.GetRequiredService<IOptions<AuthenticationOptions>>().Value;
+            Assert.AreEqual(StaffAuthenticationRegistration.CookieScheme, options.DefaultSignInScheme, environmentName);
+            Assert.AreEqual(StaffAuthenticationRegistration.EntraScheme, options.DefaultChallengeScheme, environmentName);
         }
     }
 

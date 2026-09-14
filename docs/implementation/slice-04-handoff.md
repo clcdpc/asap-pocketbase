@@ -2,12 +2,27 @@
 
 ## Current Slice 4 Stop Boundary
 
-All final candidate-c local gates and the retained Terra's full Pass 2 are
-clean; the Pass-1 P1 is closed. Astra verified the complete acceptance evidence.
-Only the coherent milestone push and actual exact-SHA remote CI remain at the
-time of this commit. Their final result is recorded in the
+Fresh candidate `corrective-20260914d` passed every complete local final-byte
+gate: Release 0 warnings/errors, 234/234 .NET/real-SQL tests with zero skips,
+172 Node files, fresh Web/native publications, four native fixture/oracle runs
+and 12 published-browser modes (103 states and 14 CSP cases). Astra verified
+the complete evidence and final desktop/mobile screenshots. The same Terra
+completed full Pass 3 clean; Astra's local acceptance gate is satisfied.
+The final replacement milestone SHA and exact-SHA remote CI outcome are
+maintained in the
 [Slice 4 acceptance record](https://github.com/clcdpc/asap-pocketbase/pull/264#issuecomment-5665538639).
-After exact-SHA CI is green, STOP with PR #264 draft. Do not start or dispatch
+Require success for that exact replacement SHA, not any older checkpoint,
+then STOP. Do not rerun completed local review solely because historical
+sections below describe earlier pending gates.
+
+Candidate c and clean Pass 2 are historical. Attempted milestone
+`c147c3501db2c852781b21af4826ce589dab622c` failed exact CI run 34855842335
+(233 passed, one failed, zero skipped): its Development recovery test host
+correctly rejected CI's Testing-only SQL authentication. The same Luna fixed
+only the fixture to exercise genuine cookie/OIDC/secure antiforgery in Testing,
+with every original assertion and normal Development/Production policy intact.
+It is not an accepted milestone. After the
+replacement exact-SHA CI is green, STOP with PR #264 draft. Do not start or dispatch
 Slice 5, merge, tag, deploy or perform cutover. Do not repeat the historical
 Step-4 pause or launch another review merely because old notes below say pending.
 
@@ -32,7 +47,7 @@ Fresh replacement `corrective-20260914b` was fully published and validated:
 four-fixture exports/oracles/imports/reconciliation, and final published batch
 `corrective-20260914b2` (12 modes, 103 browser states, 14 CSP cases). All receipt
 paths/hashes retain the candidate-b names in the local receipts. The review
-packet now identifies candidate c. Those b gates ran on frozen code;
+packet now identifies candidate d. Those b gates ran on frozen code;
 the freeze was subsequently lifted for the confirmed review finding below.
 
 Astra's fresh corrective review was clear. Fresh Terra High Laplace
@@ -43,13 +58,13 @@ case and returned it to the same Luna for locking and real-SQL tests. The fix
 and eight new SQL cases passed. Fresh candidate `corrective-20260914c` now
 passes every complete local gate: Release, 234 .NET cases with zero skips,
 172 Node files, four native fixtures/oracles and 12 published browser modes
-(103 states, 14 CSP cases). Current hashes are in the review packet. The same
+(103 states, 14 CSP cases). Historical c hashes remain in its committed packet. The same
 Terra completed mandatory full Pass 2 clean. No further substantive finding
 requires another fix/re-review cycle; the retained contexts were not replaced.
 
-Final-byte, native fixture/oracle, browser/accessibility, retained Terra
-review/re-review and Astra local acceptance gates are complete. Follow only
-the exact-milestone remote CI gate and stop boundary above. The sections below record
+Those candidate-c local gates preceded the exact-CI fixture failure. Fresh
+candidate-d evidence and the required additional review/milestone/CI gates
+are described at the current stop boundary above. The sections below record
 the earlier checkpoints and retained acceptance tooling; they are historical,
 not instructions to repeat the old pause after Step 4.
 
