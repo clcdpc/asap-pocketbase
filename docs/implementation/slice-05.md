@@ -8,12 +8,14 @@ implementation early. The canonical sequence remains document 02; this is a
 focused implementation packet, not a regenerated architecture or plan.
 
 Astra Max refreshes this packet against accepted prior implementation and
-dispatches fresh Luna Max for the complete slice, including durable queues,
-external-operation recovery and authorization-sensitive delivery. Retain that
-Luna context through tests, confirmed-review fixes and retesting. After required
-tests, fresh Terra High independently reviews the whole slice and retains the
-same context through document 10's unchanged full review/re-review gate. Sol is
-escalation-only under document 10's conditions. Astra verifies acceptance,
+normally dispatches fresh Luna High for the complete slice, including durable
+queues, external-operation recovery and authorization-sensitive delivery.
+[Document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) governs bounded Luna Max
+escalation, optional context rotation with concise handoffs, compact evidence
+receipts, and Astra-first specialist escalation; Sol remains advisory only.
+After required tests, fresh Terra High independently reviews the whole slice.
+A clean Pass 1 needs no ceremonial full Pass 2; fixes receive focused re-review
+unless document 10's full-review triggers apply. Astra verifies acceptance,
 commits/pushes the milestone and requires actual remote CI success for that exact
 commit before dispatching the next slice. Prior exact-milestone CI must be green
 before this slice is dispatched.

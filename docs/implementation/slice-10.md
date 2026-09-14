@@ -4,13 +4,16 @@
 
 Not dispatched. Start after the accepted Slice 9 implementation milestone.
 Refresh the completed schema, CLI/developer reset paths and test fixtures before
-choosing the smallest implementation. Astra Max dispatches fresh Luna Max for
-the complete slice and retains that context through tests, confirmed-review
-fixes and retesting. After required tests, fresh Terra High independently reviews
-the whole slice and retains the same context through document 10's unchanged
-full review/re-review gate. Sol is escalation-only under document 10's conditions.
-Astra verifies acceptance, commits/pushes the milestone and requires actual
-remote CI success for that exact commit before dispatching the next slice.
+choosing the smallest implementation. Astra Max normally dispatches fresh
+Luna High for the complete slice.
+[Document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) governs bounded Luna Max
+escalation, optional context rotation with concise handoffs, compact evidence
+receipts, and Astra-first specialist escalation; Sol remains advisory only.
+After required tests, fresh Terra High independently reviews the whole slice.
+A clean Pass 1 needs no ceremonial full Pass 2; fixes receive focused re-review
+unless document 10's full-review triggers apply. Astra verifies acceptance,
+commits/pushes the milestone and requires actual remote CI success for that exact
+commit before dispatching the next slice.
 Prior exact-milestone CI must be green before this slice is dispatched.
 
 Read root AGENTS, document 10, document 02 Slice 10, document 06 sections 9/13,
@@ -55,4 +58,5 @@ This command is not the migration importer or production recovery mechanism.
 Preserve fresh final-cutover target semantics and permanent-nonproduction's
 PocketBase state until the actual tagged rehearsal. Do not run this tool on a
 real deployment as part of implementation acceptance. Return code/tests/docs
-for independent review; Astra owns the milestone and progression.
+for independent review using compact evidence receipts; Astra owns the milestone
+and progression.

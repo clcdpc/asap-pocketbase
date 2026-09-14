@@ -37,6 +37,50 @@ fixes use a temporary branch from the deployed source, immediate equivalent
 
 ## Execution And Evidence
 
+### Current Execution Policy - Beginning With Slice 5 (2026-09-14)
+
+This documentation-only refinement starts from accepted Slice 4 milestone
+`417c72430652a35bc8fc1da549ae270eabc86429`. After fetching origin, local HEAD,
+`origin/codex/csharp-port` and draft PR #264 all matched that SHA, with no later
+commits. Its exact-SHA [CI run 34861199803](https://github.com/clcdpc/asap-pocketbase/actions/runs/34861199803)
+completed successfully. Slices 0-4 remain accepted; no re-review is required
+because the future execution policy changes.
+
+Beginning with Slice 5, GPT-6 Astra Max remains orchestrator and acceptance
+owner. GPT-5.6 Luna High owns complete ordinary implementation, tests, diagnosis,
+documentation and confirmed-review fixes; normally start each slice fresh.
+Luna Max is reserved for bounded implementation problems that materially benefit
+from additional reasoning. Size, SQL, authentication, migration, test volume or
+elapsed time alone are insufficient reasons. Prefer returning to Luna High.
+Luna always escalates first to Astra; only Astra may request focused independent
+Sol High advice or exceptional Sol XHigh escalation.
+
+Keep Luna context while useful; Astra may rotate when it becomes materially
+large/repetitive, using document 10's concise handoff and current-code inspection
+before editing. Context identity is not an acceptance invariant. Retain detailed
+logs locally and return compact command/result/count/hash/path/warning receipts.
+Astra verifies every required gate ran and passed, selectively inspecting raw
+evidence for failures, mismatches, relevant findings, security/concurrency/
+migration concerns or ambiguity. Successful expensive gates are not rerun solely
+for Astra to consume the same output again.
+
+Every slice still requires fresh independent GPT-5.6 Terra High full Pass 1.
+A clean Pass 1 needs no ceremonial full Pass 2. Confirmed findings return to
+the current Luna context; Terra reports findings only. After fixes/tests, Terra
+reviews fixes, affected callers/invariants, regression surface, tests and fix
+interactions. Repeat full-slice review when document 10's systemic/broad-change
+or unbounded-regression triggers apply. No pass cap permits a known blocker.
+All objective acceptance gates, exact-milestone remote CI and the separate final
+whole-app/release/rehearsal gates remain binding.
+
+The complete policy is in `../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md`.
+Earlier dated execution/policy entries below and the Slice 0-4 files preserve
+what actually happened, including prior model roles, retained contexts, full
+Terra pass counts and duplicated acceptance evidence; they do not govern future
+slices. This update changes no application/schema/migration/frontend behavior
+and does not rerun application acceptance. Slice 5 is not started or dispatched;
+PR #264 remains draft. No merge, tag, deployment or cutover is performed.
+
 ### Slice 4 Replacement Candidate D - 2026-09-14
 
 The bounded CI fixture correction below is implemented with no product,
@@ -223,7 +267,7 @@ fresh Luna Max context; independent Terra High review has not started.
 Acceptance, milestone commit and exact-milestone remote CI remain pending.
 Normal progression after that gate is authorized without a new user prompt.
 
-### Current Execution Policy - 2026-09-13
+### Historical Slice 4 Execution Policy - 2026-09-13
 
 Slices 0-3 were completed under the prior Sol implementation model. Beginning
 with Slice 4, GPT-5.6 Luna Max is the default primary implementer; GPT-5.6 Terra

@@ -5,13 +5,16 @@
 Not dispatched. Do not remove the legacy implementation or rewrite repository
 instructions before Slices 0-10 have passed their implementation/review gates.
 Refresh the actual tree, dependencies and external release blockers at dispatch.
-Astra Max dispatches fresh Luna Max for the complete slice, including removal,
-documentation and test adaptation, and retains that context through tests,
-confirmed-review fixes and retesting. After required tests, fresh Terra High
-independently reviews the whole slice and retains the same context through
-document 10's unchanged full review/re-review gate. Sol is escalation-only under
-document 10's conditions. Astra verifies acceptance, commits/pushes the milestone
-and requires actual remote CI success for that exact commit before progression.
+Astra Max normally dispatches fresh Luna High for the complete slice, including
+removal, documentation and test adaptation.
+[Document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) governs bounded Luna Max
+escalation, optional context rotation with concise handoffs, compact evidence
+receipts, and Astra-first specialist escalation; Sol remains advisory only.
+After required tests, fresh Terra High independently reviews the whole slice.
+A clean Pass 1 needs no ceremonial full Pass 2; fixes receive focused re-review
+unless document 10's full-review triggers apply. Astra verifies acceptance,
+commits/pushes the milestone and requires actual remote CI success for that exact
+commit before progression.
 Prior exact-milestone CI must be green before this slice is dispatched.
 Whole-application review afterward is a distinct required gate with fresh Terra
 contexts; its existing pass rules remain unchanged.
@@ -57,9 +60,10 @@ temporary Postmark decision. No new architecture review or UI redesign.
 
 ## Review And Release Gates
 
-Complete all relevant tests and normal full-slice Terra Pass 1/2/3 before the
-milestone. Then Astra runs the separate whole-application review: fresh Terra
-High, varied full-app emphases, a running confirmed-finding set, three
+Complete all relevant tests, full-slice Terra Pass 1 and any required re-review
+under document 10 before the milestone. Then Astra runs the separate
+whole-application review: fresh Terra High, varied full-app emphases, a running
+confirmed-finding set, three
 consecutive passes without new substantive findings within six nominal passes.
 Luna fixes confirmed blockers; a pass cap never waives a known defect.
 

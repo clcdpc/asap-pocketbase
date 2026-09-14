@@ -7,14 +7,16 @@ review/fix/re-review gates and milestone commits. This packet narrows the
 existing sequence; it does not start migration from scratch or replace the
 authoritative plan. Record the actual prior milestone SHAs, schema version,
 CLI contracts, import/reconciliation coverage and remaining domain gaps at
-dispatch. Astra Max dispatches fresh Luna Max for the complete slice and retains
-that context through tests, confirmed-review fixes and retesting. After required
-tests, fresh Terra High reviews independently and retains the same context
-through document 10's unchanged full review/re-review gate. Sol is escalation-only
-under document 10's conditions. Astra verifies acceptance, commits/pushes the
-milestone and requires actual remote CI success for that exact commit before
-dispatching the next slice. Prior exact-milestone CI must be green before this
-slice is dispatched.
+dispatch. Astra Max normally dispatches fresh Luna High for the complete slice.
+[Document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) governs bounded Luna Max
+escalation, optional context rotation with concise handoffs, compact evidence
+receipts, and Astra-first specialist escalation; Sol remains advisory only.
+After required tests, fresh Terra High independently reviews the whole slice.
+A clean Pass 1 needs no ceremonial full Pass 2; fixes receive focused re-review
+unless document 10's full-review triggers apply. Astra verifies acceptance,
+commits/pushes the milestone and requires actual remote CI success for that exact
+commit before dispatching the next slice. Prior exact-milestone CI must be green
+before this slice is dispatched.
 
 ## Objective And Authority
 
@@ -150,8 +152,8 @@ production source shape, deployed SHA and operator inputs must be verified;
 synthetic fixtures cannot satisfy those gates. Do not merge, tag, rehearse on
 permanent nonproduction or enable production writes as part of this slice.
 
-Run all relevant prior tests and end-to-end gates before Terra Pass 1. The same
-Luna fixes confirmed findings; the same Terra performs full-slice Pass 2/3. Return
+Run all relevant prior tests and end-to-end gates before Terra Pass 1. The current
+Luna context fixes confirmed findings; Terra re-reviews under document 10. Return
 actual changed files, commands/results and remaining risks without committing
 or proceeding to Slice 8. Astra accepts and creates the milestone only when
 the gate passes.

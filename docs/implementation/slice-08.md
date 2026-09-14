@@ -6,11 +6,13 @@ Not dispatched. Start only after Slices 1-7 pass their complete tests,
 independent review/fix/re-review gates and milestone commits. Refresh the
 actual schema versions, dependency assets, configuration/eligibility APIs,
 migration artifact contract and installed-state model before dispatch.
-Astra Max dispatches fresh Luna Max for the complete slice and retains that
-context through tests, confirmed-review fixes and retesting. After required
-tests, fresh Terra High independently reviews the whole slice and retains the
-same context through document 10's unchanged full review/re-review gate. Sol is
-escalation-only under document 10's conditions. Astra verifies acceptance,
+Astra Max normally dispatches fresh Luna High for the complete slice.
+[Document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) governs bounded Luna Max
+escalation, optional context rotation with concise handoffs, compact evidence
+receipts, and Astra-first specialist escalation; Sol remains advisory only.
+After required tests, fresh Terra High independently reviews the whole slice.
+A clean Pass 1 needs no ceremonial full Pass 2; fixes receive focused re-review
+unless document 10's full-review triggers apply. Astra verifies acceptance,
 commits/pushes the milestone and requires actual remote CI success for that exact
 commit before dispatching the next slice. Prior exact-milestone CI must be green
 before this slice is dispatched.
@@ -164,7 +166,7 @@ validation remain explicit release blockers, not simulated successes.
 No production tag/version, merge, permanent-nonproduction deployment or cutover
 is authorized merely by completing this implementation slice.
 
-Run all relevant tests and end-to-end acceptance before Terra Pass 1; the same
-Luna fixes confirmed findings and the same Terra performs full Pass 2/3. Return exact
-changes/results and remaining evidence gaps. Astra owns the milestone commit
-and progression after the gate, not the implementer.
+Run all relevant tests and end-to-end acceptance before Terra Pass 1; the current
+Luna context fixes confirmed findings and Terra re-reviews under document 10.
+Return exact changes/results and remaining evidence gaps. Astra owns the
+milestone commit and progression after the gate, not the implementer.

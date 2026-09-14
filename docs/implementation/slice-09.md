@@ -5,11 +5,13 @@
 Not dispatched. Follow accepted Slices 0-8 and refresh their actual tests,
 artifacts, versions, commands and evidence before implementation. This packet
 finishes the fixed sequence's existing CI/release integration, not a new plan.
-Astra Max dispatches fresh Luna Max for the complete slice and retains that
-context through tests, confirmed-review fixes and retesting. After required
-tests, fresh Terra High independently performs full Pass 1 and retains the same
-context through document 10's unchanged full review/re-review gate. Sol is
-escalation-only under document 10's conditions. Astra verifies acceptance,
+Astra Max normally dispatches fresh Luna High for the complete slice.
+[Document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) governs bounded Luna Max
+escalation, optional context rotation with concise handoffs, compact evidence
+receipts, and Astra-first specialist escalation; Sol remains advisory only.
+After required tests, fresh Terra High independently reviews the whole slice.
+A clean Pass 1 needs no ceremonial full Pass 2; fixes receive focused re-review
+unless document 10's full-review triggers apply. Astra verifies acceptance,
 commits/pushes the milestone and requires actual remote CI success for that exact
 commit before dispatching the next slice. Prior exact-milestone CI must be green
 before this slice is dispatched.
@@ -87,6 +89,7 @@ fake tests or local files cannot prove that missing adapter is implemented.
 Do not stop unrelated implementation or declare production completion because
 of that exception. All recipient-domain/outbox deterministic gates still apply.
 
-Return full test/artifact results and remaining external evidence, not a release
-approval. Do not merge, tag, deploy, alter protected environments or push without
-Astra's integration workflow. Complete the full independent slice review gate.
+Return compact test/artifact receipts, retained evidence paths and remaining
+external evidence, not a release approval. Do not merge, tag, deploy, alter
+protected environments or push without Astra's integration workflow. Complete
+the independent slice review gate under document 10.

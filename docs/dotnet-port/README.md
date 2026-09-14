@@ -1,6 +1,6 @@
 # ASAP PocketBase -> .NET Porting Documentation Pack
 
-**Status:** Slices 0-3 complete under the prior Sol model; paused before Slice 4; Luna Max is the default remaining-slice implementer; all implementation/release gates retained
+**Status:** Slices 0-4 accepted; Slice 5 not started; Luna High is the default remaining-slice implementer; all objective acceptance/release gates retained
 **Prepared:** 2026-09-12  
 **Repository:** `clcdpc/asap-pocketbase`  
 **Source snapshot:** `150b30b776565194260cc327eeeffdfb46475e81` (`Improve staff login diagnostics and library-aware email formatting`, 2026-09-09)  
@@ -14,7 +14,9 @@ The design was developed by walking the architecture, data model, authentication
 
 This revision closes four focused cutover/outbox findings: retired production PocketBase is forensic-only and cannot be started as-is after .NET accepts writes; expired email leases use a concrete conservative timeout/reclaim/fencing contract; authorization-sensitive staff mail persists the applicable ordinary-versus-weekly address rule; and post-merge/pre-cutover emergency PocketBase fixes have an explicit temporary-branch, immediate .NET propagation, rehearsal, and final-tag procedure. The pinned baseline and settled architecture remain unchanged, and no generalized messaging or migration framework is added.
 
-Beginning with Slice 4, GPT-6 Astra Max remains orchestrator, GPT-5.6 Luna Max is the default primary implementer, and GPT-5.6 Terra High remains independent reviewer. GPT-5.6 Sol High is a focused escalation advisor only; Sol XHigh is exceptional escalation outside the normal slice loop. Luna always escalates first to Astra Max, which resolves the question or decides whether optional Sol consultation has material value and retains the final implementation ruling. Slices 0-3 were completed under the prior Sol-based strategy; their evidence is preserved, and the requested stop after Slice 3 was satisfied. Implementation is paused at that clean boundary, ready to resume with Slice 4 under the new model. See `../implementation/PORT-STATUS.md` for the current execution record and `10-CODEX-MULTI-MODEL-TASK.md` for context retention, escalation conditions, unchanged review passes, and exact-milestone remote CI gates.
+Beginning with Slice 5, GPT-6 Astra Max remains the lean orchestrator and acceptance owner; GPT-5.6 Luna High is the default primary implementer, Luna Max is bounded implementation escalation, and GPT-5.6 Terra High remains the independent reviewer. GPT-5.6 Sol High is a focused independent escalation advisor only; Sol XHigh is exceptional escalation. Luna always escalates first to Astra, which owns any specialist dispatch and the final ruling. Use concise context handoffs when rotation is useful and compact objective evidence receipts with selective raw-log inspection. One fresh full-slice Terra Pass 1 is required; a clean pass needs no ceremonial full Pass 2, and fixes receive focused re-review unless the documented full-review triggers apply. All objective tests, exact-milestone remote CI, and the separate final whole-app/release gates remain binding.
+
+Slices 0-3's Sol-based execution and Slice 4's Luna Max/retained-context/full-review evidence remain historical records. Slice 4 is accepted at `417c72430652a35bc8fc1da549ae270eabc86429` with exact-SHA CI passed; this documentation-only refinement starts no slice. See `../implementation/PORT-STATUS.md` for current status and `10-CODEX-MULTI-MODEL-TASK.md` for the complete future execution policy.
 
 The temporary `FileEmailSender` decision in `../implementation/temporary-email-transport.md` remains limited to the final provider boundary. Durable SQL outbox, authorization-sensitive recipient checks, recipient-domain safety, lease/fencing/idempotency/retry behavior, and real Rest 3-compatible cancellable `Clc.Postmark.Api` release/rehearsal gates remain binding; local files do not simulate provider/webhook success. The prior R1-R7 and final F1-F3 decisions remain unchanged, including OutstandingTimeout suggestion-age semantics, particular tracked hold identity for terminal fulfillment, and exhaustive retained legacy placed-hold evidence/BIB protection.
 
@@ -47,7 +49,7 @@ The prior hold-recovery, identity/session/lifecycle, Organization/claim, Additio
 | `07-API-FRONTEND-COMPATIBILITY.md` | Frontend preservation rules, API compatibility policy, auth behavior, CSP, vendored assets, and intentional changes. |
 | `08-RELEASE-VALIDATION-NOTES.md` | Live Polaris/release-validation decisions that should remain separate from ordinary PR testing. |
 | `09-DEFERRED-FOLLOWUPS.md` | Explicitly deferred hardening, modernization, and operational improvements. |
-| `10-CODEX-MULTI-MODEL-TASK.md` | Remaining-slice orchestration task using Astra Max orchestration, Luna Max implementation, Terra High review, and escalation-only Sol. |
+| `10-CODEX-MULTI-MODEL-TASK.md` | Astra Max orchestration, Luna High implementation with bounded Luna Max escalation, Terra High review, escalation-only Sol, and context/evidence rules. |
 | `11-CURRENT-POCKETBASE-REFERENCE.md` | Current-system map and behavior anchors for implementers and reviewers. |
 | `12-DECISION-REGISTER.md` | Compact register of the binding architectural decisions and superseded choices. |
 | `13-SETTINGS-SCOPE-INVENTORY.md` | Normative field-by-field settings scope/storage/inheritance/reset/migration contract for the refactored domain-specific configuration model. |

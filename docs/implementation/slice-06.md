@@ -8,11 +8,13 @@ analytics implementation early. The canonical sequence remains document 02;
 this packet narrows implementation context without changing the agreed plan.
 
 Astra Max refreshes this packet against accepted prior implementation and
-dispatches fresh Luna Max for the complete slice. Retain that Luna context
-through tests, confirmed-review fixes and retesting. After required tests,
-fresh Terra High independently reviews the whole slice and retains the same
-context through document 10's unchanged full review/re-review gate. Sol is
-escalation-only under document 10's conditions. Astra verifies acceptance,
+normally dispatches fresh Luna High for the complete slice.
+[Document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) governs bounded Luna Max
+escalation, optional context rotation with concise handoffs, compact evidence
+receipts, and Astra-first specialist escalation; Sol remains advisory only.
+After required tests, fresh Terra High independently reviews the whole slice.
+A clean Pass 1 needs no ceremonial full Pass 2; fixes receive focused re-review
+unless document 10's full-review triggers apply. Astra verifies acceptance,
 commits/pushes the milestone and requires actual remote CI success for that exact
 commit before dispatching the next slice. Prior exact-milestone CI must be green
 before this slice is dispatched.
@@ -98,8 +100,8 @@ information. Use parameterized feature SQL/Dapper in the existing web project.
 Browser tests cover scope/range changes, stale responses across those changes
 and authentication, mobile/desktop layout, keyboard/focus and serious/critical
 axe gates. Run all relevant prior tests and end-to-end acceptance before
-Terra Pass 1. The same Luna fixes confirmed findings; Terra does not edit
-implementation.
+Terra Pass 1. The current Luna context fixes confirmed findings; Terra does not
+edit implementation.
 
 Return actual changed paths, commands/results and remaining concrete risks.
 No commit, push, merge, tag, deployment or next-slice work by the implementer.
