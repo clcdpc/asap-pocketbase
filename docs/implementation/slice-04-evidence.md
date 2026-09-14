@@ -44,6 +44,81 @@ list-item parents, and desktop horizontal overflow. All inspected images
 rendered. These known failures and the missing staff/audit UI remain open;
 passing functional cases are not a passing browser acceptance result.
 
+## Step 1-4 Pause Checkpoint - 2026-09-14
+
+Implementation intentionally paused after completing only steps 1 through 4
+from `slice-04-handoff.md`. This is a WIP/checkpoint state, not the accepted
+Slice 4 milestone. The final Slice 4 acceptance/freeze, native migration reruns,
+Terra review, exact-milestone remote CI and Slice 5 were not started.
+
+Completed in this checkpoint:
+
+- Staff Access UI in the existing settings frontend: roster load, add staff,
+  per-record profile save, role/library change, deactivation/reactivation,
+  super-admin-only confirmed/reasoned rebind, actual cleanup-result display,
+  scoped audit-history display, ordinary-admin own-library scope and stale
+  staff/scope load fencing. Staff records remain global records, not settings
+  override/inheritance state.
+- Published-browser defects from the prior run: only the selected settings
+  panel is initially visible, all 24 dynamic format-label inputs and 24 dynamic
+  mode selects have accessible names, organization rows have a semantic `ul`
+  parent, and the desktop initial/patron overflow is removed.
+- Real-SQL/API coverage for every inheritable scalar in Workflow, Patron text
+  and Email sender settings: system save, library override save, effective
+  library resolution, and single-field reset while a peer override in the same
+  row remains. The write-only Postmark token path is covered separately for
+  library override preserve/clear behavior without reading the secret.
+- Additional scoped HTTP coverage for audit authorization and system-only
+  settings authorization using a real ordinary-admin staff row.
+- The retained local browser harness was extended under `.git` with Staff
+  Access HTTP/UI journeys, organization activation/version checks, scoped audit,
+  stale Staff Access load behavior and real lifecycle cleanup seed data. These
+  harness edits are local-only evidence tooling, not tracked source.
+
+Focused validation:
+
+- `node --check src\Asap.Web\Frontend\staff\js\settings.js`: passed.
+- `node --check src\Asap.Web\Frontend\staff\js\settings-domains.js`: passed.
+- `node --check .git\asap-patron-browser-probe\admin-settings.cjs`: passed.
+- `dotnet build .git\asap-patron-browser-probe\Probe.csproj --configuration Release --no-restore`: passed, zero warnings/errors.
+- `dotnet build Asap.sln --configuration Release --no-restore`: passed, zero warnings/errors.
+- `node tests\run_all.js`: all 170 discovered Node regression files passed.
+  The existing Windows `grep`/`true` noise inside `no_dao_usage.test.js` still
+  appears, and that test still reports `PASS: No "Dao" usage found.`
+- `dotnet test tests\Asap.Tests\Asap.Tests.csproj --no-restore --filter "FullyQualifiedName~AdministrationInheritableScalarsSaveResolveAndResetPerField|FullyQualifiedName~AdministrationAuditAndSystemSettingsHttpScopeRespectCurrentStaffRole"`:
+  passed, 2/2.
+- `git diff --check`: no whitespace errors; only line-ending normalization
+  warnings for edited text files.
+
+Fresh isolated published-Web evidence:
+
+- Snapshot name: `slice-04-step4-20260914c`.
+- Published root:
+  `.artifacts/asap-slice-04-web-precheck-slice-04-step4-20260914c`.
+- Receipt:
+  `.git/asap-slice-04-web-precheck-slice-04-step4-20260914c-receipt.json`.
+- Source files: 144. Published files: 256.
+- Published DACPAC SHA-256:
+  `8ad550e2b75a5f24d24a4af086207e01a64daaa5c80727491b2ef7edce454034`.
+- Parent browser run:
+  `.artifacts/acceptance/patron-browser/f6e7cf022b314288a53c0a0e4c16de06/admin-settings-results.json`.
+- Probe script diagnostic mode: `false`.
+- External browser requests: `0`.
+- Result: 23/23 scenarios passed. The run includes the previous 17 functional
+  scenarios plus Staff Access HTTP lifecycle/audit/rebind, organization
+  activation/version/scope HTTP contracts, desktop/mobile Staff Access UI and
+  stale Staff Access roster fencing.
+- Browser states captured: 17. The aggregate gate passed with no serious or
+  critical accessibility violations, no horizontal overflow and no visible
+  image-rendering failures.
+
+Earlier same-day local probe attempts
+`e1e1186ec5704aa6872ae74ca6e0a565` and
+`525f5e4fa6564fdfa71272a620d7434e` failed on harness assertion mismatches
+while extending the local probe (`active` vs `isActive`, and a visibility wait
+for already-rendered dynamic controls). They are not passing evidence and did
+not require weakening application behavior.
+
 ## Independent Migration Inputs
 
 Existing parent preparation is retained without modification:
@@ -342,23 +417,30 @@ implementation guidance, not a completed Terra review pass.
 
 ## Acceptance Ledger
 
-Pending gates, to be replaced with actual commands, results and artifact hashes:
+Completed by the step-1-through-4 pause checkpoint, with evidence above:
 
-- Complete typed scalar save/override/effective/individual-reset behavior for
-  every inventory field; write-only protected secret preserve/clear semantics.
-- Organization/reference administration, current-policy Staff Access, scoped
-  audit, participation/session serialization and accepted lifecycle cleanup.
-- Whole sets, fixed provider identities, formats/custom fields/options/rules,
-  versioned eligible auto-claim, template lineage/reference safety and branding.
-- Reset inherited overrides preserves all library-owned domains and history.
+- Staff Access frontend flows, scoped audit UI, accepted versioned lifecycle
+  mutations, durable Entra identity, actual cleanup-result display and stale
+  staff/scope load protection.
+- Confirmed published-browser defects: initial panel visibility, dynamic format
+  control labels, semantic organization list parent and horizontal overflow.
+- Focused real-SQL scalar save/override/effective/reset coverage plus
+  write-only secret preserve/clear and scoped audit/system-only authorization.
 - Published vanilla settings browser/API journeys: role/library boundaries,
-  dirty/cancel/scope switching, stale loads and mutation completions, keyboard,
-  focus, mobile/desktop layout and serious/critical axe results.
+  dirty/cancel/scope switching, stale settings and Staff Access loads, mutation
+  completion fencing, keyboard/focus, mobile/desktop layout, visible images and
+  serious/critical axe gate.
+
+Pending final Slice 4 step-5 gates, still to be replaced with actual final
+commands, results and artifact hashes:
+
+- Run the complete required Release/.NET/real-SQL/Node suites on final bytes,
+  not only focused tests and the checkpoint Node/build passes.
 - Fresh native export/import/reconcile of the prepared administration fixture,
   effective source comparison, declared corrections, provenance, every-domain
   reconciliation and rejection of unexplained populated source values.
-- Clean Release build, complete real-SQL .NET suite, Node regressions, fresh
-  published web/self-contained migration package, source/artifact receipts.
+- Fresh self-contained migration package, source/artifact receipts, final
+  matching DACPAC/artifact/source hashes and final freeze checks.
 - Same-context Terra full Pass 1 and Pass 2, conditional additional full passes
   and blocking-finding fixes; independent Astra acceptance.
 - One coherent Slice 4 milestone commit, push to the existing branch and actual

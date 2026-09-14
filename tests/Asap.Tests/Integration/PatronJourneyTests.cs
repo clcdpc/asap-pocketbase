@@ -1207,6 +1207,261 @@ public sealed class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task AdministrationInheritableScalarsSaveResolveAndResetPerField()
+    {
+        using var client = factory!.CreateClient();
+        var actor = await ReadConfiguredSuperAdminAsync();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+
+        var libraryId = 91404;
+        var templateKeyA = $"rejection:slice4_scalar_a_{Guid.NewGuid():N}";
+        var templateKeyB = $"rejection:slice4_scalar_b_{Guid.NewGuid():N}";
+        await UpsertTestOrganizationAsync(libraryId, "Slice 4 Scalar Library", "S4S");
+
+        using var initialSystem = await ReadSettingsDocumentAsync(client, "system");
+        var initialPayload = CaptureScalarRestorePayload(initialSystem.RootElement);
+
+        try
+        {
+            using (var templateSave = await SaveSettingsDocumentAsync(
+                       client,
+                       initialSystem.RootElement,
+                       "system",
+                       new Dictionary<string, object?>
+                       {
+                           ["templates"] = new object[]
+                           {
+                               new Dictionary<string, object?>
+                               {
+                                   ["templateKey"] = templateKeyA,
+                                   ["displayName"] = "Slice 4 scalar rejection A",
+                                   ["subject"] = "Slice 4 scalar rejection A",
+                                   ["body"] = "Slice 4 scalar rejection A body",
+                                   ["enabled"] = true
+                               },
+                               new Dictionary<string, object?>
+                               {
+                                   ["templateKey"] = templateKeyB,
+                                   ["displayName"] = "Slice 4 scalar rejection B",
+                                   ["subject"] = "Slice 4 scalar rejection B",
+                                   ["body"] = "Slice 4 scalar rejection B body",
+                                   ["enabled"] = true
+                               }
+                           }
+                       }))
+            {
+                Assert.AreEqual("saved", templateSave.RootElement.GetProperty("code").GetString());
+            }
+
+            using var withTemplates = await ReadSettingsDocumentAsync(client, "system");
+            var templateIdA = FindTemplateId(withTemplates.RootElement, templateKeyA);
+            var templateIdB = FindTemplateId(withTemplates.RootElement, templateKeyB);
+            var fields = BuildScalarSettingCases(templateIdA, templateIdB);
+
+            using (var saveSystem = await SaveSettingsDocumentAsync(
+                       client,
+                       withTemplates.RootElement,
+                       "system",
+                       ScalarPayload(fields, value => value.SystemValue)))
+            {
+                Assert.AreEqual("saved", saveSystem.RootElement.GetProperty("code").GetString());
+            }
+
+            using var savedSystem = await ReadSettingsDocumentAsync(client, "system");
+            foreach (var field in fields)
+            {
+                var systemSection = savedSystem.RootElement.GetProperty("stored")
+                    .GetProperty("configuredSystem")
+                    .GetProperty(field.Section);
+                AssertScalarEquals(field.SystemValue, systemSection, field.Name, $"system {field.Section}.{field.Name}");
+            }
+
+            using var initialLibraryForSave = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            using (var saveLibrary = await SaveSettingsDocumentAsync(
+                       client,
+                       initialLibraryForSave.RootElement,
+                       libraryId.ToString(),
+                       ScalarPayload(fields, value => value.LibraryValue)))
+            {
+                Assert.AreEqual("saved", saveLibrary.RootElement.GetProperty("code").GetString());
+            }
+
+            using var savedLibrary = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            foreach (var field in fields)
+            {
+                var libraryOverride = savedLibrary.RootElement.GetProperty("stored")
+                    .GetProperty("libraryOverride")
+                    .GetProperty(field.Section);
+                AssertScalarEquals(field.LibraryValue, libraryOverride, field.Name, $"library override {field.Section}.{field.Name}");
+                AssertResolvedScalarEquals(field.LibraryValue, savedLibrary.RootElement, field, $"effective library {field.Section}.{field.Name}");
+            }
+
+            var latest = savedLibrary.RootElement.Clone();
+            foreach (var field in fields)
+            {
+                var sentinel = fields.First(item => item.Section == field.Section && item.Name != field.Name);
+                using var reset = await SaveSettingsDocumentAsync(
+                    client,
+                    latest,
+                    libraryId.ToString(),
+                    new Dictionary<string, object?>
+                    {
+                        [field.Section] = new Dictionary<string, object?>
+                        {
+                            [field.Name] = null,
+                            [sentinel.Name] = sentinel.LibraryValue
+                        }
+                    });
+                Assert.AreEqual("saved", reset.RootElement.GetProperty("code").GetString(), $"{field.Section}.{field.Name}");
+
+                using var afterReset = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+                latest = afterReset.RootElement.Clone();
+                var librarySection = afterReset.RootElement.GetProperty("stored")
+                    .GetProperty("libraryOverride")
+                    .GetProperty(field.Section);
+                AssertScalarEquals(null, librarySection, field.Name, $"cleared override {field.Section}.{field.Name}");
+                AssertResolvedScalarEquals(field.SystemValue, afterReset.RootElement, field, $"fallback {field.Section}.{field.Name}");
+                AssertScalarEquals(sentinel.LibraryValue, librarySection, sentinel.Name, $"preserved peer override {field.Section}.{sentinel.Name}");
+            }
+
+            using var secretBase = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            using (var saveLibrarySecret = await SaveSettingsDocumentAsync(
+                       client,
+                       secretBase.RootElement,
+                       libraryId.ToString(),
+                       new Dictionary<string, object?>
+                       {
+                           ["email"] = new Dictionary<string, object?>
+                           {
+                               ["fromAddress"] = "slice4-secret-sentinel@example.org",
+                               ["postmarkToken"] = "slice4-library-secret-token"
+                           }
+                       }))
+            {
+                Assert.AreEqual("saved", saveLibrarySecret.RootElement.GetProperty("code").GetString());
+            }
+
+            using var withSecret = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            AssertScalarEquals(true, withSecret.RootElement.GetProperty("stored")
+                .GetProperty("libraryOverride").GetProperty("email"), "hasPostmarkToken", "library secret saved");
+            using var clearSecret = await SaveSettingsDocumentAsync(
+                client,
+                withSecret.RootElement,
+                libraryId.ToString(),
+                new Dictionary<string, object?>
+                {
+                    ["email"] = new Dictionary<string, object?>
+                    {
+                        ["clearPostmarkToken"] = true,
+                        ["fromAddress"] = "slice4-secret-sentinel@example.org"
+                    }
+                });
+            Assert.AreEqual("saved", clearSecret.RootElement.GetProperty("code").GetString());
+
+            using var afterSecretClear = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            var emailOverride = afterSecretClear.RootElement.GetProperty("stored")
+                .GetProperty("libraryOverride")
+                .GetProperty("email");
+            AssertScalarEquals(false, emailOverride, "hasPostmarkToken", "library secret cleared");
+            AssertScalarEquals("slice4-secret-sentinel@example.org", emailOverride, "fromAddress", "sender override preserved beside secret clear");
+        }
+        finally
+        {
+            using var latestSystem = await ReadSettingsDocumentAsync(client, "system");
+            using (var restore = await SaveSettingsDocumentAsync(
+                       client,
+                       latestSystem.RootElement,
+                       "system",
+                       initialPayload))
+            {
+                Assert.AreEqual("saved", restore.RootElement.GetProperty("code").GetString());
+            }
+
+            await CleanupScalarSettingsTestDataAsync(libraryId, templateKeyA, templateKeyB);
+        }
+    }
+
+    [TestMethod]
+    public async Task AdministrationAuditAndSystemSettingsHttpScopeRespectCurrentStaffRole()
+    {
+        var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
+        var tenantId = Guid.Parse(identity.TenantId!);
+        var objectId = Guid.NewGuid();
+        long adminId;
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var seed = connection.CreateCommand();
+            seed.CommandText =
+                """
+                INSERT INTO [asap].[StaffUser]
+                    ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
+                     [DisplayName], [NotificationEmail], [Role], [OrganizationId], [IsActive])
+                VALUES (@tenantId, @objectId, N'scope.admin@example.org', N'SCOPE.ADMIN@EXAMPLE.ORG',
+                        N'Scope Administrator', N'scope.admin@example.org', N'admin', 2, 1);
+                SELECT CONVERT(bigint, SCOPE_IDENTITY());
+                """;
+            seed.Parameters.AddWithValue("@tenantId", tenantId);
+            seed.Parameters.AddWithValue("@objectId", objectId);
+            adminId = Convert.ToInt64(await seed.ExecuteScalarAsync());
+        }
+
+        try
+        {
+            using var client = factory!.CreateClient();
+            AddTestingStaffHeaders(client, adminId, tenantId, objectId);
+            client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+
+            using (var ownSettings = await client.GetAsync("/api/asap/staff/settings?orgId=2"))
+            {
+                Assert.AreEqual(HttpStatusCode.OK, ownSettings.StatusCode, await ownSettings.Content.ReadAsStringAsync());
+            }
+
+            using (var systemSettings = await client.GetAsync("/api/asap/staff/settings?orgId=system"))
+            {
+                Assert.AreEqual(HttpStatusCode.Forbidden, systemSettings.StatusCode, await systemSettings.Content.ReadAsStringAsync());
+                using var body = JsonDocument.Parse(await systemSettings.Content.ReadAsStringAsync());
+                Assert.AreEqual("staff_scope_forbidden", body.RootElement.GetProperty("code").GetString());
+            }
+
+            using (var systemMutation = await client.PostAsJsonAsync(
+                       "/api/asap/staff/settings",
+                       new
+                       {
+                           orgId = "system",
+                           version = "admin-cannot-use-this",
+                           systemSettings = new { staffUrl = "https://forbidden.example.org/staff" }
+                       }))
+            {
+                Assert.AreEqual(HttpStatusCode.Forbidden, systemMutation.StatusCode, await systemMutation.Content.ReadAsStringAsync());
+            }
+
+            using (var ownAudit = await client.GetAsync("/api/asap/staff/audit?organizationId=2"))
+            {
+                Assert.AreEqual(HttpStatusCode.OK, ownAudit.StatusCode, await ownAudit.Content.ReadAsStringAsync());
+            }
+
+            using (var otherAudit = await client.GetAsync("/api/asap/staff/audit?organizationId=3"))
+            {
+                Assert.AreEqual(HttpStatusCode.Forbidden, otherAudit.StatusCode, await otherAudit.Content.ReadAsStringAsync());
+                using var body = JsonDocument.Parse(await otherAudit.Content.ReadAsStringAsync());
+                Assert.AreEqual("staff_scope_forbidden", body.RootElement.GetProperty("code").GetString());
+            }
+        }
+        finally
+        {
+            await using var connection = new SqlConnection(databaseConnectionString);
+            await connection.OpenAsync();
+            await using var cleanup = new SqlCommand(
+                "DELETE FROM [asap].[StaffUser] WHERE [Id] = @id;",
+                connection);
+            cleanup.Parameters.AddWithValue("@id", adminId);
+            await cleanup.ExecuteNonQueryAsync();
+        }
+    }
+
+    [TestMethod]
     public async Task AdministrationPatronCodeProviderFailureDoesNotPartiallyWrite()
     {
         var actor = await ReadConfiguredSuperAdminAsync();
@@ -8448,6 +8703,247 @@ public sealed class PatronJourneyTests
         return new PatronCodeRows(setCount, values.ToArray());
     }
 
+    private static async Task<JsonDocument> ReadSettingsDocumentAsync(HttpClient client, string organizationId)
+    {
+        using var response = await client.GetAsync($"/api/asap/staff/settings?orgId={Uri.EscapeDataString(organizationId)}");
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode, await response.Content.ReadAsStringAsync());
+        return JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+    }
+
+    private static async Task<JsonDocument> SaveSettingsDocumentAsync(
+        HttpClient client,
+        JsonElement currentSettings,
+        string organizationId,
+        IDictionary<string, object?> values)
+    {
+        var payload = new Dictionary<string, object?>(values, StringComparer.Ordinal)
+        {
+            ["orgId"] = organizationId,
+            ["version"] = currentSettings.GetProperty("version").GetString()
+        };
+        using var response = await client.PostAsJsonAsync("/api/asap/staff/settings", payload);
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode, await response.Content.ReadAsStringAsync());
+        return JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+    }
+
+    private static IReadOnlyList<ScalarSettingCase> BuildScalarSettingCases(string rejectionTemplateIdA, string rejectionTemplateIdB)
+    {
+        var fields = new List<ScalarSettingCase>();
+        var index = 0;
+        void AddText(string section, string name)
+        {
+            index++;
+            fields.Add(new ScalarSettingCase(
+                section,
+                name,
+                $"Slice 4 system {section} {name}",
+                $"Slice 4 library {section} {name}"));
+        }
+        void AddBool(string section, string name)
+        {
+            index++;
+            fields.Add(new ScalarSettingCase(section, name, index % 2 == 0, index % 2 != 0));
+        }
+        void AddInt(string section, string name)
+        {
+            index++;
+            fields.Add(new ScalarSettingCase(section, name, 20 + index, 120 + index));
+        }
+
+        AddInt("workflow", "suggestionLimit");
+        AddText("workflow", "suggestionLimitMessage");
+        AddBool("workflow", "outstandingTimeoutEnabled");
+        AddInt("workflow", "outstandingTimeoutDays");
+        AddBool("workflow", "outstandingTimeoutSendEmail");
+        fields.Add(new ScalarSettingCase("workflow", "outstandingTimeoutRejectionTemplateId", rejectionTemplateIdA, rejectionTemplateIdB));
+        AddBool("workflow", "holdPickupTimeoutEnabled");
+        AddInt("workflow", "holdPickupTimeoutDays");
+        AddBool("workflow", "pendingHoldTimeoutEnabled");
+        AddInt("workflow", "pendingHoldTimeoutDays");
+        AddBool("workflow", "additionalCopyTimeoutEnabled");
+        AddInt("workflow", "additionalCopyTimeoutDays");
+        AddBool("workflow", "autoPromote");
+        AddBool("workflow", "commonAuthorsEnabled");
+        AddText("workflow", "commonAuthorsLabel");
+        AddText("workflow", "commonAuthorsHelp");
+        AddText("workflow", "commonAuthorsMessage");
+        AddBool("workflow", "allowPatronAutoholdOptOut");
+        AddBool("workflow", "allowAnyRegisteredCardLogin");
+        AddBool("workflow", "patronCodeEligibilityEnabled");
+        AddText("workflow", "patronCodeEligibilityMessage");
+
+        foreach (var name in new[]
+                 {
+                     "pageTitle", "barcodeLabel", "pinLabel", "loginPrompt", "loginNote", "suggestionFormNote",
+                     "noEmailMessage", "successTitle", "successMessage", "alreadySubmittedMessage", "ebookMessage",
+                     "eaudiobookMessage", "suggestionStatusLabel", "outstandingPurchaseStatusLabel",
+                     "pendingHoldStatusLabel", "holdPlacedStatusLabel", "closedStatusLabel", "rejectedStatusLabel",
+                     "holdCompletedStatusLabel", "holdNotPickedUpStatusLabel", "manualStatusLabel", "silentStatusLabel"
+                 })
+        {
+            AddText("patron", name);
+        }
+
+        fields.Add(new ScalarSettingCase("email", "fromAddress", "slice4-system@example.org", "slice4-library@example.org"));
+        fields.Add(new ScalarSettingCase("email", "fromName", "Slice 4 System Sender", "Slice 4 Library Sender"));
+        return fields;
+    }
+
+    private static Dictionary<string, object?> ScalarPayload(
+        IEnumerable<ScalarSettingCase> fields,
+        Func<ScalarSettingCase, object?> valueFactory)
+    {
+        return fields
+            .GroupBy(field => field.Section)
+            .ToDictionary(
+                group => group.Key,
+                group => (object?)group.ToDictionary(
+                    field => field.Name,
+                    field => valueFactory(field),
+                    StringComparer.Ordinal),
+                StringComparer.Ordinal);
+    }
+
+    private static Dictionary<string, object?> CaptureScalarRestorePayload(JsonElement settings)
+    {
+        var configuredSystem = settings.GetProperty("stored").GetProperty("configuredSystem");
+        var fieldNames = BuildScalarSettingCases("0", "0")
+            .Where(field => field.Name != "outstandingTimeoutRejectionTemplateId")
+            .Select(field => field)
+            .Append(new ScalarSettingCase("workflow", "outstandingTimeoutRejectionTemplateId", null, null))
+            .ToArray();
+        return ScalarPayload(fieldNames, field =>
+            ReadJsonScalar(configuredSystem.GetProperty(field.Section), field.Name));
+    }
+
+    private static string FindTemplateId(JsonElement settings, string key)
+    {
+        var templates = settings.GetProperty("stored")
+            .GetProperty("configuredSystem")
+            .GetProperty("templates")
+            .EnumerateArray();
+        var template = templates.Single(item => item.GetProperty("templateKey").GetString() == key);
+        return template.GetProperty("id").GetString()!;
+    }
+
+    private static object? ReadJsonScalar(JsonElement parent, string propertyName)
+    {
+        if (parent.ValueKind != JsonValueKind.Object || !parent.TryGetProperty(propertyName, out var value))
+        {
+            return null;
+        }
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString(),
+            JsonValueKind.Number when value.TryGetInt32(out var number) => number,
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Null => null,
+            _ => value.GetRawText()
+        };
+    }
+
+    private static void AssertResolvedScalarEquals(
+        object? expected,
+        JsonElement settings,
+        ScalarSettingCase field,
+        string context)
+    {
+        var stored = settings.GetProperty("stored");
+        var configuredSystem = stored.GetProperty("configuredSystem").GetProperty(field.Section);
+        var libraryOverride = stored.GetProperty("libraryOverride");
+        JsonElement librarySection = default;
+        if (libraryOverride.ValueKind == JsonValueKind.Object &&
+            libraryOverride.TryGetProperty(field.Section, out var candidate))
+        {
+            librarySection = candidate;
+        }
+
+        var actual = ReadJsonScalar(librarySection, field.Name) ??
+                     ReadJsonScalar(configuredSystem, field.Name);
+        AssertScalarValueEquals(expected, actual, context);
+    }
+
+    private static void AssertScalarEquals(object? expected, JsonElement parent, string propertyName, string context)
+    {
+        var actual = ReadJsonScalar(parent, propertyName);
+        AssertScalarValueEquals(expected, actual, context);
+    }
+
+    private static void AssertScalarValueEquals(object? expected, object? actual, string context)
+    {
+        switch (expected)
+        {
+            case null:
+                Assert.IsNull(actual, context);
+                break;
+            case bool expectedBool:
+                Assert.IsInstanceOfType(actual, typeof(bool), context);
+                Assert.AreEqual(expectedBool, (bool)actual, context);
+                break;
+            case int expectedInt:
+                Assert.AreEqual(expectedInt, Convert.ToInt32(actual), context);
+                break;
+            default:
+                Assert.AreEqual(expected.ToString(), actual?.ToString(), context);
+                break;
+        }
+    }
+
+    private static async Task UpsertTestOrganizationAsync(int organizationId, string name, string abbreviation)
+    {
+        await using var connection = new SqlConnection(databaseConnectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            IF EXISTS (SELECT 1 FROM [asap].[Organization] WHERE [Id] = @id)
+                UPDATE [asap].[Organization]
+                SET [DisplayName] = @name, [Abbreviation] = @abbreviation, [IsActive] = 1
+                WHERE [Id] = @id;
+            ELSE
+                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
+                VALUES (@id, @name, @abbreviation, 1);
+            """;
+        command.Parameters.AddWithValue("@id", organizationId);
+        command.Parameters.AddWithValue("@name", name);
+        command.Parameters.AddWithValue("@abbreviation", abbreviation);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task CleanupScalarSettingsTestDataAsync(int organizationId, string templateKeyA, string templateKeyB)
+    {
+        await using var connection = new SqlConnection(databaseConnectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            DELETE FROM [asap].[AdministrativeAudit] WHERE [OrganizationId] = @organizationId;
+            DELETE FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = @organizationId;
+            DELETE FROM [asap].[PatronSettings] WHERE [OrganizationId] = @organizationId;
+            DELETE FROM [asap].[EmailSettings] WHERE [OrganizationId] = @organizationId;
+            DELETE FROM [asap].[PublicationOption] WHERE [OrganizationId] = @organizationId;
+            DELETE FROM [asap].[PublicationOptionSet] WHERE [OrganizationId] = @organizationId;
+            DELETE FROM [asap].[CommonCreatorTerm] WHERE [OrganizationId] = @organizationId;
+            DELETE FROM [asap].[CommonCreatorSet] WHERE [OrganizationId] = @organizationId;
+            DELETE FROM [asap].[PatronCodeEligibilityMember] WHERE [OrganizationId] = @organizationId;
+            DELETE FROM [asap].[PatronCodeEligibilitySet] WHERE [OrganizationId] = @organizationId;
+            DELETE FROM [asap].[ExternalSearchProviderOverride] WHERE [LibraryOrganizationId] = @organizationId;
+            DELETE FROM [asap].[MaterialFormatCustomFieldRule] WHERE [LibraryOrganizationId] = @organizationId;
+            DELETE FROM [asap].[FormatAutoClaimRule] WHERE [LibraryOrganizationId] = @organizationId;
+            DELETE FROM [asap].[MaterialFormatOverride] WHERE [LibraryOrganizationId] = @organizationId;
+            DELETE FROM [asap].[EmailTemplate] WHERE [OrganizationId] = @organizationId;
+            DELETE FROM [asap].[Branding] WHERE [OrganizationId] = @organizationId;
+            DELETE FROM [asap].[Organization] WHERE [Id] = @organizationId;
+            DELETE FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] IN (@templateKeyA, @templateKeyB);
+            """;
+        command.Parameters.AddWithValue("@organizationId", organizationId);
+        command.Parameters.AddWithValue("@templateKeyA", templateKeyA);
+        command.Parameters.AddWithValue("@templateKeyB", templateKeyB);
+        await command.ExecuteNonQueryAsync();
+    }
+
     private static async Task WaitForOutboxStatusAsync(
         long outboxId,
         string expectedStatus,
@@ -8597,6 +9093,8 @@ public sealed class PatronJourneyTests
         string? SuppressionReason);
 
     private sealed record PatronCodeRows(int SetCount, string[] Values);
+
+    private sealed record ScalarSettingCase(string Section, string Name, object? SystemValue, object? LibraryValue);
 
     private sealed class RecordingEmailSender : IEmailSender
     {

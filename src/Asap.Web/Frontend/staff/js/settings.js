@@ -83,7 +83,9 @@ const SETTINGS_OPERATION_SLOTS = [
   'administration-settings-logo',
   'administration-settings-polaris-test',
   'administration-settings-organization-sync',
-  'administration-settings-participation'
+  'administration-settings-participation',
+  'administration-staff-access',
+  'administration-staff-mutation'
 ];
 
 const TEMPLATE_FIELDS = [
@@ -142,6 +144,10 @@ function clean(value) {
   return result || null;
 }
 
+function stringValue(value) {
+  return value === null || value === undefined ? '' : String(value);
+}
+
 function mergeConfigured(system, override, fallback = {}) {
   const result = { ...object(fallback) };
   for (const [key, value] of Object.entries(object(system))) {
@@ -176,7 +182,7 @@ function writeControl(control, value) {
 }
 
 function snapshotForm(form) {
-  return [...form.elements].map(control => [
+  return [...form.elements].filter(control => !control.closest?.('[data-settings-ignore="true"]')).map(control => [
     control.id,
     control.type === 'checkbox' ? control.checked : control.value
   ]);
@@ -264,6 +270,19 @@ export function createSettingsController({
     organizationStatus: root.querySelector('#organizations-status-message'),
     organizations: root.querySelector('#settings-organizations-list'),
     enabledLibraries: root.querySelector('#enabled-libraries-checkbox-container'),
+    staffStatus: root.querySelector('#staff-access-status'),
+    staffRefresh: root.querySelector('#staff-refresh'),
+    staffCreate: root.querySelector('#staff-add-submit'),
+    staffTenantId: root.querySelector('#staff-add-tenant-id'),
+    staffObjectId: root.querySelector('#staff-add-object-id'),
+    staffUpn: root.querySelector('#staff-add-upn'),
+    staffDisplayName: root.querySelector('#staff-add-display-name'),
+    staffNotificationEmail: root.querySelector('#staff-add-notification-email'),
+    staffRole: root.querySelector('#staff-add-role'),
+    staffOrganization: root.querySelector('#staff-add-organization'),
+    staffUsers: root.querySelector('#settings-staff-users-list'),
+    staffAuditRefresh: root.querySelector('#staff-audit-refresh'),
+    staffAudit: root.querySelector('#settings-staff-audit-list'),
     saveLogo: root.querySelector('#save-branding-logo'),
     clearLogo: root.querySelector('#clear-branding-logo'),
     logo: root.querySelector('#branding-logo'),
@@ -276,6 +295,11 @@ export function createSettingsController({
     staff: null,
     data: null,
     organizations: [],
+    staffUsers: [],
+    staffAudit: [],
+    staffCanAssignSuperAdmin: false,
+    staffAccessLoaded: false,
+    lastStaffCleanup: null,
     scope: 'system',
     activePanel: 'start',
     baselineSnapshot: [],
@@ -330,6 +354,73 @@ export function createSettingsController({
 
   function organizationId() {
     return isSystem() ? 1 : Number(state.scope);
+  }
+
+  function scopedStaffOrganizationId() {
+    if (!state.staff) return null;
+    if (state.staff.role !== 'super_admin') return clean(state.staff.organizationId);
+    return isSystem() ? null : clean(state.scope);
+  }
+
+  function scopedStaffLabel() {
+    const scope = scopedStaffOrganizationId();
+    if (!scope) return 'all organizations';
+    const organization = state.organizations.find(item => String(item.id) === String(scope));
+    return organization?.name || `organization ${scope}`;
+  }
+
+  function roleLabel(role) {
+    if (role === 'super_admin') return 'Super admin';
+    if (role === 'admin') return 'Library admin';
+    return 'Staff';
+  }
+
+  function roleChoices() {
+    const roles = state.staffCanAssignSuperAdmin || state.staff?.role === 'super_admin'
+      ? ['super_admin', 'admin', 'staff']
+      : ['admin', 'staff'];
+    return roles.map(role => ({ value: role, label: roleLabel(role) }));
+  }
+
+  function organizationChoices(role = 'staff') {
+    if (role === 'super_admin') return [{ value: '1', label: 'System level' }];
+    const staffScope = state.staff?.role === 'super_admin'
+      ? null
+      : clean(state.staff?.organizationId);
+    const organizations = staffScope
+      ? state.organizations.filter(item => String(item.id) === String(staffScope))
+      : state.organizations.filter(item => Number(item.id) > 1);
+    return organizations.map(item => ({
+      value: String(item.id),
+      label: item.name || `Library ${item.id}`
+    }));
+  }
+
+  function replaceSelectOptions(select, options, selected) {
+    if (!select) return;
+    select.replaceChildren(...options.map(option => node('option', {
+      value: option.value,
+      text: option.label,
+      selected: String(option.value) === String(selected ?? '')
+    })));
+    if (options.some(option => String(option.value) === String(selected ?? ''))) {
+      select.value = String(selected);
+    } else if (options.length > 0) {
+      select.value = String(options[0].value);
+    }
+  }
+
+  function cleanupSummary(cleanup) {
+    const value = object(cleanup);
+    return `Cleanup: ${Number(property(value, 'rulesDeactivated') || 0)} auto-claim rules deactivated; ` +
+      `${Number(property(value, 'openTitleClaimsCleared') || 0)} open title claims cleared; ` +
+      `${Number(property(value, 'openAdditionalCopyClaimsCleared') || 0)} open additional-copy claims cleared.`;
+  }
+
+  function setStaffStatus(message, kind = '') {
+    if (!dom.staffStatus) return;
+    dom.staffStatus.textContent = message || '';
+    dom.staffStatus.className = `settings-result${kind ? ` ${kind}` : ''}`;
   }
 
   function notify(message, kind = '') {
@@ -586,7 +677,7 @@ export function createSettingsController({
   function renderOrganizations() {
     dom.organizations.replaceChildren();
     if (state.organizations.length === 0) {
-      dom.organizations.append(node('p', { className: 'settings-empty', text: 'No organizations are available.' }));
+      dom.organizations.append(node('li', { className: 'settings-empty', text: 'No organizations are available.' }));
       return;
     }
     for (const organization of state.organizations) {
@@ -606,6 +697,187 @@ export function createSettingsController({
         item.append(action);
       }
       dom.organizations.append(item);
+    }
+  }
+
+  function populateStaffCreateControls() {
+    if (!dom.staffRole || !dom.staffOrganization) return;
+    const currentRole = roleChoices().some(item => item.value === dom.staffRole.value)
+      ? dom.staffRole.value
+      : 'staff';
+    replaceSelectOptions(dom.staffRole, roleChoices(), currentRole);
+    const currentOrganization = dom.staffOrganization.value || scopedStaffOrganizationId();
+    replaceSelectOptions(dom.staffOrganization, organizationChoices(dom.staffRole.value), currentOrganization);
+    dom.staffOrganization.disabled = dom.staffRole.value === 'super_admin' ||
+      state.staff?.role !== 'super_admin';
+  }
+
+  function staffUserDisplay(user) {
+    return clean(property(user, 'displayName')) ||
+      clean(property(user, 'userPrincipalName')) ||
+      `Staff ${stringValue(property(user, 'id')) || '?'}`;
+  }
+
+  function staffUserOrganizationName(user) {
+    const id = clean(property(user, 'organizationId'));
+    const organization = state.organizations.find(item => String(item.id) === String(id));
+    return organization?.name || (id === '1' ? 'System level' : `Library ${id || '?'}`);
+  }
+
+  function userRoleChoices(user) {
+    const current = clean(property(user, 'role')) || 'staff';
+    const choices = roleChoices();
+    if (!choices.some(item => item.value === current)) choices.unshift({ value: current, label: roleLabel(current) });
+    return choices;
+  }
+
+  function renderStaffUsers() {
+    if (!dom.staffUsers) return;
+    dom.staffUsers.replaceChildren();
+    populateStaffCreateControls();
+    if (state.staffUsers.length === 0) {
+      const message = state.staffAccessLoaded
+        ? `No staff users found for ${scopedStaffLabel()}.`
+        : 'Open or refresh the roster to load staff users.';
+      dom.staffUsers.append(node('p', { className: 'settings-empty', text: message }));
+      return;
+    }
+
+    for (const user of state.staffUsers) {
+      const id = stringValue(property(user, 'id'));
+      const version = stringValue(property(user, 'version'));
+      const active = property(user, 'active') !== false;
+      const row = node('article', { className: `settings-staff-row${active ? '' : ' inactive'}` });
+      const upn = node('input', {
+        type: 'email',
+        value: property(user, 'userPrincipalName') || '',
+        'aria-label': `User principal name for ${staffUserDisplay(user)}`
+      });
+      const displayName = node('input', {
+        type: 'text',
+        value: property(user, 'displayName') || '',
+        'aria-label': `Display name for ${staffUserDisplay(user)}`
+      });
+      const notificationEmail = node('input', {
+        type: 'email',
+        value: property(user, 'notificationEmail') || '',
+        'aria-label': `Notification email for ${staffUserDisplay(user)}`
+      });
+      const role = node('select', { 'aria-label': `Role for ${staffUserDisplay(user)}` });
+      replaceSelectOptions(role, userRoleChoices(user), property(user, 'role') || 'staff');
+      const organization = node('select', { 'aria-label': `Library for ${staffUserDisplay(user)}` });
+      replaceSelectOptions(organization, organizationChoices(role.value), property(user, 'organizationId'));
+      organization.disabled = role.value === 'super_admin' || state.staff?.role !== 'super_admin';
+      role.addEventListener('change', () => {
+        replaceSelectOptions(organization, organizationChoices(role.value), organization.value);
+        organization.disabled = role.value === 'super_admin' || state.staff?.role !== 'super_admin';
+      });
+
+      const saveMetadata = node('button', {
+        type: 'button',
+        className: 'secondary-button',
+        text: 'Save profile'
+      });
+      saveMetadata.addEventListener('click', () => updateStaffMetadata(id, version, {
+        userPrincipalName: clean(upn.value),
+        displayName: clean(displayName.value),
+        notificationEmail: clean(notificationEmail.value)
+      }));
+
+      const saveRole = node('button', {
+        type: 'button',
+        className: 'secondary-button',
+        text: 'Update access'
+      });
+      saveRole.addEventListener('click', () => changeStaffRole(id, version, {
+        role: role.value,
+        organizationId: role.value === 'super_admin' ? 1 : Number(organization.value)
+      }));
+
+      const lifecycle = node('button', {
+        type: 'button',
+        className: active ? 'danger-button' : 'secondary-button',
+        text: active ? 'Deactivate' : 'Reactivate'
+      });
+      lifecycle.addEventListener('click', () => {
+        if (active) deactivateStaffUser(id, version, staffUserDisplay(user));
+        else reactivateStaffUser(user, role.value, organization.value);
+      });
+
+      const actions = [saveMetadata, saveRole, lifecycle];
+      if (state.staff?.role === 'super_admin') {
+        const rebind = node('button', {
+          type: 'button',
+          className: 'secondary-button',
+          text: 'Rebind identity'
+        });
+        rebind.addEventListener('click', () => rebindStaffUser(user));
+        actions.push(rebind);
+      }
+
+      row.replaceChildren(
+        node('div', { className: 'settings-staff-heading' }, [
+          node('strong', { text: staffUserDisplay(user) }),
+          node('span', { className: `status-badge${active ? '' : ' blocked'}`, text: active ? 'Active' : 'Inactive' })
+        ]),
+        node('p', { className: 'settings-staff-meta' }, [
+          node('span', { text: `ID ${id}` }),
+          node('span', { text: roleLabel(property(user, 'role')) }),
+          node('span', { text: staffUserOrganizationName(user) }),
+          node('span', { text: `Version ${version}` })
+        ]),
+        node('div', { className: 'settings-staff-controls' }, [
+          node('label', { className: 'settings-field' }, [node('span', { text: 'User principal name' }), upn]),
+          node('label', { className: 'settings-field' }, [node('span', { text: 'Display name' }), displayName]),
+          node('label', { className: 'settings-field' }, [node('span', { text: 'Notification email' }), notificationEmail]),
+          node('label', { className: 'settings-field' }, [node('span', { text: 'Role' }), role]),
+          node('label', { className: 'settings-field' }, [node('span', { text: 'Library' }), organization])
+        ]),
+        node('div', { className: 'settings-staff-actions' }, actions)
+      );
+      if (state.lastStaffCleanup?.staffId === id) {
+        row.append(node('p', {
+          className: 'settings-cleanup-result',
+          text: cleanupSummary(state.lastStaffCleanup.cleanup)
+        }));
+      }
+      dom.staffUsers.append(row);
+    }
+  }
+
+  function auditDetails(details) {
+    const text = clean(details);
+    if (!text) return '';
+    try {
+      const parsed = JSON.parse(text);
+      if (!parsed || typeof parsed !== 'object') return text;
+      return Object.entries(parsed).map(([key, value]) => `${key}: ${value}`).join('; ');
+    } catch {
+      return text;
+    }
+  }
+
+  function renderStaffAudit() {
+    if (!dom.staffAudit) return;
+    dom.staffAudit.replaceChildren();
+    if (state.staffAudit.length === 0) {
+      dom.staffAudit.append(node('li', { className: 'settings-empty', text: 'No audit entries found for this scope.' }));
+      return;
+    }
+    for (const entry of state.staffAudit) {
+      const details = auditDetails(property(entry, 'detailsJson'));
+      const created = clean(property(entry, 'createdUtc')) || '';
+      const targetType = clean(property(entry, 'targetType'));
+      const targetId = clean(property(entry, 'targetId'));
+      dom.staffAudit.append(node('li', { className: 'settings-audit-item' }, [
+        node('strong', { text: property(entry, 'action') || 'administration_action' }),
+        node('span', {
+          className: 'settings-audit-meta',
+          text: `${created}${property(entry, 'actorName') ? ` by ${property(entry, 'actorName')}` : ''}` +
+            `${targetType ? `; ${targetType}${targetId ? ` ${targetId}` : ''}` : ''}`
+        }),
+        details ? node('span', { text: details }) : null
+      ]));
     }
   }
 
@@ -654,6 +926,8 @@ export function createSettingsController({
     configureScopedFields();
     populateParticipation();
     renderOrganizations();
+    renderStaffUsers();
+    renderStaffAudit();
     dom.scope.value = state.scope;
     state.baselineSnapshot = snapshotForm(dom.form);
     updateDirtyState();
@@ -689,6 +963,7 @@ export function createSettingsController({
       const patronCodeChoices = patronCodesResponse?.data ?? patronCodesResponse;
       data.patronCodeChoices = Array.isArray(patronCodeChoices) ? patronCodeChoices : [];
       populate(data || {});
+      if (state.activePanel === 'staff') void loadStaffAccess({ silent: true });
       if (!options.silent && loadState.isCurrent() && isSettingsContextCurrent(context)) notify('Settings loaded.');
     } catch (error) {
       if (loadState.isCurrent() && isSettingsContextCurrent(context) && !isAbortError(error) && error.status !== 401) {
@@ -698,6 +973,176 @@ export function createSettingsController({
       if (loadState.isCurrent() && isSettingsContextCurrent(context)) dom.refresh.disabled = false;
       latestLoads.finish('administration-settings', loadState.token);
     }
+  }
+
+  function staffUsersUrl() {
+    const scope = scopedStaffOrganizationId();
+    return scope ? `/api/asap/staff/users?orgId=${encodeURIComponent(scope)}` : '/api/asap/staff/users';
+  }
+
+  function staffAuditUrl() {
+    const scope = scopedStaffOrganizationId();
+    const query = new URLSearchParams({ limit: '50' });
+    if (scope) query.set('organizationId', scope);
+    return `/api/asap/staff/audit?${query.toString()}`;
+  }
+
+  async function loadStaffAccess(options = {}) {
+    if (!state.staff || state.staff.role === 'staff') return;
+    const loadState = beginSettingsOperation('administration-staff-access');
+    if (!options.silent) setStaffStatus(`Loading staff access for ${scopedStaffLabel()}...`);
+    if (dom.staffRefresh) dom.staffRefresh.disabled = true;
+    if (dom.staffAuditRefresh) dom.staffAuditRefresh.disabled = true;
+    try {
+      const [usersResponse, auditResponse] = await Promise.all([
+        authorizedJson(staffUsersUrl(), { signal: loadState.signal }),
+        authorizedJson(staffAuditUrl(), { signal: loadState.signal }).catch(error => {
+          if (isAbortError(error) || error.status === 401) throw error;
+          return { data: [] };
+        })
+      ]);
+      if (!isSettingsOperationCurrent(loadState)) return;
+      const users = usersResponse?.data ?? usersResponse ?? {};
+      state.staffUsers = Array.isArray(users.users) ? users.users : [];
+      state.staffCanAssignSuperAdmin = Boolean(users.canAssignSuperAdmin);
+      const audit = auditResponse?.data ?? auditResponse;
+      state.staffAudit = Array.isArray(audit) ? audit : [];
+      state.staffAccessLoaded = true;
+      renderStaffUsers();
+      renderStaffAudit();
+      if (!options.silent) setStaffStatus(`Staff access loaded for ${scopedStaffLabel()}.`, 'success');
+    } catch (error) {
+      if (isSettingsOperationCurrent(loadState) && !isAbortError(error) && error.status !== 401) {
+        setStaffStatus(error.message || 'Staff access could not be loaded.', 'error');
+      }
+    } finally {
+      if (isSettingsOperationCurrent(loadState)) {
+        if (dom.staffRefresh) dom.staffRefresh.disabled = false;
+        if (dom.staffAuditRefresh) dom.staffAuditRefresh.disabled = false;
+      }
+      latestLoads.finish('administration-staff-access', loadState.token);
+    }
+  }
+
+  async function mutateStaffUser(path, options, successMessage, staffId = null) {
+    const mutation = beginSettingsOperation('administration-staff-mutation');
+    setStaffStatus(successMessage.replace(/\.$/, '') + '...');
+    try {
+      const response = await authorizedJson(path, { ...options, signal: mutation.signal });
+      if (!isSettingsOperationCurrent(mutation)) return null;
+      const cleanup = response?.cleanup ?? response?.data?.cleanup ?? {};
+      state.lastStaffCleanup = { staffId: stringValue(property(response?.user ?? response?.data?.user, 'id') || staffId), cleanup };
+      await loadStaffAccess({ silent: true });
+      if (isSettingsOperationCurrent(mutation)) setStaffStatus(`${successMessage} ${cleanupSummary(cleanup)}`, 'success');
+      return response;
+    } catch (error) {
+      if (!isSettingsOperationCurrent(mutation)) return null;
+      if (error.status === 409) {
+        await loadStaffAccess({ silent: true });
+        if (!isSettingsOperationCurrent(mutation)) return null;
+        setStaffStatus(error.message || 'Staff access changed elsewhere. Review the refreshed roster.', 'error');
+      } else if (error.status !== 401 && !isAbortError(error)) {
+        setStaffStatus(error.message || 'The staff access change could not be saved.', 'error');
+      }
+      return null;
+    } finally {
+      latestLoads.finish('administration-staff-mutation', mutation.token);
+    }
+  }
+
+  async function createStaffUser() {
+    const role = dom.staffRole.value || 'staff';
+    const body = {
+      tenantId: clean(dom.staffTenantId.value),
+      objectId: clean(dom.staffObjectId.value),
+      userPrincipalName: clean(dom.staffUpn.value),
+      displayName: clean(dom.staffDisplayName.value),
+      notificationEmail: clean(dom.staffNotificationEmail.value),
+      role,
+      organizationId: role === 'super_admin' ? 1 : Number(dom.staffOrganization.value)
+    };
+    const response = await mutateStaffUser('/api/asap/staff/users', {
+      method: 'POST',
+      body
+    }, 'Staff user saved.');
+    if (response) {
+      dom.staffTenantId.value = '';
+      dom.staffObjectId.value = '';
+      dom.staffUpn.value = '';
+      dom.staffDisplayName.value = '';
+      dom.staffNotificationEmail.value = '';
+    }
+  }
+
+  async function updateStaffMetadata(id, version, values) {
+    await mutateStaffUser(`/api/asap/staff/users/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: {
+        version: stringValue(version),
+        userPrincipalName: values.userPrincipalName,
+        displayName: values.displayName,
+        notificationEmail: values.notificationEmail
+      }
+    }, 'Staff profile saved.', id);
+  }
+
+  async function changeStaffRole(id, version, values) {
+    await mutateStaffUser(`/api/asap/staff/users/${encodeURIComponent(id)}/role`, {
+      method: 'POST',
+      body: {
+        version: stringValue(version),
+        role: values.role,
+        organizationId: values.organizationId
+      }
+    }, 'Staff access updated.', id);
+  }
+
+  async function deactivateStaffUser(id, version, displayName) {
+    if (!window.confirm(`Deactivate ${displayName}?`)) return;
+    await mutateStaffUser(`/api/asap/staff/users/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      body: { version: stringValue(version) }
+    }, 'Staff user deactivated.', id);
+  }
+
+  async function reactivateStaffUser(user, role, organizationId) {
+    await mutateStaffUser('/api/asap/staff/users', {
+      method: 'POST',
+      body: {
+        tenantId: clean(property(user, 'tenantId')),
+        objectId: clean(property(user, 'objectId')),
+        userPrincipalName: clean(property(user, 'userPrincipalName')),
+        displayName: clean(property(user, 'displayName')),
+        notificationEmail: clean(property(user, 'notificationEmail')),
+        role,
+        organizationId: role === 'super_admin' ? 1 : Number(organizationId)
+      }
+    }, 'Staff user reactivated.', property(user, 'id'));
+  }
+
+  async function rebindStaffUser(user) {
+    const id = stringValue(property(user, 'id'));
+    const version = stringValue(property(user, 'version'));
+    const tenantId = clean(window.prompt('Enter the new Entra tenant ID.', property(user, 'tenantId') || ''));
+    if (!tenantId) return;
+    const objectId = clean(window.prompt('Enter the new Entra object ID.', property(user, 'objectId') || ''));
+    if (!objectId) return;
+    const reason = clean(window.prompt('Reason for rebinding this staff identity.'));
+    if (!reason) {
+      setStaffStatus('A reason is required before rebinding a staff identity.', 'error');
+      return;
+    }
+    if (!window.confirm(`Rebind ${staffUserDisplay(user)} to the entered Entra identity?`)) return;
+    await mutateStaffUser(`/api/asap/staff/users/${encodeURIComponent(id)}/rebind`, {
+      method: 'POST',
+      body: {
+        version,
+        tenantId,
+        objectId,
+        confirmed: true,
+        reason
+      }
+    }, 'Staff identity rebound.', id);
   }
 
   function collectScoped(section, fields) {
@@ -1078,6 +1523,12 @@ export function createSettingsController({
     }
     cancelSettingsOperations();
     state.scope = next;
+    state.staffUsers = [];
+    state.staffAudit = [];
+    state.staffAccessLoaded = false;
+    state.lastStaffCleanup = null;
+    renderStaffUsers();
+    renderStaffAudit();
     await load();
   }
 
@@ -1091,6 +1542,7 @@ export function createSettingsController({
     for (const panel of dom.panels) panel.hidden = panel.dataset.settingsPanelContent !== name;
     const panel = dom.panels.find(item => item.dataset.settingsPanelContent === name);
     panel?.focus({ preventScroll: true });
+    if (name === 'staff') void loadStaffAccess();
   }
 
   function populateScopeOptions() {
@@ -1126,7 +1578,14 @@ export function createSettingsController({
     } else if (staff) {
       state.scope = String(staff.organizationId);
     }
+    state.staffUsers = [];
+    state.staffAudit = [];
+    state.staffAccessLoaded = false;
+    state.lastStaffCleanup = null;
     populateScopeOptions();
+    populateStaffCreateControls();
+    renderStaffUsers();
+    renderStaffAudit();
   }
 
   function signedOut() {
@@ -1134,7 +1593,13 @@ export function createSettingsController({
     state.staff = null;
     state.data = null;
     state.organizations = [];
+    state.staffUsers = [];
+    state.staffAudit = [];
+    state.staffAccessLoaded = false;
+    state.lastStaffCleanup = null;
     state.baselineSnapshot = [];
+    renderStaffUsers();
+    renderStaffAudit();
     updateDirtyState();
   }
 
@@ -1166,6 +1631,10 @@ export function createSettingsController({
     dom.reset.addEventListener('click', resetSettings);
     dom.testPolaris.addEventListener('click', testPolaris);
     dom.syncOrganizations.addEventListener('click', syncOrganizations);
+    dom.staffRole.addEventListener('change', populateStaffCreateControls);
+    dom.staffCreate.addEventListener('click', createStaffUser);
+    dom.staffRefresh.addEventListener('click', () => loadStaffAccess());
+    dom.staffAuditRefresh.addEventListener('click', () => loadStaffAccess());
     dom.saveLogo.addEventListener('click', () => saveLogo(false));
     dom.clearLogo.addEventListener('click', () => saveLogo(true));
     for (const [sourceId, targetId] of [

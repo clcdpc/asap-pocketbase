@@ -235,7 +235,7 @@
               </fieldset>
             </section>
 
-            <section id="settings-polaris" class="settings-panel" role="tabpanel" tabindex="-1" data-settings-panel-content="polaris" aria-labelledby="settings-nav-polaris">
+            <section id="settings-polaris" class="settings-panel" role="tabpanel" tabindex="-1" data-settings-panel-content="polaris" aria-labelledby="settings-nav-polaris" hidden>
               <div class="settings-panel-heading">
                 <h2>Polaris</h2>
                 <p>System-only integration identity and reference synchronization.</p>
@@ -263,7 +263,7 @@
               </fieldset>
             </section>
 
-            <section id="settings-smtp" class="settings-panel" role="tabpanel" tabindex="-1" data-settings-panel-content="smtp" aria-labelledby="settings-nav-smtp">
+            <section id="settings-smtp" class="settings-panel" role="tabpanel" tabindex="-1" data-settings-panel-content="smtp" aria-labelledby="settings-nav-smtp" hidden>
               <div class="settings-panel-heading">
                 <h2>Email / SMTP</h2>
                 <p>Sender identity is inherited by library scope; transport credentials remain protected.</p>
@@ -279,15 +279,46 @@
               </fieldset>
             </section>
 
-            <section id="settings-staff" class="settings-panel" role="tabpanel" tabindex="-1" data-settings-panel-content="staff" aria-labelledby="settings-nav-staff">
+            <section id="settings-staff" class="settings-panel" role="tabpanel" tabindex="-1" data-settings-panel-content="staff" aria-labelledby="settings-nav-staff" hidden>
               <div class="settings-panel-heading">
                 <h2>Staff access</h2>
-                <p>Manage synced library organizations and participation state.</p>
+                <p>Manage staff accounts, library roles, and scoped administration history.</p>
               </div>
-              <div id="settings-organizations-list" class="settings-list" aria-live="polite"></div>
+              <fieldset class="settings-fieldset" data-settings-ignore="true">
+                <legend>Add staff user</legend>
+                <div class="settings-grid staff-access-form">
+                  <label class="settings-field"><span>Tenant ID</span><input id="staff-add-tenant-id" type="text" autocomplete="off"></label>
+                  <label class="settings-field"><span>Object ID</span><input id="staff-add-object-id" type="text" autocomplete="off"></label>
+                  <label class="settings-field"><span>User principal name</span><input id="staff-add-upn" type="email" autocomplete="username"></label>
+                  <label class="settings-field"><span>Display name</span><input id="staff-add-display-name" type="text" autocomplete="name"></label>
+                  <label class="settings-field"><span>Notification email</span><input id="staff-add-notification-email" type="email" autocomplete="email"></label>
+                  <label class="settings-field"><span>Role</span><select id="staff-add-role"></select></label>
+                  <label class="settings-field"><span>Library</span><select id="staff-add-organization"></select></label>
+                </div>
+                <div class="form-actions settings-inline-actions">
+                  <button id="staff-add-submit" class="primary-button" type="button"><i class="fa fa-user-plus" aria-hidden="true"></i> Add staff</button>
+                  <button id="staff-refresh" class="secondary-button" type="button"><i class="fa fa-refresh" aria-hidden="true"></i> Refresh roster</button>
+                </div>
+                <p id="staff-access-status" class="settings-result" role="status" aria-live="polite"></p>
+              </fieldset>
+              <fieldset class="settings-fieldset" data-settings-ignore="true">
+                <legend>Staff roster</legend>
+                <div id="settings-staff-users-list" class="settings-staff-list" aria-live="polite"></div>
+              </fieldset>
+              <fieldset class="settings-fieldset" data-settings-ignore="true">
+                <legend>Administration audit history</legend>
+                <div class="form-actions settings-inline-actions">
+                  <button id="staff-audit-refresh" class="secondary-button" type="button"><i class="fa fa-history" aria-hidden="true"></i> Refresh audit</button>
+                </div>
+                <ul id="settings-staff-audit-list" class="settings-audit-list" aria-live="polite"></ul>
+              </fieldset>
+              <fieldset class="settings-fieldset" data-system-only="true">
+                <legend>Organizations</legend>
+                <ul id="settings-organizations-list" class="settings-list" aria-live="polite"></ul>
+              </fieldset>
             </section>
 
-            <section id="settings-workflow" class="settings-panel" role="tabpanel" tabindex="-1" data-settings-panel-content="workflow" aria-labelledby="settings-nav-workflow">
+            <section id="settings-workflow" class="settings-panel" role="tabpanel" tabindex="-1" data-settings-panel-content="workflow" aria-labelledby="settings-nav-workflow" hidden>
               <div class="settings-panel-heading">
                 <h2>Workflow</h2>
                 <p>Suggestion limits, timeout configuration, eligibility, and external search links.</p>
@@ -345,7 +376,7 @@
               </fieldset>
             </section>
 
-            <section id="settings-patron" class="settings-panel" role="tabpanel" tabindex="-1" data-settings-panel-content="patron" aria-labelledby="settings-nav-patron">
+            <section id="settings-patron" class="settings-panel" role="tabpanel" tabindex="-1" data-settings-panel-content="patron" aria-labelledby="settings-nav-patron" hidden>
               <div class="settings-panel-heading">
                 <h2>Patron experience</h2>
                 <p>Patron-facing text, publication choices, formats, custom fields, and branding.</p>
@@ -417,7 +448,7 @@
               </fieldset>
             </section>
 
-            <section id="settings-templates" class="settings-panel" role="tabpanel" tabindex="-1" data-settings-panel-content="templates" aria-labelledby="settings-nav-templates">
+            <section id="settings-templates" class="settings-panel" role="tabpanel" tabindex="-1" data-settings-panel-content="templates" aria-labelledby="settings-nav-templates" hidden>
               <div class="settings-panel-heading">
                 <h2>Email templates</h2>
                 <p>Subject and body content preserve system identity and library lineage.</p>

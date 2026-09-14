@@ -8,6 +8,13 @@ desktop turn cancellations. This checkpoint preserves implementation progress;
 it does not declare Slice 4 complete, freeze a review candidate, waive findings,
 or authorize merge, deployment, production tags or production readiness.
 
+On 2026-09-14 implementation resumed from checkpoint head
+`414e2f515e203f0fae6f1368828ee48affc68eb7` and completed only the first four
+items from the immediate work list below. The work is intentionally paused
+after step 4 and before step 5. Do not treat this as final Slice 4 acceptance,
+do not dispatch Terra from this checkpoint, do not freeze final artifacts and
+do not begin Slice 5.
+
 - Repository: `clcdpc/asap-pocketbase`.
 - Existing branch and sole draft port PR: `codex/csharp-port`, #264.
 - Full Slice 4 review base: `4769a8a8750c315e319824355d4508073bd43546`.
@@ -92,25 +99,28 @@ release/rehearsal blocker, not a Slice 4 implementation blocker.
 
 ## Immediate Remaining Work
 
-1. Complete Staff Access in the existing settings frontend. The current panel
-   only administers organizations. Adapt the pinned roster/add/per-record
-   actions to accepted versioned StaffLifecycle APIs and durable Entra identity.
-   Add scoped audit-history UI; its API already exists. These manage global
-   records, not settings overrides: no inheritance banner or settings reset.
-2. Finish the confirmed browser defects: only the selected settings panel may
-   be visible initially; give all 24 format-label inputs and 24 mode selects
-   accessible names; give organization list items a semantic list parent; fix
-   the 14-pixel desktop overflow in initial/patron views. Preserve current UX,
-   safe DOM, dirty-state/scope fencing, keyboard/focus and mobile constraints.
-3. Complete meaningful real-SQL coverage for every inheritable scalar: system
-   save, library override save, effective read, and one-field reset while a
-   different override in the same row remains. Expand whole-set/owned-domain
-   reset, reference safety, organization/audit/authorization, coherent version
-   reads, lifecycle/concurrency and eligible versioned auto-claim cases.
-4. Extend the parent acceptance harness with organization/reference HTTP and
-   Staff Access/audit UI journeys. Earlier 17-case functional success is not
-   complete coverage of these missing paths. Rerun desktop/mobile accessibility
-   and layout on fresh actual published files, with no diagnostic interception.
+Steps 1 through 4 are complete in the 2026-09-14 WIP checkpoint:
+
+1. Staff Access now uses the existing settings frontend with roster/add/
+   per-record action workflows, accepted versioned StaffLifecycle APIs, durable
+   Entra tenant/object IDs, scoped audit history, ordinary-admin own-library
+   scope and super-admin-only confirmed/reasoned rebind. Staff records remain
+   global records, not settings inheritance data.
+2. The confirmed published-browser defects are fixed: initial panel visibility,
+   accessible names for all 24 format-label inputs and 24 mode selects,
+   semantic organization list parent and desktop horizontal overflow.
+3. Focused real-SQL coverage now proves every inheritable scalar's system save,
+   library override save, effective library read and single-field reset while a
+   peer override in the same row remains; additional scoped audit/system-only
+   authorization and write-only secret preserve/clear coverage was added.
+4. The retained parent browser harness was extended locally under `.git` with
+   Staff Access HTTP/UI, scoped audit, stale Staff Access load and organization
+   activation/version/scope coverage. Fresh published Web run
+   `f6e7cf022b314288a53c0a0e4c16de06` passed 23/23 scenarios and the aggregate
+   accessibility/layout/image gate without diagnostic interception.
+
+Remaining work begins at step 5 only:
+
 5. Run the complete required Release/.NET/real-SQL/Node suites and fresh web/
    self-contained native publications. Re-export all four stopped fixtures,
    rerun exact pinned-source oracles, native import/reconciliation and negative
@@ -137,24 +147,38 @@ resolution and migration here without bringing the later executor forward.
 
 ## Verification State
 
-Fresh checkpoint checks on the preserved implementation:
+Fresh step-1-through-4 checkpoint checks on the preserved implementation:
 
 - `dotnet build Asap.sln --configuration Release --no-restore`: passed with
   zero warnings/errors.
-- `node tests/run_all.js`: all 168 discovered test files passed.
-
-Earlier full Debug .NET/SQL result: 192/192, zero failures/skips, before later
-administration edits. It does not certify the checkpoint bytes. The full .NET/
-real-SQL suite was not rerun for this checkpoint. No final acceptance freeze,
-Terra review or accepted-milestone remote CI has occurred.
+- `node tests/run_all.js`: all 170 discovered test files passed. The existing
+  Windows `grep`/`true` noise inside `no_dao_usage.test.js` remains nonfatal
+  and that test still reports PASS.
+- `dotnet test tests\Asap.Tests\Asap.Tests.csproj --no-restore --filter "FullyQualifiedName~AdministrationInheritableScalarsSaveResolveAndResetPerField|FullyQualifiedName~AdministrationAuditAndSystemSettingsHttpScopeRespectCurrentStaffRole"`:
+  passed, 2/2.
+- `node --check` passed for `src\Asap.Web\Frontend\staff\js\settings.js`,
+  `src\Asap.Web\Frontend\staff\js\settings-domains.js`, and the retained local
+  `.git\asap-patron-browser-probe\admin-settings.cjs`.
+- `dotnet build .git\asap-patron-browser-probe\Probe.csproj --configuration Release --no-restore`:
+  passed, zero warnings/errors.
+- `git diff --check`: no whitespace errors; only line-ending normalization
+  warnings for edited text files.
 
 Latest independent browser report:
-`.artifacts/acceptance/patron-browser/ba0332479ebd420f870712fc58e477a1/admin-settings-results.json`.
-It uses unmodified publication `asap-slice-04-web-precheck-20260913b`, passes
-17 functional scenarios, and fails the aggregate accessibility/layout gate
-with twelve entries across system/patron desktop/mobile views. All images
-rendered. The earlier dirty-after-successful-save defect is fixed and verified;
-do not reclassify that historical reproduction as a current unresolved failure.
+`.artifacts/acceptance/patron-browser/f6e7cf022b314288a53c0a0e4c16de06/admin-settings-results.json`.
+It uses fresh isolated publication
+`.artifacts/asap-slice-04-web-precheck-slice-04-step4-20260914c`, whose receipt
+is `.git/asap-slice-04-web-precheck-slice-04-step4-20260914c-receipt.json`.
+The published DACPAC SHA-256 is
+`8ad550e2b75a5f24d24a4af086207e01a64daaa5c80727491b2ef7edce454034`.
+The run passed 23/23 scenarios, captured 17 browser states, made zero external
+browser requests, ran with diagnostic mode off, and passed the aggregate
+serious/critical accessibility, horizontal-overflow and image-rendering gate.
+
+Earlier full Debug .NET/SQL result: 192/192, zero failures/skips, before later
+administration edits. It remains historical only. The complete final .NET/
+real-SQL suite, native migration acceptance, final freeze, Terra review and
+accepted-milestone remote CI have not occurred.
 
 Provisional native migration: original 158/158 checks, expanded edge 161/161,
 unmapped source setting 3/3 rejection checks, competing template sender 3/3
@@ -179,7 +203,8 @@ The following paths were confirmed present when making the checkpoint:
 | `.git/asap-real-pb-source/admin-settings-unmapped-data` | Stopped unexplained populated setting rejection fixture |
 | `.git/asap-real-pb-source/admin-settings-sender-conflict-data` | Stopped ambiguous template-sender rejection fixture |
 | `.git/asap-slice-04-verification.cjs` | Final combined web/native source and payload receipts; review base remains pre-Slice 4 |
-| `.artifacts/asap-slice-04-web-precheck-20260913b` | Latest provisional Web snapshot, not final acceptance |
+| `.artifacts/asap-slice-04-web-precheck-slice-04-step4-20260914c` | Latest step-4 published Web snapshot, not final acceptance |
+| `.artifacts/acceptance/patron-browser/f6e7cf022b314288a53c0a0e4c16de06` | Latest passing step-4 browser/API/accessibility/layout evidence |
 | `.artifacts/slice-04-native-precheck-4769a8a-20260913a` | Earlier provisional native migration publication |
 
 Do not overwrite old snapshots, package manifests, receipts or baseline

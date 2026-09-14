@@ -37,6 +37,49 @@ fixes use a temporary branch from the deployed source, immediate equivalent
 
 ## Execution And Evidence
 
+### Slice 4 Step 1-4 WIP Checkpoint - 2026-09-14
+
+Implementation resumed from PR #264 checkpoint
+`414e2f515e203f0fae6f1368828ee48affc68eb7` and intentionally stopped after
+steps 1 through 4 from `slice-04-handoff.md`. This is a WIP/checkpoint state,
+not the accepted Slice 4 milestone. PR #264 remains draft on
+`codex/csharp-port`. No Terra review, final Slice 4 freeze, native migration
+acceptance, accepted milestone, exact-milestone remote CI or Slice 5 work has
+started.
+
+Completed at this checkpoint: existing-settings Staff Access UI and scoped audit
+history; accepted versioned staff lifecycle flows, cleanup-result display and
+super-admin-only confirmed/reasoned rebind; browser accessibility/layout fixes;
+focused real-SQL coverage for every inheritable scalar's system save, library
+override save, effective library read and per-field reset; scoped audit/system
+authorization coverage; and retained local parent browser harness coverage for
+Staff Access, audit, stale staff/scope loads and organization activation/version
+HTTP behavior.
+
+Checkpoint validation:
+
+- `dotnet build Asap.sln --configuration Release --no-restore`: passed with
+  zero warnings/errors.
+- `node tests/run_all.js`: all 170 discovered test files passed. Existing
+  Windows `grep`/`true` noise in `no_dao_usage.test.js` remains nonfatal and
+  that test reports PASS.
+- `dotnet test tests\Asap.Tests\Asap.Tests.csproj --no-restore --filter "FullyQualifiedName~AdministrationInheritableScalarsSaveResolveAndResetPerField|FullyQualifiedName~AdministrationAuditAndSystemSettingsHttpScopeRespectCurrentStaffRole"`:
+  passed, 2/2.
+- Fresh published Web snapshot
+  `.artifacts/asap-slice-04-web-precheck-slice-04-step4-20260914c` and parent
+  browser run
+  `.artifacts/acceptance/patron-browser/f6e7cf022b314288a53c0a0e4c16de06/admin-settings-results.json`:
+  23/23 scenarios passed, 17 browser states captured, diagnostic mode off,
+  zero external browser requests, and the aggregate serious/critical
+  accessibility, horizontal-overflow and image-rendering gate passed.
+- Published DACPAC SHA-256:
+  `8ad550e2b75a5f24d24a4af086207e01a64daaa5c80727491b2ef7edce454034`.
+
+Remaining Slice 4 work begins at step 5: complete final Release/.NET/real-SQL/
+Node validation on final bytes, publish the self-contained native migration
+artifact, re-export and rerun all four stopped fixtures/oracles/native
+acceptance modes, verify final source/artifact hashes, then start Terra review.
+
 ### Incomplete Slice 4 Checkpoint - 2026-09-13
 
 The user requested a commit and push of the current work so implementation can
@@ -175,7 +218,7 @@ closed. They do not prescribe the current remaining-slice model.
 | 1 | Patron login and submission | Complete: `c1b8655` plus reviewed correction `1e36761`; 120 tests and remote Linux CI passed |
 | 2 | Staff Entra and core request workflow | Complete: reviewed milestone `9f946ae`; 181 local and remote Linux CI tests pass, no skips |
 | 3 | Additional-copy workflow | Complete: reviewed milestone `85539b0`; 190 local/remote tests, native/published-browser checks and full Terra Pass 5 clear |
-| 4 | Administration and configuration | Incomplete WIP checkpoint; see slice-04-handoff.md |
+| 4 | Administration and configuration | Incomplete WIP checkpoint paused after step 4; final step-5 freeze/native/full-suite/Terra/CI gates pending |
 | 5 | Background workflows and complete email operations | Not started |
 | 6 | Analytics | Not started |
 | 7 | Migration hardening and legacy links | Not started |

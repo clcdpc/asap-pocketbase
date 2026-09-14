@@ -460,12 +460,23 @@ export function createSettingsDomainEditors({ root, onChange = () => {} }) {
 
   function fieldPair(name, value) {
     const group = element('div', { className: 'settings-format-field-group' });
+    const readable = name.charAt(0).toUpperCase() + name.slice(1);
     const mode = select([
       { value: 'required', label: 'Required' },
       { value: 'optional', label: 'Optional' },
       { value: 'hidden', label: 'Hidden' }
-    ], value.mode, { 'data-format-field': name, 'data-domain-editable': 'true' });
-    const label = element('input', { type: 'text', value: value.label || '', 'data-format-label': name, 'data-domain-editable': 'true' });
+    ], value.mode, {
+      'data-format-field': name,
+      'data-domain-editable': 'true',
+      'aria-label': `${readable} mode`
+    });
+    const label = element('input', {
+      type: 'text',
+      value: value.label || '',
+      'data-format-label': name,
+      'data-domain-editable': 'true',
+      'aria-label': `${readable} label`
+    });
     group.append(element('span', { className: 'settings-format-field-name', text: name }), mode, label);
     return group;
   }
