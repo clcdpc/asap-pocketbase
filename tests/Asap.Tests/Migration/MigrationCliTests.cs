@@ -5,7 +5,9 @@ using Microsoft.SqlServer.Dac;
 using Microsoft.AspNetCore.DataProtection;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Asap.Security;
 
 namespace Asap.Tests.Migration;
@@ -108,6 +110,7 @@ public sealed class MigrationCliTests
                         ('pb-org-2', '2', 'Test Library', 'TEST', 1, '2030-01-02 03:04:05.000Z');
                     """;
                 command.ExecuteNonQuery();
+                CreatePinnedSourceSchemaFixtureTables(connection);
             }
 
             using var output = new StringWriter();
@@ -135,6 +138,13 @@ public sealed class MigrationCliTests
                 manifest.RootElement.GetProperty("pocketBaseSourceSchemaVersion").GetString());
             Assert.AreEqual(1, manifest.RootElement.GetProperty("entityCounts").GetProperty("polaris_organizations").GetInt32());
             Assert.IsTrue(manifest.RootElement.GetProperty("sourceDatabase").GetProperty("sha256").GetString()!.Length == 64);
+            CollectionAssert.AreEqual(
+                new[]
+                {
+                    "legacy_smtp_transport_excluded",
+                    "pocketbase_auth_session_scheduler_state_excluded"
+                },
+                manifest.RootElement.GetProperty("warnings").EnumerateArray().Select(item => item.GetString()).ToArray());
 
             using var organizations = JsonDocument.Parse(
                 File.ReadAllText(Path.Combine(package, "organizations.json")));
@@ -147,6 +157,64 @@ public sealed class MigrationCliTests
             var files = manifest.RootElement.GetProperty("files").EnumerateArray().ToArray();
             Assert.IsTrue(files.Any(file => file.GetProperty("path").GetString() == "organizations.json"));
             Assert.IsTrue(files.All(file => file.GetProperty("sha256").GetString()!.Length == 64));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public void ExportRejectsMissingPinnedSourceCollectionBeforeWritingPackage()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-missing-collection-{Guid.NewGuid():N}");
+        var source = Path.Combine(root, "data.db");
+        var storage = Path.Combine(root, "storage");
+        var package = Path.Combine(root, "package");
+        Directory.CreateDirectory(root);
+        Directory.CreateDirectory(storage);
+        try
+        {
+            using (var connection = new SqliteConnection(
+                new SqliteConnectionStringBuilder
+                {
+                    DataSource = source,
+                    Pooling = false
+                }.ConnectionString))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText =
+                    """
+                    CREATE TABLE [_migrations] ([file] TEXT NOT NULL PRIMARY KEY, [applied] INTEGER NOT NULL);
+                    INSERT INTO [_migrations] VALUES ('202607270001_patron_code_eligibility.js', 1);
+                    CREATE TABLE [polaris_organizations] ([id] TEXT NOT NULL PRIMARY KEY);
+                    """;
+                command.ExecuteNonQuery();
+                CreatePinnedSourceSchemaFixtureTables(connection);
+                using var drop = connection.CreateCommand();
+                drop.CommandText = "DROP TABLE [staff_users];";
+                drop.ExecuteNonQuery();
+            }
+
+            using var error = new StringWriter();
+            var exitCode = MigrationCli.Run(
+                [
+                    "export",
+                    "--source", source,
+                    "--storage", storage,
+                    "--output", package,
+                    "--source-git-sha", MigrationContract.PocketBaseBaselineSha,
+                    "--exported-at-utc", "2030-01-02T03:04:05Z",
+                    "--confirm-source-stopped"
+                ],
+                TextWriter.Null,
+                error);
+
+            Assert.AreEqual(1, exitCode);
+            StringAssert.Contains(error.ToString(), "source_collection_missing");
+            StringAssert.Contains(error.ToString(), "staff_users");
+            Assert.IsFalse(File.Exists(Path.Combine(package, "manifest.json")));
         }
         finally
         {
@@ -313,6 +381,20 @@ public sealed class MigrationCliTests
             CollectionAssert.AreEqual(
                 File.ReadAllBytes(Path.Combine(FindRepositoryRoot(), "src", "Asap.Web", "Frontend", "jpl.png")),
                 File.ReadAllBytes(Path.Combine(package, assetPath.Replace('/', Path.DirectorySeparatorChar))));
+
+            using var validationError = new StringWriter();
+            Assert.AreEqual(
+                0,
+                MigrationCli.Run(["validate", "--package", package], TextWriter.Null, validationError),
+                validationError.ToString());
+
+            var unreferencedAssetPath = "assets/branding/unreferenced/logo.png";
+            var unreferencedAssetFullPath = Path.Combine(package, unreferencedAssetPath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(unreferencedAssetFullPath)!);
+            var brandingBytes = File.ReadAllBytes(Path.Combine(FindRepositoryRoot(), "src", "Asap.Web", "Frontend", "jpl.png"));
+            File.WriteAllBytes(unreferencedAssetFullPath, brandingBytes);
+            AddManifestFile(package, unreferencedAssetPath, brandingBytes);
+            AssertPackageValidationCode(package, "package_unlisted_file");
         }
         finally
         {
@@ -340,6 +422,172 @@ public sealed class MigrationCliTests
                 1,
                 MigrationCli.Run(["validate", "--package", package], TextWriter.Null, tamperedError));
             StringAssert.Contains(tamperedError.ToString(), "package_hash_mismatch");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public void ValidationRejectsRehashedOpaqueFilesAndCredentialShapedManifestPaths()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-package-membership-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var opaquePackage = CreateMinimalPackage(Path.Combine(root, "opaque"));
+            var opaquePath = Path.Combine(opaquePackage, "opaque.bin");
+            var opaqueData = new byte[] { 1, 2, 3, 4 };
+            File.WriteAllBytes(opaquePath, opaqueData);
+            AddManifestFile(opaquePackage, "opaque.bin", opaqueData);
+            AssertPackageValidationCode(opaquePackage, "package_unlisted_file");
+
+            var credentialPathPackage = CreateMinimalPackage(Path.Combine(root, "credential-path"));
+            const string credentialShapedPath = "postmarkToken=fixture-only-value";
+            UpdateManifestPath(credentialPathPackage, "organizations.json", credentialShapedPath);
+            using var error = new StringWriter();
+            Assert.AreEqual(
+                1,
+                MigrationCli.Run(["validate", "--package", credentialPathPackage], TextWriter.Null, error));
+            StringAssert.Contains(error.ToString(), "package_secret_forbidden");
+            Assert.IsFalse(error.ToString().Contains("fixture-only-value", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    public void ExportUsesPinnedInitializationPrecedenceWhenSystemSettingsRecordIsMissing()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-initialization-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var environment = new Dictionary<string, string?>
+        {
+            ["ASAP_STAFF_URL"] = null,
+            ["ASAP_BASE_URL"] = "https://base.example.org/catalog#ignored",
+            ["ASAP_PUBLIC_URL"] = "https://public.example.org/"
+        };
+        var previous = environment.Keys.ToDictionary(
+            key => key,
+            Environment.GetEnvironmentVariable,
+            StringComparer.Ordinal);
+        try
+        {
+            foreach (var item in environment)
+            {
+                Environment.SetEnvironmentVariable(item.Key, item.Value);
+            }
+
+            var package = CreateMinimalPackage(root);
+            using var runtime = JsonDocument.Parse(File.ReadAllText(
+                Path.Combine(package, "effective-legacy-runtime-config.json")));
+            var staff = runtime.RootElement.GetProperty("settings").GetProperty("StaffApplicationUrl");
+            Assert.AreEqual("https://base.example.org/catalog/staff/", staff.GetProperty("value").GetString());
+            Assert.AreEqual("environment_fallback", staff.GetProperty("provenance").GetString());
+            Assert.AreEqual("ASAP_BASE_URL", staff.GetProperty("source").GetString());
+        }
+        finally
+        {
+            foreach (var item in previous)
+            {
+                Environment.SetEnvironmentVariable(item.Key, item.Value);
+            }
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public void ValidationRejectsRehashedMalformedConflictingAndUnsafePackageInputs()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-package-validation-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var traversalPackage = CreateMinimalPackage(Path.Combine(root, "traversal"));
+            UpdateManifestPath(traversalPackage, "organizations.json", "../outside.json");
+            AssertPackageValidationCode(traversalPackage, "package_path_invalid");
+
+            var malformedPackage = CreateMinimalPackage(Path.Combine(root, "malformed"));
+            File.WriteAllText(
+                Path.Combine(malformedPackage, "organizations.json"),
+                "{\"formatVersion\":1,\"domain\":\"organizations\",\"collections\":{\"polaris_organizations\":[null]}}",
+                new UTF8Encoding(false));
+            UpdateManifestEntry(malformedPackage, "organizations.json");
+            AssertPackageValidationCode(malformedPackage, "package_domain_invalid");
+
+            var invalidUtf8Package = CreateMinimalPackage(Path.Combine(root, "utf8"));
+            File.WriteAllBytes(Path.Combine(invalidUtf8Package, "organizations.json"), [0x7b, 0xff, 0x7d]);
+            UpdateManifestEntry(invalidUtf8Package, "organizations.json");
+            AssertPackageValidationCode(invalidUtf8Package, "package_domain_invalid");
+
+            var secretPackage = CreateMinimalPackage(Path.Combine(root, "secret"));
+            AddRuntimeProperty(secretPackage, "secretFingerprint", "forbidden");
+            UpdateManifestEntry(secretPackage, "effective-legacy-runtime-config.json");
+            AssertPackageValidationCode(secretPackage, "package_secret_forbidden");
+
+            var manifestSecretPackage = CreateMinimalPackage(Path.Combine(root, "manifest-secret"));
+            AddManifestProperty(manifestSecretPackage, "postmarkToken", "fixture-only-value");
+            AssertPackageValidationCode(manifestSecretPackage, "package_secret_forbidden");
+
+            var manifestScalarSecretPackage = CreateMinimalPackage(Path.Combine(root, "manifest-scalar-secret"));
+            SetManifestWarning(manifestScalarSecretPackage, "postmarkToken=fixture-only-value");
+            AssertPackageValidationCode(manifestScalarSecretPackage, "package_secret_forbidden");
+
+            var manifestWarningPackage = CreateMinimalPackage(Path.Combine(root, "manifest-warning"));
+            SetManifestWarning(manifestWarningPackage, "fixture-only-warning");
+            AssertPackageValidationCode(manifestWarningPackage, "package_manifest_invalid");
+
+            var manifestUnknownPackage = CreateMinimalPackage(Path.Combine(root, "manifest-unknown"));
+            AddManifestProperty(manifestUnknownPackage, "unexpectedMember", "fixture-only-value");
+            AssertPackageValidationCode(manifestUnknownPackage, "package_manifest_invalid");
+
+            var conflictingPackage = CreateMinimalPackage(Path.Combine(root, "conflict"));
+            var operationalPath = Path.Combine(conflictingPackage, "effective-legacy-operational-config.json");
+            var operational = JsonNode.Parse(File.ReadAllText(operationalPath))!.AsObject();
+            operational["processingLimits"]!["effectiveQueues"]!["pending_holds"]!["targetQueue"] = "IdentifierProcessing";
+            File.WriteAllText(operationalPath, operational.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n", new UTF8Encoding(false));
+            UpdateManifestEntry(conflictingPackage, "effective-legacy-operational-config.json");
+            AssertPackageValidationCode(conflictingPackage, "package_metadata_conflict");
+
+            const string collectionId = "pbc_branding_validation";
+            const string recordId = "ui-settings-validation";
+            const string fileName = "logo_validation.png";
+            var brandingPackage = CreateMinimalPackage(
+                Path.Combine(root, "branding"),
+                $$"""
+                CREATE TABLE [_collections] ([id] TEXT NOT NULL PRIMARY KEY, [name] TEXT NOT NULL);
+                INSERT INTO [_collections] VALUES ('{{collectionId}}', 'ui_settings');
+                CREATE TABLE [ui_settings]
+                (
+                    [id] TEXT NOT NULL PRIMARY KEY,
+                    [scope] TEXT NOT NULL,
+                    [libraryOrganization] TEXT,
+                    [logo] TEXT,
+                    [logoAlt] TEXT
+                );
+                INSERT INTO [ui_settings] VALUES
+                    ('{{recordId}}', 'system', NULL, '{{fileName}}', 'Validation logo');
+                """,
+                storage =>
+                {
+                    var directory = Path.Combine(storage, collectionId, recordId);
+                    Directory.CreateDirectory(directory);
+                    File.Copy(
+                        Path.Combine(FindRepositoryRoot(), "src", "Asap.Web", "Frontend", "jpl.png"),
+                        Path.Combine(directory, fileName));
+                });
+            using (var branding = JsonDocument.Parse(File.ReadAllText(Path.Combine(brandingPackage, "branding.json"))))
+            {
+                var assetPath = branding.RootElement.GetProperty("collections").GetProperty("branding")[0]
+                    .GetProperty("assetPath").GetString()!;
+                File.WriteAllBytes(Path.Combine(brandingPackage, assetPath.Replace('/', Path.DirectorySeparatorChar)), [1, 2, 3]);
+                UpdateManifestEntry(brandingPackage, assetPath);
+            }
+            AssertPackageValidationCode(brandingPackage, "branding_asset_invalid");
         }
         finally
         {
@@ -2215,6 +2463,7 @@ public sealed class MigrationCliTests
                      'super_admin', 1, '1', 1, 'weekly@example.org', 1, 0, 1);
                 """ + additionalSql;
             command.ExecuteNonQuery();
+            CreatePinnedSourceSchemaFixtureTables(connection);
         }
         prepareStorage?.Invoke(storage);
 
@@ -2233,6 +2482,120 @@ public sealed class MigrationCliTests
             exportError);
         Assert.AreEqual(0, exitCode, exportError.ToString());
         return package;
+    }
+
+    private static void CreatePinnedSourceSchemaFixtureTables(SqliteConnection connection)
+    {
+        // These empty tables model the collections present at the pinned source schema; production export only reads them.
+        var collectionNames = new[]
+        {
+            "polaris_organizations",
+            "staff_users",
+            "system_settings",
+            "polaris_settings",
+            "workflow_settings",
+            "ui_settings",
+            "patron_settings_overrides",
+            "patron_library_settings",
+            "library_settings",
+            "smtp_settings",
+            "material_formats",
+            "format_claim_rules",
+            "workflow_tags",
+            "title_requests",
+            "title_request_tags",
+            "request_statuses",
+            "request_close_reasons",
+            "title_request_events",
+            "email_templates",
+            "rejection_templates",
+            "email_delivery_events",
+            "deleted_request_audit",
+            "additional_copy_requests"
+        };
+
+        foreach (var collectionName in collectionNames)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = $"CREATE TABLE IF NOT EXISTS [{collectionName}] ([id] TEXT NOT NULL PRIMARY KEY);";
+            command.ExecuteNonQuery();
+        }
+
+        using var metadata = connection.CreateCommand();
+        metadata.CommandText =
+            """
+            CREATE TABLE IF NOT EXISTS [_collections] ([id] TEXT NOT NULL PRIMARY KEY, [name] TEXT NOT NULL);
+            INSERT OR IGNORE INTO [_collections] ([id], [name]) VALUES ('pbc_fixture_ui_settings', 'ui_settings');
+            """;
+        metadata.ExecuteNonQuery();
+    }
+
+    private static void AssertPackageValidationCode(string package, string expectedCode)
+    {
+        using var error = new StringWriter();
+        Assert.AreEqual(1, MigrationCli.Run(["validate", "--package", package], TextWriter.Null, error));
+        StringAssert.Contains(error.ToString(), expectedCode);
+    }
+
+    private static void UpdateManifestPath(string package, string oldPath, string newPath)
+    {
+        var manifestPath = Path.Combine(package, "manifest.json");
+        var manifest = JsonNode.Parse(File.ReadAllText(manifestPath))!.AsObject();
+        var entry = manifest["files"]!.AsArray().Single(item =>
+            string.Equals(item!["path"]!.GetValue<string>(), oldPath, StringComparison.OrdinalIgnoreCase))!.AsObject();
+        entry["path"] = newPath;
+        File.WriteAllText(manifestPath, manifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n", new UTF8Encoding(false));
+    }
+
+    private static void AddRuntimeProperty(string package, string name, string value)
+    {
+        var path = Path.Combine(package, "effective-legacy-runtime-config.json");
+        var runtime = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        runtime[name] = value;
+        File.WriteAllText(path, runtime.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n", new UTF8Encoding(false));
+    }
+
+    private static void AddManifestProperty(string package, string name, string value)
+    {
+        var path = Path.Combine(package, "manifest.json");
+        var manifest = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        manifest[name] = value;
+        File.WriteAllText(path, manifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n", new UTF8Encoding(false));
+    }
+
+    private static void SetManifestWarning(string package, string value)
+    {
+        var path = Path.Combine(package, "manifest.json");
+        var manifest = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        manifest["warnings"]!.AsArray()[0] = value;
+        File.WriteAllText(path, manifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n", new UTF8Encoding(false));
+    }
+
+    private static void UpdateManifestEntry(string package, string relativePath)
+    {
+        var fullPath = Path.Combine(package, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        var data = File.ReadAllBytes(fullPath);
+        var manifestPath = Path.Combine(package, "manifest.json");
+        var manifest = JsonNode.Parse(File.ReadAllText(manifestPath))!.AsObject();
+        var entry = manifest["files"]!.AsArray().Single(item =>
+            string.Equals(item!["path"]!.GetValue<string>(), relativePath, StringComparison.OrdinalIgnoreCase))!.AsObject();
+        entry["length"] = data.LongLength;
+        entry["sha256"] = Convert.ToHexStringLower(SHA256.HashData(data));
+        File.WriteAllText(manifestPath, manifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n", new UTF8Encoding(false));
+    }
+
+    private static void AddManifestFile(string package, string relativePath, byte[] data)
+    {
+        var manifestPath = Path.Combine(package, "manifest.json");
+        var manifest = JsonNode.Parse(File.ReadAllText(manifestPath))!.AsObject();
+        manifest["files"]!.AsArray().Add(
+            new JsonObject
+            {
+                ["path"] = relativePath,
+                ["length"] = data.LongLength,
+                ["sha256"] = Convert.ToHexStringLower(SHA256.HashData(data))
+            });
+        File.WriteAllText(manifestPath, manifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n", new UTF8Encoding(false));
     }
 
     private static async Task<int> ScalarAsync(SqlConnection connection, string sql)
