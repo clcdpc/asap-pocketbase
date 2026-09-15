@@ -1,0 +1,2 @@
+src/Asap.Web/Frontend/vendor/** -text
+scripts/hangfire/1.8.25/** -text

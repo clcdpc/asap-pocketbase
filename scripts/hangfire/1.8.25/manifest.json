@@ -1,0 +1,17 @@
+{
+  "packageId": "Hangfire.SqlServer",
+  "packageVersion": "1.8.25",
+  "packageSha256": "69d1209b3267578af045bf1c1737ecbe2dbba780add1780c0e82eb0f727ab93d",
+  "targetSchemaVersion": 9,
+  "schemaName": "HangFire",
+  "script": "install.sql",
+  "files": {
+    "COPYING": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+    "COPYING.LESSER": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768",
+    "install.sql": "0074feaaee463173e427c730bf82fe44008fe072e6ef1eb04d8e2ac3ffb8b1b6",
+    "LICENSE_ROYALTYFREE": "4ca53ffd44e5c64d00cc1d61ad6095a7f9aa24d3e8e0422fbc4fce43c5f9b12a",
+    "LICENSE_STANDARD": "f7fea42684435a253ab56432842b124d57a407f619ae4499bf9d8211f78341d5",
+    "LICENSE.md": "8d389547068f9fe8cf61e9d3b0a40d2858dc217f4daa53e83208040530e0c9b0",
+    "NOTICES": "9c330aa46c8c30de312f5fff05b658e95b6b7ef8947b200d86aad245027afbf4"
+  }
+}

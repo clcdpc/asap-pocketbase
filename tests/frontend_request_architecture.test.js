@@ -386,7 +386,7 @@ async function main() {
       'AGENTS.md should document the request and refresh architecture rules'
     );
     assert.ok(
-      agentsSource.includes('protect screen-level staff loads with abort-plus-stale-result guards'),
+      agentsSource.includes('prevent stale rendering'),
       'AGENTS.md should describe staff load race protection'
     );
   }

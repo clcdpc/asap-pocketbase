@@ -1,0 +1,95 @@
+name: .NET baseline
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ASAP_TEST_SQL_CONNECTION_STRING: Server=localhost,1433;Database=master;User ID=sa;Password=Asap_Slice0_SQL_2026!;Encrypt=True;TrustServerCertificate=True
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: |
+            **/*.csproj
+            **/*.sqlproj
+            Directory.Packages.props
+
+      - name: Start SQL Server 2022
+        run: >-
+          docker run --detach --name asap-sql
+          --publish 1433:1433
+          --env ACCEPT_EULA=Y
+          --env MSSQL_SA_PASSWORD='Asap_Slice0_SQL_2026!'
+          mcr.microsoft.com/mssql/server:2022-latest
+
+      - name: Wait for SQL Server
+        shell: bash
+        run: |
+          for attempt in {1..30}; do
+            if docker exec asap-sql /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Asap_Slice0_SQL_2026!' -C -Q 'SELECT 1' >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs asap-sql
+          exit 1
+
+      - name: Restore and build
+        run: dotnet build Asap.sln --configuration Release
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install browser acceptance dependencies
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run .NET and real SQL tests
+        run: dotnet test --project tests/Asap.Tests/Asap.Tests.csproj --configuration Release --no-build --minimum-expected-tests 190
+
+      - name: Run legacy/frontend unit tests
+        run: npm test
+
+      - name: Verify publish artifacts
+        shell: pwsh
+        run: |
+          dotnet publish src/Asap.Web/Asap.Web.csproj -c Release -o .artifacts/web
+          dotnet publish src/Asap.Migration/Asap.Migration.csproj -c Release -r win-x64 --self-contained true -o .artifacts/migration
+          if (Get-ChildItem .artifacts -Recurse -File | Where-Object Name -Match 'pocketbase|node(.exe)?|npm(.cmd)?') {
+            throw 'Published artifacts contain a forbidden PocketBase or Node runtime file.'
+          }
+          if (Get-ChildItem .artifacts -Recurse -File | Where-Object FullName -Match 'dev-email') {
+            throw 'Published or CI artifacts contain temporary development email output.'
+          }
+          if (-not (Test-Path .artifacts/web/Database/Asap.Database.dacpac)) {
+            throw 'Web publish is missing Asap.Database.dacpac.'
+          }
+          if (-not (Test-Path .artifacts/migration/Asap.Migration.exe)) {
+            throw 'Migration publish is not a self-contained win-x64 executable.'
+          }
+          $manifest = Get-Content src/Asap.Web/Frontend/vendor-manifest.json -Raw | ConvertFrom-Json
+          $entries = @($manifest.packages | ForEach-Object { $_.files.psobject.Properties })
+          foreach ($entry in $entries) {
+            $path = Join-Path .artifacts/web/wwwroot $entry.Name
+            if (-not (Test-Path -LiteralPath $path)) {
+              throw "Published frontend asset is missing: $($entry.Name)"
+            }
+            $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $entry.Value) {
+              throw "Published frontend asset hash mismatch: $($entry.Name)"
+            }
+          }

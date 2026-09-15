@@ -1,0 +1,12 @@
+{
+  "users": [
+    {
+      "pocketBaseStaffUserId": "REPLACE_WITH_POCKETBASE_STAFF_ID",
+      "tenantId": "00000000-0000-0000-0000-000000000000",
+      "objectId": "11111111-1111-1111-1111-111111111111",
+      "userPrincipalName": "staff@example.org",
+      "displayName": "Example Staff Member",
+      "notificationEmail": "staff@example.org"
+    }
+  ]
+}

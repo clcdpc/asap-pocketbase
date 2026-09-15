@@ -1,0 +1,72 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <RootNamespace>Asap.Web</RootNamespace>
+    <AssemblyName>Asap.Web</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Clc.Polaris.Api" />
+    <PackageReference Include="Cronos" />
+    <PackageReference Include="Hangfire.AspNetCore" />
+    <PackageReference Include="Hangfire.SqlServer" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" />
+    <PackageReference Include="Microsoft.SqlServer.DacFx" />
+    <PackageReference Include="NLog.Web.AspNetCore" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\Shared\SecurityContract.cs" Link="Infrastructure\Security\SecurityContract.cs" />
+    <Compile Include="..\Shared\LogoImageValidator.cs" Link="Infrastructure\Media\LogoImageValidator.cs" />
+    <ProjectReference Include="..\..\database\Asap.Database\Asap.Database.sqlproj"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrontendSource Include="Frontend\**\*" />
+    <Content Include="..\..\scripts\hangfire\1.8.25\**\*"
+             Link="Database\Hangfire\1.8.25\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Remove=".artifacts\dev-email\**\*" />
+    <None Remove=".artifacts\dev-email\**\*" />
+  </ItemGroup>
+  <Target Name="CopyFrontendToWebRoot"
+          BeforeTargets="Build;Publish">
+    <ItemGroup>
+      <ExpectedFrontendOutput Include="@(FrontendSource->'wwwroot\%(RecursiveDir)%(Filename)%(Extension)')" />
+      <StaleFrontendOutput Include="wwwroot\**\*" Exclude="@(ExpectedFrontendOutput)" />
+      <Content Remove="@(StaleFrontendOutput)" />
+    </ItemGroup>
+    <Delete Files="@(StaleFrontendOutput)" />
+    <Copy SourceFiles="@(FrontendSource)"
+          DestinationFiles="@(FrontendSource->'wwwroot\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="CleanFrontendWebRoot" AfterTargets="Clean">
+    <RemoveDir Directories="$(MSBuildProjectDirectory)\wwwroot" />
+  </Target>
+  <Target Name="CopyDacpacToOutput" AfterTargets="Build">
+    <PropertyGroup>
+      <AsapDacpacSource>$(MSBuildProjectDirectory)\..\..\database\Asap.Database\bin\$(Configuration)\Asap.Database.dacpac</AsapDacpacSource>
+    </PropertyGroup>
+    <Copy SourceFiles="$(AsapDacpacSource)"
+          DestinationFolder="$(OutputPath)Database"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(AsapDacpacSource)')" />
+  </Target>
+  <Target Name="AddDacpacToPublish" BeforeTargets="ComputeFilesToPublish">
+    <PropertyGroup>
+      <AsapDacpacSource>$(MSBuildProjectDirectory)\..\..\database\Asap.Database\bin\$(Configuration)\Asap.Database.dacpac</AsapDacpacSource>
+    </PropertyGroup>
+    <ItemGroup Condition="Exists('$(AsapDacpacSource)')">
+      <ResolvedFileToPublish Include="$(AsapDacpacSource)">
+        <RelativePath>Database\Asap.Database.dacpac</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+  <Target Name="RemoveDevelopmentEmailFromPublish" AfterTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
+                             Condition="$([System.String]::Copy('%(ResolvedFileToPublish.RelativePath)').Contains('dev-email'))" />
+    </ItemGroup>
+  </Target>
+</Project>

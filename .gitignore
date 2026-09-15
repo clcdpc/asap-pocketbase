@@ -14,6 +14,13 @@ db_data/
 # Build/dependency output.
 node_modules/
 dist/
+**/bin/
+**/obj/
+src/Asap.Web/wwwroot/
+src/Asap.Web/Development.local.json
+TestResults/
+.artifacts/
+**/.artifacts/dev-email/
 
 # OS/editor artifacts.
 .DS_Store

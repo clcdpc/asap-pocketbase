@@ -1,0 +1,9 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework Condition="'$(MSBuildProjectExtension)' == '.csproj'">net10.0</TargetFramework>
+    <Nullable Condition="'$(MSBuildProjectExtension)' == '.csproj'">enable</Nullable>
+    <ImplicitUsings Condition="'$(MSBuildProjectExtension)' == '.csproj'">enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+</Project>

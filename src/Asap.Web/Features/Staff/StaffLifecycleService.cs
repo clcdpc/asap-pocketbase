@@ -1,0 +1,704 @@
+using System.Data;
+using System.Text.Json;
+using Asap.Web.Infrastructure.Configuration;
+using Asap.Web.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
+
+namespace Asap.Web.Features.Staff;
+
+public sealed record StaffCreateInput(
+    string? TenantId,
+    string? ObjectId,
+    string? UserPrincipalName,
+    string? DisplayName,
+    string? NotificationEmail,
+    string? Role,
+    int? OrganizationId);
+
+public sealed record StaffMetadataInput(
+    string? Version,
+    string? UserPrincipalName,
+    string? DisplayName,
+    string? NotificationEmail);
+
+public sealed record StaffRoleInput(string? Version, string? Role, int? OrganizationId);
+public sealed record StaffDeactivateInput(string? Version);
+public sealed record StaffRebindInput(
+    string? Version,
+    string? TenantId,
+    string? ObjectId,
+    string? UserPrincipalName,
+    bool Confirmed,
+    string? Reason);
+
+public sealed record StaffLifecycleResult(
+    string Code,
+    StaffUser? User = null,
+    int RulesDeactivated = 0,
+    int OpenTitleClaimsCleared = 0,
+    int OpenAdditionalCopyClaimsCleared = 0);
+public sealed record StaffAssignmentCandidate(long Id, string DisplayName);
+
+public sealed class StaffLifecycleService(
+    IDbContextFactory<AsapDbContext> contextFactory,
+    ExternalConfiguration configuration)
+{
+    private readonly HashSet<Guid> allowedTenantIds = configuration.Authentication.Entra.AllowedTenantIds!
+        .Select(Guid.Parse)
+        .ToHashSet();
+
+    public async Task<IReadOnlyList<StaffUser>> ListAsync(
+        CurrentStaff actor,
+        int? organizationId,
+        CancellationToken cancellationToken)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var query = context.StaffUsers.AsNoTracking();
+        if (actor.Role != "super_admin")
+        {
+            query = query.Where(item => item.OrganizationId == actor.OrganizationId && item.Role != "super_admin");
+        }
+        else if (organizationId.HasValue)
+        {
+            query = query.Where(item => item.OrganizationId == organizationId.Value);
+        }
+
+        return await query
+            .OrderBy(item => item.DisplayName)
+            .ThenBy(item => item.UserPrincipalName)
+            .ThenBy(item => item.Id)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<StaffAssignmentCandidate>> ListAssignmentCandidatesAsync(
+        int libraryOrganizationId,
+        CancellationToken cancellationToken)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var libraryIsActive = await context.Organizations.AsNoTracking().AnyAsync(
+            item => item.Id == libraryOrganizationId && item.Id != 1 && item.IsActive,
+            cancellationToken);
+        if (!libraryIsActive)
+        {
+            return [];
+        }
+
+        var rows = await context.StaffUsers.AsNoTracking()
+            .Where(item => item.IsActive &&
+                           item.EntraTenantId.HasValue &&
+                           item.EntraObjectId.HasValue &&
+                           item.EntraTenantId != Guid.Empty && item.EntraObjectId != Guid.Empty &&
+                           allowedTenantIds.Contains(item.EntraTenantId.Value) &&
+                           (item.Role == "super_admin" && item.OrganizationId == 1 ||
+                            (item.Role == "staff" || item.Role == "admin") &&
+                            item.OrganizationId == libraryOrganizationId))
+            .OrderBy(item => item.DisplayName)
+            .ThenBy(item => item.UserPrincipalName)
+            .ThenBy(item => item.Id)
+            .Select(item => new { item.Id, item.DisplayName, item.UserPrincipalName })
+            .ToListAsync(cancellationToken);
+
+        return rows.Select(item => new StaffAssignmentCandidate(
+                item.Id,
+                item.DisplayName ?? item.UserPrincipalName ?? $"Staff {item.Id}"))
+            .ToArray();
+    }
+
+    public async Task<StaffLifecycleResult> CreateAsync(
+        CurrentStaff actor,
+        StaffCreateInput input,
+        CancellationToken cancellationToken)
+    {
+        if (!TryReadIdentity(input.TenantId, input.ObjectId, input.UserPrincipalName, out var tenantId, out var objectId) ||
+            !TryNormalizeRoleOrganization(input.Role, input.OrganizationId, out var role, out var organizationId) ||
+            !StaffEmail.TryNormalize(input.NotificationEmail, out var notificationEmail))
+        {
+            return new StaffLifecycleResult("invalid_staff_user");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+        if (!await AcquireLifecycleLockAsync(context, cancellationToken))
+        {
+            return new StaffLifecycleResult("staff_invariant_busy");
+        }
+
+        var actorSnapshot = await context.StaffUsers.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.Id == actor.Id, cancellationToken);
+        if (actorSnapshot is null)
+        {
+            return new StaffLifecycleResult("staff_session_invalid");
+        }
+
+        var existingSnapshot = await context.StaffUsers.AsNoTracking().SingleOrDefaultAsync(
+            item => item.EntraTenantId == tenantId && item.EntraObjectId == objectId, cancellationToken);
+        var organizationIds = new[] { actorSnapshot.OrganizationId, organizationId, existingSnapshot?.OrganizationId ?? organizationId }
+            .Distinct().Order().ToArray();
+        var organizations = new Dictionary<int, Organization>();
+        foreach (var id in organizationIds)
+        {
+            var organization = await LockOrganizationAsync(context, id, cancellationToken);
+            if (organization is null)
+            {
+                return new StaffLifecycleResult("organization_not_found");
+            }
+            organizations[id] = organization;
+        }
+
+        var locked = new Dictionary<long, StaffUser>();
+        foreach (var id in new[] { actor.Id, existingSnapshot?.Id ?? actor.Id }.Distinct().Order())
+        {
+            var row = await LockStaffAsync(context, id, cancellationToken);
+            if (row is null) return new StaffLifecycleResult("staff_session_invalid");
+            locked[id] = row;
+        }
+        var lockedActor = locked[actor.Id];
+        if (!CanManage(
+                actor,
+                lockedActor,
+                organizations.GetValueOrDefault(lockedActor?.OrganizationId ?? 0),
+                organizationId,
+                role))
+        {
+            return new StaffLifecycleResult("staff_scope_forbidden");
+        }
+        if (role != "super_admin" && !organizations[organizationId].IsActive)
+        {
+            return new StaffLifecycleResult("organization_inactive");
+        }
+
+        // All provisioning and rebind writers share the lifecycle application lock.
+        var existing = existingSnapshot is null ? null : locked[existingSnapshot.Id];
+        if (existing is not null)
+        {
+            if (existing.IsActive)
+            {
+                return new StaffLifecycleResult("identity_already_exists");
+            }
+            if (!CanManage(
+                    actor,
+                    lockedActor,
+                    organizations.GetValueOrDefault(lockedActor?.OrganizationId ?? 0),
+                    existing.OrganizationId,
+                    existing.Role))
+            {
+                return new StaffLifecycleResult("staff_scope_forbidden");
+            }
+
+            existing.IsActive = true;
+            existing.Role = role;
+            existing.OrganizationId = organizationId;
+            existing.UserPrincipalName = Clean(input.UserPrincipalName);
+            existing.NormalizedUserPrincipalName = NormalizeUpn(input.UserPrincipalName);
+            existing.DisplayName = Clean(input.DisplayName);
+            existing.NotificationEmail = notificationEmail;
+            AddAudit(context, actor, existing.Id, organizationId, "staff_reactivated", new { role });
+            await context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return new StaffLifecycleResult("created", existing);
+        }
+
+        var user = new StaffUser
+        {
+            EntraTenantId = tenantId,
+            EntraObjectId = objectId,
+            UserPrincipalName = Clean(input.UserPrincipalName),
+            NormalizedUserPrincipalName = NormalizeUpn(input.UserPrincipalName),
+            DisplayName = Clean(input.DisplayName),
+            NotificationEmail = notificationEmail,
+            Role = role,
+            OrganizationId = organizationId,
+            IsActive = true
+        };
+        context.StaffUsers.Add(user);
+        await context.SaveChangesAsync(cancellationToken);
+        AddAudit(context, actor, user.Id, organizationId, "staff_created", new { role });
+        await context.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return new StaffLifecycleResult("created", user);
+    }
+
+    public async Task<StaffLifecycleResult> UpdateMetadataAsync(
+        CurrentStaff actor,
+        long targetId,
+        StaffMetadataInput input,
+        CancellationToken cancellationToken)
+    {
+        if (!StaffVersion.TryDecode(input.Version, out var expectedVersion) ||
+            !StaffEmail.TryNormalize(input.NotificationEmail, out var notificationEmail))
+        {
+            return new StaffLifecycleResult("invalid_staff_user");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+        if (!await AcquireLifecycleLockAsync(context, cancellationToken))
+        {
+            return new StaffLifecycleResult("staff_invariant_busy");
+        }
+
+        var targetSnapshot = await context.StaffUsers.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.Id == targetId, cancellationToken);
+        if (targetSnapshot is null)
+        {
+            return new StaffLifecycleResult("not_found");
+        }
+        var actorSnapshot = await context.StaffUsers.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.Id == actor.Id, cancellationToken);
+        if (actorSnapshot is null)
+        {
+            return new StaffLifecycleResult("staff_scope_forbidden");
+        }
+
+        var organizations = new Dictionary<int, Organization>();
+        foreach (var id in new[] { actorSnapshot.OrganizationId, targetSnapshot.OrganizationId }.Distinct().Order())
+        {
+            var organization = await LockOrganizationAsync(context, id, cancellationToken);
+            if (organization is null)
+            {
+                return new StaffLifecycleResult("organization_not_found");
+            }
+            organizations[id] = organization;
+        }
+
+        var locked = new Dictionary<long, StaffUser>();
+        foreach (var id in new[] { actor.Id, targetId }.Distinct().Order())
+        {
+            var row = await LockStaffAsync(context, id, cancellationToken);
+            if (row is null)
+            {
+                return new StaffLifecycleResult(id == targetId ? "not_found" : "staff_scope_forbidden");
+            }
+            locked[id] = row;
+        }
+
+        var lockedActor = locked[actor.Id];
+        var target = locked[targetId];
+        if (!CanManage(
+                actor,
+                lockedActor,
+                organizations.GetValueOrDefault(lockedActor.OrganizationId),
+                target.OrganizationId,
+                target.Role))
+        {
+            return new StaffLifecycleResult("staff_scope_forbidden");
+        }
+        if (!target.RowVersion.SequenceEqual(expectedVersion))
+        {
+            return new StaffLifecycleResult("stale_version");
+        }
+
+        target.UserPrincipalName = Clean(input.UserPrincipalName);
+        target.NormalizedUserPrincipalName = NormalizeUpn(input.UserPrincipalName);
+        target.DisplayName = Clean(input.DisplayName);
+        target.NotificationEmail = notificationEmail;
+        AddAudit(context, actor, target.Id, target.OrganizationId, "staff_metadata_updated", new { });
+        try
+        {
+            await context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return new StaffLifecycleResult("updated", target);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return new StaffLifecycleResult("stale_version");
+        }
+    }
+
+    public Task<StaffLifecycleResult> ChangeRoleAsync(
+        CurrentStaff actor,
+        long targetId,
+        StaffRoleInput input,
+        CancellationToken cancellationToken) =>
+        ChangeLifecycleAsync(actor, targetId, input.Version, null, input.Role, input.OrganizationId, cancellationToken);
+
+    public Task<StaffLifecycleResult> DeactivateAsync(
+        CurrentStaff actor,
+        long targetId,
+        StaffDeactivateInput input,
+        CancellationToken cancellationToken) =>
+        ChangeLifecycleAsync(actor, targetId, input.Version, false, null, null, cancellationToken);
+
+    public async Task<StaffLifecycleResult> RebindAsync(
+        CurrentStaff actor,
+        long targetId,
+        StaffRebindInput input,
+        CancellationToken cancellationToken)
+    {
+        if (!input.Confirmed || string.IsNullOrWhiteSpace(input.Reason) ||
+            !StaffVersion.TryDecode(input.Version, out var expectedVersion) ||
+            !TryReadIdentity(input.TenantId, input.ObjectId, input.UserPrincipalName, out var tenantId, out var objectId))
+        {
+            return new StaffLifecycleResult("rebind_not_confirmed");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+        if (!await AcquireLifecycleLockAsync(context, cancellationToken))
+        {
+            return new StaffLifecycleResult("staff_invariant_busy");
+        }
+
+        var actorSnapshot = await context.StaffUsers.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.Id == actor.Id, cancellationToken);
+        if (actorSnapshot is null)
+        {
+            return new StaffLifecycleResult("staff_scope_forbidden");
+        }
+        var targetSnapshot = await context.StaffUsers.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.Id == targetId, cancellationToken);
+        if (targetSnapshot is null)
+        {
+            return new StaffLifecycleResult("not_found");
+        }
+        var organizations = new Dictionary<int, Organization>();
+        foreach (var organizationId in new[] { actorSnapshot.OrganizationId, targetSnapshot.OrganizationId }.Distinct().Order())
+        {
+            var organization = await LockOrganizationAsync(context, organizationId, cancellationToken);
+            if (organization is null)
+            {
+                return new StaffLifecycleResult("organization_not_found");
+            }
+            organizations[organizationId] = organization;
+        }
+
+        var locked = new Dictionary<long, StaffUser>();
+        foreach (var id in new[] { actor.Id, targetId }.Distinct().Order())
+        {
+            var row = await LockStaffAsync(context, id, cancellationToken);
+            if (row is null)
+            {
+                return new StaffLifecycleResult("not_found");
+            }
+            locked[id] = row;
+        }
+        if (!CanManage(
+                actor,
+                locked[actor.Id],
+                organizations.GetValueOrDefault(locked[actor.Id].OrganizationId),
+                locked[targetId].OrganizationId,
+                locked[targetId].Role))
+        {
+            return new StaffLifecycleResult("staff_scope_forbidden");
+        }
+
+        var duplicate = await context.StaffUsers.AsNoTracking().AnyAsync(
+            item => item.Id != targetId &&
+                    item.EntraTenantId == tenantId && item.EntraObjectId == objectId,
+            cancellationToken);
+        if (duplicate)
+        {
+            return new StaffLifecycleResult("identity_already_exists");
+        }
+
+        var target = locked[targetId];
+        if (!target.RowVersion.SequenceEqual(expectedVersion))
+        {
+            return new StaffLifecycleResult("stale_version");
+        }
+        var oldTenantId = target.EntraTenantId;
+        var oldObjectId = target.EntraObjectId;
+        target.EntraTenantId = tenantId;
+        target.EntraObjectId = objectId;
+        target.UserPrincipalName = Clean(input.UserPrincipalName);
+        target.NormalizedUserPrincipalName = NormalizeUpn(input.UserPrincipalName);
+        AddAudit(context, actor, target.Id, target.OrganizationId, "staff_identity_rebound", new
+        {
+            oldTenantId,
+            oldObjectId,
+            newTenantId = tenantId,
+            newObjectId = objectId,
+            reason = input.Reason!.Trim()
+        });
+        await context.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return new StaffLifecycleResult("updated", target);
+    }
+
+    private async Task<StaffLifecycleResult> ChangeLifecycleAsync(
+        CurrentStaff actor,
+        long targetId,
+        string? encodedVersion,
+        bool? requestedActive,
+        string? requestedRole,
+        int? requestedOrganizationId,
+        CancellationToken cancellationToken)
+    {
+        if (!StaffVersion.TryDecode(encodedVersion, out var expectedVersion))
+        {
+            return new StaffLifecycleResult("invalid_version");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+        if (!await AcquireLifecycleLockAsync(context, cancellationToken))
+        {
+            return new StaffLifecycleResult("staff_invariant_busy");
+        }
+
+        var actorSnapshot = await context.StaffUsers.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.Id == actor.Id, cancellationToken);
+        if (actorSnapshot is null)
+        {
+            return new StaffLifecycleResult("staff_scope_forbidden");
+        }
+        var targetSnapshot = await context.StaffUsers.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.Id == targetId, cancellationToken);
+        if (targetSnapshot is null)
+        {
+            return new StaffLifecycleResult("not_found");
+        }
+        var role = requestedRole is null ? targetSnapshot.Role : requestedRole.Trim().ToLowerInvariant();
+        var organizationId = requestedOrganizationId ??
+            (role == "super_admin" ? 1 : targetSnapshot.OrganizationId);
+        if (!TryNormalizeRoleOrganization(role, organizationId, out role, out organizationId))
+        {
+            return new StaffLifecycleResult("invalid_role_scope");
+        }
+
+        var organizations = new Dictionary<int, Organization>();
+        foreach (var id in new[] { actorSnapshot.OrganizationId, targetSnapshot.OrganizationId, organizationId }.Distinct().Order())
+        {
+            var organization = await LockOrganizationAsync(context, id, cancellationToken);
+            if (organization is null)
+            {
+                return new StaffLifecycleResult("organization_not_found");
+            }
+            organizations[id] = organization;
+        }
+
+        var locked = new Dictionary<long, StaffUser>();
+        foreach (var id in new[] { actor.Id, targetId }.Distinct().Order())
+        {
+            var row = await LockStaffAsync(context, id, cancellationToken);
+            if (row is null)
+            {
+                return new StaffLifecycleResult("not_found");
+            }
+            locked[id] = row;
+        }
+        var lockedActor = locked[actor.Id];
+        var target = locked[targetId];
+        if (!CanManage(
+                actor,
+                lockedActor,
+                organizations.GetValueOrDefault(lockedActor.OrganizationId),
+                target.OrganizationId,
+                target.Role) ||
+            !CanManage(actor, lockedActor, organizations.GetValueOrDefault(lockedActor.OrganizationId), organizationId, role))
+        {
+            return new StaffLifecycleResult("staff_scope_forbidden");
+        }
+        if (!target.RowVersion.SequenceEqual(expectedVersion))
+        {
+            return new StaffLifecycleResult("stale_version");
+        }
+
+        var newActive = requestedActive ?? target.IsActive;
+        if (newActive && role != "super_admin" && !organizations[organizationId].IsActive)
+        {
+            return new StaffLifecycleResult("organization_inactive");
+        }
+
+        var targetWillBeUsableSuperAdmin = newActive && role == "super_admin" && organizationId == 1 &&
+                                           target.EntraTenantId.HasValue &&
+                                           target.EntraObjectId.HasValue &&
+                                           target.EntraTenantId != Guid.Empty && target.EntraObjectId != Guid.Empty &&
+                                           allowedTenantIds.Contains(target.EntraTenantId.Value);
+        var otherUsableSuperAdmins = await context.StaffUsers.AsNoTracking().CountAsync(
+            item => item.Id != target.Id && item.IsActive && item.Role == "super_admin" &&
+                    item.OrganizationId == 1 && item.EntraTenantId.HasValue && item.EntraObjectId.HasValue &&
+                    item.EntraTenantId != Guid.Empty && item.EntraObjectId != Guid.Empty &&
+                    allowedTenantIds.Contains(item.EntraTenantId.Value),
+            cancellationToken);
+        if (!targetWillBeUsableSuperAdmin && otherUsableSuperAdmins == 0)
+        {
+            return new StaffLifecycleResult("active_super_admin_required");
+        }
+
+        var scopeContracts = target.IsActive &&
+                             (!newActive || target.Role == "super_admin" && role != "super_admin" ||
+                              target.Role != "super_admin" &&
+                              (role == "super_admin" ? false : target.OrganizationId != organizationId));
+        var rulesDeactivated = 0;
+        var titleClaimsCleared = 0;
+        var additionalCopyClaimsCleared = 0;
+        if (scopeContracts)
+        {
+            var cleanupUtc = DateTime.UtcNow;
+            var rules = await context.FormatAutoClaimRules
+                .Where(item => item.IsActive && item.StaffUserId == target.Id &&
+                               (!newActive || role != "super_admin" && item.LibraryOrganizationId != organizationId))
+                .OrderBy(item => item.Id)
+                .ToListAsync(cancellationToken);
+            foreach (var rule in rules)
+            {
+                rule.IsActive = false;
+                rule.DeactivatedUtc = cleanupUtc;
+            }
+            rulesDeactivated = rules.Count;
+
+            var requests = !newActive
+                ? await context.TitleRequests.FromSqlInterpolated(
+                        $"SELECT * FROM [asap].[TitleRequest] WITH (UPDLOCK,HOLDLOCK) WHERE [ClaimedByStaffUserId] = {target.Id} AND [Status] <> N'closed' ORDER BY [Id]")
+                    .ToListAsync(cancellationToken)
+                : await context.TitleRequests.FromSqlInterpolated(
+                        $"SELECT * FROM [asap].[TitleRequest] WITH (UPDLOCK,HOLDLOCK) WHERE [ClaimedByStaffUserId] = {target.Id} AND [Status] <> N'closed' AND [LibraryOrganizationId] <> {organizationId} ORDER BY [Id]")
+                    .ToListAsync(cancellationToken);
+            foreach (var request in requests)
+            {
+                request.ClaimedByStaffUserId = null;
+                request.ClaimedByDisplayName = null;
+                request.ClaimedAtUtc = null;
+                request.ClaimType = null;
+                request.ClaimRuleId = null;
+                request.UpdatedUtc = cleanupUtc;
+                context.TitleRequestEvents.Add(new TitleRequestEvent
+                {
+                    TitleRequestId = request.Id,
+                    EventType = "claim_cleared",
+                    Status = request.Status,
+                    ActorType = "system",
+                    StaffUserId = actor.Id,
+                    ActorName = actor.DisplayName,
+                    Message = "Claim cleared because the assignee's staff access changed.",
+                    MetadataJson = JsonSerializer.Serialize(new { reason = "staff_scope_contracted", targetStaffUserId = target.Id }),
+                    CreatedUtc = cleanupUtc
+                });
+            }
+            titleClaimsCleared = requests.Count;
+
+            var additionalCopies = !newActive
+                ? await context.AdditionalCopyRequests.FromSqlInterpolated(
+                        $"SELECT * FROM [asap].[AdditionalCopyRequest] WITH (UPDLOCK,HOLDLOCK) WHERE [ClaimedByStaffUserId] = {target.Id} AND [Status] = N'open' ORDER BY [Id]")
+                    .ToListAsync(cancellationToken)
+                : await context.AdditionalCopyRequests.FromSqlInterpolated(
+                        $"SELECT * FROM [asap].[AdditionalCopyRequest] WITH (UPDLOCK,HOLDLOCK) WHERE [ClaimedByStaffUserId] = {target.Id} AND [Status] = N'open' AND [LibraryOrganizationId] <> {organizationId} ORDER BY [Id]")
+                    .ToListAsync(cancellationToken);
+            foreach (var request in additionalCopies)
+            {
+                request.Notes = AdditionalCopyService.AppendNote(
+                    request.Notes,
+                    AdditionalCopyService.LifecycleClaimNote(request, cleanupUtc));
+                request.ClaimedByStaffUserId = null;
+                request.ClaimedByDisplayName = null;
+                request.ClaimedAtUtc = null;
+                request.ClaimType = null;
+                request.ClaimRuleId = null;
+                request.UpdatedUtc = cleanupUtc;
+            }
+            additionalCopyClaimsCleared = additionalCopies.Count;
+        }
+
+        target.IsActive = newActive;
+        target.Role = role;
+        target.OrganizationId = organizationId;
+        AddAudit(context, actor, target.Id, organizationId, requestedActive == false ? "staff_deactivated" : "staff_lifecycle_updated", new
+        {
+            role,
+            rulesDeactivated,
+            openTitleClaimsCleared = titleClaimsCleared,
+            openAdditionalCopyClaimsCleared = additionalCopyClaimsCleared
+        });
+        await context.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return new StaffLifecycleResult(
+            "updated",
+            target,
+            rulesDeactivated,
+            titleClaimsCleared,
+            additionalCopyClaimsCleared);
+    }
+
+    private bool CanManage(
+        CurrentStaff ticketActor,
+        StaffUser? lockedActor,
+        Organization? lockedActorOrganization,
+        int targetOrganizationId,
+        string targetRole) =>
+        lockedActor is not null && lockedActor.IsActive &&
+        lockedActorOrganization is not null && lockedActorOrganization.IsActive &&
+        lockedActorOrganization.Id == lockedActor.OrganizationId &&
+        allowedTenantIds.Contains(ticketActor.EntraTenantId) &&
+        lockedActor.EntraTenantId == ticketActor.EntraTenantId &&
+        lockedActor.EntraObjectId == ticketActor.EntraObjectId &&
+        ticketActor.EntraTenantId != Guid.Empty && ticketActor.EntraObjectId != Guid.Empty &&
+        (lockedActor.Role == "super_admin" && lockedActor.OrganizationId == 1 ||
+         lockedActor.Role == "admin" && lockedActor.OrganizationId > 1) &&
+        (lockedActor.Role == "super_admin" ||
+         lockedActor.OrganizationId == targetOrganizationId && targetRole != "super_admin");
+
+    private static bool TryNormalizeRoleOrganization(
+        string? roleValue,
+        int? organizationIdValue,
+        out string role,
+        out int organizationId)
+    {
+        role = roleValue?.Trim().ToLowerInvariant() ?? "staff";
+        organizationId = organizationIdValue ?? 0;
+        if (role == "super_admin")
+        {
+            organizationId = 1;
+            return true;
+        }
+        return role is "staff" or "admin" && organizationId > 1;
+    }
+
+    private static async Task<bool> AcquireLifecycleLockAsync(
+        AsapDbContext context,
+        CancellationToken cancellationToken)
+    {
+        var connection = context.Database.GetDbConnection();
+        await using var command = connection.CreateCommand();
+        command.Transaction = context.Database.CurrentTransaction!.GetDbTransaction();
+        command.CommandText =
+            "DECLARE @result int; EXEC @result = sys.sp_getapplock @Resource=N'ASAP:ActiveSuperAdminInvariant', @LockMode=N'Exclusive', @LockOwner=N'Transaction', @LockTimeout=10000; SELECT @result;";
+        return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken)) >= 0;
+    }
+
+    private static Task<Organization?> LockOrganizationAsync(
+        AsapDbContext context,
+        int id,
+        CancellationToken cancellationToken) =>
+        context.Organizations.FromSqlInterpolated(
+                $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {id}")
+            .SingleOrDefaultAsync(cancellationToken);
+
+    private static Task<StaffUser?> LockStaffAsync(
+        AsapDbContext context,
+        long id,
+        CancellationToken cancellationToken) =>
+        context.StaffUsers.FromSqlInterpolated(
+                $"SELECT * FROM [asap].[StaffUser] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {id}")
+            .SingleOrDefaultAsync(cancellationToken);
+
+    private static void AddAudit(
+        AsapDbContext context,
+        CurrentStaff actor,
+        long targetId,
+        int organizationId,
+        string action,
+        object details) =>
+        context.AdministrativeAudits.Add(new AdministrativeAudit
+        {
+            ActorStaffUserId = actor.Id,
+            ActorName = actor.DisplayName,
+            OrganizationId = organizationId,
+            Action = action,
+            TargetType = "StaffUser",
+            TargetId = targetId.ToString(),
+            DetailsJson = JsonSerializer.Serialize(details),
+            CreatedUtc = DateTime.UtcNow
+        });
+
+    private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string? NormalizeUpn(string? value) => Clean(value)?.ToUpperInvariant();
+
+    private bool TryReadIdentity(string? tenant, string? subject, string? label, out Guid tenantId, out Guid objectId)
+    {
+        var validTenant = Guid.TryParse(tenant, out tenantId) && tenantId != Guid.Empty && allowedTenantIds.Contains(tenantId);
+        var validObject = Guid.TryParse(subject, out objectId) && objectId != Guid.Empty;
+        return validTenant && validObject && Clean(label) is { Length: <= 320 };
+    }
+}
