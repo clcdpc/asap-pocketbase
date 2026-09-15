@@ -157,6 +157,8 @@ Beginning with Slice 7, the slice integration PR is the durable orchestration su
 
 The PR body describes the objective, base/branch topology, authoritative packet/contracts, package plan if any, major non-goals and canonical state-comment link once available. It answers what the PR is. Edit the state comment for current progress; do not continuously rewrite the body as an execution journal. Events explain material transitions, review threads record findings/verification, and Actions record automated gates. Keep final draft PR #264's current summary synchronized; detailed historical execution stays in repository records.
 
+`PORT-STATUS.md` has one authoritative current status/outcome summary near the top. Chronological checkpoint sections preserve detailed historical execution/evidence; mutable historical status must be past-tense or explicitly checkpoint-qualified. Never leave unqualified historical phrases such as `Slice N has not started`, `remains pending` or `next action is ...`, or maintain a second stale slice-status table inside the chronology. PR #264 remains the concise current external summary.
+
 ### Canonical current-state comment
 
 Bootstrap creates exactly one comment marked `<!-- asap-supervisor-state:v1 -->`; record its comment ID/link in the slice PR body and edit that same comment in place. Locate it before creating anything on restart. Duplicate candidate state comments require reconciliation, not another comment or a guess at which is canonical.
@@ -187,7 +189,7 @@ next: Append SUPERVISOR_STARTED
 astra_max_escalation: none
 ```
 
-`status` is `RUNNING | BLOCKED | ACCEPTED`; `phase` is one of the existing state-machine phases or a clearly named package substate. `sequence` is the latest event sequence projected, not a poll/commit count. `fix_cycle` preserves the full-slice count out of three; package events identify their separate package count and cannot reset the full-slice counter. `terra_status` is `pending | running | findings | clean`; `ci_status` is `pending | running | success | failure` for `ci_run` at its exact SHA. A canceled, timed-out or otherwise unsuccessful completed run is `failure`, with its actual conclusion in the relevant event. `astra_max_escalation` is optional (`none | active | resolved`). Use full exact SHAs and null for unestablished evidence. `unresolved_findings` counts distinct open substantive finding IDs; link their durable reviews/threads, including summary IDs, rather than copying findings into the projection.
+`status` is `RUNNING | BLOCKED | ACCEPTED`; `phase` is one of the existing state-machine phases or a clearly named package substate. `sequence` is the latest event sequence projected, not a poll/commit count. `fix_cycle` preserves the full-slice count out of three; package events identify their separate package count and cannot reset the full-slice counter. `terra_status` is `pending | running | findings | clean`; `ci_status` is `pending | running | success | failure` for `ci_run` at its exact SHA. A canceled, timed-out or otherwise unsuccessful completed run is `failure`, with its actual conclusion in the relevant event. `astra_max_escalation` is optional (`none | active | resolved`). Use full exact SHAs and null for unestablished evidence. `unresolved_findings` counts substantive finding IDs without an independent Terra resolved disposition, not blindly GitHub's raw unresolved-thread count. Link the actual durable reviews/dispositions, including summary IDs, rather than copying findings into the projection. The projection/event may record `thread_resolution: native | disposition_fallback`; record unavailable native resolution with the fallback disposition reference under the contract below.
 
 ### Append-only event journal
 
@@ -235,7 +237,7 @@ When sources disagree, the authority order is:
 
 1. Actual Git refs, commit ancestry and PR base/head/merge state.
 2. Actual Actions/check results for the exact SHA.
-3. Actual GitHub reviews and unresolved review threads, with explicit summary-finding dispositions.
+3. Actual GitHub reviews and Terra finding dispositions: native thread resolution is preferred when available; otherwise the durable independent Terra `RESOLVED` reply on the same finding/fix SHA is resolution evidence, as are explicit summary-finding dispositions.
 4. Append-only supervisor events.
 5. Mutable supervisor-state projection.
 6. Worker receipt prose or model-local state.
@@ -247,7 +249,7 @@ A fresh Astra High context must resume without the old supervisor conversation:
 1. Read slice PR metadata/body and its canonical state-comment reference.
 2. Read the canonical projection; inspect only newer or checkpoint-relevant events as necessary.
 3. Inspect current branch/base/head/merge state and exact ancestry.
-4. Inspect unresolved Terra threads/summary finding IDs and exact reviewed SHA.
+4. Reconstruct substantive resolution from stable Terra finding IDs, actual native resolution/disposition replies and exact verified fix/reviewed SHAs. Inspect any technically open inline/summary finding. Never infer resolution from Luna replies, supervisor events/counters or model-local memory; use the documented capability fallback when the native UI bit could not be toggled.
 5. Inspect relevant current Actions/check state for the exact candidate/milestone.
 6. Reconcile discrepancies with only necessary evidence, append `STATE_RECONCILED`, and update the projection. If safe disposition remains unclear, use bounded Max escalation where appropriate; if it cannot be reconciled safely, record `HARD_STOP`, project BLOCKED and stop.
 7. Resume at the first incomplete state-machine transition, preserving fix-cycle counts and completed package/review evidence.
@@ -266,11 +268,17 @@ Never publish worker transcripts, full test output, source code/full diffs, migr
 
 Where practical, Terra creates real inline GitHub review threads against relevant changed lines, with stable IDs such as `S7-P1-1` or `S7-P2-2`, severity, concise problem, violated contract and required correction. Tie each review to the exact candidate SHA. Terra reviews/reports/verifies and never fixes code.
 
-Luna fixes each confirmed finding, changes/adds required tests, and replies in its thread with the fix SHA, concise resolution and relevant validation. Luna does not resolve Terra's substantive threads. Terra verifies the actual fix, replies with concise disposition and resolves its own substantive thread when satisfied. A fresh independent Terra context may do this; model-conversation identity is not required.
+Luna fixes each confirmed finding, changes/adds required tests, and replies in its thread with the fix SHA, concise resolution and relevant validation. Luna does not resolve Terra's substantive findings. A fresh independent Terra context may verify/dispose of them; model-conversation identity is not required.
+
+Preferred native path: Terra independently verifies the actual fix, replies with its disposition, then resolves the GitHub thread using the available authenticated capability. Only after that independent resolved disposition is the finding ID removed from `unresolved_findings`.
+
+Capability fallback: when a substantive inline thread exists but authenticated tooling cannot toggle native thread resolution, Terra still independently verifies the actual fix and posts a final durable reply on that same thread containing the stable finding ID, exact verified fix/reviewed SHA, explicit disposition `RESOLVED`, and concise verification result. Record that native thread-resolution capability was unavailable and link this disposition in the existing event/projection (`thread_resolution: disposition_fallback` where useful). The supervisor then records that ID as substantively resolved; it must not claim the GitHub thread's UI state was resolved. No elaborate capability negotiation is required.
+
+The fallback never permits Luna self-resolution, Astra waiver, missing Terra re-review, ambiguous disposition, an unresolved technical issue, or a finding disappearing through a counter decrement. If a durable Terra reply cannot be posted, the fallback is not established and acceptance remains blocked. A GitHub UI bit left unresolved solely because mutation capability was unavailable is not itself a substantive finding.
 
 For cross-file/architectural findings with no meaningful changed line, use a stable ID in the Terra review summary. The supervisor counts it in `unresolved_findings`, Luna's fix receipt names it, and Terra's re-review explicitly marks it resolved. Do not attach findings to arbitrary lines. If inline publication is unavailable, use this durable summary form with the exact SHA and source reference; do not leave substantive findings only in a worker conversation.
 
-Before short Astra High acceptance, require zero unresolved substantive Terra inline threads AND zero unresolved substantive summary IDs, the exact reviewed SHA matching expected reviewed bytes, and review state agreeing with the journal. Nit/style comments block only if classified substantive by Terra. GitHub review state supplements the independent-review contract; it does not replace it. Astra Max acceptance consultation requires a concrete unresolved invariant and returns control to High.
+Before short Astra High acceptance, require zero substantive finding IDs without independent Terra resolved disposition, across inline threads AND summary findings, the exact reviewed SHA matching expected reviewed bytes, and actual review/disposition state agreeing with the journal. Use native resolution when available. Under the capability fallback, EVERY substantive finding must have explicit independent Terra `RESOLVED` disposition and no technical finding may remain open; an unresolved UI bit is permitted only for the documented capability limitation. Nit/style comments block only if classified substantive by Terra. GitHub review/disposition evidence supplements the independent-review contract; it does not replace it. Astra Max acceptance consultation requires a concrete unresolved invariant and returns control to High.
 
 ### Automatic Codex GitHub review
 
@@ -284,7 +292,7 @@ If a future temporary PR unexpectedly triggers automatic review, detect it, do n
 
 Distinguish the historical accepted slice milestone, the current authorized product/integration baseline (including accepted independently reviewed corrections), and a later documentation-only policy head. No policy commit creates a new accepted product slice.
 
-For Slice 7, preserve historical Slice 6 `7ba59421176ede99ba48488be6bc81010e60f65c`, reviewed correction `04f538ef1a04be33b31d5dbdc3a5c1751b163ee4`, its merge `c0cde6fb744e53c1a72a63f8cb58124e43255b4f`, and authorized product/integration baseline `d607723e846f633ebe206163f6c232dd79566d6f` (CI `34988112346` succeeded). The single final commit of this policy task is the docs-policy branch point, recorded with its exact-SHA CI in PR #264 after push; it cannot embed its own SHA.
+For Slice 7, preserve historical Slice 6 `7ba59421176ede99ba48488be6bc81010e60f65c`, reviewed correction `04f538ef1a04be33b31d5dbdc3a5c1751b163ee4`, its merge `c0cde6fb744e53c1a72a63f8cb58124e43255b4f`, and authorized product/integration baseline `d607723e846f633ebe206163f6c232dd79566d6f` (CI `34988112346` succeeded). The latest authorized documentation-policy/cleanup head is the branch point, recorded with its successful exact-SHA CI in PR #264 after push; it cannot embed its own SHA.
 
 At future Slice 7 bootstrap, Astra High must:
 
@@ -386,7 +394,7 @@ An explicitly authorized supervisor run includes normal worker dispatch, fixes, 
 2. For each coherent package, normally sequentially: branch from the current slice branch; dispatch bounded Luna Max; run package-appropriate validation; commit/push; open/update its PR into the slice branch; dispatch independent Terra detailed package review; route confirmed fixes to Luna and focused re-review to Terra; merge the clean package. The supervisor verifies compact receipts at each checkpoint. Dependent packages start from its updated state; parallel packages require actual independence.
 3. Dispatch bounded Luna Max for remaining integration/glue if needed. Luna completes every slice requirement and runs the FULL existing integrated slice pre-review matrix before pushing the final candidate and returning its receipt. Package gates never replace this matrix.
 4. Dispatch fresh Terra High holistic review from the recorded technical review base to the exact final slice branch SHA. Review the complete slice delta, distinguishing policy bytes and already independently reviewed prior corrections. Route fixes and appropriate re-review automatically under the safety cap below.
-5. Perform short Astra High acceptance on the clean reviewed SHA and current receipts, including the unresolved-thread/summary-finding gate. Implementation changes after review require affected validation/re-review; allowed acceptance/status documentation alone does not require another full code review.
+5. Perform short Astra High acceptance on the clean reviewed SHA and current receipts, including the substantive-finding disposition gate above. Implementation changes after review require affected validation/re-review; allowed acceptance/status documentation alone does not require another full code review.
 6. Merge the reviewed slice PR into `codex/csharp-port`, complete ACCEPTANCE_RECORD and EXACT_SHA_CI as below, then mark ACCEPTED only on successful exact-milestone CI. Stop unless cross-slice continuation is explicitly authorized.
 
 If integration state or reviewed implementation changes unexpectedly before merge, pause and reconcile under the authority hierarchy. Resume only if the expected reviewed bytes and all gates are established; otherwise HARD STOP with the actual base/diff/evidence mismatch. Do not accept an unreviewed merge or create child packages merely to exercise this machinery.
@@ -397,7 +405,7 @@ If integration state or reviewed implementation changes unexpectedly before merg
 2. Dispatch one bounded Luna Max task for the complete slice, tests, ordinary debugging and full integrated pre-review matrix. Luna pushes the exact review candidate and returns a compact receipt.
 3. Verify receipt/state and dispatch fresh Terra High full-slice review, including detailed implementation and holistic review.
 4. On confirmed substantive findings, dispatch bounded Luna Max with only those findings and necessary context; run directly affected validation, expanding when evidence is invalidated; dispatch focused Terra High re-review or required full re-review. Continue automatically within the cap. On a clean result, proceed.
-5. Perform short Astra High acceptance including the unresolved-thread/summary-finding gate, merge the slice PR into `codex/csharp-port`, record acceptance/status documentation, commit if required, and push.
+5. Perform short Astra High acceptance including the substantive-finding disposition gate above, merge the slice PR into `codex/csharp-port`, record acceptance/status documentation, commit if required, and push.
 6. Wait/poll for CI on the exact candidate accepted milestone SHA. On success, mark accepted in PR metadata and stop; on failure follow the hard-stop rules. The user does not launch each phase individually.
 
 ### Acceptance record and exact-SHA CI
