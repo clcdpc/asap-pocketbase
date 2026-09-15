@@ -1,35 +1,39 @@
 # Slice 6 Thin Autonomous Supervisor Handoff
 
-## Implementation Status - 2026-09-15
+## Implementation Status - 2026-09-15, Fix/Re-review Cycle 1
 
-Slice 6 Analytics implementation is complete and ready for independent review;
-it is not accepted. The exact review candidate SHA is recorded in PR #265 and
-the local candidate receipt after push because a commit cannot embed its own
-hash. The candidate started from `e250ef1f40e8cae79d3761d77330a8560d799d3b`
-and is linked to `.git/asap-slice-06-candidate-20260915-final4.json` and
-`.artifacts/slice-06-candidate-20260915-final4/artifact-manifest.json`.
+Full Terra review confirmed S6-P2-1. For an in-range first literal
+`hold_placed` event earlier than request creation, `heldRequests` included the
+row while `AverageDaysToHold` omitted it. The aggregate now retains the row as
+`0.0`; the existing compact real-SQL fixture sets `t2` creation to
+`2026-09-06` after its first `2026-09-05` hold and asserts the corrected mean
+`1.5` for the two-row held population.
 
-The implemented surfaces are the scoped server-side SQL aggregation endpoint
-and DTO, staff Analytics navigation/view, scope/range/auth stale-load guards,
-real-SQL and frontend regressions, the dedicated two-library collision fixture,
-and the published/native verification wrappers. Complete local gates are
-recorded in the candidate, focused Analytics, browser, native and Node receipts.
-The earlier Grid.js focus failure was an ordinary isolated-JSDOM teardown race;
-the harness now drains scheduled Grid.js work before teardown. The candidate
-suite contains no retry-based masking. Release .NET evidence remains the
-successful 305/305 report whose application inputs were unchanged by that
-Node-only harness correction.
+The fix started at `15b750c4502228e715d0f586bf0e0003f08cd07d`. Renewed evidence:
 
-Evidence paths: `TestResults/analytics-focused-7/analytics.trx`,
-`TestResults/node-full-final.log`,
-`TestResults/staff-browser-analytics/browser.trx`,
-`.artifacts/browser/staff-0550dd9acaa84370a32954809c003011/staff-browser-results.json`,
-`.git/asap-slice-06-final-fixtures-20260915-final5/receipt.json`,
-`.git/asap-slice-06-final-browsers-20260915-final4/receipt.json`, and
-`.git/asap-slice-06-source-linkage-final4.json`.
+- Release build: `.artifacts/slice-06-fix1-20260915/validation/release-build.log`,
+  `0 Warning(s)`, `0 Error(s)`.
+- Focused real-SQL: `TestResults/analytics-fix1/analytics-fix1.trx`, `1/1`,
+  `0` failed, `0` skipped; TRX SHA256
+  `9dbb9116169d32f3d54814f620d2dcfacfd353969d91e76f12d90eda9ffffcdf`.
+- Rebuilt Kestrel browser journey: `TestResults/staff-browser-analytics-fix1/staff-browser-analytics-fix1.trx`, `1/1`, `0` failed, `0` skipped; 20 states
+  (`12` desktop/`8` mobile); TRX SHA256
+  `27a398e3e613fc3613af1e2702ef6847105419bfc970d7733fe00ba2fafdbe32`.
+- Renewed Web artifact/linkage: `.artifacts/slice-06-fix1-20260915/artifact-manifest.json`,
+  `.git/asap-slice-06-fix1-20260915.json`, and
+  `.git/asap-slice-06-source-linkage-fix1-20260915.json`.
 
-PR #265 remains draft, PR #264 remains draft, Slice 6 is not accepted, and
-Terra has not run. Next state: full independent Terra review.
+The tested and published Web assembly is SHA256
+`9fad433ea622d5a46a059dfb7b976b7a431cc231c43ec3f612e69db730a03fc7`; the
+unchanged DACPAC is SHA256
+`269a3710fb3a986cca89e957e154a8b225b8c03a52354d345dbfd5d98e475743`.
+The prior complete Release/Node/native/migration/schema/frontend/axe receipts
+remain preserved and are not relabeled as fresh for this backend-byte change.
+
+The exact fixed pushed SHA is recorded in PR #265 and the local fix receipt
+after push because a commit cannot embed its own hash. PR #265 and PR #264
+remain draft, Slice 6 remains unaccepted, and focused Terra re-review is
+pending.
 
 ## Checkpoint
 

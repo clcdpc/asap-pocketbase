@@ -36,7 +36,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(HttpStatusCode.OK, selected.StatusCode, await selected.Content.ReadAsStringAsync());
             using var selectedBody = JsonDocument.Parse(await selected.Content.ReadAsStringAsync());
             AssertAnalyticsScope(selectedBody.RootElement, organizationA, "library");
-            AssertAnalyticsSummary(selectedBody.RootElement, new(8, 8, 3, 2, 2.5));
+            AssertAnalyticsSummary(selectedBody.RootElement, new(8, 8, 3, 2, 1.5));
             AssertStageCounts(selectedBody.RootElement, new
             {
                 suggestion = 4L,
@@ -72,7 +72,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(HttpStatusCode.OK, forged.StatusCode, await forged.Content.ReadAsStringAsync());
             using var forgedBody = JsonDocument.Parse(await forged.Content.ReadAsStringAsync());
             AssertAnalyticsScope(forgedBody.RootElement, organizationA, "library");
-            AssertAnalyticsSummary(forgedBody.RootElement, new(8, 8, 3, 2, 2.5));
+            AssertAnalyticsSummary(forgedBody.RootElement, new(8, 8, 3, 2, 1.5));
             Assert.AreEqual(0, forgedBody.RootElement.GetProperty("availableLibraries").GetArrayLength());
 
             using var invalid = await superClient.GetAsync("/api/asap/staff/analytics?scope=999999999&range=last30");
@@ -154,7 +154,8 @@ public sealed partial class PatronJourneyTests
             SET @t1 = SCOPE_IDENTITY();
             INSERT INTO [asap].[TitleRequest]
                 ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [CloseReason], [CreatedUtc], [UpdatedUtc])
-            VALUES (@organizationA, N'analytics-a-2-' + @suffix, N'Analytics A T2 ' + @suffix, 0, @formatId, N'closed', N'rejected', '2026-09-03T12:00:00', '2026-09-10T12:00:00');
+            -- S6-P2-1: the first in-range literal hold precedes request creation and contributes 0.0 days.
+            VALUES (@organizationA, N'analytics-a-2-' + @suffix, N'Analytics A T2 ' + @suffix, 0, @formatId, N'closed', N'rejected', '2026-09-06T12:00:00', '2026-09-10T12:00:00');
             SET @t2 = SCOPE_IDENTITY();
             INSERT INTO [asap].[TitleRequest]
                 ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [CloseReason], [CreatedUtc], [UpdatedUtc])

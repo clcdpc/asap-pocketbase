@@ -154,8 +154,11 @@ public sealed class AnalyticsService(
             COALESCE(AVG(CASE
                 WHEN h.[FirstHoldUtc] >= @rangeStartUtc
                  AND h.[FirstHoldUtc] < @rangeEndExclusiveUtc
-                 AND h.[FirstHoldUtc] >= r.[CreatedUtc]
-                THEN CONVERT(float, DATEDIFF_BIG(NANOSECOND, r.[CreatedUtc], h.[FirstHoldUtc])) / 86400000000000.0
+                THEN CASE
+                    WHEN h.[FirstHoldUtc] >= r.[CreatedUtc]
+                    THEN CONVERT(float, DATEDIFF_BIG(NANOSECOND, r.[CreatedUtc], h.[FirstHoldUtc])) / 86400000000000.0
+                    ELSE CONVERT(float, 0.0)
+                END
                 ELSE NULL
             END), 0.0) AS [AverageDaysToHold]
         FROM ScopedRequests AS r

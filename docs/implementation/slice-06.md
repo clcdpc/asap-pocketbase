@@ -1,12 +1,14 @@
 # Slice 6: Analytics
 
-## Implementation Status - 2026-09-15
+## Implementation Status - 2026-09-15, Fix/Re-review Cycle 1
 
-The Analytics endpoint, scoped SQL metrics, staff view/navigation, stale-load
-guards and required real-SQL/frontend/browser coverage are implemented and
-ready for independent review. Slice 6 remains unaccepted; the exact pushed
-candidate SHA and compact gate receipts are recorded in PR #265 and the
-[handoff](slice-06-handoff.md).
+Full Terra review confirmed S6-P2-1 in the `AverageDaysToHold` aggregate: an
+in-range first literal `hold_placed` event earlier than request creation was
+counted as held but omitted from the average. The SQL now retains that row as
+`0.0`, and the compact real-SQL fixture covers the negative-duration case.
+Renewed Release, focused real-SQL, Kestrel browser, and Web-publication
+evidence is recorded in the [handoff](slice-06-handoff.md). Slice 6 remains
+unaccepted; focused Terra re-review is pending.
 
 ## Bootstrap (Historical) - 2026-09-15
 
