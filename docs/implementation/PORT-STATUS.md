@@ -5,6 +5,35 @@ Server 2022, and IIS under the authoritative `docs/dotnet-port/` pack. This
 single final draft PR will deliver the complete port as reviewed vertical
 slices. It is not eligible for merge or production deployment yet.
 
+## Post-Slice-6 Correction Pending Exact-SHA CI - 2026-09-15
+
+Slice 6 was accepted at its historical milestone
+`7ba59421176ede99ba48488be6bc81010e60f65c`, with successful exact-SHA
+`.NET baseline` run `34976630186`. That acceptance and milestone are preserved.
+
+Subsequent review identified two Analytics issues: inactive libraries lost
+their request populations from all-library aggregates, and a retained invalid
+library selection could strand the frontend. Both were corrected before
+Slice 7 in [PR #266](https://github.com/clcdpc/asap-pocketbase/pull/266).
+The exact Terra-reviewed correction is
+`04f538ef1a04be33b31d5dbdc3a5c1751b163ee4`; its corrective integration merge is
+`c0cde6fb744e53c1a72a63f8cb58124e43255b4f`. The merge tree matches the reviewed
+candidate, and its first parent is the historical Slice 6 milestone.
+
+Independent Terra review and one Luna fix/Terra focused re-review cycle are
+complete, with no substantive finding remaining. Candidate CI `34986700290`
+succeeded. The [review record](slice-06-review.md) distinguishes fresh fix
+validation from retained complete-suite/browser evidence. Migration, schema,
+and DACPAC surfaces are unchanged; native migration fixtures were not rerun.
+
+This documentation-only status commit is the post-Slice-6 corrective milestone
+candidate. Its own exact-SHA remote CI is the remaining acceptance gate.
+PR #266 metadata records the exact resulting `codex/csharp-port` SHA and CI
+run/result without another repository commit solely for the CI result. On
+success, that SHA is the current authorized integration head for a later
+Slice 7 bootstrap. Slice 7 has not started and PR #264 remains draft.
+Earlier entries below are historical checkpoints.
+
 ## Slice 6 Acceptance Pending Exact-SHA CI - 2026-09-15
 
 Slice 6 Analytics passed implementation validation, full independent Terra

@@ -1,5 +1,41 @@
 # Slice 6 Review And Acceptance
 
+## Current Correction Status - 2026-09-15
+
+Historical Slice 6 acceptance is preserved at
+`7ba59421176ede99ba48488be6bc81010e60f65c`, with successful exact-SHA CI
+`34976630186`. Subsequent review identified the two Analytics issues described
+under Post-acceptance Corrections below; both were corrected before Slice 7.
+
+| Correction stage | SHA |
+| --- | --- |
+| Initial Luna candidate | `522c5f6e6835ee5fbf7f93507724ccc16a8d58d9` |
+| Final Terra-reviewed correction | `04f538ef1a04be33b31d5dbdc3a5c1751b163ee4` |
+| PR #266 corrective integration merge | `c0cde6fb744e53c1a72a63f8cb58124e43255b4f` |
+
+Fresh Terra High reviewed the complete correction delta and a fresh Terra High
+reviewer confirmed C6-T1 and C6-T2 resolved in focused re-review. No substantive
+finding remains. Fix/re-review cycles: 1 of 3. Together, the reviews establish
+both correction contracts, including authorization, aggregate populations,
+exactly-once recovery, races, and test adequacy.
+
+Short Astra acceptance verified the exact SHA, clean branch, evidence hashes,
+required local gates, PR target, unchanged starting integration head, and no
+Slice 7 start. Reviewed-candidate CI `34986700290` succeeded. PR #266 was merged
+using the merge-commit method with an exact-head guard. Its parents are the
+historical Slice 6 milestone and reviewed correction; its tree matches the
+reviewed correction. No automatic GitHub review activity was present at the
+merge gate, and no review was manually requested.
+
+The documentation-only status commit containing this record is the corrective
+milestone candidate. Final acceptance awaits its own exact-SHA remote CI;
+PR #266 metadata records the resulting integration SHA and run/result without
+another repository commit solely for green CI. Slice 7 has not started, and
+PR #264 remains draft. The records below preserve earlier checkpoints and the
+fresh versus retained correction evidence.
+
+## Original Slice 6 Acceptance Record
+
 Recorded 2026-09-15 under document 10's thin autonomous supervisor policy.
 Astra verified compact worker receipts, exact branch/PR state and independent
 review. Final acceptance is pending the documentation milestone's exact-SHA CI.

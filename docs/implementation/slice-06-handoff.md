@@ -1,5 +1,23 @@
 # Slice 6 Thin Autonomous Supervisor Handoff
 
+## Post-Acceptance Correction Checkpoint - 2026-09-15
+
+Slice 6 remains historically accepted at
+`7ba59421176ede99ba48488be6bc81010e60f65c` (exact-SHA CI `34976630186`, success).
+Both subsequent Analytics findings were corrected before Slice 7.
+[PR #266](https://github.com/clcdpc/asap-pocketbase/pull/266) merged at
+`c0cde6fb744e53c1a72a63f8cb58124e43255b4f`; its tree matches the exact reviewed
+correction `04f538ef1a04be33b31d5dbdc3a5c1751b163ee4`. Independent Terra review
+and one fix/re-review cycle are complete, with no substantive finding remaining.
+
+The documentation-only commit containing this checkpoint is the corrective
+milestone candidate, pending its own exact-SHA CI. PR #266 metadata records
+the exact resulting SHA and CI result. See [PORT-STATUS.md](PORT-STATUS.md)
+and the [review record](slice-06-review.md) for validation and disposition.
+After successful CI, that SHA is the current authorized integration head for
+a later Slice 7 bootstrap. Slice 7 has not started; PR #264 remains draft.
+The following entries are historical checkpoints.
+
 ## Acceptance Status - 2026-09-15
 
 Full Terra review and cycle 1 focused Terra re-review are complete. S6-P2-1
