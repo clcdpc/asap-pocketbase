@@ -381,6 +381,20 @@ public sealed class MigrationCliTests
             CollectionAssert.AreEqual(
                 File.ReadAllBytes(Path.Combine(FindRepositoryRoot(), "src", "Asap.Web", "Frontend", "jpl.png")),
                 File.ReadAllBytes(Path.Combine(package, assetPath.Replace('/', Path.DirectorySeparatorChar))));
+
+            using var validationError = new StringWriter();
+            Assert.AreEqual(
+                0,
+                MigrationCli.Run(["validate", "--package", package], TextWriter.Null, validationError),
+                validationError.ToString());
+
+            var unreferencedAssetPath = "assets/branding/unreferenced/logo.png";
+            var unreferencedAssetFullPath = Path.Combine(package, unreferencedAssetPath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(unreferencedAssetFullPath)!);
+            var brandingBytes = File.ReadAllBytes(Path.Combine(FindRepositoryRoot(), "src", "Asap.Web", "Frontend", "jpl.png"));
+            File.WriteAllBytes(unreferencedAssetFullPath, brandingBytes);
+            AddManifestFile(package, unreferencedAssetPath, brandingBytes);
+            AssertPackageValidationCode(package, "package_unlisted_file");
         }
         finally
         {
@@ -408,6 +422,36 @@ public sealed class MigrationCliTests
                 1,
                 MigrationCli.Run(["validate", "--package", package], TextWriter.Null, tamperedError));
             StringAssert.Contains(tamperedError.ToString(), "package_hash_mismatch");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public void ValidationRejectsRehashedOpaqueFilesAndCredentialShapedManifestPaths()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-package-membership-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var opaquePackage = CreateMinimalPackage(Path.Combine(root, "opaque"));
+            var opaquePath = Path.Combine(opaquePackage, "opaque.bin");
+            var opaqueData = new byte[] { 1, 2, 3, 4 };
+            File.WriteAllBytes(opaquePath, opaqueData);
+            AddManifestFile(opaquePackage, "opaque.bin", opaqueData);
+            AssertPackageValidationCode(opaquePackage, "package_unlisted_file");
+
+            var credentialPathPackage = CreateMinimalPackage(Path.Combine(root, "credential-path"));
+            const string credentialShapedPath = "postmarkToken=fixture-only-value";
+            UpdateManifestPath(credentialPathPackage, "organizations.json", credentialShapedPath);
+            using var error = new StringWriter();
+            Assert.AreEqual(
+                1,
+                MigrationCli.Run(["validate", "--package", credentialPathPackage], TextWriter.Null, error));
+            StringAssert.Contains(error.ToString(), "package_secret_forbidden");
+            Assert.IsFalse(error.ToString().Contains("fixture-only-value", StringComparison.Ordinal));
         }
         finally
         {
@@ -2537,6 +2581,20 @@ public sealed class MigrationCliTests
             string.Equals(item!["path"]!.GetValue<string>(), relativePath, StringComparison.OrdinalIgnoreCase))!.AsObject();
         entry["length"] = data.LongLength;
         entry["sha256"] = Convert.ToHexStringLower(SHA256.HashData(data));
+        File.WriteAllText(manifestPath, manifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n", new UTF8Encoding(false));
+    }
+
+    private static void AddManifestFile(string package, string relativePath, byte[] data)
+    {
+        var manifestPath = Path.Combine(package, "manifest.json");
+        var manifest = JsonNode.Parse(File.ReadAllText(manifestPath))!.AsObject();
+        manifest["files"]!.AsArray().Add(
+            new JsonObject
+            {
+                ["path"] = relativePath,
+                ["length"] = data.LongLength,
+                ["sha256"] = Convert.ToHexStringLower(SHA256.HashData(data))
+            });
         File.WriteAllText(manifestPath, manifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n", new UTF8Encoding(false));
     }
 

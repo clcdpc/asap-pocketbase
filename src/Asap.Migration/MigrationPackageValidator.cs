@@ -127,6 +127,16 @@ public static class MigrationPackageValidator
         }
 
         ValidateManifestIdentity(manifest, manifestPath);
+        IReadOnlySet<string> brandingAssetPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var brandingPath = Path.Combine(root, "branding.json");
+        if (File.Exists(brandingPath))
+        {
+            EnsureNoReparsePoint(root, brandingPath, "package_path_invalid");
+            brandingAssetPaths = ValidateBrandingAssets(root);
+        }
+        var allowedPaths = MigrationPackageExporter.RequiredPackageFiles
+            .Concat(brandingAssetPaths)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var listedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var observedCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -141,6 +151,12 @@ public static class MigrationPackageValidator
             if (!listedPaths.Add(relativePath))
             {
                 throw new MigrationOperationException("package_manifest_invalid", $"Duplicate file entry: {relativePath}");
+            }
+            if (!allowedPaths.Contains(relativePath))
+            {
+                throw new MigrationOperationException(
+                    "package_unlisted_file",
+                    "Package manifest contains a file outside the pinned package file set.");
             }
 
             if (file.Length < 0 || !IsSha256(file.Sha256))
@@ -209,8 +225,6 @@ public static class MigrationPackageValidator
         {
             throw new MigrationOperationException("package_count_mismatch", "Manifest entity counts do not match domain files.");
         }
-
-        ValidateBrandingAssets(root);
 
         return new ValidatedMigrationPackage(root, manifest);
     }
@@ -730,10 +744,11 @@ public static class MigrationPackageValidator
             normalized.Contains("credential", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void ValidateBrandingAssets(string packageRoot)
+    private static IReadOnlySet<string> ValidateBrandingAssets(string packageRoot)
     {
         var path = Path.Combine(packageRoot, "branding.json");
         using var document = ReadJsonDocument(path, "package_domain_invalid");
+        EnsureNoDuplicateProperties(document.RootElement, "package_domain_invalid");
         var root = document.RootElement;
         var collections = RequiredObject(root, "collections", "package_domain_invalid");
         var rows = RequiredArray(collections, "branding", "package_domain_invalid");
@@ -785,6 +800,7 @@ public static class MigrationPackageValidator
                     $"Branding asset failed length, SHA-256, or image-content validation: {normalizedAssetPath}. {imageError}");
             }
         }
+        return assetPaths;
     }
 
     private static JsonElement RequiredArray(JsonElement parent, string name, string code)
