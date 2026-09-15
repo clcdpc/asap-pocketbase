@@ -1,4 +1,4 @@
-# Slice 6 Direct Implementation Handoff
+# Slice 6 Thin Autonomous Supervisor Handoff
 
 ## Checkpoint
 
@@ -8,21 +8,24 @@
 - Slice PR: [#265](https://github.com/clcdpc/asap-pocketbase/pull/265), draft
   into `codex/csharp-port`.
 - Accepted Slice 5 PRODUCT milestone: `36727414d02cbe34ba13cd3f6f1bb57980b83a6f`.
-- Actual Slice 6 branch base: `1c3b46d13a42bb1a2887136385f3dce18b610c8c`.
-- Bootstrap head SHA: recorded in [PR #265's Bootstrap
-  receipt](https://github.com/clcdpc/asap-pocketbase/pull/265). A commit cannot
-  embed its own hash. The first commit after the exact branch base is the
-  single `Prepare Slice 6 analytics` documentation commit, even after
-  implementation advances the branch.
+- Original bootstrap branch base: `1c3b46d13a42bb1a2887136385f3dce18b610c8c`.
+- Original bootstrap head: `df80ec821b0cde9309e1e4d765d736ed832f48b3`.
+- Current policy/branch base after rebase: `5493efee9ce140d6eaa83da2d178e2004fea7c2c`.
+- Rebased bootstrap commit: `1f6886ff1428ff87269e9534b7cd4e5edad70fe8`.
+- Final synchronization head: recorded in [PR #265's policy synchronization
+  receipt](https://github.com/clcdpc/asap-pocketbase/pull/265); a commit cannot
+  embed its own hash. Verify that receipt against the current branch before
+  dispatch; the original bootstrap anchors above remain historical evidence.
 - Topology: No child packages — one Slice 6 integration PR. Aggregation,
   DTOs, UI and fixtures form one tightly coupled behavioral contract.
 - Current application/schema: .NET 10, `SchemaVersion.ExpectedVersion = 5`;
   migration `ExpectedSchemaVersion = 5`, `ContractVersion = "slice-05"`, export
   format `1`. No new application release version is set.
 
-Both base anchors are intentional: the intervening commit changes only
-documentation/process policy. Analytics implementation has not started. No
-implementation or independent review was dispatched during bootstrap.
+The accepted product and both policy-base anchors are intentional: intervening
+changes are documentation/process policy only. Bootstrap is complete and must
+not be repeated. Analytics implementation has not started. No supervisor,
+implementation or independent review was dispatched during synchronization.
 
 ## Objective And Reuse
 
@@ -83,7 +86,8 @@ fixtures, frontend/browser/accessibility tests. DACPAC remains schema owner.
 All required migration inputs are present; no concrete correction is pending.
 Fix any subsequently demonstrated missing Analytics dependency in this slice.
 
-Before fresh direct Terra High review, run complete integrated Slice 6
+Luna must run complete integrated Slice 6 validation before the supervisor
+dispatches fresh independent Terra High full-slice review. Required
 validation: Release build; full .NET/real-SQL and Node/frontend suites;
 two-library/all-library/forged-scope and ID-collision metric fixtures;
 browser desktop/mobile, auth/scope/range races, keyboard/focus and axe
@@ -93,19 +97,33 @@ integrity and `git diff --check`. Retain compact receipts and local evidence.
 Existing local publication/native harness paths are in [Slice 5's
 handoff](slice-05-handoff.md#preserved-local-evidence); preserve those files.
 
-Bootstrap validation passed: 19/19 manifest hashes; 19 relative file/heading
+Original bootstrap validation passed: 19/19 manifest hashes; 19 relative file/heading
 links across 18 documents; `git diff --check`; final documentation-only file
-inspection. The manifest is unchanged. No application acceptance suite ran.
+inspection. That bootstrap did not change the manifest or run the application
+acceptance suite. Policy synchronization validation is recorded separately in
+PR #265; it also runs documentation checks only.
 No substantive baseline/packet discrepancy or unresolved contract issue was
 identified. Canonical identifier normalization and required event timestamps
 remain accepted target behavior.
 
 Non-goals: repositories, MediatR, reporting framework, charts, materialized
 Analytics state, raw-row aggregation in C# or browser, a second auth/request
-framework, new test infrastructure, paging, Slice 7, merge/tag/deploy/rehearsal
-or cutover. Keep the slice PR and PR #264 draft; implementation does not imply
-acceptance or authorize later-slice progression.
+framework, new test infrastructure, paging, Slice 7, final-port PR merge,
+tag/deploy/rehearsal or cutover. PR #265 stays draft until the authorized
+supervisor reaches its review/acceptance gates and integrates it under document
+10. PR #264 stays draft. Implementation alone does not imply acceptance or
+authorize later-slice progression.
 
 ## Next Action
 
-Run GPT-5.6 Luna Max directly to implement Slice 6 Analytics.
+Run one GPT-6 Astra Max thin autonomous supervisor task for Slice 6 from PR #265.
+
+The supervisor internally dispatches bounded Luna Max implementation with full
+integrated validation, fresh Terra High full-slice review, and confirmed Luna
+fix/Terra focused re-review loops (maximum three cycles after initial full
+review). It performs short acceptance, merges PR #265 into `codex/csharp-port`,
+records status/acceptance documentation, commits if required and waits for
+successful CI on the exact final milestone SHA. Stop at accepted Slice 6 or
+document 10's hard-stop conditions; no Slice 7 continuation is authorized.
+Use compact receipts and the binding context firewall. Manual/direct bounded
+tasks remain fallback with identical gates, not required separate user launches.

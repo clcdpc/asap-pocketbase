@@ -18,11 +18,13 @@ fallback. Technical ownership, complete integrated validation, review
 independence, release requirements and exact-milestone CI are unchanged.
 
 Slice 6 is already bootstrapped in draft [PR #265](https://github.com/clcdpc/asap-pocketbase/pull/265)
-into `codex/csharp-port`; implementation has not started. Preserve its bootstrap
-and synchronize the slice branch to this authoritative policy before the next
-task. PR #264 remains the final draft port PR. This documentation task launches
-no supervisor or workers. Next action after synchronization: one Slice 6
-autonomous supervisor task, progressing to accepted state or a hard-stop report.
+into `codex/csharp-port`; implementation has not started. Its existing bootstrap
+is preserved and rebased onto policy `5493efee9ce140d6eaa83da2d178e2004fea7c2c`;
+the [handoff](slice-06-handoff.md) retains original and rebased anchors, with
+the final synchronization head in PR #265's receipt. PR #264 remains the final
+draft port PR. This documentation task launches no supervisor or workers.
+Next action: Run one GPT-6 Astra Max thin autonomous supervisor task for Slice 6
+from PR #265, progressing to accepted state or a hard-stop report.
 No Slice 7 continuation is authorized. Earlier policy/state entries are history.
 
 ## Historical Slice 6 Bootstrap - 2026-09-15

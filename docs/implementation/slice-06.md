@@ -4,22 +4,26 @@
 
 Refreshed against accepted Slices 0-5. Analytics implementation has not started.
 The canonical sequence remains document 02; this packet narrows implementation
-context without changing the agreed plan. See the [direct implementation
+context without changing the agreed plan. See the [thin autonomous supervisor
 handoff](slice-06-handoff.md).
 
 | Anchor | Value |
 | --- | --- |
 | Accepted Slice 5 PRODUCT milestone | `36727414d02cbe34ba13cd3f6f1bb57980b83a6f` |
-| Actual Slice 6 branch base | `1c3b46d13a42bb1a2887136385f3dce18b610c8c` |
+| Original Slice 6 bootstrap branch base | `1c3b46d13a42bb1a2887136385f3dce18b610c8c` |
+| Original bootstrap head (before policy synchronization) | `df80ec821b0cde9309e1e4d765d736ed832f48b3` |
+| Current Slice 6 policy/branch base after rebase | `5493efee9ce140d6eaa83da2d178e2004fea7c2c` |
+| Rebased bootstrap commit | `1f6886ff1428ff87269e9534b7cd4e5edad70fe8` |
 | Slice branch | `codex/slice-06-analytics` |
 | Draft slice PR | [#265](https://github.com/clcdpc/asap-pocketbase/pull/265), base `codex/csharp-port` |
 | Topology | No child packages — one Slice 6 integration PR. |
 | Application/schema compatibility | .NET 10 (`net10.0`); `SchemaVersion.ExpectedVersion = 5` |
 | Migration contract | `MigrationContract.ExpectedSchemaVersion = 5`, `ContractVersion = "slice-05"`; export format `1` |
 
-The two SHA anchors differ only by documentation/process policy. The policy
-commit is not Slice 6 implementation. Local HEAD, remote `codex/csharp-port`
-and draft PR #264 matched the branch base before branch creation; remote `main`
+The accepted product and both policy-base anchors differ only by
+documentation/process policy. Neither policy commit is Slice 6 implementation.
+Local HEAD, remote `codex/csharp-port` and draft PR #264 matched the original
+branch base before branch creation; remote `main`
 still matched the behavioral pin. Prior acceptance and policy CI success are
 established evidence, not rerun by this bootstrap. Application code remains at
 the accepted Slice 5 product state; no new application release version is set.
@@ -27,6 +31,13 @@ the accepted Slice 5 product state; no new application release version is set.
 Aggregation, DTOs, browser rendering and SQL/browser fixtures share one metric
 and authorization contract. Inspection found no independently useful package
 boundary. PR #264 remains the final draft port PR into `main`.
+
+Bootstrap is complete and remains valid after the docs-only rebase. The next
+action is one GPT-6 Astra Max thin autonomous supervisor task from PR #265,
+dispatching bounded Luna Max implementation and independent Terra High review
+internally through document 10's validation, fix/re-review, acceptance,
+integration, status-record and exact-milestone CI gates. Manual/direct tasks
+remain fallback. This synchronization launches no supervisor or workers.
 
 Follow [document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) for the
 Slice-6+ staged-PR lifecycle, optional package boundaries, review modes,
