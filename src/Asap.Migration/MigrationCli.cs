@@ -65,7 +65,11 @@ public static class MigrationCli
                 ["--source", "--storage", "--output", "--source-git-sha", "--exported-at-utc"],
                 ["--confirm-source-stopped"]);
             var exportedAtUtc = parsed.Values.TryGetValue("--exported-at-utc", out var timestamp)
-                ? DateTimeOffset.Parse(timestamp, null, System.Globalization.DateTimeStyles.AssumeUniversal)
+                ? DateTimeOffset.Parse(
+                    timestamp,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeUniversal |
+                    System.Globalization.DateTimeStyles.AdjustToUniversal)
                 : DateTimeOffset.UtcNow;
             MigrationPackageExporter.Export(new MigrationExportOptions(
                 Require(parsed.Values, "--source"),

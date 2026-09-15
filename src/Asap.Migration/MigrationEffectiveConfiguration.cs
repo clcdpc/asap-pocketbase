@@ -159,6 +159,11 @@ internal static class MigrationEffectiveConfiguration
 
     private static object ResolveStaffUrl(IReadOnlyDictionary<string, object?>? row)
     {
+        if (row is null)
+        {
+            return ResolveInitializedStaffUrl();
+        }
+
         var persisted = Value(row, "staffUrl");
         if (persisted is not null)
         {
@@ -173,6 +178,29 @@ internal static class MigrationEffectiveConfiguration
         return publicUrl is not null
             ? Resolved(StaffUrlFromEnvironment(publicUrl), "environment_fallback", "ASAP_PUBLIC_URL")
             : Resolved("http://localhost:8090/staff/", "code_default", "settings.staffUrl.localhost");
+    }
+
+    private static object ResolveInitializedStaffUrl()
+    {
+        var staff = EnvironmentValue("ASAP_STAFF_URL");
+        if (staff is not null)
+        {
+            return Resolved(
+                NormalizePersistedStaffUrl(StaffUrlFromEnvironment(staff)),
+                "environment_fallback",
+                "ASAP_STAFF_URL");
+        }
+
+        var baseUrl = EnvironmentValue("ASAP_BASE_URL");
+        if (baseUrl is not null)
+        {
+            return Resolved(
+                NormalizePersistedStaffUrl(StaffUrlFromEnvironment(baseUrl)),
+                "environment_fallback",
+                "ASAP_BASE_URL");
+        }
+
+        return Resolved("http://localhost:8090/staff/", "code_default", "settings.staffUrl.localhost");
     }
 
     private static object ResolveIconPattern(IReadOnlyDictionary<string, object?>? row)
