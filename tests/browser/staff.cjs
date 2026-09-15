@@ -410,17 +410,22 @@ async function runAnalytics(browser, args, axeSource, report) {
     await superPage.getByText('Requests by stage', { exact: true }).waitFor();
     await superPage.getByText('New suggestions', { exact: true }).waitFor();
 
-    await Promise.all([
-      superPage.waitForResponse(response => {
-        const url = new URL(response.url());
-        return response.request().method() === 'GET' &&
-          url.pathname === '/api/asap/staff/analytics' &&
-          url.searchParams.get('scope') === '2';
-      }),
-      superPage.locator('#analytics-scope').selectOption('2')
-    ]);
-    await superPage.locator('#analytics-container .analytics-shell').waitFor();
-    assert.equal(await superPage.locator('#analytics-scope').inputValue(), '2');
+    let invalidScopeInjected = false;
+    let allScopeRecoveryRequests = 0;
+    await superPage.route('**/api/asap/staff/analytics*', async route => {
+      const url = new URL(route.request().url());
+      if (!invalidScopeInjected && url.searchParams.get('scope') === '2') {
+        invalidScopeInjected = true;
+        await route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          body: JSON.stringify({ code: 'invalid_scope', message: 'The analytics scope is invalid.' })
+        });
+        return;
+      }
+      if (url.searchParams.get('scope') === 'all') allScopeRecoveryRequests += 1;
+      await route.continue();
+    });
 
     await Promise.all([
       superPage.waitForResponse(response => {
@@ -428,12 +433,37 @@ async function runAnalytics(browser, args, axeSource, report) {
         return response.request().method() === 'GET' &&
           url.pathname === '/api/asap/staff/analytics' &&
           url.searchParams.get('scope') === '2' &&
+          response.status() === 400;
+      }),
+      superPage.waitForResponse(response => {
+        const url = new URL(response.url());
+        return response.request().method() === 'GET' &&
+          url.pathname === '/api/asap/staff/analytics' &&
+          url.searchParams.get('scope') === 'all' &&
+          response.status() === 200;
+      }),
+      superPage.locator('#analytics-scope').selectOption('2')
+    ]);
+    await superPage.locator('#analytics-container .analytics-shell').waitFor();
+    assert.equal(invalidScopeInjected, true);
+    assert.equal(allScopeRecoveryRequests, 1, 'Analytics invalid_scope recovery must issue one all-scope request');
+    assert.equal(await superPage.locator('#analytics-scope').inputValue(), 'all');
+    assert.equal(await superPage.locator('#analytics-scope').isEnabled(), true);
+    assert.equal(await superPage.locator('#analytics-date-range').isEnabled(), true);
+    assert.equal(await superPage.evaluate(() => document.activeElement.id), 'analytics-title');
+
+    await Promise.all([
+      superPage.waitForResponse(response => {
+        const url = new URL(response.url());
+        return response.request().method() === 'GET' &&
+          url.pathname === '/api/asap/staff/analytics' &&
+          url.searchParams.get('scope') === 'all' &&
           url.searchParams.get('range') === 'last90';
       }),
       superPage.locator('#analytics-date-range').selectOption('last90')
     ]);
     await superPage.locator('#analytics-container .analytics-shell').waitFor();
-    assert.equal(await superPage.locator('#analytics-scope').inputValue(), '2');
+    assert.equal(await superPage.locator('#analytics-scope').inputValue(), 'all');
     assert.equal(await superPage.locator('#analytics-date-range').inputValue(), 'last90');
     await scan(superPage, axeSource, args.artifactRoot, report, 'desktop', 'analytics-super-admin');
     assert.deepEqual(superErrors, [], `Super-admin Analytics raised a browser error: ${superErrors.join('; ')}`);
@@ -478,8 +508,10 @@ async function runAnalytics(browser, args, axeSource, report) {
   }
 
   report.analytics = {
-    desktopSuperAdminScope: '2',
+    desktopSuperAdminScope: 'all',
     desktopRange: 'last90',
+    invalidScopeRecovery: true,
+    allScopeRecoveryRequests: 1,
     mobileLibraryOnly: true
   };
 }

@@ -108,3 +108,29 @@ Until that exact CI succeeds, Slice 6 is not accepted. On success, record
 Slice 6 accepted and stop. Slice 7 has not started, PR #264 remains draft,
 and no release, deployment, rehearsal, cutover or final whole-app review is
 performed by this slice acceptance.
+
+## Post-acceptance Corrections
+
+On 2026-09-15, a bounded correction candidate addressed two confirmed
+Analytics findings while preserving the acceptance history above. Aggregate
+population queries now retain inactive-library history for authorized
+all/system super-admin scope while keeping active-library choices, explicit
+scope resolution, ordinary staff ownership, and direct Organization 1
+exclusion unchanged. The focused real-SQL fixture covers exact before/after
+metric deltas, inactive selection rejection, active explicit scope, forged
+staff scope, and the system exclusion.
+
+The frontend now performs one guarded recovery when a retained selected
+super-admin library returns only `400 invalid_scope`: it resets local scope to
+all, retries once, preserves the selected range and usable controls, and
+retains focus. Other 400 responses and the shared 401/403 behavior are
+unchanged; generation and cancellation guards prevent stale recovery results
+from overwriting newer loads or looping.
+
+Correction validation passed with a 0-warning/0-error Release build, focused
+real-SQL 1/1, full .NET 305/305/0, full Node 174 scripts with 0 failures,
+published Kestrel Analytics 1/1 across 20 states, and axe serious/critical
+findings 0/0. No migration, schema, or DACPAC source/artifact surface was
+changed; the existing native fixtures and retained publication evidence remain
+authoritative. This candidate is for independent review only; PR #264 remains
+draft and Slice 7 remains outside scope.

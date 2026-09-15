@@ -65,7 +65,15 @@ function renderStatus(container, className, message) {
   container.replaceChildren(node);
 }
 
-export async function loadAnalytics(container) {
+function restoreAnalyticsFocus(container, focusedControlId) {
+  if (!['analytics-scope', 'analytics-date-range'].includes(focusedControlId)) return;
+  container.querySelector(`#${focusedControlId}`)?.focus();
+}
+
+export async function loadAnalytics(
+  container,
+  allowScopeRecovery = true,
+  focusedControlId = document.activeElement?.id || '') {
   if (!container) return;
   const load = latestLoads.begin('analytics');
   renderStatus(container, 'analytics-status', 'Loading analytics...');
@@ -77,8 +85,19 @@ export async function loadAnalytics(container) {
       : data.scope?.libraryOrgId || analyticsScope;
     analyticsRange = data.dateRange?.key || analyticsRange;
     renderAnalytics(container, data);
+    restoreAnalyticsFocus(container, focusedControlId);
   } catch (error) {
     if (isAbortError(error) || !load.isCurrent()) return;
+    if (allowScopeRecovery &&
+        error?.status === 400 &&
+        error.response?.code === 'invalid_scope' &&
+        analyticsScope &&
+        analyticsScope !== 'all' &&
+        analyticsScope !== 'system') {
+      analyticsScope = 'all';
+      await loadAnalytics(container, false, focusedControlId);
+      return;
+    }
     renderStatus(container, 'analytics-status error', error.message || 'Analytics could not be loaded.');
   } finally {
     latestLoads.finish('analytics', load.token);
