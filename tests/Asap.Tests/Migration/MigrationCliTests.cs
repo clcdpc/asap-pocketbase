@@ -138,6 +138,13 @@ public sealed class MigrationCliTests
                 manifest.RootElement.GetProperty("pocketBaseSourceSchemaVersion").GetString());
             Assert.AreEqual(1, manifest.RootElement.GetProperty("entityCounts").GetProperty("polaris_organizations").GetInt32());
             Assert.IsTrue(manifest.RootElement.GetProperty("sourceDatabase").GetProperty("sha256").GetString()!.Length == 64);
+            CollectionAssert.AreEqual(
+                new[]
+                {
+                    "legacy_smtp_transport_excluded",
+                    "pocketbase_auth_session_scheduler_state_excluded"
+                },
+                manifest.RootElement.GetProperty("warnings").EnumerateArray().Select(item => item.GetString()).ToArray());
 
             using var organizations = JsonDocument.Parse(
                 File.ReadAllText(Path.Combine(package, "organizations.json")));
@@ -481,6 +488,14 @@ public sealed class MigrationCliTests
             var manifestSecretPackage = CreateMinimalPackage(Path.Combine(root, "manifest-secret"));
             AddManifestProperty(manifestSecretPackage, "postmarkToken", "fixture-only-value");
             AssertPackageValidationCode(manifestSecretPackage, "package_secret_forbidden");
+
+            var manifestScalarSecretPackage = CreateMinimalPackage(Path.Combine(root, "manifest-scalar-secret"));
+            SetManifestWarning(manifestScalarSecretPackage, "postmarkToken=fixture-only-value");
+            AssertPackageValidationCode(manifestScalarSecretPackage, "package_secret_forbidden");
+
+            var manifestWarningPackage = CreateMinimalPackage(Path.Combine(root, "manifest-warning"));
+            SetManifestWarning(manifestWarningPackage, "fixture-only-warning");
+            AssertPackageValidationCode(manifestWarningPackage, "package_manifest_invalid");
 
             var manifestUnknownPackage = CreateMinimalPackage(Path.Combine(root, "manifest-unknown"));
             AddManifestProperty(manifestUnknownPackage, "unexpectedMember", "fixture-only-value");
@@ -2501,6 +2516,14 @@ public sealed class MigrationCliTests
         var path = Path.Combine(package, "manifest.json");
         var manifest = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
         manifest[name] = value;
+        File.WriteAllText(path, manifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n", new UTF8Encoding(false));
+    }
+
+    private static void SetManifestWarning(string package, string value)
+    {
+        var path = Path.Combine(package, "manifest.json");
+        var manifest = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        manifest["warnings"]!.AsArray()[0] = value;
         File.WriteAllText(path, manifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n", new UTF8Encoding(false));
     }
 

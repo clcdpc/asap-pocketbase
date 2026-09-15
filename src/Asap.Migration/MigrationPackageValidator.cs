@@ -226,17 +226,11 @@ public static class MigrationPackageValidator
             manifest.FormatVersion != MigrationPackageExporter.FormatVersion ||
             !string.Equals(manifest.ContractVersion, MigrationContract.ContractVersion, StringComparison.Ordinal) ||
             !IsGitSha(manifest.PocketBaseSourceGitSha) ||
-            string.IsNullOrWhiteSpace(manifest.PocketBaseSourceSchemaVersion) ||
+            !IsPocketBaseMigrationName(manifest.PocketBaseSourceSchemaVersion) ||
             manifest.ExportedAtUtc == default ||
             manifest.ExportedAtUtc.Offset != TimeSpan.Zero ||
             !IsExplicitUtcTimestamp(manifestPath) ||
-            string.IsNullOrWhiteSpace(manifest.SourceDatabase.FileName) ||
-            manifest.SourceDatabase.FileName.Contains("/", StringComparison.Ordinal) ||
-            manifest.SourceDatabase.FileName.Contains("\\", StringComparison.Ordinal) ||
-            !string.Equals(
-                Path.GetFileName(manifest.SourceDatabase.FileName),
-                manifest.SourceDatabase.FileName,
-                StringComparison.Ordinal) ||
+            !IsSourceDatabaseFileName(manifest.SourceDatabase.FileName) ||
             manifest.SourceDatabase.Length < 0 ||
             !IsSha256(manifest.SourceDatabase.Sha256) ||
             manifest.EntityCounts.Any(item => string.IsNullOrWhiteSpace(item.Key) || item.Value < 0))
@@ -288,9 +282,23 @@ public static class MigrationPackageValidator
 
         if (root.TryGetProperty("warnings", out var warnings))
         {
-            if (warnings.ValueKind != JsonValueKind.Array || warnings.EnumerateArray().Any(item => item.ValueKind != JsonValueKind.String))
+            if (warnings.ValueKind != JsonValueKind.Array)
             {
                 throw new MigrationOperationException("package_manifest_invalid", "Manifest warnings must be an array of strings.");
+            }
+
+            foreach (var warning in warnings.EnumerateArray())
+            {
+                if (warning.ValueKind != JsonValueKind.String)
+                {
+                    throw new MigrationOperationException("package_manifest_invalid", "Manifest warnings must be an array of strings.");
+                }
+                if (!MigrationPackageExporter.ManifestWarningCodes.Contains(warning.GetString()!))
+                {
+                    throw new MigrationOperationException(
+                        "package_manifest_invalid",
+                        "Manifest warnings must contain only supported non-secret codes.");
+                }
             }
         }
     }
@@ -315,6 +323,11 @@ public static class MigrationPackageValidator
 
     private static readonly IReadOnlySet<string> FileProperties =
         new HashSet<string>(["path", "length", "sha256"], StringComparer.Ordinal);
+
+    private static readonly IReadOnlySet<string> ManifestSecretValueProperties =
+        new HashSet<string>(
+            ["pocketBaseSourceSchemaVersion", "fileName", "path", "warnings"],
+            StringComparer.Ordinal);
 
     private static void EnsureManifestObject(
         JsonElement value,
@@ -664,7 +677,7 @@ public static class MigrationPackageValidator
         }
     }
 
-    private static void ValidateManifestSecrets(JsonElement element)
+    private static void ValidateManifestSecrets(JsonElement element, string? propertyName = null)
     {
         if (element.ValueKind == JsonValueKind.Object)
         {
@@ -676,13 +689,35 @@ public static class MigrationPackageValidator
                         "package_secret_forbidden",
                         "Credential material must not appear in the migration package manifest.");
                 }
-                ValidateManifestSecrets(property.Value);
+                ValidateManifestSecrets(property.Value, property.Name);
             }
         }
         else if (element.ValueKind == JsonValueKind.Array)
         {
-            foreach (var item in element.EnumerateArray()) ValidateManifestSecrets(item);
+            foreach (var item in element.EnumerateArray()) ValidateManifestSecrets(item, propertyName);
         }
+        else if (element.ValueKind == JsonValueKind.String &&
+                 propertyName is not null &&
+                 ManifestSecretValueProperties.Contains(propertyName) &&
+                 LooksLikeSecretMaterialValue(element.GetString()!))
+        {
+            throw new MigrationOperationException(
+                "package_secret_forbidden",
+                "Credential material must not appear in the migration package manifest.");
+        }
+    }
+
+    private static bool LooksLikeSecretMaterialValue(string value)
+    {
+        var normalized = value
+            .Replace("_", string.Empty, StringComparison.Ordinal)
+            .Replace("-", string.Empty, StringComparison.Ordinal)
+            .Replace(" ", string.Empty, StringComparison.Ordinal);
+        return normalized.Contains("postmarktoken", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("apikey", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("password", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("secret", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("credential", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool LooksLikeSecretMaterial(string name)
@@ -895,6 +930,21 @@ public static class MigrationPackageValidator
 
     private static bool IsSha256(string? value) =>
         value is not null && value.Length == 64 && value.All(Uri.IsHexDigit);
+
+    private static bool IsPocketBaseMigrationName(string? value) =>
+        IsManifestFileName(value, ".js");
+
+    private static bool IsSourceDatabaseFileName(string? value) =>
+        IsManifestFileName(value, ".db");
+
+    private static bool IsManifestFileName(string? value, string requiredExtension) =>
+        value is not null &&
+        value.Length > requiredExtension.Length &&
+        value.Length <= 255 &&
+        string.Equals(value, value.Trim(), StringComparison.Ordinal) &&
+        string.Equals(Path.GetFileName(value), value, StringComparison.Ordinal) &&
+        value.EndsWith(requiredExtension, StringComparison.OrdinalIgnoreCase) &&
+        value.All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or '_');
 
     private static string HashFile(string path)
     {

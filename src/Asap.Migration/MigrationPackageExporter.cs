@@ -18,6 +18,17 @@ public sealed record MigrationExportOptions(
 public static class MigrationPackageExporter
 {
     public const int FormatVersion = 1;
+    internal const string LegacySmtpTransportExcludedWarning = "legacy_smtp_transport_excluded";
+    internal const string PocketBaseAuthSessionSchedulerStateExcludedWarning =
+        "pocketbase_auth_session_scheduler_state_excluded";
+
+    internal static IReadOnlySet<string> ManifestWarningCodes { get; } =
+        new HashSet<string>(
+            [
+                LegacySmtpTransportExcludedWarning,
+                PocketBaseAuthSessionSchedulerStateExcludedWarning
+            ],
+            StringComparer.Ordinal);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -173,8 +184,8 @@ public static class MigrationPackageExporter
             files = manifestFiles,
             warnings = new[]
             {
-                "Legacy SMTP transport fields were intentionally excluded; no SMTP credential is a Postmark token.",
-                "PocketBase authentication/session state and job scheduler state were intentionally excluded."
+                LegacySmtpTransportExcludedWarning,
+                PocketBaseAuthSessionSchedulerStateExcludedWarning
             }
         });
     }
