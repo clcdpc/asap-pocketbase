@@ -1,8 +1,23 @@
 # Slice 7: Migration Hardening And Legacy Links
 
-## Preparation Only
+## Authorized Bootstrap - 2026-09-15
 
-Not started; no bootstrap or worker dispatch is authorized by this policy edit.
+The autonomous Slice 7 run is authorized. Initial verification confirmed
+`origin/codex/csharp-port` at documentation-policy branch point
+`e1fc18b7b9b4d2d90892e16bf0264da5e2dc6246`, with successful exact-SHA
+`.NET baseline` CI `34996100667`. PR #264 remains open/draft. Fetched `main`
+still matches PocketBase `150b30b776565194260cc327eeeffdfb46475e81`.
+No prior Slice 7 branch, PR, supervisor journal or worker was found.
+
+The slice branch is `codex/slice-07-migration-hardening`, targeting
+`codex/csharp-port`. Its draft PR holds the canonical supervisor state and
+immutable transition journal. Package selection awaits current-code discovery;
+implementation, validation, review and acceptance have not occurred at this
+bootstrap checkpoint. Policy-only bytes after the corrected product baseline
+are classified separately from the technical review delta.
+
+### Verified Prior Anchors
+
 Historical Slice 6 accepted milestone:
 `7ba59421176ede99ba48488be6bc81010e60f65c` (CI `34976630186` succeeded).
 PR #266's exact reviewed correction is
