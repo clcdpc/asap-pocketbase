@@ -430,7 +430,11 @@ public sealed partial class PatronJourneyTests
         using (var report = JsonDocument.Parse(
                    await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "staff-browser-results.json"))))
         {
-            Assert.HasCount(18, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            Assert.HasCount(20, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            var analytics = report.RootElement.GetProperty("analytics");
+            Assert.AreEqual("2", analytics.GetProperty("desktopSuperAdminScope").GetString());
+            Assert.AreEqual("last90", analytics.GetProperty("desktopRange").GetString());
+            Assert.IsTrue(analytics.GetProperty("mobileLibraryOnly").GetBoolean());
             Assert.AreEqual("legacy", report.RootElement.GetProperty("additionalCopy").GetProperty("inheritedClaimType").GetString());
             Assert.AreEqual(
                 seeded.LegacyRuleId.ToString(),

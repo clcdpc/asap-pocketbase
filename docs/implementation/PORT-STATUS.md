@@ -17,13 +17,47 @@ receipts and a strict context firewall. Manual/direct phase control remains
 fallback. Technical ownership, complete integrated validation, review
 independence, release requirements and exact-milestone CI are unchanged.
 
-Slice 6 is already bootstrapped in draft [PR #265](https://github.com/clcdpc/asap-pocketbase/pull/265)
-into `codex/csharp-port`; implementation has not started. Preserve its bootstrap
-and synchronize the slice branch to this authoritative policy before the next
-task. PR #264 remains the final draft port PR. This documentation task launches
-no supervisor or workers. Next action after synchronization: one Slice 6
-autonomous supervisor task, progressing to accepted state or a hard-stop report.
+Slice 6 was bootstrapped in draft [PR #265](https://github.com/clcdpc/asap-pocketbase/pull/265)
+into `codex/csharp-port` and is now implemented and ready for independent
+review. Its existing bootstrap is preserved and rebased onto policy
+`5493efee9ce140d6eaa83da2d178e2004fea7c2c`; the [handoff](slice-06-handoff.md)
+retains original and rebased anchors, with the final synchronization head in
+PR #265's receipt. PR #264 remains the final draft port PR. Slice 6 is not
+accepted; Terra review is next.
 No Slice 7 continuation is authorized. Earlier policy/state entries are history.
+
+## Slice 6 Analytics Implementation Candidate - 2026-09-15
+
+Slice 6 is implemented on `codex/slice-06-analytics` from the required starting
+HEAD `e250ef1f40e8cae79d3761d77330a8560d799d3b`. The candidate is ready for
+independent review and remains unaccepted; its exact pushed SHA is recorded in
+draft PR #265 because a commit cannot embed its own hash. The compact local
+candidate receipt is `.git/asap-slice-06-candidate-20260915-final4.json`, with
+published source/artifact linkage in
+`.artifacts/slice-06-candidate-20260915-final4/artifact-manifest.json`.
+
+Local pre-review evidence includes the preserved successful Release 305/305
+real-SQL report, complete Node/frontend 174-file and 317-subcheck coverage,
+the dedicated Analytics SQL fixture, 20-state desktop/mobile Kestrel browser
+coverage, four native fixture modes, and Web/self-contained migration
+publication checks. The Grid.js focus failure was fixed as an ordinary
+isolated-JSDOM teardown race; the final candidate suite has no retry masking.
+PR #265 and PR #264 remain draft. Terra has not run. Next state: full
+independent Terra review. No merge, acceptance, Slice 7, tag, deployment,
+rehearsal or cutover is authorized by this checkpoint.
+
+## Historical Slice 6 Bootstrap - 2026-09-15
+
+Slice 6 Analytics is bootstrapped on `codex/slice-06-analytics` from
+`1c3b46d13a42bb1a2887136385f3dce18b610c8c`, the documentation-policy transition
+after accepted Slice 5 product milestone `36727414d02cbe34ba13cd3f6f1bb57980b83a6f`.
+No child packages — one Slice 6 integration PR into `codex/csharp-port`.
+Draft [PR #265](https://github.com/clcdpc/asap-pocketbase/pull/265) holds the
+exact bootstrap head receipt; see the [handoff](slice-06-handoff.md).
+The [packet](slice-06.md) now names the accepted helpers, schema and fixtures.
+Implementation has not started; direct Luna Max implementation is next.
+PR #264 remains the final draft port PR. This bootstrap authorizes no Slice 7,
+merge, tag, deployment, rehearsal or cutover. Earlier state entries are history.
 
 ## Historical Direct-Model Policy Transition - 2026-09-15
 
@@ -537,7 +571,7 @@ closed. They do not prescribe the current remaining-slice model.
 | 3 | Additional-copy workflow | Complete: reviewed milestone `85539b0`; 190 local/remote tests, native/published-browser checks and full Terra Pass 5 clear |
 | 4 | Administration and configuration | Candidate-d final local gates and retained Terra full Pass 3 clean; final milestone and exact-SHA CI result in the [acceptance record](https://github.com/clcdpc/asap-pocketbase/pull/264#issuecomment-5665538639) |
 | 5 | Background workflows and complete email operations | Not started |
-| 6 | Analytics | Not started |
+| 6 | Analytics | Implemented; independent Terra review pending; not accepted |
 | 7 | Migration hardening and legacy links | Not started |
 | 8 | Deployment, health, monitoring, release artifacts | Not started |
 | 9 | CI, browser, accessibility, release integration | Not started |

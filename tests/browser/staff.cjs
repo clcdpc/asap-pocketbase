@@ -391,6 +391,99 @@ async function runSuperAdmin(browser, args, axeSource, report) {
   }
 }
 
+async function runAnalytics(browser, args, axeSource, report) {
+  const superContextState = await createContext(
+    browser,
+    { width: 1280, height: 900 },
+    args.baseOrigin,
+    args.superIdentity
+  );
+  const superPage = await superContextState.context.newPage();
+  const superErrors = [];
+  superPage.on('pageerror', error => superErrors.push(error.message));
+  try {
+    await superPage.goto(`${args.baseOrigin}/staff/?stage=analytics`, { waitUntil: 'networkidle' });
+    await superPage.locator('#analytics-container .analytics-shell').waitFor();
+    assert.equal(await superPage.evaluate(() => document.activeElement.id), 'analytics-title');
+    assert.equal(await superPage.locator('#analytics-scope').inputValue(), 'all');
+    assert.equal(await superPage.locator('#analytics-date-range').inputValue(), 'lastMonth');
+    await superPage.getByText('Requests by stage', { exact: true }).waitFor();
+    await superPage.getByText('New suggestions', { exact: true }).waitFor();
+
+    await Promise.all([
+      superPage.waitForResponse(response => {
+        const url = new URL(response.url());
+        return response.request().method() === 'GET' &&
+          url.pathname === '/api/asap/staff/analytics' &&
+          url.searchParams.get('scope') === '2';
+      }),
+      superPage.locator('#analytics-scope').selectOption('2')
+    ]);
+    await superPage.locator('#analytics-container .analytics-shell').waitFor();
+    assert.equal(await superPage.locator('#analytics-scope').inputValue(), '2');
+
+    await Promise.all([
+      superPage.waitForResponse(response => {
+        const url = new URL(response.url());
+        return response.request().method() === 'GET' &&
+          url.pathname === '/api/asap/staff/analytics' &&
+          url.searchParams.get('scope') === '2' &&
+          url.searchParams.get('range') === 'last90';
+      }),
+      superPage.locator('#analytics-date-range').selectOption('last90')
+    ]);
+    await superPage.locator('#analytics-container .analytics-shell').waitFor();
+    assert.equal(await superPage.locator('#analytics-scope').inputValue(), '2');
+    assert.equal(await superPage.locator('#analytics-date-range').inputValue(), 'last90');
+    await scan(superPage, axeSource, args.artifactRoot, report, 'desktop', 'analytics-super-admin');
+    assert.deepEqual(superErrors, [], `Super-admin Analytics raised a browser error: ${superErrors.join('; ')}`);
+    assert.equal(superContextState.traffic.externalRequests, 0, 'Super-admin Analytics requested an external asset');
+  } finally {
+    await superContextState.context.close();
+  }
+
+  const staffContextState = await createContext(
+    browser,
+    { width: 390, height: 844 },
+    args.baseOrigin,
+    args.staffIdentity
+  );
+  const staffPage = await staffContextState.context.newPage();
+  const staffErrors = [];
+  staffPage.on('pageerror', error => staffErrors.push(error.message));
+  try {
+    await staffPage.goto(`${args.baseOrigin}/staff/?stage=analytics`, { waitUntil: 'networkidle' });
+    await staffPage.locator('#analytics-container .analytics-shell').waitFor();
+    assert.equal(await staffPage.evaluate(() => document.activeElement.id), 'analytics-title');
+    assert.equal(await staffPage.locator('#analytics-scope').count(), 0);
+    assert.equal(await staffPage.locator('#analytics-date-range').inputValue(), 'lastMonth');
+    assert.match(await staffPage.locator('.analytics-range-summary').textContent(), /Test Library/);
+    await Promise.all([
+      staffPage.waitForResponse(response => {
+        const url = new URL(response.url());
+        return response.request().method() === 'GET' &&
+          url.pathname === '/api/asap/staff/analytics' &&
+          url.searchParams.get('range') === 'last90';
+      }),
+      staffPage.locator('#analytics-date-range').selectOption('last90')
+    ]);
+    await staffPage.locator('#analytics-container .analytics-shell').waitFor();
+    assert.equal(await staffPage.locator('#analytics-date-range').inputValue(), 'last90');
+    assert.match(await staffPage.locator('.analytics-range-summary').textContent(), /Test Library/);
+    await scan(staffPage, axeSource, args.artifactRoot, report, 'mobile', 'analytics-library-staff');
+    assert.deepEqual(staffErrors, [], `Library-staff Analytics raised a browser error: ${staffErrors.join('; ')}`);
+    assert.equal(staffContextState.traffic.externalRequests, 0, 'Library-staff Analytics requested an external asset');
+  } finally {
+    await staffContextState.context.close();
+  }
+
+  report.analytics = {
+    desktopSuperAdminScope: '2',
+    desktopRange: 'last90',
+    mobileLibraryOnly: true
+  };
+}
+
 async function runStaleAssignmentCandidates(browser, args, report) {
   const { context, traffic } = await createContext(
     browser,
@@ -1321,6 +1414,7 @@ async function main() {
   try {
     await runAnonymous(browser, args, axeSource, report);
     await runSuperAdmin(browser, args, axeSource, report);
+    await runAnalytics(browser, args, axeSource, report);
     await runStaleAssignmentCandidates(browser, args, report);
     await runOrdinaryTitleAssignment(browser, args, report);
     await runStaleMutationCompletions(browser, args, report);
@@ -1328,7 +1422,7 @@ async function main() {
     await runAdditionalCopies(browser, args, axeSource, report);
     await runOperatorResolution(browser, args, axeSource, report);
     await runScopedBlocked(browser, args, axeSource, report);
-    assert.equal(report.states.length, 18, 'Expected eighteen major staff browser states');
+    assert.equal(report.states.length, 20, 'Expected twenty major staff browser states');
     await fs.writeFile(
       path.join(args.artifactRoot, 'staff-browser-results.json'),
       JSON.stringify(report, null, 2),
