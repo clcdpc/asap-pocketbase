@@ -16,6 +16,7 @@ using NLog.Web;
 using System.Threading.RateLimiting;
 using Asap.Web.Features.Patron;
 using Asap.Web.Features.Administration;
+using Asap.Web.Features.Analytics;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -115,6 +116,7 @@ if (externalConfiguration is not null)
     builder.Services.AddSingleton<StaffProfileService>();
     builder.Services.AddSingleton<StaffLifecycleService>();
     builder.Services.AddSingleton<AdministrationService>();
+    builder.Services.AddSingleton<AnalyticsService>();
     builder.Services.AddSingleton<TitleRequestViewService>();
     builder.Services.AddSingleton<TitleRequestMutationService>();
     builder.Services.AddSingleton<AdditionalCopyService>();
@@ -201,6 +203,7 @@ if (externalConfiguration is not null)
     app.MapAdministrationEndpoints();
     app.MapTitleRequestEndpoints();
     app.MapAdditionalCopyEndpoints();
+    app.MapAnalyticsEndpoints();
     app.UseHangfireDashboard(
         "/hangfire",
         new Hangfire.DashboardOptions

@@ -1,8 +1,16 @@
 # Slice 6: Analytics
 
-## Bootstrap - 2026-09-15
+## Implementation Status - 2026-09-15
 
-Refreshed against accepted Slices 0-5. Analytics implementation has not started.
+The Analytics endpoint, scoped SQL metrics, staff view/navigation, stale-load
+guards and required real-SQL/frontend/browser coverage are implemented and
+ready for independent review. Slice 6 remains unaccepted; the exact pushed
+candidate SHA and compact gate receipts are recorded in PR #265 and the
+[handoff](slice-06-handoff.md).
+
+## Bootstrap (Historical) - 2026-09-15
+
+This packet was refreshed against accepted Slices 0-5 before implementation.
 The canonical sequence remains document 02; this packet narrows implementation
 context without changing the agreed plan. See the [thin autonomous supervisor
 handoff](slice-06-handoff.md).

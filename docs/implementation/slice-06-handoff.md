@@ -1,5 +1,36 @@
 # Slice 6 Thin Autonomous Supervisor Handoff
 
+## Implementation Status - 2026-09-15
+
+Slice 6 Analytics implementation is complete and ready for independent review;
+it is not accepted. The exact review candidate SHA is recorded in PR #265 and
+the local candidate receipt after push because a commit cannot embed its own
+hash. The candidate started from `e250ef1f40e8cae79d3761d77330a8560d799d3b`
+and is linked to `.git/asap-slice-06-candidate-20260915-final4.json` and
+`.artifacts/slice-06-candidate-20260915-final4/artifact-manifest.json`.
+
+The implemented surfaces are the scoped server-side SQL aggregation endpoint
+and DTO, staff Analytics navigation/view, scope/range/auth stale-load guards,
+real-SQL and frontend regressions, the dedicated two-library collision fixture,
+and the published/native verification wrappers. Complete local gates are
+recorded in the candidate, focused Analytics, browser, native and Node receipts.
+The earlier Grid.js focus failure was an ordinary isolated-JSDOM teardown race;
+the harness now drains scheduled Grid.js work before teardown. The candidate
+suite contains no retry-based masking. Release .NET evidence remains the
+successful 305/305 report whose application inputs were unchanged by that
+Node-only harness correction.
+
+Evidence paths: `TestResults/analytics-focused-7/analytics.trx`,
+`TestResults/node-full-final.log`,
+`TestResults/staff-browser-analytics/browser.trx`,
+`.artifacts/browser/staff-0550dd9acaa84370a32954809c003011/staff-browser-results.json`,
+`.git/asap-slice-06-final-fixtures-20260915-final5/receipt.json`,
+`.git/asap-slice-06-final-browsers-20260915-final4/receipt.json`, and
+`.git/asap-slice-06-source-linkage-final4.json`.
+
+PR #265 remains draft, PR #264 remains draft, Slice 6 is not accepted, and
+Terra has not run. Next state: full independent Terra review.
+
 ## Checkpoint
 
 - Repository: `clcdpc/asap-pocketbase`.
@@ -24,8 +55,8 @@
 
 The accepted product and both policy-base anchors are intentional: intervening
 changes are documentation/process policy only. Bootstrap is complete and must
-not be repeated. Analytics implementation has not started. No supervisor,
-implementation or independent review was dispatched during synchronization.
+not be repeated. The implementation and local pre-review gates are complete;
+no independent review was dispatched during synchronization.
 
 ## Objective And Reuse
 
@@ -78,13 +109,13 @@ within the existing feature boundary.
 
 ## Surfaces And Validation
 
-Expected implementation: feature-oriented endpoint/service/DTO in `Asap.Web`,
+Implemented surface: feature-oriented endpoint/service/DTO in `Asap.Web`,
 normal endpoint/DI registration, parameterized aggregate SQL using existing
 EF/SqlClient boundaries or Dapper where appropriate, an Analytics module in
 the tracked vanilla staff frontend and its existing navigation/styles, real-SQL
 fixtures, frontend/browser/accessibility tests. DACPAC remains schema owner.
-All required migration inputs are present; no concrete correction is pending.
-Fix any subsequently demonstrated missing Analytics dependency in this slice.
+All required migration inputs are present; no missing Analytics dependency was
+demonstrated during implementation.
 
 Luna must run complete integrated Slice 6 validation before the supervisor
 dispatches fresh independent Terra High full-slice review. Required
@@ -116,14 +147,15 @@ authorize later-slice progression.
 
 ## Next Action
 
-Run one GPT-6 Astra Max thin autonomous supervisor task for Slice 6 from PR #265.
+Run the full independent Terra review for the pushed PR #265 candidate. Terra
+has not run; this handoff does not accept Slice 6, merge either draft PR, or
+authorize Slice 7. Any later acceptance must preserve the exact candidate SHA,
+run the governing exact-SHA CI, and follow document 10's review/acceptance
+gates.
 
-The supervisor internally dispatches bounded Luna Max implementation with full
-integrated validation, fresh Terra High full-slice review, and confirmed Luna
-fix/Terra focused re-review loops (maximum three cycles after initial full
-review). It performs short acceptance, merges PR #265 into `codex/csharp-port`,
-records status/acceptance documentation, commits if required and waits for
-successful CI on the exact final milestone SHA. Stop at accepted Slice 6 or
-document 10's hard-stop conditions; no Slice 7 continuation is authorized.
-Use compact receipts and the binding context firewall. Manual/direct bounded
-tasks remain fallback with identical gates, not required separate user launches.
+For a later documentation-only acceptance commit, run from the repository root:
+
+```text
+node .git/validate-supervisor-docs.cjs HEAD^
+git diff --check HEAD^ HEAD
+```

@@ -20,6 +20,12 @@ async function until(predicate, message) {
 async function afterFocusFrame(window) {
   await new Promise(resolve => window.requestAnimationFrame(() => window.setTimeout(resolve, 0)));
 }
+async function settleGridWork(window) {
+  // Grid.js schedules follow-up renders after its data promise resolves.
+  await afterFocusFrame(window);
+  await afterFocusFrame(window);
+  await new Promise(resolve => window.setTimeout(resolve, 0));
+}
 
 async function runJourney(scenario) {
   const titleRequest = scenario === 'title-return';
@@ -174,6 +180,7 @@ async function runJourney(scenario) {
     if (scenario === 'library-navigation') assert.strictEqual(document.getElementById('additional-copy-library-scope').value, '3');
     console.log(`Staff delayed Grid.js dialog focus passed: ${scenario}`);
   } finally {
+    if (dom) await settleGridWork(dom.window);
     dom?.window.close();
     fs.rmSync(temporary, { recursive: true, force: true });
   }

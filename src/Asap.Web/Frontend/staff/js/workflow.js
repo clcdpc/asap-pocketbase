@@ -7,6 +7,7 @@ import {
   onAccessUnavailable
 } from './http.js';
 import { createSettingsController } from './settings.js';
+import { loadAnalytics, resetAnalytics } from './analytics.js';
 
 const STATUS_LABELS = {
   open: 'Open',
@@ -95,6 +96,8 @@ export function createWorkflowApp() {
     signOut: document.querySelector('#sign-out'),
     queueView: document.querySelector('#queue-view'),
     additionalCopyView: document.querySelector('#additional-copy-view'),
+    analyticsView: document.querySelector('#analytics-view'),
+    analyticsContainer: document.querySelector('#analytics-container'),
     profileView: document.querySelector('#profile-view'),
     operationsView: document.querySelector('#operations-view'),
     operationsTab: document.querySelector('#operations-view-tab'),
@@ -251,6 +254,7 @@ export function createWorkflowApp() {
     latestLoads.begin('detail').abort();
     latestLoads.begin('additional-copy-detail').abort();
     latestLoads.begin('additional-copy-preview').abort();
+    resetAnalytics();
     settingsController.signedOut();
     dom.signedOutMessage.textContent = message || 'Sign in with your authorized library account.';
     dom.signedOut.hidden = false;
@@ -322,6 +326,9 @@ export function createWorkflowApp() {
       } else if (currentStageParameter() === 'additional_copies') {
         switchView('additional-copies', false);
         await loadAdditionalCopies();
+      } else if (currentStageParameter() === 'analytics') {
+        switchView('analytics', false);
+        await loadAnalytics(dom.analyticsContainer);
       } else {
         await loadQueue();
       }
@@ -1638,6 +1645,7 @@ export function createWorkflowApp() {
     state.activeView = name;
     dom.queueView.hidden = name !== 'queue';
     dom.additionalCopyView.hidden = name !== 'additional-copies';
+    dom.analyticsView.hidden = name !== 'analytics';
     dom.profileView.hidden = name !== 'profile';
     dom.operationsView.hidden = name !== 'operations';
     dom.settingsView.hidden = name !== 'settings';
@@ -1648,17 +1656,19 @@ export function createWorkflowApp() {
       else tab.removeAttribute('aria-current');
     }
     if (updateUrl) replaceStageParameter(
-      name === 'additional-copies' ? 'additional_copies' : name === 'settings' ? 'settings' : name === 'operations' ? 'operations' : null
+      name === 'additional-copies' ? 'additional_copies' : name === 'analytics' ? 'analytics' : name === 'settings' ? 'settings' : name === 'operations' ? 'operations' : null
     );
     const heading = name === 'queue'
       ? '#queue-title'
       : name === 'additional-copies' ? '#additional-copy-title'
+      : name === 'analytics' ? '#analytics-title'
       : name === 'profile' ? '#profile-title' : name === 'operations' ? '#operations-title' : '#settings-title';
     document.querySelector(heading).focus({ preventScroll: true });
     if (updateUrl && name === 'additional-copies' && !state.additionalCopyLoaded) {
       loadAdditionalCopies({ skipDeepLink: true });
     }
     if (updateUrl && name === 'operations') loadOperations();
+    if (updateUrl && name === 'analytics') loadAnalytics(dom.analyticsContainer);
     if (name === 'settings') settingsController.activate();
   }
 

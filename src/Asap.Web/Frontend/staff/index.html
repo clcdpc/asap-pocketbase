@@ -46,6 +46,9 @@
         <button class="view-tab" type="button" data-view="additional-copies">
           <i class="fa fa-clone" aria-hidden="true"></i> Additional copies
         </button>
+        <button class="view-tab" type="button" data-view="analytics">
+          <i class="fa fa-bar-chart" aria-hidden="true"></i> Analytics
+        </button>
         <button class="view-tab" type="button" data-view="profile">
           <i class="fa fa-user" aria-hidden="true"></i> Profile
         </button>
@@ -169,6 +172,16 @@
           <label class="check-field"><input id="mine-default" type="checkbox"> <span>Show mine + unclaimed by default</span></label>
           <div class="form-actions"><button class="primary-button" type="submit">Save profile</button></div>
         </form>
+      </section>
+
+      <section id="analytics-view" aria-labelledby="analytics-title" hidden>
+        <div class="section-heading">
+          <div>
+            <h1 id="analytics-title" tabindex="-1">Analytics</h1>
+            <p>Authorized operational metrics for the selected library scope and date range.</p>
+          </div>
+        </div>
+        <div id="analytics-container"></div>
       </section>
 
       <section id="operations-view" aria-labelledby="operations-title" hidden>
