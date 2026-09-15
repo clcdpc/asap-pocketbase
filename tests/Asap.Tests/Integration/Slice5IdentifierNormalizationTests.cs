@@ -11,6 +11,8 @@ public sealed partial class PatronJourneyTests
     public async Task EmptyIdentifierClearsStaleBibAndDerivedTagsWithQueueCheckpoint()
     {
         var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var scope = Slice5IsolatedLibraryId;
+        await EnsureSlice5IsolatedLibraryAsync(contextFactory, scope);
         long requestId;
         var seedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(-1);
         await using (var seed = await contextFactory.CreateDbContextAsync())
@@ -18,7 +20,7 @@ public sealed partial class PatronJourneyTests
             var bookFormat = await seed.MaterialFormats.SingleAsync(item => item.Code == "book");
             var request = new TitleRequest
             {
-                LibraryOrganizationId = 2,
+                LibraryOrganizationId = scope,
                 Barcode = $"slice5-empty-{Guid.NewGuid():N}",
                 Title = "Empty identifier normalization",
                 Author = "Slice Five",
@@ -57,7 +59,7 @@ public sealed partial class PatronJourneyTests
         try
         {
             var service = factory.Services.GetRequiredService<WorkflowProcessingService>();
-            var result = await service.ProcessIdentifierAsync(2, CancellationToken.None);
+            var result = await service.ProcessIdentifierAsync(scope, CancellationToken.None);
             Assert.AreEqual("completed", result.Code);
 
             await using var verify = await contextFactory.CreateDbContextAsync();
@@ -73,7 +75,7 @@ public sealed partial class PatronJourneyTests
                 select tag.Code).ToListAsync();
             CollectionAssert.AreEquivalent(new[] { "slice5-unrelated" }, tags);
             var progress = await verify.QueueProgress.AsNoTracking().SingleAsync(item =>
-                item.QueueName == QueueNames.IdentifierProcessing && item.ScopeOrganizationId == 2);
+                item.QueueName == QueueNames.IdentifierProcessing && item.ScopeOrganizationId == scope);
             Assert.IsNull(progress.LastItemId);
             Assert.AreEqual(requestId, progress.LastOutcomeItemId);
             Assert.AreEqual("cycle_complete", progress.LastOutcomeCode);

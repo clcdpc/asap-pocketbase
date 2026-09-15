@@ -37,6 +37,25 @@ fixes use a temporary branch from the deployed source, immediate equivalent
 
 ## Execution And Evidence
 
+### Slice 5 Review Candidate - 2026-09-14
+
+The interrupted Slice 5 work resumed from
+`7a3919994d182ec1de3552b2861e657817933f69` in the existing checkout. The
+implementation and required pre-review validation are complete on the fresh
+candidate bytes, which are recorded in
+`.artifacts/slice-05-candidate-review-candidate-20260914l/` and the paired
+native/browser receipts under `.git/`. The candidate includes the schema-5
+QueueProgress migration, nine finite fair scans, timeout and fulfillment
+boundaries, actor/recipient concurrency protection, email operations, and the
+scoped admin UI journeys.
+
+Slice 5 status is **implemented / ready for independent review**. Terra review
+has not started, Slice 5 is not accepted, and Slice 6 has not started. The
+review-candidate SHA is recorded in PR #264's current-state section after the
+WIP commit is pushed. CI for this WIP candidate is diagnostic only. PR #264
+remains draft; no merge, tag, deployment, rehearsal, cutover, or accepted
+milestone was created.
+
 ### Slice 5 Interrupted WIP Checkpoint - 2026-09-14
 
 Slices 0-4 remain accepted. Slice 5 is **IN PROGRESS**, not review-ready and not

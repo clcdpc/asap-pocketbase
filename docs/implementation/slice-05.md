@@ -25,10 +25,10 @@ The canonical sequence remains document 02; this packet does not replace it.
   `150b30b776565194260cc327eeeffdfb46475e81`; no intervening PocketBase
   changes require propagation. The deployed production SHA remains unverified.
 - App and migration expected schema version: `5`; migration contract:
-  `slice-05`. The Slice 5 DACPAC must be freshly published after the
-  QueueProgress schema addition. DACPAC owns `[asap]`; pinned Hangfire 1.8.25
-  owns its separate schema.
-  DACPAC owns `[asap]`; pinned Hangfire 1.8.25 owns its separate schema.
+  `slice-05`. Starting schema version was `4`; Slice 5 advances it to `5`.
+  The Slice 5 DACPAC must be freshly published after the QueueProgress schema
+  addition. DACPAC owns `[asap]`; pinned Hangfire 1.8.25 owns its separate
+  schema.
   QueueProgress uses the prescribed scalar composite key `(QueueName,
   ScopeOrganizationId)` shape; `ScopeOrganizationId=1` is the all-libraries
   scope, `CycleMaxId` is nullable with zero representing an empty cycle, and

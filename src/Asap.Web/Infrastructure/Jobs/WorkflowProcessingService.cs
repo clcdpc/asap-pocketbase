@@ -250,9 +250,6 @@ public sealed class WorkflowProcessingService(
                 item.LibraryOrganizationId == authorizationOrganizationId)
                 .OrderByDescending(item => item.CreatedUtc).ThenByDescending(item => item.Id).ToList();
             if (newSubmissions.Count == 0 && purchases.Count == 0 && copies.Count == 0) continue;
-            var address = !string.IsNullOrWhiteSpace(recipientSnapshot.WeeklyActionSummaryEmail)
-                ? recipientSnapshot.WeeklyActionSummaryEmail : recipientSnapshot.NotificationEmail;
-            var normalized = StaffEmail.TryNormalize(address, out var validAddress) ? validAddress : null;
             var readiness = await emailSender.CheckReadinessAsync(authorizationOrganizationId, cancellationToken);
             var businessKey = manualRunId is null
                 ? $"weekly-summary:{recipientSnapshot.Id}:{periodStart:yyyyMMdd}-{periodEnd:yyyyMMdd}"
@@ -281,6 +278,8 @@ public sealed class WorkflowProcessingService(
             if (authorization is null || !authorization.IsActive || recipient is null || !recipient.IsActive ||
                 recipient.OrganizationId != recipientSnapshot.OrganizationId || !recipient.WeeklyActionSummaryEnabled ||
                 recipient.EntraTenantId != recipientSnapshot.EntraTenantId || recipient.EntraObjectId != recipientSnapshot.EntraObjectId ||
+                !recipient.EntraTenantId.HasValue || !allowedTenantIds.Contains(recipient.EntraTenantId.Value) ||
+                !IsWeeklyRecipientRoleAllowed(recipient, authorizationOrganizationId) ||
                 !manualActorAllowed)
             {
                 continue;
@@ -292,8 +291,14 @@ public sealed class WorkflowProcessingService(
                 .SingleOrDefaultAsync(item => item.OrganizationId == 1, cancellationToken);
             var fromAddress = Clean(librarySettings?.FromAddress) ?? Clean(systemEmail?.FromAddress);
             var fromName = Clean(librarySettings?.FromName) ?? Clean(systemEmail?.FromName);
-            var suppression = normalized is null ? "recipient_missing_or_invalid" :
-                !recipientDomainPolicy.IsAllowed(normalized) ? "recipient_domain_not_allowed" :
+            var currentAddress = !string.IsNullOrWhiteSpace(recipient.WeeklyActionSummaryEmail)
+                ? recipient.WeeklyActionSummaryEmail
+                : recipient.NotificationEmail;
+            var currentNormalized = StaffEmail.TryNormalize(currentAddress, out var currentValidAddress)
+                ? currentValidAddress
+                : null;
+            var suppression = currentNormalized is null ? "recipient_missing_or_invalid" :
+                !recipientDomainPolicy.IsAllowed(currentNormalized) ? "recipient_domain_not_allowed" :
                 string.IsNullOrWhiteSpace(staffUrl) ? "staff_url_missing" :
                 string.IsNullOrWhiteSpace(fromAddress) ? "sender_missing" :
                 !readiness.IsConfigured ? "mail_not_configured" : null;
@@ -309,7 +314,7 @@ public sealed class WorkflowProcessingService(
                 RecipientEntraObjectId = recipient.EntraObjectId,
                 AuthorizationOrganizationId = authorizationOrganizationId,
                 RecipientAddressKind = "weekly_summary",
-                ToAddress = normalized,
+                ToAddress = currentNormalized,
                 FromAddress = fromAddress,
                 FromName = fromName,
                 Subject = suppression is null ? $"Weekly ASAP action summary: {newSubmissions.Count} new, {purchases.Count} awaiting bibs, {copies.Count} additional copies" : null,
@@ -1007,6 +1012,13 @@ public sealed class WorkflowProcessingService(
             return new WorkflowItemResult("stale_progress_fence", FenceLost: true);
         }
 
+        // A bounded HoldPickupTimeout scan may leave a due row for this later phase.
+        // Check the current row before calling Polaris so fulfillment cannot outrun it.
+        if (await IsFulfillmentTimeoutDueAsync(candidate, cancellationToken))
+        {
+            return new WorkflowItemResult("deferred_timeout");
+        }
+
         var operation = await LatestTrackedOperationAsync(candidate.Id, cancellationToken);
         IReadOnlyList<PolarisCheckoutSnapshot> checkouts;
         try
@@ -1636,6 +1648,28 @@ public sealed class WorkflowProcessingService(
         return progress is not null && progress.RowVersion.SequenceEqual(expectedVersion);
     }
 
+    private async Task<bool> IsFulfillmentTimeoutDueAsync(
+        TitleRequest candidate,
+        CancellationToken cancellationToken)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var request = await context.TitleRequests.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.Id == candidate.Id, cancellationToken);
+        if (request is null || request.LibraryOrganizationId != candidate.LibraryOrganizationId ||
+            !request.RowVersion.SequenceEqual(candidate.RowVersion) || request.Status != "hold_placed")
+        {
+            return false;
+        }
+
+        var settings = await EffectiveWorkflowAsync(context, request.LibraryOrganizationId, cancellationToken);
+        var (enabled, days) = TimeoutSetting(settings, TimeoutFamily.HoldPickupTimeout);
+        return enabled && days.HasValue && TimeoutSemantics.IsExpired(
+            request.UpdatedUtc,
+            timeProvider.GetUtcNow(),
+            businessTimeZone,
+            days.Value);
+    }
+
     private static async Task<bool> IsIdentifierMutationProtectedAsync(
         AsapDbContext context,
         long requestId,
@@ -1905,6 +1939,13 @@ public sealed class WorkflowProcessingService(
         string.IsNullOrWhiteSpace(value) ? null : value.Replace("<", "", StringComparison.Ordinal).Replace(">", "", StringComparison.Ordinal).Trim();
 
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static bool IsWeeklyRecipientRoleAllowed(StaffUser recipient, int authorizationOrganizationId) =>
+        recipient.EntraTenantId.HasValue && recipient.EntraObjectId.HasValue &&
+        recipient.EntraTenantId != Guid.Empty && recipient.EntraObjectId != Guid.Empty &&
+        (recipient.Role == "super_admin" && recipient.OrganizationId == 1 && authorizationOrganizationId == 1 ||
+         recipient.Role is "staff" or "admin" && recipient.OrganizationId == authorizationOrganizationId &&
+         authorizationOrganizationId > 1);
 
     private static string AppendNote(string? current, string note) => string.IsNullOrWhiteSpace(current) ? note : $"{current.TrimEnd()}\n{note}";
     private static async Task<bool> SaveWithConcurrencyAsync(AsapDbContext context, CancellationToken cancellationToken)

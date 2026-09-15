@@ -1,12 +1,114 @@
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Jobs;
+using Asap.Web.Features.Staff;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Asap.Tests.Integration;
 
 public sealed partial class PatronJourneyTests
 {
+    [TestMethod]
+    public async Task LaterFulfillmentDefersRowsTheBoundedPickupTimeoutScanDidNotReach()
+    {
+        const int scope = 99004;
+        var configuration = CreateLowCapConfiguration(pageSize: 1, maxPerRun: 2);
+        configuration.Hangfire.ProcessingLimits.Timeouts!.PageSize = 1;
+        configuration.Hangfire.ProcessingLimits.Timeouts.MaxPerRun = 1;
+        var provider = new FulfillmentEvidenceProvider();
+        await using var workflowFactory = CreateQueueTestFactory(configuration, new QueueFairnessProvider());
+        await using var evidenceFactory = workflowFactory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IStaffPolarisProvider>(provider);
+            }));
+        var contextFactory = evidenceFactory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await EnsureSlice5IsolatedLibraryAsync(contextFactory, scope);
+        var requestIds = new List<long>();
+        WorkflowSettings? originalSettings = null;
+        try
+        {
+            var now = timeProvider!.GetUtcNow().UtcDateTime;
+            await using (var seed = await contextFactory.CreateDbContextAsync())
+            {
+                var settings = await seed.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == scope);
+                if (settings is not null)
+                {
+                    originalSettings = new WorkflowSettings
+                    {
+                        OrganizationId = scope,
+                        HoldPickupTimeoutEnabled = settings.HoldPickupTimeoutEnabled,
+                        HoldPickupTimeoutDays = settings.HoldPickupTimeoutDays
+                    };
+                }
+                else
+                {
+                    settings = new WorkflowSettings { OrganizationId = scope };
+                    seed.WorkflowSettings.Add(settings);
+                }
+                settings.HoldPickupTimeoutEnabled = true;
+                settings.HoldPickupTimeoutDays = 1;
+                var formatId = await seed.MaterialFormats.Where(item => item.Code == "book")
+                    .Select(item => item.Id).SingleAsync();
+                var recent = NewRequest(scope, $"s5-def-recent-{Guid.NewGuid():N}"[..28], "hold_placed",
+                    now.AddDays(-3), now.AddHours(-1));
+                recent.MaterialFormatId = formatId;
+                recent.BibId = "99041";
+                var due = NewRequest(scope, $"s5-def-due-{Guid.NewGuid():N}"[..28], "hold_placed",
+                    now.AddDays(-2), now.AddDays(-2));
+                due.MaterialFormatId = formatId;
+                due.BibId = "99042";
+                seed.TitleRequests.AddRange(recent, due);
+                await seed.SaveChangesAsync();
+                requestIds.AddRange([recent.Id, due.Id]);
+
+                await PrepareTimeoutCycleAsync(
+                    contextFactory,
+                    QueueNames.HoldPickupTimeout,
+                    due.Id,
+                    scope,
+                    recent.CreatedUtc.AddTicks(-1));
+                await PrepareTimeoutCycleAsync(
+                    contextFactory,
+                    QueueNames.FulfillmentTracking,
+                    due.Id,
+                    scope,
+                    recent.CreatedUtc.AddTicks(-1));
+            }
+
+            var result = await evidenceFactory.Services.GetRequiredService<WorkflowProcessingService>()
+                .ProcessWorkflowAsync(scope, CancellationToken.None);
+            Assert.AreEqual("completed", result.Code);
+            Assert.AreEqual(1, provider.CheckoutReadCount);
+            Assert.AreEqual("hold_placed", await ReadRequestStatusAsync(contextFactory, requestIds[0]));
+            Assert.AreEqual("hold_placed", await ReadRequestStatusAsync(contextFactory, requestIds[1]));
+
+            await using var verify = await contextFactory.CreateDbContextAsync();
+            var fulfillmentProgress = await verify.QueueProgress.AsNoTracking().SingleAsync(item =>
+                item.QueueName == QueueNames.FulfillmentTracking && item.ScopeOrganizationId == scope);
+            Assert.AreEqual(requestIds[1], fulfillmentProgress.LastItemId);
+            Assert.AreEqual("deferred_timeout", fulfillmentProgress.LastOutcomeCode);
+        }
+        finally
+        {
+            await DeleteRequestIdsAsync(contextFactory, requestIds);
+            await using var restore = await contextFactory.CreateDbContextAsync();
+            var settings = await restore.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == scope);
+            if (originalSettings is null)
+            {
+                if (settings is not null) restore.WorkflowSettings.Remove(settings);
+            }
+            else if (settings is not null)
+            {
+                settings.HoldPickupTimeoutEnabled = originalSettings.HoldPickupTimeoutEnabled;
+                settings.HoldPickupTimeoutDays = originalSettings.HoldPickupTimeoutDays;
+            }
+            await restore.SaveChangesAsync();
+        }
+    }
+
     [TestMethod]
     public async Task TimeoutUsesSparseSystemSettingsButHonorsLibraryDisableOverride()
     {
@@ -164,20 +266,106 @@ public sealed partial class PatronJourneyTests
         }
     }
 
+    [TestMethod]
+    public async Task TimeoutUsesBusinessCalendarAcrossSpringForwardThroughTheSqlQueue()
+    {
+        const int scope = 99006;
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await EnsureSlice5IsolatedLibraryAsync(contextFactory, scope);
+        var originalNow = timeProvider!.GetUtcNow();
+        var dstNow = new DateTimeOffset(2026, 3, 9, 6, 30, 0, TimeSpan.Zero);
+        timeProvider.SetUtcNow(dstNow);
+        var configuration = TestConfigurationFactory.Create();
+        var zone = TimeZoneInfo.FindSystemTimeZoneById(configuration.Application.BusinessTimeZone!);
+        var cutoff = TimeoutSemantics.CutoffUtc(dstNow, zone, 1);
+        var requestIds = new List<long>();
+        WorkflowSettings? originalSettings = null;
+        try
+        {
+            await using (var seed = await contextFactory.CreateDbContextAsync())
+            {
+                var settings = await seed.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == scope);
+                if (settings is not null)
+                {
+                    originalSettings = new WorkflowSettings
+                    {
+                        OrganizationId = scope,
+                        OutstandingTimeoutEnabled = settings.OutstandingTimeoutEnabled,
+                        OutstandingTimeoutDays = settings.OutstandingTimeoutDays,
+                        OutstandingTimeoutSendEmail = settings.OutstandingTimeoutSendEmail
+                    };
+                }
+                else
+                {
+                    settings = new WorkflowSettings { OrganizationId = scope };
+                    seed.WorkflowSettings.Add(settings);
+                }
+                settings.OutstandingTimeoutEnabled = true;
+                settings.OutstandingTimeoutDays = 1;
+                settings.OutstandingTimeoutSendEmail = false;
+                var request = NewRequest(scope, $"s5-dst-{Guid.NewGuid():N}", "suggestion", cutoff, cutoff);
+                request.MaterialFormatId = await seed.MaterialFormats.Where(item => item.Code == "book")
+                    .Select(item => item.Id).SingleAsync();
+                seed.TitleRequests.Add(request);
+                await seed.SaveChangesAsync();
+                requestIds.Add(request.Id);
+            }
+
+            await PrepareTimeoutCycleAsync(
+                contextFactory, QueueNames.OutstandingTimeout, requestIds[0], scope);
+            var service = factory.Services.GetRequiredService<WorkflowProcessingService>();
+            await service.ProcessWorkflowAsync(scope, CancellationToken.None);
+            Assert.AreEqual("suggestion", await ReadRequestStatusAsync(contextFactory, requestIds[0]));
+
+            await using (var mutate = await contextFactory.CreateDbContextAsync())
+            {
+                var request = await mutate.TitleRequests.SingleAsync(item => item.Id == requestIds[0]);
+                request.CreatedUtc = cutoff.AddTicks(-1);
+                request.UpdatedUtc = cutoff.AddTicks(-1);
+                await mutate.SaveChangesAsync();
+            }
+            await PrepareTimeoutCycleAsync(
+                contextFactory, QueueNames.OutstandingTimeout, requestIds[0], scope);
+            await service.ProcessWorkflowAsync(scope, CancellationToken.None);
+            Assert.AreEqual("closed", await ReadRequestStatusAsync(contextFactory, requestIds[0]));
+        }
+        finally
+        {
+            await DeleteRequestIdsAsync(contextFactory, requestIds);
+            await using var restore = await contextFactory.CreateDbContextAsync();
+            var settings = await restore.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == scope);
+            if (originalSettings is null)
+            {
+                if (settings is not null) restore.WorkflowSettings.Remove(settings);
+            }
+            else if (settings is not null)
+            {
+                settings.OutstandingTimeoutEnabled = originalSettings.OutstandingTimeoutEnabled;
+                settings.OutstandingTimeoutDays = originalSettings.OutstandingTimeoutDays;
+                settings.OutstandingTimeoutSendEmail = originalSettings.OutstandingTimeoutSendEmail;
+            }
+            await restore.SaveChangesAsync();
+            timeProvider.SetUtcNow(originalNow);
+        }
+    }
+
     private static async Task PrepareTimeoutCycleAsync(
         IDbContextFactory<AsapDbContext> contextFactory,
         string queueName,
-        long requestId)
+        long requestId,
+        int scope = 2,
+        DateTime? cursorCreatedUtc = null,
+        long cursorItemId = 0)
     {
         await using var context = await contextFactory.CreateDbContextAsync();
         var request = await context.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == requestId);
         var progress = await context.QueueProgress.SingleOrDefaultAsync(item =>
-            item.QueueName == queueName && item.ScopeOrganizationId == 2);
-        progress ??= new QueueProgress { QueueName = queueName, ScopeOrganizationId = 2 };
+            item.QueueName == queueName && item.ScopeOrganizationId == scope);
+        progress ??= new QueueProgress { QueueName = queueName, ScopeOrganizationId = scope };
         if (progress.RowVersion.Length == 0) context.QueueProgress.Add(progress);
         progress.CycleMaxId = requestId;
-        progress.LastCreatedUtc = request.CreatedUtc.AddTicks(-1);
-        progress.LastItemId = 0;
+        progress.LastCreatedUtc = cursorCreatedUtc ?? request.CreatedUtc.AddTicks(-1);
+        progress.LastItemId = cursorItemId;
         progress.LastOutcomeItemId = null;
         progress.LastOutcomeCode = "test_cycle_started";
         progress.LastOutcomeUtc = request.CreatedUtc;

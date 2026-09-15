@@ -122,8 +122,13 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task ManualWorkflowRejectsActorContractionAfterProviderEvidence()
+    [DataRow("deactivate")]
+    [DataRow("rebind")]
+    [DataRow("move")]
+    [DataRow("demote")]
+    public async Task ManualWorkflowRejectsActorContractionAfterProviderEvidence(string mutation)
     {
+        const int scope = 99010;
         var provider = ScriptedHoldProvider.ReplyRequiredThenSuccess();
         provider.BlockCreate();
         await using var workflowFactory = factory!.WithWebHostBuilder(builder =>
@@ -136,19 +141,20 @@ public sealed partial class PatronJourneyTests
             }));
 
         var superAdmin = await ReadConfiguredSuperAdminAsync();
-        var admin = await CreateCorrectiveStaffAsync(superAdmin, "admin", 2);
+        await EnsureManualActorOrganizationAsync(scope);
+        var admin = await CreateCorrectiveStaffAsync(superAdmin, "admin", scope);
         var actor = await ReadCorrectiveStaffAsync(admin);
-        var seeded = await SeedPendingHoldRequestAsync("manual-actor-final-boundary");
-        await PrepareSingleItemCycleAsync(QueueNames.HoldPlacement, 2, seeded.RequestId);
+        var seeded = await SeedPendingHoldRequestAsync("manual-actor-final-boundary", scope);
+        await PrepareSingleItemCycleAsync(QueueNames.HoldPlacement, scope, seeded.RequestId);
         try
         {
             var job = workflowFactory.Services.GetRequiredService<BackgroundWorkflowJobs>();
             var execution = job.ProcessManualWorkflowAsync(
                 new StaffJobEvidence(actor.Id, actor.EntraTenantId, actor.EntraObjectId),
-                2,
+                scope,
                 CancellationToken.None);
             await provider.CreateStarted.Task.WaitAsync(TimeSpan.FromSeconds(15));
-            await ExecuteNonQueryAsync("UPDATE [asap].[StaffUser] SET [IsActive] = 0 WHERE [Id] = @id;", ("@id", admin.Id));
+            await MutateManualActorAsync(admin.Id, mutation);
             provider.CompleteBlockedCreate(new HoldProviderResult(
                 HoldProviderOutcome.FinalSuccess,
                 null,
@@ -171,5 +177,37 @@ public sealed partial class PatronJourneyTests
             await DeleteRequestAsync(seeded.RequestId);
             await DeactivateCorrectiveStaffAsync(admin.Id);
         }
+    }
+
+    private static Task MutateManualActorAsync(long staffId, string mutation) => mutation switch
+    {
+        "deactivate" => ExecuteNonQueryAsync(
+            "UPDATE [asap].[StaffUser] SET [IsActive] = 0 WHERE [Id] = @id;", ("@id", staffId)),
+        "rebind" => ExecuteNonQueryAsync(
+            "UPDATE [asap].[StaffUser] SET [EntraObjectId] = @objectId WHERE [Id] = @id;",
+            ("@objectId", Guid.NewGuid()), ("@id", staffId)),
+        "move" => MoveManualActorAsync(staffId),
+        "demote" => ExecuteNonQueryAsync(
+            "UPDATE [asap].[StaffUser] SET [Role] = N'staff' WHERE [Id] = @id;", ("@id", staffId)),
+        _ => throw new ArgumentOutOfRangeException(nameof(mutation), mutation, null)
+    };
+
+    private static Task EnsureManualActorOrganizationAsync(int organizationId) => ExecuteNonQueryAsync(
+        "IF NOT EXISTS (SELECT 1 FROM [asap].[Organization] WHERE [Id] = @organizationId) " +
+        "INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive]) " +
+        "VALUES (@organizationId, N'Slice 5 manual actor library', N'S5M', 1);",
+        ("@organizationId", organizationId));
+
+    private static async Task MoveManualActorAsync(long staffId)
+    {
+        const int destinationOrganizationId = 99009;
+        await ExecuteNonQueryAsync(
+            "IF NOT EXISTS (SELECT 1 FROM [asap].[Organization] WHERE [Id] = @organizationId) " +
+            "INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive]) " +
+            "VALUES (@organizationId, N'Slice 5 actor race destination', N'S5A', 1);",
+            ("@organizationId", destinationOrganizationId));
+        await ExecuteNonQueryAsync(
+            "UPDATE [asap].[StaffUser] SET [Role] = N'admin', [OrganizationId] = @organizationId WHERE [Id] = @id;",
+            ("@organizationId", destinationOrganizationId), ("@id", staffId));
     }
 }

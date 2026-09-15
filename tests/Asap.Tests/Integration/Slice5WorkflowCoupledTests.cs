@@ -32,22 +32,24 @@ public sealed partial class PatronJourneyTests
                 services.AddSingleton<Asap.Web.Features.Staff.IStaffPolarisProvider>(provider);
             }));
         var contextFactory = lowCapFactory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
-        var seed = await SeedCoupledRowsAsync(contextFactory, scope: 2, recoveryCount: 3, placementCount: 3);
-        await IsolateOtherWorkflowQueuesAsync(contextFactory, QueueNames.HoldRecovery);
-        await IsolateOtherWorkflowQueuesAsync(contextFactory, QueueNames.HoldPlacement);
+        var scope = Slice5IsolatedLibraryId;
+        await EnsureSlice5IsolatedLibraryAsync(contextFactory, scope);
+        var seed = await SeedCoupledRowsAsync(contextFactory, scope, recoveryCount: 3, placementCount: 3);
+        await IsolateOtherWorkflowQueuesAsync(contextFactory, QueueNames.HoldRecovery, scope);
+        await IsolateOtherWorkflowQueuesAsync(contextFactory, QueueNames.HoldPlacement, scope);
         try
         {
             var result = await lowCapFactory.Services.GetRequiredService<WorkflowProcessingService>()
-                .ProcessWorkflowAsync(2, CancellationToken.None);
+                .ProcessWorkflowAsync(scope, CancellationToken.None);
             Assert.AreEqual("completed", result.Code);
             Assert.AreEqual(4, provider.CreateCount,
                 "Recovery and new placement each get two provider mutation opportunities in one invocation.");
 
             await using var verify = await contextFactory.CreateDbContextAsync();
             var recovery = await verify.QueueProgress.AsNoTracking().SingleAsync(item =>
-                item.QueueName == QueueNames.HoldRecovery && item.ScopeOrganizationId == 2);
+                item.QueueName == QueueNames.HoldRecovery && item.ScopeOrganizationId == scope);
             var placement = await verify.QueueProgress.AsNoTracking().SingleAsync(item =>
-                item.QueueName == QueueNames.HoldPlacement && item.ScopeOrganizationId == 2);
+                item.QueueName == QueueNames.HoldPlacement && item.ScopeOrganizationId == scope);
             Assert.AreEqual(seed.OperationIds[1], recovery.LastItemId);
             Assert.AreEqual(seed.PlacementRequestIds[1], placement.LastItemId);
             Assert.IsNotNull(recovery.CycleMaxId);
@@ -55,7 +57,7 @@ public sealed partial class PatronJourneyTests
         }
         finally
         {
-            await DeleteCoupledRowsAsync(contextFactory, seed, 2);
+            await DeleteCoupledRowsAsync(contextFactory, seed, scope);
         }
     }
 
@@ -82,7 +84,8 @@ public sealed partial class PatronJourneyTests
                 services.AddSingleton<Asap.Web.Features.Staff.IStaffPolarisProvider>(provider);
             }));
         var contextFactory = lowCapFactory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
-        var seed = await SeedCoupledRowsAsync(contextFactory, scope: 1, recoveryCount: 1, placementCount: 1);
+        var seed = await SeedCoupledRowsAsync(
+            contextFactory, scope: 1, recoveryCount: 1, placementCount: 1, requestLibraryOrganizationId: 2);
         await IsolateOtherWorkflowQueuesAsync(contextFactory, QueueNames.HoldRecovery, scope: 1);
         await IsolateOtherWorkflowQueuesAsync(contextFactory, QueueNames.HoldPlacement, scope: 1);
         var wasActive = await SetOrganizationActiveAsync(contextFactory, 2, false);
@@ -111,14 +114,16 @@ public sealed partial class PatronJourneyTests
         IDbContextFactory<AsapDbContext> contextFactory,
         int scope,
         int recoveryCount,
-        int placementCount)
+        int placementCount,
+        int? requestLibraryOrganizationId = null)
     {
         await using var context = await contextFactory.CreateDbContextAsync();
         var format = await context.MaterialFormats.SingleAsync(item => item.Code == "book");
         var baseUtc = DateTime.UtcNow.AddMinutes(-10);
+        var requestScope = requestLibraryOrganizationId ?? scope;
         var recoveryRequests = Enumerable.Range(0, recoveryCount).Select(index => new TitleRequest
         {
-            LibraryOrganizationId = 2,
+            LibraryOrganizationId = requestScope,
             Barcode = $"s5-cr-{Guid.NewGuid():N}",
             Title = $"Slice 5 coupled recovery {index}",
             MaterialFormatId = format.Id,
@@ -130,7 +135,7 @@ public sealed partial class PatronJourneyTests
         }).ToList();
         var placementRequests = Enumerable.Range(0, placementCount).Select(index => new TitleRequest
         {
-            LibraryOrganizationId = 2,
+            LibraryOrganizationId = requestScope,
             Barcode = $"s5-cp-{Guid.NewGuid():N}",
             Title = $"Slice 5 coupled placement {index}",
             MaterialFormatId = format.Id,

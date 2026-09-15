@@ -86,6 +86,52 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task FulfillmentDoesNotCloseAfterRequestIdentityChangesDuringCheckoutRead()
+    {
+        var barcode = $"2000000000{Random.Shared.Next(100000, 999999)}";
+        var provider = new FulfillmentEvidenceProvider
+        {
+            Checkouts = [new PolarisCheckoutSnapshot(9956, "tracked-9956", barcode)]
+        };
+        provider.BlockCheckoutRead();
+        await using var workflowFactory = factory!.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IStaffPolarisProvider>(provider);
+            }));
+
+        var seeded = await SeedCompletedHoldIdentityAsync(
+            "checkout-stale-identity", barcode, "9956", holdRequestId: "tracked-9956");
+        await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, 2, seeded.RequestId);
+        try
+        {
+            var execution = workflowFactory.Services.GetRequiredService<WorkflowProcessingService>()
+                .ProcessWorkflowAsync(2, CancellationToken.None);
+            await provider.CheckoutReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            await ExecuteNonQueryAsync(
+                "UPDATE [asap].[TitleRequest] SET [BibId] = N'9957' WHERE [Id] = @id;",
+                ("@id", seeded.RequestId));
+            provider.CompleteBlockedCheckout(provider.Checkouts);
+
+            var result = await execution.WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.AreEqual("completed", result.Code);
+            Assert.AreEqual("hold_placed", await ReadStringAsync(
+                "SELECT [Status] FROM [asap].[TitleRequest] WHERE [Id] = @id;", "@id", seeded.RequestId));
+            Assert.AreEqual("9957", await ReadStringAsync(
+                "SELECT [BibId] FROM [asap].[TitleRequest] WHERE [Id] = @id;", "@id", seeded.RequestId));
+            Assert.AreEqual(0, await CountForRequestAsync(
+                "[asap].[TitleRequestEvent]", "[TitleRequestId]", seeded.RequestId));
+            Assert.AreEqual(1, provider.CheckoutReadCount);
+            Assert.AreEqual(0, provider.HoldReadCount);
+        }
+        finally
+        {
+            await DeleteRequestAsync(seeded.RequestId);
+        }
+    }
+
+    [TestMethod]
     public async Task FulfillmentDoesNotInheritAnOldIdentityWhenLatestOperationHasNoHoldId()
     {
         var barcode = $"2000000000{Random.Shared.Next(100000, 999999)}";

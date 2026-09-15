@@ -387,7 +387,7 @@ public sealed partial class PatronJourneyTests
         await command.ExecuteNonQueryAsync();
     }
 
-    private static async Task<(long RequestId, byte[] RowVersion)> SeedPendingHoldRequestAsync(string key)
+    private static async Task<(long RequestId, byte[] RowVersion)> SeedPendingHoldRequestAsync(string key, int scope = 2)
     {
         await using var connection = new SqlConnection(databaseConnectionString);
         await connection.OpenAsync();
@@ -398,7 +398,7 @@ public sealed partial class PatronJourneyTests
             INSERT INTO [asap].[TitleRequest]
                 ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
                  [CreatedUtc], [UpdatedUtc])
-            VALUES (2, @barcode, @title, 1, @formatId, N'pending_hold', N'99001',
+            VALUES (@scope, @barcode, @title, 1, @formatId, N'pending_hold', N'99001',
                     DATEADD(day, -1, SYSUTCDATETIME()), SYSUTCDATETIME());
             SELECT CAST(SCOPE_IDENTITY() AS bigint), [RowVersion]
             FROM [asap].[TitleRequest]
@@ -406,6 +406,7 @@ public sealed partial class PatronJourneyTests
             """;
         command.Parameters.AddWithValue("@barcode", $"2000000000{Random.Shared.Next(100000, 999999)}");
         command.Parameters.AddWithValue("@title", $"Pending hold {key} {Guid.NewGuid():N}");
+        command.Parameters.AddWithValue("@scope", scope);
         await using var reader = await command.ExecuteReaderAsync();
         Assert.IsTrue(await reader.ReadAsync());
         return (reader.GetInt64(0), (byte[])reader[1]);
@@ -575,6 +576,15 @@ public sealed partial class PatronJourneyTests
         public List<string> HoldReadBarcodes { get; } = [];
         public int HoldReadCount { get; private set; }
         public int CheckoutReadCount { get; private set; }
+        public TaskCompletionSource CheckoutReadStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<IReadOnlyList<PolarisCheckoutSnapshot>>? PendingCheckoutRead { get; private set; }
+
+        public void BlockCheckoutRead() => PendingCheckoutRead = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void CompleteBlockedCheckout(IReadOnlyList<PolarisCheckoutSnapshot> checkouts) =>
+            PendingCheckoutRead!.TrySetResult(checkouts);
 
         public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken) =>
             Task.FromResult(new BibValidationResult(true));
@@ -597,6 +607,11 @@ public sealed partial class PatronJourneyTests
             cancellationToken.ThrowIfCancellationRequested();
             CheckoutReadCount++;
             if (CheckoutReadException is not null) throw CheckoutReadException;
+            if (PendingCheckoutRead is not null)
+            {
+                CheckoutReadStarted.TrySetResult();
+                return PendingCheckoutRead.Task;
+            }
             return Task.FromResult(Checkouts);
         }
 

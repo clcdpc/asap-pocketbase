@@ -11,6 +11,8 @@ public sealed partial class PatronJourneyTests
     public async Task TimeoutQueuesUseStatusSpecificAgesAndNeverExpireOutstandingPurchases()
     {
         var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var scope = Slice5IsolatedLibraryId;
+        await EnsureSlice5IsolatedLibraryAsync(contextFactory, scope);
         var now = timeProvider!.GetUtcNow().UtcDateTime;
         var old = now.AddDays(-31);
         var requestIds = new List<long>();
@@ -22,10 +24,10 @@ public sealed partial class PatronJourneyTests
         var createdLibraryEmail = false;
         await using (var seed = await contextFactory.CreateDbContextAsync())
         {
-            var settings = await seed.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == 2);
+            var settings = await seed.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == scope);
             originalSettings = settings is null ? null : new WorkflowSettings
             {
-                OrganizationId = 2,
+                OrganizationId = scope,
                 SuggestionLimit = settings.SuggestionLimit,
                 SuggestionLimitMessage = settings.SuggestionLimitMessage,
                 OutstandingTimeoutEnabled = settings.OutstandingTimeoutEnabled,
@@ -51,7 +53,7 @@ public sealed partial class PatronJourneyTests
             };
             if (settings is null)
             {
-                settings = new WorkflowSettings { OrganizationId = 2 };
+                settings = new WorkflowSettings { OrganizationId = scope };
                 seed.WorkflowSettings.Add(settings);
             }
             settings.OutstandingTimeoutEnabled = true;
@@ -68,10 +70,10 @@ public sealed partial class PatronJourneyTests
             var systemEmail = await seed.EmailSettings.SingleAsync(item => item.OrganizationId == 1);
             originalSystemEmailAddress = systemEmail.FromAddress;
             originalSystemEmailName = systemEmail.FromName;
-            var libraryEmail = await seed.EmailSettings.SingleOrDefaultAsync(item => item.OrganizationId == 2);
+            var libraryEmail = await seed.EmailSettings.SingleOrDefaultAsync(item => item.OrganizationId == scope);
             originalLibraryEmail = libraryEmail is null ? null : new EmailSettings
             {
-                OrganizationId = 2,
+                OrganizationId = scope,
                 ProtectedServerToken = libraryEmail.ProtectedServerToken,
                 FromAddress = libraryEmail.FromAddress,
                 FromName = libraryEmail.FromName,
@@ -79,7 +81,7 @@ public sealed partial class PatronJourneyTests
             };
             if (libraryEmail is null)
             {
-                libraryEmail = new EmailSettings { OrganizationId = 2 };
+                libraryEmail = new EmailSettings { OrganizationId = scope };
                 seed.EmailSettings.Add(libraryEmail);
                 createdLibraryEmail = true;
             }
@@ -89,13 +91,13 @@ public sealed partial class PatronJourneyTests
             libraryEmail.FromName = "Library Sender";
 
             var format = await seed.MaterialFormats.SingleAsync(item => item.Code == "book");
-            var suggestion = NewRequest(2, "timeout-suggestion", "suggestion", old, now);
+            var suggestion = NewRequest(scope, "timeout-suggestion", "suggestion", old, now);
             suggestion.Email = "timeout-recipient@example.org";
-            var purchase = NewRequest(2, "timeout-purchase", "outstanding_purchase", old, old);
+            var purchase = NewRequest(scope, "timeout-purchase", "outstanding_purchase", old, old);
             purchase.BibId = null;
-            var pendingHold = NewRequest(2, "timeout-pending", "pending_hold", old, old);
+            var pendingHold = NewRequest(scope, "timeout-pending", "pending_hold", old, old);
             pendingHold.AutoHold = true;
-            var placed = NewRequest(2, "timeout-placed", "hold_placed", old, old);
+            var placed = NewRequest(scope, "timeout-placed", "hold_placed", old, old);
             suggestion.MaterialFormatId = format.Id;
             purchase.MaterialFormatId = format.Id;
             pendingHold.MaterialFormatId = format.Id;
@@ -103,7 +105,7 @@ public sealed partial class PatronJourneyTests
             seed.TitleRequests.AddRange(suggestion, purchase, pendingHold, placed);
             var copy = new AdditionalCopyRequest
             {
-                LibraryOrganizationId = 2,
+                LibraryOrganizationId = scope,
                 BibId = "timeout-copy-bib",
                 Title = "Timeout copy",
                 Status = "open",
@@ -124,8 +126,8 @@ public sealed partial class PatronJourneyTests
                      })
             {
                 var progress = await seed.QueueProgress.SingleOrDefaultAsync(item =>
-                    item.QueueName == queue && item.ScopeOrganizationId == 2);
-                progress ??= new QueueProgress { QueueName = queue, ScopeOrganizationId = 2 };
+                    item.QueueName == queue && item.ScopeOrganizationId == scope);
+                progress ??= new QueueProgress { QueueName = queue, ScopeOrganizationId = scope };
                 if (progress.RowVersion.Length == 0) seed.QueueProgress.Add(progress);
                 progress.CycleMaxId = id;
                 progress.LastCreatedUtc = created.AddTicks(-1);
@@ -139,7 +141,7 @@ public sealed partial class PatronJourneyTests
         try
         {
             var result = await factory.Services.GetRequiredService<WorkflowProcessingService>()
-                .ProcessWorkflowAsync(2, CancellationToken.None);
+                .ProcessWorkflowAsync(scope, CancellationToken.None);
             Assert.AreEqual("completed", result.Code);
 
             await using var verify = await contextFactory.CreateDbContextAsync();
@@ -171,7 +173,7 @@ public sealed partial class PatronJourneyTests
                 "DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] = CONCAT(N'timeout:OutstandingTimeout:', @a); DELETE FROM [asap].[TitleRequestEvent] WHERE [TitleRequestId] IN (@a,@b,@c,@d); DELETE FROM [asap].[TitleRequest] WHERE [Id] IN (@a,@b,@c,@d); DELETE FROM [asap].[AdditionalCopyRequest] WHERE [Id] = @copy;",
                 ("@a", requestIds[0]), ("@b", requestIds[1]), ("@c", requestIds[2]), ("@d", requestIds[3]), ("@copy", copyId));
             await using var restore = await contextFactory.CreateDbContextAsync();
-            var settings = await restore.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == 2);
+            var settings = await restore.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == scope);
             if (originalSettings is null)
             {
                 if (settings is not null) restore.WorkflowSettings.Remove(settings);
@@ -192,7 +194,7 @@ public sealed partial class PatronJourneyTests
             var systemEmail = await restore.EmailSettings.SingleAsync(item => item.OrganizationId == 1);
             systemEmail.FromAddress = originalSystemEmailAddress;
             systemEmail.FromName = originalSystemEmailName;
-            var libraryEmail = await restore.EmailSettings.SingleOrDefaultAsync(item => item.OrganizationId == 2);
+            var libraryEmail = await restore.EmailSettings.SingleOrDefaultAsync(item => item.OrganizationId == scope);
             if (createdLibraryEmail)
             {
                 if (libraryEmail is not null) restore.EmailSettings.Remove(libraryEmail);

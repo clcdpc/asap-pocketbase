@@ -12,6 +12,27 @@ namespace Asap.Tests.Integration;
 
 public sealed partial class PatronJourneyTests
 {
+    private const int Slice5IsolatedLibraryId = 99001;
+
+    private static async Task EnsureSlice5IsolatedLibraryAsync(
+        IDbContextFactory<AsapDbContext> contextFactory,
+        int organizationId = Slice5IsolatedLibraryId)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync();
+        var organization = await context.Organizations.SingleOrDefaultAsync(item => item.Id == organizationId);
+        if (organization is null)
+        {
+            context.Organizations.Add(new Organization
+            {
+                Id = organizationId,
+                DisplayName = "Slice 5 Isolated Library",
+                Abbreviation = "S5I",
+                IsActive = true
+            });
+            await context.SaveChangesAsync();
+        }
+    }
+
     [TestMethod]
     [DataRow(QueueNames.IdentifierProcessing)]
     [DataRow(QueueNames.PurchasePromotion)]
@@ -47,21 +68,22 @@ public sealed partial class PatronJourneyTests
 
         var contextFactory = lowCapFactory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         var seed = await SeedFairnessRowsAsync(contextFactory, queueName);
-        await IsolateOtherWorkflowQueuesAsync(contextFactory, queueName);
+        var scope = seed.ScopeOrganizationId;
+        await IsolateOtherWorkflowQueuesAsync(contextFactory, queueName, scope);
         try
         {
             var service = lowCapFactory.Services.GetRequiredService<WorkflowProcessingService>();
             for (var invocation = 0; invocation < 3; invocation++)
             {
                 var result = queueName == QueueNames.IdentifierProcessing
-                    ? await service.ProcessIdentifierAsync(2, CancellationToken.None)
-                    : await service.ProcessWorkflowAsync(2, CancellationToken.None);
+                    ? await service.ProcessIdentifierAsync(scope, CancellationToken.None)
+                    : await service.ProcessWorkflowAsync(scope, CancellationToken.None);
                 Assert.AreNotEqual("sql_failure", result.Code);
                 Assert.AreNotEqual("stale_progress_fence", result.Code);
 
                 await using var progressContext = await contextFactory.CreateDbContextAsync();
                 var progress = await progressContext.QueueProgress.AsNoTracking().SingleAsync(item =>
-                    item.QueueName == queueName && item.ScopeOrganizationId == 2);
+                    item.QueueName == queueName && item.ScopeOrganizationId == scope);
                 if (invocation < 2)
                 {
                     var expectedIndex = invocation * 2 + 1;
@@ -124,8 +146,10 @@ public sealed partial class PatronJourneyTests
 
     private static async Task<FairnessSeed> SeedFairnessRowsAsync(
         IDbContextFactory<AsapDbContext> contextFactory,
-        string queueName)
+        string queueName,
+        int scope = Slice5IsolatedLibraryId)
     {
+        await EnsureSlice5IsolatedLibraryAsync(contextFactory, scope);
         await using var context = await contextFactory.CreateDbContextAsync();
         var format = await context.MaterialFormats.SingleAsync(item => item.Code == "book");
         var baseUtc = DateTime.UtcNow.AddDays(-60);
@@ -146,7 +170,7 @@ public sealed partial class PatronJourneyTests
             }
             var request = new TitleRequest
             {
-                LibraryOrganizationId = 2,
+                LibraryOrganizationId = scope,
                 Barcode = $"slice5-fairness-{Guid.NewGuid():N}-{index}",
                 Title = $"Slice 5 fairness {queueName} {index}",
                 Author = "Slice Five",
@@ -168,7 +192,7 @@ public sealed partial class PatronJourneyTests
             {
                 copies.Add(new AdditionalCopyRequest
                 {
-                    LibraryOrganizationId = 2,
+                    LibraryOrganizationId = scope,
                     BibId = (91000 + index).ToString(),
                     Title = $"Slice 5 fairness copy {index}",
                     Status = "open",
@@ -186,7 +210,7 @@ public sealed partial class PatronJourneyTests
             {
                 requests.Add(new TitleRequest
                 {
-                    LibraryOrganizationId = 2,
+                    LibraryOrganizationId = scope,
                     Barcode = $"slice5-recovery-{Guid.NewGuid():N}-{index}",
                     Title = $"Slice 5 recovery {index}",
                     MaterialFormatId = format.Id,
@@ -229,8 +253,8 @@ public sealed partial class PatronJourneyTests
                 ? operations.Select(item => item.Id).ToList()
                 : requests.Select(item => item.Id).ToList();
         var progress = await context.QueueProgress.SingleOrDefaultAsync(item =>
-            item.QueueName == queueName && item.ScopeOrganizationId == 2);
-        progress ??= new QueueProgress { QueueName = queueName, ScopeOrganizationId = 2 };
+            item.QueueName == queueName && item.ScopeOrganizationId == scope);
+        progress ??= new QueueProgress { QueueName = queueName, ScopeOrganizationId = scope };
         if (progress.RowVersion.Length == 0) context.QueueProgress.Add(progress);
         progress.CycleMaxId = null;
         progress.LastCreatedUtc = null;
@@ -240,7 +264,7 @@ public sealed partial class PatronJourneyTests
         progress.LastOutcomeUtc = null;
         progress.UpdatedUtc = DateTime.UtcNow;
         await context.SaveChangesAsync();
-        return new FairnessSeed(cursorIds, operations.Select(item => item.Id).ToList(), requests.Select(item => item.Id).ToList(), copies.Select(item => item.Id).ToList());
+        return new FairnessSeed(scope, cursorIds, operations.Select(item => item.Id).ToList(), requests.Select(item => item.Id).ToList(), copies.Select(item => item.Id).ToList());
     }
 
     private static async Task DeleteFairnessRowsAsync(
@@ -262,7 +286,7 @@ public sealed partial class PatronJourneyTests
         }
         await context.SaveChangesAsync();
         var progress = await context.QueueProgress.SingleOrDefaultAsync(item =>
-            item.QueueName == queueName && item.ScopeOrganizationId == 2);
+            item.QueueName == queueName && item.ScopeOrganizationId == seed.ScopeOrganizationId);
         if (progress is not null)
         {
             progress.CycleMaxId = null;
@@ -277,6 +301,7 @@ public sealed partial class PatronJourneyTests
     }
 
     private sealed record FairnessSeed(
+        int ScopeOrganizationId,
         IReadOnlyList<long> CursorIds,
         IReadOnlyList<long> OperationIds,
         IReadOnlyList<long> RequestIds,
