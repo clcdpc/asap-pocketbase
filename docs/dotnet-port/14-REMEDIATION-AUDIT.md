@@ -1,6 +1,6 @@
 # Porting pack remediation and handoff audit
 
-The dated execution/model-policy entries below are historical. The staged-PR/direct-model policy begins with Slice 6; [document 10](10-CODEX-MULTI-MODEL-TASK.md) governs current execution. This supersedes earlier model/process instructions without changing the technical remediation findings, contracts or acceptance evidence recorded here.
+The dated execution/model-policy entries below are historical. Staged PRs begin with Slice 6; [document 10](10-CODEX-MULTI-MODEL-TASK.md) now makes thin autonomous supervision with bounded workers and a strict context firewall preferred/default, with manual/direct fallback. This supersedes earlier model/process instructions without changing the technical remediation findings, contracts or acceptance evidence recorded here.
 
 ## Astra-first escalation refinement - 2026-09-13
 

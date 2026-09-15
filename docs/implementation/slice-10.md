@@ -7,10 +7,11 @@ Refresh the completed schema, CLI/developer reset paths and test fixtures before
 choosing the smallest implementation.
 
 Follow [document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) for the
-Slice-6+ staged-PR/direct-model lifecycle, optional package boundaries, review
-modes, context/evidence rules and exact-milestone CI. Run Luna Max and Terra
-High directly; Astra handles short boundary/acceptance tasks. Reading lists
-below identify full-slice authority; package tasks start with directly relevant
+Slice-6+ staged-PR lifecycle, optional package boundaries, review modes,
+context firewall and exact-milestone CI. Thin autonomous supervision is the
+preferred/default mode; Astra dispatches bounded Luna Max and independent
+Terra High workers. Manual/direct execution remains fallback. Reading lists
+below identify full-slice authority; workers start with directly relevant
 excerpts and expand for concrete concerns. Prior-slice acceptance and its
 exact-SHA CI must be complete before this slice starts.
 Default: one cohesive slice PR.

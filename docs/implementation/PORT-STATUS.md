@@ -5,7 +5,27 @@ Server 2022, and IIS under the authoritative `docs/dotnet-port/` pack. This
 single final draft PR will deliver the complete port as reviewed vertical
 slices. It is not eligible for merge or production deployment yet.
 
-## Current Policy And State - 2026-09-15
+## Thin Autonomous Supervisor Policy - 2026-09-15
+
+Slice 5 remains accepted at `36727414d02cbe34ba13cd3f6f1bb57980b83a6f`.
+Before Slice 6 implementation, the execution policy is refined again from
+`1c3b46d13a42bb1a2887136385f3dce18b610c8c` (policy CI `34954502445` succeeded).
+[Document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) makes a thin GPT-6
+Astra Max autonomous state-machine supervisor preferred/default, with bounded
+Luna Max implementation and independent Terra High review workers, compact
+receipts and a strict context firewall. Manual/direct phase control remains
+fallback. Technical ownership, complete integrated validation, review
+independence, release requirements and exact-milestone CI are unchanged.
+
+Slice 6 is already bootstrapped in draft [PR #265](https://github.com/clcdpc/asap-pocketbase/pull/265)
+into `codex/csharp-port`; implementation has not started. Preserve its bootstrap
+and synchronize the slice branch to this authoritative policy before the next
+task. PR #264 remains the final draft port PR. This documentation task launches
+no supervisor or workers. Next action after synchronization: one Slice 6
+autonomous supervisor task, progressing to accepted state or a hard-stop report.
+No Slice 7 continuation is authorized. Earlier policy/state entries are history.
+
+## Historical Direct-Model Policy Transition - 2026-09-15
 
 Slice 5 is reviewed and accepted at
 `36727414d02cbe34ba13cd3f6f1bb57980b83a6f`. Its exact-SHA

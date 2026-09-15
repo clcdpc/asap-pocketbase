@@ -1,6 +1,6 @@
 # ASAP PocketBase -> .NET Porting Documentation Pack
 
-**Status:** Slices 0-5 accepted; Slice 6 not started; staged-PR/direct-model policy begins with Slice 6; all objective acceptance/release gates retained
+**Status:** Slices 0-5 accepted; Slice 6 implementation not started; thin autonomous supervisor preferred/default from the remainder of Slice 6; all objective acceptance/release gates retained
 **Prepared:** 2026-09-12  
 **Repository:** `clcdpc/asap-pocketbase`  
 **Source snapshot:** `150b30b776565194260cc327eeeffdfb46475e81` (`Improve staff login diagnostics and library-aware email formatting`, 2026-09-09)  
@@ -14,9 +14,9 @@ The design was developed by walking the architecture, data model, authentication
 
 This revision closes four focused cutover/outbox findings: retired production PocketBase is forensic-only and cannot be started as-is after .NET accepts writes; expired email leases use a concrete conservative timeout/reclaim/fencing contract; authorization-sensitive staff mail persists the applicable ordinary-versus-weekly address rule; and post-merge/pre-cutover emergency PocketBase fixes have an explicit temporary-branch, immediate .NET propagation, rehearsal, and final-tag procedure. The pinned baseline and settled architecture remain unchanged, and no generalized messaging or migration framework is added.
 
-The staged-PR/direct-model policy begins with Slice 6. [Document 10](10-CODEX-MULTI-MODEL-TASK.md) is the primary execution/model/review authority: direct Luna Max implementation, direct Terra High detailed package and fresh holistic slice reviews, and short Astra Max bootstrap/contract/acceptance tasks. Temporary slice/work-package PRs bound coherent work below `codex/csharp-port`; PR #264 remains the single final draft port PR into `main`. Package validation is proportionate, full integrated slice validation remains required, and acceptance needs the resulting integration milestone's exact-SHA remote CI. Sol remains exceptional specialist advice outside the normal lifecycle.
+Staged PRs begin with Slice 6. [Document 10](10-CODEX-MULTI-MODEL-TASK.md) makes thin autonomous supervisor mode preferred/default for the remainder of Slice 6: one GPT-6 Astra Max state-machine supervisor dispatches bounded Luna Max implementation and independent Terra High review, consumes compact receipts under a strict context firewall, routes bounded fixes, performs short acceptance, integrates and waits for exact-milestone CI. Manual/direct tasks remain an explicit fallback with identical gates. Persistent technical-parent behavior is prohibited. Temporary slice/work-package topology is unchanged; PR #264 remains the final draft port PR into `main`. Full integrated validation, review independence and the three-cycle operational stop rule remain binding. Sol remains exceptional specialist advice.
 
-Slices 0-5 retain their actual historical policies and accepted evidence. Slice 5 is accepted at `36727414d02cbe34ba13cd3f6f1bb57980b83a6f` with successful exact-SHA CI `34952097695`. This documentation-only transition starts no slice and creates no new accepted product milestone. See [PORT-STATUS.md](../implementation/PORT-STATUS.md) for current state. The final repeated whole-application adversarial review and release/cutover gates remain unchanged.
+Slices 0-5 retain their actual historical policies and accepted evidence. Slice 5 is accepted at `36727414d02cbe34ba13cd3f6f1bb57980b83a6f` with successful exact-SHA CI `34952097695`. This documentation-only refinement launches no supervisor or workers and creates no new accepted product milestone. Existing bootstrap remains valid. See [PORT-STATUS.md](../implementation/PORT-STATUS.md) for current state. The final repeated whole-application adversarial review and release/cutover gates remain unchanged.
 
 The temporary `FileEmailSender` decision in `../implementation/temporary-email-transport.md` remains limited to the final provider boundary. Durable SQL outbox, authorization-sensitive recipient checks, recipient-domain safety, lease/fencing/idempotency/retry behavior, and real Rest 3-compatible cancellable `Clc.Postmark.Api` release/rehearsal gates remain binding; local files do not simulate provider/webhook success. The prior R1-R7 and final F1-F3 decisions remain unchanged, including OutstandingTimeout suggestion-age semantics, particular tracked hold identity for terminal fulfillment, and exhaustive retained legacy placed-hold evidence/BIB protection.
 
@@ -49,7 +49,7 @@ The prior hold-recovery, identity/session/lifecycle, Organization/claim, Additio
 | `07-API-FRONTEND-COMPATIBILITY.md` | Frontend preservation rules, API compatibility policy, auth behavior, CSP, vendored assets, and intentional changes. |
 | `08-RELEASE-VALIDATION-NOTES.md` | Live Polaris/release-validation decisions that should remain separate from ordinary PR testing. |
 | `09-DEFERRED-FOLLOWUPS.md` | Explicitly deferred hardening, modernization, and operational improvements. |
-| `10-CODEX-MULTI-MODEL-TASK.md` | Staged PRs, direct Luna Max/Terra High tasks, short Astra boundary/acceptance roles, review modes, and context/evidence rules. |
+| `10-CODEX-MULTI-MODEL-TASK.md` | Thin autonomous supervision, bounded Luna/Terra workers, context firewall, staged PRs, review modes, stop rules and exact-SHA acceptance; manual fallback. |
 | `11-CURRENT-POCKETBASE-REFERENCE.md` | Current-system map and behavior anchors for implementers and reviewers. |
 | `12-DECISION-REGISTER.md` | Compact register of the binding architectural decisions and superseded choices. |
 | `13-SETTINGS-SCOPE-INVENTORY.md` | Normative field-by-field settings scope/storage/inheritance/reset/migration contract for the refactored domain-specific configuration model. |
@@ -77,7 +77,7 @@ The earlier accumulated review corrections also remain binding: preserve all cur
 3. Current automated tests and explicit business behavior encoded in the PocketBase application.
 4. Older repository architecture/design documents, only where they do not conflict with this pack.
 
-If `main` moves after the pinned SHA because of an urgent PocketBase production fix, the current task owner must compare that change and deliberately bring the relevant behavior into the port before continuing, consulting Astra separately for material contract questions.
+If `main` moves after the pinned SHA because of an urgent PocketBase production fix, the responsible bounded worker must compare that change and deliberately bring the relevant behavior into the port before continuing, escalating material contract questions for a bounded Astra ruling under document 10.
 
 ## What success means
 

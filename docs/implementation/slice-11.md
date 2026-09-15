@@ -6,10 +6,11 @@ Not dispatched. Do not remove the legacy implementation or rewrite repository
 instructions before Slices 0-10 have passed their implementation/review gates.
 Refresh the actual tree, dependencies and external release blockers at dispatch.
 Follow [document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) for the
-Slice-6+ staged-PR/direct-model lifecycle, optional package boundaries, review
-modes, context/evidence rules and exact-milestone CI. Run Luna Max and Terra
-High directly; Astra handles short boundary/acceptance tasks. Reading lists
-below identify full-slice authority; package tasks start with directly relevant
+Slice-6+ staged-PR lifecycle, optional package boundaries, review modes,
+context firewall and exact-milestone CI. Thin autonomous supervision is the
+preferred/default mode; Astra dispatches bounded Luna Max and independent
+Terra High workers. Manual/direct execution remains fallback. Reading lists
+below identify full-slice authority; workers start with directly relevant
 excerpts and expand for concrete concerns. Prior-slice acceptance and its
 exact-SHA CI must be complete before this slice starts.
 Package guidance in document 10 is provisional; choose actual boundaries at
@@ -60,10 +61,10 @@ temporary Postmark decision. No new architecture review or UI redesign.
 
 Complete full integrated validation, holistic Terra slice review and required
 re-review, short Astra acceptance and exact-milestone CI under document 10.
-Then run the separate whole-application adversarial review directly with fresh
+Then run the separate whole-application adversarial review with fresh independent
 Terra High contexts, varied full-app emphases and a running confirmed-finding
 set: three consecutive passes without new substantive findings within six
-nominal passes. Direct Luna Max fixes confirmed blockers; a pass cap never
+nominal passes. Bounded Luna Max fixes confirmed blockers; a pass cap never
 waives a known defect. Package and slice reviews do not replace this gate.
 
 Repository cleanup is not production completion. Actual deployed PB identity,

@@ -10,10 +10,11 @@ CLI contracts, import/reconciliation coverage and remaining domain gaps at
 dispatch.
 
 Follow [document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) for the
-Slice-6+ staged-PR/direct-model lifecycle, optional package boundaries, review
-modes, context/evidence rules and exact-milestone CI. Run Luna Max and Terra
-High directly; Astra handles short boundary/acceptance tasks. Reading lists
-below identify full-slice authority; package tasks start with directly relevant
+Slice-6+ staged-PR lifecycle, optional package boundaries, review modes,
+context firewall and exact-milestone CI. Thin autonomous supervision is the
+preferred/default mode; Astra dispatches bounded Luna Max and independent
+Terra High workers. Manual/direct execution remains fallback. Reading lists
+below identify full-slice authority; workers start with directly relevant
 excerpts and expand for concrete concerns. Prior-slice acceptance and its
 exact-SHA CI must be complete before this slice starts.
 Package guidance in document 10 is provisional; choose actual boundaries at
@@ -155,7 +156,7 @@ tag, rehearse on permanent nonproduction or enable production writes as part
 of this slice.
 
 Run the complete integrated slice validation before holistic Terra review.
-Package/fix validation, direct Luna fixes, re-review and staged integration
+Package/fix validation, bounded Luna fixes, re-review and staged integration
 follow document 10. Return changed paths, compact receipts and remaining risks
 at the authorized branch/PR checkpoint. Slice 8 cannot start before acceptance
 and successful exact-SHA CI on the integration milestone.
