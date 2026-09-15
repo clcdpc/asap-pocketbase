@@ -1,11 +1,32 @@
 # Slice 6: Analytics
 
-## Preparation Only
+## Bootstrap - 2026-09-15
 
-Not dispatched. Refresh this packet after Slices 1-5 pass their complete
-tests, Terra review/fix/re-review gates, and milestone commits. Do not start
-analytics implementation early. The canonical sequence remains document 02;
-this packet narrows implementation context without changing the agreed plan.
+Refreshed against accepted Slices 0-5. Analytics implementation has not started.
+The canonical sequence remains document 02; this packet narrows implementation
+context without changing the agreed plan. See the [direct implementation
+handoff](slice-06-handoff.md).
+
+| Anchor | Value |
+| --- | --- |
+| Accepted Slice 5 PRODUCT milestone | `36727414d02cbe34ba13cd3f6f1bb57980b83a6f` |
+| Actual Slice 6 branch base | `1c3b46d13a42bb1a2887136385f3dce18b610c8c` |
+| Slice branch | `codex/slice-06-analytics` |
+| Draft slice PR | [#265](https://github.com/clcdpc/asap-pocketbase/pull/265), base `codex/csharp-port` |
+| Topology | No child packages — one Slice 6 integration PR. |
+| Application/schema compatibility | .NET 10 (`net10.0`); `SchemaVersion.ExpectedVersion = 5` |
+| Migration contract | `MigrationContract.ExpectedSchemaVersion = 5`, `ContractVersion = "slice-05"`; export format `1` |
+
+The two SHA anchors differ only by documentation/process policy. The policy
+commit is not Slice 6 implementation. Local HEAD, remote `codex/csharp-port`
+and draft PR #264 matched the branch base before branch creation; remote `main`
+still matched the behavioral pin. Prior acceptance and policy CI success are
+established evidence, not rerun by this bootstrap. Application code remains at
+the accepted Slice 5 product state; no new application release version is set.
+
+Aggregation, DTOs, browser rendering and SQL/browser fixtures share one metric
+and authorization contract. Inspection found no independently useful package
+boundary. PR #264 remains the final draft port PR into `main`.
 
 Follow [document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) for the
 Slice-6+ staged-PR lifecycle, optional package boundaries, review modes,
@@ -25,11 +46,149 @@ frontend and existing request/stale-response helpers. Do not add a reporting
 framework, charts, precomputed analytics state, or request paging as part of
 this slice. Do not load all requests to aggregate them in C# or the browser.
 
-Before dispatch, record the actual previous milestone SHAs, schema version,
-staff authorization and scope helpers, request/event/tag models, migration
-contracts, and test fixture APIs. Reuse those contracts directly. Current
-staff binding/allowed-tenant/role/activity/organization eligibility applies to
-every request; the selected browser scope is never authorization evidence.
+Current staff binding/allowed-tenant/role/activity/organization eligibility
+applies to every request; selected browser scope is never authorization
+evidence. The simple direction remains feature-oriented Analytics code in
+`src/Asap.Web`, a scoped aggregate endpoint/DTO, parameterized SQL using the
+existing EF context/SqlClient boundary (Dapper where useful), and the current
+vanilla frontend. No repositories, MediatR or materialized Analytics state.
+
+## Current Reuse Map
+
+Paths below are repository-relative. These are existing contracts, not new
+Analytics infrastructure.
+
+### Staff Authorization And Scope
+
+- `src/Asap.Web/Features/Staff/StaffAuthenticationRegistration.cs`:
+  `AddStaffAuthentication` establishes Entra/cookie authentication and retains
+  the sign-in tuple. `StaffClaims.TryRead` in `StaffClaims.cs` produces
+  `StaffIdentityEvidence(StaffUserId, TenantId, ObjectId)`.
+- `StaffEligibilityService.cs`: `FindByBindingAsync`, `EvaluateAsync`,
+  `CurrentStaff`, `StaffEligibilityOutcome` and `StaffRoleRequirement.Any`.
+  Every request requires the original tuple to equal the current active
+  `StaffUser` binding and its tenant to remain in `AllowedTenantIds`. Roles are
+  `staff`/`admin` on a non-system Organization or `super_admin` on Organization
+  `1`; participation requires the actor's Organization to be active.
+- `StaffCurrentUserMiddleware.InvokeAsync` applies that eligibility to
+  `/api/asap/staff`, returning `401 staff_session_invalid` or
+  `403 staff_scope_forbidden` when invalid. Use `RequireAuthorization()` and
+  `StaffAuthenticationEndpoints.RequireCurrentStaff(HttpContext)` in the new
+  endpoint. Analytics is available to ordinary staff, not admin-only.
+- `TitleRequestViewService.ListAsync` contains the current list-scope contract;
+  `CanAccess(CurrentStaff, int)` is internal. `AdditionalCopyService.ResolveScope`
+  implements the same parsing privately: staff/admin always use their own
+  `OrganizationId` and ignore forged selections; super-admin uses `all`/omitted
+  or a validated active non-system library ID. Invalid super-admin selection
+  becomes `400 invalid_scope` at the list endpoints. No public generic scope
+  resolver exists. Reuse these semantics with the common eligibility service;
+  do not call a raw-row list loader to compute Analytics or add a second auth
+  layer. Preserve Analytics' `scope` then `orgId` input and `system` all-scope
+  alias at the route boundary.
+
+### Requests, Events, Tags And Time
+
+- `src/Asap.Web/Infrastructure/Data/DomainEntities.cs` and `AsapDbContext.cs`:
+  `TitleRequest`, `AdditionalCopyRequest`, `Organization`, `StaffUser`,
+  `TitleRequestEvent`, `WorkflowTag`, `TitleRequestWorkflowTag` and their DbSets.
+  Both request types own independent bigint `Id` sequences and scope through
+  `LibraryOrganizationId`, not patron Organization or copy source request.
+- DACPAC sources: `database/Asap.Database/Tables/TitleRequests.sql`,
+  `AdditionalCopyRequest.sql`, `OrganizationAndStaff.sql`. Both requests have
+  required `CreatedUtc`/`UpdatedUtc` (`datetime2(7)`) and current `Status`.
+  Title statuses are `suggestion`, `outstanding_purchase`, `pending_hold`,
+  `hold_placed`, `closed`; copies use `open`/`closed` and display open as
+  `additional_copies`. Only titles have `CloseReason`; closed copies therefore
+  use Analytics' `unrecorded` fallback. Copy `ClosedUtc` is not the range field.
+- Events have `TitleRequestId`, literal `EventType`, `Status`, `CloseReason`
+  and required `CreatedUtc`. Tags join through `TitleRequestWorkflowTag`;
+  exception matching uses `WorkflowTag.Label`'s case-insensitive `hold failed`
+  prefix, once per title. Copies acquire neither events nor tags through a
+  matching numeric ID or their `SourceTitleRequestId`.
+- Canonical `TitleRequest.IsbnCheckStatus` permits null, `pending`, `found`,
+  `not_found`, `skipped_no_isbn`, `error_max_retries`. Failure count uses
+  `error_max_retries`; `IsbnCheckLastErrorCode`/retry count are diagnostics,
+  not additional failure populations. Migration's accepted legacy `error`
+  normalization is described below.
+- `Infrastructure/Data/SchemaVersion.cs` and
+  `database/Asap.Database/Scripts/PostDeployment.sql` agree on version `5`.
+  Reuse injected `TimeProvider` and
+  `ExternalConfiguration.Application.BusinessTimeZone` from
+  `Infrastructure/Configuration/ExternalConfiguration.cs`, resolved with
+  `TimeZoneInfo.FindSystemTimeZoneById` as in `WorkflowProcessingService`.
+  `TimeoutSemantics` calendar-day cutoffs are not fractional Analytics ages.
+
+### Frontend And Fixtures
+
+- `src/Asap.Web/Frontend/staff/js/http.js`: `authorizedJson`,
+  `loadStaffSession`, `onSessionInvalid`, `onAccessUnavailable`, `isAbortError`,
+  shared `latestLoads`. `Frontend/shared/http.js` owns `requestJson`;
+  `Frontend/shared/latest-load.js` owns `createLatestLoad`,
+  `begin(slot)`/`signal`/`isCurrent()`/`abort()`/`finish(slot, token)`.
+- `Frontend/staff/js/workflow.js`: `createWorkflowApp`, `state.staff`,
+  `state.scope`, `state.activeView`, `showWorkspace`, `populateScopes`,
+  `startSession`, `switchView`, `showSignedOut`, `showAccessUnavailable`.
+  Extend existing view/navigation and auth invalidation wiring for Analytics'
+  separate scope/range. `element`, `announce`, `renderOperationsTable` and
+  `loadOperations` demonstrate safe DOM, loading/empty/error states and guarded
+  completion. These functions are local, not exported shared APIs. Keep DOM
+  construction with `textContent`/`replaceChildren`, accessible status and
+  heading focus. Edit tracked `Frontend/staff/index.html`/`styles.css`, not
+  generated `wwwroot` files.
+- `tests/Asap.Tests/Integration/PatronJourneyTests.cs`: existing partial
+  `PatronJourneyTests`, `Initialize` (isolated real-SQL DACPAC deployment),
+  `StartApplication`, `CreateApplicationFactory`, `SeedLibraryAsync` (library
+  `2`), `UpsertTestOrganizationAsync`, `ReadConfiguredSuperAdminAsync`,
+  `AddTestingStaffHeaders`, `ProtectStaffCookie`, `CookieClient`,
+  `ReadAntiforgeryTokenAsync`, `MutableTimeProvider.SetUtcNow` and
+  `TestArtifactPaths.FindDacpac`. Reuse `IDbContextFactory<AsapDbContext>` for
+  fixture data and `ASAP_TEST_SQL_CONNECTION_STRING` for real SQL.
+- `StaffCorrectiveJourneyTests.cs`: `CreateCorrectiveStaffAsync(actor, role,
+  organizationId)` and `ReadCorrectiveStaffAsync` create/read actual eligible
+  staff/admin/super-admin scope. `Slice5QueueFairnessRuntimeTests.cs` has
+  `EnsureSlice5IsolatedLibraryAsync(contextFactory, organizationId)` for another
+  Organization. These helpers are private members of the same partial fixture.
+  Use explicit two-library fixtures with ordinary and super-admin callers.
+- `StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers` and
+  `SeedStaffBrowserStateAsync` in `PatronJourneyTests.cs` run the existing
+  `tests/browser/staff.cjs`. Its local `createContext`, `scan`,
+  `delayNextServerResponse` and `deferred` cover authenticated scope, delayed
+  responses, screenshots, overflow/images and axe serious/critical assertions.
+  Existing desktop `1280x900`/mobile `390x844`, keyboard presses and focus
+  assertions are the browser patterns to extend.
+- Frontend regression anchors: `tests/staff_dotnet_frontend.test.js`,
+  `staff_dialog_focus_dotnet.test.js`, `staff_forbidden_recovery_dotnet.test.js`,
+  `settings_mutation_scope_race_dotnet.test.js`,
+  `frontend_request_architecture.test.js`, `staff_analytics_dom_safety.test.js`.
+  Migration fixtures: `tests/Asap.Tests/Migration/MigrationCliTests.cs`,
+  `CreateMinimalPackage`, `DeployDacpac`, identifier normalization, historical
+  event-time rejection and additional-copy timestamp/history tests.
+
+## Migration Dependency Check
+
+All required Analytics data dependencies are present in the accepted contract;
+no missing dependency correction was identified. In `src/Asap.Migration`,
+`MigrationPackageExporter` exports the request/event/status/reason/tag domains;
+`MigrationImporter.ImportTitleRequests`, `ImportAdditionalCopies`,
+`ImportTitleRequestEventsAndPlacementProtection`, `ImportWorkflowTags` and
+`ImportTitleRequestTags` preserve their Analytics inputs. `ReconcileImportedSourceState`,
+`ReconcileTarget` and `MigrationReconciler.Reconcile` retain the existing
+semantic/count/package checks. Extend Analytics assertions using these fixtures.
+
+Title creation/update and event creation timestamps are required and invalid
+history blocks import; copies retain updated time with the accepted
+created-time fallback when absent. Literal `hold_placed` stays literal;
+`status_changed` adoption and synthetic `legacy` protection markers do not
+become literal holds. `NormalizeIsbnStatus` preserves terminal
+`error_max_retries`, converts legacy `error` without an identifier to
+`skipped_no_isbn`, and blocks ambiguous `error` with an identifier. This is
+the accepted canonical migration contract, not lost Analytics data to restore.
+
+Executable baseline inspection confirmed the prepared metric/range/DOM
+contract. No substantive packet discrepancy was found. The reuse map makes
+the canonical identifier population, copy close-reason fallback and current
+scope APIs explicit. Target current staff eligibility and configured business
+timezone govern the already-planned platform differences from PocketBase.
 
 ## Required Reading
 

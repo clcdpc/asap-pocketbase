@@ -25,6 +25,19 @@ no supervisor or workers. Next action after synchronization: one Slice 6
 autonomous supervisor task, progressing to accepted state or a hard-stop report.
 No Slice 7 continuation is authorized. Earlier policy/state entries are history.
 
+## Historical Slice 6 Bootstrap - 2026-09-15
+
+Slice 6 Analytics is bootstrapped on `codex/slice-06-analytics` from
+`1c3b46d13a42bb1a2887136385f3dce18b610c8c`, the documentation-policy transition
+after accepted Slice 5 product milestone `36727414d02cbe34ba13cd3f6f1bb57980b83a6f`.
+No child packages — one Slice 6 integration PR into `codex/csharp-port`.
+Draft [PR #265](https://github.com/clcdpc/asap-pocketbase/pull/265) holds the
+exact bootstrap head receipt; see the [handoff](slice-06-handoff.md).
+The [packet](slice-06.md) now names the accepted helpers, schema and fixtures.
+Implementation has not started; direct Luna Max implementation is next.
+PR #264 remains the final draft port PR. This bootstrap authorizes no Slice 7,
+merge, tag, deployment, rehearsal or cutover. Earlier state entries are history.
+
 ## Historical Direct-Model Policy Transition - 2026-09-15
 
 Slice 5 is reviewed and accepted at
