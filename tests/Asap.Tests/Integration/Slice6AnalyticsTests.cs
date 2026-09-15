@@ -31,6 +31,22 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(HttpStatusCode.OK, baseline.StatusCode, await baseline.Content.ReadAsStringAsync());
             using var baselineBody = JsonDocument.Parse(await baseline.Content.ReadAsStringAsync());
 
+            await SeedSystemOrganizationAnalyticsFixtureAsync(suffix);
+
+            using var allWithSystemRows = await superClient.GetAsync("/api/asap/staff/analytics?scope=all&range=last30");
+            Assert.AreEqual(HttpStatusCode.OK, allWithSystemRows.StatusCode,
+                await allWithSystemRows.Content.ReadAsStringAsync());
+            using var allWithSystemRowsBody = JsonDocument.Parse(await allWithSystemRows.Content.ReadAsStringAsync());
+            AssertAnalyticsScope(allWithSystemRowsBody.RootElement, null, "all");
+            AssertAnalyticsMetricsEqual(baselineBody.RootElement, allWithSystemRowsBody.RootElement);
+
+            using var systemWithSystemRows = await superClient.GetAsync("/api/asap/staff/analytics?scope=system&range=last30");
+            Assert.AreEqual(HttpStatusCode.OK, systemWithSystemRows.StatusCode,
+                await systemWithSystemRows.Content.ReadAsStringAsync());
+            using var systemWithSystemRowsBody = JsonDocument.Parse(await systemWithSystemRows.Content.ReadAsStringAsync());
+            AssertAnalyticsScope(systemWithSystemRowsBody.RootElement, null, "all");
+            AssertAnalyticsMetricsEqual(baselineBody.RootElement, systemWithSystemRowsBody.RootElement);
+
             await SeedAnalyticsFixtureAsync(organizationA, organizationB, suffix);
             ordinaryRow = await CreateCorrectiveStaffAsync(superAdmin, "staff", organizationA);
             var ordinary = await ReadCorrectiveStaffAsync(ordinaryRow);
@@ -74,17 +90,21 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(HttpStatusCode.OK, other.StatusCode, await other.Content.ReadAsStringAsync());
             using var otherBody = JsonDocument.Parse(await other.Content.ReadAsStringAsync());
             AssertAnalyticsScope(otherBody.RootElement, organizationB, "library");
-            AssertAnalyticsSummary(otherBody.RootElement, new(2, 1, 1, 0, 0));
+            AssertAnalyticsSummary(otherBody.RootElement, new(3, 2, 2, 0, 0));
             AssertStageCounts(otherBody.RootElement, new
             {
                 suggestion = 1L,
                 outstanding_purchase = 0L,
                 pending_hold = 0L,
                 hold_placed = 0L,
-                closed = 1L,
-                additional_copies = 0L
+                closed = 2L,
+                additional_copies = 1L
             });
-            AssertClosedReasons(otherBody.RootElement, new Dictionary<string, long> { ["manual"] = 1 });
+            AssertClosedReasons(otherBody.RootElement, new Dictionary<string, long>
+            {
+                ["manual"] = 1,
+                ["unrecorded"] = 1
+            });
 
             using var all = await superClient.GetAsync("/api/asap/staff/analytics?scope=all&range=last30");
             Assert.AreEqual(HttpStatusCode.OK, all.StatusCode, await all.Content.ReadAsStringAsync());
@@ -278,9 +298,38 @@ public sealed partial class PatronJourneyTests
             INSERT INTO [asap].[TitleRequest]
                 ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [CloseReason], [CreatedUtc], [UpdatedUtc])
             VALUES (@organizationB, N'analytics-b-2-' + @suffix, N'Analytics B T2 ' + @suffix, 0, @formatId, N'closed', N'manual', '2026-09-03T12:00:00', '2026-09-03T12:00:00');
+
+            INSERT INTO [asap].[AdditionalCopyRequest]
+                ([LibraryOrganizationId], [BibId], [Title], [Status], [CreatedUtc], [UpdatedUtc])
+            VALUES (@organizationB, N'analytics-b-copy-open-' + @suffix, N'Analytics B open copy ' + @suffix,
+                    N'open', '2026-08-01T12:00:00', '2026-08-01T12:00:00');
+            INSERT INTO [asap].[AdditionalCopyRequest]
+                ([LibraryOrganizationId], [BibId], [Title], [Status], [CreatedUtc], [UpdatedUtc], [ClosedUtc])
+            VALUES (@organizationB, N'analytics-b-copy-closed-' + @suffix, N'Analytics B closed copy ' + @suffix,
+                    N'closed', '2026-09-02T12:00:00', '2026-09-03T12:00:00', '2026-09-03T12:00:00');
             """;
         command.Parameters.Add("@organizationA", SqlDbType.Int).Value = organizationA;
         command.Parameters.Add("@organizationB", SqlDbType.Int).Value = organizationB;
+        command.Parameters.Add("@suffix", SqlDbType.NVarChar, 32).Value = suffix;
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task SeedSystemOrganizationAnalyticsFixtureAsync(string suffix)
+    {
+        await using var connection = new SqlConnection(databaseConnectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO [asap].[AdditionalCopyRequest]
+                ([LibraryOrganizationId], [BibId], [Title], [Status], [CreatedUtc], [UpdatedUtc])
+            VALUES (1, N'analytics-system-copy-open-' + @suffix, N'Analytics system open copy ' + @suffix,
+                    N'open', '2026-07-01T12:00:00', '2026-07-01T12:00:00');
+            INSERT INTO [asap].[AdditionalCopyRequest]
+                ([LibraryOrganizationId], [BibId], [Title], [Status], [CreatedUtc], [UpdatedUtc], [ClosedUtc])
+            VALUES (1, N'analytics-system-copy-closed-' + @suffix, N'Analytics system closed copy ' + @suffix,
+                    N'closed', '2026-09-02T12:00:00', '2026-09-03T12:00:00', '2026-09-03T12:00:00');
+            """;
         command.Parameters.Add("@suffix", SqlDbType.NVarChar, 32).Value = suffix;
         await command.ExecuteNonQueryAsync();
     }
@@ -298,7 +347,9 @@ public sealed partial class PatronJourneyTests
             WHERE request.[LibraryOrganizationId] IN (@organizationA, @organizationB);
             DELETE FROM [asap].[WorkflowTag]
             WHERE [Code] IN (N'analytics-hold-failed-one-' + @suffix, N'analytics-hold-failed-two-' + @suffix);
-            DELETE FROM [asap].[AdditionalCopyRequest] WHERE [LibraryOrganizationId] IN (@organizationA, @organizationB);
+            DELETE FROM [asap].[AdditionalCopyRequest]
+            WHERE [LibraryOrganizationId] IN (@organizationA, @organizationB)
+               OR [BibId] IN (N'analytics-system-copy-open-' + @suffix, N'analytics-system-copy-closed-' + @suffix);
             DELETE FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] IN (@organizationA, @organizationB);
             DELETE FROM [asap].[AdministrativeAudit] WHERE [OrganizationId] IN (@organizationA, @organizationB);
             DELETE FROM [asap].[StaffUser] WHERE [Id] = @staffId;
@@ -361,11 +412,11 @@ public sealed partial class PatronJourneyTests
     {
         var beforeSummary = before.GetProperty("summary");
         var afterSummary = after.GetProperty("summary");
-        Assert.AreEqual(beforeSummary.GetProperty("newSuggestions").GetInt64() + 10,
+        Assert.AreEqual(beforeSummary.GetProperty("newSuggestions").GetInt64() + 11,
             afterSummary.GetProperty("newSuggestions").GetInt64());
-        Assert.AreEqual(beforeSummary.GetProperty("openRequests").GetInt64() + 9,
+        Assert.AreEqual(beforeSummary.GetProperty("openRequests").GetInt64() + 10,
             afterSummary.GetProperty("openRequests").GetInt64());
-        Assert.AreEqual(beforeSummary.GetProperty("closedRequests").GetInt64() + 4,
+        Assert.AreEqual(beforeSummary.GetProperty("closedRequests").GetInt64() + 5,
             afterSummary.GetProperty("closedRequests").GetInt64());
         Assert.AreEqual(beforeSummary.GetProperty("heldRequests").GetInt64() + 2,
             afterSummary.GetProperty("heldRequests").GetInt64());
@@ -380,20 +431,20 @@ public sealed partial class PatronJourneyTests
             ["outstanding_purchase"] = 1,
             ["pending_hold"] = 1,
             ["hold_placed"] = 1,
-            ["closed"] = 4,
-            ["additional_copies"] = 1
+            ["closed"] = 5,
+            ["additional_copies"] = 2
         });
         AssertClosedReasonDeltas(before, after, new Dictionary<string, long>
         {
             ["hold_completed"] = 1,
             ["rejected"] = 1,
-            ["unrecorded"] = 1,
+            ["unrecorded"] = 2,
             ["manual"] = 1
         });
 
         var beforeAging = before.GetProperty("aging");
         var afterAging = after.GetProperty("aging");
-        Assert.AreEqual(beforeAging.GetProperty("openOlderThanThreshold").GetInt64() + 2,
+        Assert.AreEqual(beforeAging.GetProperty("openOlderThanThreshold").GetInt64() + 3,
             afterAging.GetProperty("openOlderThanThreshold").GetInt64());
         AssertStageCountDeltas(beforeAging, afterAging, new Dictionary<string, long>
         {
@@ -401,7 +452,7 @@ public sealed partial class PatronJourneyTests
             ["outstanding_purchase"] = 1,
             ["pending_hold"] = 1,
             ["hold_placed"] = 1,
-            ["additional_copies"] = 1
+            ["additional_copies"] = 2
         }, "averageAgeByStage");
 
         var beforeExceptions = before.GetProperty("exceptions");

@@ -134,3 +134,30 @@ findings 0/0. No migration, schema, or DACPAC source/artifact surface was
 changed; the existing native fixtures and retained publication evidence remain
 authoritative. This candidate is for independent review only; PR #264 remains
 draft and Slice 7 remains outside scope.
+
+## Cycle 1 Test-Adequacy Disposition
+
+On 2026-09-15, bounded Luna Max fix worker cycle 1 of 3 addressed the two
+confirmed Terra test-adequacy findings in `Slice6AnalyticsTests.cs` only.
+
+- C6-T1: B now has uniquely suffixed open and closed additional-copy rows,
+  including an aged open row. The fixture asserts exact all/system aggregate
+  metrics and populations before and after B deactivation, while retaining
+  active A scope and forged ordinary-staff identity/ownership assertions.
+- C6-T2: the fixture adds uniquely suffixed Organization 1 additional-copy
+  rows and exact-compares both `all` and `system` aggregates before and after
+  insertion. `TitleRequest` system ownership remains schema-prohibited; the
+  persisted copy path is exercised without schema changes. Explicit `scope=1`
+  rejection remains covered.
+
+Fresh gates: Release build 0 warnings/0 errors, focused real-SQL Analytics
+1 passed/0 failed/0 skipped, and `git diff --check` clean. Fresh evidence is
+under `TestResults/analytics-correction-fix1-20260915/`. Retained evidence
+continues to cover unchanged surfaces: complete .NET 305/305/0, Node 174
+scripts with no failures, focused frontend 3/3, published Kestrel Analytics
+1/1 across 20 states with axe serious/critical 0/0, and the existing native
+fixture/publication evidence.
+
+Disposition is findings-covered, pending the supervisor's independent Terra
+re-review and integration decision. This worker does not claim acceptance;
+PR #266 remains draft, PR #264 remains draft, and Slice 7 is untouched.
