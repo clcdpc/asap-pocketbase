@@ -6,6 +6,11 @@ using Microsoft.Data.SqlClient;
 
 namespace Asap.Migration;
 
+internal sealed record MigrationConfigurationReconciliation(
+    int RowsChecked,
+    int FieldsChecked,
+    int RelationshipsChecked);
+
 internal static class MigrationConfigurationImporter
 {
     private sealed record PublicationImportOption(
@@ -69,7 +74,8 @@ internal static class MigrationConfigurationImporter
         IDictionary<string, int> importedCounts,
         ICollection<object> transformations)
     {
-        ImportSystemSettings(connection, transaction, package, exportedAtUtc, importedCounts);
+        ValidateConfigurationRows(package);
+        ImportSystemSettings(connection, transaction, package, exportedAtUtc, importedCounts, transformations);
         ImportPolarisSettings(
             connection,
             transaction,
@@ -183,6 +189,85 @@ internal static class MigrationConfigurationImporter
         importedCounts["branding"] = rows.Count;
     }
 
+    private static void ValidateConfigurationRows(ValidatedMigrationPackage package)
+    {
+        ValidateUniqueScope(
+            MigrationPackageReader.ReadRows(package, "workflow-settings.json", "workflow_settings"),
+            "workflow settings",
+            row => ScopedKey(row, "libraryOrganization"));
+        ValidateUniqueScope(
+            MigrationPackageReader.ReadRows(package, "patron-settings.json", "ui_settings"),
+            "patron UI settings",
+            row => ScopedKey(row, "libraryOrganization"));
+        ValidateUniqueScope(
+            MigrationPackageReader.ReadRows(package, "patron-settings.json", "patron_settings_overrides"),
+            "patron settings overrides",
+            row => row.RequiredString("orgId"));
+        ValidateUniqueScope(
+            MigrationPackageReader.ReadRows(package, "patron-settings.json", "patron_library_settings"),
+            "legacy patron settings",
+            row => row.RequiredString("libraryOrganization"));
+        ValidateUniqueScope(
+            MigrationPackageReader.ReadRows(package, "patron-settings.json", "library_settings"),
+            "legacy library settings",
+            row => row.RequiredString("libraryOrganization"));
+
+        var emailRows = MigrationPackageReader.ReadRows(package, "email-templates.json", "email_templates");
+        var rejectionRows = MigrationPackageReader.ReadRows(package, "email-templates.json", "rejection_templates");
+        ValidateUniqueScope(
+            emailRows,
+            "email templates",
+            row => $"{ScopedKey(row, "libraryOrganization")}|{row.RequiredString("templateKey").Trim().ToLowerInvariant()}");
+        ValidateUniqueScope(
+            rejectionRows,
+            "rejection templates",
+            row => $"{ScopedKey(row, "libraryOrganization")}|{row.String("sourceTemplateId") ?? row.RequiredString("id")}");
+        var templateSourceIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var row in emailRows.Concat(rejectionRows))
+        {
+            if (!templateSourceIds.Add(row.RequiredString("id")))
+            {
+                throw new MigrationOperationException(
+                    "configuration_source_id_conflict",
+                    "Email and rejection templates contain the same source identifier.");
+            }
+        }
+
+        ValidateUniqueScope(
+            MigrationPackageReader.ReadRows(package, "material-formats.json", "material_formats"),
+            "material formats",
+            row => $"{ScopedKey(row, "libraryOrganization")}|{row.RequiredString("code").Trim().ToLowerInvariant()}");
+        ValidateUniqueScope(
+            MigrationPackageReader.ReadRows(package, "format-auto-claim-rules.json", "format_claim_rules"),
+            "format auto-claim rules",
+            row => $"{row.RequiredString("libraryOrgId")}|{NormalizeFormatCode(row.RequiredString("format"))}");
+    }
+
+    private static void ValidateUniqueScope(
+        IReadOnlyList<SourceRow> rows,
+        string entity,
+        Func<SourceRow, string> keySelector)
+    {
+        var keys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            if (!keys.Add(keySelector(row)))
+            {
+                throw new MigrationOperationException(
+                    "configuration_scope_conflict",
+                    $"Source {entity} contains duplicate scoped configuration.");
+            }
+        }
+    }
+
+    private static string ScopedKey(SourceRow row, string organizationField)
+    {
+        var scope = row.RequiredString("scope").Trim().ToLowerInvariant();
+        return scope == "system"
+            ? "system"
+            : $"library:{row.RequiredString(organizationField)}";
+    }
+
     private static string ResolvePackagePath(string packageRoot, string relativePath)
     {
         if (Path.IsPathRooted(relativePath))
@@ -210,7 +295,8 @@ internal static class MigrationConfigurationImporter
         SqlTransaction transaction,
         ValidatedMigrationPackage package,
         DateTime exportedAtUtc,
-        IDictionary<string, int> importedCounts)
+        IDictionary<string, int> importedCounts,
+        ICollection<object> transformations)
     {
         var rows = MigrationPackageReader.ReadRows(package, "system-settings.json", "system_settings");
         if (rows.Count > 1)
@@ -222,14 +308,10 @@ internal static class MigrationConfigurationImporter
             package,
             "effective-legacy-runtime-config.json");
         var settings = runtime.GetProperty("settings");
-        var staffUrl = settings
-            .GetProperty("StaffApplicationUrl")
-            .GetProperty("value")
-            .GetString();
-        var iconPattern = settings
-            .GetProperty("MaterialTypeIconUrlPattern")
-            .GetProperty("value")
-            .GetString();
+        var staffUrlSetting = settings.GetProperty("StaffApplicationUrl");
+        var iconPatternSetting = settings.GetProperty("MaterialTypeIconUrlPattern");
+        var staffUrl = staffUrlSetting.GetProperty("value").GetString();
+        var iconPattern = iconPatternSetting.GetProperty("value").GetString();
         if (string.IsNullOrWhiteSpace(staffUrl) || string.IsNullOrWhiteSpace(iconPattern))
         {
             throw new MigrationOperationException(
@@ -276,6 +358,15 @@ internal static class MigrationConfigurationImporter
             insert.ExecuteNonQuery();
         }
         importedCounts["system_settings"] = rows.Count;
+        transformations.Add(new
+        {
+            entity = "system_settings_effective_runtime",
+            sourceId = row?.String("id"),
+            staffApplicationUrlSource = staffUrlSetting.GetProperty("source").GetString(),
+            materialTypeIconUrlPatternSource = iconPatternSetting.GetProperty("source").GetString(),
+            misconfiguredMessage = "target_code_default",
+            misconfiguredMessageReason = "pinned_ui_settings_schema_has_no_persisted_field"
+        });
     }
 
     private static string NormalizeEmbedOrigin(string value)
@@ -710,27 +801,58 @@ internal static class MigrationConfigurationImporter
             var labelField = $"externalSearch{slot}Label";
             var urlField = $"externalSearch{slot}UrlTemplate";
             if (!isSystem && !row.HasValue(enabledField) && !row.HasValue(labelField) && !row.HasValue(urlField)) continue;
+            var providerKey = $"external_search_{slot}";
+            long providerId;
+            using (var lookup = new SqlCommand(
+                       "SELECT [Id] FROM [asap].[ExternalSearchProvider] WHERE [ProviderKey] = @key;",
+                       connection,
+                       transaction))
+            {
+                lookup.Parameters.AddWithValue("@key", providerKey);
+                var value = lookup.ExecuteScalar();
+                if (value is null or DBNull)
+                {
+                    throw new MigrationOperationException(
+                        "external_provider_seed_missing",
+                        $"Target external-search provider {providerKey} is missing from the permitted static seeds.");
+                }
+                providerId = Convert.ToInt64(value);
+            }
+
             using var command = new SqlCommand(
                 isSystem
                     ? """
                       UPDATE [asap].[ExternalSearchProvider]
                       SET [IsEnabled] = @enabled, [Label] = @label, [UrlTemplate] = @url
-                      WHERE [ProviderKey] = @key;
+                      WHERE [Id] = @providerId;
                       """
                     : """
-                      INSERT INTO [asap].[ExternalSearchProviderOverride]
-                          ([LibraryOrganizationId], [ExternalSearchProviderId], [IsEnabled], [Label], [UrlTemplate])
-                      SELECT @organizationId, [Id], @enabled, @label, @url
-                      FROM [asap].[ExternalSearchProvider] WHERE [ProviderKey] = @key;
+                      IF EXISTS
+                      (
+                          SELECT 1 FROM [asap].[ExternalSearchProviderOverride]
+                          WHERE [LibraryOrganizationId] = @organizationId AND [ExternalSearchProviderId] = @providerId
+                      )
+                          UPDATE [asap].[ExternalSearchProviderOverride]
+                          SET [IsEnabled] = @enabled, [Label] = @label, [UrlTemplate] = @url
+                          WHERE [LibraryOrganizationId] = @organizationId AND [ExternalSearchProviderId] = @providerId;
+                      ELSE
+                          INSERT INTO [asap].[ExternalSearchProviderOverride]
+                              ([LibraryOrganizationId], [ExternalSearchProviderId], [IsEnabled], [Label], [UrlTemplate])
+                          VALUES (@organizationId, @providerId, @enabled, @label, @url);
                       """,
                 connection,
                 transaction);
             command.Parameters.AddWithValue("@organizationId", organizationId);
-            command.Parameters.AddWithValue("@key", $"external_search_{slot}");
+            command.Parameters.AddWithValue("@providerId", providerId);
             command.Parameters.AddWithValue("@enabled", Db(isSystem ? row.Bool(enabledField, defaults[slot - 1].Item1) : row.NullableBool(enabledField)));
             command.Parameters.AddWithValue("@label", Db(isSystem ? row.Text(labelField) ?? defaults[slot - 1].Item2 : ScopedText(row, labelField, false)));
             command.Parameters.AddWithValue("@url", Db(isSystem ? row.Text(urlField) ?? defaults[slot - 1].Item3 : ScopedText(row, urlField, false)));
-            command.ExecuteNonQuery();
+            if (command.ExecuteNonQuery() == 0)
+            {
+                throw new MigrationOperationException(
+                    "external_provider_seed_missing",
+                    $"Target external-search provider {providerKey} could not be reconciled.");
+            }
         }
     }
 
@@ -751,7 +873,10 @@ internal static class MigrationConfigurationImporter
             UpsertPatronSettings(connection, transaction, organizationId, row, exportedAtUtc);
             if (organizationId != 1)
             {
-                var ignoredFields = LegacyUiDuplicateLabelFields.Where(row.HasValue).ToArray();
+                var ignoredFields = LegacyUiDuplicateLabelFields
+                    .Concat(["systemNotEnabledMessage", "publicationOptions"])
+                    .Where(row.HasValue)
+                    .ToArray();
                 if (ignoredFields.Length > 0)
                 {
                     transformations.Add(new
@@ -775,7 +900,10 @@ internal static class MigrationConfigurationImporter
                 updateSystem.Parameters.AddWithValue("@updatedUtc", row.UtcDateTime("updated") ?? exportedAtUtc);
                 updateSystem.ExecuteNonQuery();
             }
-            ReplacePublicationOptions(connection, transaction, organizationId, row.Text("publicationOptions"));
+            if (organizationId == 1)
+            {
+                ReplacePublicationOptions(connection, transaction, organizationId, row.Text("publicationOptions"));
+            }
             UpsertBrandingAlt(connection, transaction, organizationId, row.Text("logoAlt"), row.UtcDateTime("updated") ?? exportedAtUtc);
         }
 
@@ -784,7 +912,12 @@ internal static class MigrationConfigurationImporter
         foreach (var row in overrides.OrderBy(item => item.RequiredString("orgId"), StringComparer.Ordinal))
         {
             var organizationId = row.Int32("orgId") ?? throw new MigrationOperationException("patron_override_org_invalid", "A patron settings override has no organization.");
-            if (organizationId == 1) throw new MigrationOperationException("patron_override_org_invalid", "A patron override cannot belong to the system organization.");
+            if (organizationId == 1 || !organizationIds.Values.Contains(organizationId))
+            {
+                throw new MigrationOperationException(
+                    "patron_override_org_invalid",
+                    "A patron override references an unknown or system organization.");
+            }
             modernOverrideOrganizations.Add(organizationId);
             EnsurePatronSettings(connection, transaction, organizationId, row.UtcDateTime("updated") ?? exportedAtUtc);
             ApplyPatronOverride(connection, transaction, organizationId, row, exportedAtUtc);
@@ -839,6 +972,1047 @@ internal static class MigrationConfigurationImporter
         importedCounts["patron_settings_overrides"] = overrides.Count;
         importedCounts["patron_library_settings"] = legacyPatronRows.Count;
         importedCounts["library_settings"] = dormantLibrarySettings.Count;
+    }
+
+    internal static MigrationConfigurationReconciliation Reconcile(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        ValidatedMigrationPackage package,
+        IReadOnlyDictionary<string, int> organizationIds,
+        IReadOnlyDictionary<string, long> formatIds,
+        IReadOnlyDictionary<string, long> templateIds,
+        DateTime exportedAtUtc,
+        bool postmarkTokenProvisioned)
+    {
+        var counter = new ReconciliationCounter();
+        ReconcileSystemSettings(connection, transaction, package, counter);
+        ReconcilePolarisSettings(connection, transaction, package, counter);
+        ReconcileEmailSettings(connection, transaction, package, organizationIds, postmarkTokenProvisioned, counter);
+        ReconcileWorkflowSettings(connection, transaction, package, organizationIds, templateIds, counter);
+        ReconcilePatronSettings(connection, transaction, package, organizationIds, formatIds, exportedAtUtc, counter);
+        ReconcileEmailTemplates(connection, transaction, package, organizationIds, templateIds, counter);
+        ReconcileMaterialFormats(
+            connection,
+            transaction,
+            package,
+            organizationIds,
+            formatIds,
+            exportedAtUtc,
+            counter);
+        return new(counter.Rows, counter.Fields, counter.Relationships);
+    }
+
+    private sealed class ReconciliationCounter
+    {
+        public int Rows { get; set; }
+        public int Fields { get; set; }
+        public int Relationships { get; set; }
+    }
+
+    private static void ReconcileSystemSettings(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        ValidatedMigrationPackage package,
+        ReconciliationCounter counter)
+    {
+        var rows = MigrationPackageReader.ReadRows(package, "system-settings.json", "system_settings");
+        var row = rows.SingleOrDefault();
+        var runtime = MigrationPackageReader.ReadMetadata(package, "effective-legacy-runtime-config.json");
+        var settings = runtime.GetProperty("settings");
+        var expectedStaffUrl = settings.GetProperty("StaffApplicationUrl").GetProperty("value").GetString();
+        var expectedIconPattern = settings.GetProperty("MaterialTypeIconUrlPattern").GetProperty("value").GetString();
+        using var command = new SqlCommand(
+            "SELECT [StaffApplicationUrl], [LeapBibUrlPattern], [LeapPatronUrlPattern], [MaterialTypeIconUrlPattern], [SystemNotEnabledMessage], [MisconfiguredMessage] FROM [asap].[SystemSettings] WHERE [OrganizationId] = 1;",
+            connection,
+            transaction);
+        using var reader = command.ExecuteReader();
+        EnsureConfiguration(reader.Read(), "system settings");
+        EnsureConfiguration(
+            StringEquals(reader, 0, expectedStaffUrl) &&
+            StringEquals(reader, 1, row?.String("leapBibUrlPattern")) &&
+            StringEquals(reader, 2, row?.String("leapPatronUrlPattern")) &&
+            StringEquals(reader, 3, expectedIconPattern),
+            "system settings");
+        counter.Rows++;
+        counter.Fields += 4;
+
+        if (row?.HasValue("systemNotEnabledMessage") == true)
+        {
+            EnsureConfiguration(StringEquals(reader, 4, row.Text("systemNotEnabledMessage")), "system not-enabled message");
+            counter.Fields++;
+        }
+        EnsureConfiguration(!reader.IsDBNull(5) && reader.GetString(5).Length > 0, "system misconfigured message");
+
+        var expectedOrigins = SplitValues(row?.String("patronEmbedAllowedOrigins"))
+            .Select(NormalizeEmbedOrigin)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        reader.Close();
+        using var originsCommand = new SqlCommand(
+            "SELECT [NormalizedOrigin] FROM [asap].[PatronEmbedAllowedOrigin] WHERE [OrganizationId] = 1 ORDER BY [NormalizedOrigin];",
+            connection,
+            transaction);
+        using var originsReader = originsCommand.ExecuteReader();
+        var actualOrigins = new List<string>();
+        while (originsReader.Read()) actualOrigins.Add(originsReader.GetString(0));
+        EnsureConfiguration(expectedOrigins.SequenceEqual(actualOrigins, StringComparer.Ordinal), "patron embed origins");
+        counter.Fields += expectedOrigins.Length;
+    }
+
+    private static void ReconcilePolarisSettings(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        ValidatedMigrationPackage package,
+        ReconciliationCounter counter)
+    {
+        var row = MigrationPackageReader.ReadRows(package, "polaris-settings.json", "polaris_settings").SingleOrDefault();
+        if (row is null) return;
+        using var command = new SqlCommand(
+            "SELECT [Host], [AccessId], [ProtectedApiKey], [StaffDomain], [AdminUser], [ProtectedAdminPassword], [WorkstationId], [SystemPolarisUserId], [OrganizationIdForRequests], [PickupOrganizationId] FROM [asap].[PolarisSettings] WHERE [OrganizationId] = 1;",
+            connection,
+            transaction);
+        using var reader = command.ExecuteReader();
+        EnsureConfiguration(reader.Read(), "Polaris settings");
+        EnsureConfiguration(
+            StringEquals(reader, 0, row.String("host")) &&
+            StringEquals(reader, 1, row.String("accessId")) &&
+            ProtectedPresenceEquals(reader, 2, row.String("apiKey")) &&
+            StringEquals(reader, 3, row.String("staffDomain")) &&
+            StringEquals(reader, 4, row.String("adminUser")) &&
+            ProtectedPresenceEquals(reader, 5, row.String("adminPassword")) &&
+            IntEquals(reader, 6, row.Int32("workstationId")) &&
+            IntEquals(reader, 7, row.Int32("userId")) &&
+            IntEquals(reader, 8, row.Int32("requestingOrgId")) &&
+            IntEquals(reader, 9, row.Int32("pickupOrgId")),
+            "Polaris settings");
+        counter.Rows++;
+        counter.Fields += 10;
+    }
+
+    private static void ReconcileEmailSettings(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        ValidatedMigrationPackage package,
+        IReadOnlyDictionary<string, int> organizationIds,
+        bool postmarkTokenProvisioned,
+        ReconciliationCounter counter)
+    {
+        var smtpRows = MigrationPackageReader.ReadRows(package, "email-settings.json", "smtp_settings");
+        var templateRows = MigrationPackageReader.ReadRowsOrEmpty(package, "email-templates.json", "email_templates");
+        var systemTemplates = templateRows
+            .Where(row => string.Equals(row.String("scope"), "system", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var expectedAddress = ResolveSenderValue(
+            "system templates",
+            "fromAddress",
+            systemTemplates.Select(row => new SenderCandidate(row.RequiredString("id"), row.Text("fromAddress"))))
+            ?? MeaningfulSenderText(smtpRows.SingleOrDefault()?.Text("fromAddress"));
+        var expectedName = ResolveSenderValue(
+            "system templates",
+            "fromName",
+            systemTemplates.Select(row => new SenderCandidate(row.RequiredString("id"), row.Text("fromName"))))
+            ?? MeaningfulSenderText(smtpRows.SingleOrDefault()?.Text("fromName"));
+
+        using (var command = new SqlCommand(
+                   "SELECT [ProtectedServerToken], [FromAddress], [FromName] FROM [asap].[EmailSettings] WHERE [OrganizationId] = 1;",
+                   connection,
+                   transaction))
+        {
+            using var reader = command.ExecuteReader();
+            EnsureConfiguration(reader.Read(), "system email settings");
+            EnsureConfiguration(
+                ProtectedPresenceEquals(reader, 0, postmarkTokenProvisioned) &&
+                StringEquals(reader, 1, expectedAddress) &&
+                StringEquals(reader, 2, expectedName),
+                "system email settings");
+            counter.Rows++;
+            counter.Fields += 3;
+        }
+
+        foreach (var group in templateRows
+                     .Where(row => string.Equals(row.String("scope"), "library", StringComparison.OrdinalIgnoreCase))
+                     .GroupBy(row => ResolveScopedOrganization(row, organizationIds)))
+        {
+            var expectedAddressForLibrary = ResolveSenderValue(
+                $"library:{group.Key}",
+                "fromAddress",
+                group.Select(row => new SenderCandidate(row.RequiredString("id"), row.Text("fromAddress"))));
+            var expectedNameForLibrary = ResolveSenderValue(
+                $"library:{group.Key}",
+                "fromName",
+                group.Select(row => new SenderCandidate(row.RequiredString("id"), row.Text("fromName"))));
+            if (expectedAddressForLibrary is null && expectedNameForLibrary is null) continue;
+            using var command = new SqlCommand(
+                "SELECT [FromAddress], [FromName] FROM [asap].[EmailSettings] WHERE [OrganizationId] = @organizationId;",
+                connection,
+                transaction);
+            command.Parameters.AddWithValue("@organizationId", group.Key);
+            using var reader = command.ExecuteReader();
+            EnsureConfiguration(reader.Read(), "library email settings");
+            EnsureConfiguration(
+                StringEquals(reader, 0, expectedAddressForLibrary) &&
+                StringEquals(reader, 1, expectedNameForLibrary),
+                "library email settings");
+            counter.Rows++;
+            counter.Fields += 2;
+        }
+    }
+
+    private static void ReconcileWorkflowSettings(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        ValidatedMigrationPackage package,
+        IReadOnlyDictionary<string, int> organizationIds,
+        IReadOnlyDictionary<string, long> templateIds,
+        ReconciliationCounter counter)
+    {
+        var rows = MigrationPackageReader.ReadRows(package, "workflow-settings.json", "workflow_settings");
+        foreach (var row in rows.OrderBy(item => item.RequiredString("id"), StringComparer.Ordinal))
+        {
+            var organizationId = ResolveScopedOrganization(row, organizationIds);
+            var isSystem = organizationId == 1;
+            var sourceTemplate = row.String("outstandingTimeoutRejectionTemplate");
+            long? expectedTemplateId = sourceTemplate is null
+                ? null
+                : templateIds.TryGetValue(sourceTemplate, out var mappedTemplate)
+                    ? mappedTemplate
+                    : throw new MigrationOperationException(
+                        "workflow_template_unresolved",
+                        "A workflow rejection template reference cannot be reconciled.");
+            using var command = new SqlCommand(
+                "SELECT [SuggestionLimit], [SuggestionLimitMessage], [OutstandingTimeoutEnabled], [OutstandingTimeoutDays], [OutstandingTimeoutSendEmail], [OutstandingTimeoutRejectionTemplateId], [HoldPickupTimeoutEnabled], [HoldPickupTimeoutDays], [PendingHoldTimeoutEnabled], [PendingHoldTimeoutDays], [AdditionalCopyTimeoutEnabled], [AdditionalCopyTimeoutDays], [AutoPromote], [CommonAuthorsEnabled], [CommonAuthorsLabel], [CommonAuthorsHelp], [CommonAuthorsMessage], [AllowPatronAutoholdOptOut], [AllowAnyRegisteredCardLogin], [PatronCodeEligibilityEnabled], [PatronCodeEligibilityMessage] FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = @organizationId;",
+                connection,
+                transaction);
+            command.Parameters.AddWithValue("@organizationId", organizationId);
+            using var reader = command.ExecuteReader();
+            EnsureConfiguration(reader.Read(), "workflow settings");
+            EnsureConfiguration(
+                IntEquals(reader, 0, isSystem ? row.Int32("suggestionLimit") ?? 5 : row.Int32("suggestionLimit")) &&
+                StringEquals(reader, 1, ScopedText(row, "suggestionLimitMessage", isSystem)) &&
+                BoolEquals(reader, 2, Bool(row, "outstandingTimeoutEnabled", isSystem, false)) &&
+                IntEquals(reader, 3, Int(row, "outstandingTimeoutDays", isSystem, 30)) &&
+                BoolEquals(reader, 4, Bool(row, "outstandingTimeoutSendEmail", isSystem, false)) &&
+                LongEquals(reader, 5, expectedTemplateId) &&
+                BoolEquals(reader, 6, Bool(row, "holdPickupTimeoutEnabled", isSystem, false)) &&
+                IntEquals(reader, 7, Int(row, "holdPickupTimeoutDays", isSystem, 14)) &&
+                BoolEquals(reader, 8, Bool(row, "pendingHoldTimeoutEnabled", isSystem, false)) &&
+                IntEquals(reader, 9, Int(row, "pendingHoldTimeoutDays", isSystem, 14)) &&
+                BoolEquals(reader, 10, Bool(row, "additionalCopyTimeoutEnabled", isSystem, false)) &&
+                IntEquals(reader, 11, Int(row, "additionalCopyTimeoutDays", isSystem, 14)) &&
+                BoolEquals(reader, 12, Bool(row, "autoPromote", isSystem, false)) &&
+                BoolEquals(reader, 13, Bool(row, "commonAuthorsEnabled", isSystem, false)) &&
+                StringEquals(reader, 14, ScopedText(row, "commonAuthorsLabel", isSystem)) &&
+                StringEquals(reader, 15, ScopedText(row, "commonAuthorsHelp", isSystem)) &&
+                StringEquals(reader, 16, ScopedText(row, "commonAuthorsMessage", isSystem)) &&
+                BoolEquals(reader, 17, Bool(row, "allowPatronAutoholdOptOut", isSystem, true)) &&
+                BoolEquals(reader, 18, Bool(row, "allowAnyRegisteredCardLogin", isSystem, false)) &&
+                BoolEquals(reader, 19, Bool(row, "patronCodeEligibilityEnabled", isSystem, false)) &&
+                StringEquals(reader, 20, ScopedText(row, "patronCodeEligibilityMessage", isSystem)),
+                "workflow settings");
+            counter.Rows++;
+            counter.Fields += 21;
+
+            ReconcileCommonCreatorSet(connection, transaction, organizationId, row.String("commonAuthorsList"), isSystem, counter);
+            ReconcilePatronCodeSet(connection, transaction, organizationId, row.String("allowedPatronCodeIds"), isSystem, counter);
+            ReconcileExternalSearch(connection, transaction, organizationId, row, isSystem, counter);
+        }
+    }
+
+    private static void ReconcileCommonCreatorSet(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        int organizationId,
+        string? rawValue,
+        bool isSystem,
+        ReconciliationCounter counter)
+    {
+        var expected = SplitValues(rawValue);
+        var expectedSet = isSystem || expected.Count > 0;
+        using var setCommand = new SqlCommand(
+            "SELECT COUNT(*) FROM [asap].[CommonCreatorSet] WHERE [OrganizationId] = @organizationId;",
+            connection,
+            transaction);
+        setCommand.Parameters.AddWithValue("@organizationId", organizationId);
+        EnsureConfiguration(Convert.ToInt32(setCommand.ExecuteScalar()) == (expectedSet ? 1 : 0), "common creator set");
+        using var command = new SqlCommand(
+            "SELECT [Value] FROM [asap].[CommonCreatorTerm] WHERE [OrganizationId] = @organizationId ORDER BY [SortOrder], [Id];",
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("@organizationId", organizationId);
+        using var reader = command.ExecuteReader();
+        var actual = new List<string>();
+        while (reader.Read()) actual.Add(reader.GetString(0));
+        EnsureConfiguration(expectedSet && expected.Count == 0 || expected.SequenceEqual(actual, StringComparer.Ordinal), "common creator set");
+        counter.Relationships++;
+        counter.Fields += expected.Count;
+    }
+
+    private static void ReconcilePatronCodeSet(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        int organizationId,
+        string? rawValue,
+        bool isSystem,
+        ReconciliationCounter counter)
+    {
+        var expected = SplitValues(rawValue).Distinct(StringComparer.Ordinal).ToArray();
+        var expectedSet = isSystem || expected.Length > 0;
+        using var setCommand = new SqlCommand(
+            "SELECT COUNT(*) FROM [asap].[PatronCodeEligibilitySet] WHERE [OrganizationId] = @organizationId;",
+            connection,
+            transaction);
+        setCommand.Parameters.AddWithValue("@organizationId", organizationId);
+        EnsureConfiguration(Convert.ToInt32(setCommand.ExecuteScalar()) == (expectedSet ? 1 : 0), "patron-code eligibility set");
+        using var command = new SqlCommand(
+            "SELECT [PatronCodeId] FROM [asap].[PatronCodeEligibilityMember] WHERE [OrganizationId] = @organizationId ORDER BY [PatronCodeId];",
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("@organizationId", organizationId);
+        using var reader = command.ExecuteReader();
+        var actual = new List<string>();
+        while (reader.Read()) actual.Add(reader.GetString(0));
+        EnsureConfiguration(expected.Order(StringComparer.Ordinal).SequenceEqual(actual, StringComparer.Ordinal), "patron-code eligibility set");
+        counter.Relationships++;
+        counter.Fields += expected.Length;
+    }
+
+    private static void ReconcileExternalSearch(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        int organizationId,
+        SourceRow row,
+        bool isSystem,
+        ReconciliationCounter counter)
+    {
+        var defaults = new[]
+        {
+            (Enabled: true, Label: "Search Amazon", Url: "https://www.amazon.com/s?k={{title}}"),
+            (Enabled: true, Label: "Search Goodreads", Url: "https://www.goodreads.com/search?q={{title}}"),
+            (Enabled: true, Label: "Search WorldCat", Url: "https://www.worldcat.org/search?q={{title}}"),
+            (Enabled: false, Label: "", Url: "")
+        };
+        for (var slot = 1; slot <= 4; slot++)
+        {
+            var enabledField = $"externalSearch{slot}Enabled";
+            var labelField = $"externalSearch{slot}Label";
+            var urlField = $"externalSearch{slot}UrlTemplate";
+            if (!isSystem && !row.HasValue(enabledField) && !row.HasValue(labelField) && !row.HasValue(urlField)) continue;
+            var expectedEnabled = isSystem ? row.Bool(enabledField, defaults[slot - 1].Enabled) : row.NullableBool(enabledField);
+            var expectedLabel = isSystem ? row.Text(labelField) ?? defaults[slot - 1].Label : ScopedText(row, labelField, false);
+            var expectedUrl = isSystem ? row.Text(urlField) ?? defaults[slot - 1].Url : ScopedText(row, urlField, false);
+            var providerKey = $"external_search_{slot}";
+            using var command = new SqlCommand(
+                isSystem
+                    ? "SELECT [IsEnabled], [Label], [UrlTemplate] FROM [asap].[ExternalSearchProvider] WHERE [ProviderKey] = @providerKey;"
+                    : "SELECT o.[IsEnabled], o.[Label], o.[UrlTemplate] FROM [asap].[ExternalSearchProvider] p LEFT JOIN [asap].[ExternalSearchProviderOverride] o ON o.[ExternalSearchProviderId] = p.[Id] AND o.[LibraryOrganizationId] = @organizationId WHERE p.[ProviderKey] = @providerKey;",
+                connection,
+                transaction);
+            command.Parameters.AddWithValue("@organizationId", organizationId);
+            command.Parameters.AddWithValue("@providerKey", providerKey);
+            using var reader = command.ExecuteReader();
+            EnsureConfiguration(reader.Read(), "external search provider");
+            EnsureConfiguration(
+                BoolEquals(reader, 0, expectedEnabled) &&
+                StringEquals(reader, 1, expectedLabel) &&
+                StringEquals(reader, 2, expectedUrl),
+                "external search provider");
+            counter.Rows++;
+            counter.Fields += 3;
+            counter.Relationships++;
+        }
+    }
+
+    private static void ReconcilePatronSettings(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        ValidatedMigrationPackage package,
+        IReadOnlyDictionary<string, int> organizationIds,
+        IReadOnlyDictionary<string, long> formatIds,
+        DateTime exportedAtUtc,
+        ReconciliationCounter counter)
+    {
+        var expected = new Dictionary<int, Dictionary<string, string?>>();
+        var uiRows = MigrationPackageReader.ReadRows(package, "patron-settings.json", "ui_settings");
+        foreach (var row in uiRows)
+        {
+            var organizationId = ResolveScopedOrganization(row, organizationIds);
+            var values = GetExpectedPatronValues(expected, organizationId);
+            AddPatronUiValues(values, row, organizationId == 1);
+            if (organizationId == 1 && row.HasValue("systemNotEnabledMessage"))
+            {
+                using var command = new SqlCommand(
+                    "SELECT [SystemNotEnabledMessage] FROM [asap].[SystemSettings] WHERE [OrganizationId] = 1;",
+                    connection,
+                    transaction);
+                using var reader = command.ExecuteReader();
+                EnsureConfiguration(reader.Read() && StringEquals(reader, 0, row.Text("systemNotEnabledMessage")), "system not-enabled message");
+                counter.Fields++;
+            }
+        }
+
+        var publicationRows = new Dictionary<int, string?>();
+        foreach (var row in uiRows)
+        {
+            var raw = row.Text("publicationOptions");
+            if (!string.IsNullOrWhiteSpace(raw) &&
+                ResolveScopedOrganization(row, organizationIds) == 1)
+            {
+                publicationRows[1] = raw;
+            }
+        }
+
+        var overrides = MigrationPackageReader.ReadRows(package, "patron-settings.json", "patron_settings_overrides");
+        var modernOverrideOrganizations = new HashSet<int>();
+        foreach (var row in overrides)
+        {
+            var organizationId = row.Int32("orgId") ?? throw new MigrationOperationException(
+                "patron_override_org_invalid",
+                "A patron settings override has no organization.");
+            if (organizationId == 1 || !organizationIds.Values.Contains(organizationId))
+            {
+                throw new MigrationOperationException(
+                    "patron_override_org_invalid",
+                    "A patron settings override references an unknown or system organization.");
+            }
+            modernOverrideOrganizations.Add(organizationId);
+            var values = GetExpectedPatronValues(expected, organizationId);
+            AddPatronOverrideValues(values, row);
+            var raw = row.Text("publicationOptions");
+            if (!string.IsNullOrWhiteSpace(raw)) publicationRows[organizationId] = raw;
+            ReconcileCustomFields(
+                connection,
+                transaction,
+                organizationId,
+                row,
+                counter);
+            ReconcileFormatRules(
+                connection,
+                transaction,
+                organizationId,
+                row,
+                counter);
+        }
+
+        foreach (var row in MigrationPackageReader.ReadRows(package, "patron-settings.json", "patron_library_settings"))
+        {
+            var organizationId = ResolveLibraryOrganization(row, "libraryOrganization", organizationIds);
+            if (modernOverrideOrganizations.Contains(organizationId)) continue;
+            AddLegacyDuplicateLabelValues(GetExpectedPatronValues(expected, organizationId), row.JsonText("duplicateRequestStatusLabels"));
+        }
+
+        foreach (var item in expected.OrderBy(item => item.Key))
+        {
+            ReconcilePatronValueSet(connection, transaction, item.Key, item.Value, counter);
+        }
+
+        foreach (var item in publicationRows.OrderBy(item => item.Key))
+        {
+            ReconcilePublicationOptions(connection, transaction, item.Key, item.Value!, counter);
+        }
+
+        counter.Rows += uiRows.Count + overrides.Count +
+            MigrationPackageReader.ReadRows(package, "patron-settings.json", "patron_library_settings").Count;
+    }
+
+    private static Dictionary<string, string?> GetExpectedPatronValues(
+        IDictionary<int, Dictionary<string, string?>> expected,
+        int organizationId)
+    {
+        if (!expected.TryGetValue(organizationId, out var values))
+        {
+            values = new Dictionary<string, string?>(StringComparer.Ordinal);
+            foreach (var (_, target) in PatronTextFields) values[target] = null;
+            foreach (var (_, target) in DuplicateLabelFields) values[target] = null;
+            expected.Add(organizationId, values);
+        }
+        return values;
+    }
+
+    private static readonly (string Source, string Target)[] PatronTextFields =
+    [
+        ("pageTitle", "PageTitle"),
+        ("barcodeLabel", "BarcodeLabel"),
+        ("pinLabel", "PinLabel"),
+        ("loginPrompt", "LoginPrompt"),
+        ("loginNote", "LoginNote"),
+        ("suggestionFormNote", "SuggestionFormNote"),
+        ("noEmailMessage", "NoEmailMessage"),
+        ("successTitle", "SuccessTitle"),
+        ("successMessage", "SuccessMessage"),
+        ("alreadySubmittedMessage", "AlreadySubmittedMessage"),
+        ("ebookMessage", "EbookMessage"),
+        ("eaudiobookMessage", "EaudiobookMessage")
+    ];
+
+    private static readonly (string Source, string Target)[] DuplicateLabelFields =
+    [
+        ("suggestion", "SuggestionStatusLabel"),
+        ("outstanding_purchase", "OutstandingPurchaseStatusLabel"),
+        ("pending_hold", "PendingHoldStatusLabel"),
+        ("hold_placed", "HoldPlacedStatusLabel"),
+        ("closed", "ClosedStatusLabel"),
+        ("rejected", "RejectedStatusLabel"),
+        ("hold_completed", "HoldCompletedStatusLabel"),
+        ("hold_not_picked_up", "HoldNotPickedUpStatusLabel"),
+        ("manual", "ManualStatusLabel"),
+        ("silent", "SilentStatusLabel")
+    ];
+
+    private static void AddPatronUiValues(
+        IDictionary<string, string?> values,
+        SourceRow row,
+        bool isSystem)
+    {
+        foreach (var (source, target) in PatronTextFields)
+        {
+            if (isSystem || row.HasValue(source)) values[target] = ScopedText(row, source, isSystem);
+        }
+        if (isSystem)
+        {
+            AddDuplicateLabelValues(values, row, null);
+        }
+    }
+
+    private static void AddPatronOverrideValues(
+        IDictionary<string, string?> values,
+        SourceRow row)
+    {
+        values["EbookMessage"] = ScopedText(row, "ebookMessage", false);
+        values["EaudiobookMessage"] = ScopedText(row, "eaudiobookMessage", false);
+        AddDuplicateLabelValues(values, row, ParseObject(row.JsonText("duplicateStatusLabels")));
+    }
+
+    private static void AddLegacyDuplicateLabelValues(
+        IDictionary<string, string?> values,
+        string? rawLabels)
+    {
+        AddDuplicateLabelValues(values, null, ParseObject(rawLabels));
+    }
+
+    private static void AddDuplicateLabelValues(
+        IDictionary<string, string?> values,
+        SourceRow? row,
+        IReadOnlyDictionary<string, string>? labels)
+    {
+        foreach (var (source, target) in DuplicateLabelFields)
+        {
+            var value = labels is not null && labels.TryGetValue(source, out var label)
+                ? label
+                : row?.Text($"duplicateLabel{DuplicateLabelSuffix(source)}");
+            values[target] = value;
+        }
+    }
+
+    private static string DuplicateLabelSuffix(string source) => source switch
+    {
+        "suggestion" => "Suggestion",
+        "outstanding_purchase" => "OutstandingPurchase",
+        "pending_hold" => "PendingHold",
+        "hold_placed" => "HoldPlaced",
+        "closed" => "Closed",
+        "rejected" => "Rejected",
+        "hold_completed" => "HoldCompleted",
+        "hold_not_picked_up" => "HoldNotPickedUp",
+        "manual" => "Manual",
+        "silent" => "Silent",
+        _ => throw new ArgumentOutOfRangeException(nameof(source))
+    };
+
+    private static void ReconcilePatronValueSet(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        int organizationId,
+        IReadOnlyDictionary<string, string?> expected,
+        ReconciliationCounter counter)
+    {
+        if (expected.Count == 0) return;
+        using var command = new SqlCommand(
+            "SELECT [PageTitle], [BarcodeLabel], [PinLabel], [LoginPrompt], [LoginNote], [SuggestionFormNote], [NoEmailMessage], [SuccessTitle], [SuccessMessage], [AlreadySubmittedMessage], [EbookMessage], [EaudiobookMessage], [SuggestionStatusLabel], [OutstandingPurchaseStatusLabel], [PendingHoldStatusLabel], [HoldPlacedStatusLabel], [ClosedStatusLabel], [RejectedStatusLabel], [HoldCompletedStatusLabel], [HoldNotPickedUpStatusLabel], [ManualStatusLabel], [SilentStatusLabel] FROM [asap].[PatronSettings] WHERE [OrganizationId] = @organizationId;",
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("@organizationId", organizationId);
+        using var reader = command.ExecuteReader();
+        EnsureConfiguration(reader.Read(), "patron settings");
+        var columns = new[]
+        {
+            "PageTitle", "BarcodeLabel", "PinLabel", "LoginPrompt", "LoginNote", "SuggestionFormNote",
+            "NoEmailMessage", "SuccessTitle", "SuccessMessage", "AlreadySubmittedMessage", "EbookMessage",
+            "EaudiobookMessage", "SuggestionStatusLabel", "OutstandingPurchaseStatusLabel",
+            "PendingHoldStatusLabel", "HoldPlacedStatusLabel", "ClosedStatusLabel", "RejectedStatusLabel",
+            "HoldCompletedStatusLabel", "HoldNotPickedUpStatusLabel", "ManualStatusLabel", "SilentStatusLabel"
+        };
+        var indexes = columns.Select((name, index) => (name, index)).ToDictionary(item => item.name, item => item.index, StringComparer.Ordinal);
+        foreach (var item in expected)
+        {
+            EnsureConfiguration(StringEquals(reader, indexes[item.Key], item.Value), "patron settings");
+            counter.Fields++;
+        }
+    }
+
+    private static void ReconcilePublicationOptions(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        int organizationId,
+        string rawValue,
+        ReconciliationCounter counter)
+    {
+        var options = ParsePublicationOptions(rawValue);
+        var expectedSet = organizationId == 1 || options.Count > 0;
+        using var setCommand = new SqlCommand(
+            "SELECT COUNT(*) FROM [asap].[PublicationOptionSet] WHERE [OrganizationId] = @organizationId;",
+            connection,
+            transaction);
+        setCommand.Parameters.AddWithValue("@organizationId", organizationId);
+        EnsureConfiguration(Convert.ToInt32(setCommand.ExecuteScalar()) == (expectedSet ? 1 : 0), "publication option set");
+        using var command = new SqlCommand(
+            "SELECT [OptionKey], [Label], [IsEnabled], [SortOrder] FROM [asap].[PublicationOption] WHERE [OrganizationId] = @organizationId ORDER BY [SortOrder], [Id];",
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("@organizationId", organizationId);
+        using var reader = command.ExecuteReader();
+        var actual = new List<PublicationImportOption>();
+        while (reader.Read())
+        {
+            actual.Add(new(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetBoolean(2),
+                reader.GetInt32(3)));
+        }
+        EnsureConfiguration(options.SequenceEqual(actual), "publication options");
+        counter.Relationships++;
+        counter.Fields += options.Count * 4;
+    }
+
+    private static void ReconcileCustomFields(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        int organizationId,
+        SourceRow row,
+        ReconciliationCounter counter)
+    {
+        var definitionsJson = row.JsonText("additionalFieldDefinitions");
+        var formatRules = ParseRootObject(row.JsonText("patronFormatRules"));
+        if (definitionsJson is null)
+        {
+            EnsureConfiguration(
+                Scalar(connection, transaction, "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = @organizationId;", organizationId) == 0,
+                "custom fields");
+            return;
+        }
+
+        using var definitions = JsonDocument.Parse(definitionsJson);
+        if (definitions.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            throw new MigrationOperationException("custom_fields_invalid", "Additional field definitions must be a JSON array.");
+        }
+        var definitionItems = definitions.RootElement.EnumerateArray().ToArray();
+        EnsureConfiguration(
+            Scalar(connection, transaction, "SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = @organizationId;", organizationId) == definitionItems.Length,
+            "custom fields");
+        foreach (var definition in definitionItems)
+        {
+            var key = RequiredJsonString(definition, "key", "custom_fields_invalid");
+            var type = RequiredJsonString(definition, "type", "custom_fields_invalid");
+            var label = RequiredJsonString(definition, "label", "custom_fields_invalid");
+            var help = JsonStringStrict(definition, "helpText", "custom_fields_invalid");
+            var enabled = JsonBool(definition, "enabled", true);
+            var sortOrder = JsonInt(definition, "sortOrder", 0);
+            using var command = new SqlCommand(
+                "SELECT [Id], [FieldType], [Label], [HelpText], [IsEnabled], [SortOrder] FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = @organizationId AND [FieldKey] = @fieldKey;",
+                connection,
+                transaction);
+            command.Parameters.AddWithValue("@organizationId", organizationId);
+            command.Parameters.AddWithValue("@fieldKey", key);
+            using var reader = command.ExecuteReader();
+            EnsureConfiguration(reader.Read(), "custom field");
+            var fieldId = reader.GetInt64(0);
+            EnsureConfiguration(
+                StringEquals(reader, 1, type) &&
+                StringEquals(reader, 2, label) &&
+                StringEquals(reader, 3, help) &&
+                reader.GetBoolean(4) == enabled &&
+                reader.GetInt32(5) == sortOrder,
+                "custom field");
+            counter.Rows++;
+            counter.Fields += 5;
+            reader.Close();
+
+            var options = definition.TryGetProperty("options", out var optionElement) &&
+                          optionElement.ValueKind == JsonValueKind.Array
+                ? optionElement.EnumerateArray().ToArray()
+                : Array.Empty<JsonElement>();
+            using var optionCount = new SqlCommand(
+                "SELECT COUNT(*) FROM [asap].[PatronCustomFieldOption] WHERE [PatronCustomFieldId] = @fieldId;",
+                connection,
+                transaction);
+            optionCount.Parameters.AddWithValue("@fieldId", fieldId);
+            EnsureConfiguration(Convert.ToInt32(optionCount.ExecuteScalar()) == options.Length, "custom field options");
+            foreach (var option in options)
+            {
+                var optionKey = RequiredJsonString(option, "id", "custom_fields_invalid");
+                var optionLabel = RequiredJsonString(option, "label", "custom_fields_invalid");
+                var optionEnabled = JsonBool(option, "enabled", true);
+                var optionSortOrder = JsonInt(option, "sortOrder", 0);
+                using var optionCommand = new SqlCommand(
+                    "SELECT [Label], [IsEnabled], [SortOrder] FROM [asap].[PatronCustomFieldOption] WHERE [PatronCustomFieldId] = @fieldId AND [OptionKey] = @optionKey;",
+                    connection,
+                    transaction);
+                optionCommand.Parameters.AddWithValue("@fieldId", fieldId);
+                optionCommand.Parameters.AddWithValue("@optionKey", optionKey);
+                using var optionReader = optionCommand.ExecuteReader();
+                EnsureConfiguration(optionReader.Read(), "custom field option");
+                EnsureConfiguration(
+                    StringEquals(optionReader, 0, optionLabel) &&
+                    optionReader.GetBoolean(1) == optionEnabled &&
+                    optionReader.GetInt32(2) == optionSortOrder,
+                    "custom field option");
+                counter.Fields += 3;
+                counter.Relationships++;
+            }
+        }
+
+        var scopedFormats = ReadScopedFormats(connection, transaction, organizationId);
+        var effectiveFormats = scopedFormats
+            .GroupBy(format => format.Code, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group
+                .OrderBy(format => format.OwnerOrganizationId == organizationId ? 0 : 1)
+                .ThenBy(format => format.Id)
+                .First())
+            .ToArray();
+        var expectedRuleCount = effectiveFormats.Length * definitionItems.Length;
+        EnsureConfiguration(
+            Scalar(connection, transaction, "SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] WHERE [LibraryOrganizationId] = @organizationId;", organizationId) == expectedRuleCount,
+            "custom field format rules");
+        foreach (var format in effectiveFormats)
+        {
+            foreach (var definition in definitionItems)
+            {
+                var fieldKey = RequiredJsonString(definition, "key", "custom_fields_invalid");
+                var fieldId = ReadCustomFieldId(connection, transaction, organizationId, fieldKey);
+                var expectedRule = ResolveCustomFieldRule(formatRules, format.Code, fieldKey, JsonBool(definition, "enabled", true));
+                using var ruleCommand = new SqlCommand(
+                    "SELECT [Mode], [LabelOverride] FROM [asap].[MaterialFormatCustomFieldRule] WHERE [LibraryOrganizationId] = @organizationId AND [MaterialFormatId] = @formatId AND [PatronCustomFieldId] = @fieldId;",
+                    connection,
+                    transaction);
+                ruleCommand.Parameters.AddWithValue("@organizationId", organizationId);
+                ruleCommand.Parameters.AddWithValue("@formatId", format.Id);
+                ruleCommand.Parameters.AddWithValue("@fieldId", fieldId);
+                using var ruleReader = ruleCommand.ExecuteReader();
+                EnsureConfiguration(ruleReader.Read(), "custom field format rule");
+                EnsureConfiguration(
+                    StringEquals(ruleReader, 0, expectedRule.Mode) &&
+                    StringEquals(ruleReader, 1, expectedRule.LabelOverride),
+                    "custom field format rule");
+                counter.Relationships++;
+                counter.Fields += 2;
+            }
+        }
+    }
+
+    private static void ReconcileFormatRules(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        int organizationId,
+        SourceRow row,
+        ReconciliationCounter counter)
+    {
+        var formatRules = ParseRootObject(row.JsonText("patronFormatRules"));
+        if (formatRules is null) return;
+        var scopedFormats = ReadScopedFormats(connection, transaction, organizationId);
+        foreach (var property in formatRules.Value.EnumerateObject())
+        {
+            var target = scopedFormats
+                .Where(format => string.Equals(format.Code, property.Name, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(format => format.OwnerOrganizationId == organizationId ? 0 : 1)
+                .ThenBy(format => format.Id)
+                .FirstOrDefault();
+            if (target is null)
+            {
+                throw new MigrationOperationException(
+                    "format_rule_format_unresolved",
+                    $"The patron format rule for {property.Name} has no system or same-library material format.");
+            }
+            var expected = NormalizeFormatRule(property.Value, target.Code);
+            using var command = new SqlCommand(
+                "SELECT COALESCE(o.[MessageBehavior], f.[MessageBehavior]), COALESCE(o.[Message], f.[Message]), COALESCE(o.[TitleMode], f.[TitleMode]), COALESCE(o.[TitleLabel], f.[TitleLabel]), COALESCE(o.[AuthorMode], f.[AuthorMode]), COALESCE(o.[AuthorLabel], f.[AuthorLabel]), COALESCE(o.[IdentifierMode], f.[IdentifierMode]), COALESCE(o.[IdentifierLabel], f.[IdentifierLabel]), COALESCE(o.[PublicationMode], f.[PublicationMode]), COALESCE(o.[PublicationLabel], f.[PublicationLabel]) FROM [asap].[MaterialFormat] f LEFT JOIN [asap].[MaterialFormatOverride] o ON o.[MaterialFormatId] = f.[Id] AND o.[LibraryOrganizationId] = @organizationId WHERE f.[Id] = @formatId;",
+                connection,
+                transaction);
+            command.Parameters.AddWithValue("@organizationId", organizationId);
+            command.Parameters.AddWithValue("@formatId", target.Id);
+            using var reader = command.ExecuteReader();
+            EnsureConfiguration(reader.Read(), "material format rule");
+            EnsureConfiguration(
+                StringEquals(reader, 0, EmptyAsNull(expected.MessageBehavior)) &&
+                StringEquals(reader, 1, EmptyAsNull(expected.Message)) &&
+                StringEquals(reader, 2, expected.TitleMode) &&
+                StringEquals(reader, 3, expected.TitleLabel) &&
+                StringEquals(reader, 4, expected.AuthorMode) &&
+                StringEquals(reader, 5, expected.AuthorLabel) &&
+                StringEquals(reader, 6, expected.IdentifierMode) &&
+                StringEquals(reader, 7, expected.IdentifierLabel) &&
+                StringEquals(reader, 8, expected.PublicationMode) &&
+                StringEquals(reader, 9, expected.PublicationLabel),
+                "material format rule");
+            counter.Rows++;
+            counter.Fields += 10;
+        }
+    }
+
+    private static long ReadCustomFieldId(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        int organizationId,
+        string fieldKey)
+    {
+        using var command = new SqlCommand(
+            "SELECT [Id] FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = @organizationId AND [FieldKey] = @fieldKey;",
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("@organizationId", organizationId);
+        command.Parameters.AddWithValue("@fieldKey", fieldKey);
+        var value = command.ExecuteScalar();
+        return value is null or DBNull
+            ? throw new MigrationOperationException("reconciliation_failed", "An imported custom field has no target identity.")
+            : Convert.ToInt64(value);
+    }
+
+    private static int ResolveOrganizationId(
+        SourceRow row,
+        string field,
+        IReadOnlyDictionary<string, int> organizationIds)
+    {
+        var sourceValue = row.RequiredString(field);
+        if (organizationIds.TryGetValue(sourceValue, out var mapped) && mapped != 1) return mapped;
+        if (int.TryParse(sourceValue, out var organizationId) &&
+            organizationId != 1 &&
+            organizationIds.Values.Contains(organizationId))
+        {
+            return organizationId;
+        }
+        throw new MigrationOperationException(
+            "settings_organization_unresolved",
+            $"Source organization reference {sourceValue} cannot be resolved.");
+    }
+
+    private static long? ResolveSourceTemplateId(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        SourceRow row,
+        bool isRejection,
+        string templateKey,
+        IReadOnlyDictionary<string, long> mapped)
+    {
+        var explicitSourceId = row.String("sourceTemplateId");
+        if (explicitSourceId is not null)
+        {
+            if (mapped.TryGetValue(explicitSourceId, out var targetId)) return targetId;
+            throw new MigrationOperationException(
+                "email_template_source_unresolved",
+                $"Email template {row.RequiredString("id")} has an unresolved source template.");
+        }
+        return isRejection ? null : FindSystemTemplateId(connection, transaction, templateKey);
+    }
+
+    private static long? FindSystemTemplateId(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        string templateKey)
+    {
+        using var command = new SqlCommand(
+            "SELECT [Id] FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = @key;",
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("@key", templateKey);
+        var value = command.ExecuteScalar();
+        return value is null or DBNull ? null : Convert.ToInt64(value);
+    }
+
+    private static string? NormalizeTemplateText(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value;
+
+    private static string NormalizeFormatCode(string value) => value.Trim().ToLowerInvariant() switch
+    {
+        "0" => "book",
+        "1" => "ebook",
+        "2" => "audiobook_cd",
+        "3" => "eaudiobook",
+        "4" => "dvd",
+        "5" => "music_cd",
+        var code when code.Length > 0 => code,
+        _ => throw new MigrationOperationException("format_code_invalid", "Material format code is blank.")
+    };
+
+    private static string? NormalizeOptionalEnum(
+        string? value,
+        IReadOnlyCollection<string> allowed,
+        string errorCode)
+    {
+        if (value is null) return null;
+        var normalized = value.Trim();
+        var canonical = allowed.FirstOrDefault(item =>
+            string.Equals(item, normalized, StringComparison.OrdinalIgnoreCase));
+        return canonical ?? throw new MigrationOperationException(errorCode, $"Unknown source value: {value}");
+    }
+
+    private static void ReconcileEmailTemplates(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        ValidatedMigrationPackage package,
+        IReadOnlyDictionary<string, int> organizationIds,
+        IReadOnlyDictionary<string, long> templateIds,
+        ReconciliationCounter counter)
+    {
+        var sources = MigrationPackageReader.ReadRows(package, "email-templates.json", "email_templates")
+            .Select(row => (Row: row, IsRejection: false))
+            .Concat(MigrationPackageReader.ReadRows(package, "email-templates.json", "rejection_templates")
+                .Select(row => (Row: row, IsRejection: true)))
+            .OrderBy(item => item.Row.RequiredString("id"), StringComparer.Ordinal)
+            .ToArray();
+        foreach (var source in sources)
+        {
+            var row = source.Row;
+            var sourceId = row.RequiredString("id");
+            var scope = row.RequiredString("scope").Trim().ToLowerInvariant();
+            var organizationId = scope switch
+            {
+                "system" => 1,
+                "library" => ResolveOrganizationId(row, "libraryOrganization", organizationIds),
+                _ => throw new MigrationOperationException("email_template_scope_invalid", "An email template has an invalid scope.")
+            };
+            var templateKey = source.IsRejection
+                ? "rejection:" + (row.String("sourceTemplateId") ?? sourceId)
+                : row.RequiredString("templateKey");
+            var sourceTemplateId = scope == "library"
+                ? ResolveSourceTemplateId(connection, transaction, row, source.IsRejection, templateKey, templateIds)
+                : null;
+            var isCustom = scope == "library" && sourceTemplateId is null;
+            using var command = new SqlCommand(
+                "SELECT t.[OrganizationId], t.[TemplateKey], t.[SourceTemplateId], t.[DisplayName], t.[SubjectTemplate], t.[BodyTemplate], t.[IsHidden], t.[IsCustom], t.[SortOrder] FROM [asap].[LegacyPocketBaseMapping] m JOIN [asap].[EmailTemplate] t ON t.[Id] = m.[NewId] WHERE m.[EntityType] = N'email_template' AND m.[PocketBaseId] = @sourceId;",
+                connection,
+                transaction);
+            command.Parameters.AddWithValue("@sourceId", sourceId);
+            using var reader = command.ExecuteReader();
+            EnsureConfiguration(reader.Read(), "email template");
+            EnsureConfiguration(
+                reader.GetInt32(0) == organizationId &&
+                StringEquals(reader, 1, templateKey) &&
+                LongEquals(reader, 2, sourceTemplateId) &&
+                StringEquals(reader, 3, row.Text("name")) &&
+                StringEquals(reader, 4, NormalizeTemplateText(row.Text("subject"))) &&
+                StringEquals(reader, 5, NormalizeTemplateText(row.Text("body"))) &&
+                reader.GetBoolean(6) == !row.Bool("enabled", true) &&
+                reader.GetBoolean(7) == isCustom &&
+                reader.GetInt32(8) == (row.Int32("sortOrder") ?? 0),
+                "email template");
+            counter.Rows++;
+            counter.Fields += 9;
+            counter.Relationships++;
+        }
+    }
+
+    private static void ReconcileMaterialFormats(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        ValidatedMigrationPackage package,
+        IReadOnlyDictionary<string, int> organizationIds,
+        IReadOnlyDictionary<string, long> formatIds,
+        DateTime exportedAtUtc,
+        ReconciliationCounter counter)
+    {
+        var rows = MigrationPackageReader.ReadRows(package, "material-formats.json", "material_formats");
+        foreach (var row in rows.OrderBy(item => item.RequiredString("id"), StringComparer.Ordinal))
+        {
+            var sourceId = row.RequiredString("id");
+            var scope = row.RequiredString("scope").Trim().ToLowerInvariant();
+            var ownerId = scope switch
+            {
+                "system" => 1,
+                "library" => ResolveOrganizationId(row, "libraryOrganization", organizationIds),
+                _ => throw new MigrationOperationException("format_scope_invalid", "A material format has an invalid scope.")
+            };
+            if (!formatIds.TryGetValue(sourceId, out var formatId))
+            {
+                throw new MigrationOperationException("reconciliation_failed", "An imported material format has no target identity.");
+            }
+            using var command = new SqlCommand(
+                "SELECT f.[OwnerOrganizationId], f.[Code], COALESCE(o.[Label], f.[Label]), COALESCE(o.[SortOrder], f.[SortOrder]), COALESCE(o.[IsEnabled], f.[IsEnabled]), COALESCE(o.[MessageBehavior], f.[MessageBehavior]), COALESCE(o.[Message], f.[Message]), COALESCE(o.[TitleMode], f.[TitleMode]), COALESCE(o.[TitleLabel], f.[TitleLabel]), COALESCE(o.[AuthorMode], f.[AuthorMode]), COALESCE(o.[AuthorLabel], f.[AuthorLabel]), COALESCE(o.[IdentifierMode], f.[IdentifierMode]), COALESCE(o.[IdentifierLabel], f.[IdentifierLabel]), COALESCE(o.[PublicationMode], f.[PublicationMode]), COALESCE(o.[PublicationLabel], f.[PublicationLabel]), f.[CreatedUtc], f.[UpdatedUtc] FROM [asap].[MaterialFormat] f LEFT JOIN [asap].[MaterialFormatOverride] o ON o.[MaterialFormatId] = f.[Id] AND o.[LibraryOrganizationId] = @organizationId WHERE f.[Id] = @formatId;",
+                connection,
+                transaction);
+            command.Parameters.AddWithValue("@organizationId", ownerId);
+            command.Parameters.AddWithValue("@formatId", formatId);
+            using var reader = command.ExecuteReader();
+            EnsureConfiguration(reader.Read(), "material format");
+            var targetOwnerId = reader.GetInt32(0);
+            var sparseOverride = scope == "library" && targetOwnerId == 1;
+            EnsureConfiguration(
+                sparseOverride || targetOwnerId == ownerId,
+                "material format ownership");
+            EnsureConfiguration(StringEquals(reader, 1, NormalizeFormatCode(row.RequiredString("code"))), "material format code");
+            var fields = 2;
+            if (!sparseOverride)
+            {
+                EnsureConfiguration(
+                    StringEquals(reader, 2, row.RequiredText("label")) &&
+                    IntEquals(reader, 3, row.Int32("sortOrder") ?? 0) &&
+                    BoolEquals(reader, 4, row.Bool("enabled", true)) &&
+                    StringEquals(reader, 5, NormalizeOptionalEnum(row.String("messageBehavior"), ["none", "message", "ebookMessage", "eaudiobookMessage"], "format_message_behavior_invalid")) &&
+                    StringEquals(reader, 6, row.Text("message")) &&
+                    StringEquals(reader, 7, NormalizeOptionalEnum(row.String("titleMode"), ["required"], "format_title_mode_invalid") ?? "required") &&
+                    StringEquals(reader, 8, row.Text("titleLabel")) &&
+                    StringEquals(reader, 9, NormalizeOptionalEnum(row.String("authorMode"), ["required", "optional", "hidden"], "format_author_mode_invalid")) &&
+                    StringEquals(reader, 10, row.Text("authorLabel")) &&
+                    StringEquals(reader, 11, NormalizeOptionalEnum(row.String("identifierMode"), ["required", "optional", "hidden"], "format_identifier_mode_invalid")) &&
+                    StringEquals(reader, 12, row.Text("identifierLabel")) &&
+                    StringEquals(reader, 13, NormalizeOptionalEnum(row.String("publicationMode"), ["required", "optional", "hidden"], "format_publication_mode_invalid")) &&
+                    StringEquals(reader, 14, row.Text("publicationLabel")) &&
+                    DateEquals(reader, 15, row.UtcDateTime("created") ?? exportedAtUtc) &&
+                    DateEquals(reader, 16, row.UtcDateTime("updated") ?? exportedAtUtc),
+                    "material format");
+                fields += 15;
+            }
+            else
+            {
+                EnsureSparseFormatValue(reader, 2, row, "label", value => value, "material format label");
+                EnsureSparseFormatValue(reader, 3, row, "sortOrder", value => value.Int32("sortOrder"), "material format sort order");
+                EnsureSparseFormatValue(reader, 4, row, "enabled", value => value.NullableBool("enabled"), "material format enabled");
+                EnsureSparseFormatValue(reader, 5, row, "messageBehavior", value => NormalizeOptionalEnum(value.String("messageBehavior"), ["none", "message", "ebookMessage", "eaudiobookMessage"], "format_message_behavior_invalid"), "material format message behavior");
+                EnsureSparseFormatValue(reader, 6, row, "message", value => value.String("message"), "material format message");
+                EnsureSparseFormatValue(reader, 7, row, "titleMode", value => NormalizeOptionalEnum(value.String("titleMode"), ["required"], "format_title_mode_invalid"), "material format title mode");
+                EnsureSparseFormatValue(reader, 8, row, "titleLabel", value => value.String("titleLabel"), "material format title label");
+                EnsureSparseFormatValue(reader, 9, row, "authorMode", value => NormalizeOptionalEnum(value.String("authorMode"), ["required", "optional", "hidden"], "format_author_mode_invalid"), "material format author mode");
+                EnsureSparseFormatValue(reader, 10, row, "authorLabel", value => value.String("authorLabel"), "material format author label");
+                EnsureSparseFormatValue(reader, 11, row, "identifierMode", value => NormalizeOptionalEnum(value.String("identifierMode"), ["required", "optional", "hidden"], "format_identifier_mode_invalid"), "material format identifier mode");
+                EnsureSparseFormatValue(reader, 12, row, "identifierLabel", value => value.String("identifierLabel"), "material format identifier label");
+                EnsureSparseFormatValue(reader, 13, row, "publicationMode", value => NormalizeOptionalEnum(value.String("publicationMode"), ["required", "optional", "hidden"], "format_publication_mode_invalid"), "material format publication mode");
+                EnsureSparseFormatValue(reader, 14, row, "publicationLabel", value => value.String("publicationLabel"), "material format publication label");
+                fields += row.Names.Count(name => name is "label" or "sortOrder" or "enabled" or "messageBehavior" or "message" or "titleMode" or "titleLabel" or "authorMode" or "authorLabel" or "identifierMode" or "identifierLabel" or "publicationMode" or "publicationLabel");
+            }
+            counter.Rows++;
+            counter.Fields += fields;
+            counter.Relationships++;
+        }
+    }
+
+    private static void EnsureSparseFormatValue(
+        SqlDataReader reader,
+        int ordinal,
+        SourceRow row,
+        string sourceField,
+        Func<SourceRow, object?> expectedValue,
+        string entity)
+    {
+        if (!row.HasValue(sourceField)) return;
+        var expected = expectedValue(row);
+        var matches = expected switch
+        {
+            null => reader.IsDBNull(ordinal),
+            int value => !reader.IsDBNull(ordinal) && reader.GetInt32(ordinal) == value,
+            bool value => !reader.IsDBNull(ordinal) && reader.GetBoolean(ordinal) == value,
+            _ => StringEquals(reader, ordinal, Convert.ToString(expected, System.Globalization.CultureInfo.InvariantCulture))
+        };
+        EnsureConfiguration(matches, entity);
     }
 
     private static void UpsertPatronSettings(
@@ -1039,21 +2213,32 @@ internal static class MigrationConfigurationImporter
                     }
                     if (item.ValueKind != JsonValueKind.Object)
                     {
-                        continue;
+                        throw new MigrationOperationException(
+                            "publication_options_invalid",
+                            "Publication options must contain only strings or objects.");
                     }
-                    var label = JsonString(item, "label") ??
-                                JsonString(item, "name") ??
-                                JsonString(item, "value") ??
+                    var label = JsonStringStrict(item, "label", "publication_options_invalid") ??
+                                JsonStringStrict(item, "name", "publication_options_invalid") ??
+                                JsonStringStrict(item, "value", "publication_options_invalid") ??
                                 string.Empty;
-                    rawOptions.Add((
-                        JsonString(item, "id"),
-                        label,
-                        JsonBool(item, "enabled", true),
-                        item.TryGetProperty("sortOrder", out var sortOrder) &&
-                        sortOrder.TryGetInt32(out var parsedOrder) &&
-                        parsedOrder != 0
+                    if (label.Length == 0)
+                    {
+                        throw new MigrationOperationException(
+                            "publication_options_invalid",
+                            "A publication option must have a nonblank label.");
+                    }
+                    var sortOrder = item.TryGetProperty("sortOrder", out var sortElement)
+                        ? sortElement.ValueKind == JsonValueKind.Number && sortElement.TryGetInt32(out var parsedOrder)
                             ? parsedOrder
-                            : null));
+                            : throw new MigrationOperationException(
+                                "publication_options_invalid",
+                                "A publication option sortOrder must be an integer.")
+                        : (int?)null;
+                    rawOptions.Add((
+                        JsonStringStrict(item, "id", "publication_options_invalid"),
+                        label,
+                        JsonBoolStrict(item, "enabled", true),
+                        sortOrder));
                 }
             }
             catch (JsonException)
@@ -1080,16 +2265,18 @@ internal static class MigrationConfigurationImporter
             var label = raw.Label.Trim();
             if (label.Length == 0 || !seenLabels.Add(label))
             {
-                continue;
+                throw new MigrationOperationException(
+                    "publication_options_conflict",
+                    "Publication options contain a blank or duplicate label.");
             }
             var key = string.IsNullOrWhiteSpace(raw.Id)
                 ? OptionIdFromLabel(label, $"option_{index + 1}")
                 : raw.Id.Trim();
-            var baseKey = key;
-            var suffix = 2;
-            while (!seenIds.Add(key))
+            if (key.Length == 0 || !seenIds.Add(key))
             {
-                key = $"{baseKey}_{suffix++}";
+                throw new MigrationOperationException(
+                    "publication_options_conflict",
+                    "Publication options contain a blank or duplicate stable ID.");
             }
             result.Add(new PublicationImportOption(
                 key,
@@ -1098,6 +2285,36 @@ internal static class MigrationConfigurationImporter
                 raw.SortOrder ?? (index + 1) * 10));
         }
         return result;
+    }
+
+    private static bool JsonBoolStrict(JsonElement value, string property, bool defaultValue)
+    {
+        if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(property, out var item))
+        {
+            return defaultValue;
+        }
+        if (item.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            return item.GetBoolean();
+        }
+        throw new MigrationOperationException(
+            "publication_options_invalid",
+            $"Publication option {property} must be a boolean.");
+    }
+
+    private static string? JsonStringStrict(JsonElement value, string property, string errorCode)
+    {
+        if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(property, out var item) ||
+            item.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return null;
+        }
+        if (item.ValueKind != JsonValueKind.String)
+        {
+            throw new MigrationOperationException(errorCode, $"JSON property {property} must be a string.");
+        }
+        var result = item.GetString()?.Trim();
+        return string.IsNullOrWhiteSpace(result) ? null : result;
     }
 
     private static string OptionIdFromLabel(string label, string fallback)
@@ -1163,10 +2380,17 @@ internal static class MigrationConfigurationImporter
             throw new MigrationOperationException("custom_fields_invalid", "Additional field definitions must be a JSON array.");
         }
         var fields = new List<(long Id, string Key, bool Enabled)>();
+        var fieldKeys = new HashSet<string>(StringComparer.Ordinal);
         foreach (var definition in definitions.RootElement.EnumerateArray())
         {
             var key = RequiredJsonString(definition, "key", "custom_fields_invalid");
             var type = RequiredJsonString(definition, "type", "custom_fields_invalid");
+            if (!fieldKeys.Add(key))
+            {
+                throw new MigrationOperationException(
+                    "custom_fields_conflict",
+                    $"Library {organizationId} contains duplicate custom field key {key}.");
+            }
             if (type is not ("text" or "textarea" or "select"))
             {
                 throw new MigrationOperationException("custom_fields_invalid", $"Custom field {key} has an invalid type.");
@@ -1184,23 +2408,38 @@ internal static class MigrationConfigurationImporter
             insert.Parameters.AddWithValue("@key", key);
             insert.Parameters.AddWithValue("@type", type);
             insert.Parameters.AddWithValue("@label", RequiredJsonString(definition, "label", "custom_fields_invalid"));
-            insert.Parameters.AddWithValue("@help", Db(JsonString(definition, "helpText")));
+            insert.Parameters.AddWithValue("@help", Db(JsonStringStrict(definition, "helpText", "custom_fields_invalid")));
             var enabled = JsonBool(definition, "enabled", true);
             insert.Parameters.AddWithValue("@enabled", enabled);
             insert.Parameters.AddWithValue("@sortOrder", JsonInt(definition, "sortOrder", 0));
             var fieldId = Convert.ToInt64(insert.ExecuteScalar());
             fields.Add((fieldId, key, enabled));
 
-            if (definition.TryGetProperty("options", out var options) && options.ValueKind == JsonValueKind.Array)
+            if (definition.TryGetProperty("options", out var options) &&
+                options.ValueKind is not (JsonValueKind.Array or JsonValueKind.Null or JsonValueKind.Undefined))
             {
+                throw new MigrationOperationException(
+                    "custom_fields_invalid",
+                    $"Custom field {key} options must be an array.");
+            }
+            if (definition.TryGetProperty("options", out options) && options.ValueKind == JsonValueKind.Array)
+            {
+                var optionKeys = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var option in options.EnumerateArray())
                 {
+                    var optionKey = RequiredJsonString(option, "id", "custom_fields_invalid");
+                    if (!optionKeys.Add(optionKey))
+                    {
+                        throw new MigrationOperationException(
+                            "custom_fields_conflict",
+                            $"Custom field {key} contains duplicate option key {optionKey}.");
+                    }
                     using var optionInsert = new SqlCommand(
                         "INSERT INTO [asap].[PatronCustomFieldOption] ([PatronCustomFieldId], [OptionKey], [Label], [IsEnabled], [SortOrder]) VALUES (@fieldId, @key, @label, @enabled, @sortOrder);",
                         connection,
                         transaction);
                     optionInsert.Parameters.AddWithValue("@fieldId", fieldId);
-                    optionInsert.Parameters.AddWithValue("@key", RequiredJsonString(option, "id", "custom_fields_invalid"));
+                    optionInsert.Parameters.AddWithValue("@key", optionKey);
                     optionInsert.Parameters.AddWithValue("@label", RequiredJsonString(option, "label", "custom_fields_invalid"));
                     optionInsert.Parameters.AddWithValue("@enabled", JsonBool(option, "enabled", true));
                     optionInsert.Parameters.AddWithValue("@sortOrder", JsonInt(option, "sortOrder", 0));
@@ -1280,12 +2519,15 @@ internal static class MigrationConfigurationImporter
         {
             return ("hidden", null);
         }
-        var mode = JsonString(rule, "mode") ?? "hidden";
+        var mode = (JsonStringStrict(rule, "mode", "custom_field_rule_invalid") ?? "hidden").ToLowerInvariant();
         if (mode is not ("required" or "optional" or "hidden"))
         {
             throw new MigrationOperationException("custom_field_rule_invalid", $"Custom field {fieldKey} has an invalid mode.");
         }
-        return (mode, JsonString(rule, "labelOverride") ?? JsonString(rule, "label"));
+        return (
+            mode,
+            JsonStringStrict(rule, "labelOverride", "custom_field_rule_invalid") ??
+            JsonStringStrict(rule, "label", "custom_field_rule_invalid"));
     }
 
     private static void ApplyFormatFieldRules(
@@ -1486,22 +2728,25 @@ internal static class MigrationConfigurationImporter
     private static NormalizedFormatRule NormalizeFormatRule(JsonElement format, string formatCode)
     {
         var defaults = DefaultFormatRule(formatCode);
-        var fields = format.TryGetProperty("fields", out var incomingFields) &&
-                     incomingFields.ValueKind == JsonValueKind.Object
-            ? incomingFields
+        var fields = format.TryGetProperty("fields", out var incomingFields)
+            ? incomingFields.ValueKind is JsonValueKind.Object or JsonValueKind.Null or JsonValueKind.Undefined
+                ? incomingFields
+                : throw new MigrationOperationException(
+                    "format_field_rule_invalid",
+                    $"Material format {formatCode} fields must be an object.")
             : default;
         var title = NormalizeFormatField(fields, "title", defaults.TitleMode, defaults.TitleLabel, forceRequired: true);
         var author = NormalizeFormatField(fields, "author", defaults.AuthorMode, defaults.AuthorLabel, forceRequired: false);
         var identifier = NormalizeFormatField(fields, "identifier", defaults.IdentifierMode, defaults.IdentifierLabel, forceRequired: false);
         var publication = NormalizeFormatField(fields, "publication", defaults.PublicationMode, defaults.PublicationLabel, forceRequired: false);
         var behavior = NormalizeFormatEnum(
-            JsonString(format, "messageBehavior"),
+            JsonStringStrict(format, "messageBehavior", "format_message_behavior_invalid"),
             defaults.MessageBehavior,
             ["none", "message", "ebookMessage", "eaudiobookMessage"],
             "format_message_behavior_invalid");
         return new NormalizedFormatRule(
             behavior,
-            JsonString(format, "message") ?? defaults.Message,
+            JsonStringStrict(format, "message", "format_message_invalid") ?? defaults.Message,
             title.Mode,
             title.Label,
             author.Mode,
@@ -1519,17 +2764,21 @@ internal static class MigrationConfigurationImporter
         string defaultLabel,
         bool forceRequired)
     {
-        var field = fields.ValueKind == JsonValueKind.Object &&
-                    fields.TryGetProperty(key, out var incoming) &&
-                    incoming.ValueKind == JsonValueKind.Object
-            ? incoming
+        var field = fields.ValueKind == JsonValueKind.Object && fields.TryGetProperty(key, out var incoming)
+            ? incoming.ValueKind is JsonValueKind.Object or JsonValueKind.Null or JsonValueKind.Undefined
+                ? incoming
+                : throw new MigrationOperationException(
+                    "format_field_rule_invalid",
+                    $"Material format field {key} must be an object.")
             : default;
         var mode = NormalizeFormatEnum(
-            JsonString(field, "mode"),
+            JsonStringStrict(field, "mode", "format_field_mode_invalid"),
             defaultMode,
             ["required", "optional", "hidden"],
             "format_field_mode_invalid");
-        return (forceRequired ? "required" : mode, JsonString(field, "label") ?? defaultLabel);
+        return (
+            forceRequired ? "required" : mode,
+            JsonStringStrict(field, "label", "format_field_label_invalid") ?? defaultLabel);
     }
 
     private static string NormalizeFormatEnum(
@@ -1539,7 +2788,12 @@ internal static class MigrationConfigurationImporter
         string errorCode)
     {
         if (value is null) return fallback;
-        return allowed.Contains(value) ? value : fallback;
+        var normalized = value.Trim();
+        var canonical = allowed.FirstOrDefault(
+            item => string.Equals(item, normalized, StringComparison.OrdinalIgnoreCase));
+        return canonical ?? throw new MigrationOperationException(
+            errorCode,
+            $"Unknown material-format value: {value}");
     }
 
     private static NormalizedFormatRule DefaultFormatRule(string formatCode) =>
@@ -1583,7 +2837,12 @@ internal static class MigrationConfigurationImporter
         if (scope != "library") throw new MigrationOperationException("settings_scope_invalid", "A settings row has an invalid scope.");
         var sourceOrganization = row.RequiredString("libraryOrganization");
         if (organizationIds.TryGetValue(sourceOrganization, out var organizationId) && organizationId != 1) return organizationId;
-        if (int.TryParse(sourceOrganization, out organizationId) && organizationId != 1) return organizationId;
+        if (int.TryParse(sourceOrganization, out organizationId) &&
+            organizationId != 1 &&
+            organizationIds.Values.Contains(organizationId))
+        {
+            return organizationId;
+        }
         throw new MigrationOperationException("settings_organization_unresolved", "A library settings row has an unresolved organization.");
     }
 
@@ -1597,7 +2856,9 @@ internal static class MigrationConfigurationImporter
         {
             return organizationId;
         }
-        if (int.TryParse(sourceOrganization, out organizationId) && organizationId != 1)
+        if (int.TryParse(sourceOrganization, out organizationId) &&
+            organizationId != 1 &&
+            organizationIds.Values.Contains(organizationId))
         {
             return organizationId;
         }
@@ -1656,9 +2917,26 @@ internal static class MigrationConfigurationImporter
         {
             throw new MigrationOperationException("settings_json_invalid", "A settings JSON value must be an object.");
         }
-        return document.RootElement.EnumerateObject()
-            .Where(property => property.Value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(property.Value.GetString()))
-            .ToDictionary(property => property.Name, property => property.Value.GetString()!, StringComparer.Ordinal);
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var property in document.RootElement.EnumerateObject())
+        {
+            if (property.Value.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+            {
+                throw new MigrationOperationException(
+                    "settings_json_invalid",
+                    $"Settings JSON property {property.Name} must be a string.");
+            }
+            var value = property.Value.ValueKind == JsonValueKind.String
+                ? property.Value.GetString()?.Trim()
+                : null;
+            if (!string.IsNullOrWhiteSpace(value) && !result.TryAdd(property.Name, value))
+            {
+                throw new MigrationOperationException(
+                    "settings_json_invalid",
+                    $"Settings JSON contains duplicate property {property.Name}.");
+            }
+        }
+        return result;
     }
 
     private static JsonElement? ParseRootObject(string? json)
@@ -1673,7 +2951,7 @@ internal static class MigrationConfigurationImporter
     }
 
     private static string RequiredJsonString(JsonElement value, string property, string errorCode) =>
-        JsonString(value, property) is { Length: > 0 } result
+        JsonStringStrict(value, property, errorCode) is { Length: > 0 } result
             ? result
             : throw new MigrationOperationException(errorCode, $"Required JSON property {property} is missing.");
 
@@ -1684,16 +2962,70 @@ internal static class MigrationConfigurationImporter
             : null;
 
     private static bool JsonBool(JsonElement value, string property, bool defaultValue) =>
-        value.ValueKind == JsonValueKind.Object &&
-        value.TryGetProperty(property, out var item) && item.ValueKind is JsonValueKind.True or JsonValueKind.False
-            ? item.GetBoolean()
-            : defaultValue;
+        value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(property, out var item) ||
+        item.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined
+            ? defaultValue
+            : item.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? item.GetBoolean()
+                : throw new MigrationOperationException(
+                    "custom_fields_invalid",
+                    $"JSON property {property} must be a boolean.");
 
     private static int JsonInt(JsonElement value, string property, int defaultValue) =>
-        value.ValueKind == JsonValueKind.Object &&
-        value.TryGetProperty(property, out var item) && item.ValueKind == JsonValueKind.Number && item.TryGetInt32(out var parsed)
-            ? parsed
-            : defaultValue;
+        value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(property, out var item) ||
+        item.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined
+            ? defaultValue
+            : item.ValueKind == JsonValueKind.Number && item.TryGetInt32(out var parsed)
+                ? parsed
+                : throw new MigrationOperationException(
+                    "custom_fields_invalid",
+                    $"JSON property {property} must be an integer.");
+
+    private static int Scalar(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        string sql,
+        int organizationId)
+    {
+        using var command = new SqlCommand(sql, connection, transaction);
+        command.Parameters.AddWithValue("@organizationId", organizationId);
+        return Convert.ToInt32(command.ExecuteScalar());
+    }
+
+    private static bool StringEquals(SqlDataReader reader, int ordinal, string? expected) =>
+        reader.IsDBNull(ordinal)
+            ? expected is null
+            : string.Equals(reader.GetString(ordinal), expected, StringComparison.Ordinal);
+
+    private static bool IntEquals(SqlDataReader reader, int ordinal, int? expected) =>
+        reader.IsDBNull(ordinal) ? expected is null : reader.GetInt32(ordinal) == expected;
+
+    private static bool LongEquals(SqlDataReader reader, int ordinal, long? expected) =>
+        reader.IsDBNull(ordinal) ? expected is null : reader.GetInt64(ordinal) == expected;
+
+    private static bool BoolEquals(SqlDataReader reader, int ordinal, bool? expected) =>
+        reader.IsDBNull(ordinal) ? expected is null : expected is not null && reader.GetBoolean(ordinal) == expected.Value;
+
+    private static bool DateEquals(SqlDataReader reader, int ordinal, DateTime? expected) =>
+        reader.IsDBNull(ordinal)
+            ? expected is null
+            : expected is not null && reader.GetDateTime(ordinal).Ticks == expected.Value.Ticks;
+
+    private static bool ProtectedPresenceEquals(SqlDataReader reader, int ordinal, string? sourceValue) =>
+        reader.IsDBNull(ordinal) == (sourceValue is null);
+
+    private static bool ProtectedPresenceEquals(SqlDataReader reader, int ordinal, bool expectedPresent) =>
+        !reader.IsDBNull(ordinal) == expectedPresent;
+
+    private static void EnsureConfiguration(bool condition, string entity)
+    {
+        if (!condition)
+        {
+            throw new MigrationOperationException(
+                "reconciliation_failed",
+                $"Imported {entity} does not match the immutable source package.");
+        }
+    }
 
     private static object Db(object? value) => value ?? DBNull.Value;
 }

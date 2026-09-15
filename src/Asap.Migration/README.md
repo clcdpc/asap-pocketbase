@@ -30,6 +30,41 @@ Asap.Migration reconcile --package <package-dir> --connection-string-env <name> 
   --report <path> [--external-config <path>]
 ```
 
+## PACKAGE2 import and reconciliation
+
+`import` accepts only a closed, immutable package whose manifest, source
+schema, required files, referenced assets, and source-configuration warnings
+validate together. The target is a fresh DACPAC database containing only the
+permitted structural/static seeds; the application, web host, Hangfire, and
+workers must remain stopped. A failed import is reset or recreated before a
+retry; the importer never resumes a partial target.
+
+Staff identity is supplied by an operator-controlled map of source staff IDs
+to Entra tenant/object IDs. The map is checked against the allowed tenants and
+is the only durable identity source; UPNs and email addresses are not used to
+derive identity. A configured matching bootstrap tuple may promote the
+existing target bootstrap account or insert the mapped account through the
+import path. There is no startup repair.
+
+Configuration is reconciled by scope: system defaults, library overrides,
+sparse format overrides, custom formats, whole-set inheritance, the effective
+legacy URL settings, and the eight queue/four schedule operational comparison
+are recorded with intentional decisions. Legacy SMTP transport is not
+converted to Postmark. Target provider credentials are supplied only through
+the protected import boundary and target Data Protection storage; values,
+fingerprints, and provider responses do not enter reports or ordinary logs.
+
+Claims are mapped before eligibility is evaluated. Eligible open claims are
+preserved, invalid open claims are cleared only in their mutable fields, and
+closed attribution remains historical. Status, close-reason, identifier,
+actor, original-date, delivery, and request-event transforms are retained in
+deterministic metadata. Placement protection records every applicable evidence
+class and terminal reason, preserves known or explicit-null BIB provenance,
+and inserts no synthetic hold operation, provider success, outbox, queue, or
+pending-work record. Reconciliation compares source values and relationships,
+not only counts or target fingerprints; the report includes the transform
+decisions and semantic counters.
+
 ## Export handling
 
 1. Stop PocketBase writes, scheduled jobs, and workers. Copy the SQLite file
