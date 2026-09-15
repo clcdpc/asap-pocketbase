@@ -37,6 +37,40 @@ fixes use a temporary branch from the deployed source, immediate equivalent
 
 ## Execution And Evidence
 
+### Slice 5 Acceptance - 2026-09-15
+
+Astra has accepted the Slice 5 implementation and independent-review gates.
+Accepted Slice 4 base: `417c72430652a35bc8fc1da549ae270eabc86429`.
+Original review candidate: `eb74e00477f28525359fbd851026199a733b4413`.
+First fix candidate: `cd47a8d6f0501759d10401d28b0a6c0e32c2ca74`.
+Final reviewed implementation candidate: `1da861efc17e23e9f8d97b823044f4494025a036`.
+
+Terra's full Pass 1 and two focused re-reviews are complete. Both confirmed P1
+findings are resolved: ordinary weekly-summary Run Now now honors `force=false`,
+and the ordinary manual job retains initiating-actor evidence and revalidates
+authorization at execution and the locked outbox boundary. Terra's final
+recommendation is clean, ready for Astra acceptance; no directly related
+regression, material test gap, unresolved substantive finding or full-review
+trigger remains.
+
+Final validation: weekly-summary 10/10, shared manual-job authorization 4/4,
+complete .NET/real-SQL 302/302 with zero failures/skips, Release zero
+warnings/errors, and Node/frontend 173/173 files. Required earlier publications,
+native migration fixtures, browser/accessibility and artifact gates remain
+valid for the unchanged inputs. Candidate [CI run 34950716124](https://github.com/clcdpc/asap-pocketbase/actions/runs/34950716124)
+succeeded, including Release, real-SQL/frontend tests and publish verification.
+
+The documentation commit introducing this acceptance is the Slice 5 milestone;
+the reviewed implementation candidate above is not that milestone. Final
+certification requires successful remote CI associated with the exact new
+milestone SHA. Its SHA and final CI result are recorded in PR #264's current
+state and conversation acceptance record, without a follow-up repository commit.
+See [slice-05-review.md](slice-05-review.md) for the compact acceptance evidence.
+Implementation/test bytes are unchanged after the final Terra review. Slice 6
+has not started; PR #264 remains draft. The next authorized task is the separate
+orchestration-policy documentation rework for Slices 6-11. Earlier entries below
+preserve their historical status.
+
 ### Slice 5 Manual Weekly Summary Authorization Fix - 2026-09-15
 
 The second review-fix candidate starts from

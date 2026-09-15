@@ -1,4 +1,32 @@
-# Slice 5 Review-Candidate Handoff
+# Slice 5 Acceptance And Handoff
+
+## Current Acceptance - 2026-09-15
+
+Astra has accepted the completed Slice 5 implementation and review gates at
+final reviewed candidate `1da861efc17e23e9f8d97b823044f4494025a036`. Terra's full
+Pass 1 and both focused re-reviews are complete: both weekly-summary P1 findings
+are resolved, no related regression or material test gap remains, and no
+full-review trigger was reached. The final recommendation is clean, ready for
+Astra acceptance. The [review record](slice-05-review.md) records the exact
+candidate sequence, resolutions and validation receipts.
+
+Candidate CI `34950716124` succeeded with Release zero warnings/errors,
+302/302 .NET/real-SQL tests, zero failures/skips, 173/173 frontend files and
+successful publish verification. Focused local coverage passed 10/10
+weekly-summary and 4/4 shared manual-job authorization tests. Earlier complete
+pre-review native, browser, accessibility and artifact evidence remains valid.
+
+This acceptance documentation commit becomes the official Slice 5 milestone
+only when its own exact-SHA remote CI succeeds. PR #264's current state and
+conversation acceptance record hold that new milestone SHA and final CI result;
+the implementation candidate is not the accepted milestone. No implementation
+or test bytes changed during acceptance. Slice 6 has not started, and PR #264
+remains draft. After exact-milestone CI and PR recording, stop; the next
+authorized task is the separate orchestration-policy documentation rework for
+Slices 6-11.
+
+The checkpoint and next-step statements below are preserved historical records
+and are superseded by this acceptance entry.
 
 ## Checkpoint
 
