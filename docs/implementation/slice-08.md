@@ -6,16 +6,15 @@ Not dispatched. Start only after Slices 1-7 pass their complete tests,
 independent review/fix/re-review gates and milestone commits. Refresh the
 actual schema versions, dependency assets, configuration/eligibility APIs,
 migration artifact contract and installed-state model before dispatch.
-Astra Max normally dispatches fresh Luna High for the complete slice.
-[Document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) governs bounded Luna Max
-escalation, optional context rotation with concise handoffs, compact evidence
-receipts, and Astra-first specialist escalation; Sol remains advisory only.
-After required tests, fresh Terra High independently reviews the whole slice.
-A clean Pass 1 needs no ceremonial full Pass 2; fixes receive focused re-review
-unless document 10's full-review triggers apply. Astra verifies acceptance,
-commits/pushes the milestone and requires actual remote CI success for that exact
-commit before dispatching the next slice. Prior exact-milestone CI must be green
-before this slice is dispatched.
+Follow [document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) for the
+Slice-6+ staged-PR/direct-model lifecycle, optional package boundaries, review
+modes, context/evidence rules and exact-milestone CI. Run Luna Max and Terra
+High directly; Astra handles short boundary/acceptance tasks. Reading lists
+below identify full-slice authority; package tasks start with directly relevant
+excerpts and expand for concrete concerns. Prior-slice acceptance and its
+exact-SHA CI must be complete before this slice starts.
+Package guidance in document 10 is provisional; choose actual boundaries at
+slice start.
 
 ## Objective And References
 
@@ -163,10 +162,11 @@ have actual evidence; absent external access is not a passed gate.
 The authorized FileEmailSender remains temporary. Real cancellable Rest 3
 Postmark integration, provider/webhook tests and final transport/rehearsal
 validation remain explicit release blockers, not simulated successes.
-No production tag/version, merge, permanent-nonproduction deployment or cutover
-is authorized merely by completing this implementation slice.
+No production tag/version, final-port merge, permanent-nonproduction deployment
+or cutover is authorized merely by completing this implementation slice.
 
-Run all relevant tests and end-to-end acceptance before Terra Pass 1; the current
-Luna context fixes confirmed findings and Terra re-reviews under document 10.
-Return exact changes/results and remaining evidence gaps. Astra owns the
-milestone commit and progression after the gate, not the implementer.
+Run the complete integrated slice validation before holistic Terra review.
+Follow document 10 for package/fix validation, direct tasks and staged
+integration. Return exact changes, compact receipts and remaining evidence
+gaps at the authorized branch/PR checkpoint. Short Astra acceptance precedes
+slice integration; the exact resulting milestone's remote CI gates progression.

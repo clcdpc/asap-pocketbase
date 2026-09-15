@@ -7,17 +7,14 @@ tests, Terra review/fix/re-review gates, and milestone commits. Do not start
 analytics implementation early. The canonical sequence remains document 02;
 this packet narrows implementation context without changing the agreed plan.
 
-Astra Max refreshes this packet against accepted prior implementation and
-normally dispatches fresh Luna High for the complete slice.
-[Document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) governs bounded Luna Max
-escalation, optional context rotation with concise handoffs, compact evidence
-receipts, and Astra-first specialist escalation; Sol remains advisory only.
-After required tests, fresh Terra High independently reviews the whole slice.
-A clean Pass 1 needs no ceremonial full Pass 2; fixes receive focused re-review
-unless document 10's full-review triggers apply. Astra verifies acceptance,
-commits/pushes the milestone and requires actual remote CI success for that exact
-commit before dispatching the next slice. Prior exact-milestone CI must be green
-before this slice is dispatched.
+Follow [document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) for the
+Slice-6+ staged-PR/direct-model lifecycle, optional package boundaries, review
+modes, context/evidence rules and exact-milestone CI. Run Luna Max and Terra
+High directly; Astra handles short boundary/acceptance tasks. Reading lists
+below identify full-slice authority; package tasks start with directly relevant
+excerpts and expand for concrete concerns. Prior-slice acceptance and its
+exact-SHA CI must be complete before this slice starts.
+Default: one cohesive analytics slice PR; child packages need a material benefit.
 
 ## Objective And Prior Contracts
 
@@ -99,10 +96,10 @@ information. Use parameterized feature SQL/Dapper in the existing web project.
 
 Browser tests cover scope/range changes, stale responses across those changes
 and authentication, mobile/desktop layout, keyboard/focus and serious/critical
-axe gates. Run all relevant prior tests and end-to-end acceptance before
-Terra Pass 1. The current Luna context fixes confirmed findings; Terra does not
-edit implementation.
+axe gates.
 
-Return actual changed paths, commands/results and remaining concrete risks.
-No commit, push, merge, tag, deployment or next-slice work by the implementer.
-No completed-slice or production claim until the corresponding gates pass.
+Run the complete integrated slice validation before holistic Terra review;
+package/fix validation and integration follow document 10. Return changed paths,
+compact receipts and remaining risks. Commit/push and temporary PR operations
+stay within the authorized branch/checkpoint. No final-port merge, tag,
+deployment or next-slice work; acceptance requires the exact integration SHA's CI.

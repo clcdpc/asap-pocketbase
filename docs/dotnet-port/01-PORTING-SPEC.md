@@ -4,7 +4,7 @@
 
 Replace PocketBase/SQLite/Goja with a .NET 10 ASP.NET Core application backed by SQL Server 2022. Preserve the existing vanilla HTML/CSS/JavaScript patron and staff applications as closely as practical. The new application remains self-hosted and lightweight: Node/npm is not required to build, publish, deploy, or run the application; Node remains development/CI-only for frontend tests and Playwright.
 
-The port stays in the existing `clcdpc/asap-pocketbase` repository on a dedicated branch and one large draft PR. Once the .NET deployment has been validated in production, rename the repository to `clcdpc/asap`. After successful .NET production cutover, create/verify a permanent Git tag for the final PocketBase implementation at the exact PocketBase commit frozen for that cutover.
+The port stays in the existing `clcdpc/asap-pocketbase` repository with `codex/csharp-port` as the long-lived integration branch and #264 as the single final draft PR into `main`. Beginning with Slice 6, temporary slice/work-package PRs are permitted below that branch under `10-CODEX-MULTI-MODEL-TASK.md`; they are development/review mechanics, not independent releases. Once the .NET deployment has been validated in production, rename the repository to `clcdpc/asap`. After successful .NET production cutover, create/verify a permanent Git tag for the final PocketBase implementation at the exact PocketBase commit frozen for that cutover.
 
 ## 2. Target solution and source layout
 

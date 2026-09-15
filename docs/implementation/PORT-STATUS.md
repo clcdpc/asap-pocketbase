@@ -2,8 +2,36 @@
 
 The implementation replaces PocketBase with .NET 10 / ASP.NET Core 10, SQL
 Server 2022, and IIS under the authoritative `docs/dotnet-port/` pack. This
-single draft PR will deliver the complete port as reviewed vertical
+single final draft PR will deliver the complete port as reviewed vertical
 slices. It is not eligible for merge or production deployment yet.
+
+## Current Policy And State - 2026-09-15
+
+Slice 5 is reviewed and accepted at
+`36727414d02cbe34ba13cd3f6f1bb57980b83a6f`. Its exact-SHA
+[CI run 34952097695](https://github.com/clcdpc/asap-pocketbase/actions/runs/34952097695)
+succeeded: Release zero warnings/errors, 302/302 .NET/real-SQL tests with zero
+failures/skips, 173/173 frontend files and Web/native publication verification.
+The [Slice 5 acceptance receipt](https://github.com/clcdpc/asap-pocketbase/pull/264#issuecomment-5677892874)
+remains the accepted product milestone record. Slice 6 has not started.
+
+The staged-PR/direct-model policy begins with Slice 6.
+
+[Document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) now governs direct
+Luna Max implementation, direct Terra High package and holistic slice reviews,
+and short Astra Max bootstrap/contract/acceptance tasks. Optional coherent
+work-package PRs target a temporary slice branch; the slice PR targets
+`codex/csharp-port`. PR #264 remains the single final draft port PR into `main`.
+Full integrated slice validation, exact-SHA CI on the resulting integration
+milestone, slice ordering and the final repeated whole-app review remain binding.
+
+This docs-only policy transition starts from the accepted Slice 5 SHA above.
+It creates no new accepted product slice and changes no implementation or
+technical acceptance contract. Slices 0-5 retain their actual historical policies
+and evidence below. Packet updates only point to the new execution mechanics;
+package guidance remains provisional. Root `AGENTS.md` needs no change.
+No slice/package branch is created or model dispatched by this transition.
+The next authorized work is Slice 6 bootstrap under the new policy.
 
 ## Baseline
 
@@ -161,7 +189,7 @@ candidate is created by this documentation-only cleanup. PR #264 remains draft;
 no application acceptance suite, merge, tag, deployment, rehearsal or cutover
 is performed by this task.
 
-### Current Execution Policy - Beginning With Slice 5 (2026-09-14)
+### Historical Execution Policy - Beginning With Slice 5 (2026-09-14)
 
 This documentation-only refinement starts from accepted Slice 4 milestone
 `417c72430652a35bc8fc1da549ae270eabc86429`. After fetching origin, local HEAD,

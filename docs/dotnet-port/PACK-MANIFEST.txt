@@ -2,11 +2,11 @@
 # Prepared: 2026-09-12
 # Repository: clcdpc/asap-pocketbase
 # Pinned source SHA: 150b30b776565194260cc327eeeffdfb46475e81
-# Revision: Slice 5 onward uses Luna High by default, bounded Luna Max, lean Astra, optional context rotation and focused Terra re-review; all objective gates retained
+# Revision: Staged-PR/direct-model policy begins with Slice 6; direct Luna Max/Terra High, short Astra boundaries, optional packages, holistic slice review and exact-milestone CI; technical contracts unchanged
 # Inventory: 19 payload files plus this manifest (20 files total)
 # Note: PACK-MANIFEST.txt intentionally does not hash itself.
-b14d4ef33da004c505ca11d293824f4d266c94db5031e322e2a6d839b526b4d2  01-PORTING-SPEC.md
-22b01ea558d6ca88a695dcf1e365b5711ae14fcf8732f3fb8e6b1c26622fd719  02-IMPLEMENTATION-PLAN.md
+9534ec144c2677a8612c845d70377ba919e591f4d170f8570848186efae32c8c  01-PORTING-SPEC.md
+fe36bd8f033bdf81074b4ebf26b231bc5846712524dd9033e1bcffdb8f711752  02-IMPLEMENTATION-PLAN.md
 83bbc967541fe526efd2826776e932bc8b117007f414bdd515ca55338a9e80db  03-DATABASE-DESIGN.md
 6cdcbef55600a379ce8987629a777e803520ff367f7fb146d50dd5bae2a54ae4  04-MIGRATION-CUTOVER.md
 e51f07f39e7c2117046e71a09fcd9cf0fa1a443bb3a45c89d4992112c90a4863  05-DEPLOYMENT-OPERATIONS.md
@@ -14,12 +14,12 @@ e51f07f39e7c2117046e71a09fcd9cf0fa1a443bb3a45c89d4992112c90a4863  05-DEPLOYMENT-
 b3827e1b61bcb124cf8e0a659c7ece2ebeb4f97224d7119b2c75ba6d80044078  07-API-FRONTEND-COMPATIBILITY.md
 1430f87b4c98686935bfb99aff9bcd4a0b2887fd342522c23d9158f167b79411  08-RELEASE-VALIDATION-NOTES.md
 47af284ca3f0064263adbd46259bc43811b92a1f4a9d48e983691775b8468b5c  09-DEFERRED-FOLLOWUPS.md
-3f898f9fdcff96b2c83e9e30a3b0b08f6ae2437a6fbdff3ed65d21849001fc77  10-CODEX-MULTI-MODEL-TASK.md
+dcbb2f4b4b9272f195bf88c4d3f77c3a92099d124ffef29a8f82d04bbc37842f  10-CODEX-MULTI-MODEL-TASK.md
 60fbe2f71be8493db0d3bf09d2d3d2605a54486a29eae3fc7db03da2a79f351e  11-CURRENT-POCKETBASE-REFERENCE.md
-f1f1a6c5fb30193d35db7128fa351f9ee6e0319c17c70c3bd1232a41520aedb8  12-DECISION-REGISTER.md
+a38bc9b229d03ea0248a4dfe795b703820a30a08885077d995f7772b94c2f7ba  12-DECISION-REGISTER.md
 f24bb40c483bfcaaacb0f19864de33f1d7df9a62ff665bcf236549405726a4ab  13-SETTINGS-SCOPE-INVENTORY.md
-9594bc12b8d553c62e9508173d816e32ebfa90dceac0d4e2250b26075c9af192  14-REMEDIATION-AUDIT.md
-621f92d5173674cce423fcde86f0f66ef84bf5c3a146b40c39b3cd19636443e6  README.md
+6fbe1c8d415615a762a9277496b0d4268a9a2a76d8215f333ec9f17b9d2b9d43  14-REMEDIATION-AUDIT.md
+54b2408f6a633292dc5cbc80a2c5105070c3735d613eb3bb51b440ff9ef00a82  README.md
 22408be6ddb4dfb6b72858b66ef0433b2c1225cc1ab23568407234649dab56e8  examples/Config.example.json
 c49eaf5a22963704ce747cce676e51d2aad544dcd6a14ffe920224c19615957f  examples/EffectiveLegacyOperationalConfig.example.json
 4240608b5730b4a498d8a9e8d8a2556ab2fa3038d5cbb9eadf93f0e3540e6ef7  examples/EffectiveLegacyRuntimeConfig.example.json

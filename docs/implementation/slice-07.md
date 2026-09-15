@@ -7,16 +7,17 @@ review/fix/re-review gates and milestone commits. This packet narrows the
 existing sequence; it does not start migration from scratch or replace the
 authoritative plan. Record the actual prior milestone SHAs, schema version,
 CLI contracts, import/reconciliation coverage and remaining domain gaps at
-dispatch. Astra Max normally dispatches fresh Luna High for the complete slice.
-[Document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) governs bounded Luna Max
-escalation, optional context rotation with concise handoffs, compact evidence
-receipts, and Astra-first specialist escalation; Sol remains advisory only.
-After required tests, fresh Terra High independently reviews the whole slice.
-A clean Pass 1 needs no ceremonial full Pass 2; fixes receive focused re-review
-unless document 10's full-review triggers apply. Astra verifies acceptance,
-commits/pushes the milestone and requires actual remote CI success for that exact
-commit before dispatching the next slice. Prior exact-milestone CI must be green
-before this slice is dispatched.
+dispatch.
+
+Follow [document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) for the
+Slice-6+ staged-PR/direct-model lifecycle, optional package boundaries, review
+modes, context/evidence rules and exact-milestone CI. Run Luna Max and Terra
+High directly; Astra handles short boundary/acceptance tasks. Reading lists
+below identify full-slice authority; package tasks start with directly relevant
+excerpts and expand for concrete concerns. Prior-slice acceptance and its
+exact-SHA CI must be complete before this slice starts.
+Package guidance in document 10 is provisional; choose actual boundaries at
+slice start.
 
 ## Objective And Authority
 
@@ -149,11 +150,12 @@ The temporary FileEmailSender exception remains only at final transport.
 Real Rest 3-compatible cancellable Postmark integration, provider/webhook
 tests and release validation are still release/rehearsal blockers. Actual
 production source shape, deployed SHA and operator inputs must be verified;
-synthetic fixtures cannot satisfy those gates. Do not merge, tag, rehearse on
-permanent nonproduction or enable production writes as part of this slice.
+synthetic fixtures cannot satisfy those gates. Do not merge the final port PR,
+tag, rehearse on permanent nonproduction or enable production writes as part
+of this slice.
 
-Run all relevant prior tests and end-to-end gates before Terra Pass 1. The current
-Luna context fixes confirmed findings; Terra re-reviews under document 10. Return
-actual changed files, commands/results and remaining risks without committing
-or proceeding to Slice 8. Astra accepts and creates the milestone only when
-the gate passes.
+Run the complete integrated slice validation before holistic Terra review.
+Package/fix validation, direct Luna fixes, re-review and staged integration
+follow document 10. Return changed paths, compact receipts and remaining risks
+at the authorized branch/PR checkpoint. Slice 8 cannot start before acceptance
+and successful exact-SHA CI on the integration milestone.

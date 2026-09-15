@@ -2,13 +2,17 @@
 
 ## Mission
 
-Port `clcdpc/asap-pocketbase` from PocketBase/SQLite/Goja to the .NET architecture defined by this documentation pack. This is one large branch/PR delivered in complete vertical slices. Preserve existing ASAP behavior and frontend UX by default; change behavior only when the specification explicitly requires it or when a concrete technical benefit justifies a documented deviation.
+Port `clcdpc/asap-pocketbase` from PocketBase/SQLite/Goja to the .NET architecture defined by this documentation pack. The final port is delivered through `codex/csharp-port` and draft PR #264 into `main`, with temporary slice/work-package PRs under the execution policy below. Preserve existing ASAP behavior and frontend UX by default; change behavior only when the specification explicitly requires it or when a concrete technical benefit justifies a documented deviation.
 
 The port is not an opportunity for a general rewrite beyond the backend/platform boundaries described here.
 
 ## Source baseline
 
-The existing implementation is on `codex/csharp-port`, draft PR #264. Slices 0-4 are accepted; Slice 4's milestone is `417c72430652a35bc8fc1da549ae270eabc86429` and its exact-SHA remote CI passed. Slice 5 has not started. Verify the current branch/PR and `../implementation/PORT-STATUS.md` before resuming. Preserve historical execution and evidence: Slices 0-3 used the prior Sol-based strategy and Slice 4 used Luna Max with retained contexts and full Terra re-reviews. Do not repeat bootstrap or re-review accepted slices because the policy changed. The execution-policy refinement below applies beginning with Slice 5 and does not authorize its dispatch.
+The staged-PR/direct-model policy begins with Slice 6.
+
+Slices 0-5 remain accepted under the policies that actually governed them. Accepted Slice 5 milestone: `36727414d02cbe34ba13cd3f6f1bb57980b83a6f`; exact-SHA CI `34952097695` succeeded. Slice 6 has not started. Verify current branch/PR state and [PORT-STATUS.md](../implementation/PORT-STATUS.md) before starting work. Preserve historical Sol-based execution of Slices 0-3, Slice 4's Luna Max/retained-context/full-review sequence, and Slice 5's Astra-led Luna implementation/full-and-focused Terra review. Do not reopen those acceptances or rewrite their history.
+
+This policy changes development and review mechanics only. Architecture, behavioral contracts, slice contents, database/security/migration rules, release/cutover design and objective test acceptance criteria are unchanged. This documentation transition is not a new accepted product slice and does not start Slice 6.
 
 The original baseline procedure remains the source-tracking contract; branch/PR creation below was already completed:
 
@@ -19,109 +23,115 @@ The original baseline procedure remains the source-tracking contract; branch/PR 
 5. Open a draft PR immediately and use it for the entire port.
 6. Freeze ordinary PocketBase feature work. If an urgent PocketBase production fix lands during the port, bring the behavior into the port branch immediately.
 
+## Delivery topology
+
+Keep `codex/csharp-port` as the long-lived accepted-slice integration branch and PR #264 as the single final port PR into `main`. Temporary branches and PRs only bound implementation and review; they are not independent releases.
+
+```text
+main
+  ^
+  | PR #264 (final port PR, draft until final whole-app gate)
+codex/csharp-port
+  ^
+  | slice integration PR
+codex/slice-N-<name>
+  ^
+  | package PRs (optional)
+  +-- codex/slice-N-<package-a>
+  +-- codex/slice-N-<package-b>
+  +-- codex/slice-N-<package-c>
+```
+
+Package PRs target the slice integration branch. Slice integration PRs target `codex/csharp-port`. Neither targets `main`. A small cohesive slice uses only `codex/slice-N-<name>` and its PR into `codex/csharp-port`.
+
+Keep one accepted milestone per completed slice on `codex/csharp-port`. Package completion is not slice acceptance; package CI cannot replace integrated slice validation, and slice-branch CI cannot replace the accepted milestone's exact-SHA remote CI. No later slice begins until the current slice is accepted. PR #264 cannot leave draft or merge before the separate final whole-application review and its existing gates.
+
+### Optional package sizing
+
+Use packages only for coherent, independently testable/reviewable boundaries: distinct subsystems, correctness/risk domains or acceptance concerns, or a diff whose bounded review materially improves comprehension. Normally 2-4 packages help a large slice; this is guidance, not a quota. Avoid PRs per file/class/service, arbitrary line-count splits, excessive overlapping branches, inseparable packages and ceremonial splits.
+
+### Remaining-slice planning defaults
+
+These are planning defaults, not binding implementation partitions. Choose actual boundaries from the current implementation at slice start.
+
+| Slice | Default |
+| --- | --- |
+| 6 - Analytics | One cohesive slice PR; child packages only if discovery shows material benefit. |
+| 7 - Migration hardening | Likely 2-4 packages: export/package/core mechanics; validation/import/reconciliation/cutover invariants; legacy-link/operator/rehearsal tooling. |
+| 8 - Deployment/release | Possible packages: release artifacts/manifests; deployment/preflight/rollback; health/monitoring/operator concerns. |
+| 9 - CI/browser/accessibility/release validation | Possible packages: CI/real-SQL integration; Playwright/accessibility; release-validation/environment controls. |
+| 10 - Synthetic seed/reset | One cohesive slice PR. |
+| 11 - Legacy removal/final preparation | Choose from actual remaining work at dispatch; do not freeze partitions early. |
+
 ## Required model roles
 
-### GPT-6 Astra Max - orchestrator
+### GPT-5.6 Luna Max - normal direct implementation owner
 
-You own the full plan, integration, slice boundaries, progression, context management, delegation, material design/contract interpretation, escalation decisions, acceptance verification, milestone commits, and PR/status maintenance. Operate as a lean orchestrator using compact objective evidence under the evidence rule below.
+Run Luna Max directly for complete small slices, individual packages, integration/glue work and confirmed review fixes. Each task ends at a concrete branch/PR/review checkpoint. Luna owns ordinary C#, SQL/DACPAC, migration, frontend, tests, debugging and directly affected documentation. Do not run Luna underneath a persistent Astra conversation. Luna High may be chosen intentionally, but is neither the default nor a required first tier.
 
-For each remaining slice:
+Luna implements the existing contract rather than redesigning it. Do not add repositories, MediatR, generalized workflow or messaging infrastructure, migration frameworks, layering, speculative hardening or other machinery the pack does not require. Resolve routine implementation choices from the applicable contracts and current code.
 
-- refresh the already-prepared slice packet against accepted prior implementation and prepare a focused implementation context;
-- include objective, acceptance criteria, relevant global invariants, relevant prior-slice contracts, exact current PocketBase files/behavior to preserve, migration impact, and relevant deferred/non-goal warnings;
-- normally dispatch a fresh GPT-5.6 Luna High implementation context;
-- after implementation and all required pre-review gates, dispatch a fresh GPT-5.6 Terra High reviewer context unless the user directed a review-candidate stop under the commit policy below;
-- keep the Luna context while efficient and useful; rotate with a concise handoff when the context-management rule below warrants it;
-- keep the same Terra context through that slice's review/fix/re-review sequence;
-- verify acceptance and create the milestone commit only after all existing tests and review gates are satisfied;
-- push the milestone and require actual remote CI success for that exact commit before dispatching the next slice.
+### GPT-5.6 Terra High - direct independent reviewer
 
-Resolve ordinary ambiguity yourself from this pack, repository, existing behavior, and tests. Do **not** ask the user for routine implementation choices. Ask only if a genuinely material product/security/migration decision cannot be resolved from the pack/current system.
+Run Terra directly; it reports findings only and never implements fixes. Confirmed findings go directly to Luna Max. Use the two distinct review modes below. Reuse useful focused-review context when practical, but retained model identity is not an acceptance invariant.
 
-Astra Max is Luna's mandatory first escalation point. Astra already owns the complete port contract, cross-slice state, accepted decisions, packet scope, current implementation, progression and acceptance, including whether an issue requires design reasoning. For escalation questions, inspect the authoritative documentation, accepted implementation, pinned PocketBase behavior and relevant tests/evidence; decide which contract governs, narrow the problem, and give Luna a concrete implementation ruling. Resolve the issue directly whenever that evidence is sufficient. Astra owns substantive resolution as well as any decision to seek independent Sol advice.
+#### Work-package review
 
-### GPT-5.6 Luna High - default primary implementation
+Question: **Is this bounded component/behavior correct?**
 
-Normally begin each remaining slice with a fresh Luna High implementation context. Luna High owns the complete ordinary implementation workload, including C#, SQL/DACPAC changes, migration/export/import/reconciliation, frontend integration, tests, ordinary test-failure diagnosis, directly affected documentation, and confirmed Terra fixes as applicable. Context continuity is useful, but identity is not an acceptance invariant; follow the context-management rule below.
+Review the complete package diff, affected callers, relevant invariants, failure paths, concurrency/state implications and directly relevant tests. This is the detailed local review. Begin from the package contract and diff rather than rediscovering the entire port architecture. After bounded fixes, use focused Terra re-review unless the correction materially broadens the regression surface.
 
-Luna implements the existing contract rather than redesigning it. Do not add repositories, MediatR, generalized workflow engines, generalized messaging infrastructure, migration frameworks, layering, speculative hardening, or other machinery the pack does not require.
+#### Slice integration review
 
-### GPT-5.6 Luna Max - bounded implementation escalation
+After packages and integration/glue are complete and full slice validation passes, use a fresh Terra High context for the COMPLETE slice delta:
 
-Astra may elevate a concrete implementation problem when additional reasoning materially helps: subtle concurrency/serialization, recovery around irreversible external effects, difficult migration reconciliation, complex state-machine correctness, or a confirmed review finding that Luna High cannot resolve confidently. Bound the problem and prefer returning to Luna High once it is resolved. Slice size, SQL, authentication, migration, many tests, or elapsed implementation time alone do not justify Luna Max.
+- base: previously accepted slice milestone;
+- head: exact final slice integration branch SHA.
 
-### GPT-5.6 Terra High - independent review
+Question: **Do the reviewed components form one correct implementation of the complete slice?**
 
-Use a fresh Terra High context per slice after implementation and required tests, then retain it through any required re-review. Pass 1 covers the FULL slice, including correctness/regression, callers and surrounding code, state/data consistency, SQL and migrations, authorization/scope, concurrency/ordering, recovery, external side effects, frontend/API compatibility, test adequacy, and unnecessary complexity/coupling. Terra reports findings only; it does not implement fixes. Confirmed findings return to the current Luna implementation context. Re-review scope follows the slice review/fix rule below.
+This is a holistic review of gaps between packages, cross-package invariants, state-transition composition, authorization/scope composition, SQL/concurrency ordering, migration/runtime agreement, API/frontend agreement, integration regressions, missing acceptance behavior and unnecessary complexity across packages.
 
-### Mandatory first escalation: Luna -> Astra Max
+Use package review receipts to avoid mechanically repeating line-by-line review of unchanged, independently reviewed code. Inspect deeply when code changed after package review, findings cross packages, integration exposes a concern, shared invariants need direct inspection or confidence otherwise requires it. This review has a different purpose, not reduced rigor. For an unpartitioned slice, the direct full-slice review includes the detailed implementation review as well as this holistic assessment.
 
-Luna always consults Astra Max first for a materially blocking issue, including:
+### GPT-6 Astra Max - short boundary and acceptance tasks
 
-1. The pack, accepted target implementation, pinned source, and tests appear to conflict or fail to determine required behavior.
-2. A Terra finding cannot be resolved confidently from the existing contract.
-3. Repeated implementation attempts fail because the correct invariant or behavior is unclear, rather than because of an ordinary coding defect.
-4. A cross-slice concurrency, recovery, migration, authorization, security, or external-operation question requires interpretation of the broader design.
-5. An external provider/API limitation appears to require changing an existing contract.
-6. The smallest apparent implementation would require deviation from a binding architectural decision.
-7. Luna believes work belongs to a different slice or should be deferred, and the answer materially affects current implementation.
+Astra is not a persistent parent supervising or routing implementation/review.
 
-No fixed number of Luna failures is required before Astra reasons about an issue. Luna must not bypass Astra or dispatch Sol directly. If Astra resolves the issue, the current Luna implementation context implements the ruling and runs required tests; Terra independently verifies it under the slice review/fix rule.
+At slice bootstrap, a brief Astra task may verify the prior acceptance, refresh the packet against current code, choose one PR or coherent packages, identify cross-package invariants and record slice branch/base SHAs. Then STOP. Do not keep Astra running during Luna implementation or Terra review. A clearly small, prepared slice does not require a large planning exercise.
 
-### GPT-5.6 Sol High - focused escalation advisor only
+For a genuinely unresolved product/security/migration/architecture contract question, Luna or Terra stops the bounded task with a concise escalation packet: exact state, governing sources, conflict, evidence and required decision. Consult Astra separately. Astra resolves the governing contract from authoritative sources and returns a concrete ruling; resume the direct task with it. Ask the user only when a material decision remains unresolved by those sources. Ordinary coding decisions do not require a parent model.
 
-Only Astra may dispatch a fresh Sol High consultation, after focused Astra analysis determines that the issue remains materially uncertain or an independent/deeper specialist opinion provides material value. Examples include:
+After implementation, clean package reviews where applicable, current integrated validation, clean holistic Terra review and all required fix/re-review cycles, run a SHORT Astra acceptance task. Verify the exact reviewed SHA, receipts, no unresolved substantive findings, acceptance invariants and branch/PR state. Do not redo successful review, tests or implementation. Authorize slice integration and milestone progression subject to that resulting integration SHA's remote CI.
 
-1. Contradictory evidence with no clear governing source.
-2. Subtle cross-system concurrency/recovery reasoning where multiple plausible solutions remain.
-3. External provider semantics that remain uncertain after available source, package and documentation have been inspected.
-4. A proposed architectural deviation with material correctness implications.
-5. A substantive Terra issue unresolved after focused Luna work and Astra guidance.
+### Sol - exceptional specialist consultation only
 
-Code size, difficult SQL, migration, concurrency, authentication, configuration, deployment, an external integration, or a routine Luna implementation question alone does not justify Sol consultation.
+Sol High/XHigh remains outside the normal lifecycle. After a concrete unresolved issue has been identified, a separate Astra consultation may seek focused specialist advice where it materially helps. Sol XHigh is exceptional when bounded Sol High advice leaves a blocker or exceptional cross-system reasoning is needed. Astra issues the ruling; Luna implements/tests and Terra verifies. Size, migration, SQL, concurrency or security sensitivity alone do not justify Sol.
 
-Sol analyzes only the bounded problem and provides root cause, alternatives, the smallest faithful resolution, and affected invariants/tests. Astra evaluates that advice against the authoritative pack and accepted implementation, then decides the resolution. The current Luna implementation context implements it and runs required tests; Terra independently verifies it through the review/re-review gate. Neither Sol High nor Sol XHigh takes ownership of the slice.
+## Context management
 
-The escalation hierarchy is Luna -> Astra Max focused consultation -> optional specialist escalation chosen by Astra -> Astra ruling -> Luna implementation/tests -> Terra independent verification. Luna Max handles bounded implementation escalation; Sol remains an independent advisor outside the normal slice lifecycle.
+Use direct bounded model tasks instead of nested long-running orchestration. The branch/PR diff is the default review context. Begin with root instructions, the relevant slice/package packet, the diff and directly relevant contracts; expand to other specification documents when a concrete issue requires them. Do not reread the complete documentation pack for each package.
 
-### GPT-5.6 Sol XHigh - exceptional escalation only
+Handoffs contain repository/branch/PR, exact base/head SHA, completed and remaining scope, binding rulings/invariants, findings, validation counts/hashes/paths and the next action. Keep verbose logs locally; pass compact receipts, not conversation transcripts. Inspect current code before editing.
 
-Use only when Astra determines that the bounded Sol High consultation still leaves a blocking issue unresolved, or the problem requires exceptional cross-system reasoning. Astra retains the resolution decision; Luna implements/tests and Terra independently verifies. Sol XHigh remains outside the normal slice lifecycle and never replaces Astra as Luna's first escalation point.
+Context rotation does not force checkout/worktree rotation. Preserve required local-only fixtures, harnesses and evidence. If an environment change is unavoidable, explicitly recreate and rerun unavailable required evidence before relying on it; do not claim evidence that cannot be inspected.
 
-## Implementation context management
+## Validation and evidence placement
 
-Use the same Luna context while it remains efficient and useful. Astra may rotate to fresh Luna High when accumulated context becomes materially large or repetitive: repeated build/test output, obsolete diagnostic logs, a cleanly completed major phase, safely isolated review fixes, or substantial repeated context processing. A long-lived conversation is not a correctness requirement.
+| Stage | Required validation |
+| --- | --- |
+| Package | Clean relevant build, directly affected tests, real SQL for persistence/concurrency, affected frontend/browser/migration tests, `git diff --check`, and automatic CI where configured. Run the whole slice browser/native/publication matrix only if the package invalidates it. |
+| Integrated slice | The COMPLETE existing slice pre-review/acceptance matrix on the integrated source/artifact; package validation never substitutes. |
+| Review fixes | Narrowest sufficient affected gates first; broaden when changed bytes invalidate earlier evidence. |
+| Accepted milestone | Actual successful remote CI associated with the exact resulting SHA on `codex/csharp-port`; package or slice-branch CI never substitutes. |
 
-Before rotation, create a concise handoff containing only:
+Full integrated validation retains all required Release builds, complete .NET/real-SQL and Node/frontend suites, browser/axe, native migration/export/import/reconciliation, publication/exclusion and DACPAC/source/artifact checks, plus applicable release gates. This policy does not change the test acceptance criteria.
 
-- repository, branch, PR, and exact current SHA;
-- slice objective and completed work;
-- binding decisions/invariants relevant to remaining work;
-- outstanding work and known failures/findings;
-- test status/counts and evidence/artifact paths;
-- exact next action.
-
-Do not paste large logs or prior conversations into the handoff. The new context must inspect current code before editing; the handoff does not substitute for the repository.
-
-Model-context rotation does not imply changing the checkout or environment. Preserve the current checkout and any local-only harnesses, fixtures, receipts, or evidence required by the slice; do not move to a fresh worktree/checkout merely because the model context rotates. If an environment change is unavoidable, explicitly recreate and rerun any required local-only evidence before relying on it. Do not claim prior evidence that is no longer available.
-
-## Evidence and acceptance verification
-
-Retain full command output in local evidence/log files by default. Successful gates return compact receipts to Astra/Luna containing:
-
-- exact command and exit/result status;
-- passed/failed/skipped counts;
-- relevant source/artifact/DACPAC hashes;
-- paths to retained detailed evidence;
-- concise warning/error summary.
-
-Astra must verify that every required gate actually ran and passed for the intended source/artifact. Do not repeatedly ingest or reproduce successful command logs, complete source dumps, browser output, or migration output when compact objective evidence suffices. Inspect raw evidence selectively for failures, counts/hashes that do not reconcile, findings dependent on details, security/concurrency/migration correctness requiring direct inspection, or other ambiguity. On failure, inspect the relevant tail/section/error and expand only as diagnosis requires; do not repeatedly reread the complete log.
-
-Do not rerun an expensive objective gate solely for Astra to consume the same successful output again. Rerun when changed source/inputs or the gate's requirements demand fresh verification. Do not weaken tests or suppress useful diagnostics to reduce context use. Required Release builds, real-SQL tests, Node/frontend tests, Playwright/browser acceptance, axe gates, native migration/export/import/reconciliation, artifact and DACPAC verification, exact-SHA remote CI, and applicable release/rehearsal gates remain binding. This reduces duplicate model processing, not objective verification.
+Receipts record exact command/result, passed/failed/skipped counts, source/artifact/DACPAC hashes, retained log paths and warnings/errors. Astra verifies every required gate ran and passed for the intended source/artifact. Expand raw evidence for failures, mismatches, detail-dependent findings, relevant security/concurrency/migration concerns or ambiguity. Do not rerun successful expensive gates merely so another model can consume their logs. Context efficiency never waives objective validation.
 
 ## Binding architecture
 
-Read the entire pack before orchestration begins. Especially treat the following as non-negotiable unless a blocking technical fact proves otherwise:
+Use the relevant authoritative contracts under the context rules above. The following remain non-negotiable unless a blocking technical fact proves otherwise:
 
 - .NET 10 / ASP.NET Core 10 / SQL Server 2022 compatibility 160 / IIS.
 - Simple solution: `Asap.Web`, `Asap.Database`, `Asap.Migration`, `Asap.Tests`.
@@ -175,23 +185,28 @@ Implement the following within the existing slices and models, not as another ar
 
 All R1-R7 cases in `06-TESTING-CI.md` section 10.1 and F1-F3 cases in section 10.2 are blocking. `14-REMEDIATION-AUDIT.md` maps each finding to contracts and tests. Preserve prior decisions and the pinned SHA; do not add unrelated abstractions, product changes, or deferred hardening.
 
-## Slice review/fix rule
+## Slice lifecycle and review fixes
 
-For **every remaining** vertical slice beginning with Slice 5:
+### Large slice
 
-1. Astra Max refreshes the prepared focused slice packet against accepted prior implementation.
-2. Normally a fresh Luna High context implements the complete slice, with bounded escalation/context rotation under the rules above.
-3. Luna runs all required pre-review gates and verifies the slice end-to-end. At the user's direction, stop here at a pushed review-candidate checkpoint under the commit policy below; otherwise continue to Terra.
-4. A fresh Terra High context performs Pass 1 over the full slice.
-5. If Pass 1 has no substantive finding, no ceremonial full Pass 2 is required. Astra may proceed to acceptance verification or request focused confirmation of a particular high-risk invariant.
-6. Confirmed substantive findings go to the current Luna implementation context for fixes and affected/full required tests.
-7. Terra then performs focused re-review of each fix, directly affected callers/invariants, regression surface, added/changed tests, and interactions among fixes. A localized correction does not automatically restart review of the entire slice.
-8. Require another FULL-slice review if the finding was systemic; the fix changed broad/shared infrastructure; authorization/concurrency/migration architecture changed materially; several unrelated areas changed; focused re-review exposes a new unrelated substantive defect; or Astra/Terra cannot confidently bound the regression surface.
-9. Repeat fixes and the appropriate re-review as necessary. There is no numeric pass cap permitting a known blocking defect to remain. Correctness, security, data-integrity, migration, authorization, concurrency, and material-regression defects block acceptance; only nonblocking leftovers may be deferred.
-10. Astra verifies required gate receipts and acceptance, then creates the coherent milestone commit only after the slice gate passes.
-11. Astra pushes the milestone and requires actual remote CI success for that exact commit before dispatching the next slice; no earlier green run substitutes for it.
+1. Verify the exact accepted prior milestone and its successful exact-SHA CI. Create `codex/slice-N-<name>` from that accepted integration state and record the base SHA. If an explicitly authorized documentation-only transition follows the accepted product milestone, retain it in the branch base and record both the current integration HEAD and prior accepted review-base SHA; verify there is no implementation/test drift. This policy transition does not become a new accepted product slice.
+2. For each coherent package, normally sequentially: branch from the current slice branch; run Luna Max directly within package scope; validate; commit/push; open a PR into the slice branch; run direct Terra package review; return findings to Luna; revalidate and re-review as needed; merge the clean package into the slice branch. Dependent packages start from its updated state. Parallel packages require actual independence.
+3. Complete integration/glue using direct Luna Max work. Ensure every slice requirement is complete, then run the FULL existing integrated slice pre-review matrix and retain final receipts.
+4. Run fresh Terra High holistic review from the previously accepted milestone to the exact final slice branch SHA. Resolve findings through direct Luna fixes, affected validation and appropriate Terra re-review.
+5. Run short Astra acceptance on the clean reviewed SHA and current evidence. Prepare acceptance/status documentation before the integration merge and verify any post-review changes remain documentation-only; implementation changes need affected validation/re-review.
+6. Merge the reviewed slice integration PR into `codex/csharp-port`. The resulting integration-branch SHA is the candidate accepted milestone. Require successful remote CI associated with THAT exact SHA, then record acceptance and permit the next slice. Earlier package/slice CI never substitutes.
 
-The normal loop is Astra packet refresh -> Luna High implementation/tests -> fresh Terra full Pass 1 -> fixes/tests and focused or full re-review when required -> Astra acceptance/milestone/push/exact-commit green remote CI -> next slice. Sol remains outside that loop. The separate final whole-app review below is unchanged.
+If the integration branch or reviewed implementation changes before merge, stop integration and reconcile the actual base/diff/evidence; do not accept an unreviewed merge. If milestone CI fails, the slice is not accepted and progression stops for a bounded correction with the required validation/re-review and a new exact-SHA CI result.
+
+### Small cohesive slice
+
+Brief Astra bootstrap if useful -> slice branch and PR into `codex/csharp-port` -> direct Luna Max implementation -> complete slice validation -> direct Terra full-slice review -> Luna fixes and focused Terra re-review as needed -> short Astra acceptance -> merge slice PR -> exact-SHA integration-branch CI. Omit child packages without a concrete benefit.
+
+### Re-review scope and blocking findings
+
+Focused re-review covers corrections, affected callers/invariants, regression surface, changed tests and interactions among fixes. Require another full holistic review when a correction materially broadens the surface: systemic shared infrastructure, broad authorization or concurrency/locking changes, migration architecture changes, several unrelated areas changed, a new unrelated substantive defect discovered in focused review, or a regression surface that cannot be bounded confidently.
+
+Do not require ceremonial full passes for narrow corrections. Repeat fixes/re-review as necessary; no numeric pass cap permits a known blocking correctness, security, data-integrity, migration, authorization, concurrency or material-regression defect. Only nonblocking leftovers may be deferred. Package and slice reviews supplement the separate final whole-application review.
 
 The user-authorized `../implementation/temporary-email-transport.md` decision remains binding: `FileEmailSender` substitutes only the final provider boundary. It does not weaken the durable SQL outbox, authorization-sensitive recipient checks, recipient-domain safety, or lease/fencing/idempotency/retry behavior; it does not simulate Postmark webhook/provider success or become another subsystem. Real Rest 3-compatible cancellable `Clc.Postmark.Api` integration and required provider/webhook/transport tests remain release/rehearsal blockers. This model-policy update executes no implementation or release validation and starts no slice.
 
@@ -220,15 +235,15 @@ At each milestone the .NET branch must build, tests must be green, and all featu
 
 ## Commit policy
 
-Commit by completed vertical slice/meaningful milestone. Keep coherent slice changes together. Do not manufacture tiny commits for every file or reviewer fix; do not let unrelated multi-slice work accumulate into one giant final commit.
+Keep coherent work-package and slice changes together. Direct implementation tasks may commit/push and open the temporary PR required by their authorized checkpoint. Clean package PRs merge only into their slice branch; only the reviewed, Astra-approved slice PR integrates into `codex/csharp-port`. Do not manufacture tiny PRs per file or mix unrelated slices.
 
-At the user's direction, Astra may commit and push a review-candidate checkpoint after implementation and all required pre-review gates, before Terra runs. Use a clearly nonfinal message such as `WIP Slice 5 review candidate`. `../implementation/PORT-STATUS.md` and handoff material must label it `implemented / ready for independent review`, not `accepted`, and state that Terra has not run yet.
+A user-directed review-candidate checkpoint may be pushed on the package/slice branch after its applicable pre-review gates. Label its scope and exact SHA `implemented / ready for independent review`, state which review has not run, and never call it accepted. Resume with the corresponding package/holistic review and acceptance gates. Candidate CI cannot authorize progression.
 
-A review candidate is not an accepted slice milestone and does not satisfy the independent Terra gate. Its remote CI cannot substitute for the accepted milestone's exact-SHA CI, and no later slice may start from merely a candidate. Resume from that candidate with the normal independent Terra review/fix/acceptance process. Create the accepted milestone only after required review/fixes and Astra acceptance; only that accepted milestone's own successful exact-SHA remote CI satisfies the progression gate.
+The slice merge result is the single candidate accepted milestone. Only its own successful exact-SHA remote CI completes acceptance. Record the final SHA/run result in PR metadata or an acceptance conversation record without creating an extra unvalidated repository commit merely to record CI. Policy/documentation maintenance commits are not new accepted product slices.
 
 ## Final whole-app review
 
-After legacy cleanup and all deterministic tests are green, use fresh Terra High whole-app review passes. Vary focus across correctness/integration, failure paths, migration/data, concurrency, APIs/contracts, security, performance/resources, maintainability/coupling, deployment/recovery, and test adequacy.
+After legacy cleanup and all deterministic tests are green, use fresh direct Terra High whole-app review passes. Ask: **Do all accepted slices form one correct, secure, migratable, deployable replacement system?** Work-package and slice reviews do not replace this final adversarial gate. Vary focus across correctness/integration, failure paths, migration/data, concurrency, APIs/contracts, security, performance/resources, maintainability/coupling, deployment/recovery, and test adequacy.
 
 Stop after **3 consecutive passes with no new substantive finding**, maximum **6 passes**. Maintain a running confirmed-finding set so later passes do not repeat old issues. Fix all blocking findings regardless of pass count.
 
