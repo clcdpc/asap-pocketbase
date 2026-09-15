@@ -33,6 +33,9 @@ public sealed class MigrationPackageManifest
 
     [JsonPropertyName("files")]
     public List<MigrationPackageFile> Files { get; init; } = [];
+
+    [JsonPropertyName("warnings")]
+    public List<string> Warnings { get; init; } = [];
 }
 
 public sealed class MigrationPackageSourceDatabase
@@ -110,6 +113,8 @@ public static class MigrationPackageValidator
         using (var manifestDocument = ReadJsonDocument(manifestPath, "package_manifest_invalid"))
         {
             EnsureNoDuplicateProperties(manifestDocument.RootElement, "package_manifest_invalid");
+            ValidateManifestSecrets(manifestDocument.RootElement);
+            ValidateManifestShape(manifestDocument.RootElement);
             try
             {
                 manifest = manifestDocument.RootElement.Deserialize<MigrationPackageManifest>(JsonOptions)
@@ -237,6 +242,114 @@ public static class MigrationPackageValidator
             manifest.EntityCounts.Any(item => string.IsNullOrWhiteSpace(item.Key) || item.Value < 0))
         {
             throw new MigrationOperationException("package_manifest_invalid", "Manifest identity or source snapshot metadata is invalid.");
+        }
+    }
+
+    private static void ValidateManifestShape(JsonElement root)
+    {
+        EnsureManifestObject(root, ManifestProperties, "manifest");
+        RequireManifestKind(root, "formatVersion", JsonValueKind.Number);
+        RequireManifestKind(root, "contractVersion", JsonValueKind.String);
+        RequireManifestKind(root, "pocketBaseSourceGitSha", JsonValueKind.String);
+        RequireManifestKind(root, "pocketBaseSourceSchemaVersion", JsonValueKind.String);
+        RequireManifestKind(root, "exportedAtUtc", JsonValueKind.String);
+
+        var sourceDatabase = RequiredManifestProperty(root, "sourceDatabase");
+        EnsureManifestObject(sourceDatabase, SourceDatabaseProperties, "sourceDatabase");
+        RequireManifestKind(sourceDatabase, "fileName", JsonValueKind.String);
+        RequireManifestKind(sourceDatabase, "length", JsonValueKind.Number);
+        RequireManifestKind(sourceDatabase, "sha256", JsonValueKind.String);
+
+        var entityCounts = RequiredManifestProperty(root, "entityCounts");
+        if (entityCounts.ValueKind != JsonValueKind.Object)
+        {
+            throw new MigrationOperationException("package_manifest_invalid", "Manifest entityCounts must be an object.");
+        }
+        foreach (var count in entityCounts.EnumerateObject())
+        {
+            if (count.Value.ValueKind != JsonValueKind.Number || !count.Value.TryGetInt32(out _))
+            {
+                throw new MigrationOperationException("package_manifest_invalid", "Manifest entity counts must be integers.");
+            }
+        }
+
+        var files = RequiredManifestProperty(root, "files");
+        if (files.ValueKind != JsonValueKind.Array)
+        {
+            throw new MigrationOperationException("package_manifest_invalid", "Manifest files must be an array.");
+        }
+        foreach (var file in files.EnumerateArray())
+        {
+            EnsureManifestObject(file, FileProperties, "files");
+            RequireManifestKind(file, "path", JsonValueKind.String);
+            RequireManifestKind(file, "length", JsonValueKind.Number);
+            RequireManifestKind(file, "sha256", JsonValueKind.String);
+        }
+
+        if (root.TryGetProperty("warnings", out var warnings))
+        {
+            if (warnings.ValueKind != JsonValueKind.Array || warnings.EnumerateArray().Any(item => item.ValueKind != JsonValueKind.String))
+            {
+                throw new MigrationOperationException("package_manifest_invalid", "Manifest warnings must be an array of strings.");
+            }
+        }
+    }
+
+    private static readonly IReadOnlySet<string> ManifestProperties =
+        new HashSet<string>(
+            [
+                "formatVersion",
+                "contractVersion",
+                "pocketBaseSourceGitSha",
+                "pocketBaseSourceSchemaVersion",
+                "exportedAtUtc",
+                "sourceDatabase",
+                "entityCounts",
+                "files",
+                "warnings"
+            ],
+            StringComparer.Ordinal);
+
+    private static readonly IReadOnlySet<string> SourceDatabaseProperties =
+        new HashSet<string>(["fileName", "length", "sha256"], StringComparer.Ordinal);
+
+    private static readonly IReadOnlySet<string> FileProperties =
+        new HashSet<string>(["path", "length", "sha256"], StringComparer.Ordinal);
+
+    private static void EnsureManifestObject(
+        JsonElement value,
+        IReadOnlySet<string> allowedProperties,
+        string objectName)
+    {
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            throw new MigrationOperationException("package_manifest_invalid", $"Manifest {objectName} must be an object.");
+        }
+
+        foreach (var property in value.EnumerateObject())
+        {
+            if (!allowedProperties.Contains(property.Name))
+            {
+                throw new MigrationOperationException("package_manifest_invalid", $"Manifest contains an unsupported member in {objectName}.");
+            }
+        }
+    }
+
+    private static JsonElement RequiredManifestProperty(JsonElement parent, string name)
+    {
+        if (!parent.TryGetProperty(name, out var value))
+        {
+            throw new MigrationOperationException("package_manifest_invalid", $"Manifest property is missing: {name}.");
+        }
+        return value;
+    }
+
+    private static void RequireManifestKind(JsonElement parent, string name, JsonValueKind kind)
+    {
+        var value = RequiredManifestProperty(parent, name);
+        if (value.ValueKind != kind)
+        {
+            throw new MigrationOperationException("package_manifest_invalid", $"Manifest property has an invalid shape: {name}.");
         }
     }
 
@@ -548,6 +661,27 @@ public static class MigrationPackageValidator
         else if (element.ValueKind == JsonValueKind.Array)
         {
             foreach (var item in element.EnumerateArray()) ValidateMetadataSecrets(item);
+        }
+    }
+
+    private static void ValidateManifestSecrets(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                if (LooksLikeSecretMaterial(property.Name))
+                {
+                    throw new MigrationOperationException(
+                        "package_secret_forbidden",
+                        "Credential material must not appear in the migration package manifest.");
+                }
+                ValidateManifestSecrets(property.Value);
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray()) ValidateManifestSecrets(item);
         }
     }
 

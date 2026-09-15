@@ -100,6 +100,7 @@ public static class MigrationPackageExporter
         VerifyIntegrity(connection);
         using var transaction = connection.BeginTransaction();
         var sourceSchemaVersion = ReadSourceSchemaVersion(connection, transaction);
+        ValidateRequiredSourceCollections(connection, transaction);
 
         foreach (var domain in Domains)
         {
@@ -451,6 +452,24 @@ public static class MigrationPackageExporter
             rows.Add(row);
         }
         return rows;
+    }
+
+    private static void ValidateRequiredSourceCollections(
+        SqliteConnection connection,
+        SqliteTransaction transaction)
+    {
+        var missing = Domains
+            .SelectMany(domain => domain.Collections)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(collection => !TableExists(connection, transaction, collection))
+            .OrderBy(collection => collection, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (missing.Length > 0)
+        {
+            throw new MigrationOperationException(
+                "source_collection_missing",
+                $"The pinned PocketBase source is missing required collection table(s): {string.Join(", ", missing)}.");
+        }
     }
 
     private static object NormalizeSqliteValue(object value, string collection, string column)

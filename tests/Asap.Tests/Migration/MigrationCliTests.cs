@@ -110,6 +110,7 @@ public sealed class MigrationCliTests
                         ('pb-org-2', '2', 'Test Library', 'TEST', 1, '2030-01-02 03:04:05.000Z');
                     """;
                 command.ExecuteNonQuery();
+                CreatePinnedSourceSchemaFixtureTables(connection);
             }
 
             using var output = new StringWriter();
@@ -149,6 +150,64 @@ public sealed class MigrationCliTests
             var files = manifest.RootElement.GetProperty("files").EnumerateArray().ToArray();
             Assert.IsTrue(files.Any(file => file.GetProperty("path").GetString() == "organizations.json"));
             Assert.IsTrue(files.All(file => file.GetProperty("sha256").GetString()!.Length == 64));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public void ExportRejectsMissingPinnedSourceCollectionBeforeWritingPackage()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-missing-collection-{Guid.NewGuid():N}");
+        var source = Path.Combine(root, "data.db");
+        var storage = Path.Combine(root, "storage");
+        var package = Path.Combine(root, "package");
+        Directory.CreateDirectory(root);
+        Directory.CreateDirectory(storage);
+        try
+        {
+            using (var connection = new SqliteConnection(
+                new SqliteConnectionStringBuilder
+                {
+                    DataSource = source,
+                    Pooling = false
+                }.ConnectionString))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText =
+                    """
+                    CREATE TABLE [_migrations] ([file] TEXT NOT NULL PRIMARY KEY, [applied] INTEGER NOT NULL);
+                    INSERT INTO [_migrations] VALUES ('202607270001_patron_code_eligibility.js', 1);
+                    CREATE TABLE [polaris_organizations] ([id] TEXT NOT NULL PRIMARY KEY);
+                    """;
+                command.ExecuteNonQuery();
+                CreatePinnedSourceSchemaFixtureTables(connection);
+                using var drop = connection.CreateCommand();
+                drop.CommandText = "DROP TABLE [staff_users];";
+                drop.ExecuteNonQuery();
+            }
+
+            using var error = new StringWriter();
+            var exitCode = MigrationCli.Run(
+                [
+                    "export",
+                    "--source", source,
+                    "--storage", storage,
+                    "--output", package,
+                    "--source-git-sha", MigrationContract.PocketBaseBaselineSha,
+                    "--exported-at-utc", "2030-01-02T03:04:05Z",
+                    "--confirm-source-stopped"
+                ],
+                TextWriter.Null,
+                error);
+
+            Assert.AreEqual(1, exitCode);
+            StringAssert.Contains(error.ToString(), "source_collection_missing");
+            StringAssert.Contains(error.ToString(), "staff_users");
+            Assert.IsFalse(File.Exists(Path.Combine(package, "manifest.json")));
         }
         finally
         {
@@ -418,6 +477,14 @@ public sealed class MigrationCliTests
             AddRuntimeProperty(secretPackage, "secretFingerprint", "forbidden");
             UpdateManifestEntry(secretPackage, "effective-legacy-runtime-config.json");
             AssertPackageValidationCode(secretPackage, "package_secret_forbidden");
+
+            var manifestSecretPackage = CreateMinimalPackage(Path.Combine(root, "manifest-secret"));
+            AddManifestProperty(manifestSecretPackage, "postmarkToken", "fixture-only-value");
+            AssertPackageValidationCode(manifestSecretPackage, "package_secret_forbidden");
+
+            var manifestUnknownPackage = CreateMinimalPackage(Path.Combine(root, "manifest-unknown"));
+            AddManifestProperty(manifestUnknownPackage, "unexpectedMember", "fixture-only-value");
+            AssertPackageValidationCode(manifestUnknownPackage, "package_manifest_invalid");
 
             var conflictingPackage = CreateMinimalPackage(Path.Combine(root, "conflict"));
             var operationalPath = Path.Combine(conflictingPackage, "effective-legacy-operational-config.json");
@@ -2337,6 +2404,7 @@ public sealed class MigrationCliTests
                      'super_admin', 1, '1', 1, 'weekly@example.org', 1, 0, 1);
                 """ + additionalSql;
             command.ExecuteNonQuery();
+            CreatePinnedSourceSchemaFixtureTables(connection);
         }
         prepareStorage?.Invoke(storage);
 
@@ -2355,6 +2423,52 @@ public sealed class MigrationCliTests
             exportError);
         Assert.AreEqual(0, exitCode, exportError.ToString());
         return package;
+    }
+
+    private static void CreatePinnedSourceSchemaFixtureTables(SqliteConnection connection)
+    {
+        // These empty tables model the collections present at the pinned source schema; production export only reads them.
+        var collectionNames = new[]
+        {
+            "polaris_organizations",
+            "staff_users",
+            "system_settings",
+            "polaris_settings",
+            "workflow_settings",
+            "ui_settings",
+            "patron_settings_overrides",
+            "patron_library_settings",
+            "library_settings",
+            "smtp_settings",
+            "material_formats",
+            "format_claim_rules",
+            "workflow_tags",
+            "title_requests",
+            "title_request_tags",
+            "request_statuses",
+            "request_close_reasons",
+            "title_request_events",
+            "email_templates",
+            "rejection_templates",
+            "email_delivery_events",
+            "deleted_request_audit",
+            "additional_copy_requests"
+        };
+
+        foreach (var collectionName in collectionNames)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = $"CREATE TABLE IF NOT EXISTS [{collectionName}] ([id] TEXT NOT NULL PRIMARY KEY);";
+            command.ExecuteNonQuery();
+        }
+
+        using var metadata = connection.CreateCommand();
+        metadata.CommandText =
+            """
+            CREATE TABLE IF NOT EXISTS [_collections] ([id] TEXT NOT NULL PRIMARY KEY, [name] TEXT NOT NULL);
+            INSERT OR IGNORE INTO [_collections] ([id], [name]) VALUES ('pbc_fixture_ui_settings', 'ui_settings');
+            """;
+        metadata.ExecuteNonQuery();
     }
 
     private static void AssertPackageValidationCode(string package, string expectedCode)
@@ -2380,6 +2494,14 @@ public sealed class MigrationCliTests
         var runtime = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
         runtime[name] = value;
         File.WriteAllText(path, runtime.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n", new UTF8Encoding(false));
+    }
+
+    private static void AddManifestProperty(string package, string name, string value)
+    {
+        var path = Path.Combine(package, "manifest.json");
+        var manifest = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        manifest[name] = value;
+        File.WriteAllText(path, manifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n", new UTF8Encoding(false));
     }
 
     private static void UpdateManifestEntry(string package, string relativePath)
