@@ -6,10 +6,12 @@ Not dispatched. Do not remove the legacy implementation or rewrite repository
 instructions before Slices 0-10 have passed their implementation/review gates.
 Refresh the actual tree, dependencies and external release blockers at dispatch.
 Follow [document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) for the
-Slice-6+ staged-PR lifecycle, optional package boundaries, review modes,
-context firewall and exact-milestone CI. Thin autonomous supervision is the
-preferred/default mode; Astra dispatches bounded Luna Max and independent
-Terra High workers. Manual/direct execution remains fallback. Reading lists
+staged-PR lifecycle, optional package boundaries, PR-backed durable state,
+review modes, context firewall and exact-milestone CI. GPT-6 Astra High is the
+default thin supervisor, dispatching bounded Luna Max and independent Terra
+High workers. GPT-6 Astra Max is bounded escalation only, returning control to
+High. The slice PR holds the central state/event journal under document 10;
+package PRs do not duplicate it. Manual/direct execution remains fallback. Reading lists
 below identify full-slice authority; workers start with directly relevant
 excerpts and expand for concrete concerns. Prior-slice acceptance and its
 exact-SHA CI must be complete before this slice starts.

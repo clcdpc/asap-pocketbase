@@ -1,6 +1,18 @@
 # Slice 6: Analytics
 
-## Implementation Status - 2026-09-15, Fix/Re-review Cycle 1
+## Current Status - 2026-09-15
+
+Slice 6 was accepted at historical milestone
+`7ba59421176ede99ba48488be6bc81010e60f65c`; correction PR #266 is complete at
+authorized product/integration baseline
+`d607723e846f633ebe206163f6c232dd79566d6f`, with successful exact-SHA CI
+`34988112346`. See [PORT-STATUS.md](PORT-STATUS.md) and the
+[review record](slice-06-review.md). Slice 7 has not started; its execution
+follows [document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md).
+The implementation/bootstrap entries below preserve historical checkpoints,
+including their then-current pending actions and model roles.
+
+## Historical Implementation Status - 2026-09-15, Fix/Re-review Cycle 1
 
 Full Terra review confirmed S6-P2-1 in the `AverageDaysToHold` aggregate: an
 in-range first literal `hold_placed` event earlier than request creation was

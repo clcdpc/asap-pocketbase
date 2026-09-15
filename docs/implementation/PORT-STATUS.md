@@ -5,6 +5,52 @@ Server 2022, and IIS under the authoritative `docs/dotnet-port/` pack. This
 single final draft PR will deliver the complete port as reviewed vertical
 slices. It is not eligible for merge or production deployment yet.
 
+## Current Status - GitHub-Backed Orchestration Policy - 2026-09-15
+
+Historical Slice 6 acceptance remains at
+`7ba59421176ede99ba48488be6bc81010e60f65c` (CI `34976630186` succeeded).
+[Correction PR #266](https://github.com/clcdpc/asap-pocketbase/pull/266) is
+merged and complete. Its exact Terra-reviewed correction is
+`04f538ef1a04be33b31d5dbdc3a5c1751b163ee4`, merged at
+`c0cde6fb744e53c1a72a63f8cb58124e43255b4f`. The corrective integration/current
+authorized product baseline before this policy edit is
+`d607723e846f633ebe206163f6c232dd79566d6f`; its exact-SHA
+[.NET baseline CI 34988112346](https://github.com/clcdpc/asap-pocketbase/actions/runs/34988112346)
+succeeded. No substantive corrective finding remains.
+
+Slice 7 has not started. This documentation/process-only refinement occurs
+before its bootstrap and creates no new accepted product slice.
+[Document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) now makes GPT-6
+Astra High the normal thin supervisor, GPT-6 Astra Max bounded escalation
+only with control returning to High, and the slice PR the durable state/event
+journal. Bounded Luna Max implementation and independent Terra High review,
+compact receipts, the context firewall, full validation, three-cycle cap and
+exact-SHA acceptance gates remain binding. Terra owns substantive finding
+verification/resolution; comments must never contain sensitive migration data.
+
+This task's single final docs-policy commit is the future Slice 7 branch point.
+Its exact SHA and CI run/result are recorded in
+[draft PR #264](https://github.com/clcdpc/asap-pocketbase/pull/264), after push
+and CI, without another repository commit merely to record its own hash or
+green CI. Bootstrap must separately record the prior product baseline and
+actual technical review base under document 10. No Slice 7 branch, PR,
+supervisor comment or worker dispatch is part of this policy task.
+
+Desired external configuration: automatic Codex GitHub review disabled for
+this repository, explicit/manual review retained. The policy task could not
+access that setting: available tools expose no setting control and the
+available browser reached signed-out ChatGPT. One external/manual setting
+change remains; this record does not claim it is disabled. Document 10 defines
+the fallback for any unexpected automatic review.
+
+Next action after this policy head's successful exact-SHA CI: run one GPT-6
+Astra High autonomous Slice 7 bootstrap/execution task using the GitHub-backed
+supervisor journal, with GPT-6 Astra Max reserved for bounded escalation.
+PR #264 remains draft; no merge, tag, deployment, rehearsal or cutover.
+
+All entries below are historical checkpoints. Their pending/next-action
+wording describes the state at that time, not current execution instructions.
+
 ## Post-Slice-6 Correction Pending Exact-SHA CI - 2026-09-15
 
 Slice 6 was accepted at its historical milestone

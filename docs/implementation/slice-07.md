@@ -2,23 +2,50 @@
 
 ## Preparation Only
 
-Not dispatched. Refresh after Slices 1-6 pass their complete tests, Terra
-review/fix/re-review gates and milestone commits. This packet narrows the
-existing sequence; it does not start migration from scratch or replace the
-authoritative plan. Record the actual prior milestone SHAs, schema version,
-CLI contracts, import/reconciliation coverage and remaining domain gaps at
-dispatch.
+Not started; no bootstrap or worker dispatch is authorized by this policy edit.
+Historical Slice 6 accepted milestone:
+`7ba59421176ede99ba48488be6bc81010e60f65c` (CI `34976630186` succeeded).
+PR #266's exact reviewed correction is
+`04f538ef1a04be33b31d5dbdc3a5c1751b163ee4`, merged at
+`c0cde6fb744e53c1a72a63f8cb58124e43255b4f`. Prior authorized product/integration
+baseline: `d607723e846f633ebe206163f6c232dd79566d6f`, exact-SHA CI
+`34988112346` succeeded. The final docs-policy head produced by this policy
+task, with its own successful CI recorded in draft PR #264, is the required
+Slice 7 branch point. Record these anchors separately at bootstrap; the actual
+technical review base is the prior authorized product baseline above, with
+later documentation/process bytes classified separately. Do not mechanically
+re-review independently reviewed correction bytes.
+
+This packet narrows the existing sequence; it does not start migration from
+scratch or replace the authoritative plan. At bootstrap, refresh the schema
+version, CLI contracts, import/reconciliation coverage and remaining domain
+gaps from the actual implementation. Choose actual package boundaries then;
+none are frozen by this policy edit.
 
 Follow [document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) for the
-Slice-6+ staged-PR lifecycle, optional package boundaries, review modes,
-context firewall and exact-milestone CI. Thin autonomous supervision is the
-preferred/default mode; Astra dispatches bounded Luna Max and independent
-Terra High workers. Manual/direct execution remains fallback. Reading lists
-below identify full-slice authority; workers start with directly relevant
-excerpts and expand for concrete concerns. Prior-slice acceptance and its
-exact-SHA CI must be complete before this slice starts.
-Package guidance in document 10 is provisional; choose actual boundaries at
-slice start.
+staged-PR lifecycle, baseline/bootstrap contract, PR-backed state/recovery,
+review modes, context firewall and exact-milestone CI. One GPT-6 Astra High
+autonomous supervisor is preferred/default; GPT-6 Astra Max is bounded
+material supervisor/contract escalation only and returns control to High.
+Manual/direct execution remains fallback. Reading lists below identify
+full-slice authority; workers start with relevant excerpts and expand for
+concrete concerns.
+
+Future bootstrap verifies all three baseline/CI anchors, creates the slice
+branch from the final policy head, and opens the draft slice integration PR
+first. It creates the canonical `asap-supervisor-state:v1` comment, appends
+sequence 1 `SUPERVISOR_STARTED`, then projects that event in the same comment.
+After inspecting current migration code and selecting packages, record
+`BOOTSTRAP_COMPLETED` under document 10. Package PRs use the slice PR as the
+central journal; Terra findings live where the code is reviewed. Never put
+migration packages, patron information, staff identity maps, credentials,
+protected reports or raw provider responses into GitHub comments.
+
+When authorized for the complete slice, the same Astra High task continues
+through bounded Luna Max implementation/fixes, independent Terra High review,
+full validation, short acceptance, integration and exact-SHA CI without manual
+phase launches. Stop at accepted Slice 7 or a defined hard stop. This task
+only establishes that future execution contract.
 
 ## Objective And Authority
 

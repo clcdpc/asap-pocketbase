@@ -8,9 +8,9 @@ The port is not an opportunity for a general rewrite beyond the backend/platform
 
 ## Source baseline
 
-Staged PRs begin with Slice 6. Beginning with the remainder of Slice 6, thin autonomous supervisor mode is preferred/default unless the user explicitly requests manual/direct execution. A completed bootstrap remains valid and must not be repeated.
+Staged PRs began with Slice 6. Beginning with Slice 7, GPT-6 Astra High is the preferred/default thin autonomous supervisor, with GitHub-backed durable state and bounded Astra Max escalation, unless the user explicitly requests manual/direct execution. A completed bootstrap remains valid and must not be repeated.
 
-Slices 0-5 remain accepted under the policies that actually governed them. Accepted Slice 5 milestone: `36727414d02cbe34ba13cd3f6f1bb57980b83a6f`; exact-SHA CI `34952097695` succeeded. Slice 6 implementation has not started. Verify current branch/PR state and [PORT-STATUS.md](../implementation/PORT-STATUS.md) before starting work. Preserve historical Sol-based execution of Slices 0-3, Slice 4's Luna Max/retained-context/full-review sequence, and Slice 5's Astra-led Luna implementation/full-and-focused Terra review. Do not reopen those acceptances or rewrite their history.
+Slices 0-6 remain accepted under the policies that actually governed them. Historical Slice 6 accepted milestone: `7ba59421176ede99ba48488be6bc81010e60f65c`, exact-SHA CI `34976630186` succeeded. Post-Slice-6 correction PR #266 merged the exact Terra-reviewed correction `04f538ef1a04be33b31d5dbdc3a5c1751b163ee4` at `c0cde6fb744e53c1a72a63f8cb58124e43255b4f`. The current authorized product/integration baseline before this policy edit is `d607723e846f633ebe206163f6c232dd79566d6f`, with successful exact-SHA CI `34988112346`. Slice 7 has not started. Verify actual branch/PR state and [PORT-STATUS.md](../implementation/PORT-STATUS.md) before starting work. Preserve the historical execution/review and acceptance records, including Slice 6's Astra Max supervision; do not reopen those acceptances or rewrite their history.
 
 This policy changes execution orchestration only. Architecture, behavioral contracts, slice contents, database/security/migration rules, release/cutover design, review independence and objective test acceptance criteria are unchanged. This documentation transition is not a new accepted product slice and does not launch implementation or a supervisor.
 
@@ -56,7 +56,7 @@ These are planning defaults, not binding implementation partitions. Choose actua
 
 | Slice | Default |
 | --- | --- |
-| 6 - Analytics | One cohesive slice PR; child packages only if discovery shows material benefit. |
+| 6 - Analytics (historical) | Completed as one cohesive slice PR; correction PR #266 is also complete. |
 | 7 - Migration hardening | Likely 2-4 packages: export/package/core mechanics; validation/import/reconciliation/cutover invariants; legacy-link/operator/rehearsal tooling. |
 | 8 - Deployment/release | Possible packages: release artifacts/manifests; deployment/preflight/rollback; health/monitoring/operator concerns. |
 | 9 - CI/browser/accessibility/release validation | Possible packages: CI/real-SQL integration; Playwright/accessibility; release-validation/environment controls. |
@@ -85,7 +85,7 @@ Review the complete package diff, affected callers, relevant invariants, failure
 
 After packages and integration/glue are complete and full slice validation passes, use a fresh Terra High context for the COMPLETE slice delta:
 
-- base: previously accepted slice milestone;
+- base: actual technical review base recorded at bootstrap under [Baseline and bootstrap contract](#baseline-and-bootstrap-contract), including independently reviewed post-acceptance corrections;
 - head: exact final slice integration branch SHA.
 
 Question: **Do the reviewed components form one correct implementation of the complete slice?**
@@ -94,19 +94,32 @@ This is a holistic review of gaps between packages, cross-package invariants, st
 
 Use package review receipts to avoid mechanically repeating line-by-line review of unchanged, independently reviewed code. Inspect deeply when code changed after package review, findings cross packages, integration exposes a concern, shared invariants need direct inspection or confidence otherwise requires it. This review has a different purpose, not reduced rigor. For an unpartitioned slice, the full-slice review includes the detailed implementation review as well as this holistic assessment.
 
-### GPT-6 Astra Max - thin autonomous supervisor
+### GPT-6 Astra High - normal thin autonomous supervisor
 
-Astra may retain one supervisor context for the entire authorized slice. It operates as a state-machine controller with the binding context firewall below. It owns phase progression, worker dispatch, branch/PR state, compact receipt verification, confirmed finding/fix routing, short acceptance gating, integration, milestone documentation, CI polling and final status. Normal transitions require no new user prompt.
+Astra High is the default supervisor beginning with Slice 7 and may retain one thin context for the entire authorized slice. It owns phase/state progression, worker dispatch, branch/PR state, compact receipt verification, confirmed finding/fix routing, short acceptance, integration, status/milestone records, the GitHub state projection/event journal, CI polling, restart/recovery and final status. Normal transitions require no new user prompt. It operates from exact SHAs, PR metadata, state/events, compact receipts, unresolved findings, review/thread state and CI under the binding context firewall below.
 
-Persistent technical-parent behavior is prohibited: the supervisor does not normally implement, debug, inspect source, conduct detailed review or analyze complete test output. Bounded workers retain technical ownership. Complete any missing bootstrap in a bounded task and consume its packet/receipt; verify an existing bootstrap instead of repeating it. Honor an explicitly bootstrap-only task's stop boundary.
+Persistent technical-parent behavior is prohibited: the supervisor does not normally implement, debug, inspect source, conduct detailed review or analyze complete test output. Bounded workers retain technical ownership. Astra High completes missing bootstrap under the baseline contract, limiting discovery to the package/dispatch decision, or verifies an existing bootstrap instead of repeating it. Honor an explicitly bootstrap-only task's stop boundary.
 
-For a genuine product/security/migration/architecture ambiguity, pause progression. The worker returns exact state, governing sources, conflict and required decision. Astra inspects only necessary authoritative material, issues a bounded ruling when the contract resolves it and resumes the relevant worker. If authoritative sources do not resolve a material decision, stop for user input. Ordinary implementation/test failures stay with Luna; their debugging transcripts do not cross into supervisor context.
+Workers return exact state, governing sources, conflict and required decision for a supervisor-level ambiguity. Astra High resolves normal orchestration from necessary authoritative material and uses the bounded escalation contract below only for a concrete difficult question. Ordinary implementation/test failures stay with Luna; their debugging transcripts do not cross into supervisor context.
 
 Acceptance remains SHORT: verify the exact reviewed candidate, clean independent review, no unresolved substantive findings, complete current integrated validation, allowed documentation-only changes since review, branch/PR state and acceptance invariants. Do not redo Terra review or rerun successful expensive gates. Record the exact reviewed implementation SHA separately from later acceptance/status commits. Final acceptance still requires successful CI on the exact candidate milestone SHA after integration and any required status commit.
 
+### GPT-6 Astra Max - bounded supervisor escalation
+
+Astra Max is not the default or persistent supervisor beginning with Slice 7. Consult it only for a specific material product/security/migration/architecture contract ambiguity, conflicting worker conclusions not resolvable from authoritative state, a difficult cross-package interaction, a narrow material acceptance invariant not confidently established at High, or a difficult state-reconciliation question whose safe disposition is unclear.
+
+Do not escalate routine branch operations, test failures, implementation debugging, review findings, CI polling, documentation updates or ordinary package coordination. Do not make Max a routine acceptance pass.
+
+1. Astra High pauses progression, defines the exact bounded question and gathers only necessary governing context.
+2. Append `ASTRA_MAX_ESCALATION_STARTED` and update the state projection to `astra_max_escalation: active`, retaining the paused phase.
+3. Dispatch one bounded GPT-6 Astra Max consultation with that question, exact state and authoritative references. Exclude full supervisor/worker transcripts, all-document dumps and complete successful logs.
+4. Max returns a concise ruling/recommendation, its authoritative basis and required next action.
+5. Append `ASTRA_MAX_ESCALATION_RESOLVED`, update the projection to `resolved`, and return control to Astra High. Consultation never replaces the ongoing controller with Max.
+6. If authoritative sources still leave a material product/security/migration decision unresolved, record `HARD_STOP` and stop for user input.
+
 ### Sol - exceptional specialist consultation only
 
-Sol High/XHigh remains outside the normal lifecycle. After a concrete unresolved issue has been identified, bounded Astra contract analysis may seek focused specialist advice where it materially helps. Sol XHigh is exceptional when bounded Sol High advice leaves a blocker or exceptional cross-system reasoning is needed. Astra issues the ruling; Luna implements/tests and Terra verifies. Size, migration, SQL, concurrency or security sensitivity alone do not justify Sol.
+Sol High/XHigh remains outside the normal lifecycle. After normal supervisor reasoning/escalation identifies a concrete specialist issue, focused advice may be requested where it materially helps. Sol XHigh is exceptional when bounded Sol High advice leaves a blocker or exceptional cross-system reasoning is needed. Astra High retains control and records the ruling; Luna implements/tests and Terra verifies. Size, migration, SQL, concurrency or security sensitivity alone do not justify Sol.
 
 ## Supervisor context firewall
 
@@ -137,6 +150,152 @@ The supervisor normally checks SHA, branch/PR, required gate presence, pass/fail
 The supervisor may inspect a small source area only for a genuine contract ambiguity, conflicting worker reports or a narrow acceptance invariant not established by receipts. Terra owns routine code review. Workers use branch/PR diffs, root instructions, relevant packets and contracts; expand context only for concrete concerns and inspect current code before editing. Keep successful handoffs compact: repository/branch/PR, base/head, completed/remaining scope, rulings, findings, validation and next action. Do not attach lengthy implementation narration.
 
 Context rotation does not force checkout/worktree rotation. Preserve required local-only fixtures, harnesses and evidence. If an environment change is unavoidable, explicitly recreate and rerun unavailable required evidence before relying on it; do not claim evidence that cannot be inspected.
+
+## GitHub-backed supervisor state
+
+Beginning with Slice 7, the slice integration PR is the durable orchestration surface. GitHub is a durable state surface, not an agent transcript. Keep a relatively stable PR body, one mutable current-state comment, a small append-only event journal, Terra review threads/findings, Git refs and Actions. This is a thin execution policy, not a generic workflow/event-sourcing framework.
+
+The PR body describes the objective, base/branch topology, authoritative packet/contracts, package plan if any, major non-goals and canonical state-comment link once available. It answers what the PR is. Edit the state comment for current progress; do not continuously rewrite the body as an execution journal. Events explain material transitions, review threads record findings/verification, and Actions record automated gates. Keep final draft PR #264's current summary synchronized; detailed historical execution stays in repository records.
+
+### Canonical current-state comment
+
+Bootstrap creates exactly one comment marked `<!-- asap-supervisor-state:v1 -->`; record its comment ID/link in the slice PR body and edit that same comment in place. Locate it before creating anything on restart. Duplicate candidate state comments require reconciliation, not another comment or a guess at which is canonical.
+
+Use a fenced YAML mapping after the marker. This is an illustrative initial projection, not live Slice 7 state:
+
+```yaml
+schema: 1
+slice: 7
+slice_pr: <number>
+status: RUNNING
+phase: BOOTSTRAP
+sequence: 0
+supervisor_model: GPT-6 Astra High
+base_sha: <authorized-docs-policy-starting-sha>
+head_sha: <current-slice-head>
+review_candidate_sha: null
+reviewed_sha: null
+active_package: null
+fix_cycle: 0/3
+terra_status: pending
+unresolved_findings: 0
+integration_sha: null
+milestone_sha: null
+ci_run: null
+ci_status: pending
+next: Append SUPERVISOR_STARTED
+astra_max_escalation: none
+```
+
+`status` is `RUNNING | BLOCKED | ACCEPTED`; `phase` is one of the existing state-machine phases or a clearly named package substate. `sequence` is the latest event sequence projected, not a poll/commit count. `fix_cycle` preserves the full-slice count out of three; package events identify their separate package count and cannot reset the full-slice counter. `terra_status` is `pending | running | findings | clean`; `ci_status` is `pending | running | success | failure` for `ci_run` at its exact SHA. A canceled, timed-out or otherwise unsuccessful completed run is `failure`, with its actual conclusion in the relevant event. `astra_max_escalation` is optional (`none | active | resolved`). Use full exact SHAs and null for unestablished evidence. `unresolved_findings` counts distinct open substantive finding IDs; link their durable reviews/threads, including summary IDs, rather than copying findings into the projection.
+
+### Append-only event journal
+
+Each major transition uses one new comment marked `<!-- asap-supervisor-event:v1 -->` and a fenced YAML mapping. Events have strictly increasing integer `seq` values per slice PR, beginning at 1. One Astra High controller writes the journal. Before appending, check the latest sequence and whether the transition is already recorded, including after an uncertain API response; never blindly duplicate a completed transition. This illustrative event is not an actual review:
+
+```yaml
+seq: 4
+event: FULL_REVIEW_COMPLETED
+from: FULL_REVIEW
+to: FIX
+head: <exact-sha>
+actor: Terra High
+result: findings
+findings: 2
+review: <GitHub-review-reference>
+fix_cycle: 1/3
+next: Luna Max fix
+```
+
+Required common fields are `seq`, `event`, `from`, `to`, `head`, `actor`, `result` and `next`; use `from: null` for the first event. Add only relevant package/PR, review, finding-ID, fix-cycle, integration/milestone, CI or safe evidence references. Events are immutable except an absolutely necessary correction of an objectively broken link/identifier. Never rewrite earlier outcomes when later state changes.
+
+Adopt these meaningful transition types, only when applicable:
+
+- `SUPERVISOR_STARTED`, `BOOTSTRAP_COMPLETED`;
+- `PACKAGE_IMPLEMENTATION_COMPLETED`, `PACKAGE_REVIEW_COMPLETED`, `PACKAGE_MERGED`;
+- `IMPLEMENTATION_COMPLETED`, `INTEGRATED_VALIDATION_COMPLETED`;
+- `FULL_REVIEW_COMPLETED`, `FIX_COMPLETED`, `REREVIEW_COMPLETED`;
+- `ASTRA_MAX_ESCALATION_STARTED`, `ASTRA_MAX_ESCALATION_RESOLVED`;
+- `ACCEPTANCE_APPROVED`, `SLICE_INTEGRATED`, `MILESTONE_RECORDED`, `MILESTONE_CI_COMPLETED`, `ACCEPTED`;
+- `HARD_STOP`, `STATE_RECONCILED`, `UNEXPECTED_AUTOMATIC_REVIEW`.
+
+Record each real review/integration boundary, not every command, test, debugging attempt, commit, CI poll, worker startup/shutdown or successful evidence inspection. A normal cohesive slice generally needs roughly 5-12 event comments. When implementation and integrated validation finish together, one event may record both outcomes; similarly one final CI event may record successful exact-SHA CI and the transition to ACCEPTED. Package work may produce more, but never skip a material boundary merely to meet a comment quota.
+
+For every durable transition:
+
+1. Establish the transition from actual Git/PR/review/CI state and applicable evidence.
+2. Append the immutable event.
+3. Edit the canonical state comment to project the new phase and event sequence.
+
+Initial bootstrap creates the sequence-0 comment, appends sequence 1 `SUPERVISOR_STARTED`, then projects sequence 1. If a projection update fails after its event is written, recover from authority plus the journal. If append completion is uncertain, inspect before retrying. No state-comment claim can supply missing validation/review/CI.
+
+### Authority and recovery
+
+When sources disagree, the authority order is:
+
+1. Actual Git refs, commit ancestry and PR base/head/merge state.
+2. Actual Actions/check results for the exact SHA.
+3. Actual GitHub reviews and unresolved review threads, with explicit summary-finding dispositions.
+4. Append-only supervisor events.
+5. Mutable supervisor-state projection.
+6. Worker receipt prose or model-local state.
+
+Comments record state/history and never override GitHub reality. Higher-ranked evidence establishes its own fact, not a substitute for another gate: green CI cannot waive an unresolved review finding.
+
+A fresh Astra High context must resume without the old supervisor conversation:
+
+1. Read slice PR metadata/body and its canonical state-comment reference.
+2. Read the canonical projection; inspect only newer or checkpoint-relevant events as necessary.
+3. Inspect current branch/base/head/merge state and exact ancestry.
+4. Inspect unresolved Terra threads/summary finding IDs and exact reviewed SHA.
+5. Inspect relevant current Actions/check state for the exact candidate/milestone.
+6. Reconcile discrepancies with only necessary evidence, append `STATE_RECONCILED`, and update the projection. If safe disposition remains unclear, use bounded Max escalation where appropriate; if it cannot be reconciled safely, record `HARD_STOP`, project BLOCKED and stop.
+7. Resume at the first incomplete state-machine transition, preserving fix-cycle counts and completed package/review evidence.
+
+Do not rerun successful Luna implementation, complete validation, Terra review, resolved fix cycles or packages merely because context was lost. Exact SHAs, durable reviews, compact receipts/events and actual CI establish completion. Required evidence that existed only in a lost environment must follow the existing recreation rules; a comment claiming it once existed does not preserve inspectable evidence.
+
+### Package journals and sensitive evidence
+
+The slice integration PR holds the central state and journal, including package implementation/review/merge events. Package bodies describe package scope; Terra findings live on the package PR where the code is reviewed. Do not duplicate supervisor journals on package PRs absent a future concrete need.
+
+Events contain only the durable subset of receipts, such as exact candidate, build result, `.NET/SQL` passed/failed/skipped counts, frontend/browser/migration results and known-issue count. Safe evidence identifiers/paths may be referenced. Detailed evidence stays in its existing restricted/local location.
+
+Never publish worker transcripts, full test output, source code/full diffs, migration package contents, patron information, staff identity-map contents, credentials/secret values, protected migration reports or raw provider responses in state comments, events or review text. Use sanitized synthetic descriptions and non-sensitive references; apply this especially to Slice 7. Avoid narration, duplicate findings/receipts, repeated waiting comments and verbose acceptance essays.
+
+## Durable Terra findings and automatic review
+
+Where practical, Terra creates real inline GitHub review threads against relevant changed lines, with stable IDs such as `S7-P1-1` or `S7-P2-2`, severity, concise problem, violated contract and required correction. Tie each review to the exact candidate SHA. Terra reviews/reports/verifies and never fixes code.
+
+Luna fixes each confirmed finding, changes/adds required tests, and replies in its thread with the fix SHA, concise resolution and relevant validation. Luna does not resolve Terra's substantive threads. Terra verifies the actual fix, replies with concise disposition and resolves its own substantive thread when satisfied. A fresh independent Terra context may do this; model-conversation identity is not required.
+
+For cross-file/architectural findings with no meaningful changed line, use a stable ID in the Terra review summary. The supervisor counts it in `unresolved_findings`, Luna's fix receipt names it, and Terra's re-review explicitly marks it resolved. Do not attach findings to arbitrary lines. If inline publication is unavailable, use this durable summary form with the exact SHA and source reference; do not leave substantive findings only in a worker conversation.
+
+Before short Astra High acceptance, require zero unresolved substantive Terra inline threads AND zero unresolved substantive summary IDs, the exact reviewed SHA matching expected reviewed bytes, and review state agreeing with the journal. Nit/style comments block only if classified substantive by Terra. GitHub review state supplements the independent-review contract; it does not replace it. Astra Max acceptance consultation requires a concrete unresolved invariant and returns control to High.
+
+### Automatic Codex GitHub review
+
+Desired repository configuration for the remainder of the port: disable automatic Codex GitHub review for `clcdpc/asap-pocketbase`, retain explicit/manual `@codex review` capability, and invoke it only when deliberately requested. Temporary slice/package PRs already have independent Terra review; automatic Codex review is not a normal gate or a second mandatory reviewer and never replaces Terra. Final draft PR #264 may receive deliberate Codex review during later whole-application review if useful.
+
+Change only the external Codex automatic-review setting when accessible and verify its value. Do not imitate it with Actions or change unrelated repository settings. If unavailable, report the remaining external/manual configuration action without blocking documentation maintenance or claiming it was disabled.
+
+If a future temporary PR unexpectedly triggers automatic review, detect it, do not request another manual review, wait for the already-started review before merging, and resolve any substantive finding as an additional review finding. Record one concise `UNEXPECTED_AUTOMATIC_REVIEW` event on the central slice PR with the affected PR/review reference. Keep Terra's gate. This is a misconfiguration fallback, not the normal lifecycle.
+
+## Baseline and bootstrap contract
+
+Distinguish the historical accepted slice milestone, the current authorized product/integration baseline (including accepted independently reviewed corrections), and a later documentation-only policy head. No policy commit creates a new accepted product slice.
+
+For Slice 7, preserve historical Slice 6 `7ba59421176ede99ba48488be6bc81010e60f65c`, reviewed correction `04f538ef1a04be33b31d5dbdc3a5c1751b163ee4`, its merge `c0cde6fb744e53c1a72a63f8cb58124e43255b4f`, and authorized product/integration baseline `d607723e846f633ebe206163f6c232dd79566d6f` (CI `34988112346` succeeded). The single final commit of this policy task is the docs-policy branch point, recorded with its exact-SHA CI in PR #264 after push; it cannot embed its own SHA.
+
+At future Slice 7 bootstrap, Astra High must:
+
+1. Verify historical Slice 6 acceptance/CI, the reviewed corrective baseline/CI, and the exact docs-policy head/CI recorded in PR #264. Stop on unexpected active Slice 7 work or unexplained integration movement.
+2. Verify product-baseline-to-policy-head changes are documentation/process only. Record historical milestone, prior product baseline, docs-policy branch point and actual technical review base separately in the packet/PR. For this transition, the technical Slice 7 review base is `d607723e846f633ebe206163f6c232dd79566d6f`; policy bytes after it are classified separately. Do not mechanically re-review already independently reviewed correction bytes; inspect interactions if Slice 7 changes invalidate earlier evidence.
+3. Create `codex/slice-07-<name>` from the final policy head and open its draft integration PR into `codex/csharp-port` before choosing implementation packages or dispatching workers.
+4. Create the canonical sequence-0 state comment; append sequence 1 `SUPERVISOR_STARTED` and update that same comment. The state `base_sha` is the policy branch point; the stable body separately records the product and technical review bases.
+5. Inspect current migration implementation and choose actual package boundaries; do not freeze provisional packages beforehand. Record `BOOTSTRAP_COMPLETED` and update the projection.
+6. Continue in one autonomous Astra High task through bounded Luna implementation/package workers, independent Terra review/fixes, full integrated validation, short acceptance, integration, milestone and exact-SHA CI. Use Max only for bounded material supervisor escalation. Stop at accepted Slice 7 or a defined hard stop; full-slice authorization does not require the user to launch phases after bootstrap.
+
+This policy-edit task performs none of that bootstrap or implementation. Later slices apply the same baseline distinction and document their actual technical review base at bootstrap.
 
 ## Validation and evidence placement
 
@@ -217,28 +376,28 @@ BOOTSTRAP -> IMPLEMENTATION -> REVIEW_CANDIDATE -> FULL_REVIEW
   -> ACCEPTANCE_RECORD -> EXACT_SHA_CI -> ACCEPTED
 ```
 
-The supervisor advances automatically when each state's objective gates pass. IMPLEMENTATION includes any package loops and the complete integrated pre-review validation. REVIEW_CANDIDATE requires a pushed exact SHA and complete compact receipt. FULL_REVIEW always uses fresh independent Terra context. A required full re-review replaces the focused review step when the broadening rules apply. Preserve phase, reviewed/candidate/milestone SHAs and cycle count across context rotation; do not reset the budget by rotating workers.
+The Astra High supervisor advances automatically when each state's objective gates pass and records material transitions under the GitHub state/event contract above. IMPLEMENTATION includes any package loops and the complete integrated pre-review validation. REVIEW_CANDIDATE requires a pushed exact SHA and complete compact receipt. FULL_REVIEW always uses fresh independent Terra context. A required full re-review replaces the focused review step when the broadening rules apply. Preserve phase, reviewed/candidate/milestone SHAs and cycle count across context rotation; do not reset the budget by rotating workers.
 
 An explicitly authorized supervisor run includes normal worker dispatch, fixes, validation, review, acceptance, slice integration, status commit where required and CI waiting. It ends at ACCEPTED or a hard-stop report. A documentation-only policy task does not launch that run. Stop after the authorized slice; starting the next slice requires explicit cross-slice continuation authorization as well as acceptance.
 
 ### Large slice
 
-1. Verify the exact accepted prior milestone and its successful exact-SHA CI. Create `codex/slice-N-<name>` from that accepted integration state and record the base SHA. If an explicitly authorized documentation-only transition follows the accepted product milestone, retain it in the branch base and record both the current integration HEAD and prior accepted review-base SHA; verify there is no implementation/test drift. This policy transition does not become a new accepted product slice.
+1. Complete or verify the [Baseline and bootstrap contract](#baseline-and-bootstrap-contract): distinguish the historical milestone, authorized corrected product baseline, documentation-policy branch point and actual technical review base, and verify their exact-SHA CI. Create the slice branch/draft PR and canonical state/event comments before implementation. Reuse completed bootstrap on recovery.
 2. For each coherent package, normally sequentially: branch from the current slice branch; dispatch bounded Luna Max; run package-appropriate validation; commit/push; open/update its PR into the slice branch; dispatch independent Terra detailed package review; route confirmed fixes to Luna and focused re-review to Terra; merge the clean package. The supervisor verifies compact receipts at each checkpoint. Dependent packages start from its updated state; parallel packages require actual independence.
 3. Dispatch bounded Luna Max for remaining integration/glue if needed. Luna completes every slice requirement and runs the FULL existing integrated slice pre-review matrix before pushing the final candidate and returning its receipt. Package gates never replace this matrix.
-4. Dispatch fresh Terra High holistic review from the previously accepted product milestone to the exact final slice branch SHA. Route fixes and appropriate re-review automatically under the safety cap below.
-5. Perform short Astra acceptance on the clean reviewed SHA and current receipts. Implementation changes after review require affected validation/re-review; allowed acceptance/status documentation alone does not require another full code review.
+4. Dispatch fresh Terra High holistic review from the recorded technical review base to the exact final slice branch SHA. Review the complete slice delta, distinguishing policy bytes and already independently reviewed prior corrections. Route fixes and appropriate re-review automatically under the safety cap below.
+5. Perform short Astra High acceptance on the clean reviewed SHA and current receipts, including the unresolved-thread/summary-finding gate. Implementation changes after review require affected validation/re-review; allowed acceptance/status documentation alone does not require another full code review.
 6. Merge the reviewed slice PR into `codex/csharp-port`, complete ACCEPTANCE_RECORD and EXACT_SHA_CI as below, then mark ACCEPTED only on successful exact-milestone CI. Stop unless cross-slice continuation is explicitly authorized.
 
-If integration state or reviewed implementation changes unexpectedly before merge, stop and report the actual base/diff/evidence mismatch; do not accept an unreviewed merge. Do not create child packages merely to exercise this machinery.
+If integration state or reviewed implementation changes unexpectedly before merge, pause and reconcile under the authority hierarchy. Resume only if the expected reviewed bytes and all gates are established; otherwise HARD STOP with the actual base/diff/evidence mismatch. Do not accept an unreviewed merge or create child packages merely to exercise this machinery.
 
 ### Small cohesive slice
 
-1. Verify completed bootstrap or complete it once if missing; retain the slice branch/PR into `codex/csharp-port`.
+1. Verify completed bootstrap or complete it once under the baseline contract; retain the slice branch/PR into `codex/csharp-port` and its canonical state/event journal.
 2. Dispatch one bounded Luna Max task for the complete slice, tests, ordinary debugging and full integrated pre-review matrix. Luna pushes the exact review candidate and returns a compact receipt.
 3. Verify receipt/state and dispatch fresh Terra High full-slice review, including detailed implementation and holistic review.
 4. On confirmed substantive findings, dispatch bounded Luna Max with only those findings and necessary context; run directly affected validation, expanding when evidence is invalidated; dispatch focused Terra High re-review or required full re-review. Continue automatically within the cap. On a clean result, proceed.
-5. Perform short Astra acceptance, merge the slice PR into `codex/csharp-port`, record acceptance/status documentation, commit if required, and push.
+5. Perform short Astra High acceptance including the unresolved-thread/summary-finding gate, merge the slice PR into `codex/csharp-port`, record acceptance/status documentation, commit if required, and push.
 6. Wait/poll for CI on the exact candidate accepted milestone SHA. On success, mark accepted in PR metadata and stop; on failure follow the hard-stop rules. The user does not launch each phase individually.
 
 ### Acceptance record and exact-SHA CI
@@ -247,17 +406,17 @@ After integration, use the existing status/review/handoff documentation pattern.
 
 Changes limited to allowed review/acceptance documentation, with no implementation/test/schema/runtime behavior change, do not require another full code review. Verify the changed-file scope and documentation integrity. Any implementation change invalidates the relevant validation/review evidence and must go through the required gates.
 
-The supervisor owns CI waiting. Poll at reasonable intervals (normally 30-60 seconds, backing off while unchanged), without repeatedly downloading logs for running jobs. On success consume the conclusion and required compact step/count evidence. Only actual successful CI associated with the exact candidate milestone SHA completes acceptance; package, slice-branch, earlier merge or earlier status-commit CI cannot substitute. Record the accepted SHA/run/result in PR metadata, without another repository commit merely to record green CI.
+The supervisor owns CI waiting. Poll at reasonable intervals (normally 30-60 seconds, backing off while unchanged), without repeatedly downloading logs for running jobs. On success consume the conclusion and required compact step/count evidence. Only actual successful CI associated with the exact candidate milestone SHA completes acceptance; package, slice-branch, earlier merge or earlier status-commit CI cannot substitute. Record the accepted SHA/run/result in the slice event/state comments and PR #264 current metadata, without another repository commit merely to record green CI. The merged slice PR remains the journal through EXACT_SHA_CI and ACCEPTED; do not move the journal to PR #264.
 
 ### Review-loop safety cap and failure handling
 
 Default maximum: **3 fix/re-review cycles after the initial full slice review**. A full re-review required by broadening counts as a cycle. If the third cycle still leaves a substantive finding, repeated regression, an expanding review surface or a problem that cannot be bounded confidently, stop the supervisor and report unresolved findings/state. Never accept the slice or waive a finding because the cap was reached. This operational stop limit does not change the separate final whole-app review rules.
 
 - Ordinary implementation/test failure: Luna diagnoses and corrects it inside its bounded task. Return a compact blocker receipt if the task cannot finish; the supervisor does not ingest the debugging transcript or repeatedly redispatch unchanged work.
-- Contract ambiguity: pause, inspect only necessary authority, issue a bounded Astra ruling and resume when resolved. Stop for user input when a material decision remains unresolved by authoritative sources.
+- Contract ambiguity: Astra High pauses and inspects only necessary authority; consult bounded Astra Max for a concrete difficult supervisor/contract question under the escalation contract. Return control to High after the ruling; stop for user input when a material decision remains unresolved by authoritative sources.
 - Infrastructure failure: an obviously transient external/CI operation may be retried once when safe. Do not relabel substantive application/test failures as infrastructure failures. Stop if the retry fails or safe retry is unavailable.
 - Exact accepted-milestone CI failure: substantive failure means NOT accepted. Stop with failed SHA/run/step and a concise corrective recommendation; do not weaken CI or start the next slice. A clearly transient GitHub/runner failure may be retried once.
-- Unexpected branch/PR/implementation state, unavailable worker dispatch or an unresolved receipt/evidence mismatch prevents progression. Report the checkpoint and missing decision/capability/evidence rather than guessing acceptance.
+- Unexpected branch/PR/implementation state pauses progression for reconciliation; append `STATE_RECONCILED` and update the projection when safely established. Unreconcilable state, unavailable worker dispatch or an unresolved receipt/evidence mismatch requires `HARD_STOP` and BLOCKED state. Report the checkpoint and missing decision/capability/evidence rather than guessing acceptance.
 
 ### Manual/direct fallback
 
