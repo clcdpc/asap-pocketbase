@@ -104,11 +104,112 @@ async function flush() {
     await flush();
     assert.equal(container.querySelector('#analytics-date-range').value, 'last90');
 
+    const recoveryStart = requests.length;
+    const recoveryPendingStart = pending.length;
+    const recovery = analytics.loadAnalytics(container);
+    await flush();
+    assert.strictEqual(pending.length, recoveryPendingStart + 1);
+    pending[recoveryPendingStart].resolve(response(400, {
+      code: 'invalid_scope',
+      message: 'The analytics scope is invalid.'
+    }));
+    await flush();
+    assert.strictEqual(pending.length, recoveryPendingStart + 2);
+    assert.equal(new URL(requests[recoveryStart + 1].url, dom.window.location.href).searchParams.get('scope'), 'all');
+    pending[recoveryPendingStart + 1].resolve(response(200, payload('all', 'last90', 'All libraries after recovery')));
+    await recovery;
+    await flush();
+    await flush();
+    assert.deepStrictEqual(
+      requests.slice(recoveryStart).map(item => new URL(item.url, dom.window.location.href).searchParams.get('scope')),
+      ['2', 'all']
+    );
+    assert.equal(container.querySelector('#analytics-scope').value, 'all');
+    assert.equal(container.querySelector('#analytics-date-range').value, 'last90');
+    assert.ok(container.querySelector('#analytics-scope').options.length >= 3);
+    assert.match(container.textContent, /All libraries after recovery/);
+
+    const restore = analytics.loadAnalytics(container);
+    await flush();
+    const restoreIndex = pending.length - 1;
+    pending[restoreIndex].resolve(response(200, payload('2', 'last90', 'Library Two restored')));
+    await restore;
+    await flush();
+    assert.equal(container.querySelector('#analytics-scope').value, '2');
+
+    const noLoopStart = requests.length;
+    const noLoopPendingStart = pending.length;
+    const retryFailure = analytics.loadAnalytics(container);
+    await flush();
+    assert.strictEqual(pending.length, noLoopPendingStart + 1);
+    pending[noLoopPendingStart].resolve(response(400, {
+      code: 'invalid_scope',
+      message: 'The analytics scope is invalid.'
+    }));
+    await flush();
+    assert.strictEqual(pending.length, noLoopPendingStart + 2);
+    pending[noLoopPendingStart + 1].resolve(response(400, {
+      code: 'invalid_scope',
+      message: 'The analytics scope is still invalid.'
+    }));
+    await retryFailure;
+    await flush();
+    await flush();
+    assert.strictEqual(requests.length - noLoopStart, 2, 'invalid_scope recovery must run once');
+    assert.match(container.textContent, /The analytics scope is still invalid/);
+
+    const arbitrary400Start = requests.length;
+    const arbitrary400PendingStart = pending.length;
+    const arbitrary400 = analytics.loadAnalytics(container);
+    await flush();
+    pending[arbitrary400PendingStart].resolve(response(400, {
+      code: 'analytics_unavailable',
+      message: 'Analytics is unavailable.'
+    }));
+    await arbitrary400;
+    await flush();
+    assert.strictEqual(requests.length - arbitrary400Start, 1, 'other 400 responses must not recover');
+    assert.match(container.textContent, /Analytics is unavailable/);
+
+    const restoreForRace = analytics.loadAnalytics(container);
+    await flush();
+    pending[pending.length - 1].resolve(response(200, payload('2', 'last90', 'Library Two restored for race')));
+    await restoreForRace;
+    await flush();
+    assert.equal(container.querySelector('#analytics-scope').value, '2');
+
+    const staleRecoveryStart = requests.length;
+    const staleRecoveryPendingStart = pending.length;
+    const staleRecovery = analytics.loadAnalytics(container);
+    await flush();
+    pending[staleRecoveryPendingStart].resolve(response(400, {
+      code: 'invalid_scope',
+      message: 'The analytics scope is invalid.'
+    }));
+    await flush();
+    const recoveryIndex = pending.length - 1;
+    const newerLoad = analytics.loadAnalytics(container);
+    await flush();
+    const newerPendingIndex = pending.length - 1;
+    assert.deepStrictEqual(
+      requests.slice(staleRecoveryStart).map(item => new URL(item.url, dom.window.location.href).searchParams.get('scope')),
+      ['2', 'all', 'all']
+    );
+    pending[recoveryIndex].resolve(response(200, payload('all', 'last90', 'Stale recovery response')));
+    pending[newerPendingIndex].resolve(response(200, payload('all', 'last90', 'Newer all response')));
+    await Promise.all([staleRecovery, newerLoad]);
+    await flush();
+    await flush();
+    assert.match(container.textContent, /Newer all response/);
+    assert.ok(!container.textContent.includes('Stale recovery response'));
+
+    const staleIndex = requests.length;
+    const stalePendingIndex = pending.length;
     const stale = analytics.loadAnalytics(container);
     await flush();
-    assert.strictEqual(pending.length, 6);
+    assert.strictEqual(pending.length, stalePendingIndex + 1);
     analytics.resetAnalytics();
-    pending[5].resolve(response(200, payload('all', 'lastMonth', 'Stale auth response')));
+    pending[stalePendingIndex].resolve(response(200, payload('all', 'lastMonth', 'Stale auth response')));
     await stale;
     await flush();
     assert.match(container.textContent, /Loading analytics/);

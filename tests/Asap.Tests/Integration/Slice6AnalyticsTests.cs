@@ -25,12 +25,32 @@ public sealed partial class PatronJourneyTests
 
         try
         {
+            using var superClient = factory!.CreateClient();
+            AddTestingStaffHeaders(superClient, superAdmin.Id, superAdmin.EntraTenantId, superAdmin.EntraObjectId);
+            using var baseline = await superClient.GetAsync("/api/asap/staff/analytics?scope=system&range=last30");
+            Assert.AreEqual(HttpStatusCode.OK, baseline.StatusCode, await baseline.Content.ReadAsStringAsync());
+            using var baselineBody = JsonDocument.Parse(await baseline.Content.ReadAsStringAsync());
+
+            await SeedSystemOrganizationAnalyticsFixtureAsync(suffix);
+
+            using var allWithSystemRows = await superClient.GetAsync("/api/asap/staff/analytics?scope=all&range=last30");
+            Assert.AreEqual(HttpStatusCode.OK, allWithSystemRows.StatusCode,
+                await allWithSystemRows.Content.ReadAsStringAsync());
+            using var allWithSystemRowsBody = JsonDocument.Parse(await allWithSystemRows.Content.ReadAsStringAsync());
+            AssertAnalyticsScope(allWithSystemRowsBody.RootElement, null, "all");
+            AssertAnalyticsMetricsEqual(baselineBody.RootElement, allWithSystemRowsBody.RootElement);
+
+            using var systemWithSystemRows = await superClient.GetAsync("/api/asap/staff/analytics?scope=system&range=last30");
+            Assert.AreEqual(HttpStatusCode.OK, systemWithSystemRows.StatusCode,
+                await systemWithSystemRows.Content.ReadAsStringAsync());
+            using var systemWithSystemRowsBody = JsonDocument.Parse(await systemWithSystemRows.Content.ReadAsStringAsync());
+            AssertAnalyticsScope(systemWithSystemRowsBody.RootElement, null, "all");
+            AssertAnalyticsMetricsEqual(baselineBody.RootElement, systemWithSystemRowsBody.RootElement);
+
             await SeedAnalyticsFixtureAsync(organizationA, organizationB, suffix);
             ordinaryRow = await CreateCorrectiveStaffAsync(superAdmin, "staff", organizationA);
             var ordinary = await ReadCorrectiveStaffAsync(ordinaryRow);
 
-            using var superClient = factory!.CreateClient();
-            AddTestingStaffHeaders(superClient, superAdmin.Id, superAdmin.EntraTenantId, superAdmin.EntraObjectId);
             using var selected = await superClient.GetAsync(
                 $"/api/asap/staff/analytics?scope={organizationA}&orgId={organizationB}&range=last30");
             Assert.AreEqual(HttpStatusCode.OK, selected.StatusCode, await selected.Content.ReadAsStringAsync());
@@ -65,6 +85,66 @@ public sealed partial class PatronJourneyTests
             CollectionAssert.Contains(availableLibraryIds, organizationA.ToString());
             CollectionAssert.Contains(availableLibraryIds, organizationB.ToString());
 
+            using var other = await superClient.GetAsync(
+                $"/api/asap/staff/analytics?scope={organizationB}&range=last30");
+            Assert.AreEqual(HttpStatusCode.OK, other.StatusCode, await other.Content.ReadAsStringAsync());
+            using var otherBody = JsonDocument.Parse(await other.Content.ReadAsStringAsync());
+            AssertAnalyticsScope(otherBody.RootElement, organizationB, "library");
+            AssertAnalyticsSummary(otherBody.RootElement, new(3, 2, 2, 0, 0));
+            AssertStageCounts(otherBody.RootElement, new
+            {
+                suggestion = 1L,
+                outstanding_purchase = 0L,
+                pending_hold = 0L,
+                hold_placed = 0L,
+                closed = 2L,
+                additional_copies = 1L
+            });
+            AssertClosedReasons(otherBody.RootElement, new Dictionary<string, long>
+            {
+                ["manual"] = 1,
+                ["unrecorded"] = 1
+            });
+
+            using var all = await superClient.GetAsync("/api/asap/staff/analytics?scope=all&range=last30");
+            Assert.AreEqual(HttpStatusCode.OK, all.StatusCode, await all.Content.ReadAsStringAsync());
+            using var allBody = JsonDocument.Parse(await all.Content.ReadAsStringAsync());
+            AssertAnalyticsScope(allBody.RootElement, null, "all");
+            AssertAnalyticsFixtureDeltas(baselineBody.RootElement, allBody.RootElement);
+
+            await DeactivateAnalyticsOrganizationAsync(organizationB);
+
+            using var systemAfterDeactivation = await superClient.GetAsync(
+                "/api/asap/staff/analytics?scope=system&range=last30");
+            Assert.AreEqual(HttpStatusCode.OK, systemAfterDeactivation.StatusCode,
+                await systemAfterDeactivation.Content.ReadAsStringAsync());
+            using var systemAfterDeactivationBody =
+                JsonDocument.Parse(await systemAfterDeactivation.Content.ReadAsStringAsync());
+            AssertAnalyticsScope(systemAfterDeactivationBody.RootElement, null, "all");
+            AssertAnalyticsMetricsEqual(allBody.RootElement, systemAfterDeactivationBody.RootElement);
+
+            var availableAfterDeactivation = systemAfterDeactivationBody.RootElement.GetProperty("availableLibraries")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("orgId").GetString())
+                .ToArray();
+            CollectionAssert.Contains(availableAfterDeactivation, organizationA.ToString());
+            Assert.IsFalse(availableAfterDeactivation.Contains(organizationB.ToString(), StringComparer.Ordinal));
+
+            using var inactive = await superClient.GetAsync(
+                $"/api/asap/staff/analytics?scope={organizationB}&range=last30");
+            Assert.AreEqual(HttpStatusCode.BadRequest, inactive.StatusCode, await inactive.Content.ReadAsStringAsync());
+            using var inactiveBody = JsonDocument.Parse(await inactive.Content.ReadAsStringAsync());
+            Assert.AreEqual("invalid_scope", inactiveBody.RootElement.GetProperty("code").GetString());
+
+            using var activeAfterDeactivation = await superClient.GetAsync(
+                $"/api/asap/staff/analytics?scope={organizationA}&range=last30");
+            Assert.AreEqual(HttpStatusCode.OK, activeAfterDeactivation.StatusCode,
+                await activeAfterDeactivation.Content.ReadAsStringAsync());
+            using var activeAfterDeactivationBody =
+                JsonDocument.Parse(await activeAfterDeactivation.Content.ReadAsStringAsync());
+            AssertAnalyticsScope(activeAfterDeactivationBody.RootElement, organizationA, "library");
+            AssertAnalyticsMetricsEqual(selectedBody.RootElement, activeAfterDeactivationBody.RootElement);
+
             using var ordinaryClient = factory.CreateClient();
             AddTestingStaffHeaders(ordinaryClient, ordinary.Id, ordinary.EntraTenantId, ordinary.EntraObjectId);
             using var forged = await ordinaryClient.GetAsync(
@@ -72,7 +152,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(HttpStatusCode.OK, forged.StatusCode, await forged.Content.ReadAsStringAsync());
             using var forgedBody = JsonDocument.Parse(await forged.Content.ReadAsStringAsync());
             AssertAnalyticsScope(forgedBody.RootElement, organizationA, "library");
-            AssertAnalyticsSummary(forgedBody.RootElement, new(8, 8, 3, 2, 1.5));
+            AssertAnalyticsMetricsEqual(selectedBody.RootElement, forgedBody.RootElement);
             Assert.AreEqual(0, forgedBody.RootElement.GetProperty("availableLibraries").GetArrayLength());
 
             using var invalid = await superClient.GetAsync("/api/asap/staff/analytics?scope=999999999&range=last30");
@@ -80,22 +160,11 @@ public sealed partial class PatronJourneyTests
             using var invalidBody = JsonDocument.Parse(await invalid.Content.ReadAsStringAsync());
             Assert.AreEqual("invalid_scope", invalidBody.RootElement.GetProperty("code").GetString());
 
-            using var other = await superClient.GetAsync(
-                $"/api/asap/staff/analytics?scope={organizationB}&range=last30");
-            Assert.AreEqual(HttpStatusCode.OK, other.StatusCode, await other.Content.ReadAsStringAsync());
-            using var otherBody = JsonDocument.Parse(await other.Content.ReadAsStringAsync());
-            AssertAnalyticsScope(otherBody.RootElement, organizationB, "library");
-            AssertAnalyticsSummary(otherBody.RootElement, new(2, 1, 1, 0, 0));
-
-            using var all = await superClient.GetAsync("/api/asap/staff/analytics?scope=system&range=last30");
-            Assert.AreEqual(HttpStatusCode.OK, all.StatusCode, await all.Content.ReadAsStringAsync());
-            using var allBody = JsonDocument.Parse(await all.Content.ReadAsStringAsync());
-            AssertAnalyticsScope(allBody.RootElement, null, "all");
-            var allSummary = allBody.RootElement.GetProperty("summary");
-            Assert.IsTrue(allSummary.GetProperty("newSuggestions").GetInt64() >= 10);
-            Assert.IsTrue(allSummary.GetProperty("openRequests").GetInt64() >= 9);
-            Assert.IsTrue(allSummary.GetProperty("closedRequests").GetInt64() >= 4);
-            Assert.IsTrue(allSummary.GetProperty("heldRequests").GetInt64() >= 2);
+            using var systemOrganization = await superClient.GetAsync("/api/asap/staff/analytics?scope=1&range=last30");
+            Assert.AreEqual(HttpStatusCode.BadRequest, systemOrganization.StatusCode,
+                await systemOrganization.Content.ReadAsStringAsync());
+            using var systemOrganizationBody = JsonDocument.Parse(await systemOrganization.Content.ReadAsStringAsync());
+            Assert.AreEqual("invalid_scope", systemOrganizationBody.RootElement.GetProperty("code").GetString());
 
             using var lastMonth = await superClient.GetAsync(
                 $"/api/asap/staff/analytics?scope={organizationA}&range=lastMonth");
@@ -229,9 +298,38 @@ public sealed partial class PatronJourneyTests
             INSERT INTO [asap].[TitleRequest]
                 ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [CloseReason], [CreatedUtc], [UpdatedUtc])
             VALUES (@organizationB, N'analytics-b-2-' + @suffix, N'Analytics B T2 ' + @suffix, 0, @formatId, N'closed', N'manual', '2026-09-03T12:00:00', '2026-09-03T12:00:00');
+
+            INSERT INTO [asap].[AdditionalCopyRequest]
+                ([LibraryOrganizationId], [BibId], [Title], [Status], [CreatedUtc], [UpdatedUtc])
+            VALUES (@organizationB, N'analytics-b-copy-open-' + @suffix, N'Analytics B open copy ' + @suffix,
+                    N'open', '2026-08-01T12:00:00', '2026-08-01T12:00:00');
+            INSERT INTO [asap].[AdditionalCopyRequest]
+                ([LibraryOrganizationId], [BibId], [Title], [Status], [CreatedUtc], [UpdatedUtc], [ClosedUtc])
+            VALUES (@organizationB, N'analytics-b-copy-closed-' + @suffix, N'Analytics B closed copy ' + @suffix,
+                    N'closed', '2026-09-02T12:00:00', '2026-09-03T12:00:00', '2026-09-03T12:00:00');
             """;
         command.Parameters.Add("@organizationA", SqlDbType.Int).Value = organizationA;
         command.Parameters.Add("@organizationB", SqlDbType.Int).Value = organizationB;
+        command.Parameters.Add("@suffix", SqlDbType.NVarChar, 32).Value = suffix;
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task SeedSystemOrganizationAnalyticsFixtureAsync(string suffix)
+    {
+        await using var connection = new SqlConnection(databaseConnectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO [asap].[AdditionalCopyRequest]
+                ([LibraryOrganizationId], [BibId], [Title], [Status], [CreatedUtc], [UpdatedUtc])
+            VALUES (1, N'analytics-system-copy-open-' + @suffix, N'Analytics system open copy ' + @suffix,
+                    N'open', '2026-07-01T12:00:00', '2026-07-01T12:00:00');
+            INSERT INTO [asap].[AdditionalCopyRequest]
+                ([LibraryOrganizationId], [BibId], [Title], [Status], [CreatedUtc], [UpdatedUtc], [ClosedUtc])
+            VALUES (1, N'analytics-system-copy-closed-' + @suffix, N'Analytics system closed copy ' + @suffix,
+                    N'closed', '2026-09-02T12:00:00', '2026-09-03T12:00:00', '2026-09-03T12:00:00');
+            """;
         command.Parameters.Add("@suffix", SqlDbType.NVarChar, 32).Value = suffix;
         await command.ExecuteNonQueryAsync();
     }
@@ -249,7 +347,9 @@ public sealed partial class PatronJourneyTests
             WHERE request.[LibraryOrganizationId] IN (@organizationA, @organizationB);
             DELETE FROM [asap].[WorkflowTag]
             WHERE [Code] IN (N'analytics-hold-failed-one-' + @suffix, N'analytics-hold-failed-two-' + @suffix);
-            DELETE FROM [asap].[AdditionalCopyRequest] WHERE [LibraryOrganizationId] IN (@organizationA, @organizationB);
+            DELETE FROM [asap].[AdditionalCopyRequest]
+            WHERE [LibraryOrganizationId] IN (@organizationA, @organizationB)
+               OR [BibId] IN (N'analytics-system-copy-open-' + @suffix, N'analytics-system-copy-closed-' + @suffix);
             DELETE FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] IN (@organizationA, @organizationB);
             DELETE FROM [asap].[AdministrativeAudit] WHERE [OrganizationId] IN (@organizationA, @organizationB);
             DELETE FROM [asap].[StaffUser] WHERE [Id] = @staffId;
@@ -260,6 +360,16 @@ public sealed partial class PatronJourneyTests
         command.Parameters.Add("@staffId", SqlDbType.BigInt).Value = staffId;
         command.Parameters.Add("@suffix", SqlDbType.NVarChar, 32).Value = suffix;
         await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task DeactivateAnalyticsOrganizationAsync(int organizationId)
+    {
+        await using var connection = new SqlConnection(databaseConnectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE [asap].[Organization] SET [IsActive] = 0 WHERE [Id] = @organizationId;";
+        command.Parameters.Add("@organizationId", SqlDbType.Int).Value = organizationId;
+        Assert.AreEqual(1, await command.ExecuteNonQueryAsync());
     }
 
     private static void AssertAnalyticsScope(JsonElement body, int? organizationId, string mode)
@@ -293,11 +403,173 @@ public sealed partial class PatronJourneyTests
 
     private static void AssertClosedReasons(JsonElement body, IReadOnlyDictionary<string, long> expected)
     {
-        var actual = body.GetProperty("closedReasons").EnumerateArray()
-            .ToDictionary(item => item.GetProperty("reason").GetString()!, item => item.GetProperty("count").GetInt64());
+        var actual = ReadClosedReasons(body);
         CollectionAssert.AreEquivalent(expected.Keys.ToArray(), actual.Keys.ToArray());
         foreach (var item in expected) Assert.AreEqual(item.Value, actual[item.Key], item.Key);
     }
+
+    private static void AssertAnalyticsFixtureDeltas(JsonElement before, JsonElement after)
+    {
+        var beforeSummary = before.GetProperty("summary");
+        var afterSummary = after.GetProperty("summary");
+        Assert.AreEqual(beforeSummary.GetProperty("newSuggestions").GetInt64() + 11,
+            afterSummary.GetProperty("newSuggestions").GetInt64());
+        Assert.AreEqual(beforeSummary.GetProperty("openRequests").GetInt64() + 10,
+            afterSummary.GetProperty("openRequests").GetInt64());
+        Assert.AreEqual(beforeSummary.GetProperty("closedRequests").GetInt64() + 5,
+            afterSummary.GetProperty("closedRequests").GetInt64());
+        Assert.AreEqual(beforeSummary.GetProperty("heldRequests").GetInt64() + 2,
+            afterSummary.GetProperty("heldRequests").GetInt64());
+        var expectedAverage = (
+            beforeSummary.GetProperty("heldRequests").GetInt64() * beforeSummary.GetProperty("averageDaysToHold").GetDouble() + 3.0)
+            / (beforeSummary.GetProperty("heldRequests").GetInt64() + 2);
+        Assert.AreEqual(expectedAverage, afterSummary.GetProperty("averageDaysToHold").GetDouble(), 0.0001);
+
+        AssertStageCountDeltas(before, after, new Dictionary<string, long>
+        {
+            ["suggestion"] = 5,
+            ["outstanding_purchase"] = 1,
+            ["pending_hold"] = 1,
+            ["hold_placed"] = 1,
+            ["closed"] = 5,
+            ["additional_copies"] = 2
+        });
+        AssertClosedReasonDeltas(before, after, new Dictionary<string, long>
+        {
+            ["hold_completed"] = 1,
+            ["rejected"] = 1,
+            ["unrecorded"] = 2,
+            ["manual"] = 1
+        });
+
+        var beforeAging = before.GetProperty("aging");
+        var afterAging = after.GetProperty("aging");
+        Assert.AreEqual(beforeAging.GetProperty("openOlderThanThreshold").GetInt64() + 3,
+            afterAging.GetProperty("openOlderThanThreshold").GetInt64());
+        AssertStageCountDeltas(beforeAging, afterAging, new Dictionary<string, long>
+        {
+            ["suggestion"] = 5,
+            ["outstanding_purchase"] = 1,
+            ["pending_hold"] = 1,
+            ["hold_placed"] = 1,
+            ["additional_copies"] = 2
+        }, "averageAgeByStage");
+
+        var beforeExceptions = before.GetProperty("exceptions");
+        var afterExceptions = after.GetProperty("exceptions");
+        Assert.AreEqual(beforeExceptions.GetProperty("holdFailures").GetInt64() + 1,
+            afterExceptions.GetProperty("holdFailures").GetInt64());
+        Assert.AreEqual(beforeExceptions.GetProperty("identifierFailures").GetInt64() + 1,
+            afterExceptions.GetProperty("identifierFailures").GetInt64());
+    }
+
+    private static void AssertAnalyticsMetricsEqual(JsonElement expected, JsonElement actual)
+    {
+        var expectedSummary = expected.GetProperty("summary");
+        var actualSummary = actual.GetProperty("summary");
+        Assert.AreEqual(expectedSummary.GetProperty("newSuggestions").GetInt64(), actualSummary.GetProperty("newSuggestions").GetInt64());
+        Assert.AreEqual(expectedSummary.GetProperty("openRequests").GetInt64(), actualSummary.GetProperty("openRequests").GetInt64());
+        Assert.AreEqual(expectedSummary.GetProperty("closedRequests").GetInt64(), actualSummary.GetProperty("closedRequests").GetInt64());
+        Assert.AreEqual(expectedSummary.GetProperty("heldRequests").GetInt64(), actualSummary.GetProperty("heldRequests").GetInt64());
+        Assert.AreEqual(expectedSummary.GetProperty("averageDaysToHold").GetDouble(),
+            actualSummary.GetProperty("averageDaysToHold").GetDouble(), 0.0001);
+        AssertStageCountsEqual(expected, actual);
+        AssertClosedReasonsEqual(expected, actual);
+
+        var expectedAging = expected.GetProperty("aging");
+        var actualAging = actual.GetProperty("aging");
+        Assert.AreEqual(expectedAging.GetProperty("thresholdDays").GetInt32(), actualAging.GetProperty("thresholdDays").GetInt32());
+        Assert.AreEqual(expectedAging.GetProperty("openOlderThanThreshold").GetInt64(),
+            actualAging.GetProperty("openOlderThanThreshold").GetInt64());
+        AssertStageCountsEqual(expectedAging, actualAging, "averageAgeByStage", includeAverage: true);
+
+        var expectedExceptions = expected.GetProperty("exceptions");
+        var actualExceptions = actual.GetProperty("exceptions");
+        Assert.AreEqual(expectedExceptions.GetProperty("holdFailures").GetInt64(),
+            actualExceptions.GetProperty("holdFailures").GetInt64());
+        Assert.AreEqual(expectedExceptions.GetProperty("identifierFailures").GetInt64(),
+            actualExceptions.GetProperty("identifierFailures").GetInt64());
+    }
+
+    private static void AssertStageCountDeltas(
+        JsonElement before,
+        JsonElement after,
+        IReadOnlyDictionary<string, long> expectedDeltas,
+        string propertyName = "stageCounts")
+    {
+        var beforeStages = before.GetProperty(propertyName);
+        var afterStages = after.GetProperty(propertyName);
+        foreach (var item in expectedDeltas)
+        {
+            var beforeCount = propertyName == "stageCounts"
+                ? beforeStages.GetProperty(item.Key).GetInt64()
+                : beforeStages.EnumerateArray().Single(row => row.GetProperty("status").GetString() == item.Key).GetProperty("count").GetInt64();
+            var afterCount = propertyName == "stageCounts"
+                ? afterStages.GetProperty(item.Key).GetInt64()
+                : afterStages.EnumerateArray().Single(row => row.GetProperty("status").GetString() == item.Key).GetProperty("count").GetInt64();
+            Assert.AreEqual(beforeCount + item.Value, afterCount, item.Key);
+        }
+    }
+
+    private static void AssertStageCountsEqual(
+        JsonElement expected,
+        JsonElement actual,
+        string propertyName = "stageCounts",
+        bool includeAverage = false)
+    {
+        var expectedStages = expected.GetProperty(propertyName);
+        var actualStages = actual.GetProperty(propertyName);
+        if (propertyName == "stageCounts")
+        {
+            foreach (var stage in new[] { "suggestion", "outstanding_purchase", "pending_hold", "hold_placed", "closed", "additional_copies" })
+            {
+                Assert.AreEqual(expectedStages.GetProperty(stage).GetInt64(), actualStages.GetProperty(stage).GetInt64(), stage);
+            }
+        }
+        else
+        {
+            foreach (var expectedStage in expectedStages.EnumerateArray())
+            {
+                var status = expectedStage.GetProperty("status").GetString();
+                var actualStage = actualStages.EnumerateArray().Single(row => row.GetProperty("status").GetString() == status);
+                Assert.AreEqual(expectedStage.GetProperty("count").GetInt64(), actualStage.GetProperty("count").GetInt64(), status);
+                if (includeAverage)
+                {
+                    Assert.AreEqual(expectedStage.GetProperty("averageAgeDays").GetDouble(),
+                        actualStage.GetProperty("averageAgeDays").GetDouble(), 0.0001, status);
+                }
+            }
+        }
+    }
+
+    private static void AssertClosedReasonDeltas(
+        JsonElement before,
+        JsonElement after,
+        IReadOnlyDictionary<string, long> expectedDeltas)
+    {
+        var beforeReasons = ReadClosedReasons(before);
+        var afterReasons = ReadClosedReasons(after);
+        foreach (var reason in beforeReasons.Keys.Union(afterReasons.Keys).Union(expectedDeltas.Keys))
+        {
+            beforeReasons.TryGetValue(reason, out var beforeCount);
+            afterReasons.TryGetValue(reason, out var afterCount);
+            expectedDeltas.TryGetValue(reason, out var expectedDelta);
+            Assert.AreEqual(beforeCount + expectedDelta, afterCount, reason);
+        }
+    }
+
+    private static void AssertClosedReasonsEqual(JsonElement expected, JsonElement actual)
+    {
+        CollectionAssert.AreEquivalent(ReadClosedReasons(expected).Keys.ToArray(), ReadClosedReasons(actual).Keys.ToArray());
+        foreach (var item in ReadClosedReasons(expected))
+        {
+            Assert.AreEqual(item.Value, ReadClosedReasons(actual)[item.Key], item.Key);
+        }
+    }
+
+    private static Dictionary<string, long> ReadClosedReasons(JsonElement body) => body.GetProperty("closedReasons")
+        .EnumerateArray()
+        .ToDictionary(item => item.GetProperty("reason").GetString()!, item => item.GetProperty("count").GetInt64());
 
     private readonly record struct AnalyticsSummaryExpectation(
         long NewSuggestions,

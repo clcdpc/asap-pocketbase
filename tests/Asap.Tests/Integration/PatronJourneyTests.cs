@@ -432,8 +432,10 @@ public sealed partial class PatronJourneyTests
         {
             Assert.HasCount(20, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
             var analytics = report.RootElement.GetProperty("analytics");
-            Assert.AreEqual("2", analytics.GetProperty("desktopSuperAdminScope").GetString());
+            Assert.AreEqual("all", analytics.GetProperty("desktopSuperAdminScope").GetString());
             Assert.AreEqual("last90", analytics.GetProperty("desktopRange").GetString());
+            Assert.IsTrue(analytics.GetProperty("invalidScopeRecovery").GetBoolean());
+            Assert.AreEqual(1, analytics.GetProperty("allScopeRecoveryRequests").GetInt32());
             Assert.IsTrue(analytics.GetProperty("mobileLibraryOnly").GetBoolean());
             Assert.AreEqual("legacy", report.RootElement.GetProperty("additionalCopy").GetProperty("inheritedClaimType").GetString());
             Assert.AreEqual(
