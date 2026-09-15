@@ -16,7 +16,7 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
-    public async Task WeeklySummaryRunNowFalseQueuesOrdinaryInvocationWithoutManualRunIdAndPreservesDedupe()
+    public async Task WeeklySummaryRunNowFalseQueuesManualOrdinaryInvocationWithoutManualRunIdAndPreservesDedupe()
     {
         var superAdmin = await ReadConfiguredSuperAdminAsync();
         var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
@@ -87,9 +87,13 @@ public sealed partial class PatronJourneyTests
 
                 var job = ReadEnqueuedHangfireJob(storage, jobId!);
                 Assert.AreEqual(typeof(BackgroundWorkflowJobs), job.Type);
-                Assert.AreEqual(nameof(BackgroundWorkflowJobs.SendWeeklyStaffSummaryAsync), job.Method.Name);
+                Assert.AreEqual(nameof(BackgroundWorkflowJobs.SendManualWeeklyStaffSummaryAsync), job.Method.Name);
                 Assert.AreEqual(3, job.Args.Count);
-                Assert.IsNull(job.Args[0]);
+                var queuedEvidence = job.Args[0] as StaffJobEvidence;
+                Assert.IsNotNull(queuedEvidence);
+                Assert.AreEqual(actor.Id, queuedEvidence!.StaffUserId);
+                Assert.AreEqual(actor.EntraTenantId, queuedEvidence.TenantId);
+                Assert.AreEqual(actor.EntraObjectId, queuedEvidence.ObjectId);
                 Assert.AreEqual(scope, Convert.ToInt32(job.Args[1]));
             }
 
@@ -97,8 +101,8 @@ public sealed partial class PatronJourneyTests
             var workflowJobs = factory.Services.GetRequiredService<BackgroundWorkflowJobs>();
             foreach (var job in queuedJobs)
             {
-                var result = await workflowJobs.SendWeeklyStaffSummaryAsync(
-                    job.Args[0] as string,
+                var result = await workflowJobs.SendManualWeeklyStaffSummaryAsync(
+                    (StaffJobEvidence)job.Args[0],
                     Convert.ToInt32(job.Args[1]),
                     CancellationToken.None);
                 Assert.AreEqual("completed", result.Code);
@@ -127,6 +131,99 @@ public sealed partial class PatronJourneyTests
             var system = await cleanup.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
             system.StaffApplicationUrl = oldStaffUrl;
             await cleanup.SaveChangesAsync();
+            await DeactivateCorrectiveStaffAsync(admin.Id);
+        }
+    }
+
+    [TestMethod]
+    [DataRow("deactivate")]
+    [DataRow("demote")]
+    [DataRow("move")]
+    [DataRow("rebind")]
+    public async Task ManualWeeklySummaryRejectsActorContractionBeforeExecution(string mutation)
+    {
+        var superAdmin = await ReadConfiguredSuperAdminAsync();
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var storage = factory.Services.GetRequiredService<JobStorage>();
+        var jobs = factory.Services.GetRequiredService<IBackgroundJobClient>();
+        var scope = Slice5IsolatedLibraryId;
+        await EnsureSlice5IsolatedLibraryAsync(contextFactory, scope);
+        var admin = await CreateCorrectiveStaffAsync(superAdmin, "admin", scope);
+        var actor = await ReadCorrectiveStaffAsync(admin);
+        var jobIds = new List<string>();
+        long requestId = 0;
+        string? oldStaffUrl = null;
+        var businessKeyPrefix = $"weekly-summary:{admin.Id}:";
+
+        await using (var seed = await contextFactory.CreateDbContextAsync())
+        {
+            var system = await seed.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+            oldStaffUrl = system.StaffApplicationUrl;
+            system.StaffApplicationUrl = "https://staff.example.org/staff/";
+            var staff = await seed.StaffUsers.SingleAsync(item => item.Id == admin.Id);
+            staff.WeeklyActionSummaryEnabled = true;
+            staff.WeeklyActionSummaryEmail = $"weekly-auth-{mutation}@example.org";
+            var format = await seed.MaterialFormats.SingleAsync(item => item.Code == "book");
+            var now = timeProvider!.GetUtcNow().UtcDateTime;
+            var request = new TitleRequest
+            {
+                LibraryOrganizationId = scope,
+                Barcode = $"s5-weekly-auth-{Guid.NewGuid():N}"[..40],
+                Title = $"Weekly authorization {mutation}",
+                MaterialFormatId = format.Id,
+                Status = "suggestion",
+                CreatedUtc = now,
+                UpdatedUtc = now
+            };
+            seed.TitleRequests.Add(request);
+            await seed.SaveChangesAsync();
+            requestId = request.Id;
+        }
+
+        try
+        {
+            using var client = factory.CreateClient();
+            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+            client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+            using var response = await client.PostAsync(
+                $"/api/asap/staff/workflow/weekly-summary/run-now?organizationId={scope}&force=false",
+                content: null);
+            Assert.AreEqual(System.Net.HttpStatusCode.Accepted, response.StatusCode,
+                await response.Content.ReadAsStringAsync());
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            var jobId = body.RootElement.GetProperty("jobId").GetString();
+            Assert.IsFalse(string.IsNullOrWhiteSpace(jobId));
+            jobIds.Add(jobId!);
+
+            var job = ReadEnqueuedHangfireJob(storage, jobId!);
+            Assert.AreEqual(nameof(BackgroundWorkflowJobs.SendManualWeeklyStaffSummaryAsync), job.Method.Name);
+            var evidence = job.Args[0] as StaffJobEvidence;
+            Assert.IsNotNull(evidence);
+            Assert.AreEqual(scope, Convert.ToInt32(job.Args[1]));
+
+            await MutateManualActorAsync(admin.Id, mutation);
+            var result = await factory.Services.GetRequiredService<BackgroundWorkflowJobs>()
+                .SendManualWeeklyStaffSummaryAsync(evidence!, scope, CancellationToken.None);
+            Assert.AreEqual("staff_scope_forbidden", result.Code);
+            Assert.IsNull(result.ManualRunId);
+
+            await using var verify = await contextFactory.CreateDbContextAsync();
+            Assert.AreEqual(0, await verify.EmailOutbox.CountAsync(item =>
+                item.BusinessKey != null && item.BusinessKey.StartsWith(businessKeyPrefix)));
+        }
+        finally
+        {
+            DeleteHangfireJobs(jobs, jobIds);
+            await ExecuteNonQueryAsync(
+                "DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @prefix;",
+                ("@prefix", businessKeyPrefix + "%"));
+            await ExecuteNonQueryAsync(
+                "DELETE FROM [asap].[TitleRequest] WHERE [Id] = @id;",
+                ("@id", requestId));
+            await using var restore = await contextFactory.CreateDbContextAsync();
+            var system = await restore.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+            system.StaffApplicationUrl = oldStaffUrl;
+            await restore.SaveChangesAsync();
             await DeactivateCorrectiveStaffAsync(admin.Id);
         }
     }
@@ -340,6 +437,85 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    [DataRow("rebind")]
+    public async Task ManualWeeklySummaryPassesEvidenceIntoLockedActorAuthorization(string mutation)
+    {
+        const int scope = 99006;
+        var superAdmin = await ReadConfiguredSuperAdminAsync();
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await EnsureSlice5IsolatedLibraryAsync(contextFactory, scope);
+        var initiatingAdmin = await CreateCorrectiveStaffAsync(superAdmin, "admin", scope);
+        var recipientAdmin = await CreateCorrectiveStaffAsync(superAdmin, "admin", scope);
+        var actor = await ReadCorrectiveStaffAsync(initiatingAdmin);
+        var sender = new MutatingWeeklyActorEmailSender(initiatingAdmin.Id, mutation);
+        await using var scoped = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IEmailSender>();
+                services.AddSingleton<IEmailSender>(sender);
+        }));
+        var scopedContextFactory = scoped.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var requestId = 0L;
+        string? oldStaffUrl = null;
+        var businessPrefix = $"weekly-summary:{recipientAdmin.Id}:";
+
+        await using (var seed = await scopedContextFactory.CreateDbContextAsync())
+        {
+            var system = await seed.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+            oldStaffUrl = system.StaffApplicationUrl;
+            system.StaffApplicationUrl = "https://staff.example.org/staff/";
+            var staff = await seed.StaffUsers.SingleAsync(item => item.Id == recipientAdmin.Id);
+            staff.WeeklyActionSummaryEnabled = true;
+            staff.WeeklyActionSummaryEmail = "weekly-locked-actor@example.org";
+            var format = await seed.MaterialFormats.SingleAsync(item => item.Code == "book");
+            var now = timeProvider!.GetUtcNow().UtcDateTime;
+            var request = new TitleRequest
+            {
+                LibraryOrganizationId = scope,
+                Barcode = $"s5-weekly-locked-actor-{Guid.NewGuid():N}"[..40],
+                Title = "Weekly locked actor authorization",
+                MaterialFormatId = format.Id,
+                Status = "suggestion",
+                CreatedUtc = now,
+                UpdatedUtc = now
+            };
+            seed.TitleRequests.Add(request);
+            await seed.SaveChangesAsync();
+            requestId = request.Id;
+        }
+
+        try
+        {
+            var result = await scoped.Services.GetRequiredService<BackgroundWorkflowJobs>()
+                .SendManualWeeklyStaffSummaryAsync(
+                    new StaffJobEvidence(actor.Id, actor.EntraTenantId, actor.EntraObjectId),
+                    scope,
+                    CancellationToken.None);
+            Assert.AreEqual("completed", result.Code);
+            Assert.AreEqual(1, sender.MutationCount);
+
+            await using var verify = await scopedContextFactory.CreateDbContextAsync();
+            Assert.AreEqual(0, await verify.EmailOutbox.CountAsync(item =>
+                item.BusinessKey != null && item.BusinessKey.StartsWith(businessPrefix)));
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync(
+                "DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @prefix;",
+                ("@prefix", businessPrefix + "%"));
+            await ExecuteNonQueryAsync(
+                "DELETE FROM [asap].[TitleRequest] WHERE [Id] = @id;",
+                ("@id", requestId));
+            await using var restore = await scopedContextFactory.CreateDbContextAsync();
+            var system = await restore.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+            system.StaffApplicationUrl = oldStaffUrl;
+            await restore.SaveChangesAsync();
+            await DeactivateCorrectiveStaffAsync(initiatingAdmin.Id);
+            await DeactivateCorrectiveStaffAsync(recipientAdmin.Id);
+        }
+    }
+
+    [TestMethod]
     public async Task ForcedWeeklySummaryUsesOpenActionCountsSamplesLinksAndDurableManualId()
     {
         var superAdmin = await ReadConfiguredSuperAdminAsync();
@@ -459,6 +635,28 @@ public sealed partial class PatronJourneyTests
                 await ExecuteNonQueryAsync(
                     "UPDATE [asap].[StaffUser] SET [WeeklyActionSummaryEmail] = @address WHERE [Id] = @id;",
                     ("@address", currentAddress), ("@id", staffUserId));
+                MutationCount++;
+            }
+            return EmailTransportReadiness.Configured;
+        }
+
+        public Task<EmailSendResult> SendAsync(EmailEnvelope envelope, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("Intent creation must not perform delivery.");
+    }
+
+    private sealed class MutatingWeeklyActorEmailSender(long staffUserId, string mutation) : IEmailSender
+    {
+        private int mutationComplete;
+
+        public int MutationCount { get; private set; }
+
+        public async Task<EmailTransportReadiness> CheckReadinessAsync(
+            int organizationId,
+            CancellationToken cancellationToken)
+        {
+            if (Interlocked.Exchange(ref mutationComplete, 1) == 0)
+            {
+                await MutateManualActorAsync(staffUserId, mutation);
                 MutationCount++;
             }
             return EmailTransportReadiness.Configured;

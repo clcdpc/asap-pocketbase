@@ -2,12 +2,17 @@
 
 ## Checkpoint
 
-Recorded 2026-09-14 after the Slice 5 review-fix validation.
-**Slice 5 remains not accepted.** Terra Pass 1 found exactly one substantive
-P1 issue: the weekly-summary Run Now endpoint ignored `force=false` and always
-queued a forced summary with a new `ManualRunId`. The endpoint fix is complete;
-focused Terra re-review is still required. Slice 6 has not started. PR #264
-remains draft. Any CI triggered by this WIP candidate is diagnostic only.
+Recorded 2026-09-15 after the second Slice 5 review-fix validation.
+**Slice 5 remains not accepted.** The review sequence is: Terra Pass 1 found
+that weekly-summary Run Now ignored `force=false` and always queued a forced
+summary with a new `ManualRunId`; the first Luna fix resolved that dispatch
+defect; fresh focused Terra re-review confirmed it resolved but found that the
+ordinary manual job no longer retained initiating-actor evidence for
+execution-time authorization; this candidate adds a purpose-specific manual
+ordinary entry point that retains that evidence and passes it into the service.
+Focused Terra re-review of this candidate is still required. Slice 6 has not
+started. PR #264 remains draft. Any CI triggered by this WIP candidate is
+diagnostic only.
 
 - Repository/branch: `clcdpc/asap-pocketbase`, `codex/csharp-port`.
 - Resume starting SHA: `7a3919994d182ec1de3552b2861e657817933f69`.
@@ -21,6 +26,24 @@ remains draft. Any CI triggered by this WIP candidate is diagnostic only.
   acceptance was performed.
 
 ## Review-Fix Validation
+
+- Current fix candidate starts from `cd47a8d6f0501759d10401d28b0a6c0e32c2ca74`.
+- `force=false` now queues `SendManualWeeklyStaffSummaryAsync` with the
+  initiating `StaffJobEvidence`, no `ManualRunId`, and the requested scope;
+  that job revalidates the actor before invoking the ordinary summary service,
+  which also receives the evidence for its locked current-state check.
+- Focused weekly-summary coverage: 10/10 passed, 0 failed, 0 skipped.
+  Shared manual-job authorization coverage: 4/4 passed, 0 failed, 0 skipped.
+- Complete .NET/real-SQL suite: 302/302 passed, 0 failed, 0 skipped. Clean
+  Release build: 0 warnings, 0 errors. Node/frontend suite: 173/173 test files
+  passed. Receipts and detailed logs are retained under
+  `.artifacts/slice-05-manual-weekly-auth-fix-20260915/`.
+- The original dispatch finding is resolved and the execution-time
+  authorization regression is fixed locally. Focused Terra re-review of this
+  candidate is still required; Slice 5 remains not accepted and Slice 6 has
+  not started.
+
+## Previous Review-Fix Validation
 
 - Starting review candidate: `eb74e00477f28525359fbd851026199a733b4413`.
 - Ordinary `force=false` Run Now now queues the existing ordinary weekly-summary

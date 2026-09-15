@@ -332,7 +332,7 @@ public static class AdministrationEndpoints
         if (!force)
         {
             var ordinaryJobId = jobs.Enqueue<BackgroundWorkflowJobs>(job =>
-                job.SendWeeklyStaffSummaryAsync(null, effectiveScope, CancellationToken.None));
+                job.SendManualWeeklyStaffSummaryAsync(evidence, effectiveScope, CancellationToken.None));
             return Results.Accepted(value: new
             {
                 code = "queued",

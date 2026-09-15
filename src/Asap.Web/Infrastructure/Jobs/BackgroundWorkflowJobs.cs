@@ -60,6 +60,26 @@ public sealed class BackgroundWorkflowJobs(
     [AutomaticRetry(Attempts = 0)]
     [DisableConcurrentExecution(timeoutInSeconds: 1800)]
     [Queue("asap-admin")]
+    public async Task<WorkflowRunResult> SendManualWeeklyStaffSummaryAsync(
+        StaffJobEvidence evidence,
+        int? scopeOrganizationId,
+        CancellationToken cancellationToken)
+    {
+        if (!await IsAuthorizedAsync(evidence, scopeOrganizationId, cancellationToken))
+        {
+            return new WorkflowRunResult("staff_scope_forbidden");
+        }
+
+        return await workflow.SendWeeklyStaffSummaryAsync(
+            manualRunId: null,
+            scopeOrganizationId,
+            cancellationToken,
+            new StaffIdentityEvidence(evidence.StaffUserId, evidence.TenantId, evidence.ObjectId));
+    }
+
+    [AutomaticRetry(Attempts = 0)]
+    [DisableConcurrentExecution(timeoutInSeconds: 1800)]
+    [Queue("asap-admin")]
     public async Task<WorkflowRunResult> SendForcedWeeklyStaffSummaryAsync(
         StaffJobEvidence evidence,
         int? scopeOrganizationId,

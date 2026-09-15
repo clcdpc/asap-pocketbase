@@ -37,6 +37,29 @@ fixes use a temporary branch from the deployed source, immediate equivalent
 
 ## Execution And Evidence
 
+### Slice 5 Manual Weekly Summary Authorization Fix - 2026-09-15
+
+The second review-fix candidate starts from
+`cd47a8d6f0501759d10401d28b0a6c0e32c2ca74`. Terra Pass 1 found the original
+weekly-summary Run Now `force=false` dispatch defect; the first Luna fix
+resolved it; fresh focused Terra re-review confirmed that resolution but found
+that ordinary manual execution no longer retained initiating-actor evidence
+for execution-time authorization. This candidate adds a purpose-specific
+manual ordinary job entry point that carries `StaffJobEvidence`, performs the
+same current authorization check as the forced path, and passes the evidence
+into the service's locked outbox-creation check. Scheduled ordinary execution
+and forced execution remain unchanged in their respective semantics.
+
+Focused weekly-summary tests pass 10/10 with zero skips; shared manual-job
+authorization tests pass 4/4 with zero skips. The complete .NET/real-SQL suite
+passes 302/302 with zero skips, the clean Release build has 0 warnings/errors,
+and the normal Node/frontend suite passes 173/173 test files. Detailed logs and
+receipts are retained under
+`.artifacts/slice-05-manual-weekly-auth-fix-20260915/`.
+
+Focused Terra re-review of this new candidate is still required. Slice 5
+remains not accepted, Slice 6 has not started, and PR #264 remains draft.
+
 ### Slice 5 Review Candidate - 2026-09-14
 
 The interrupted Slice 5 work resumed from
