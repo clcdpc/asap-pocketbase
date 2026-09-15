@@ -5,6 +5,34 @@ Server 2022, and IIS under the authoritative `docs/dotnet-port/` pack. This
 single final draft PR will deliver the complete port as reviewed vertical
 slices. It is not eligible for merge or production deployment yet.
 
+## Slice 6 Acceptance Pending Exact-SHA CI - 2026-09-15
+
+Slice 6 Analytics passed implementation validation, full independent Terra
+review and one Luna fix/Terra focused re-review cycle. No substantive finding
+remains. The exact reviewed implementation is
+`4f68b2ca849630f5399022432d57d137f4638d8e`.
+
+[PR #265](https://github.com/clcdpc/asap-pocketbase/pull/265) is merged into
+`codex/csharp-port` at `80f5c291373737e225e38d5e6d6cae6f79a0b70d`;
+the merge tree exactly matches the reviewed implementation. The accepted
+prior product milestone is Slice 5 at
+`36727414d02cbe34ba13cd3f6f1bb57980b83a6f`, and the Slice 6 policy base is
+`5493efee9ce140d6eaa83da2d178e2004fea7c2c`.
+
+Complete local evidence includes Release 0 warnings/errors, 305/305
+.NET/real-SQL tests with 0 failures/skips, 174 frontend scripts, 20
+desktop/mobile browser states, 13 published-browser cases, zero serious or
+critical axe findings, native export/import/reconciliation and Web/native
+publication. The aggregate correction has renewed SQL, browser, Release and
+Web artifact linkage evidence. See the [review and acceptance record](slice-06-review.md)
+for the exact candidates, finding disposition and preserved evidence.
+
+This documentation-only acceptance/status commit is the candidate accepted
+milestone. Slice 6 acceptance remains pending its own successful exact-SHA
+remote CI. PR metadata records that milestone SHA and CI result without a
+further repository commit. Slice 7 has not started; PR #264 remains draft.
+Earlier dated entries below are historical checkpoints.
+
 ## Thin Autonomous Supervisor Policy - 2026-09-15
 
 Slice 5 remains accepted at `36727414d02cbe34ba13cd3f6f1bb57980b83a6f`.

@@ -1,5 +1,28 @@
 # Slice 6 Thin Autonomous Supervisor Handoff
 
+## Acceptance Status - 2026-09-15
+
+Full Terra review and cycle 1 focused Terra re-review are complete. S6-P2-1
+is resolved, with no remaining substantive finding or material uncertainty.
+The exact reviewed implementation is
+`4f68b2ca849630f5399022432d57d137f4638d8e`; its candidate CI run
+`34974910905` succeeded.
+
+[PR #265](https://github.com/clcdpc/asap-pocketbase/pull/265) is merged into
+`codex/csharp-port` at `80f5c291373737e225e38d5e6d6cae6f79a0b70d`.
+The merge parents are policy base
+`5493efee9ce140d6eaa83da2d178e2004fea7c2c` and the reviewed implementation;
+its tree exactly matches that implementation. Slice 5's accepted product
+milestone remains `36727414d02cbe34ba13cd3f6f1bb57980b83a6f`.
+
+The [review and acceptance record](slice-06-review.md) records the complete
+validation receipts and bounded fix. The documentation-only acceptance/status
+commit following integration is the candidate accepted milestone. Acceptance
+is pending successful remote CI on that exact SHA; the final SHA/run/result
+will be recorded in PR metadata without another repository commit.
+Slice 7 has not started and PR #264 remains draft. The sections below retain
+the implementation and bootstrap checkpoints as history.
+
 ## Implementation Status - 2026-09-15, Fix/Re-review Cycle 1
 
 Full Terra review confirmed S6-P2-1. For an in-range first literal
@@ -151,11 +174,11 @@ authorize later-slice progression.
 
 ## Next Action
 
-Run the full independent Terra review for the pushed PR #265 candidate. Terra
-has not run; this handoff does not accept Slice 6, merge either draft PR, or
-authorize Slice 7. Any later acceptance must preserve the exact candidate SHA,
-run the governing exact-SHA CI, and follow document 10's review/acceptance
-gates.
+The supervisor must push this documentation-only acceptance/status commit,
+wait for its exact-SHA `.NET baseline` CI, and record success or a hard stop in
+PR metadata. Candidate or merge CI cannot substitute. On success, record Slice
+6 accepted and stop; no Slice 7 continuation is authorized. A substantive CI
+failure leaves Slice 6 unaccepted under document 10.
 
 For a later documentation-only acceptance commit, run from the repository root:
 
