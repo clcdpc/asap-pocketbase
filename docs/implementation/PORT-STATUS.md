@@ -49,12 +49,27 @@ QueueProgress migration, nine finite fair scans, timeout and fulfillment
 boundaries, actor/recipient concurrency protection, email operations, and the
 scoped admin UI journeys.
 
-Slice 5 status is **implemented / ready for independent review**. Terra review
-has not started, Slice 5 is not accepted, and Slice 6 has not started. The
-review-candidate SHA is recorded in PR #264's current-state section after the
-WIP commit is pushed. CI for this WIP candidate is diagnostic only. PR #264
-remains draft; no merge, tag, deployment, rehearsal, cutover, or accepted
-milestone was created.
+Slice 5 status is **review-fix candidate; focused Terra re-review pending**.
+Terra Pass 1 found exactly one substantive P1 issue: the weekly-summary Run Now
+endpoint ignored `force=false` and always dispatched the forced path with a new
+`ManualRunId`. The endpoint now binds `force`, dispatches the ordinary path with
+no manual run ID when false, and preserves the existing forced path when true.
+Endpoint dispatch tests pass 2/2, the weekly-route ordinary-staff authorization
+regression passes 1/1, directly affected weekly-summary tests pass 5/5, and the
+complete .NET/real-SQL suite passes 297/297 with zero skips. The clean Release
+solution build has 0 warnings/errors. Focused Terra re-review is still required;
+Slice 5 remains not accepted and Slice 6 has not started. CI for this WIP
+candidate is diagnostic only. PR #264 remains draft; no merge, tag, deployment,
+rehearsal, cutover, or accepted milestone was created.
+
+### Slice 5 Review-Fix Checkpoint - 2026-09-14
+
+The starting review candidate was
+`eb74e00477f28525359fbd851026199a733b4413`. The confirmed Terra Pass 1 finding
+is fixed locally. The focused Terra re-review has not been performed and remains
+required. The focused/full .NET receipt is retained at
+`.artifacts/slice-05-run-now-fix-20260914/full-dotnet-real-sql.log`. Slice 5
+remains not accepted; Slice 6 has not started.
 
 ### Slice 5 Interrupted WIP Checkpoint - 2026-09-14
 

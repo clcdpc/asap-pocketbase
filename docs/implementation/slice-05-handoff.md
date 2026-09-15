@@ -2,10 +2,12 @@
 
 ## Checkpoint
 
-Recorded 2026-09-14 after resuming the interrupted Slice 5 implementation.
-**Slice 5 is implemented / ready for independent review.** Terra review has
-not started. Slice 5 is not accepted. Slice 6 has not started. PR #264 remains
-draft. Any CI triggered by this WIP candidate is diagnostic only.
+Recorded 2026-09-14 after the Slice 5 review-fix validation.
+**Slice 5 remains not accepted.** Terra Pass 1 found exactly one substantive
+P1 issue: the weekly-summary Run Now endpoint ignored `force=false` and always
+queued a forced summary with a new `ManualRunId`. The endpoint fix is complete;
+focused Terra re-review is still required. Slice 6 has not started. PR #264
+remains draft. Any CI triggered by this WIP candidate is diagnostic only.
 
 - Repository/branch: `clcdpc/asap-pocketbase`, `codex/csharp-port`.
 - Resume starting SHA: `7a3919994d182ec1de3552b2861e657817933f69`.
@@ -17,6 +19,20 @@ draft. Any CI triggered by this WIP candidate is diagnostic only.
   still unverified.
 - No merge, tag, deployment, rehearsal, cutover, or final milestone
   acceptance was performed.
+
+## Review-Fix Validation
+
+- Starting review candidate: `eb74e00477f28525359fbd851026199a733b4413`.
+- Ordinary `force=false` Run Now now queues the existing ordinary weekly-summary
+  path with no manual run ID; explicit `force=true` retains one generated ID in
+  the enqueued forced invocation.
+- Endpoint dispatch tests: 2/2 passed; weekly-route ordinary-staff authorization
+  regression: 1/1 passed. Directly affected weekly-summary tests: 5/5 passed.
+- Complete .NET/real-SQL suite: 297/297 passed, 0 failed, 0 skipped. Clean
+  Release solution build: 0 warnings, 0 errors. Focused/full receipt:
+  `.artifacts/slice-05-run-now-fix-20260914/full-dotnet-real-sql.log`.
+- The finding is fixed locally. Focused Terra re-review has not been performed;
+  Slice 5 remains not accepted and Slice 6 has not started.
 
 ## Completed Slice 5 Work
 
@@ -98,6 +114,6 @@ requirement was added.
 
 ## Next Step
 
-The next authorized activity is independent review. This handoff intentionally
-does not start Terra review, Slice 5 acceptance, Slice 6, or any release,
-deployment, rehearsal, cutover, merge, or tag operation.
+The next authorized activity is focused Terra re-review of this fix candidate.
+This handoff intentionally does not perform re-review, Slice 5 acceptance,
+Slice 6, or any release, deployment, rehearsal, cutover, merge, or tag operation.

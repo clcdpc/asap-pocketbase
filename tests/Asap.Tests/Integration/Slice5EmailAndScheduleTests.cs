@@ -58,6 +58,13 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(System.Net.HttpStatusCode.Forbidden, response.StatusCode);
         using var body = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.AreEqual("staff_scope_forbidden", body.RootElement.GetProperty("code").GetString());
+
+        using var weeklyResponse = await client.PostAsync(
+            "/api/asap/staff/workflow/weekly-summary/run-now?organizationId=2&force=false",
+            content: null);
+        Assert.AreEqual(System.Net.HttpStatusCode.Forbidden, weeklyResponse.StatusCode);
+        using var weeklyBody = System.Text.Json.JsonDocument.Parse(await weeklyResponse.Content.ReadAsStringAsync());
+        Assert.AreEqual("staff_scope_forbidden", weeklyBody.RootElement.GetProperty("code").GetString());
         await DeactivateCorrectiveStaffAsync(staff.Id);
     }
 

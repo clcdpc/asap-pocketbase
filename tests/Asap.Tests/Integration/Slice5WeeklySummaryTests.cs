@@ -6,11 +6,183 @@ using Asap.Web.Features.Staff;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using System.Text.Json;
+using Hangfire;
+using Hangfire.Common;
+using Hangfire.States;
 
 namespace Asap.Tests.Integration;
 
 public sealed partial class PatronJourneyTests
 {
+    [TestMethod]
+    public async Task WeeklySummaryRunNowFalseQueuesOrdinaryInvocationWithoutManualRunIdAndPreservesDedupe()
+    {
+        var superAdmin = await ReadConfiguredSuperAdminAsync();
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var storage = factory.Services.GetRequiredService<JobStorage>();
+        var jobs = factory.Services.GetRequiredService<IBackgroundJobClient>();
+        var scope = Slice5IsolatedLibraryId;
+        await EnsureSlice5IsolatedLibraryAsync(contextFactory, scope);
+        var admin = await CreateCorrectiveStaffAsync(superAdmin, "admin", scope);
+        var actor = await ReadCorrectiveStaffAsync(admin);
+        var jobIds = new List<string>();
+        long requestId = 0;
+        string? oldStaffUrl = null;
+
+        await using (var seed = await contextFactory.CreateDbContextAsync())
+        {
+            var system = await seed.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+            oldStaffUrl = system.StaffApplicationUrl;
+            system.StaffApplicationUrl = "https://staff.example.org/staff/";
+            var staff = await seed.StaffUsers.SingleAsync(item => item.Id == admin.Id);
+            staff.WeeklyActionSummaryEnabled = true;
+            staff.WeeklyActionSummaryEmail = "weekly-endpoint-normal@example.org";
+            var format = await seed.MaterialFormats.SingleAsync(item => item.Code == "book");
+            var now = timeProvider!.GetUtcNow().UtcDateTime;
+            var request = new TitleRequest
+            {
+                LibraryOrganizationId = scope,
+                Barcode = $"s5-endpoint-normal-{Guid.NewGuid():N}"[..40],
+                Title = "Endpoint ordinary weekly summary",
+                MaterialFormatId = format.Id,
+                Status = "suggestion",
+                CreatedUtc = now,
+                UpdatedUtc = now
+            };
+            seed.TitleRequests.Add(request);
+            await seed.SaveChangesAsync();
+            requestId = request.Id;
+        }
+
+        try
+        {
+            using var client = factory.CreateClient();
+            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+            client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+
+            using (var forged = await client.PostAsync(
+                       $"/api/asap/staff/workflow/weekly-summary/run-now?organizationId={scope + 1}&force=false",
+                       content: null))
+            {
+                Assert.AreEqual(System.Net.HttpStatusCode.Forbidden, forged.StatusCode);
+                using var body = JsonDocument.Parse(await forged.Content.ReadAsStringAsync());
+                Assert.AreEqual("staff_scope_forbidden", body.RootElement.GetProperty("code").GetString());
+            }
+
+            for (var index = 0; index < 2; index++)
+            {
+                using var response = await client.PostAsync(
+                    $"/api/asap/staff/workflow/weekly-summary/run-now?organizationId={scope}&force=false",
+                    content: null);
+                Assert.AreEqual(System.Net.HttpStatusCode.Accepted, response.StatusCode,
+                    await response.Content.ReadAsStringAsync());
+                using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                Assert.AreEqual("queued", body.RootElement.GetProperty("code").GetString());
+                Assert.AreEqual(scope, body.RootElement.GetProperty("organizationId").GetInt32());
+                Assert.IsFalse(body.RootElement.TryGetProperty("manualRunId", out _));
+                var jobId = body.RootElement.GetProperty("jobId").GetString();
+                Assert.IsFalse(string.IsNullOrWhiteSpace(jobId));
+                jobIds.Add(jobId!);
+
+                var job = ReadEnqueuedHangfireJob(storage, jobId!);
+                Assert.AreEqual(typeof(BackgroundWorkflowJobs), job.Type);
+                Assert.AreEqual(nameof(BackgroundWorkflowJobs.SendWeeklyStaffSummaryAsync), job.Method.Name);
+                Assert.AreEqual(3, job.Args.Count);
+                Assert.IsNull(job.Args[0]);
+                Assert.AreEqual(scope, Convert.ToInt32(job.Args[1]));
+            }
+
+            var queuedJobs = jobIds.Select(jobId => ReadEnqueuedHangfireJob(storage, jobId)).ToArray();
+            var workflowJobs = factory.Services.GetRequiredService<BackgroundWorkflowJobs>();
+            foreach (var job in queuedJobs)
+            {
+                var result = await workflowJobs.SendWeeklyStaffSummaryAsync(
+                    job.Args[0] as string,
+                    Convert.ToInt32(job.Args[1]),
+                    CancellationToken.None);
+                Assert.AreEqual("completed", result.Code);
+                Assert.IsNull(result.ManualRunId);
+            }
+
+            await using var verify = await contextFactory.CreateDbContextAsync();
+            var normalPrefix = $"weekly-summary:{admin.Id}:";
+            var ordinaryRows = await verify.EmailOutbox.AsNoTracking()
+                .Where(item => item.BusinessKey != null && item.BusinessKey.StartsWith(normalPrefix))
+                .ToListAsync();
+            Assert.AreEqual(1, ordinaryRows.Count);
+            Assert.IsTrue(ordinaryRows.All(item => !item.BusinessKey!.StartsWith("weekly-summary-force:", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            DeleteHangfireJobs(jobs, jobIds);
+            await using var cleanup = await contextFactory.CreateDbContextAsync();
+            var normalPrefix = $"weekly-summary:{admin.Id}:";
+            var outbox = await cleanup.EmailOutbox
+                .Where(item => item.BusinessKey != null && item.BusinessKey.StartsWith(normalPrefix))
+                .ToListAsync();
+            cleanup.EmailOutbox.RemoveRange(outbox);
+            var request = await cleanup.TitleRequests.SingleOrDefaultAsync(item => item.Id == requestId);
+            if (request is not null) cleanup.TitleRequests.Remove(request);
+            var system = await cleanup.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+            system.StaffApplicationUrl = oldStaffUrl;
+            await cleanup.SaveChangesAsync();
+            await DeactivateCorrectiveStaffAsync(admin.Id);
+        }
+    }
+
+    [TestMethod]
+    public async Task WeeklySummaryRunNowTrueQueuesForcedInvocationWithDistinctStableManualRunIds()
+    {
+        var superAdmin = await ReadConfiguredSuperAdminAsync();
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var storage = factory.Services.GetRequiredService<JobStorage>();
+        var jobs = factory.Services.GetRequiredService<IBackgroundJobClient>();
+        var scope = Slice5IsolatedLibraryId;
+        await EnsureSlice5IsolatedLibraryAsync(contextFactory, scope);
+        var admin = await CreateCorrectiveStaffAsync(superAdmin, "admin", scope);
+        var actor = await ReadCorrectiveStaffAsync(admin);
+        var jobIds = new List<string>();
+        var manualRunIds = new List<string>();
+
+        try
+        {
+            using var client = factory.CreateClient();
+            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+            client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+
+            for (var index = 0; index < 2; index++)
+            {
+                using var response = await client.PostAsync(
+                    $"/api/asap/staff/workflow/weekly-summary/run-now?organizationId={scope}&force=true",
+                    content: null);
+                Assert.AreEqual(System.Net.HttpStatusCode.Accepted, response.StatusCode,
+                    await response.Content.ReadAsStringAsync());
+                using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                var manualRunId = body.RootElement.GetProperty("manualRunId").GetString();
+                Assert.IsFalse(string.IsNullOrWhiteSpace(manualRunId));
+                var jobId = body.RootElement.GetProperty("jobId").GetString();
+                Assert.IsFalse(string.IsNullOrWhiteSpace(jobId));
+                jobIds.Add(jobId!);
+                manualRunIds.Add(manualRunId!);
+
+                var job = ReadEnqueuedHangfireJob(storage, jobId!);
+                Assert.AreEqual(typeof(BackgroundWorkflowJobs), job.Type);
+                Assert.AreEqual(nameof(BackgroundWorkflowJobs.SendForcedWeeklyStaffSummaryAsync), job.Method.Name);
+                Assert.AreEqual(4, job.Args.Count);
+                Assert.AreEqual(manualRunId, job.Args[2] as string);
+                Assert.AreEqual(manualRunId, ReadEnqueuedHangfireJob(storage, jobId!).Args[2] as string);
+            }
+
+            Assert.AreNotEqual(manualRunIds[0], manualRunIds[1]);
+        }
+        finally
+        {
+            DeleteHangfireJobs(jobs, jobIds);
+            await DeactivateCorrectiveStaffAsync(admin.Id);
+        }
+    }
+
     [TestMethod]
     public async Task NormalWeeklySummaryUsesBusinessPeriodAndQueuesOnlyOnceForCurrentRecipient()
     {
@@ -294,5 +466,23 @@ public sealed partial class PatronJourneyTests
 
         public Task<EmailSendResult> SendAsync(EmailEnvelope envelope, CancellationToken cancellationToken) =>
             throw new InvalidOperationException("Intent creation must not perform delivery.");
+    }
+
+    private static Job ReadEnqueuedHangfireJob(JobStorage storage, string jobId)
+    {
+        using var connection = storage.GetConnection();
+        var data = connection.GetJobData(jobId);
+        Assert.IsNotNull(data);
+        data!.EnsureLoaded();
+        Assert.IsNotNull(data.Job);
+        return data.Job!;
+    }
+
+    private static void DeleteHangfireJobs(IBackgroundJobClient jobs, IEnumerable<string> jobIds)
+    {
+        foreach (var jobId in jobIds)
+        {
+            jobs.ChangeState(jobId, new DeletedState());
+        }
     }
 }

@@ -316,7 +316,8 @@ public static class AdministrationEndpoints
     private static IResult RunWeeklySummaryNowAsync(
         HttpContext context,
         int? organizationId,
-        IBackgroundJobClient jobs)
+        IBackgroundJobClient jobs,
+        bool force = false)
     {
         var actor = StaffAuthenticationEndpoints.RequireCurrentStaff(context);
         if (actor.Role is not ("admin" or "super_admin") ||
@@ -327,8 +328,20 @@ public static class AdministrationEndpoints
         }
 
         var effectiveScope = actor.Role == "super_admin" ? organizationId : actor.OrganizationId;
-        var manualRunId = Guid.NewGuid().ToString("N");
         var evidence = new StaffJobEvidence(actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+        if (!force)
+        {
+            var ordinaryJobId = jobs.Enqueue<BackgroundWorkflowJobs>(job =>
+                job.SendWeeklyStaffSummaryAsync(null, effectiveScope, CancellationToken.None));
+            return Results.Accepted(value: new
+            {
+                code = "queued",
+                jobId = ordinaryJobId,
+                organizationId = effectiveScope ?? 1
+            });
+        }
+
+        var manualRunId = Guid.NewGuid().ToString("N");
         var jobId = jobs.Enqueue<BackgroundWorkflowJobs>(job =>
             job.SendForcedWeeklyStaffSummaryAsync(evidence, effectiveScope, manualRunId, CancellationToken.None));
         return Results.Accepted(value: new
