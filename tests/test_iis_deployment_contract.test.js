@@ -23,6 +23,7 @@ assert.ok(workflow.includes('dotnet publish src/Asap.Migration/Asap.Migration.cs
 const deploymentJobStart = workflow.indexOf('  deploy-test-iis:');
 assert.ok(deploymentJobStart > 0, 'the deployment job should be present');
 const hostedJobs = workflow.slice(0, deploymentJobStart);
+const deploymentJob = workflow.slice(deploymentJobStart);
 assert.ok(!hostedJobs.includes('self-hosted'), 'hosted build/test/package jobs must not use self-hosted labels');
 assert.ok(!hostedJobs.includes('ASAP_TEST_DEPLOYMENT_ENABLED'), 'hosted build/test/package jobs must not depend on activation');
 assert.ok(
@@ -37,6 +38,19 @@ assert.ok(
 );
 assert.ok(!workflow.slice(deploymentJobStart).includes('actions/checkout'), 'the IIS job must not check out the repository');
 assert.ok(workflow.includes('actions/download-artifact@v4'), 'the IIS job must consume the hosted artifact');
+assert.ok(workflow.includes('zip_sha256: ${{ steps.package.outputs.zip_sha256 }}'), 'the hosted package job must expose the final ZIP digest as a job output');
+assert.ok(workflow.includes('id: package'), 'the ZIP packaging step must own the digest output');
+assert.ok(workflow.includes('"zip_sha256=$zipHash" >> $env:GITHUB_OUTPUT'), 'the package step must emit the computed final ZIP digest');
+assert.ok(
+  deploymentJob.includes('EXPECTED_ZIP_SHA256: ${{ needs.build-test-package.outputs.zip_sha256 }}'),
+  'the IIS job must receive the hosted package digest through its environment'
+);
+assert.ok(!deploymentJob.includes('$zipPath.sha256'), 'the IIS job must not trust a digest sidecar downloaded with the artifact');
+const deploymentHashCheck = deploymentJob.indexOf('$actualHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()');
+const deploymentExtraction = deploymentJob.indexOf('Expand-Archive -LiteralPath $zipPath -DestinationPath $bootstrapRoot -Force');
+assert.ok(deploymentHashCheck >= 0, 'the IIS job must hash the downloaded ZIP inline');
+assert.ok(deploymentJob.includes('throw "Deployment ZIP SHA-256 mismatch: expected $expectedHash, got $actualHash."'), 'a mismatched hosted digest must reject deployment');
+assert.ok(deploymentHashCheck < deploymentExtraction, 'the IIS job must verify the ZIP before extracting artifact code');
 
 for (const token of [
   'Get-FileHash',

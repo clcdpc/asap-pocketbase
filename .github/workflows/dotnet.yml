@@ -22,6 +22,7 @@ jobs:
     outputs:
       artifact_name: ${{ steps.identity.outputs.artifact_name }}
       deployment_label: ${{ steps.identity.outputs.deployment_label }}
+      zip_sha256: ${{ steps.package.outputs.zip_sha256 }}
 
     steps:
       - uses: actions/checkout@v4
@@ -136,6 +137,7 @@ jobs:
           "artifact_name=$artifactName" >> $env:GITHUB_OUTPUT
 
       - name: Create exact test-IIS deployment ZIP
+        id: package
         shell: pwsh
         env:
           DEPLOYMENT_LABEL: ${{ steps.identity.outputs.deployment_label }}
@@ -207,6 +209,7 @@ jobs:
           Compress-Archive -Path (Join-Path $packageRoot '*') -DestinationPath $zipPath -CompressionLevel Optimal
           $zipHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
           [IO.File]::WriteAllText($digestPath, $zipHash, [Text.UTF8Encoding]::new($false))
+          "zip_sha256=$zipHash" >> $env:GITHUB_OUTPUT
           Write-Host "Created $zipPath ($zipHash)"
 
       - name: Validate test-IIS package without host mutation
@@ -260,13 +263,22 @@ jobs:
       - name: Deploy exact tested artifact
         shell: pwsh
         env:
+          EXPECTED_ZIP_SHA256: ${{ needs.build-test-package.outputs.zip_sha256 }}
           EXPECTED_COMMIT_SHA: ${{ github.sha }}
           EXPECTED_DEPLOYMENT_LABEL: ${{ needs.build-test-package.outputs.deployment_label }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $zipPath = (Resolve-Path .artifacts/incoming/asap-test-deployment.zip).Path
-          $expectedHash = (Get-Content -LiteralPath "$zipPath.sha256" -Raw).Trim()
+          $expectedHash = $env:EXPECTED_ZIP_SHA256
+          if ([string]::IsNullOrWhiteSpace($expectedHash)) {
+            throw 'Hosted build did not provide the expected deployment ZIP SHA-256.'
+          }
+          $expectedHash = $expectedHash.Trim().ToLowerInvariant()
+          $actualHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if (-not $actualHash.Equals($expectedHash, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Deployment ZIP SHA-256 mismatch: expected $expectedHash, got $actualHash."
+          }
           $bootstrapRoot = Join-Path $env:RUNNER_TEMP ("asap-test-deployment-bootstrap-" + [guid]::NewGuid().ToString('N'))
           try {
             Expand-Archive -LiteralPath $zipPath -DestinationPath $bootstrapRoot -Force
