@@ -48,6 +48,21 @@ public sealed class MigrationPackageSourceDatabase
 
     [JsonPropertyName("sha256")]
     public string Sha256 { get; init; } = string.Empty;
+
+    [JsonPropertyName("wal")]
+    public MigrationPackageSourceWal? Wal { get; init; }
+}
+
+public sealed class MigrationPackageSourceWal
+{
+    [JsonPropertyName("fileName")]
+    public string FileName { get; init; } = string.Empty;
+
+    [JsonPropertyName("length")]
+    public long Length { get; init; }
+
+    [JsonPropertyName("sha256")]
+    public string Sha256 { get; init; } = string.Empty;
 }
 
 public sealed class MigrationPackageFile
@@ -247,6 +262,7 @@ public static class MigrationPackageValidator
             !IsSourceDatabaseFileName(manifest.SourceDatabase.FileName) ||
             manifest.SourceDatabase.Length < 0 ||
             !IsSha256(manifest.SourceDatabase.Sha256) ||
+            !IsValidWalMetadata(manifest.SourceDatabase) ||
             manifest.EntityCounts.Any(item => string.IsNullOrWhiteSpace(item.Key) || item.Value < 0))
         {
             throw new MigrationOperationException("package_manifest_invalid", "Manifest identity or source snapshot metadata is invalid.");
@@ -267,6 +283,13 @@ public static class MigrationPackageValidator
         RequireManifestKind(sourceDatabase, "fileName", JsonValueKind.String);
         RequireManifestKind(sourceDatabase, "length", JsonValueKind.Number);
         RequireManifestKind(sourceDatabase, "sha256", JsonValueKind.String);
+        if (sourceDatabase.TryGetProperty("wal", out var wal) && wal.ValueKind != JsonValueKind.Null)
+        {
+            EnsureManifestObject(wal, SourceWalProperties, "sourceDatabase.wal");
+            RequireManifestKind(wal, "fileName", JsonValueKind.String);
+            RequireManifestKind(wal, "length", JsonValueKind.Number);
+            RequireManifestKind(wal, "sha256", JsonValueKind.String);
+        }
 
         var entityCounts = RequiredManifestProperty(root, "entityCounts");
         if (entityCounts.ValueKind != JsonValueKind.Object)
@@ -333,6 +356,9 @@ public static class MigrationPackageValidator
             StringComparer.Ordinal);
 
     private static readonly IReadOnlySet<string> SourceDatabaseProperties =
+        new HashSet<string>(["fileName", "length", "sha256", "wal"], StringComparer.Ordinal);
+
+    private static readonly IReadOnlySet<string> SourceWalProperties =
         new HashSet<string>(["fileName", "length", "sha256"], StringComparer.Ordinal);
 
     private static readonly IReadOnlySet<string> FileProperties =
@@ -952,6 +978,16 @@ public static class MigrationPackageValidator
 
     private static bool IsSourceDatabaseFileName(string? value) =>
         IsManifestFileName(value, ".db");
+
+    private static bool IsValidWalMetadata(MigrationPackageSourceDatabase sourceDatabase) =>
+        sourceDatabase.Wal is null ||
+        (IsManifestFileName(sourceDatabase.Wal.FileName, ".db-wal") &&
+         string.Equals(
+             sourceDatabase.Wal.FileName,
+             sourceDatabase.FileName + "-wal",
+             StringComparison.OrdinalIgnoreCase) &&
+         sourceDatabase.Wal.Length >= 0 &&
+         IsSha256(sourceDatabase.Wal.Sha256));
 
     private static bool IsManifestFileName(string? value, string requiredExtension) =>
         value is not null &&

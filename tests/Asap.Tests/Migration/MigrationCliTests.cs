@@ -138,6 +138,7 @@ public sealed class MigrationCliTests
                 manifest.RootElement.GetProperty("pocketBaseSourceSchemaVersion").GetString());
             Assert.AreEqual(1, manifest.RootElement.GetProperty("entityCounts").GetProperty("polaris_organizations").GetInt32());
             Assert.IsTrue(manifest.RootElement.GetProperty("sourceDatabase").GetProperty("sha256").GetString()!.Length == 64);
+            Assert.AreEqual(JsonValueKind.Null, manifest.RootElement.GetProperty("sourceDatabase").GetProperty("wal").ValueKind);
             CollectionAssert.AreEqual(
                 new[]
                 {
@@ -161,6 +162,169 @@ public sealed class MigrationCliTests
         finally
         {
             Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public void ExportBindsWalBackedSourceIdentityAndPreservesSourceBytes()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-wal-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            CreateMinimalPackage(Path.Combine(root, "seed"));
+            var seedSource = Path.Combine(root, "seed", "data.db");
+            var firstSource = Path.Combine(root, "first", "data.db");
+            var secondSource = Path.Combine(root, "second", "data.db");
+            var firstStorage = Path.Combine(root, "first-storage");
+            var secondStorage = Path.Combine(root, "second-storage");
+            var firstPackage = Path.Combine(root, "first-package");
+            var secondPackage = Path.Combine(root, "second-package");
+            Directory.CreateDirectory(Path.GetDirectoryName(firstSource)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(secondSource)!);
+            Directory.CreateDirectory(firstStorage);
+            Directory.CreateDirectory(secondStorage);
+            File.Copy(seedSource, firstSource);
+            File.Copy(seedSource, secondSource);
+
+            CommitWalUpdate(firstSource, "WAL snapshot one");
+            CommitWalUpdate(secondSource, "WAL snapshot two");
+
+            var firstMainBytes = File.ReadAllBytes(firstSource);
+            var secondMainBytes = File.ReadAllBytes(secondSource);
+            var firstWalPath = firstSource + "-wal";
+            var secondWalPath = secondSource + "-wal";
+            Assert.IsTrue(File.Exists(firstWalPath));
+            Assert.IsTrue(File.Exists(secondWalPath));
+            var firstWalBytes = File.ReadAllBytes(firstWalPath);
+            var secondWalBytes = File.ReadAllBytes(secondWalPath);
+            CollectionAssert.AreEqual(firstMainBytes, secondMainBytes);
+
+            Export(firstSource, firstStorage, firstPackage);
+            Export(secondSource, secondStorage, secondPackage);
+
+            using var firstManifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(firstPackage, "manifest.json")));
+            using var secondManifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(secondPackage, "manifest.json")));
+            var firstSourceMetadata = firstManifest.RootElement.GetProperty("sourceDatabase");
+            var secondSourceMetadata = secondManifest.RootElement.GetProperty("sourceDatabase");
+            var firstWalMetadata = firstSourceMetadata.GetProperty("wal");
+            var secondWalMetadata = secondSourceMetadata.GetProperty("wal");
+            Assert.AreEqual("data.db-wal", firstWalMetadata.GetProperty("fileName").GetString());
+            Assert.AreEqual("data.db-wal", secondWalMetadata.GetProperty("fileName").GetString());
+            Assert.AreEqual(firstWalBytes.LongLength, firstWalMetadata.GetProperty("length").GetInt64());
+            Assert.AreEqual(secondWalBytes.LongLength, secondWalMetadata.GetProperty("length").GetInt64());
+            Assert.AreEqual(
+                Convert.ToHexStringLower(SHA256.HashData(firstWalBytes)),
+                firstWalMetadata.GetProperty("sha256").GetString());
+            Assert.AreEqual(
+                Convert.ToHexStringLower(SHA256.HashData(secondWalBytes)),
+                secondWalMetadata.GetProperty("sha256").GetString());
+            Assert.AreNotEqual(
+                firstWalMetadata.GetProperty("sha256").GetString(),
+                secondWalMetadata.GetProperty("sha256").GetString());
+            Assert.AreNotEqual(
+                File.ReadAllText(Path.Combine(firstPackage, "manifest.json")),
+                File.ReadAllText(Path.Combine(secondPackage, "manifest.json")));
+
+            using var firstOrganizations = JsonDocument.Parse(File.ReadAllText(Path.Combine(firstPackage, "organizations.json")));
+            using var secondOrganizations = JsonDocument.Parse(File.ReadAllText(Path.Combine(secondPackage, "organizations.json")));
+            Assert.AreEqual(
+                "WAL snapshot one",
+                firstOrganizations.RootElement.GetProperty("collections").GetProperty("polaris_organizations")[0]
+                    .GetProperty("displayName").GetString());
+            Assert.AreEqual(
+                "WAL snapshot two",
+                secondOrganizations.RootElement.GetProperty("collections").GetProperty("polaris_organizations")[0]
+                    .GetProperty("displayName").GetString());
+            Assert.AreEqual(
+                0,
+                MigrationCli.Run(["validate", "--package", firstPackage], TextWriter.Null, TextWriter.Null));
+            Assert.AreEqual(
+                0,
+                MigrationCli.Run(["validate", "--package", secondPackage], TextWriter.Null, TextWriter.Null));
+            CollectionAssert.AreEqual(firstMainBytes, File.ReadAllBytes(firstSource));
+            CollectionAssert.AreEqual(secondMainBytes, File.ReadAllBytes(secondSource));
+            CollectionAssert.AreEqual(firstWalBytes, File.ReadAllBytes(firstWalPath));
+            CollectionAssert.AreEqual(secondWalBytes, File.ReadAllBytes(secondWalPath));
+            Assert.IsFalse(File.Exists(Path.Combine(firstPackage, "data.db-wal")));
+            Assert.IsFalse(File.Exists(Path.Combine(secondPackage, "data.db-wal")));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+
+        static void CommitWalUpdate(string source, string displayName)
+        {
+            SqliteConnection? reader = null;
+            SqliteTransaction? readerTransaction = null;
+            try
+            {
+                using (var writer = new SqliteConnection(
+                    new SqliteConnectionStringBuilder
+                    {
+                        DataSource = source,
+                        Pooling = false
+                    }.ConnectionString))
+                {
+                    writer.Open();
+                    using (var journal = writer.CreateCommand())
+                    {
+                        journal.CommandText = "PRAGMA journal_mode=WAL;";
+                        Assert.AreEqual("wal", Convert.ToString(journal.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture));
+                    }
+                    using (var checkpoint = writer.CreateCommand())
+                    {
+                        checkpoint.CommandText = "PRAGMA wal_autocheckpoint=0;";
+                        checkpoint.ExecuteNonQuery();
+                    }
+                    using (var update = writer.CreateCommand())
+                    {
+                        update.CommandText = "UPDATE [polaris_organizations] SET [displayName] = $displayName WHERE [id] = 'pb-org-2';";
+                        update.Parameters.AddWithValue("$displayName", displayName);
+                        update.ExecuteNonQuery();
+                    }
+
+                    reader = new SqliteConnection(
+                        new SqliteConnectionStringBuilder
+                        {
+                            DataSource = source,
+                            Mode = SqliteOpenMode.ReadOnly,
+                            Pooling = false
+                        }.ConnectionString);
+                    reader.Open();
+                    readerTransaction = reader.BeginTransaction();
+                    using var read = reader.CreateCommand();
+                    read.Transaction = readerTransaction;
+                    read.CommandText = "SELECT [displayName] FROM [polaris_organizations] WHERE [id] = 'pb-org-2';";
+                    Assert.AreEqual(displayName, Convert.ToString(read.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture));
+                }
+            }
+            finally
+            {
+                readerTransaction?.Dispose();
+                reader?.Dispose();
+            }
+        }
+
+        static void Export(string source, string storage, string package)
+        {
+            using var error = new StringWriter();
+            Assert.AreEqual(
+                0,
+                MigrationCli.Run(
+                    [
+                        "export",
+                        "--source", source,
+                        "--storage", storage,
+                        "--output", package,
+                        "--source-git-sha", MigrationContract.PocketBaseBaselineSha,
+                        "--exported-at-utc", "2030-01-02T03:04:05Z",
+                        "--confirm-source-stopped"
+                    ],
+                    TextWriter.Null,
+                    error),
+                error.ToString());
         }
     }
 
@@ -657,6 +821,21 @@ public sealed class MigrationCliTests
             var manifestUnknownPackage = CreateMinimalPackage(Path.Combine(root, "manifest-unknown"));
             AddManifestProperty(manifestUnknownPackage, "unexpectedMember", "fixture-only-value");
             AssertPackageValidationCode(manifestUnknownPackage, "package_manifest_invalid");
+
+            var invalidWalMetadataPackage = CreateMinimalPackage(Path.Combine(root, "invalid-wal-metadata"));
+            var invalidWalManifestPath = Path.Combine(invalidWalMetadataPackage, "manifest.json");
+            var invalidWalManifest = JsonNode.Parse(File.ReadAllText(invalidWalManifestPath))!.AsObject();
+            invalidWalManifest["sourceDatabase"]!.AsObject()["wal"] = new JsonObject
+            {
+                ["fileName"] = "data.db-shm",
+                ["length"] = 1,
+                ["sha256"] = new string('a', 64)
+            };
+            File.WriteAllText(
+                invalidWalManifestPath,
+                invalidWalManifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n",
+                new UTF8Encoding(false));
+            AssertPackageValidationCode(invalidWalMetadataPackage, "package_manifest_invalid");
 
             var conflictingPackage = CreateMinimalPackage(Path.Combine(root, "conflict"));
             var operationalPath = Path.Combine(conflictingPackage, "effective-legacy-operational-config.json");

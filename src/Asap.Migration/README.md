@@ -80,7 +80,9 @@ decisions and semantic counters.
 3. Run `validate` before transfer. The package contains normalized UTF-8 JSON,
    source SHA/schema/time and SQLite snapshot metadata, entity counts, file
    lengths, and SHA-256 entries in `manifest.json`. Effective runtime and
-   operational configuration are separate artifacts.
+   operational configuration are separate artifacts. When SQLite is using WAL,
+   `manifest.json` binds the matching `data.db-wal` name, length, and SHA-256;
+   `data.db-shm` is transient index state and is not packaged or fingerprinted.
 
 The exporter uses read-only SQLite access, copies supported PNG/JPEG/GIF
 branding bytes, and blocks missing, unsupported, or invalid assets. It never

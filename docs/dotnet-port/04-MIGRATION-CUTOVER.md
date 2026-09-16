@@ -66,6 +66,16 @@ The manifest should identify at minimum:
 - file hashes for exported JSON/assets;
 - warnings/intentional normalization notes.
 
+`sourceDatabase` records the stopped source `*.db` file's name, length, and
+SHA-256. It also records `wal: null` when the matching `*.db-wal` sidecar is
+absent, or a `wal` object with that sidecar's name, length, and SHA-256 when it
+is present. Export captures the main file and WAL metadata before opening
+SQLite and verifies both are unchanged after the read; a changed, missing, or
+new main/WAL file aborts export. The `*.db-shm` file is SQLite's rebuildable
+WAL-index state, so it is intentionally neither part of snapshot identity nor
+the normalized package; the stopped source must keep the main database and
+WAL sidecar together for the complete read.
+
 Suggested data files by dependency domain:
 
 ```text

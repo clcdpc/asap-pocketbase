@@ -94,15 +94,15 @@ public static class MigrationPackageExporter
             throw new MigrationOperationException("export_output_not_empty", "The export output directory must be empty.");
         }
 
-        var sourceInfo = new FileInfo(options.SourceDatabasePath);
-        var sourceHash = HashFile(options.SourceDatabasePath);
+        var sourceDatabasePath = Path.GetFullPath(options.SourceDatabasePath);
+        var sourceSnapshot = CaptureSourceSnapshot(sourceDatabasePath);
         var entityCounts = new SortedDictionary<string, int>(StringComparer.Ordinal);
         var manifestFiles = new List<object>();
 
         using var connection = new SqliteConnection(
             new SqliteConnectionStringBuilder
             {
-                DataSource = options.SourceDatabasePath,
+                DataSource = sourceDatabasePath,
                 Mode = SqliteOpenMode.ReadOnly,
                 Cache = SqliteCacheMode.Private,
                 Pooling = false
@@ -166,6 +166,9 @@ public static class MigrationPackageExporter
         manifestFiles.Add(FileManifest(options.OutputPath, operationalPath));
 
         transaction.Commit();
+        transaction.Dispose();
+        connection.Dispose();
+        EnsureSourceSnapshotUnchanged(sourceDatabasePath, sourceSnapshot);
 
         WriteJson(Path.Combine(options.OutputPath, "manifest.json"), new
         {
@@ -176,9 +179,10 @@ public static class MigrationPackageExporter
             exportedAtUtc = options.ExportedAtUtc.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
             sourceDatabase = new
             {
-                fileName = sourceInfo.Name,
-                length = sourceInfo.Length,
-                sha256 = sourceHash
+                fileName = sourceSnapshot.Main.FileName,
+                length = sourceSnapshot.Main.Length,
+                sha256 = sourceSnapshot.Main.Sha256,
+                wal = WalManifest(sourceSnapshot.Wal)
             },
             entityCounts,
             files = manifestFiles,
@@ -361,6 +365,62 @@ public static class MigrationPackageExporter
                 "The export output path must not traverse symbolic links or reparse points.");
         }
     }
+
+    private static SourceSnapshot CaptureSourceSnapshot(string sourceDatabasePath)
+    {
+        // SQLite commits may live in -wal; -shm is only a rebuildable WAL index.
+        var walPath = sourceDatabasePath + "-wal";
+        return new(
+            CaptureFileSnapshot(sourceDatabasePath),
+            File.Exists(walPath) ? CaptureFileSnapshot(walPath) : null);
+    }
+
+    private static SourceFileSnapshot CaptureFileSnapshot(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            return new(info.Name, info.Length, HashFile(path));
+        }
+        catch (IOException)
+        {
+            throw new MigrationOperationException(
+                "source_snapshot_unavailable",
+                "The stopped source database snapshot could not be read.");
+        }
+    }
+
+    private static void EnsureSourceSnapshotUnchanged(string sourceDatabasePath, SourceSnapshot expected)
+    {
+        SourceSnapshot actual;
+        try
+        {
+            actual = CaptureSourceSnapshot(sourceDatabasePath);
+        }
+        catch (MigrationOperationException)
+        {
+            throw new MigrationOperationException(
+                "source_snapshot_changed",
+                "The stopped source database or its WAL sidecar changed while export was reading it.");
+        }
+
+        if (!expected.Equals(actual))
+        {
+            throw new MigrationOperationException(
+                "source_snapshot_changed",
+                "The stopped source database or its WAL sidecar changed while export was reading it.");
+        }
+    }
+
+    private static object? WalManifest(SourceFileSnapshot? wal) =>
+        wal is null
+            ? null
+            : new
+            {
+                fileName = wal.FileName,
+                length = wal.Length,
+                sha256 = wal.Sha256
+            };
 
     private static bool PathsOverlap(string candidate, string source)
     {
@@ -553,6 +613,10 @@ public static class MigrationPackageExporter
     }
 
     private static string EscapeIdentifier(string value) => value.Replace("]", "]]", StringComparison.Ordinal);
+
+    private sealed record SourceSnapshot(SourceFileSnapshot Main, SourceFileSnapshot? Wal);
+
+    private sealed record SourceFileSnapshot(string FileName, long Length, string Sha256);
 
     private sealed record MigrationDomain(string Name, string FileName, IReadOnlyList<string> Collections);
 }
