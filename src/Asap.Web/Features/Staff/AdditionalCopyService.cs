@@ -130,14 +130,12 @@ public sealed class AdditionalCopyService(
         CancellationToken cancellationToken)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        long? requestId = long.TryParse(id, out var parsed) ? parsed : null;
-        if (!requestId.HasValue)
-        {
-            requestId = await context.LegacyPocketBaseMappings.AsNoTracking()
-                .Where(item => item.EntityType == "additional_copy" && item.PocketBaseId == id)
-                .Select(item => (long?)item.NewId)
-                .SingleOrDefaultAsync(cancellationToken);
-        }
+        var requestId = await LegacyRequestLinkResolver.ResolveAsync(
+            context,
+            context.AdditionalCopyRequests.Select(item => item.Id),
+            LegacyRequestLinkResolver.AdditionalCopyEntityType,
+            id,
+            cancellationToken);
         if (!requestId.HasValue)
         {
             return null;
@@ -862,10 +860,10 @@ public sealed class AdditionalCopyService(
             var isOpen = request.Status == "open";
             var claimedByActor = request.ClaimedByStaffUserId == actor.Id;
             return new AdditionalCopyDto(
-                request.Id.ToString(),
+                request.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 "additional_copy",
                 request.LegacyId,
-                request.SourceTitleRequestId?.ToString(),
+                request.SourceTitleRequestId?.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 source?.Status,
                 request.LibraryOrganizationId,
                 request.LibraryNameSnapshot ?? string.Empty,
@@ -878,18 +876,18 @@ public sealed class AdditionalCopyService(
                 request.Publication,
                 request.Status,
                 request.Notes,
-                request.CreatedByStaffUserId?.ToString(),
+                request.CreatedByStaffUserId?.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 request.CreatedByDisplayName,
-                request.ClosedByStaffUserId?.ToString(),
+                request.ClosedByStaffUserId?.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 request.ClosedByDisplayName,
                 AsUtc(request.ClosedUtc),
                 AsUtc(request.CreatedUtc),
                 AsUtc(request.UpdatedUtc),
-                request.ClaimedByStaffUserId?.ToString(),
+                request.ClaimedByStaffUserId?.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 request.ClaimedByDisplayName,
                 AsUtc(request.ClaimedAtUtc),
                 request.ClaimType,
-                request.ClaimRuleId?.ToString(),
+                request.ClaimRuleId?.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 StaffVersion.Encode(request.RowVersion),
                 claimClearedReason,
                 new AdditionalCopyCapabilities(

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Asap.Web.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -174,14 +175,12 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
         CancellationToken cancellationToken)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        long? requestId = long.TryParse(id, out var parsed) ? parsed : null;
-        if (!requestId.HasValue)
-        {
-            requestId = await context.LegacyPocketBaseMappings.AsNoTracking()
-                .Where(item => item.EntityType == "title_request" && item.PocketBaseId == id)
-                .Select(item => (long?)item.NewId)
-                .SingleOrDefaultAsync(cancellationToken);
-        }
+        var requestId = await LegacyRequestLinkResolver.ResolveAsync(
+            context,
+            context.TitleRequests.Select(item => item.Id),
+            LegacyRequestLinkResolver.TitleRequestEntityType,
+            id,
+            cancellationToken);
         if (!requestId.HasValue)
         {
             return null;
@@ -289,7 +288,7 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
                 .LastOrDefault() ?? request.CreatedUtc;
             formats.TryGetValue(request.MaterialFormatId, out var format);
             result.Add(new TitleRequestDto(
-                request.Id.ToString(),
+                request.Id.ToString(CultureInfo.InvariantCulture),
                 "title_request",
                 request.LegacyId,
                 request.LibraryOrganizationId,
@@ -310,17 +309,17 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
                 request.ExactPublicationDate,
                 ParseCustomFields(request.CustomFieldsJson),
                 request.AutoHold,
-                format?.Code ?? request.MaterialFormatId.ToString(),
+                format?.Code ?? request.MaterialFormatId.ToString(CultureInfo.InvariantCulture),
                 format?.Label ?? string.Empty,
                 request.Status,
                 request.CloseReason,
                 request.BibId,
                 request.Notes,
-                request.ClaimedByStaffUserId?.ToString(),
+                request.ClaimedByStaffUserId?.ToString(CultureInfo.InvariantCulture),
                 request.ClaimedByDisplayName,
                 AsUtc(request.ClaimedAtUtc),
                 request.ClaimType,
-                request.ClaimRuleId?.ToString(),
+                request.ClaimRuleId?.ToString(CultureInfo.InvariantCulture),
                 request.IsbnCheckStatus,
                 request.IsbnCheckResult,
                 request.IsbnCheckRetryCount,
@@ -333,7 +332,7 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
                 StaffVersion.Encode(request.RowVersion),
                 capabilities,
                 operation is null ? null : new HoldOperationSummary(
-                    operation.Id.ToString(),
+                    operation.Id.ToString(CultureInfo.InvariantCulture),
                     operation.State,
                     operation.Phase,
                     operation.AttemptNumber,

@@ -112,7 +112,9 @@ The .NET app serves only explicit DTOs; never expose EF entities directly.
 
 Preserve staff links such as `?request=<id>` and additional-copy `stage`/source-request links.
 
-New request IDs are bigint values. During the temporary migration-compatibility window, old PocketBase request IDs resolve through `LegacyPocketBaseMapping`; after successful resolution the frontend normalizes the URL to the new ID.
+New request IDs are bigint values and remain strings through the browser. During the temporary migration-compatibility window, old PocketBase request IDs resolve through the type-qualified `LegacyPocketBaseMapping` key (`EntityType` + `PocketBaseId`); the same legacy ID text may therefore map independently for a title request and an additional-copy task. Supported `stage`/`status` aliases remain accepted, including `submitted`/`new` and `purchased_waiting_for_bib`.
+
+Mapping is only an identifier translation. After resolution, the normal current staff identity, eligibility, and library-scope checks still authorize the target. Unknown, deleted, and out-of-scope links return the same non-disclosing not-found behavior. On success, the frontend replaces only the request value with the invariant-decimal target ID and preserves supported navigation parameters and the URL hash; failed resolution leaves the legacy URL in place. Mapping retention and cleanup are explicit operator actions after the reference window, with no automatic purge.
 
 ## 11. Staff workflow scope
 
