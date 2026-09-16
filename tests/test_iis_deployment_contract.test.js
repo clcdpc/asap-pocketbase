@@ -5,8 +5,8 @@ const path = require('path');
 const root = path.resolve(__dirname, '..');
 const workflow = fs.readFileSync(path.join(root, '.github/workflows/dotnet.yml'), 'utf8').replace(/\r\n/g, '\n');
 const deployment = fs.readFileSync(path.join(root, 'scripts/deployment/Deploy-AsapTest.ps1'), 'utf8');
+const bootstrap = fs.readFileSync(path.join(root, 'scripts/deployment/Initialize-AsapTestHost.ps1'), 'utf8');
 const activation = fs.readFileSync(path.join(root, 'docs/implementation/test-iis-activation.md'), 'utf8');
-const slice8 = fs.readFileSync(path.join(root, 'docs/implementation/slice-08.md'), 'utf8');
 
 assert.ok(workflow.includes("tags:\n      - 'v*.*.*-test.*'"), 'test deployment tags should use the documented convention');
 assert.ok(workflow.includes('- codex/csharp-port'), 'integration-branch push trigger is required');
@@ -27,16 +27,16 @@ const deploymentJob = workflow.slice(deploymentJobStart);
 assert.ok(!hostedJobs.includes('self-hosted'), 'hosted build/test/package jobs must not use self-hosted labels');
 assert.ok(!hostedJobs.includes('ASAP_TEST_DEPLOYMENT_ENABLED'), 'hosted build/test/package jobs must not depend on activation');
 assert.ok(
-  workflow.slice(deploymentJobStart).includes(
+  deploymentJob.includes(
     "if: ${{ vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))) }}"
   ),
   'deployment must require the explicit activation variable and an eligible event'
 );
 assert.ok(
-  workflow.slice(deploymentJobStart).includes('runs-on: [self-hosted, windows, x64, asap-test-iis]'),
+  deploymentJob.includes('runs-on: [self-hosted, windows, x64, asap-test-iis]'),
   'deployment must be isolated to the dedicated test-IIS runner labels'
 );
-assert.ok(!workflow.slice(deploymentJobStart).includes('actions/checkout'), 'the IIS job must not check out the repository');
+assert.ok(!deploymentJob.includes('actions/checkout'), 'the IIS job must not check out the repository');
 assert.ok(workflow.includes('actions/download-artifact@v4'), 'the IIS job must consume the hosted artifact');
 assert.ok(workflow.includes('zip_sha256: ${{ steps.package.outputs.zip_sha256 }}'), 'the hosted package job must expose the final ZIP digest as a job output');
 assert.ok(workflow.includes('id: package'), 'the ZIP packaging step must own the digest output');
@@ -46,6 +46,10 @@ assert.ok(
   'the IIS job must receive the hosted package digest through its environment'
 );
 assert.ok(!deploymentJob.includes('$zipPath.sha256'), 'the IIS job must not trust a digest sidecar downloaded with the artifact');
+assert.ok(
+  deploymentJob.includes("-ConfigPath 'C:\\ProgramData\\clc-asap\\config\\test-deployment.json'"),
+  'the deployment job must use the bootstrapped host configuration'
+);
 const deploymentHashCheck = deploymentJob.indexOf('$actualHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()');
 const deploymentExtraction = deploymentJob.indexOf('Expand-Archive -LiteralPath $zipPath -DestinationPath $bootstrapRoot -Force');
 assert.ok(deploymentHashCheck >= 0, 'the IIS job must hash the downloaded ZIP inline');
@@ -79,10 +83,38 @@ for (const token of [
 
 assert.ok(!deployment.includes('SkipCertificateCheck'), 'readiness must use normal TLS certificate validation');
 assert.ok(!deployment.includes('[asap].[DeploymentState]'), 'test deployment must not repurpose application DeploymentState');
+
+for (const token of [
+  "[string] $DatabaseName = 'AsapTest'",
+  "[string] $RootPath = 'C:\\ProgramData\\clc-asap'",
+  "Where-Object Name -Like 'actions.runner.*'",
+  'Get-CimInstance Win32_Service',
+  'IIS_IUSRS membership',
+  'IIS lifecycle permission',
+  'New-SelfSignedCertificate',
+  'Asap__ConfigFile',
+  'test-deployment.json',
+  'test-app.json',
+  "Join-Path $root 'web'",
+  "Join-Path $root 'staging'",
+  "Join-Path $root 'backups'",
+  'ValidateOnly'
+]) {
+  assert.ok(bootstrap.includes(token), `test host bootstrap should implement ${token}`);
+}
+assert.ok(
+  bootstrap.includes("Add-Result 'INFO' 'SQL authorization'"),
+  'bootstrap must leave SQL privilege grants as an explicit operator boundary'
+);
+assert.ok(
+  bootstrap.includes("[switch] $SkipLocalAdministrator"),
+  'bootstrap should allow separately provisioned narrower IIS lifecycle rights'
+);
+
+assert.ok(activation.includes('Initialize-AsapTestHost.ps1'), 'activation docs should use the automated host bootstrap');
+assert.ok(activation.includes('C:\\ProgramData\\clc-asap\\config\\test-deployment.json'), 'activation docs should use the current host config path');
 assert.ok(activation.includes('gh workflow run dotnet.yml'), 'activation docs should provide the explicit CLI dispatch');
 assert.ok(activation.includes('--ref v1.0.0-test.1'), 'activation docs should show an exact test tag ref');
 assert.ok(activation.includes('ASAP_TEST_DEPLOYMENT_ENABLED=true'), 'activation docs should describe enabling the gate');
-assert.ok(activation.includes('pending_runner_setup'), 'activation docs must distinguish repository acceptance from live activation');
-assert.ok(slice8.includes('C:\\ProgramData\\ASAP\\test-deployment.json'), 'Slice 8 should document the host-local config path');
 
-console.log('Test-IIS deployment workflow and script contract tests passed.');
+console.log('Test-IIS deployment workflow, deployment script, and host bootstrap contract tests passed.');
