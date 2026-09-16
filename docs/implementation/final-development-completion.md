@@ -7,18 +7,36 @@ Reduced Slice 9 and Slice 11 run as one combined batch on
 
 The Phase A browser/accessibility checkpoint is complete. Phase B consumer-led
 cleanup and canonical documentation are implemented, and the cleaned-tree
-local matrix is green through publish and focused migration checks. The
-candidate package identity/validate-only gate passed for the candidate SHA and
-will be repeated once after this receipt-only amend so the pushed SHA remains
-the manifest identity. Review, integration, exact candidate CI, and supervisor
-acceptance remain pending.
+local matrix is green through publish and focused migration checks. The full
+local implementation validation is recorded at
+`74c1b1008963bfb460d89aa374fd245789dd89d4`; its Slice 8 package has 333
+entries and SHA-256
+`570d2a7257b96de132f5cfbb0be7a41e043d451befa29c18fb4749917e6fc9ee`, bound to
+that implementation checkpoint. The prose-only head
+`a4fa224864004279cb679738fd1f155c795645dc` subsequently passed hosted PR CI
+`35129263256`, including browser, publish, and package checks; IIS was skipped.
+The hosted run is current-head evidence; the local package remains bound to
+`74c1b1008963bfb460d89aa374fd245789dd89d4`.
+
+Initial independent Terra review of `a4fa224864004279cb679738fd1f155c795645dc`
+found only FDC-1 [P2]. This documentation-only correction is awaiting focused
+independent verification and does not self-resolve the finding. Integration,
+final milestone, and supervisor acceptance remain pending. Later
+documentation-only head/CI updates are tracked in the
+[canonical live PR #272 supervisor state](https://github.com/clcdpc/asap-pocketbase/pull/272#issuecomment-5700413998).
 
 - Technical review base: `ce0f4693ea3e98ed81efcf93241456b99050fb56`.
 - Phase A checkpoint: `ec609e38588edcdde8cf45d5c75cc790f359cc1d`.
 - Phase A PR CI: `35124500838` succeeded; IIS was skipped.
+- Full local implementation validation: `74c1b1008963bfb460d89aa374fd245789dd89d4`;
+  its local Slice 8 package has 333 entries and SHA-256
+  `570d2a7257b96de132f5cfbb0be7a41e043d451befa29c18fb4749917e6fc9ee`.
+- Hosted current-head PR CI: `a4fa224864004279cb679738fd1f155c795645dc` /
+  `35129263256` succeeded, including browser, publish, and package checks;
+  IIS was skipped.
 - Draft PR #264 remains open into `main`; this batch does not merge it.
-- The supervisor dispatches one fresh independent Terra High review after the
-  candidate CI gate. No review or acceptance is claimed here.
+- FDC-1 remains pending fresh focused Terra verification; no integration,
+  final milestone, or supervisor acceptance is claimed here.
 
 ## Phase B consumer and retention record
 
@@ -80,7 +98,8 @@ part of the receipt.
 
 ## Required cleaned-tree validation
 
-The cleaned-tree local validation record is:
+The cleaned-tree local implementation validation record is for
+`74c1b1008963bfb460d89aa374fd245789dd89d4`:
 
 - Release build: 0 warnings and 0 errors.
 - Real SQL: non-browser `310/310` plus browser `3/3`, for `313/313` total,
@@ -94,21 +113,19 @@ The cleaned-tree local validation record is:
   exactly one `e_sqlite3.dll`, required DACPAC/executable present, forbidden
   publish files absent; source and published vendor hashes `17/17`.
 - Focused migration regression/oracles: `25/25` passed with 0 failures/skips.
-- Slice 8 package: `333` entries with `330` packaged Web files; exact manifest
-  identity, digest-before-extract, runner isolation, and deployment
-  `-ValidateOnly` passed with no host mutation. The final amended SHA receives
-  the same package gate before push.
+- Slice 8 package: `333` entries with `330` packaged Web files; the manifest
+  and ZIP SHA-256
+  `570d2a7257b96de132f5cfbb0be7a41e043d451befa29c18fb4749917e6fc9ee` are
+  bound to this checkpoint. Digest-before-extract, runner isolation, and
+  deployment `-ValidateOnly` passed with no host mutation.
 - Hygiene: 82 Markdown files have 0 missing relative links; no removed roots or
   current legacy imports, no tracked generated/secret paths, the Slice 8
   workflow/deployment contract passes, and `git diff --check` is clean.
 
-The package gate is repeated for the final amended commit to verify the exact
-identity, ZIP digest before extraction, deployment package integrity, runner
-isolation, and `-ValidateOnly` without host mutation:
-
-- the current published outputs and deployment script;
-- a package manifest bound to the final commit;
-- digest-before-extract and validate-only/no-host-mutation checks.
+The prose-only head `a4fa224864004279cb679738fd1f155c795645dc` then passed
+hosted PR CI `35129263256`, including the browser, publish, and package checks;
+IIS was skipped. This hosted evidence validates the current head but does not
+rebind the local package recorded above.
 
 ## Boundaries
 

@@ -61,10 +61,16 @@ classify the actual consumers: `Asap.Web`/Frontend own shipped behavior,
 `Asap.Migration` owns stopped-source native SQLite migration, and the current
 C#/browser/frontend suites own regression coverage. The obsolete PocketBase
 runtime/source/public tree and dependent legacy tests/docs are removed. The
-cleaned-tree local matrix is green through publish, focused migration checks,
-and the exact package identity/validate-only gate. That package gate is
-repeated after the receipt-only final amend so the pushed SHA remains its
-manifest identity.
+cleaned-tree local matrix is green through publish and focused migration
+checks. Full local implementation validation is recorded at
+`74c1b1008963bfb460d89aa374fd245789dd89d4`; its local Slice 8 package has 333
+entries and SHA-256
+`570d2a7257b96de132f5cfbb0be7a41e043d451befa29c18fb4749917e6fc9ee`, bound to
+that checkpoint. The prose-only head
+`a4fa224864004279cb679738fd1f155c795645dc` then passed hosted PR CI
+`35129263256`, including browser, publish, and package checks; IIS was skipped.
+The hosted run is current-head evidence; the local package remains bound to
+`74c1b1008963bfb460d89aa374fd245789dd89d4`.
 
 PR #264 remains open/draft into `main`; its current summary is synchronized by
 the supervisor. `test_cd_activation: pending_runner_setup` is the only allowed
@@ -73,8 +79,12 @@ No runner installation, registration, host contact, live IIS deployment,
 production tag, PR #264 merge, review, or acceptance is claimed here. Runner
 activation is a separate later operational task and need not precede this
 batch; see [the activation checklist](test-iis-activation.md). Slice 10 is
-optional/deferred. The combined Slice 9 + Slice 11 batch is in progress pending
-cleaned-tree validation, exact candidate CI, integration, and supervisor review.
+optional/deferred. Initial independent Terra review of
+`a4fa224864004279cb679738fd1f155c795645dc` found only FDC-1 [P2]. This
+documentation-only correction is awaiting focused independent verification and
+does not self-resolve the finding. Integration, final milestone, and supervisor
+acceptance remain pending. Later documentation-only head/CI updates are tracked
+in the [canonical live PR #272 supervisor state](https://github.com/clcdpc/asap-pocketbase/pull/272#issuecomment-5700413998).
 
 ## Slice Outcome Summary
 
@@ -92,9 +102,9 @@ here; chronological entries below preserve checkpoint-time execution evidence.
 | 6 | Analytics | Accepted; later post-acceptance correction completed | Historical milestone `7ba59421176ede99ba48488be6bc81010e60f65c` / `34976630186` |
 | 7 | Migration hardening and legacy links | Accepted | `88fd92cf1fdd856dccba6ef3538182d80325e98a` / `35086949437` |
 | 8 | Reduced test-environment CI/CD to IIS | Accepted at `ce0f4693ea3e98ed81efcf93241456b99050fb56` / CI `35109947096`; activation pending runner setup | Exact milestone / CI / final acceptance: [canonical state](https://github.com/clcdpc/asap-pocketbase/pull/271#issuecomment-5698135527) |
-| 9 | Focused development CI, browser and accessibility completion | Combined with Slice 11; Phase B cleanup/docs in progress pending validation/review/CI | - |
+| 9 | Focused development CI, browser and accessibility completion | Combined with Slice 11; implementation, local validation and hosted CI complete; focused review, integration, final milestone and acceptance pending | - |
 | 10 | Synthetic seed/reset convenience tooling | Deferred / optional | - |
-| 11 | Reduced .NET cleanup, canonical docs and one integrated final review | Combined with Slice 9; Phase B in progress pending validation/review/CI | - |
+| 11 | Reduced .NET cleanup, canonical docs and one integrated final review | Combined with Slice 9; implementation, local validation and hosted CI complete; focused review, integration, final milestone and acceptance pending | - |
 
 The separate post-Slice-6 reviewed correction is
 `04f538ef1a04be33b31d5dbdc3a5c1751b163ee4`; corrected product/integration
