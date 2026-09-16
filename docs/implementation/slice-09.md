@@ -2,8 +2,11 @@
 
 ## Current combined-batch scope
 
-Reduced Slice 9 and Slice 11 are implemented as one final development-
-completion batch on `codex/final-development-completion`. The batch preserves
+Reduced Slice 9 and Slice 11 completed as one final development-completion
+batch, merged through PR #272 into `codex/csharp-port`. See the
+[completion record](final-development-completion.md) and its live journal for
+the exact milestone CI and acceptance. No required development slice remains.
+The batch preserves
 the accepted Slices 0-8 behavior and runs against the current .NET tree. Slice
 9 is not a production-release exercise and does not require test-IIS activation.
 

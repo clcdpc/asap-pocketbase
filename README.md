@@ -11,6 +11,11 @@ feature services with selective parameterized Dapper/ADO.NET where the feature
 contract needs it, and Hangfire for recurring work. The tracked frontend lives
 under `src/Asap.Web/Frontend` and is copied to generated `wwwroot` by MSBuild.
 
+Development work is complete; the combined final batch is integrated on
+`codex/csharp-port`. See the [completion record](docs/implementation/final-development-completion.md)
+for exact-milestone CI and acceptance. Production readiness and test-IIS runner
+activation remain separate deferred work; PR #264 remains draft.
+
 ## Prerequisites
 
 - .NET SDK 10.0.303 or the compatible SDK selected by `global.json`.

@@ -1,6 +1,22 @@
 # Multi-model Codex Task: Port ASAP from PocketBase to .NET 10
 
-## Current Development-Completion Policy - 2026-09-16
+## Current Development-Completion Outcome - 2026-09-16
+
+Slices 0-8 are accepted. Reduced Slices 9 and 11 completed as one final batch
+and merged through PR #272 into `codex/csharp-port`, after full cleaned-tree
+validation, one independent Terra holistic review and one focused correction
+cycle with zero unresolved findings. No required development slice remains.
+The [completion record](../implementation/final-development-completion.md)
+and its live PR journal hold final exact-milestone CI and acceptance; this
+status-only record does not predict its own future CI result.
+
+Slice 10 remains deferred/optional, test-IIS activation remains
+`pending_runner_setup`, and production readiness remains deferred. PR #264
+stays open/draft into `main`; no production release or cutover is authorized.
+The execution and recovery contracts below remain applicable where relevant.
+Their prior remaining-slice sequence is historical and does not reopen work.
+
+## Historical Development-Completion Policy - Before Slice 8
 
 The current target is a **development-complete .NET port**, not production
 readiness. This policy and the revised Slice 8-11 packets supersede conflicting

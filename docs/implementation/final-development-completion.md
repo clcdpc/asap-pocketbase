@@ -1,9 +1,35 @@
 # Final Development-Completion Batch
 
-Reduced Slice 9 and Slice 11 run as one combined batch on
-`codex/final-development-completion`, targeting `codex/csharp-port`.
+Reduced Slice 9 and Slice 11 completed as one combined batch on
+`codex/final-development-completion`, merged into `codex/csharp-port` through
+[PR #272](https://github.com/clcdpc/asap-pocketbase/pull/272).
 
 ## Current state
+
+Development work is **COMPLETE**; no required development slice remains.
+The final reviewed candidate is `245c5ff5cd07cd1c4e3bb061ffc6ab199b5bcac8`,
+which passed hosted CI `35131411399`. The single holistic Terra review and
+one focused correction cycle ended with
+[FDC-1 independently resolved](https://github.com/clcdpc/asap-pocketbase/pull/272#issuecomment-5702148343)
+and zero unresolved substantive findings. Short Astra acceptance passed.
+
+PR #272 merged at `4b03107c6b9dac591ec7c58ce505bf2ae01a2928`; the integration
+tree is identical to the reviewed tree. This subsequent documentation-only
+record is the final milestone candidate. Final acceptance requires its own
+successful exact-SHA `.NET baseline` run. At record creation that final run
+was pending; its exact SHA/run/result and acceptance are maintained in the
+[canonical live batch journal](https://github.com/clcdpc/asap-pocketbase/pull/272#issuecomment-5700413998).
+No further repository commit is needed merely to record green CI.
+
+Slice 10 is deferred/optional, test-IIS activation remains
+`pending_runner_setup`, production readiness is deferred, and PR #264 stays
+open/draft into `main`.
+
+## Historical pre-integration receipt
+
+The following records the candidate checkpoint before focused verification
+and integration. Pending statements in this section are historical, not the
+current status above.
 
 The Phase A browser/accessibility checkpoint is complete. Phase B consumer-led
 cleanup and canonical documentation are implemented, and the cleaned-tree

@@ -5,7 +5,77 @@ Server 2022, and IIS under the authoritative `docs/dotnet-port/` pack. This
 record preserves accepted-slice evidence while the current target is a
 development-complete port. Production readiness and cutover remain deferred.
 
-## Current Status - Final Development-Completion Batch - 2026-09-16
+## Current Status - Development Complete - 2026-09-16
+
+**Development work is COMPLETE. No required development slice remains.**
+Slices 0-8 are accepted; reduced Slices 9 and 11 are complete as one combined
+final development-completion batch, integrated through
+[PR #272](https://github.com/clcdpc/asap-pocketbase/pull/272).
+
+- Starting milestone: `ce0f4693ea3e98ed81efcf93241456b99050fb56`,
+  successful exact-SHA CI `35109947096`.
+- Phase A checkpoint: `ec609e38588edcdde8cf45d5c75cc790f359cc1d`.
+- Final Terra-verified candidate: `245c5ff5cd07cd1c4e3bb061ffc6ab199b5bcac8`,
+  successful candidate CI `35131411399`.
+- PR merge and integration SHA: `4b03107c6b9dac591ec7c58ce505bf2ae01a2928`;
+  its tree exactly matches the reviewed candidate.
+- One holistic Terra review plus one focused fix verification completed.
+  [FDC-1 is independently resolved](https://github.com/clcdpc/asap-pocketbase/pull/272#issuecomment-5702148343);
+  zero substantive findings remain, fix cycle 1/3.
+- Cleaned-tree validation passed: Release 0 warnings/errors; real SQL and
+  browser 313/313, 0 failures/skips; frontend 18/18; 48 axe states and 3 races
+  with no serious/critical findings or overflow; migration/oracles 25/25;
+  Web/native publication, 17 vendor hashes and test-IIS package gates passed.
+
+This documentation-only integration-branch commit records the final milestone.
+Final combined-batch acceptance is effective only when its own exact-SHA
+`.NET baseline` CI succeeds. At record creation that last CI gate was pending.
+The exact milestone SHA, run and final acceptance are maintained in the
+[canonical batch journal](https://github.com/clcdpc/asap-pocketbase/pull/272#issuecomment-5700413998)
+and PR #264 without a self-referential follow-up commit.
+
+Slice 10 remains **deferred / optional**. Test CI/CD activation remains
+`pending_runner_setup`; the next separate operational task is
+[test-IIS runner/host activation](test-iis-activation.md). Production readiness
+remains **DEFERRED**, including the temporary email transport and all preserved
+[production-readiness work](deferred-production-readiness.md).
+PR #264 remains open/draft into `main`. No production tag, production
+deployment, cutover, runner activation or PR #264 merge was performed.
+
+## Slice Outcome Summary
+
+This is the authoritative quick status view. Exact accepted anchors are retained
+here; chronological entries below preserve checkpoint-time execution evidence.
+
+| Slice | Scope | Outcome | Accepted milestone / CI |
+| --- | --- | --- | --- |
+| 0 | Branch, skeleton, engineering baseline | Accepted | `00967778001e7ec8198ab4498d0fbd15ded4d984` / `34703502557` |
+| 1 | Patron login and submission | Accepted | Reviewed corrective milestone `1e36761c771db70d0b669087d0a843b66cf5618b` / `34731687718`; original candidate retained in chronology |
+| 2 | Staff Entra and core request workflow | Accepted | `9f946aed4b091a82407ac929345819d0a0c87b10` / `34744506275` |
+| 3 | Additional-copy workflow | Accepted | `85539b0ba34937e31396181adfc87c383b8a0cd8` / `34755432713` |
+| 4 | Administration and configuration | Accepted | `417c72430652a35bc8fc1da549ae270eabc86429` / `34861199803` |
+| 5 | Background workflows and complete email operations | Accepted | `36727414d02cbe34ba13cd3f6f1bb57980b83a6f` / `34952097695` |
+| 6 | Analytics | Accepted; later post-acceptance correction completed | Historical milestone `7ba59421176ede99ba48488be6bc81010e60f65c` / `34976630186` |
+| 7 | Migration hardening and legacy links | Accepted | `88fd92cf1fdd856dccba6ef3538182d80325e98a` / `35086949437` |
+| 8 | Reduced test-environment CI/CD to IIS | Accepted at `ce0f4693ea3e98ed81efcf93241456b99050fb56` / CI `35109947096`; activation pending runner setup | Exact milestone / CI / final acceptance: [canonical state](https://github.com/clcdpc/asap-pocketbase/pull/271#issuecomment-5698135527) |
+| 9 | Focused development CI, browser and accessibility completion | Complete as one combined batch; acceptance effective on successful milestone CI | [Exact milestone / CI / acceptance](https://github.com/clcdpc/asap-pocketbase/pull/272#issuecomment-5700413998) |
+| 10 | Synthetic seed/reset convenience tooling | Deferred / optional | - |
+| 11 | Reduced .NET cleanup, canonical docs and one integrated final review | Complete as one combined batch; acceptance effective on successful milestone CI | [Exact milestone / CI / acceptance](https://github.com/clcdpc/asap-pocketbase/pull/272#issuecomment-5700413998) |
+
+The separate post-Slice-6 reviewed correction is
+`04f538ef1a04be33b31d5dbdc3a5c1751b163ee4`; corrected product/integration
+baseline `d607723e846f633ebe206163f6c232dd79566d6f` passed CI `34988112346`.
+It is not a new slice and does not replace the historical Slice 6 milestone.
+
+## Historical Checkpoints
+
+All entries below preserve checkpoint-time status and evidence. Their status,
+next actions and deferred claims are qualified to the checkpoint date and do
+not override the current summary above. Technical contracts retain their
+historical meaning unless the current policy block explicitly narrows the
+remaining execution scope.
+
+## Historical Batch Candidate Checkpoint - Before Integration
 
 Slices 0-7 remain accepted under their recorded review and CI evidence. Slice 7
 passed independent review and short Astra High acceptance.
@@ -86,38 +156,6 @@ does not self-resolve the finding. Integration, final milestone, and supervisor
 acceptance remain pending. Later documentation-only head/CI updates are tracked
 in the [canonical live PR #272 supervisor state](https://github.com/clcdpc/asap-pocketbase/pull/272#issuecomment-5700413998).
 
-## Slice Outcome Summary
-
-This is the authoritative quick status view. Exact accepted anchors are retained
-here; chronological entries below preserve checkpoint-time execution evidence.
-
-| Slice | Scope | Outcome | Accepted milestone / CI |
-| --- | --- | --- | --- |
-| 0 | Branch, skeleton, engineering baseline | Accepted | `00967778001e7ec8198ab4498d0fbd15ded4d984` / `34703502557` |
-| 1 | Patron login and submission | Accepted | Reviewed corrective milestone `1e36761c771db70d0b669087d0a843b66cf5618b` / `34731687718`; original candidate retained in chronology |
-| 2 | Staff Entra and core request workflow | Accepted | `9f946aed4b091a82407ac929345819d0a0c87b10` / `34744506275` |
-| 3 | Additional-copy workflow | Accepted | `85539b0ba34937e31396181adfc87c383b8a0cd8` / `34755432713` |
-| 4 | Administration and configuration | Accepted | `417c72430652a35bc8fc1da549ae270eabc86429` / `34861199803` |
-| 5 | Background workflows and complete email operations | Accepted | `36727414d02cbe34ba13cd3f6f1bb57980b83a6f` / `34952097695` |
-| 6 | Analytics | Accepted; later post-acceptance correction completed | Historical milestone `7ba59421176ede99ba48488be6bc81010e60f65c` / `34976630186` |
-| 7 | Migration hardening and legacy links | Accepted | `88fd92cf1fdd856dccba6ef3538182d80325e98a` / `35086949437` |
-| 8 | Reduced test-environment CI/CD to IIS | Accepted at `ce0f4693ea3e98ed81efcf93241456b99050fb56` / CI `35109947096`; activation pending runner setup | Exact milestone / CI / final acceptance: [canonical state](https://github.com/clcdpc/asap-pocketbase/pull/271#issuecomment-5698135527) |
-| 9 | Focused development CI, browser and accessibility completion | Combined with Slice 11; implementation, local validation and hosted CI complete; focused review, integration, final milestone and acceptance pending | - |
-| 10 | Synthetic seed/reset convenience tooling | Deferred / optional | - |
-| 11 | Reduced .NET cleanup, canonical docs and one integrated final review | Combined with Slice 9; implementation, local validation and hosted CI complete; focused review, integration, final milestone and acceptance pending | - |
-
-The separate post-Slice-6 reviewed correction is
-`04f538ef1a04be33b31d5dbdc3a5c1751b163ee4`; corrected product/integration
-baseline `d607723e846f633ebe206163f6c232dd79566d6f` passed CI `34988112346`.
-It is not a new slice and does not replace the historical Slice 6 milestone.
-
-## Historical Checkpoints
-
-All entries below preserve checkpoint-time status and evidence. Their status,
-next actions and deferred claims are qualified to the checkpoint date and do
-not override the current summary above. Technical contracts retain their
-historical meaning unless the current policy block explicitly narrows the
-remaining execution scope.
 
 ## Slice 7 Integration And Acceptance Checkpoint - 2026-09-16
 

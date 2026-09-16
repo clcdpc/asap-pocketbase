@@ -1,22 +1,24 @@
 # Development Completion And Deferred Production Readiness
 
-The current target is a development-complete .NET port: preserve accepted
-Slices 0-8 behavior and migration correctness, normal build/tests, usable
-development/test configuration, small test-IIS deployment capability, important
-browser/accessibility CI, canonical .NET documentation and one final independent
-integrated review. This is not production readiness or cutover authorization.
+Development work on the .NET port is complete and the combined final batch is
+integrated. The [completion record](final-development-completion.md) and its
+live journal record exact-milestone CI and acceptance. Accepted behavior,
+migration correctness, hosted browser/accessibility CI and canonical .NET
+documentation are preserved. This is not production readiness or cutover
+authorization; no required development slice remains.
 
-## Remaining Sequence
+## Completed Development And Remaining Work
 
 - Slices 0-8: accepted implementation and repository-side test-IIS CI/CD;
   runner activation remains separate.
-- Combined Slice 9 + Slice 11: focused development CI/browser/accessibility,
-  legacy cleanup, canonical .NET documentation, and one final integrated review.
+- Combined Slice 9 + Slice 11: development work complete and integrated;
+  hosted browser/accessibility, cleanup/docs and one final independent review.
+  Exact milestone certification is maintained in the completion journal.
 - Slice 10: deferred/optional synthetic seed-reset convenience tooling.
 - Future phase: production readiness and separately authorized release/cutover.
 
 `test_cd_activation: pending_runner_setup` is compatible with Slice 8 repository
-acceptance and later Slice 9 work. It must not become `active` until a separate
+acceptance and development completion. It must not become `active` until a separate
 activation task records a real successful IIS deployment and exact installed SHA.
 
 ## Preserved Future Work

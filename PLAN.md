@@ -1,13 +1,13 @@
 # ASAP Development Plan
 
-## Current batch
+## Development completion
 
-The reduced Slice 9 browser/accessibility CI work and Slice 11 cleanup/docs
-work run as one final development-completion batch. The current branch is
-`codex/final-development-completion`, based on the reviewed
-`codex/csharp-port` baseline. The batch ends with a cleaned-tree validation,
-one independent integrated review, and exact-milestone CI. It does not claim
-production readiness or merge acceptance.
+Reduced Slices 9 and 11 completed as one final batch and merged into
+`codex/csharp-port` through PR #272. Cleaned-tree validation, one independent
+holistic review, and focused finding verification passed. No required
+development slice remains. Final milestone CI and acceptance are recorded in
+the [completion record](docs/implementation/final-development-completion.md)
+and its live supervisor journal. Production readiness remains deferred.
 
 ## Maintained development gates
 

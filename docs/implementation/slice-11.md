@@ -2,7 +2,10 @@
 
 ## Current combined-batch scope
 
-Reduced Slice 11 runs with Slice 9 as the final development-completion batch.
+Reduced Slice 11 completed with Slice 9 as the final development-completion
+batch, merged through PR #272 into `codex/csharp-port`. The
+[completion record](final-development-completion.md) and its live journal hold
+the exact milestone CI and acceptance. No required development slice remains.
 Consumer inventory precedes deletion. The target tree contains the shipped
 .NET web application, DACPAC, migration executable, current frontend, useful
 frontend regression tests, browser fixtures, and concrete migration/recovery
@@ -43,13 +46,14 @@ SQLite database directly and does not load the retired source migration files.
 Legacy source IDs remain supported by `LegacyPocketBaseMapping` and the
 legacy-link resolver.
 
-## Deferred review and release boundary
+## Completed review and deferred release boundary
 
-Cleanup and documentation are not production completion. The implementer
-finishes the cleaned-tree matrix and commits/pushes the candidate; the
-supervisor waits for exact-milestone CI and dispatches one fresh Terra High
-review. No merge, acceptance, production tag, live provider call, runner or
-host activation, deployment, or repository rename is performed here.
+Cleanup and documentation are not production completion. The cleaned-tree
+matrix and one fresh Terra High holistic review passed after one focused
+documentation correction cycle; zero substantive findings remain. PR #272 is
+integrated. Final milestone CI and acceptance are recorded in the completion
+journal. No production tag, live provider call, runner or host activation,
+deployment, repository rename, or PR #264 merge was performed.
 
 Production operational evidence, real Postmark adapter/webhook validation,
 provider and host isolation, recovery rehearsal, and cutover remain in the

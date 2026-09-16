@@ -2,10 +2,13 @@
 
 ## Current Scope Notice - 2026-09-16
 
-The current target is development-complete .NET port work. The reduced Slice 8
-packet governs the active test-IIS CI/CD implementation; the production-grade
-Slice 8-11 and final cutover sections in this historical plan remain deferred
-reference. See [document 10](10-CODEX-MULTI-MODEL-TASK.md) and
+Development work is complete: Slices 0-8 are accepted and reduced Slices 9 and
+11 completed as one integrated final batch. No required development slice
+remains. The [completion record](../implementation/final-development-completion.md)
+and its live journal record exact-milestone CI and acceptance. Slice 10 remains
+optional/deferred and test-IIS runner activation remains separate. The slice
+sequence below is historical; production-grade release and cutover sections
+remain deferred reference. See [document 10](10-CODEX-MULTI-MODEL-TASK.md) and
 [deferred-production-readiness.md](../implementation/deferred-production-readiness.md)
 for the current sequence and acceptance boundary.
 
