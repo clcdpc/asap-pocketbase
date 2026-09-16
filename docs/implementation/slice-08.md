@@ -1,8 +1,8 @@
-# Slice 8: Deployment, Health And Release Artifacts
+# Slice 8: Test-Environment CI/CD To IIS
 
 ## Current Authorized Scope - 2026-09-16
 
-This packet is being reduced to repository-side **test-environment CI/CD to IIS**.
+This packet defines repository-side **test-environment CI/CD to IIS**.
 The prior production-grade specification below is preserved reference only and
 is superseded for current execution by the user-authorized reduced Slice 8 and
 [development-completion policy](deferred-production-readiness.md).
@@ -55,6 +55,9 @@ configuration and adjacent `test-deployment-state.json`; see
 one-time runner task and the no-live-evidence boundary.
 
 ## Historical Production-Readiness Specification
+
+The sections below preserve the original packet as historical production scope.
+They do not override the reduced contract or its pending-runner acceptance boundary.
 
 ## Preparation Only
 
