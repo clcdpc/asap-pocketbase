@@ -1,12 +1,20 @@
 # Test IIS Deployment Activation
 
-The repository-side test deployment workflow is implemented, but live test deployment remains an explicit operational activation step. Keep `ASAP_TEST_DEPLOYMENT_ENABLED` unset or false until this checklist is complete.
+Current state: `test_cd_activation: pending_runner_setup`.
+
+The repository-side test deployment workflow is implemented, but live test deployment remains an explicit operational activation step. Keep `ASAP_TEST_DEPLOYMENT_ENABLED` unset or false until this checklist is complete. Do not mark activation active until a separately authorized task records a real successful test-IIS deployment.
 
 ## Repository Contract
 
 The `.NET baseline` workflow keeps Release build, real-SQL tests, frontend/browser tests, publish checks, and deployment-package validation on GitHub-hosted `ubuntu-latest`. Only the final deployment job targets the dedicated Windows runner labels `self-hosted`, `windows`, `x64`, and `asap-test-iis`.
 
 A matching test tag such as `v1.0.0-test.1` or an explicit `workflow_dispatch` builds and tests one exact commit, packages the Web publish/DACPAC/deployment script/Hangfire asset, verifies the package digest, then deploys only when repository variable `ASAP_TEST_DEPLOYMENT_ENABLED` is exactly `true`.
+
+The deployment job always reads the canonical host configuration from:
+
+```text
+C:\ProgramData\clc-asap\config\test-deployment.json
+```
 
 ## Automated Host Bootstrap
 
@@ -18,7 +26,7 @@ Run the bootstrap once from an **elevated PowerShell 7** session on the IIS test
     -ReadinessUrl 'https://asap-test.example.org/health/ready'
 ```
 
-`DatabaseName` defaults to `AsapTest`. The bootstrap defaults the application root to:
+`DatabaseName` defaults to `AsapTest`. The bootstrap uses the single canonical application root:
 
 ```text
 C:\ProgramData\clc-asap
@@ -63,9 +71,10 @@ The bootstrap:
 - adds the service identity to `IIS_IUSRS`;
 - by default adds the service identity to local Administrators so the deployment job can manage the IIS app pool on this dedicated test host; use `-SkipLocalAdministrator` only when equivalent narrower IIS lifecycle rights have been provisioned separately;
 - locates `pwsh`, `SqlPackage`, and `sqlcmd` and reports missing tools;
-- creates or reuses a LocalMachine Data Protection certificate and grants the service identity read access to its private key;
+- creates or reuses a LocalMachine Data Protection certificate, grants the service identity read access to its private key, and verifies that access;
 - creates `test-app.json` when absent and preserves it on later runs unless `-ForceApplicationConfig` is supplied;
-- creates/updates `test-deployment.json`;
+- validates preserved application configuration against the startup-relevant ASP.NET configuration contract, including Entra, paths, recipient domains, Hangfire shape/limits, rate limits, and SQL target/security settings;
+- creates/updates `test-deployment.json` in normal mode and validates all of its effective values in `-ValidateOnly` mode;
 - creates/configures the `ASAP-Test` app pool and sets its `Asap__ConfigFile` environment variable;
 - validates an existing IIS site and refuses to silently repoint one with a different path or app pool;
 - can create a missing HTTPS IIS site when `-HttpsCertificateThumbprint` is supplied;
@@ -73,7 +82,7 @@ The bootstrap:
 
 If the IIS pool must be changed to the detected ordinary AD service account, the bootstrap prompts once for that account's password unless `-ServiceCredential` is supplied. A gMSA name ending in `$` does not require that prompt.
 
-Use `-ValidateOnly` to audit the host without creating directories, changing ACLs/groups/IIS, creating certificates, or writing configuration files.
+Use `-ValidateOnly` to audit the host without creating directories, changing ACLs/groups/IIS, creating certificates, or writing configuration files. Validation mode inspects the existing root ACL, Data Protection private-key access, application configuration, and deployment configuration; it does not report those areas as PASS merely because files/certificates exist.
 
 ## Application Configuration
 
@@ -134,7 +143,7 @@ The readiness URL must be HTTPS and end in `/health/ready`.
 3. Complete real Entra configuration in `test-app.json`.
 4. Confirm the HTTPS IIS binding/certificate and DNS are correct.
 5. Grant/verify SQL permissions for the shared test service identity.
-6. Re-run the bootstrap with `-ValidateOnly` as a final host check.
+6. Re-run the bootstrap with `-ValidateOnly` as a final host check and require zero blocking `NEEDS ATTENTION` results.
 7. Set repository variable `ASAP_TEST_DEPLOYMENT_ENABLED=true`.
 8. Dispatch one exact test tag, for example `gh workflow run dotnet.yml --repo clcdpc/asap-pocketbase --ref v1.0.0-test.1`.
 9. Confirm the deployment job validates the package before mutation, `/health/ready` returns HTTP 200 with JSON `status: healthy`, and `test-deployment-state.json` records the expected commit and ZIP/DACPAC hashes.
