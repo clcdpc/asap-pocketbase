@@ -347,7 +347,7 @@ Maintain generic `LegacyPocketBaseMapping` entries for old request IDs needed by
 3. open the target request, then apply the ordinary current-staff eligibility and library-scope checks;
 4. normalize the browser URL to the new ID as a string while preserving supported `stage`/`status`, other navigation parameters, and the hash.
 
-Mapping is translation only and never grants authorization. Unknown, deleted, and out-of-scope targets have the same non-disclosing not-found behavior. A numeric-looking legacy ID remains a legacy ID when the source mapping supports it; browser code must not coerce request IDs through JavaScript `Number`.
+Resolution first checks whether the supplied value is an existing current target ID, and that current target ID wins. The type-qualified mapping (`title_request` or `additional_copy`) is used only as a fallback when no current target exists. Mapping is translation only and never grants authorization. Unknown, deleted, and out-of-scope targets have the same non-disclosing not-found behavior. Independently, browser code must keep request IDs as strings and must not coerce them through JavaScript `Number`, including numeric-looking legacy IDs.
 
 Mapping cleanup is a reviewed, explicit operator action after the reference window. Keep both request-type keys distinct when the same legacy ID text appears in both types, and do not tie cleanup to an automatic purge timer.
 
