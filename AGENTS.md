@@ -12,6 +12,12 @@ Read the directly relevant current source and contract before editing. Preserve
 existing user changes. Use `rg`/`rg --files` for discovery, `apply_patch` for
 manual edits, and focused tests scaled to the behavioral risk.
 
+In C#, always use braces for control-flow blocks, even for one statement. Keep
+nesting minimal with guard clauses and small helpers when that makes the path
+clearer. Make cancellation explicit across async boundaries: thread the
+`CancellationToken` through calls, honor it promptly, and do not swallow or
+misreport cancellation as an ordinary failure.
+
 ## Repository ownership
 
 - `src/Asap.Web` owns the HTTP host, Entra authentication, authorization,
@@ -57,6 +63,10 @@ first and fall back to the system value only when no override exists. Save and
 reset intentionally to the selected scope; do not treat a missing override and
 a blank override as equivalent unless the contract says so.
 
+Reset-inherited-overrides must preserve library-owned items, including custom
+fields, custom formats, rejection templates, auto-claim rules, and their
+history. Reset only the inherited override values that the operation owns.
+
 System-only controls remain disabled in library context and library saves must
 not submit system-only keys. Global records such as staff users are not
 settings overrides: scope controls filter or preselect records, while
@@ -91,8 +101,8 @@ the feature-specific wrapper.
 When scoped loads can overlap, prevent an older response from rendering over a
 newer status, tab, workflow, analytics range, selected library/settings
 context, or authentication context. Reuse the existing abort or stale-result
-pattern where a real race exists. Route mutation follow-up loads through
-explicit refresh helpers.
+pattern where a real race exists, and keep cancellation visible at the caller
+boundary. Route mutation follow-up loads through explicit refresh helpers.
 
 Every interactive flow must remain keyboard reachable with visible focus,
 correct labels, sensible dialog/tab/view focus, supported Escape behavior, and

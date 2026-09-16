@@ -33,13 +33,18 @@ checks, deployment package validation/tamper rejection, workflow isolation,
 PowerShell parsing and diff checks. Exact reviewed-candidate CI `35108769162`
 and PR CI `35108776174` succeeded; the IIS job was skipped in both.
 
-This documentation commit is the candidate acceptance milestone. Final Slice 8
-acceptance is effective only after its own exact-SHA `.NET baseline` CI succeeds.
+For the current status record, Slice 8 is accepted at exact milestone
+`ce0f4693ea3e98ed81efcf93241456b99050fb56` after `.NET baseline` CI
+`35109947096` succeeded; IIS was skipped. The following paragraph is retained
+as historical Slice 8 checkpoint wording and does not describe the current
+combined batch. At that historical checkpoint, this documentation commit was
+the candidate acceptance milestone. Final Slice 8 acceptance was effective
+only after its own exact-SHA `.NET baseline` CI succeeded.
 The resulting SHA, CI run/result and final **Accepted - repository-side test
 CI/CD implemented** certification are maintained in the
 [canonical Slice 8 state](https://github.com/clcdpc/asap-pocketbase/pull/271#issuecomment-5698135527)
-and PR #264, without a self-referential follow-up commit. At record creation,
-that final exact-milestone CI gate had not yet run.
+and PR #264, without a self-referential follow-up commit. At that historical
+record creation, the final exact-milestone CI gate had not yet run.
 
 The current target is the combined reduced Slice 9 + Slice 11 final
 development-completion batch: accepted behavior and migration correctness,
@@ -86,7 +91,7 @@ here; chronological entries below preserve checkpoint-time execution evidence.
 | 5 | Background workflows and complete email operations | Accepted | `36727414d02cbe34ba13cd3f6f1bb57980b83a6f` / `34952097695` |
 | 6 | Analytics | Accepted; later post-acceptance correction completed | Historical milestone `7ba59421176ede99ba48488be6bc81010e60f65c` / `34976630186` |
 | 7 | Migration hardening and legacy links | Accepted | `88fd92cf1fdd856dccba6ef3538182d80325e98a` / `35086949437` |
-| 8 | Reduced test-environment CI/CD to IIS | Repository implementation complete; review/short acceptance passed; activation pending runner setup | Exact milestone / CI / final acceptance: [canonical state](https://github.com/clcdpc/asap-pocketbase/pull/271#issuecomment-5698135527) |
+| 8 | Reduced test-environment CI/CD to IIS | Accepted at `ce0f4693ea3e98ed81efcf93241456b99050fb56` / CI `35109947096`; activation pending runner setup | Exact milestone / CI / final acceptance: [canonical state](https://github.com/clcdpc/asap-pocketbase/pull/271#issuecomment-5698135527) |
 | 9 | Focused development CI, browser and accessibility completion | Combined with Slice 11; Phase B cleanup/docs in progress pending validation/review/CI | - |
 | 10 | Synthetic seed/reset convenience tooling | Deferred / optional | - |
 | 11 | Reduced .NET cleanup, canonical docs and one integrated final review | Combined with Slice 9; Phase B in progress pending validation/review/CI | - |
