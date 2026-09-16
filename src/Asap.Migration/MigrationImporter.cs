@@ -47,18 +47,20 @@ public static class MigrationImporter
     public static MigrationImportResult Import(MigrationImportOptions options)
     {
         var package = MigrationPackageValidator.Validate(options.PackagePath);
+        var operationalConfiguration = MigrationOperationalConfiguration.ValidateRequired(
+            package,
+            options.ExternalConfigurationPath);
         ValidateOptions(options, package);
-        var operationalConfiguration = options.ExternalConfigurationPath is null
-            ? null
-            : MigrationOperationalConfiguration.Validate(package, options.ExternalConfigurationPath);
         var organizations = MigrationPackageReader.ReadRows(package, "organizations.json", "polaris_organizations");
         var staffUsers = MigrationPackageReader.ReadRows(package, "staff-users.json", "staff_users");
         var identityMap = ReadIdentityMap(options.StaffIdentityMapPath, staffUsers, options.AllowedTenantIds);
         ValidateSourceIdentityRows(package);
-        var credentialProtector = MigrationCredentialProtector.Load(options.ExternalConfigurationPath);
         var postmarkToken = ReadOptionalSecretEnvironment(
             options.PostmarkTokenEnvironmentName,
             "postmark_token_missing");
+        var credentialProtector = RequiresCredentialProtection(package, postmarkToken)
+            ? MigrationCredentialProtector.Load(options.ExternalConfigurationPath)
+            : null;
         var importedCounts = new SortedDictionary<string, int>(StringComparer.Ordinal);
         var transformations = new List<object>();
         var claimTransformations = new List<ClaimTransformation>();
@@ -69,10 +71,10 @@ public static class MigrationImporter
         transformations.Add(new
         {
             entity = "operational_configuration",
-            status = operationalConfiguration is null ? "external_config_not_supplied" : "matched",
-            matchedSchedules = operationalConfiguration?.MatchedSchedules ?? 0,
-            matchedQueues = operationalConfiguration?.MatchedQueues ?? 0,
-            retiredObsoleteOverrides = operationalConfiguration?.RetiredObsoleteOverrides ?? 0
+            status = "matched",
+            matchedSchedules = operationalConfiguration.MatchedSchedules,
+            matchedQueues = operationalConfiguration.MatchedQueues,
+            retiredObsoleteOverrides = operationalConfiguration.RetiredObsoleteOverrides
         });
 
         using (var connection = new SqlConnection(options.ConnectionString))
@@ -541,6 +543,15 @@ public static class MigrationImporter
             throw new MigrationOperationException(errorCode, "The named secure process-environment input is missing.");
         }
         return value.Trim();
+    }
+
+    private static bool RequiresCredentialProtection(
+        ValidatedMigrationPackage package,
+        string? postmarkToken)
+    {
+        if (postmarkToken is not null) return true;
+        return MigrationPackageReader.ReadRowsOrEmpty(package, "polaris-settings.json", "polaris_settings")
+            .Any(row => row.String("apiKey") is not null || row.String("adminPassword") is not null);
     }
 
     private static Dictionary<string, StaffIdentity> ReadIdentityMap(
@@ -1343,6 +1354,7 @@ public static class MigrationImporter
         ICollection<object> transformations)
     {
         var mapped = new Dictionary<string, long>(StringComparer.Ordinal);
+        var activeScopes = new HashSet<(int LibraryId, long FormatId)>();
         foreach (var row in rows.OrderBy(item => item.RequiredString("id"), StringComparer.Ordinal))
         {
             var sourceId = row.RequiredString("id");
@@ -1384,6 +1396,12 @@ public static class MigrationImporter
                     : !eligible
                         ? "assignee_ineligible"
                         : "eligible";
+            if (active && !activeScopes.Add((libraryId, formatId)))
+            {
+                throw new MigrationOperationException(
+                    "configuration_scope_conflict",
+                    "Effective format auto-claim rules contain duplicate active scoped configuration.");
+            }
 
             using var command = new SqlCommand(
                 """
@@ -1682,7 +1700,7 @@ public static class MigrationImporter
                 """,
                 connection,
                 transaction);
-            command.Parameters.AddWithValue("@legacyId", sourceId);
+            command.Parameters.AddWithValue("@legacyId", DbString(row.String("legacyId")));
             command.Parameters.AddWithValue("@sourceTitleRequestId", DbValue(sourceTitleRequestId));
             command.Parameters.AddWithValue("@libraryId", libraryId);
             command.Parameters.AddWithValue("@libraryName", DbString(row.Text("libraryOrgName")));
@@ -2116,6 +2134,7 @@ public static class MigrationImporter
             var evidence = new List<PlacementEvidence>();
             var currentStatus = ResolveRequestStatus(request, statuses);
             var currentCloseReason = ResolveRequestCloseReason(request, closeReasons);
+            var requestBib = request.String("bibid");
             if (currentStatus == "hold_placed")
             {
                 evidence.Add(new(
@@ -2136,7 +2155,8 @@ public static class MigrationImporter
             }
 
             eventsByRequest.TryGetValue(sourceRequestId, out var requestEvents);
-            foreach (var sourceEvent in requestEvents ?? [])
+            var sourceEvents = requestEvents ?? [];
+            foreach (var sourceEvent in sourceEvents)
             {
                 if (sourceEvent.EventType == "hold_placed")
                 {
@@ -2156,6 +2176,71 @@ public static class MigrationImporter
                 }
             }
             var libraryOrganizationId = request.Int32("libraryOrgId") ?? 0;
+            var hints = new List<PlacementEvidence>();
+            if (evidence.Count == 0 &&
+                currentStatus == "closed" &&
+                currentCloseReason is not "rejected" &&
+                requestBib is not null)
+            {
+                hints.Add(new(
+                    "recorded_bib_hint",
+                    "title_requests",
+                    sourceRequestId,
+                    "bibid",
+                    requestBib));
+            }
+            foreach (var sourceEvent in sourceEvents)
+            {
+                if (evidence.Any(item => item.SourceRecordId == sourceEvent.Id)) continue;
+                hints.AddRange(sourceEvent.BibSources.Select(source => new PlacementEvidence(
+                    "event_bib_hint",
+                    source.SourceCollection,
+                    source.SourceRecordId,
+                    source.SourceField,
+                    source.BibId)));
+            }
+            var sortedHints = hints.Distinct()
+                .OrderBy(item => item.Kind, StringComparer.Ordinal)
+                .ThenBy(item => item.SourceCollection, StringComparer.Ordinal)
+                .ThenBy(item => item.SourceRecordId, StringComparer.Ordinal)
+                .ThenBy(item => item.SourceField, StringComparer.Ordinal)
+                .ThenBy(item => item.Value, StringComparer.Ordinal)
+                .ToArray();
+            if (evidence.Count == 0 && sortedHints.Length > 0)
+            {
+                placementTransformations.Add(new(
+                    sourceRequestId,
+                    libraryOrganizationId,
+                    currentStatus,
+                    null,
+                    [],
+                    [],
+                    "placement_history_ambiguous",
+                    sortedHints));
+                transformations.Add(new
+                {
+                    entity = "placed_bib_protection",
+                    sourceId = sourceRequestId,
+                    libraryOrganizationId,
+                    status = currentStatus,
+                    bibId = (string?)null,
+                    evidence = Array.Empty<PlacementEvidence>(),
+                    hints = sortedHints.Select(item => new
+                    {
+                        kind = item.Kind,
+                        sourceCollection = item.SourceCollection,
+                        sourceRecordId = item.SourceRecordId,
+                        sourceField = item.SourceField,
+                        value = item.Value
+                    }),
+                    action = "placement_history_ambiguous"
+                });
+                var references = string.Join(", ", sortedHints.Select(item =>
+                    $"{item.SourceCollection}/{item.SourceRecordId}/{item.SourceField}"));
+                throw new MigrationOperationException(
+                    "placement_history_ambiguous",
+                    $"Title request {sourceRequestId} has hint-only placement history ({references}); source correction is required.");
+            }
             if (evidence.Count == 0)
             {
                 placementTransformations.Add(new(
@@ -2165,7 +2250,8 @@ public static class MigrationImporter
                     null,
                     [],
                     [],
-                    "no_placement_evidence"));
+                    "no_placement_evidence",
+                    []));
                 transformations.Add(new
                 {
                     entity = "placed_bib_protection",
@@ -2181,7 +2267,6 @@ public static class MigrationImporter
 
             var bibSources = new List<PlacementBibSource>();
             var bibIds = new HashSet<string>(StringComparer.Ordinal);
-            var requestBib = request.String("bibid");
             if (requestBib is not null)
             {
                 bibIds.Add(requestBib);
@@ -2259,7 +2344,8 @@ public static class MigrationImporter
                 bibId,
                 sortedEvidence,
                 sortedBibSources,
-                "inserted"));
+                "inserted",
+                []));
             transformations.Add(new
             {
                 entity = "placed_bib_protection",
@@ -3551,6 +3637,7 @@ public static class MigrationImporter
                 knownBibMarkers = placementTransformations.Count(item => item.Action == "inserted" && item.BibId is not null),
                 explicitNullBibMarkers = placementTransformations.Count(item => item.Action == "inserted" && item.BibId is null),
                 noPlacementEvidence = placementTransformations.Count(item => item.Action == "no_placement_evidence"),
+                placementHistoryAmbiguous = placementTransformations.Count(item => item.Action == "placement_history_ambiguous"),
                 insertedMarkers = placementTransformations.Count(item => item.Action == "inserted"),
                 reusedMarkers = 0,
                 fabricatedHoldPlacementOperations = 0,
@@ -4279,7 +4366,8 @@ public static class MigrationImporter
         string? BibId,
         IReadOnlyList<PlacementEvidence> Evidence,
         IReadOnlyList<PlacementBibSource> BibSources,
-        string Action);
+        string Action,
+        IReadOnlyList<PlacementEvidence> Hints);
 
     private sealed record ConfigurationSourceFields(
         string File,

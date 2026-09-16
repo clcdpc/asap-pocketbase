@@ -237,10 +237,6 @@ internal static class MigrationConfigurationImporter
             MigrationPackageReader.ReadRows(package, "material-formats.json", "material_formats"),
             "material formats",
             row => $"{ScopedKey(row, "libraryOrganization")}|{row.RequiredString("code").Trim().ToLowerInvariant()}");
-        ValidateUniqueScope(
-            MigrationPackageReader.ReadRows(package, "format-auto-claim-rules.json", "format_claim_rules"),
-            "format auto-claim rules",
-            row => $"{row.RequiredString("libraryOrgId")}|{NormalizeFormatCode(row.RequiredString("format"))}");
     }
 
     private static void ValidateUniqueScope(
@@ -1185,31 +1181,34 @@ internal static class MigrationConfigurationImporter
                 connection,
                 transaction);
             command.Parameters.AddWithValue("@organizationId", organizationId);
-            using var reader = command.ExecuteReader();
-            EnsureConfiguration(reader.Read(), "workflow settings");
-            EnsureConfiguration(
-                IntEquals(reader, 0, isSystem ? row.Int32("suggestionLimit") ?? 5 : row.Int32("suggestionLimit")) &&
-                StringEquals(reader, 1, ScopedText(row, "suggestionLimitMessage", isSystem)) &&
-                BoolEquals(reader, 2, Bool(row, "outstandingTimeoutEnabled", isSystem, false)) &&
-                IntEquals(reader, 3, Int(row, "outstandingTimeoutDays", isSystem, 30)) &&
-                BoolEquals(reader, 4, Bool(row, "outstandingTimeoutSendEmail", isSystem, false)) &&
-                LongEquals(reader, 5, expectedTemplateId) &&
-                BoolEquals(reader, 6, Bool(row, "holdPickupTimeoutEnabled", isSystem, false)) &&
-                IntEquals(reader, 7, Int(row, "holdPickupTimeoutDays", isSystem, 14)) &&
-                BoolEquals(reader, 8, Bool(row, "pendingHoldTimeoutEnabled", isSystem, false)) &&
-                IntEquals(reader, 9, Int(row, "pendingHoldTimeoutDays", isSystem, 14)) &&
-                BoolEquals(reader, 10, Bool(row, "additionalCopyTimeoutEnabled", isSystem, false)) &&
-                IntEquals(reader, 11, Int(row, "additionalCopyTimeoutDays", isSystem, 14)) &&
-                BoolEquals(reader, 12, Bool(row, "autoPromote", isSystem, false)) &&
-                BoolEquals(reader, 13, Bool(row, "commonAuthorsEnabled", isSystem, false)) &&
-                StringEquals(reader, 14, ScopedText(row, "commonAuthorsLabel", isSystem)) &&
-                StringEquals(reader, 15, ScopedText(row, "commonAuthorsHelp", isSystem)) &&
-                StringEquals(reader, 16, ScopedText(row, "commonAuthorsMessage", isSystem)) &&
-                BoolEquals(reader, 17, Bool(row, "allowPatronAutoholdOptOut", isSystem, true)) &&
-                BoolEquals(reader, 18, Bool(row, "allowAnyRegisteredCardLogin", isSystem, false)) &&
-                BoolEquals(reader, 19, Bool(row, "patronCodeEligibilityEnabled", isSystem, false)) &&
-                StringEquals(reader, 20, ScopedText(row, "patronCodeEligibilityMessage", isSystem)),
-                "workflow settings");
+            bool matches;
+            using (var reader = command.ExecuteReader())
+            {
+                EnsureConfiguration(reader.Read(), "workflow settings");
+                matches =
+                    IntEquals(reader, 0, isSystem ? row.Int32("suggestionLimit") ?? 5 : row.Int32("suggestionLimit")) &&
+                    StringEquals(reader, 1, ScopedText(row, "suggestionLimitMessage", isSystem)) &&
+                    BoolEquals(reader, 2, Bool(row, "outstandingTimeoutEnabled", isSystem, false)) &&
+                    IntEquals(reader, 3, Int(row, "outstandingTimeoutDays", isSystem, 30)) &&
+                    BoolEquals(reader, 4, Bool(row, "outstandingTimeoutSendEmail", isSystem, false)) &&
+                    LongEquals(reader, 5, expectedTemplateId) &&
+                    BoolEquals(reader, 6, Bool(row, "holdPickupTimeoutEnabled", isSystem, false)) &&
+                    IntEquals(reader, 7, Int(row, "holdPickupTimeoutDays", isSystem, 14)) &&
+                    BoolEquals(reader, 8, Bool(row, "pendingHoldTimeoutEnabled", isSystem, false)) &&
+                    IntEquals(reader, 9, Int(row, "pendingHoldTimeoutDays", isSystem, 14)) &&
+                    BoolEquals(reader, 10, Bool(row, "additionalCopyTimeoutEnabled", isSystem, false)) &&
+                    IntEquals(reader, 11, Int(row, "additionalCopyTimeoutDays", isSystem, 14)) &&
+                    BoolEquals(reader, 12, Bool(row, "autoPromote", isSystem, false)) &&
+                    BoolEquals(reader, 13, Bool(row, "commonAuthorsEnabled", isSystem, false)) &&
+                    StringEquals(reader, 14, ScopedText(row, "commonAuthorsLabel", isSystem)) &&
+                    StringEquals(reader, 15, ScopedText(row, "commonAuthorsHelp", isSystem)) &&
+                    StringEquals(reader, 16, ScopedText(row, "commonAuthorsMessage", isSystem)) &&
+                    BoolEquals(reader, 17, Bool(row, "allowPatronAutoholdOptOut", isSystem, true)) &&
+                    BoolEquals(reader, 18, Bool(row, "allowAnyRegisteredCardLogin", isSystem, false)) &&
+                    BoolEquals(reader, 19, Bool(row, "patronCodeEligibilityEnabled", isSystem, false)) &&
+                    StringEquals(reader, 20, ScopedText(row, "patronCodeEligibilityMessage", isSystem));
+            }
+            EnsureConfiguration(matches, "workflow settings");
             counter.Rows++;
             counter.Fields += 21;
 

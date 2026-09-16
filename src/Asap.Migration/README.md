@@ -24,10 +24,10 @@ Asap.Migration validate --package <package-dir> [--external-config <path>]
 
 Asap.Migration import --package <package-dir> --connection-string-env <name> \
   --staff-identity-map <path> --allowed-tenant-ids <comma-separated-guids> --report <path> \
-  [--external-config <path>] [--postmark-token-env <name>]
+  --external-config <path> [--postmark-token-env <name>]
 
 Asap.Migration reconcile --package <package-dir> --connection-string-env <name> \
-  --report <path> [--external-config <path>]
+  --report <path> --external-config <path>
 ```
 
 ## PACKAGE2 import and reconciliation
@@ -53,6 +53,11 @@ are recorded with intentional decisions. Legacy SMTP transport is not
 converted to Postmark. Target provider credentials are supplied only through
 the protected import boundary and target Data Protection storage; values,
 fingerprints, and provider responses do not enter reports or ordinary logs.
+
+`import` and `reconcile` require `--external-config` and fail closed when the
+target operational configuration is missing or does not match the frozen
+legacy schedules and processing limits. `validate` may omit it when only the
+immutable package structure is being checked.
 
 Claims are mapped before eligibility is evaluated. Eligible open claims are
 preserved, invalid open claims are cleared only in their mutable fields, and
