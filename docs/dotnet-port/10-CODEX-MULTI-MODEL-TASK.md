@@ -1,5 +1,41 @@
 # Multi-model Codex Task: Port ASAP from PocketBase to .NET 10
 
+## Current Development-Completion Policy - 2026-09-16
+
+The current target is a **development-complete .NET port**, not production
+readiness. This policy and the revised Slice 8-11 packets supersede conflicting
+remaining-slice/release sequencing below. Accepted Slices 0-7 and their evidence
+remain unchanged. Slice 8 starts from `88fd92cf1fdd856dccba6ef3538182d80325e98a`
+(successful exact-SHA `.NET baseline` run `35086949437`).
+
+Remaining sequence: Slice 8 repository-side test-IIS CI/CD; Slice 9 focused
+development/browser/accessibility CI; Slice 10 deferred/optional synthetic
+seed-reset; Slice 11 .NET cleanup, canonical documentation and one integrated
+development-completion review. Production operational/release/cutover contracts
+remain preserved in [the deferred backlog](../implementation/deferred-production-readiness.md).
+No production gate is implicitly satisfied by development completion.
+
+Default to one bounded Luna Max implementation context for a cohesive slice.
+Package branches may bound context but do not automatically receive Terra review.
+Package-level Terra review requires a recorded exceptional, unusually risky,
+independently reviewable boundary. Complete integrated validation precedes ONE
+fresh Terra High holistic review of the complete slice. Confirmed findings go
+to bounded Luna Max fixes, each followed by fresh focused Terra High verification;
+materially broadened fixes may require a new holistic review. The maximum remains
+three full-slice fix/re-review cycles. The final development-completion review is
+one fresh full-application Terra High review plus focused verification of fixes;
+the old three-consecutive-clean-pass rule belongs to future production readiness.
+
+Astra High remains the thin supervisor; Astra Max is bounded escalation only.
+The context firewall, GitHub state/events, short acceptance, independent finding
+dispositions and exact-milestone CI remain binding. PR #264 remains open/draft
+into main; this task does not authorize its merge or starting Slice 9.
+
+Slice 8 can be accepted with `test_cd_activation: pending_runner_setup` after all
+repository-side gates pass. Runner setup, host configuration and first live IIS
+deployment are a later operational task. Ordinary CI never requires the runner.
+Reduced Slice 9 may proceed after Slice 8 acceptance without waiting for activation.
+
 ## Mission
 
 Port `clcdpc/asap-pocketbase` from PocketBase/SQLite/Goja to the .NET architecture defined by this documentation pack. The final port is delivered through `codex/csharp-port` and draft PR #264 into `main`, with temporary slice/work-package PRs under the execution policy below. Preserve existing ASAP behavior and frontend UX by default; change behavior only when the specification explicitly requires it or when a concrete technical benefit justifies a documented deviation.
