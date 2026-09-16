@@ -9,6 +9,7 @@ const deployment = fs.readFileSync(path.join(root, 'scripts/deployment/Deploy-As
 const bootstrapPath = path.join(root, 'scripts/deployment/Initialize-AsapTestHost.ps1');
 const bootstrap = fs.readFileSync(bootstrapPath, 'utf8');
 const activation = fs.readFileSync(path.join(root, 'docs/implementation/test-iis-activation.md'), 'utf8');
+const slice8 = fs.readFileSync(path.join(root, 'docs/implementation/slice-08.md'), 'utf8');
 
 assert.ok(workflow.includes("tags:\n      - 'v*.*.*-test.*'"), 'test deployment tags should use the documented convention');
 assert.ok(workflow.includes('- codex/csharp-port'), 'integration-branch push trigger is required');
@@ -88,7 +89,7 @@ assert.ok(!deployment.includes('[asap].[DeploymentState]'), 'test deployment mus
 
 for (const token of [
   "[string] $DatabaseName = 'AsapTest'",
-  "[string] $RootPath = 'C:\\ProgramData\\clc-asap'",
+  "$root = 'C:\\ProgramData\\clc-asap'",
   "Where-Object Name -Like 'actions.runner.*'",
   'Get-CimInstance Win32_Service',
   'IIS_IUSRS membership',
@@ -100,12 +101,22 @@ for (const token of [
   "Join-Path $root 'web'",
   "Join-Path $root 'staging'",
   "Join-Path $root 'backups'",
+  'Test-RootPermissions',
+  'Test-CertificateRead',
+  'Test-AppConfiguration',
+  'Test-DeploymentConfiguration',
   'ValidateOnly'
 ]) {
   assert.ok(bootstrap.includes(token), `test host bootstrap should implement ${token}`);
 }
+assert.ok(!bootstrap.includes('[string] $RootPath'), 'bootstrap should use one canonical ProgramData root rather than configurable RootPath');
 assert.ok(bootstrap.includes("Add-Result 'INFO' 'SQL authorization'"), 'bootstrap must leave SQL privilege grants as an explicit operator boundary');
 assert.ok(bootstrap.includes('[switch] $SkipLocalAdministrator'), 'bootstrap should allow separately provisioned narrower IIS lifecycle rights');
+assert.ok(bootstrap.includes('ACL inheritance is not protected.'), 'ValidateOnly must inspect the canonical root ACL');
+assert.ok(bootstrap.includes('does not have private-key Read'), 'ValidateOnly must inspect Data Protection private-key access');
+assert.ok(bootstrap.includes('AllowedTenantIds contains an invalid tenant GUID'), 'application validation must inspect allowed Entra tenants');
+assert.ok(bootstrap.includes('Hangfire.Schedules keys do not match the required shape'), 'application validation must inspect Hangfire schedule shape');
+assert.ok(bootstrap.includes('matches the requested host contract'), 'deployment configuration must be content-validated');
 
 const escapedBootstrapPath = bootstrapPath.replace(/'/g, "''");
 const parseCommand = `$tokens = $null; $errors = $null; [System.Management.Automation.Language.Parser]::ParseFile('${escapedBootstrapPath}', [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }`;
@@ -114,8 +125,13 @@ if (!parseResult.error || parseResult.error.code !== 'ENOENT') {
   assert.strictEqual(parseResult.status, 0, `bootstrap PowerShell should parse cleanly:\n${parseResult.stdout}\n${parseResult.stderr}`);
 }
 
+const canonicalConfigPath = 'C:\\ProgramData\\clc-asap\\config\\test-deployment.json';
 assert.ok(activation.includes('Initialize-AsapTestHost.ps1'), 'activation docs should use the automated host bootstrap');
-assert.ok(activation.includes('C:\\ProgramData\\clc-asap\\config\\test-deployment.json'), 'activation docs should use the current host config path');
+assert.ok(activation.includes(canonicalConfigPath), 'activation docs should use the canonical host config path');
+assert.ok(slice8.includes(canonicalConfigPath), 'Slice 8 should use the same canonical host config path as activation and workflow');
+assert.ok(activation.includes('test_cd_activation: pending_runner_setup'), 'activation guide must retain the pending activation state');
+assert.ok(slice8.includes('test_cd_activation: pending_runner_setup'), 'Slice 8 must retain the pending activation state');
+assert.ok(!slice8.includes('C:\\ProgramData\\ASAP\\test-deployment.json'), 'Slice 8 current contract must not retain the superseded host path');
 assert.ok(activation.includes('gh workflow run dotnet.yml'), 'activation docs should provide the explicit CLI dispatch');
 assert.ok(activation.includes('--ref v1.0.0-test.1'), 'activation docs should show an exact test tag ref');
 assert.ok(activation.includes('ASAP_TEST_DEPLOYMENT_ENABLED=true'), 'activation docs should describe enabling the gate');
