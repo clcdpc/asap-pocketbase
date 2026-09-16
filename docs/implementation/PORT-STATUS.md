@@ -5,7 +5,7 @@ Server 2022, and IIS under the authoritative `docs/dotnet-port/` pack. This
 record preserves accepted-slice evidence while the current target is a
 development-complete port. Production readiness and cutover remain deferred.
 
-## Current Status - Slice 8 Repository Acceptance Record - 2026-09-16
+## Current Status - Final Development-Completion Batch - 2026-09-16
 
 Slices 0-7 remain accepted under their recorded review and CI evidence. Slice 7
 passed independent review and short Astra High acceptance.
@@ -33,32 +33,58 @@ checks, deployment package validation/tamper rejection, workflow isolation,
 PowerShell parsing and diff checks. Exact reviewed-candidate CI `35108769162`
 and PR CI `35108776174` succeeded; the IIS job was skipped in both.
 
-This documentation commit is the candidate acceptance milestone. Final Slice 8
-acceptance is effective only after its own exact-SHA `.NET baseline` CI succeeds.
+For the current status record, Slice 8 is accepted at exact milestone
+`ce0f4693ea3e98ed81efcf93241456b99050fb56` after `.NET baseline` CI
+`35109947096` succeeded; IIS was skipped. The following paragraph is retained
+as historical Slice 8 checkpoint wording and does not describe the current
+combined batch. At that historical checkpoint, this documentation commit was
+the candidate acceptance milestone. Final Slice 8 acceptance was effective
+only after its own exact-SHA `.NET baseline` CI succeeded.
 The resulting SHA, CI run/result and final **Accepted - repository-side test
 CI/CD implemented** certification are maintained in the
 [canonical Slice 8 state](https://github.com/clcdpc/asap-pocketbase/pull/271#issuecomment-5698135527)
-and PR #264, without a self-referential follow-up commit. At record creation,
-that final exact-milestone CI gate had not yet run.
+and PR #264, without a self-referential follow-up commit. At that historical
+record creation, the final exact-milestone CI gate had not yet run.
 
-The current target is development completion: accepted behavior and migration
-correctness, normal Release/real-SQL/frontend/publish gates, usable development
-and test configuration, repository-side test-IIS CI/CD, focused browser and
-accessibility coverage, canonical .NET cleanup and one integrated final review.
-Production deployment, cutover and operational-readiness evidence remain
-deferred in [deferred-production-readiness.md](deferred-production-readiness.md).
+The current target is the combined reduced Slice 9 + Slice 11 final
+development-completion batch: accepted behavior and migration correctness,
+normal Release/real-SQL/frontend/publish gates, focused browser and
+accessibility coverage, consumer-led legacy cleanup, canonical .NET
+documentation, and one integrated final review. Production deployment,
+cutover, and operational-readiness evidence remain deferred in
+[deferred-production-readiness.md](deferred-production-readiness.md).
+
+Phase A checkpoint `ec609e38588edcdde8cf45d5c75cc790f359cc1d` passed PR CI
+`35124500838`; the IIS job was skipped. Phase B inventory and cleanup now
+classify the actual consumers: `Asap.Web`/Frontend own shipped behavior,
+`Asap.Database` owns the DACPAC and intentional legacy-ID mapping,
+`Asap.Migration` owns stopped-source native SQLite migration, and the current
+C#/browser/frontend suites own regression coverage. The obsolete PocketBase
+runtime/source/public tree and dependent legacy tests/docs are removed. The
+cleaned-tree local matrix is green through publish and focused migration
+checks. Full local implementation validation is recorded at
+`74c1b1008963bfb460d89aa374fd245789dd89d4`; its local Slice 8 package has 333
+entries and SHA-256
+`570d2a7257b96de132f5cfbb0be7a41e043d451befa29c18fb4749917e6fc9ee`, bound to
+that checkpoint. The prose-only head
+`a4fa224864004279cb679738fd1f155c795645dc` then passed hosted PR CI
+`35129263256`, including browser, publish, and package checks; IIS was skipped.
+The hosted run is current-head evidence; the local package remains bound to
+`74c1b1008963bfb460d89aa374fd245789dd89d4`.
 
 PR #264 remains open/draft into `main`; its current summary is synchronized by
 the supervisor. `test_cd_activation: pending_runner_setup` is the only allowed
 Slice 8 activation state until a separate task records a real IIS deployment.
 No runner installation, registration, host contact, live IIS deployment,
-production tag, PR #264 merge or Slice 9 implementation is claimed here.
-After successful exact-milestone CI, the next development action is reduced
-Slice 9: important browser journeys and serious/critical accessibility coverage
-in normal CI, preserving real-SQL/frontend gates. Slice 9 has not started.
-Runner activation is a separate later operational task and need not precede it;
-see [the activation checklist](test-iis-activation.md). Slice 10 is optional;
-Slice 11 follows the reduced development-completion review policy.
+production tag, PR #264 merge, review, or acceptance is claimed here. Runner
+activation is a separate later operational task and need not precede this
+batch; see [the activation checklist](test-iis-activation.md). Slice 10 is
+optional/deferred. Initial independent Terra review of
+`a4fa224864004279cb679738fd1f155c795645dc` found only FDC-1 [P2]. This
+documentation-only correction is awaiting focused independent verification and
+does not self-resolve the finding. Integration, final milestone, and supervisor
+acceptance remain pending. Later documentation-only head/CI updates are tracked
+in the [canonical live PR #272 supervisor state](https://github.com/clcdpc/asap-pocketbase/pull/272#issuecomment-5700413998).
 
 ## Slice Outcome Summary
 
@@ -75,10 +101,10 @@ here; chronological entries below preserve checkpoint-time execution evidence.
 | 5 | Background workflows and complete email operations | Accepted | `36727414d02cbe34ba13cd3f6f1bb57980b83a6f` / `34952097695` |
 | 6 | Analytics | Accepted; later post-acceptance correction completed | Historical milestone `7ba59421176ede99ba48488be6bc81010e60f65c` / `34976630186` |
 | 7 | Migration hardening and legacy links | Accepted | `88fd92cf1fdd856dccba6ef3538182d80325e98a` / `35086949437` |
-| 8 | Reduced test-environment CI/CD to IIS | Repository implementation complete; review/short acceptance passed; activation pending runner setup | Exact milestone / CI / final acceptance: [canonical state](https://github.com/clcdpc/asap-pocketbase/pull/271#issuecomment-5698135527) |
-| 9 | Focused development CI, browser and accessibility completion | Future scope; not started in this task | - |
+| 8 | Reduced test-environment CI/CD to IIS | Accepted at `ce0f4693ea3e98ed81efcf93241456b99050fb56` / CI `35109947096`; activation pending runner setup | Exact milestone / CI / final acceptance: [canonical state](https://github.com/clcdpc/asap-pocketbase/pull/271#issuecomment-5698135527) |
+| 9 | Focused development CI, browser and accessibility completion | Combined with Slice 11; implementation, local validation and hosted CI complete; focused review, integration, final milestone and acceptance pending | - |
 | 10 | Synthetic seed/reset convenience tooling | Deferred / optional | - |
-| 11 | Reduced .NET cleanup, canonical docs and one integrated final review | Future scope; not started in this task | - |
+| 11 | Reduced .NET cleanup, canonical docs and one integrated final review | Combined with Slice 9; implementation, local validation and hosted CI complete; focused review, integration, final milestone and acceptance pending | - |
 
 The separate post-Slice-6 reviewed correction is
 `04f538ef1a04be33b31d5dbdc3a5c1751b163ee4`; corrected product/integration

@@ -1,18 +1,18 @@
 # Development Completion And Deferred Production Readiness
 
 The current target is a development-complete .NET port: preserve accepted
-Slices 0-7 behavior and migration correctness, normal build/tests, usable
+Slices 0-8 behavior and migration correctness, normal build/tests, usable
 development/test configuration, small test-IIS deployment capability, important
 browser/accessibility CI, canonical .NET documentation and one final independent
 integrated review. This is not production readiness or cutover authorization.
 
 ## Remaining Sequence
 
-- Slice 8: repository-side tag/manual test-IIS CI/CD; runner activation separate.
-- Slice 9: focused development CI/browser/accessibility completion.
+- Slices 0-8: accepted implementation and repository-side test-IIS CI/CD;
+  runner activation remains separate.
+- Combined Slice 9 + Slice 11: focused development CI/browser/accessibility,
+  legacy cleanup, canonical .NET documentation, and one final integrated review.
 - Slice 10: deferred/optional synthetic seed-reset convenience tooling.
-- Slice 11: .NET cleanup/docs and one full-application Terra High review, with
-  bounded Luna fixes and focused independent verification.
 - Future phase: production readiness and separately authorized release/cutover.
 
 `test_cd_activation: pending_runner_setup` is compatible with Slice 8 repository

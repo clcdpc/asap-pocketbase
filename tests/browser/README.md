@@ -1,24 +1,45 @@
-# Patron browser acceptance
+# Browser acceptance suite
 
-This is a plain Node Playwright runner for the Slice 1 patron journey. It does
-not start the application, use `@playwright/test`, add application endpoints,
-or create application email files itself. It does mutate the running app through
-normal login, submission, duplicate-submission, and logout requests; it does
-not provision a database or seed fixture data through SQL. The application must
-already be running with the deterministic Testing provider and the parent
-SQL-backed fixture.
+`npm run test:browser` is the full browser-suite entry point. It selects the
+three existing real-SQL integration journeys and runs them through the same
+Testing Kestrel fixtures used by the .NET test suite:
 
-Run it with exactly two positional arguments:
+- `patron.cjs`: 10 desktop/mobile patron states and 3 authentication/session
+  race scenarios.
+- `staff.cjs`: 20 desktop/mobile staff states covering scope, recovery,
+  queue, analytics, assignment, stale mutations, and keyboard workflows.
+- `legacy-links.cjs`: 18 desktop/mobile success and failure states covering
+  shared, numeric, and type-qualified request links.
+
+Each integration journey provisions its isolated SQL fixture, starts the Testing app with
+deterministic providers, and tears down the host and browser in test cleanup.
+The runners reject external requests, page errors, serious or critical axe
+violations, horizontal overflow, and unintended missing images. Hosted CI
+uploads `.artifacts/browser` only when the job fails; the directory contains
+synthetic screenshots and JSON reports, not credentials or provider traffic.
+
+The command requires the Release build, SQL Server 2022, installed npm
+dependencies, and a Chromium browser. It is the CI-facing entry point; the
+individual runners below are lower-level contracts for fixture-owned
+integration tests.
+
+## Patron runner
+
+The patron browser journey is a plain Node.js + Playwright regression runner
+for the hosted `Asap.Web` application. It does not start the application or
+seed a database. The real-SQL integration test owns that lifecycle and passes
+the runner a loopback base URL plus an isolated artifact directory.
+
+The direct runner contract is:
 
 ```text
 node tests/browser/patron.cjs <baseURL> <artifactDirectory>
 ```
 
-For repository integration, pass an ignored directory such as:
-
-```text
-npm run test:browser -- http://127.0.0.1:5000 .artifacts/browser
-```
+The staff and legacy-link runners use the same loopback/artifact contract
+followed by their fixture identifiers; their integration tests supply those
+arguments. Run `npm run test:browser` instead of reproducing those argument
+lists by hand.
 
 The runner normalizes `baseURL` to its origin and aborts every browser request
 to another origin. It exits nonzero for any failed browser assertion, serious
@@ -32,7 +53,7 @@ The parent machine may instead provide an existing executable through
 `ASAP_TEST_CHROMIUM_EXECUTABLE_PATH`; no user-specific path is built into the
 runner.
 
-The journey uses these synthetic fixture barcodes, all with PIN `1234`,
+The patron journey uses these synthetic fixture barcodes, all with PIN `1234`,
 library context `libraryOrgId=2`, and pickup branch `101`:
 
 | Purpose | Barcode(s) |
@@ -41,22 +62,13 @@ library context `libraryOrgId=2`, and pickup branch `101`:
 | Normal session-restore race | `20000000000901`, `20000000000902` |
 | Startup config/login race | `20000000000911`, `20000000000912` |
 
-The parent fixture must provide the deterministic provider behavior already
-used by the integration tests: wrong PIN rejection, branch `101`, publication
-option `Coming soon`, duplicate submission for the same journey patron/title,
-and successful lookup for identifier `9780000000001`. Across the desktop and
-mobile journeys, the parent should expect exactly two created requests: one
-successful first submission for each journey fixture; the second identical
-submission for each fixture is a duplicate/conflict. The synthetic
-`@example.org` recipients use the normal allowed-domain intent. Parent-side
-domain-policy checks should keep blocked destinations terminal as
-`recipient_domain_not_allowed` with zero provider calls; this runner does not
-provision or seed that SQL state.
+The parent fixture provides deterministic wrong-PIN rejection, branch `101`,
+publication option `Coming soon`, duplicate submission for the same
+journey patron/title, and successful lookup for identifier `9780000000001`.
+The synthetic `@example.org` recipients use the normal allowed-domain intent.
 
 The artifact directory receives desktop/mobile screenshots for the ten major
-states (`login`, `invalid-login`, `form`, `success`, and `duplicate`), three
-authentication-race screenshots, and `browser-results.json`. Keep that
-directory under `.artifacts/` for repository integration; it is ignored by the
-repository and may be retained as intentional CI browser-test evidence. Only
-generated dev-email output must be excluded from application publish and CI
-artifacts.
+states, three authentication-race screenshots, and
+`browser-results.json`. Keep it under `.artifacts/` for repository
+integration; it is ignored by the repository and is retained only as
+intentional browser-test evidence.

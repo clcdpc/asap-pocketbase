@@ -1,53 +1,47 @@
-# Slice 9: Focused Development CI And Browser Completion
+# Slice 9: Development Browser And Accessibility Completion
 
-## Current Reduced Scope
+## Current combined-batch scope
 
-Slice 9 is future work and is not implemented by reduced Slice 8. Start only
-after the accepted Slice 8 milestone, following [document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md)
-and the current status record. It does not have to wait for
-`test_cd_activation` unless a chosen browser check explicitly targets the live
-test IIS host.
+Reduced Slice 9 and Slice 11 are implemented as one final development-
+completion batch on `codex/final-development-completion`. The batch preserves
+the accepted Slices 0-8 behavior and runs against the current .NET tree. Slice
+9 is not a production-release exercise and does not require test-IIS activation.
 
-The development-completion scope is:
+The maintained development contract is:
 
-- make important existing browser journeys run in normal hosted CI using the
-  retained plain Node/Playwright runners;
-- preserve the full .NET/real-SQL suite, frontend unit suite, and meaningful
-  test-count/skip guards;
-- preserve the serious/critical `axe-core` accessibility gate;
-- fill concrete development-completion coverage gaps in the owning feature,
-  including patron login/options/submission/expiry/pickup and staff anonymous
-  shell, roles, queue/scope/deep-link, edit/claim/action, stale conflict,
-  AdditionalCopy, profile preferences, settings inheritance/reset and
-  email/operator recovery journeys;
-- cover keyboard reachability, visible focus, modal/tab/view focus, labels,
-  live regions and supported Escape behavior at desktop and mobile sizes;
-- optionally add a small post-deployment browser smoke after the test runner is
-  activated.
+- run the retained plain Node/Playwright wrapper in normal hosted CI;
+- preserve the full .NET/real-SQL suite, current frontend tests, and test-count
+  and zero-skip guards;
+- keep serious/critical `axe-core`, origin, page-error, missing-image, and
+  overflow gates;
+- cover the retained patron, staff, and legacy request-link journeys at
+  desktop and mobile sizes, including keyboard/focus/dialog/tab/live-region
+  behavior and the authentication/session races;
+- keep deterministic Polaris/Postmark boundaries, real SQL assertions, and
+  Node/npm strictly development and CI only.
 
-Normal CI remains independent of the IIS runner and live Polaris/Postmark.
-Testing-only identity evidence, deterministic provider boundaries and real SQL
-authorization/concurrency assertions remain required where applicable. Node and
-browser dependencies stay development/CI-only and never enter the application
-publish or deployment artifact.
+The current browser inventory is 10 patron states plus 3 race scenarios, 20
+staff states, and 18 legacy-link states. The three browser fixture methods are
+ordinary .NET tests selected by `npm run test:browser`; they are not optional
+or skipped tests.
 
-## Explicitly Deferred
+## Explicitly deferred
 
-Slice 9 does not implement production release artifact promotion, protected
-live-Polaris canaries, production release/tag workflows, production provider
-correlation evidence, production rehearsal machinery or other operational proof.
-Those contracts remain in the deferred production-readiness backlog and the
-preserved historical porting pack.
+Slice 9 does not activate a runner or IIS host, send live Polaris/Postmark
+requests, promote a production artifact, create a production tag, or perform
+cutover/rehearsal work. `test_cd_activation: pending_runner_setup` remains
+valid. Those contracts remain in
+[deferred production readiness](deferred-production-readiness.md) and the
+preserved `docs/dotnet-port` pack.
 
-## Acceptance Boundary
+## Acceptance boundary
 
-Use one cohesive implementation context where practical, complete integrated
-validation, one fresh Terra High review and focused re-review of confirmed
-findings under the three-cycle cap. Do not create a production tag or alter a
-protected environment to exercise this slice. `test_cd_activation:
-pending_runner_setup` may remain unchanged while development CI/browser work
-proceeds.
+The combined batch ends with complete integrated validation, one fresh
+independent Terra High review, focused re-review of confirmed findings when
+needed, and exact-milestone CI. The implementer does not merge the draft PR or
+claim supervisor acceptance. Slice 10 synthetic seed/reset convenience
+tooling remains optional and deferred.
 
 The prior production-oriented Slice 9 packet is retained in Git at
-`88fd92cf1fdd856dccba6ef3538182d80325e98a` and remains reference material for
-future production readiness; it is not the current execution contract.
+`88fd92cf1fdd856dccba6ef3538182d80325e98a`; it remains reference material for
+future production readiness and does not override this development scope.

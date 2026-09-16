@@ -1,9 +1,3 @@
-# Local PocketBase runtime artifacts. Users download the binary themselves.
-pocketbase
-pocketbase.exe
-pb_data/
-pb_data_test/
-
 # Local environment and operational output.
 .env
 .env.*

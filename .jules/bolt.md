@@ -1,3 +1,0 @@
-## 2024-06-25 - N+1 Query Optimization in workflowTagsForRequest
-**Performance Issue:** N+1 Query overhead where `app.findRecordById("workflow_tags", rows[i].get("tag"))` was called inside a loop over title request tags up to 100 times.
-**Learning:** In PocketBase JS hooks, N+1 query patterns can be effectively optimized by collecting all IDs inside the initial loop, dynamically constructing a parameterized batch filter string (`id = {:p0} || id = {:p1}`), and fetching all referenced records in a single query using `app.findRecordsByFilter("collection", filter, "", count, 0, paramMap)`. This drastically reduces the number of SQLite queries executed via Goja and reduces overhead without requiring native Promises/async parallelization which is unavailable.
