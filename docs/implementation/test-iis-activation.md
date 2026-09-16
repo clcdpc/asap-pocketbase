@@ -1,134 +1,145 @@
 # Test IIS Deployment Activation
 
-This is a later one-time operational task for the reduced Slice 8 repository
-implementation. It is intentionally separate from Slice 8 acceptance.
-
-Current state: `test_cd_activation: pending_runner_setup`. No runner has been
-installed or registered, no host configuration has been created by this
-repository task, and no live IIS deployment is claimed.
+The repository-side test deployment workflow is implemented, but live test deployment remains an explicit operational activation step. Keep `ASAP_TEST_DEPLOYMENT_ENABLED` unset or false until this checklist is complete.
 
 ## Repository Contract
 
-The `.NET baseline` workflow keeps Release build, real-SQL tests, frontend tests,
-publish checks, and test-package validation on `ubuntu-latest`. A matching test
-tag such as `v1.0.0-test.1` runs those hosted gates for the exact tagged commit
+The `.NET baseline` workflow keeps Release build, real-SQL tests, frontend/browser tests, publish checks, and deployment-package validation on GitHub-hosted `ubuntu-latest`. Only the final deployment job targets the dedicated Windows runner labels `self-hosted`, `windows`, `x64`, and `asap-test-iis`.
+
+A matching test tag such as `v1.0.0-test.1` or an explicit `workflow_dispatch` builds and tests one exact commit, packages the Web publish/DACPAC/deployment script/Hangfire asset, verifies the package digest, then deploys only when repository variable `ASAP_TEST_DEPLOYMENT_ENABLED` is exactly `true`.
+
+## Automated Host Bootstrap
+
+Run the bootstrap once from an **elevated PowerShell 7** session on the IIS test host:
+
+```powershell
+.\scripts\deployment\Initialize-AsapTestHost.ps1 `
+    -SqlServer 'TEST-SQL' `
+    -ReadinessUrl 'https://asap-test.example.org/health/ready'
+```
+
+`DatabaseName` defaults to `AsapTest`. The bootstrap defaults the application root to:
+
+```text
+C:\ProgramData\clc-asap
+```
+
 and creates:
 
 ```text
-manifest.json
-web/                         published Asap.Web files and Asap.Database.dacpac
-hangfire/1.8.25/install.sql  exact Hangfire schema-9 operator asset
-deployment/Deploy-AsapTest.ps1
+C:\ProgramData\clc-asap\web
+C:\ProgramData\clc-asap\staging
+C:\ProgramData\clc-asap\backups
+C:\ProgramData\clc-asap\config
+C:\ProgramData\clc-asap\keys
+C:\ProgramData\clc-asap\logs
 ```
 
-The ZIP and its adjacent `.sha256` file are uploaded as one artifact named for
-the exact commit. The deployment job downloads that artifact and does not check
-out the repository. It runs only when the event is a matching tag push or
-`workflow_dispatch` and the repository variable
-`ASAP_TEST_DEPLOYMENT_ENABLED` is exactly `true`. Empty, unset, or any other
-value leaves the self-hosted job skipped.
-
-`workflow_dispatch` uses the selected branch or tag as its ref, and the hosted
-job checks out `github.sha`, so the build, tests, package and deployment
-identity remain tied to one commit. GitHub shows the UI "Run workflow" button
-only when the workflow file exists on the default branch. Until that file is
-available on `main`, use the CLI/API after the workflow has run once:
+The deployment configuration is:
 
 ```text
-gh workflow run dotnet.yml --repo clcdpc/asap-pocketbase --ref v1.0.0-test.1
+C:\ProgramData\clc-asap\config\test-deployment.json
 ```
 
-Do not dispatch a deployment until this activation checklist is complete.
-See the [GitHub workflow_dispatch documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch)
-for the default-branch/UI and branch-or-tag dispatch behavior.
-
-## Host-Local Configuration
-
-Create this file on the IIS test host only:
+The external application configuration is:
 
 ```text
-C:\ProgramData\ASAP\test-deployment.json
+C:\ProgramData\clc-asap\config\test-app.json
 ```
 
-The deployment script requires this shape. Values below are placeholders, not
-usable credentials or infrastructure values:
-
-```json
-{
-  "IisSiteName": "ASAP-Test",
-  "IisAppPoolName": "ASAP-Test",
-  "DeploymentPath": "D:\\Sites\\ASAP-Test",
-  "StagingRoot": "D:\\ASAP\\staging",
-  "BackupRoot": "D:\\ASAP\\backups",
-  "ExternalApplicationConfigPath": "C:\\ProgramData\\ASAP\\test-app.json",
-  "ReadinessUrl": "https://test.example.invalid/health/ready",
-  "AsapDatabaseConnectionString": "Server=TEST-SQL;Database=AsapTest;Integrated Security=True;Encrypt=True;TrustServerCertificate=False",
-  "HangfireDatabaseConnectionString": "Server=TEST-SQL;Database=AsapTest;Integrated Security=True;Encrypt=True;TrustServerCertificate=False",
-  "SqlPackagePath": "C:\\Program Files\\Microsoft SQL Server\\DAC\\170\\SqlPackage.exe",
-  "SqlCmdPath": "sqlcmd.exe"
-}
-```
-
-`Asap:ConfigFile` is the application configuration pointer. On IIS, set the
-corresponding `Asap__ConfigFile` environment setting to the external
-`ExternalApplicationConfigPath`; that application file must in turn point to
-an existing Data Protection key directory outside `DeploymentPath`. Neither
-that file nor its keys are copied into or overwritten by the deployment ZIP.
-
-Successful state is written beside the deployment config at:
+Successful deployment state is written beside it as:
 
 ```text
-C:\ProgramData\ASAP\test-deployment-state.json
+C:\ProgramData\clc-asap\config\test-deployment-state.json
 ```
 
-The state records schema version, version/label, exact commit, deployment ZIP
-SHA-256, DACPAC SHA-256 and UTC deployment time. Old state files are retained
-until an operator removes them; old web backups under `BackupRoot` are never
-pruned by the script.
+The bootstrap:
+
+- discovers the installed `actions.runner.*` Windows service;
+- uses that service's Windows identity for both the runner and the `ASAP-Test` IIS app pool;
+- accepts `-RunnerServiceName` when more than one runner service exists;
+- accepts `-ServiceAccount` only as an explicit override;
+- creates the application folders and restricts their ACLs to SYSTEM, local Administrators, and the service identity;
+- adds the service identity to `IIS_IUSRS`;
+- by default adds the service identity to local Administrators so the deployment job can manage the IIS app pool on this dedicated test host; use `-SkipLocalAdministrator` only when equivalent narrower IIS lifecycle rights have been provisioned separately;
+- locates `pwsh`, `SqlPackage`, and `sqlcmd` and reports missing tools;
+- creates or reuses a LocalMachine Data Protection certificate and grants the service identity read access to its private key;
+- creates `test-app.json` when absent and preserves it on later runs unless `-ForceApplicationConfig` is supplied;
+- creates/updates `test-deployment.json`;
+- creates/configures the `ASAP-Test` app pool and sets its `Asap__ConfigFile` environment variable;
+- validates an existing IIS site and refuses to silently repoint one with a different path or app pool;
+- can create a missing HTTPS IIS site when `-HttpsCertificateThumbprint` is supplied;
+- prints a `PASS` / `NEEDS ATTENTION` summary.
+
+If the IIS pool must be changed to the detected ordinary AD service account, the bootstrap prompts once for that account's password unless `-ServiceCredential` is supplied. A gMSA name ending in `$` does not require that prompt.
+
+Use `-ValidateOnly` to audit the host without creating directories, changing ACLs/groups/IIS, creating certificates, or writing configuration files.
+
+## Application Configuration
+
+The bootstrap can populate the Entra values at creation time:
+
+```powershell
+$entraSecret = Read-Host 'Entra client secret' -AsSecureString
+
+.\scripts\deployment\Initialize-AsapTestHost.ps1 `
+    -SqlServer 'TEST-SQL' `
+    -ReadinessUrl 'https://asap-test.example.org/health/ready' `
+    -EntraClientId '<client-guid>' `
+    -EntraTenantId '<tenant-guid>' `
+    -EntraObjectId '<initial-admin-object-guid>' `
+    -AdminEmail 'admin@example.org' `
+    -EntraClientSecret $entraSecret
+```
+
+If those values are omitted, `test-app.json` is created with `REPLACE-LOCALLY` placeholders and the bootstrap reports `NEEDS ATTENTION`. Complete those values before enabling deployment. Do not place the client secret directly on the command line.
+
+The generated SQL connection strings use Windows Integrated Security and encryption. `TrustServerCertificate` defaults to false; use `-TrustServerCertificate` only if the test SQL endpoint intentionally requires it.
+
+## SQL Authorization Boundary
+
+The host bootstrap intentionally does **not** grant SQL Server privileges. Grant the detected service identity only the test-environment rights needed for:
+
+1. the deployment path to publish the ASAP DACPAC with `SqlPackage`;
+2. the deployment path to create/upgrade Hangfire schema 9 when necessary;
+3. the running application to access the ASAP/Hangfire database.
+
+Confirm those permissions by running under the service identity or by performing the first controlled deployment. Do not embed a SQL login/password in the host configuration.
+
+## IIS / TLS
+
+The IIS site defaults to `ASAP-Test`, with physical path:
+
+```text
+C:\ProgramData\clc-asap\web
+```
+
+The app pool also defaults to `ASAP-Test` and runs as the same Windows identity as the GitHub Actions runner service.
+
+If the site already exists, the bootstrap verifies its physical path and pool and will not repoint it automatically. If it does not exist, either create the HTTPS site/binding normally or pass the LocalMachine certificate thumbprint:
+
+```powershell
+.\scripts\deployment\Initialize-AsapTestHost.ps1 `
+    -SqlServer 'TEST-SQL' `
+    -ReadinessUrl 'https://asap-test.example.org/health/ready' `
+    -HttpsCertificateThumbprint '<thumbprint>'
+```
+
+The readiness URL must be HTTPS and end in `/health/ready`.
 
 ## One-Time Activation Checklist
 
-1. Create/register a dedicated repository self-hosted runner on the Windows
-   IIS test host.
-2. Install it as a Windows service with the dedicated service identity.
-3. Assign labels `self-hosted`, `windows`, `x64`, and `asap-test-iis`.
-4. Restrict the runner to the deployment workflow; it must not run PR or
-   ordinary build jobs.
-5. Create the host-local deployment config shown above and the external app
-   config. Keep both outside the deployed web path.
-6. Ensure the configured IIS site, app pool, deployment/staging/backup paths,
-   HTTPS certificate and SQL database already exist.
-7. Ensure PowerShell 7 (`pwsh`), `SqlPackage.exe` and `sqlcmd.exe` are available and the runner
-   identity can use them with Windows Integrated Security.
-8. Grant only the required IIS, filesystem and SQL deployment permissions.
-9. Verify outbound GitHub connectivity and that the runner reports online.
-10. Set repository variable `ASAP_TEST_DEPLOYMENT_ENABLED=true`.
-11. Use an explicit CLI/API dispatch against one exact test tag, for example
-    `gh workflow run dotnet.yml --repo clcdpc/asap-pocketbase --ref v1.0.0-test.1`.
-12. Confirm the deployment job validates the ZIP SHA-256 and manifest before
-    stopping the app pool, then verifies the site path and external config.
-13. Confirm `/health/ready` returns HTTP 200 with JSON `status: healthy`.
-14. Confirm `test-deployment-state.json` records the expected exact commit and
-    ZIP/DACPAC hashes.
-15. Record the first live test deployment evidence separately. This is the
-    point at which `test_cd_activation` may become `active`.
+1. Confirm the repository runner is online and has labels `self-hosted`, `windows`, `x64`, and `asap-test-iis`.
+2. Run `Initialize-AsapTestHost.ps1` and resolve every `NEEDS ATTENTION` item that blocks startup/deployment.
+3. Complete real Entra configuration in `test-app.json`.
+4. Confirm the HTTPS IIS binding/certificate and DNS are correct.
+5. Grant/verify SQL permissions for the shared test service identity.
+6. Re-run the bootstrap with `-ValidateOnly` as a final host check.
+7. Set repository variable `ASAP_TEST_DEPLOYMENT_ENABLED=true`.
+8. Dispatch one exact test tag, for example `gh workflow run dotnet.yml --repo clcdpc/asap-pocketbase --ref v1.0.0-test.1`.
+9. Confirm the deployment job validates the package before mutation, `/health/ready` returns HTTP 200 with JSON `status: healthy`, and `test-deployment-state.json` records the expected commit and ZIP/DACPAC hashes.
+10. Record the first live deployment evidence. Only then should `test_cd_activation` be considered active.
 
-The script checks Hangfire schema version 9 before mutation. If the `[HangFire]`
-schema is missing or older, it stops the app pool, runs the exact packaged
-`install.sql` asset with `sqlcmd`, and verifies version 9 before proceeding.
-If it is newer, the deployment fails. Application runtime schema preparation
-remains disabled (`PrepareSchemaIfNecessary = false`); this is the minimum
-test-environment prerequisite and is not the deferred production classifier.
+The test deployment path does not perform automatic SQL backup/rollback or production deployment behavior. It backs up the previous web payload, applies changed DACPAC/Hangfire schema work as required, replaces the staged web payload, starts the app pool, and writes deployment state only after readiness succeeds.
 
-The script publishes the DACPAC only when its hash differs from the last
-successful test state. It uses data-loss blocking, backs up the prior web
-payload, replaces the complete staged web payload, starts the app pool, polls
-the configured HTTPS readiness URL with normal TLS validation, and writes state
-only after readiness succeeds. Preflight failure leaves the running site
-untouched. Database or file failure leaves the app pool stopped as applicable;
-readiness failure retains the new files for repair-forward. There is no
-automatic SQL backup, schema rollback, old-artifact rollback, or production
-deployment behavior in this test path.
-
-Do not commit runner tokens, PATs, database passwords, certificates, private
-keys, or a host-local configuration file.
+Do not commit runner tokens, PATs, database passwords, Entra secrets, certificates/private keys, Data Protection keys, or host-local configuration files.
