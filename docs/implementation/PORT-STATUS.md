@@ -5,7 +5,22 @@ Server 2022, and IIS under the authoritative `docs/dotnet-port/` pack. This
 single final draft PR will deliver the complete port as reviewed vertical
 slices. It is not eligible for merge or production deployment yet.
 
-## Current Status - GitHub-Backed Orchestration Policy - 2026-09-15
+## Current Status - Slice 7 Bootstrap - 2026-09-15
+
+Slice 7 is running under the authorized autonomous supervisor in
+[draft PR #267](https://github.com/clcdpc/asap-pocketbase/pull/267), from
+`e1fc18b7b9b4d2d90892e16bf0264da5e2dc6246` on
+`codex/slice-07-migration-hardening`. Initial refs, all three baseline CI
+anchors, clean-start conditions and unchanged PocketBase source pin were
+verified. The [canonical state comment](https://github.com/clcdpc/asap-pocketbase/pull/267#issuecomment-5684606992)
+and immutable events record actual progress. Current-code discovery precedes
+package selection and implementation; no Slice 7 acceptance is claimed.
+
+The technical review base is the corrected product baseline
+`d607723e846f633ebe206163f6c232dd79566d6f`; later documentation/process bytes
+are classified separately. PR #264 remains draft. Slices 8-11 have not started.
+
+### Pre-bootstrap Policy Checkpoint - 2026-09-15
 
 Historical Slice 6 acceptance remains at
 `7ba59421176ede99ba48488be6bc81010e60f65c` (CI `34976630186` succeeded).
@@ -18,8 +33,8 @@ authorized product baseline before this policy edit is
 [.NET baseline CI 34988112346](https://github.com/clcdpc/asap-pocketbase/actions/runs/34988112346)
 succeeded. No substantive corrective finding remains.
 
-Slice 7 has not started. This documentation/process-only refinement occurs
-before its bootstrap and creates no new accepted product slice.
+At this policy checkpoint, Slice 7 had not started. The documentation/process
+refinement preceded bootstrap and created no new accepted product slice.
 [Document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) now makes GPT-6
 Astra High the normal thin supervisor, GPT-6 Astra Max bounded escalation
 only with control returning to High, and the slice PR the durable state/event
@@ -32,7 +47,7 @@ The GitHub-state policy landed at `c7fca3c2eda178bfb24c826f446086f31278ce1a`,
 with successful exact-SHA CI `34992493001`. This follow-up documentation-only
 cleanup clarifies historical status and independent Terra dispositions when
 native thread-resolution tooling is unavailable. It does not start a slice.
-The latest authorized docs-cleanup head is the future Slice 7 branch point.
+The latest authorized docs-cleanup head was the future Slice 7 branch point.
 Its exact SHA and CI run/result are recorded in
 [draft PR #264](https://github.com/clcdpc/asap-pocketbase/pull/264), after push
 and CI, without another repository commit merely to record its own hash or
@@ -47,7 +62,7 @@ available browser reached signed-out ChatGPT. One external/manual setting
 change remains; this record does not claim it is disabled. Document 10 defines
 the fallback for any unexpected automatic review.
 
-Next action after this policy head's successful exact-SHA CI: run one GPT-6
+The next action at that checkpoint, after successful exact-SHA CI, was one GPT-6
 Astra High autonomous Slice 7 bootstrap/execution task using the GitHub-backed
 supervisor journal, with GPT-6 Astra Max reserved for bounded escalation.
 PR #264 remains draft; no merge, tag, deployment, rehearsal or cutover.
@@ -66,7 +81,7 @@ here; chronological entries below preserve checkpoint-time execution evidence.
 | 4 | Administration and configuration | Accepted | `417c72430652a35bc8fc1da549ae270eabc86429` / `34861199803` |
 | 5 | Background workflows and complete email operations | Accepted | `36727414d02cbe34ba13cd3f6f1bb57980b83a6f` / `34952097695` |
 | 6 | Analytics | Accepted; later post-acceptance correction completed | Historical milestone `7ba59421176ede99ba48488be6bc81010e60f65c` / `34976630186` |
-| 7 | Migration hardening and legacy links | Not started | - |
+| 7 | Migration hardening and legacy links | Bootstrap running; not accepted | PR #267; exact milestone pending |
 | 8 | Deployment, health, monitoring, release artifacts | Not started | - |
 | 9 | CI, browser, accessibility, release integration | Not started | - |
 | 10 | Explicit synthetic seed/reset tooling | Not started | - |

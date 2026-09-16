@@ -18,6 +18,17 @@ public sealed record MigrationExportOptions(
 public static class MigrationPackageExporter
 {
     public const int FormatVersion = 1;
+    internal const string LegacySmtpTransportExcludedWarning = "legacy_smtp_transport_excluded";
+    internal const string PocketBaseAuthSessionSchedulerStateExcludedWarning =
+        "pocketbase_auth_session_scheduler_state_excluded";
+
+    internal static IReadOnlySet<string> ManifestWarningCodes { get; } =
+        new HashSet<string>(
+            [
+                LegacySmtpTransportExcludedWarning,
+                PocketBaseAuthSessionSchedulerStateExcludedWarning
+            ],
+            StringComparer.Ordinal);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -44,6 +55,23 @@ public static class MigrationPackageExporter
         new("deleted-request-audit", "deleted-request-audit.json", ["deleted_request_audit"]),
         new("additional-copy-requests", "additional-copy-requests.json", ["additional_copy_requests"])
     ];
+
+    internal static IReadOnlySet<string> RequiredPackageFiles { get; } =
+        Domains
+            .Select(domain => domain.FileName)
+            .Concat(new[]
+            {
+                "branding.json",
+                "effective-legacy-runtime-config.json",
+                "effective-legacy-operational-config.json"
+            })
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    internal static IReadOnlyDictionary<string, IReadOnlySet<string>> RequiredCollections { get; } =
+        Domains.ToDictionary(
+            domain => domain.FileName,
+            domain => (IReadOnlySet<string>)domain.Collections.ToHashSet(StringComparer.OrdinalIgnoreCase),
+            StringComparer.OrdinalIgnoreCase);
 
     private static readonly IReadOnlyDictionary<string, HashSet<string>> ExcludedColumns =
         new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
@@ -83,6 +111,7 @@ public static class MigrationPackageExporter
         VerifyIntegrity(connection);
         using var transaction = connection.BeginTransaction();
         var sourceSchemaVersion = ReadSourceSchemaVersion(connection, transaction);
+        ValidateRequiredSourceCollections(connection, transaction);
 
         foreach (var domain in Domains)
         {
@@ -155,8 +184,8 @@ public static class MigrationPackageExporter
             files = manifestFiles,
             warnings = new[]
             {
-                "Legacy SMTP transport fields were intentionally excluded; no SMTP credential is a Postmark token.",
-                "PocketBase authentication/session state and job scheduler state were intentionally excluded."
+                LegacySmtpTransportExcludedWarning,
+                PocketBaseAuthSessionSchedulerStateExcludedWarning
             }
         });
     }
@@ -292,19 +321,68 @@ public static class MigrationPackageExporter
                 "Export requires --confirm-source-stopped after PocketBase writes and jobs are stopped.");
         }
 
-        if (!File.Exists(options.SourceDatabasePath))
+        var sourceDatabasePath = Path.GetFullPath(options.SourceDatabasePath);
+        var storagePath = Path.GetFullPath(options.StoragePath);
+        var outputPath = Path.GetFullPath(options.OutputPath);
+
+        if (!File.Exists(sourceDatabasePath))
         {
             throw new MigrationOperationException("source_database_missing", "The PocketBase SQLite database does not exist.");
         }
 
-        if (!Directory.Exists(options.StoragePath))
+        if (!Directory.Exists(storagePath))
         {
             throw new MigrationOperationException("source_storage_missing", "The PocketBase storage directory does not exist.");
         }
 
-        if (options.SourceGitSha.Length != 40 || !options.SourceGitSha.All(Uri.IsHexDigit))
+        if (string.IsNullOrWhiteSpace(options.SourceGitSha) ||
+            options.SourceGitSha.Length != 40 ||
+            !options.SourceGitSha.All(Uri.IsHexDigit))
         {
             throw new MigrationOperationException("source_git_sha_invalid", "The deployed PocketBase Git SHA must be a full 40-character SHA.");
+        }
+
+        if (options.ExportedAtUtc == default || options.ExportedAtUtc.Offset != TimeSpan.Zero)
+        {
+            throw new MigrationOperationException("export_time_not_utc", "The frozen export time must include an explicit UTC offset.");
+        }
+
+        if (PathsOverlap(outputPath, sourceDatabasePath) || PathsOverlap(outputPath, storagePath))
+        {
+            throw new MigrationOperationException(
+                "export_output_overlaps_source",
+                "The export output must be separate from the source database and storage so the stopped source remains immutable.");
+        }
+
+        if (HasReparsePointInPath(outputPath))
+        {
+            throw new MigrationOperationException(
+                "export_output_path_invalid",
+                "The export output path must not traverse symbolic links or reparse points.");
+        }
+    }
+
+    private static bool PathsOverlap(string candidate, string source)
+    {
+        var normalizedSource = source.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return string.Equals(candidate, normalizedSource, StringComparison.OrdinalIgnoreCase) ||
+            candidate.StartsWith(normalizedSource + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasReparsePointInPath(string path)
+    {
+        var current = Path.GetFullPath(path);
+        while (true)
+        {
+            if ((File.Exists(current) || Directory.Exists(current)) &&
+                (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+            {
+                return true;
+            }
+
+            var parent = Directory.GetParent(current)?.FullName;
+            if (parent is null || string.Equals(parent, current, StringComparison.OrdinalIgnoreCase)) return false;
+            current = parent;
         }
     }
 
@@ -385,6 +463,24 @@ public static class MigrationPackageExporter
             rows.Add(row);
         }
         return rows;
+    }
+
+    private static void ValidateRequiredSourceCollections(
+        SqliteConnection connection,
+        SqliteTransaction transaction)
+    {
+        var missing = Domains
+            .SelectMany(domain => domain.Collections)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(collection => !TableExists(connection, transaction, collection))
+            .OrderBy(collection => collection, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (missing.Length > 0)
+        {
+            throw new MigrationOperationException(
+                "source_collection_missing",
+                $"The pinned PocketBase source is missing required collection table(s): {string.Join(", ", missing)}.");
+        }
     }
 
     private static object NormalizeSqliteValue(object value, string collection, string column)

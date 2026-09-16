@@ -17,10 +17,7 @@ public static class MigrationReconciler
     public static void Reconcile(MigrationReconcileOptions options)
     {
         var package = MigrationPackageValidator.Validate(options.PackagePath);
-        if (options.ExternalConfigurationPath is not null)
-        {
-            MigrationOperationalConfiguration.Validate(package, options.ExternalConfigurationPath);
-        }
+        MigrationOperationalConfiguration.ValidateRequired(package, options.ExternalConfigurationPath);
         if (string.IsNullOrWhiteSpace(options.ConnectionString))
         {
             throw new MigrationOperationException(
