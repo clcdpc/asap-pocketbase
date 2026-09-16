@@ -81,11 +81,27 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
-      - name: Run .NET and real SQL tests
-        run: dotnet test --project tests/Asap.Tests/Asap.Tests.csproj --configuration Release --no-build --minimum-expected-tests 190
+      - name: Run .NET and real SQL tests (non-browser partition)
+        run: >-
+          dotnet test --project tests/Asap.Tests/Asap.Tests.csproj
+          --configuration Release --no-build --minimum-expected-tests 310
+          --filter
+          'FullyQualifiedName!~PatronBrowserJourneyRunsOnKestrelWithRealSqlAndRecordingEmailTransport&FullyQualifiedName!~StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers&FullyQualifiedName!~LegacyRequestLinksReplaceDesktopAndMobileUrlsWithoutLeakingFailures'
 
       - name: Run legacy/frontend unit tests
         run: npm test
+
+      - name: Run browser accessibility tests
+        run: npm run test:browser
+
+      - name: Upload browser diagnostics on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-diagnostics-${{ github.sha }}
+          path: .artifacts/browser
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Verify publish artifacts
         shell: pwsh
@@ -244,6 +260,11 @@ jobs:
             .artifacts/asap-test-deployment.zip.sha256
           if-no-files-found: error
           retention-days: 14
+
+      - name: Remove SQL Server test container
+        if: ${{ always() }}
+        shell: bash
+        run: docker rm --force asap-sql >/dev/null 2>&1 || true
 
   deploy-test-iis:
     name: Deploy exact artifact to test IIS

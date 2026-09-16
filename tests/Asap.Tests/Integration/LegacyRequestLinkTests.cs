@@ -103,12 +103,14 @@ public sealed partial class PatronJourneyTests
             ?? throw new InvalidOperationException("The Kestrel test host did not expose a base address.");
         var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
         var seeded = await SeedLegacyRequestLinkFixtureAsync();
+        var repositoryRoot = Path.GetDirectoryName(TestArtifactPaths.FindRepositoryFile("Asap.sln"))!;
         var artifactDirectory = Path.Combine(
-            Path.GetTempPath(),
-            $"asap-slice07-package3-legacy-links-{Guid.NewGuid():N}");
+            repositoryRoot,
+            ".artifacts",
+            "browser",
+            $"legacy-{Guid.NewGuid():N}");
         Directory.CreateDirectory(artifactDirectory);
 
-        var repositoryRoot = Path.GetDirectoryName(TestArtifactPaths.FindRepositoryFile("Asap.sln"))!;
         var startInfo = new ProcessStartInfo
         {
             FileName = "node",

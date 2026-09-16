@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.resolve(__dirname, '..');
-const workflow = fs.readFileSync(path.join(root, '.github/workflows/dotnet.yml'), 'utf8');
+const workflow = fs.readFileSync(path.join(root, '.github/workflows/dotnet.yml'), 'utf8').replace(/\r\n/g, '\n');
 const deployment = fs.readFileSync(path.join(root, 'scripts/deployment/Deploy-AsapTest.ps1'), 'utf8');
 const activation = fs.readFileSync(path.join(root, 'docs/implementation/test-iis-activation.md'), 'utf8');
 const slice8 = fs.readFileSync(path.join(root, 'docs/implementation/slice-08.md'), 'utf8');
@@ -15,7 +15,7 @@ assert.ok(workflow.includes('  workflow_dispatch:\n'), 'manual dispatch should b
 assert.ok(workflow.includes('Generate ephemeral SQL test credentials'), 'CI SQL credentials should be generated per run');
 assert.ok(!workflow.includes('Asap_Slice0_SQL_2026'), 'CI must not retain the historical hard-coded SQL password');
 assert.ok(workflow.includes('ref: ${{ github.sha }}'), 'the hosted job should check out the exact event SHA');
-assert.ok(workflow.includes('--minimum-expected-tests 190'), 'the real-SQL minimum test-count guard must remain');
+assert.ok(workflow.includes('--minimum-expected-tests 310'), 'the non-browser real-SQL partition must retain its test-count guard');
 assert.ok(workflow.includes('run: npm test'), 'the frontend test gate must remain');
 assert.ok(workflow.includes('dotnet publish src/Asap.Web/Asap.Web.csproj'), 'Web publish must remain a hosted check');
 assert.ok(workflow.includes('dotnet publish src/Asap.Migration/Asap.Migration.csproj'), 'native migration publish check must remain');
