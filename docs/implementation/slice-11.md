@@ -1,9 +1,11 @@
 # Slice 11: Legacy Removal And Canonical Documentation
 
-## Preparation Only
+## Current Reduced Scope: Future Cleanup And Review
 
-Not dispatched. Do not remove the legacy implementation or rewrite repository
-instructions before Slices 0-10 have passed their implementation/review gates.
+Slice 11 is not implemented by reduced Slice 8. Start after the reduced
+development-completion implementation sequence is ready; optional Slice 10
+does not become a mandatory prerequisite. Do not remove the legacy
+implementation or rewrite repository instructions in this task.
 Refresh the actual tree, dependencies and external release blockers at dispatch.
 Follow [document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md) for the
 staged-PR lifecycle, optional package boundaries, PR-backed durable state,
@@ -17,8 +19,10 @@ excerpts and expand for concrete concerns. Prior-slice acceptance and its
 exact-SHA CI must be complete before this slice starts.
 Package guidance in document 10 is provisional; choose actual boundaries at
 slice start.
-Whole-application review afterward is a distinct required gate with fresh Terra
-contexts; its existing pass rules remain unchanged.
+The reduced slice ends with complete integrated validation and ONE fresh Terra
+High holistic review, with bounded Luna fixes and focused Terra re-review as
+required. The old multi-pass whole-application review is deferred to production
+readiness.
 
 Read root AGENTS before replacing it, document 10 in full, document 02 Slice 11
 and final sequence, documents 04/05/08 release/recovery boundaries and document
@@ -59,28 +63,24 @@ temporary Postmark decision. No new architecture review or UI redesign.
   execution requires an isolated copy with outbound mutations/mail blocked and
   jobs disabled. Never document it as a writable fallback after cutover.
 
-## Review And Release Gates
+## Development-Completion Review And Deferred Release Gates
 
-Complete full integrated validation, holistic Terra slice review and required
-re-review, short Astra acceptance and exact-milestone CI under document 10.
-Then run the separate whole-application adversarial review with fresh independent
-Terra High contexts, varied full-app emphases and a running confirmed-finding
-set: three consecutive passes without new substantive findings within six
-nominal passes. Bounded Luna Max fixes confirmed blockers; a pass cap never
-waives a known defect. Package and slice reviews do not replace this gate.
+Complete full integrated validation, one holistic Terra slice review and
+required focused re-review, short Astra acceptance and exact-milestone CI under
+document 10. The review covers the complete development-completion delta.
+Bounded Luna Max fixes confirmed blockers; the three-consecutive-clean-pass
+production review remains deferred and a pass cap never waives a known defect.
+Package and slice reviews do not replace the one integrated slice review.
 
-Repository cleanup is not production completion. Actual deployed PB identity,
-required real Postmark adapter/webhook/transport tests, provider/host/isolation
-evidence, complete operational artifacts and all deterministic gates remain
-prerequisites for the prescribed release workflow. A temporary file sender
-must remain prominently identified as a release/rehearsal blocker if unresolved.
+Repository cleanup is not production completion. Actual deployed PocketBase
+identity, required real Postmark adapter/webhook/transport tests,
+provider/host/isolation evidence, complete operational artifacts and all
+production deterministic gates remain in the deferred production-readiness
+backlog. A temporary file sender must remain prominently identified as a
+release/rehearsal blocker if unresolved.
 
-Only after the complete review/gates: record source production identity, merge
-the complete PR, tag the merged commit, build immutable correlated artifacts,
-rehearse those exact artifacts on permanent nonproduction, and correct any
-defect through a new tag/artifact and repeated rehearsal. Real-hostname/Entra
-preflight uses disposable SQL; final migration target stays fresh/stopped until
-import/reconciliation. The exact rehearsed artifact alone may reach production.
-Successful cutover fixes the final-PocketBase tag at the actual frozen source.
-Repository rename follows production validation. None of these external actions
-is performed by the slice implementer merely because cleanup tests pass.
+Only in that future phase may the project record source production identity,
+merge the complete PR, create a production tag, build immutable correlated
+artifacts, rehearse exact artifacts, perform cutover or rename the repository.
+None of those external actions is performed by the slice implementer merely
+because cleanup tests pass.

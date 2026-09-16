@@ -1,8 +1,12 @@
 # Slice 10: Explicit Synthetic Seed And Reset
 
-## Preparation Only
+## Current Status: DEFERRED / OPTIONAL
 
-Not dispatched. Start after the accepted Slice 9 implementation milestone.
+Synthetic seed/reset is not a required development-completion or Slice 8 gate.
+Do not implement it as part of reduced Slice 8. If convenience tooling is
+authorized later, start after the accepted reduced Slice 9 milestone and
+refresh the completed schema, CLI/developer reset paths and test fixtures first.
+The detailed contract below is preserved for that future decision.
 Refresh the completed schema, CLI/developer reset paths and test fixtures before
 choosing the smallest implementation.
 

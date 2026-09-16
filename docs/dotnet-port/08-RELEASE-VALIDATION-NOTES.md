@@ -1,5 +1,14 @@
 # Release Validation Notes
 
+## Current Scope Notice - 2026-09-16
+
+These notes preserve the deferred production/rehearsal and live-provider
+contracts. They are not current reduced Slice 8 acceptance gates. The active
+test-IIS repository contract is in
+`docs/implementation/slice-08.md` and
+`docs/implementation/test-iis-activation.md`; no production tag, host contact,
+live provider validation or cutover is performed by that slice.
+
 ## 1. Purpose
 
 Keep live Polaris validation separate from ordinary deterministic PR testing. This area was deliberately not expanded into a large release-engineering project during the port design interview; the decisions below are sufficient to guide implementation without blocking the core rewrite on additional policy discussion.

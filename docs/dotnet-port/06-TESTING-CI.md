@@ -1,5 +1,13 @@
 # Testing and CI Strategy
 
+## Current Scope Notice - 2026-09-16
+
+The full release/rehearsal matrix in this document remains a future
+production-readiness contract. Current reduced Slice 8 runs the existing
+Release build, full .NET/real-SQL and frontend suites, publish/exclusion checks,
+exact test-IIS artifact/manifest validation and workflow isolation checks. It
+does not require a Windows runner or live provider/host evidence.
+
 ## 1. Testing philosophy
 
 The port must replace PocketBase without building a temporary dual-implementation parity harness. Use the old application as a behavior reference, then encode durable behavior in .NET integration tests, real-SQL tests, frontend unit tests, and targeted browser journeys.

@@ -36,19 +36,28 @@ repository-side gates pass. Runner setup, host configuration and first live IIS
 deployment are a later operational task. Ordinary CI never requires the runner.
 Reduced Slice 9 may proceed after Slice 8 acceptance without waiting for activation.
 
+This current policy block is authoritative for the remaining execution sequence
+and review lifecycle. The historical production/cutover sections below remain
+preserved future contracts; they do not add gates to reduced Slice 8 or authorize
+production deployment, production tags, PR #264 merge, or Slice 9 implementation.
+
 ## Mission
 
 Port `clcdpc/asap-pocketbase` from PocketBase/SQLite/Goja to the .NET architecture defined by this documentation pack. The final port is delivered through `codex/csharp-port` and draft PR #264 into `main`, with temporary slice/work-package PRs under the execution policy below. Preserve existing ASAP behavior and frontend UX by default; change behavior only when the specification explicitly requires it or when a concrete technical benefit justifies a documented deviation.
 
 The port is not an opportunity for a general rewrite beyond the backend/platform boundaries described here.
 
-## Source baseline
+## Source baseline and historical bootstrap procedure
 
 Staged PRs began with Slice 6. Beginning with Slice 7, GPT-6 Astra High is the preferred/default thin autonomous supervisor, with GitHub-backed durable state and bounded Astra Max escalation, unless the user explicitly requests manual/direct execution. A completed bootstrap remains valid and must not be repeated.
 
-Slices 0-6 remain accepted under the policies that actually governed them. Historical Slice 6 accepted milestone: `7ba59421176ede99ba48488be6bc81010e60f65c`, exact-SHA CI `34976630186` succeeded. Post-Slice-6 correction PR #266 merged the exact Terra-reviewed correction `04f538ef1a04be33b31d5dbdc3a5c1751b163ee4` at `c0cde6fb744e53c1a72a63f8cb58124e43255b4f`. The current authorized product/integration baseline before this policy edit is `d607723e846f633ebe206163f6c232dd79566d6f`, with successful exact-SHA CI `34988112346`. Slice 7 has not started. Verify actual branch/PR state and [PORT-STATUS.md](../implementation/PORT-STATUS.md) before starting work. Preserve the historical execution/review and acceptance records, including Slice 6's Astra Max supervision; do not reopen those acceptances or rewrite their history.
+Slices 0-7 are accepted under the policies that actually governed them. Historical Slice 6 accepted milestone: `7ba59421176ede99ba48488be6bc81010e60f65c`, exact-SHA CI `34976630186` succeeded. Post-Slice-6 correction PR #266 merged the exact Terra-reviewed correction `04f538ef1a04be33b31d5dbdc3a5c1751b163ee4` at `c0cde6fb744e53c1a72a63f8cb58124e43255b4f`. Slice 7 was integrated through `333330da11b5fcaeafaca3fc820eba68fc4953d3`; the current documentation/base milestone for reduced Slice 8 is `88fd92cf1fdd856dccba6ef3538182d80325e98a`. The Slice 7 bootstrap procedure below is historical and retained for evidence. Preserve the historical execution/review and acceptance records, including Slice 6's Astra Max supervision; do not reopen those acceptances or rewrite their history.
 
-This policy changes execution orchestration only. Architecture, behavioral contracts, slice contents, database/security/migration rules, release/cutover design, review independence and objective test acceptance criteria are unchanged. This documentation transition is not a new accepted product slice and does not launch implementation or a supervisor.
+This policy changes the current remaining-slice scope and execution orchestration.
+Accepted application behavior, database/security/migration invariants, review
+independence and objective tests remain binding; production-only release and
+cutover contracts are preserved below for later. The bootstrap policy commit is
+not itself a new accepted product slice.
 
 The original baseline procedure remains the source-tracking contract; branch/PR creation below was already completed:
 
@@ -88,16 +97,17 @@ Use packages only for coherent, independently testable/reviewable boundaries: di
 
 ### Remaining-slice planning defaults
 
-These are planning defaults, not binding implementation partitions. Choose actual boundaries from the current implementation at slice start.
+These are historical planning defaults, not binding implementation partitions.
+The current remaining sequence is defined in the policy block at the top.
 
 | Slice | Default |
 | --- | --- |
 | 6 - Analytics (historical) | Completed as one cohesive slice PR; correction PR #266 is also complete. |
 | 7 - Migration hardening | Likely 2-4 packages: export/package/core mechanics; validation/import/reconciliation/cutover invariants; legacy-link/operator/rehearsal tooling. |
-| 8 - Deployment/release | Possible packages: release artifacts/manifests; deployment/preflight/rollback; health/monitoring/operator concerns. |
-| 9 - CI/browser/accessibility/release validation | Possible packages: CI/real-SQL integration; Playwright/accessibility; release-validation/environment controls. |
-| 10 - Synthetic seed/reset | One cohesive slice PR. |
-| 11 - Legacy removal/final preparation | Choose from actual remaining work at dispatch; do not freeze partitions early. |
+| 8 - Test-IIS CI/CD | One cohesive repository-side test-environment implementation; runner activation is separate. |
+| 9 - Focused development CI/browser/accessibility | Future focused development-completion work; no production release machinery. |
+| 10 - Synthetic seed/reset | Deferred/optional convenience tooling. |
+| 11 - Legacy removal/final preparation | Future .NET cleanup, canonical documentation and one integrated development-completion review. |
 
 ## Required model roles
 
@@ -111,11 +121,16 @@ Luna implements the existing contract rather than redesigning it. Do not add rep
 
 The supervisor dispatches Terra High in a fresh/bounded child context independent of implementation. Terra reports findings only and never implements fixes. Confirmed findings return to a bounded Luna Max fix task with only the findings and necessary context, followed by focused Terra re-review. A fresh focused Terra context is acceptable; retained model identity is not an acceptance invariant. Use the two distinct review modes below; manual mode preserves the same independence.
 
-#### Work-package review
+#### Work-package review (exceptional only)
 
 Question: **Is this bounded component/behavior correct?**
 
-Review the complete package diff, affected callers, relevant invariants, failure paths, concurrency/state implications and directly relevant tests. This is the detailed local review. Begin from the package contract and diff rather than rediscovering the entire port architecture. After bounded fixes, use focused Terra re-review unless the correction materially broadens the regression surface.
+Use this only when Astra records a specific unusually risky, independently
+reviewable boundary. Review the complete package diff, affected callers,
+relevant invariants, failure paths, concurrency/state implications and directly
+relevant tests. Begin from the package contract and diff rather than
+rediscovering the entire port architecture. Otherwise the default is one
+integrated full-slice Terra review.
 
 #### Slice integration review
 
@@ -350,13 +365,26 @@ This policy-edit task performs none of that bootstrap or implementation. Later s
 | Review fixes | Narrowest sufficient affected gates first; broaden when changed bytes invalidate earlier evidence. |
 | Accepted milestone | Actual successful remote CI associated with the exact resulting SHA on `codex/csharp-port`; package or slice-branch CI never substitutes. |
 
-Full integrated validation retains all required Release builds, complete .NET/real-SQL and Node/frontend suites, browser/axe, native migration/export/import/reconciliation, publication/exclusion and DACPAC/source/artifact checks, plus applicable release gates. This policy does not change the test acceptance criteria.
+For the current reduced Slice 8, complete integrated validation means the clean
+Release build, full .NET/real-SQL suite, frontend suite, existing publish and
+native migration checks, deployment ZIP/manifest/integrity checks, workflow
+isolation checks and focused safe PowerShell validation. Browser/axe evidence
+already required by the current CI foundation remains preserved. The detailed
+production release gates below apply when production readiness resumes, not to
+the pending-runner repository acceptance.
 
 Retained evidence records exact commands/results, passed/failed/skipped counts, source/artifact/DACPAC hashes, log paths and warnings/errors. Compact receipts identify that evidence and every required gate for the intended source/artifact. Supervisor inspection follows the context firewall; efficiency never waives objective validation.
 
-## Binding architecture
+## Binding architecture and preserved future contracts
 
 Use the relevant authoritative contracts under the context rules above. The following remain non-negotiable unless a blocking technical fact proves otherwise:
+
+Accepted application, data, migration and security invariants remain binding.
+Production-only deployment classification, backup/restore, rollback, host and
+cutover requirements in this section are preserved future production-readiness
+contracts. Reduced Slice 8 uses only its simple test-IIS DACPAC/hash path and
+the concrete Hangfire schema-9 prerequisite; it does not implement the
+production database-changing classifier.
 
 - .NET 10 / ASP.NET Core 10 / SQL Server 2022 compatibility 160 / IIS.
 - Simple solution: `Asap.Web`, `Asap.Database`, `Asap.Migration`, `Asap.Tests`.
@@ -394,9 +422,13 @@ Use the relevant authoritative contracts under the context rules above. The foll
 - Permanent nonproduction stays PocketBase until the .NET implementation is complete and a merged/tagged release candidate is ready.
 - Exact tagged artifact that passes the final permanent-nonproduction rehearsal is the production artifact.
 
-## Binding closure-remediation implementation requirements
+## Preserved production-readiness closure-remediation requirements
 
-Implement the following within the existing slices and models, not as another architecture review:
+The following detailed requirements remain preserved for the future
+production-readiness phase. They are not additional work for reduced Slice 8;
+in particular, item 5's production database-changing classifier is deferred.
+Implement them within the existing models when that phase is authorized, not as
+another architecture review:
 
 1. Complete `HoldPlacementOperation` exactly as `01-PORTING-SPEC.md` section 9.1: owner token/epoch and bounded lease, durable one-way create/reply markers, persisted provider GUID/qualifiers before reply, evidence-classified terminal outcomes, observation-only uncertainty, and super-admin operator resolution. Recovery runs before business phases and includes already-acquired inactive-library work; no new inactive-library acquisition or unsupported replay.
 2. Enforce AdditionalCopy retained-claim validation under Organization -> StaffUser -> task locking on reopen and inherited-claim creation. Clear invalid effective fields, preserve Notes history, and do not auto-assign. Import both request types with map-then-current-eligibility checks, all conversion reasons/counts, valid inactive-organization relationships, and preserved closed history (`04-MIGRATION-CUTOVER.md` section 6.3).
@@ -474,7 +506,7 @@ Do not require ceremonial full passes for narrow corrections. Repeat fixes/re-re
 
 The user-authorized `../implementation/temporary-email-transport.md` decision remains binding: `FileEmailSender` substitutes only the final provider boundary. It does not weaken the durable SQL outbox, authorization-sensitive recipient checks, recipient-domain safety, or lease/fencing/idempotency/retry behavior; it does not simulate Postmark webhook/provider success or become another subsystem. Real Rest 3-compatible cancellable `Clc.Postmark.Api` integration and required provider/webhook/transport tests remain release/rehearsal blockers. This model-policy update executes no implementation or release validation and starts no slice.
 
-## Required implementation slice sequence
+## Current and historical implementation sequence
 
 Follow `02-IMPLEMENTATION-PLAN.md` as the canonical sequence:
 
@@ -486,10 +518,10 @@ Follow `02-IMPLEMENTATION-PLAN.md` as the canonical sequence:
 - **Slice 5:** background workflows + complete email operations.
 - **Slice 6:** analytics.
 - **Slice 7:** migration hardening + legacy-link compatibility.
-- **Slice 8:** deployment/health/monitoring/release artifacts.
-- **Slice 9:** CI/Playwright/accessibility/release validation integration.
-- **Slice 10:** end-of-port explicit synthetic seed/reset tooling.
-- **Slice 11:** remove legacy PocketBase implementation, rewrite canonical docs and repository-level `AGENTS.md`, and run final review. Before the port PR merges, remove obsolete PocketBase-only agent instructions, retain/adapt general simplicity/scope, settings-scope, DOM-safety, accessibility, and behavioral-testing guidance, and make `AGENTS.md` describe the completed .NET repository, including its DACPAC/EF Core/Dapper/ADO.NET/SQL rules, rather than a planned future port.
+- **Slice 8:** reduced repository-side test-environment CI/CD to IIS; acceptance may record `test_cd_activation: pending_runner_setup`.
+- **Slice 9:** focused development CI/browser/accessibility completion; not started by this task.
+- **Slice 10:** deferred/optional synthetic seed/reset convenience tooling.
+- **Slice 11:** reduced .NET cleanup, canonical documentation and one integrated development-completion review; not started by this task.
 
 Migration export/import/reconciliation code is developed **alongside** every data-owning slice; the migration-hardening slice consolidates and productionizes it rather than starting it from scratch.
 
@@ -505,15 +537,29 @@ A review-candidate checkpoint is pushed on the package/slice branch after its ap
 
 The candidate accepted milestone is the integration-branch head after the slice merge and any required documentation-only acceptance/status commit. Only its own successful exact-SHA remote CI completes acceptance. Keep the reviewed implementation SHA distinct and record the final SHA/run result in PR metadata or an acceptance conversation record without creating an extra unvalidated repository commit merely to record CI. Policy/documentation maintenance commits are not new accepted product slices.
 
-## Final whole-app review
+## Deferred production-readiness whole-application review
 
-After legacy cleanup and all deterministic tests are green, use fresh independent Terra High whole-app review passes, dispatched by the supervisor or run directly in manual mode. Ask: **Do all accepted slices form one correct, secure, migratable, deployable replacement system?** Work-package and slice reviews do not replace this final adversarial gate. Vary focus across correctness/integration, failure paths, migration/data, concurrency, APIs/contracts, security, performance/resources, maintainability/coupling, deployment/recovery, and test adequacy.
+After legacy cleanup and all deterministic tests are green in the future
+production-readiness phase, use fresh independent Terra High whole-app review
+passes. Ask: **Do all accepted slices form one correct, secure, migratable,
+deployable replacement system?** Work-package and slice reviews do not replace
+this final adversarial gate. Vary focus across correctness/integration, failure
+paths, migration/data, concurrency, APIs/contracts, security,
+performance/resources, maintainability/coupling, deployment/recovery, and test
+adequacy.
 
-Stop after **3 consecutive passes with no new substantive finding**, maximum **6 passes**. Maintain a running confirmed-finding set so later passes do not repeat old issues. Fix all blocking findings regardless of pass count.
+The deferred production gate remains **3 consecutive passes with no new
+substantive finding**, maximum **6 passes**. Maintain a running confirmed-finding
+set so later passes do not repeat old issues. Fix all blocking findings
+regardless of pass count. Reduced Slice 8 uses one integrated Terra High review
+plus focused re-review of confirmed fixes.
 
-## Merge, tag, rehearsal, production
+## Deferred merge, tag, rehearsal and production sequence
 
-The PR must include everything required for real cutover:
+The following is preserved for the future production-readiness phase. It is not
+required for reduced Slice 8 acceptance, and no step is authorized by this task.
+The final production PR must eventually include everything required for real
+cutover:
 
 - complete app;
 - DACPAC;
@@ -527,7 +573,8 @@ The PR must include everything required for real cutover:
 - release artifact/manifest generation;
 - migration and deployment/cutover runbooks.
 
-Do not merge a "code complete, ops later" port.
+When production readiness resumes, do not merge a "code complete, ops later"
+port. That future rule does not expand reduced Slice 8 acceptance.
 
 After the final whole-app review:
 
@@ -546,4 +593,11 @@ If PocketBase production needs a critical fix after step 2 but before production
 
 ## Scope control
 
-Whenever you discover cleanup/modernization that is not needed for correctness or cutover, add it to `09-DEFERRED-FOLLOWUPS.md` instead of expanding the port. In particular do not opportunistically add frontend frameworks, dependency major upgrades, server-side paging, an external secret-vault product beyond the required Data Protection SQL-secret protection, distributed caching, automatic CD, or generalized migration/workflow frameworks.
+Whenever you discover cleanup/modernization that is not needed for current
+development completion or the future cutover, add it to
+`09-DEFERRED-FOLLOWUPS.md` instead of expanding the port. The reduced test-IIS
+workflow is the sole current automatic deployment path; do not add production
+promotion automation, frontend frameworks, dependency major upgrades,
+server-side paging, an external secret-vault product beyond the required Data
+Protection SQL-secret protection, distributed caching, or generalized
+migration/workflow frameworks.
