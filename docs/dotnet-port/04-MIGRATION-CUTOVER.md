@@ -29,7 +29,14 @@ Export creates a normalized UTF-8 JSON directory/package plus manifest. The expo
 
 ### Import/reconcile - new .NET server
 
-Transfer the normalized package through the trusted administrative path to the new ASAP server. Run `Asap.Migration validate/import/reconcile` there against the pre-provisioned empty SQL database.
+Transfer the normalized package through the trusted administrative path to the new ASAP server. Run `Asap.Migration validate/import/reconcile` there against the pre-provisioned empty SQL database. `validate` may omit external configuration when only package structure is being checked, but `import` and `reconcile` currently require the ACLed target external configuration path:
+
+```text
+Asap.Migration import ... --external-config <path>
+Asap.Migration reconcile ... --external-config <path>
+```
+
+The required external configuration is the target operational configuration used for schedule and processing-limit parity; do not substitute a package-local or guessed file.
 
 Do not install or run the migration executable on SQL Server itself.
 
@@ -58,6 +65,16 @@ The manifest should identify at minimum:
 - entity/file counts;
 - file hashes for exported JSON/assets;
 - warnings/intentional normalization notes.
+
+`sourceDatabase` records the stopped source `*.db` file's name, length, and
+SHA-256. It also records `wal: null` when the matching `*.db-wal` sidecar is
+absent, or a `wal` object with that sidecar's name, length, and SHA-256 when it
+is present. Export captures the main file and WAL metadata before opening
+SQLite and verifies both are unchanged after the read; a changed, missing, or
+new main/WAL file aborts export. The `*.db-shm` file is SQLite's rebuildable
+WAL-index state, so it is intentionally neither part of snapshot identity nor
+the normalized package; the stopped source must keep the main database and
+WAL sidecar together for the complete read.
 
 Suggested data files by dependency domain:
 
@@ -336,11 +353,13 @@ The target external JSON uses `Hangfire:Schedules` plus `Hangfire:ProcessingLimi
 Maintain generic `LegacyPocketBaseMapping` entries for old request IDs needed by staff links/bookmarks/email history. During the temporary compatibility period:
 
 1. accept old PocketBase request ID in the existing deep-link parameter;
-2. resolve to new bigint ID;
-3. open the target request;
-4. normalize the browser URL to the new ID.
+2. resolve to a new invariant-decimal bigint ID using the type-qualified mapping (`title_request` or `additional_copy`) when needed;
+3. open the target request, then apply the ordinary current-staff eligibility and library-scope checks;
+4. normalize the browser URL to the new ID as a string while preserving supported `stage`/`status`, other navigation parameters, and the hash.
 
-Mapping cleanup is manual/explicit after the reference window; do not tie it to an automatic purge timer.
+Resolution first checks whether the supplied value is an existing current target ID, and that current target ID wins. The type-qualified mapping (`title_request` or `additional_copy`) is used only as a fallback when no current target exists. Mapping is translation only and never grants authorization. Unknown, deleted, and out-of-scope targets have the same non-disclosing not-found behavior. Independently, browser code must keep request IDs as strings and must not coerce them through JavaScript `Number`, including numeric-looking legacy IDs.
+
+Mapping cleanup is a reviewed, explicit operator action after the reference window. Keep both request-type keys distinct when the same legacy ID text appears in both types, and do not tie cleanup to an automatic purge timer.
 
 ## 8. Reconciliation is a hard gate
 

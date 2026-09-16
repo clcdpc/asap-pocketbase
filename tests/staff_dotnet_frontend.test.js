@@ -9,6 +9,7 @@ const requiredFiles = [
   'app.js',
   path.join('js', 'http.js'),
   path.join('js', 'workflow.js'),
+  path.join('js', 'url-utils.js'),
   path.join('js', 'analytics.js')
 ];
 
@@ -20,9 +21,10 @@ const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
 const http = fs.readFileSync(path.join(root, 'js', 'http.js'), 'utf8');
 const workflow = fs.readFileSync(path.join(root, 'js', 'workflow.js'), 'utf8');
+const urlUtils = fs.readFileSync(path.join(root, 'js', 'url-utils.js'), 'utf8');
 const analytics = fs.readFileSync(path.join(root, 'js', 'analytics.js'), 'utf8');
 const styles = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
-const all = `${index}\n${app}\n${http}\n${workflow}\n${analytics}`;
+const all = `${index}\n${app}\n${http}\n${workflow}\n${urlUtils}\n${analytics}`;
 
 assert.match(index, /Sign in with Microsoft/);
 assert.match(index, /gridjs\.umd\.js/);
@@ -33,9 +35,11 @@ assert.match(styles, /table\.gridjs-table\s*\{[^}]*min-width:\s*\d+px/s, 'queue 
 assert.match(app, /createWorkflowApp/);
 assert.match(http, /X-ASAP-Antiforgery/);
 assert.match(http, /createLatestLoad/);
-assert.match(workflow, /searchParams\.get\('request'\)/);
-assert.match(workflow, /searchParams\.set\('request', id\)/);
-assert.match(workflow, /searchParams\.delete\('request'\)/);
+assert.match(workflow, /requestedRequestIdFromUrl/);
+assert.match(workflow, /requestedStatusFromUrl/);
+assert.match(urlUtils, /searchParams\.get\('request'\)/);
+assert.match(urlUtils, /searchParams\.set\('request', normalizedId\)/);
+assert.match(urlUtils, /searchParams\.delete\('request'\)/);
 assert.match(index, /data-view="additional-copies"/);
 assert.match(index, /data-view="analytics"/);
 assert.match(index, /id="analytics-container"/);
@@ -46,7 +50,7 @@ assert.match(analytics, /latestLoads\.begin\('analytics'\)/);
 assert.match(analytics, /analyticsRange = 'lastMonth'/);
 assert.match(index, /id="additional-copy-create-dialog"/);
 assert.match(index, /id="additional-copy-reminder"/);
-assert.match(workflow, /searchParams\.set\('stage', 'additional_copies'\)/);
+assert.match(urlUtils, /searchParams\.set\('stage', 'additional_copies'\)/);
 assert.match(workflow, /\/api\/asap\/staff\/additional-copies\?scope=/);
 assert.match(workflow, /title-requests\/\$\{request\.id\}\/additional-copy/);
 for (const operation of ['claim', 'unclaim', 'assign', 'close', 'reopen', 'delete']) {

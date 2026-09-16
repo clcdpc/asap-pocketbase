@@ -65,7 +65,11 @@ public static class MigrationCli
                 ["--source", "--storage", "--output", "--source-git-sha", "--exported-at-utc"],
                 ["--confirm-source-stopped"]);
             var exportedAtUtc = parsed.Values.TryGetValue("--exported-at-utc", out var timestamp)
-                ? DateTimeOffset.Parse(timestamp, null, System.Globalization.DateTimeStyles.AssumeUniversal)
+                ? DateTimeOffset.Parse(
+                    timestamp,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeUniversal |
+                    System.Globalization.DateTimeStyles.AdjustToUniversal)
                 : DateTimeOffset.UtcNow;
             MigrationPackageExporter.Export(new MigrationExportOptions(
                 Require(parsed.Values, "--source"),
@@ -128,7 +132,7 @@ public static class MigrationCli
                 Require(parsed.Values, "--staff-identity-map"),
                 allowedTenantIds,
                 Require(parsed.Values, "--report"),
-                Optional(parsed.Values, "--external-config"),
+                Require(parsed.Values, "--external-config"),
                 Optional(parsed.Values, "--postmark-token-env")));
             output.WriteLine($"Import and reconciliation succeeded for {result.ImportedCounts.Values.Sum()} records.");
             return 0;
@@ -168,7 +172,7 @@ public static class MigrationCli
                 Require(parsed.Values, "--package"),
                 Environment.GetEnvironmentVariable(environmentName) ?? string.Empty,
                 Require(parsed.Values, "--report"),
-                Optional(parsed.Values, "--external-config")));
+                Require(parsed.Values, "--external-config")));
             output.WriteLine("Reconciliation succeeded; target SQL matches the restricted import report.");
             return 0;
         }
@@ -240,8 +244,8 @@ public static class MigrationCli
         output.WriteLine("  Asap.Migration validate --package <package-dir> [--external-config <path>]");
         output.WriteLine("  Asap.Migration import --package <package-dir> --connection-string-env <name>");
         output.WriteLine("      --staff-identity-map <path> --allowed-tenant-ids <comma-separated-guids> --report <path>");
-        output.WriteLine("      [--external-config <path>] [--postmark-token-env <name>]");
-        output.WriteLine("  Asap.Migration reconcile --package <package-dir> --connection-string-env <name> --report <path> [--external-config <path>]");
+        output.WriteLine("      --external-config <path> [--postmark-token-env <name>]");
+        output.WriteLine("  Asap.Migration reconcile --package <package-dir> --connection-string-env <name> --report <path> --external-config <path>");
         output.WriteLine();
         output.WriteLine("Export reads a stopped PocketBase SQLite database and writes normalized hashed JSON.");
         output.WriteLine("Import validates a fresh target and writes a deterministic reconciliation report.");
