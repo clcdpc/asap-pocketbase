@@ -22,8 +22,9 @@ The small ZIP contains Web publish, DACPAC, deployment PowerShell and a manifest
 with label, exact commit, UTC build time, DACPAC SHA-256 and web file identity.
 Verify final ZIP SHA-256 before mutation and exact expected manifest identity.
 Exclude source, secrets, external config, keys, Git, Node, PocketBase and migration
-executables/packages. Load host settings outside the site, preferably
-`C:\ProgramData\ASAP\test-deployment.json`; successful state lives beside it.
+executables/packages. Load host settings outside the site from the canonical
+`C:\ProgramData\clc-asap\config\test-deployment.json`; successful state lives
+beside it as `C:\ProgramData\clc-asap\config\test-deployment-state.json`.
 
 Preflight staging, identity, payload, IIS/pool/path, external configuration,
 SqlPackage and prior state before mutation. Stop/verify pool before changed
@@ -48,9 +49,11 @@ Release/real-SQL/frontend/publish gates on `ubuntu-latest`, packages the exact
 tested SHA, validates the ZIP safely, and gates the isolated labels
 `self-hosted`, `windows`, `x64`, `asap-test-iis` on
 `vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true'` for matching tag pushes or
-`workflow_dispatch`. The host script uses
-`C:\ProgramData\ASAP\test-deployment.json`, external `Asap:ConfigFile` application
-configuration and adjacent `test-deployment-state.json`; see
+`workflow_dispatch`. The host bootstrap uses the fixed root
+`C:\ProgramData\clc-asap`, with deployment configuration at
+`C:\ProgramData\clc-asap\config\test-deployment.json`, external `Asap:ConfigFile`
+application configuration at `C:\ProgramData\clc-asap\config\test-app.json`, and
+adjacent `test-deployment-state.json`; see
 [Test IIS Deployment Activation](test-iis-activation.md) for the later
 one-time runner task and the no-live-evidence boundary.
 
