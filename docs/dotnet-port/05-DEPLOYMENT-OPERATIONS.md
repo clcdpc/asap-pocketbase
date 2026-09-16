@@ -1,5 +1,14 @@
 # Deployment and Operations
 
+## Current Scope Notice - 2026-09-16
+
+This document preserves the production-readiness and cutover contract. Reduced
+Slice 8 implements only the repository-side test-IIS path in
+`docs/implementation/slice-08.md` and
+`docs/implementation/test-iis-activation.md`; it does not claim or implement
+production backups, rollback, host provisioning, cutover or the full
+database-changing classifier.
+
 ## 1. Production/nonproduction topology
 
 Production and permanent nonproduction use separate Windows/IIS servers and separate SQL Server infrastructure/instances. The new .NET production server is different from the old PocketBase server and already exists.

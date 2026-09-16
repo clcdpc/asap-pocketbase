@@ -2,31 +2,42 @@
 
 The implementation replaces PocketBase with .NET 10 / ASP.NET Core 10, SQL
 Server 2022, and IIS under the authoritative `docs/dotnet-port/` pack. This
-single final draft PR will deliver the complete port as reviewed vertical
-slices. It is not eligible for merge or production deployment yet.
+record preserves accepted-slice evidence while the current target is a
+development-complete port. Production readiness and cutover remain deferred.
 
-## Current Status - Slice 7 Acceptance Record - 2026-09-16
+## Current Status - Reduced Slice 8 Implementation - 2026-09-16
 
-Slice 7 passed independent review and short Astra High acceptance.
+Slices 0-7 remain accepted under their recorded review and CI evidence. Slice 7
+passed independent review and short Astra High acceptance.
 [PR #267](https://github.com/clcdpc/asap-pocketbase/pull/267) is merged into
 `codex/csharp-port` at `333330da11b5fcaeafaca3fc820eba68fc4953d3`, preserving
 the exact reviewed tree at `bcd5190ef951fcaf93a0843833b78c89b20ab2af`.
 All substantive findings have independent Terra resolution; the full-slice
 fix count is 1/3. See the [Slice 7 acceptance evidence](slice-07.md#acceptance-record---2026-09-16).
 
-This documentation commit records the candidate milestone. Its exact SHA,
-normal `.NET baseline` CI result and final acceptance status are maintained
-in the [canonical Slice 7 state](https://github.com/clcdpc/asap-pocketbase/pull/267#issuecomment-5684606992)
-and PR #264, without a self-referential follow-up commit. At record creation,
-that final exact-milestone CI gate had not yet run.
+The current reduced Slice 8 implementation branch is
+`codex/slice-08-test-deployment` at review-candidate start
+`9102549b6bf68d6146351a8de10e6fb24e9a3d09`; its technical/base accepted
+milestone is `88fd92cf1fdd856dccba6ef3538182d80325e98a`. Draft PR #271 targets
+`codex/csharp-port`. The current phase is repository implementation and
+integrated validation; Slice 8 has not yet been accepted and no exact
+milestone CI is claimed for it.
 
-PR #264 remains open/draft into `main`; Slices 8-11 have not started.
-Representative-old-host, production-source and release/rehearsal evidence
-is not claimed. Next action after successful milestone CI: Review and narrow
-the Slice 8-11 roadmap before dispatching Slice 8, using integrated-slice Terra
-review as the default and deferring production-only work that is outside the
-current development-complete target. This record does not change that roadmap
-or its execution policy.
+The current target is development completion: accepted behavior and migration
+correctness, normal Release/real-SQL/frontend/publish gates, usable development
+and test configuration, repository-side test-IIS CI/CD, focused browser and
+accessibility coverage, canonical .NET cleanup and one integrated final review.
+Production deployment, cutover and operational-readiness evidence remain
+deferred in [deferred-production-readiness.md](deferred-production-readiness.md).
+
+PR #264 remains open/draft into `main`; its current summary is synchronized by
+the supervisor. `test_cd_activation: pending_runner_setup` is the only allowed
+Slice 8 activation state until a separate task records a real IIS deployment.
+No runner installation, registration, host contact, live IIS deployment,
+production tag, PR #264 merge or Slice 9 implementation is claimed here.
+Next action: finish the repository-side Slice 8 candidate, run the complete
+current integrated validation, obtain the one fresh Terra High holistic review
+and bounded focused re-reviews if required.
 
 ## Slice Outcome Summary
 
@@ -43,10 +54,10 @@ here; chronological entries below preserve checkpoint-time execution evidence.
 | 5 | Background workflows and complete email operations | Accepted | `36727414d02cbe34ba13cd3f6f1bb57980b83a6f` / `34952097695` |
 | 6 | Analytics | Accepted; later post-acceptance correction completed | Historical milestone `7ba59421176ede99ba48488be6bc81010e60f65c` / `34976630186` |
 | 7 | Migration hardening and legacy links | Independent review and short acceptance passed; integrated | Exact milestone / CI / final certification: [canonical state](https://github.com/clcdpc/asap-pocketbase/pull/267#issuecomment-5684606992) |
-| 8 | Deployment, health, monitoring, release artifacts | Not started | - |
-| 9 | CI, browser, accessibility, release integration | Not started | - |
-| 10 | Explicit synthetic seed/reset tooling | Not started | - |
-| 11 | Legacy removal, canonical docs, final review | Not started | - |
+| 8 | Reduced test-environment CI/CD to IIS | Implementation in progress; activation pending runner setup | Review candidate `9102549b6bf68d6146351a8de10e6fb24e9a3d09` |
+| 9 | Focused development CI, browser and accessibility completion | Future scope; not started in this task | - |
+| 10 | Synthetic seed/reset convenience tooling | Deferred / optional | - |
+| 11 | Reduced .NET cleanup, canonical docs and one integrated final review | Future scope; not started in this task | - |
 
 The separate post-Slice-6 reviewed correction is
 `04f538ef1a04be33b31d5dbdc3a5c1751b163ee4`; corrected product/integration
@@ -55,8 +66,11 @@ It is not a new slice and does not replace the historical Slice 6 milestone.
 
 ## Historical Checkpoints
 
-All entries below preserve checkpoint-time status and evidence. Mutable status
-is past-tense or explicitly qualified; technical contracts retain their meaning.
+All entries below preserve checkpoint-time status and evidence. Their status,
+next actions and deferred claims are qualified to the checkpoint date and do
+not override the current summary above. Technical contracts retain their
+historical meaning unless the current policy block explicitly narrows the
+remaining execution scope.
 
 ## Slice 7 Integration And Acceptance Checkpoint - 2026-09-16
 

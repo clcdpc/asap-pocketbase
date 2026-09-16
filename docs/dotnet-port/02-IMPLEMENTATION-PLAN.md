@@ -1,5 +1,14 @@
 # ASAP .NET Port Implementation Plan
 
+## Current Scope Notice - 2026-09-16
+
+The current target is development-complete .NET port work. The reduced Slice 8
+packet governs the active test-IIS CI/CD implementation; the production-grade
+Slice 8-11 and final cutover sections in this historical plan remain deferred
+reference. See [document 10](10-CODEX-MULTI-MODEL-TASK.md) and
+[deferred-production-readiness.md](../implementation/deferred-production-readiness.md)
+for the current sequence and acceptance boundary.
+
 ## 1. Delivery model
 
 The port delivers through one long-lived accepted-slice integration branch, `codex/csharp-port`, and one final draft PR (#264) into `main`. Beginning with Slice 6, temporary slice integration PRs target `codex/csharp-port`; optional coherent work-package PRs target their slice branch. Neither targets `main`, and neither is an independent release. [Document 10](10-CODEX-MULTI-MODEL-TASK.md) is authoritative for topology, thin autonomous supervision, bounded workers, package sizing and review/acceptance mechanics.

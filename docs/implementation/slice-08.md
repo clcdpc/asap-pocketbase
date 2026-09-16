@@ -1,5 +1,61 @@
 # Slice 8: Deployment, Health And Release Artifacts
 
+## Current Authorized Scope - 2026-09-16
+
+This packet is being reduced to repository-side **test-environment CI/CD to IIS**.
+The prior production-grade specification below is preserved reference only and
+is superseded for current execution by the user-authorized reduced Slice 8 and
+[development-completion policy](deferred-production-readiness.md).
+
+Start/technical review base: `88fd92cf1fdd856dccba6ef3538182d80325e98a`.
+Branch: `codex/slice-08-test-deployment` into `codex/csharp-port`.
+One cohesive Luna Max implementation; complete integrated validation, then one
+fresh Terra High holistic review. No package reviews absent recorded exception.
+
+Implement `v*.*.*-test.*` and `workflow_dispatch` exact-ref hosted build/test/package,
+then a deployment job gated by repository variable
+`ASAP_TEST_DEPLOYMENT_ENABLED == 'true'`. Unset/empty/false skips deployment.
+PR and ordinary branch CI must never require self-hosted runners. Future labels:
+`self-hosted`, `windows`, `x64`, `asap-test-iis`. No IIS-host checkout/build/npm.
+
+The small ZIP contains Web publish, DACPAC, deployment PowerShell and a manifest
+with label, exact commit, UTC build time, DACPAC SHA-256 and web file identity.
+Verify final ZIP SHA-256 before mutation and exact expected manifest identity.
+Exclude source, secrets, external config, keys, Git, Node, PocketBase and migration
+executables/packages. Load host settings outside the site, preferably
+`C:\ProgramData\ASAP\test-deployment.json`; successful state lives beside it.
+
+Preflight staging, identity, payload, IIS/pool/path, external configuration,
+SqlPackage and prior state before mutation. Stop/verify pool before changed
+DACPAC publish with data-loss blocking; unchanged DACPAC skips publish. Back up
+old web files without pruning, replace the complete payload from staging, start
+the pool and require bounded HTTPS `/health/ready` HTTP 200 healthy polling with
+normal TLS validation. Write state only after readiness. Preflight failure leaves
+the running site untouched; DACPAC failure leaves old files and stopped pool;
+file failure leaves pool stopped; readiness failure retains new files/diagnostics.
+No automatic SQL backup/rollback, production classifier or SQL DeploymentState use.
+Preserve existing `/health/live` and `/health/ready`, including Hangfire compatibility.
+
+Runner installation/registration, contacting the IIS host, host-local setup and
+the first real deployment are explicitly excluded. Document later activation.
+Acceptance requires repository tests/review/exact-milestone CI, never a runner.
+Record `test_cd_activation: pending_runner_setup`; do not claim live deployment.
+Do not merge PR #264 or implement Slices 9, 10 or 11.
+
+The repository implementation lives in `.github/workflows/dotnet.yml` and
+`scripts/deployment/Deploy-AsapTest.ps1`. The workflow keeps the current
+Release/real-SQL/frontend/publish gates on `ubuntu-latest`, packages the exact
+tested SHA, validates the ZIP safely, and gates the isolated labels
+`self-hosted`, `windows`, `x64`, `asap-test-iis` on
+`vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true'` for matching tag pushes or
+`workflow_dispatch`. The host script uses
+`C:\ProgramData\ASAP\test-deployment.json`, external `Asap:ConfigFile` application
+configuration and adjacent `test-deployment-state.json`; see
+[Test IIS Deployment Activation](test-iis-activation.md) for the later
+one-time runner task and the no-live-evidence boundary.
+
+## Historical Production-Readiness Specification
+
 ## Preparation Only
 
 Not dispatched. Start only after Slices 1-7 pass their complete tests,

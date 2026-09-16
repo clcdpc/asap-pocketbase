@@ -17,7 +17,7 @@ These items are intentionally outside the initial port unless implementation exp
 
 ## Deployment / operations
 
-- Build true CI/CD for automatic main -> permanent nonproduction and/or production promotion.
+- Build production/promotion CI/CD for automatic main -> permanent nonproduction and/or production. The reduced Slice 8 test-IIS tag/manual workflow is the limited current deployment path.
 - Automate housekeeping of old application directory backups and deployment-created SQL backups once retention policy is known.
 - Consider centralized log aggregation if local 30-day files become insufficient.
 - Revisit multi-instance/high-availability concerns only if ASAP moves beyond one IIS instance.
