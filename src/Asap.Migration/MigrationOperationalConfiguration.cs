@@ -9,11 +9,37 @@ internal sealed record OperationalConfigurationReconciliation(
 
 internal static class MigrationOperationalConfiguration
 {
+    public static OperationalConfigurationReconciliation ValidateRequired(
+        ValidatedMigrationPackage package,
+        string? externalConfigurationPath)
+    {
+        if (string.IsNullOrWhiteSpace(externalConfigurationPath))
+        {
+            throw new MigrationOperationException(
+                "external_configuration_missing",
+                "A target external configuration file is required for import or reconciliation.");
+        }
+
+        return Validate(package, externalConfigurationPath);
+    }
+
     public static OperationalConfigurationReconciliation Validate(
         ValidatedMigrationPackage package,
         string externalConfigurationPath)
     {
-        if (!File.Exists(externalConfigurationPath))
+        var packageRoot = Path.GetFullPath(package.RootPath);
+        var packagePrefix = packageRoot.EndsWith(Path.DirectorySeparatorChar)
+            ? packageRoot
+            : packageRoot + Path.DirectorySeparatorChar;
+        var externalPath = Path.GetFullPath(externalConfigurationPath);
+        if (externalPath.StartsWith(packagePrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new MigrationOperationException(
+                "external_configuration_path_invalid",
+                "The target external configuration must be supplied outside the immutable migration package.");
+        }
+
+        if (!File.Exists(externalPath))
         {
             throw new MigrationOperationException(
                 "external_configuration_missing",
@@ -25,7 +51,7 @@ internal static class MigrationOperationalConfiguration
             var source = MigrationPackageReader.ReadMetadata(
                 package,
                 "effective-legacy-operational-config.json");
-            using var targetDocument = JsonDocument.Parse(File.ReadAllText(externalConfigurationPath));
+            using var targetDocument = JsonDocument.Parse(File.ReadAllText(externalPath));
             var targetHangfire = Property(targetDocument.RootElement, "Hangfire");
             var targetSchedules = Property(targetHangfire, "Schedules");
             var matchedSchedules = 0;

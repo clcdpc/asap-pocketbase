@@ -339,6 +339,119 @@ public sealed class MigrationCliTests
     }
 
     [TestMethod]
+    public void ImportAndReconcileRequireExternalConfigurationAtEveryEntryPoint()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-required-config-{Guid.NewGuid():N}");
+        var connectionEnvironmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        var tenantId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var package = CreateMinimalPackage(root);
+            var identityMap = Path.Combine(root, "staff-map.json");
+            File.WriteAllText(identityMap, "{\"users\":[]}");
+            var report = Path.Combine(root, "report.json");
+
+            using var importMissingError = new StringWriter();
+            Assert.AreEqual(
+                1,
+                MigrationCli.Run(
+                    [
+                        "import", "--package", package,
+                        "--connection-string-env", connectionEnvironmentName,
+                        "--staff-identity-map", identityMap,
+                        "--allowed-tenant-ids", tenantId.ToString(),
+                        "--report", report
+                    ],
+                    TextWriter.Null,
+                    importMissingError));
+            StringAssert.Contains(importMissingError.ToString(), "invalid_arguments");
+            StringAssert.Contains(importMissingError.ToString(), "Missing required option: --external-config");
+
+            using var reconcileMissingError = new StringWriter();
+            Assert.AreEqual(
+                1,
+                MigrationCli.Run(
+                    [
+                        "reconcile", "--package", package,
+                        "--connection-string-env", connectionEnvironmentName,
+                        "--report", report
+                    ],
+                    TextWriter.Null,
+                    reconcileMissingError));
+            StringAssert.Contains(reconcileMissingError.ToString(), "invalid_arguments");
+            StringAssert.Contains(reconcileMissingError.ToString(), "Missing required option: --external-config");
+
+            var importException = Assert.Throws<MigrationOperationException>(() =>
+                MigrationImporter.Import(new MigrationImportOptions(
+                    package,
+                    string.Empty,
+                    identityMap,
+                    new HashSet<Guid> { tenantId },
+                    report,
+                    null)));
+            Assert.AreEqual("external_configuration_missing", importException.Code);
+
+            var reconcileException = Assert.Throws<MigrationOperationException>(() =>
+                MigrationReconciler.Reconcile(new MigrationReconcileOptions(
+                    package,
+                    string.Empty,
+                    report,
+                    null)));
+            Assert.AreEqual("external_configuration_missing", reconcileException.Code);
+
+            var configurationPath = ExternalConfigurationPath(package);
+            using var validConfigurationError = new StringWriter();
+            Assert.AreEqual(
+                0,
+                MigrationCli.Run(
+                    ["validate", "--package", package, "--external-config", configurationPath],
+                    TextWriter.Null,
+                    validConfigurationError),
+                validConfigurationError.ToString());
+
+            var configuration = JsonNode.Parse(File.ReadAllText(configurationPath))!.AsObject();
+            configuration["Hangfire"]!["Schedules"]!["WorkflowProcessing"] = "17 * * * *";
+            File.WriteAllText(configurationPath, configuration.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+
+            using var importMismatchError = new StringWriter();
+            Assert.AreEqual(
+                1,
+                MigrationCli.Run(
+                    [
+                        "import", "--package", package,
+                        "--connection-string-env", connectionEnvironmentName,
+                        "--staff-identity-map", identityMap,
+                        "--allowed-tenant-ids", tenantId.ToString(),
+                        "--report", report,
+                        "--external-config", configurationPath
+                    ],
+                    TextWriter.Null,
+                    importMismatchError));
+            StringAssert.Contains(importMismatchError.ToString(), "operational_configuration_mismatch");
+
+            using var reconcileMismatchError = new StringWriter();
+            Assert.AreEqual(
+                1,
+                MigrationCli.Run(
+                    [
+                        "reconcile", "--package", package,
+                        "--connection-string-env", connectionEnvironmentName,
+                        "--report", report,
+                        "--external-config", configurationPath
+                    ],
+                    TextWriter.Null,
+                    reconcileMismatchError));
+            StringAssert.Contains(reconcileMismatchError.ToString(), "operational_configuration_mismatch");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(connectionEnvironmentName, null);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public void ExportCopiesAndHashesPocketBaseBrandingBytes()
     {
         var root = Path.Combine(Path.GetTempPath(), $"asap-migration-branding-{Guid.NewGuid():N}");
@@ -669,7 +782,8 @@ public sealed class MigrationCliTests
                         "--connection-string-env", connectionEnvironmentName,
                         "--staff-identity-map", identityMap,
                         "--allowed-tenant-ids", tenantId.ToString(),
-                        "--report", Path.Combine(root, "dirty-target-report.json")
+                        "--report", Path.Combine(root, "dirty-target-report.json"),
+                        "--external-config", ExternalConfigurationPath(package)
                     ],
                     TextWriter.Null,
                     dirtyError);
@@ -692,7 +806,8 @@ public sealed class MigrationCliTests
                     "--connection-string-env", connectionEnvironmentName,
                     "--staff-identity-map", identityMap,
                     "--allowed-tenant-ids", tenantId.ToString(),
-                    "--report", report
+                    "--report", report,
+                    "--external-config", ExternalConfigurationPath(package)
                 ],
                 output,
                 error);
@@ -744,7 +859,8 @@ public sealed class MigrationCliTests
                 [
                     "reconcile", "--package", package,
                     "--connection-string-env", connectionEnvironmentName,
-                    "--report", report
+                    "--report", report,
+                    "--external-config", ExternalConfigurationPath(package)
                 ],
                 reconcileOutput,
                 reconcileError), reconcileError.ToString());
@@ -773,7 +889,8 @@ public sealed class MigrationCliTests
                     [
                         "reconcile", "--package", package,
                         "--connection-string-env", connectionEnvironmentName,
-                        "--report", report
+                        "--report", report,
+                        "--external-config", ExternalConfigurationPath(package)
                     ],
                     TextWriter.Null,
                     queueDriftError));
@@ -795,7 +912,8 @@ public sealed class MigrationCliTests
                     "--connection-string-env", secondConnectionEnvironmentName,
                     "--staff-identity-map", identityMap,
                     "--allowed-tenant-ids", tenantId.ToString(),
-                    "--report", secondReport
+                    "--report", secondReport,
+                    "--external-config", ExternalConfigurationPath(package)
                 ],
                 TextWriter.Null,
                 secondError), secondError.ToString());
@@ -814,7 +932,8 @@ public sealed class MigrationCliTests
                 [
                     "reconcile", "--package", differentPackage,
                     "--connection-string-env", connectionEnvironmentName,
-                    "--report", report
+                    "--report", report,
+                    "--external-config", ExternalConfigurationPath(differentPackage)
                 ],
                 TextWriter.Null,
                 differentPackageError));
@@ -830,7 +949,8 @@ public sealed class MigrationCliTests
                 [
                     "reconcile", "--package", package,
                     "--connection-string-env", connectionEnvironmentName,
-                    "--report", report
+                    "--report", report,
+                    "--external-config", ExternalConfigurationPath(package)
                 ],
                 TextWriter.Null,
                 driftError));
@@ -1191,7 +1311,8 @@ public sealed class MigrationCliTests
                     "--connection-string-env", connectionEnvironmentName,
                     "--staff-identity-map", identityMap,
                     "--allowed-tenant-ids", tenantId.ToString(),
-                    "--report", report
+                    "--report", report,
+                    "--external-config", ExternalConfigurationPath(package)
                 ],
                 TextWriter.Null,
                 error);
@@ -1338,7 +1459,8 @@ public sealed class MigrationCliTests
                         "--connection-string-env", connectionEnvironmentName,
                         "--staff-identity-map", identityMap,
                         "--allowed-tenant-ids", tenantId.ToString(),
-                        "--report", Path.Combine(caseRoot, "report.json")
+                        "--report", Path.Combine(caseRoot, "report.json"),
+                        "--external-config", ExternalConfigurationPath(package)
                     ],
                     TextWriter.Null,
                     error);
@@ -1389,7 +1511,8 @@ public sealed class MigrationCliTests
                     "--connection-string-env", connectionEnvironmentName,
                     "--staff-identity-map", identityMap,
                     "--allowed-tenant-ids", tenantId.ToString(),
-                    "--report", Path.Combine(validRoot, "report.json")
+                    "--report", Path.Combine(validRoot, "report.json"),
+                    "--external-config", ExternalConfigurationPath(validPackage)
                 ],
                 TextWriter.Null,
                 validError);
@@ -1501,7 +1624,8 @@ public sealed class MigrationCliTests
                     "--connection-string-env", connectionEnvironmentName,
                     "--staff-identity-map", identityMap,
                     "--allowed-tenant-ids", tenantId.ToString(),
-                    "--report", report
+                    "--report", report,
+                    "--external-config", ExternalConfigurationPath(package)
                 ],
                 TextWriter.Null,
                 error);
@@ -1615,7 +1739,8 @@ public sealed class MigrationCliTests
                         "--connection-string-env", connectionEnvironmentName,
                         "--staff-identity-map", identityMap,
                         "--allowed-tenant-ids", tenantId.ToString(),
-                        "--report", Path.Combine(caseRoot, "report.json")
+                        "--report", Path.Combine(caseRoot, "report.json"),
+                        "--external-config", ExternalConfigurationPath(package)
                     ],
                     TextWriter.Null,
                     error);
@@ -1643,7 +1768,8 @@ public sealed class MigrationCliTests
                         "--connection-string-env", connectionEnvironmentName,
                         "--staff-identity-map", identityMap,
                         "--allowed-tenant-ids", tenantId.ToString(),
-                        "--report", Path.Combine(bibConflictRoot, "report.json")
+                        "--report", Path.Combine(bibConflictRoot, "report.json"),
+                        "--external-config", ExternalConfigurationPath(bibConflictPackage)
                     ],
                     TextWriter.Null,
                     bibError);
@@ -1656,6 +1782,49 @@ public sealed class MigrationCliTests
                 await rollbackConnection.OpenAsync();
                 Assert.AreEqual(0, await ScalarAsync(rollbackConnection, "SELECT COUNT(*) FROM [asap].[TitleRequest];"));
                 Assert.AreEqual(0, await ScalarAsync(rollbackConnection, "SELECT COUNT(*) FROM [asap].[StaffUser];"));
+            }
+
+            var ambiguousRoot = Path.Combine(root, "ambiguous");
+            Directory.CreateDirectory(ambiguousRoot);
+            var ambiguousPackage = CreateMinimalPackage(
+                ambiguousRoot,
+                """
+                CREATE TABLE [material_formats] ([id] TEXT NOT NULL PRIMARY KEY, [scope] TEXT NOT NULL, [libraryOrganization] TEXT, [code] TEXT NOT NULL, [label] TEXT NOT NULL, [enabled] INTEGER NOT NULL, [sortOrder] INTEGER NOT NULL);
+                INSERT INTO [material_formats] VALUES ('fmt-book', 'system', NULL, 'book', 'Book', 1, 10);
+                CREATE TABLE [title_requests]
+                (
+                    [id] TEXT NOT NULL PRIMARY KEY, [libraryOrgId] TEXT NOT NULL, [formatRef] TEXT,
+                    [barcode] TEXT NOT NULL, [title] TEXT NOT NULL, [autohold] INTEGER NOT NULL,
+                    [status] TEXT NOT NULL, [closeReason] TEXT, [bibid] TEXT,
+                    [created] TEXT NOT NULL, [updated] TEXT NOT NULL
+                );
+                INSERT INTO [title_requests] VALUES
+                    ('request-ambiguous', '2', 'fmt-book', 'A20000000000012', 'Hint only', 0,
+                     'closed', 'manual', 'BIB-HINT', '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
+                """);
+            var ambiguousReport = Path.Combine(ambiguousRoot, "report.json");
+            using (var ambiguousError = new StringWriter())
+            {
+                var exitCode = MigrationCli.Run(
+                    [
+                        "import", "--package", ambiguousPackage,
+                        "--connection-string-env", connectionEnvironmentName,
+                        "--staff-identity-map", identityMap,
+                        "--allowed-tenant-ids", tenantId.ToString(),
+                        "--report", ambiguousReport,
+                        "--external-config", ExternalConfigurationPath(ambiguousPackage)
+                    ],
+                    TextWriter.Null,
+                    ambiguousError);
+                Assert.AreEqual(1, exitCode);
+                StringAssert.Contains(ambiguousError.ToString(), "placement_history_ambiguous");
+                Assert.IsFalse(File.Exists(ambiguousReport));
+            }
+
+            await using (var ambiguousRollbackConnection = new SqlConnection(target))
+            {
+                await ambiguousRollbackConnection.OpenAsync();
+                Assert.AreEqual(0, await ScalarAsync(ambiguousRollbackConnection, "SELECT COUNT(*) FROM [asap].[TitleRequest];"));
             }
 
             var validRoot = Path.Combine(root, "valid");
@@ -1712,7 +1881,8 @@ public sealed class MigrationCliTests
                     "--connection-string-env", connectionEnvironmentName,
                     "--staff-identity-map", identityMap,
                     "--allowed-tenant-ids", tenantId.ToString(),
-                    "--report", report
+                    "--report", report,
+                    "--external-config", ExternalConfigurationPath(validPackage)
                 ],
                 TextWriter.Null,
                 validError);
@@ -1733,6 +1903,7 @@ public sealed class MigrationCliTests
             Assert.AreEqual(8, placement.GetProperty("knownBibMarkers").GetInt32());
             Assert.AreEqual(2, placement.GetProperty("explicitNullBibMarkers").GetInt32());
             Assert.AreEqual(1, placement.GetProperty("noPlacementEvidence").GetInt32());
+            Assert.AreEqual(0, placement.GetProperty("placementHistoryAmbiguous").GetInt32());
             Assert.AreEqual(0, placement.GetProperty("fabricatedHoldPlacementOperations").GetInt32());
             var terminalReasons = placement.GetProperty("terminalReasons").EnumerateArray().ToDictionary(
                 item => item.GetProperty("reason").GetString()!,
@@ -1824,7 +1995,8 @@ public sealed class MigrationCliTests
                         "--connection-string-env", connectionEnvironmentName,
                         "--staff-identity-map", identityMap,
                         "--allowed-tenant-ids", tenantId.ToString(),
-                        "--report", report
+                        "--report", report,
+                        "--external-config", ExternalConfigurationPath(package)
                     ],
                     TextWriter.Null,
                     error);
@@ -1901,7 +2073,8 @@ public sealed class MigrationCliTests
                         "--connection-string-env", connectionEnvironmentName,
                         "--staff-identity-map", identityMap,
                         "--allowed-tenant-ids", tenantId.ToString(),
-                        "--report", Path.Combine(packageRoot, "report.json")
+                        "--report", Path.Combine(packageRoot, "report.json"),
+                        "--external-config", ExternalConfigurationPath(package)
                     ],
                     TextWriter.Null,
                     error);
@@ -2003,7 +2176,8 @@ public sealed class MigrationCliTests
                     "--connection-string-env", connectionEnvironmentName,
                     "--staff-identity-map", identityMap,
                     "--allowed-tenant-ids", tenantId.ToString(),
-                    "--report", report
+                    "--report", report,
+                    "--external-config", ExternalConfigurationPath(package)
                 ],
                 TextWriter.Null,
                 error);
@@ -2114,7 +2288,8 @@ public sealed class MigrationCliTests
                     "--connection-string-env", environmentName,
                     "--staff-identity-map", identityMap,
                     "--allowed-tenant-ids", "00000000-0000-0000-0000-000000000002",
-                    "--report", report
+                    "--report", report,
+                    "--external-config", ExternalConfigurationPath(package)
                 ],
                 output,
                 error);
@@ -2193,7 +2368,8 @@ public sealed class MigrationCliTests
                     "--connection-string-env", environmentName,
                     "--staff-identity-map", identityMap,
                     "--allowed-tenant-ids", "00000000-0000-0000-0000-000000000002",
-                    "--report", Path.Combine(root, "report.json")
+                    "--report", Path.Combine(root, "report.json"),
+                    "--external-config", ExternalConfigurationPath(package)
                 ],
                 TextWriter.Null,
                 error);
@@ -2481,8 +2657,14 @@ public sealed class MigrationCliTests
             TextWriter.Null,
             exportError);
         Assert.AreEqual(0, exitCode, exportError.ToString());
+        File.WriteAllText(
+            Path.Combine(root, "asap.settings.json"),
+            JsonSerializer.Serialize(TestConfigurationFactory.Create(), new JsonSerializerOptions { WriteIndented = true }));
         return package;
     }
+
+    private static string ExternalConfigurationPath(string package) =>
+        Path.Combine(Directory.GetParent(package)!.FullName, "asap.settings.json");
 
     private static void CreatePinnedSourceSchemaFixtureTables(SqliteConnection connection)
     {
