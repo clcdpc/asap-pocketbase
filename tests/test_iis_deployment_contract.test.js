@@ -1,11 +1,13 @@
 const assert = require('assert');
+const cp = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
 const root = path.resolve(__dirname, '..');
 const workflow = fs.readFileSync(path.join(root, '.github/workflows/dotnet.yml'), 'utf8').replace(/\r\n/g, '\n');
 const deployment = fs.readFileSync(path.join(root, 'scripts/deployment/Deploy-AsapTest.ps1'), 'utf8');
-const bootstrap = fs.readFileSync(path.join(root, 'scripts/deployment/Initialize-AsapTestHost.ps1'), 'utf8');
+const bootstrapPath = path.join(root, 'scripts/deployment/Initialize-AsapTestHost.ps1');
+const bootstrap = fs.readFileSync(bootstrapPath, 'utf8');
 const activation = fs.readFileSync(path.join(root, 'docs/implementation/test-iis-activation.md'), 'utf8');
 
 assert.ok(workflow.includes("tags:\n      - 'v*.*.*-test.*'"), 'test deployment tags should use the documented convention');
@@ -102,14 +104,15 @@ for (const token of [
 ]) {
   assert.ok(bootstrap.includes(token), `test host bootstrap should implement ${token}`);
 }
-assert.ok(
-  bootstrap.includes("Add-Result 'INFO' 'SQL authorization'"),
-  'bootstrap must leave SQL privilege grants as an explicit operator boundary'
-);
-assert.ok(
-  bootstrap.includes("[switch] $SkipLocalAdministrator"),
-  'bootstrap should allow separately provisioned narrower IIS lifecycle rights'
-);
+assert.ok(bootstrap.includes("Add-Result 'INFO' 'SQL authorization'"), 'bootstrap must leave SQL privilege grants as an explicit operator boundary');
+assert.ok(bootstrap.includes('[switch] $SkipLocalAdministrator'), 'bootstrap should allow separately provisioned narrower IIS lifecycle rights');
+
+const escapedBootstrapPath = bootstrapPath.replace(/'/g, "''");
+const parseCommand = `$tokens = $null; $errors = $null; [System.Management.Automation.Language.Parser]::ParseFile('${escapedBootstrapPath}', [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }`;
+const parseResult = cp.spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', parseCommand], { encoding: 'utf8' });
+if (!parseResult.error || parseResult.error.code !== 'ENOENT') {
+  assert.strictEqual(parseResult.status, 0, `bootstrap PowerShell should parse cleanly:\n${parseResult.stdout}\n${parseResult.stderr}`);
+}
 
 assert.ok(activation.includes('Initialize-AsapTestHost.ps1'), 'activation docs should use the automated host bootstrap');
 assert.ok(activation.includes('C:\\ProgramData\\clc-asap\\config\\test-deployment.json'), 'activation docs should use the current host config path');
