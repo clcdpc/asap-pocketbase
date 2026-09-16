@@ -8,6 +8,12 @@ import {
 } from './http.js';
 import { createSettingsController } from './settings.js';
 import { loadAnalytics, resetAnalytics } from './analytics.js';
+import {
+  requestedRequestIdFromUrl,
+  requestedStatusFromUrl,
+  replaceRequestParameter,
+  replaceStageParameter
+} from './url-utils.js';
 
 const STATUS_LABELS = {
   open: 'Open',
@@ -61,28 +67,11 @@ function statusLabel(value) {
 }
 
 function currentRequestParameter() {
-  return new URL(window.location.href).searchParams.get('request');
+  return requestedRequestIdFromUrl();
 }
 
 function currentStageParameter() {
-  return new URL(window.location.href).searchParams.get('stage');
-}
-
-function replaceRequestParameter(id, additionalCopy = false) {
-  const url = new URL(window.location.href);
-  if (id) url.searchParams.set('request', id);
-  else url.searchParams.delete('request');
-  if (additionalCopy) url.searchParams.set('stage', 'additional_copies');
-  else url.searchParams.delete('stage');
-  window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
-}
-
-function replaceStageParameter(stage) {
-  const url = new URL(window.location.href);
-  url.searchParams.delete('request');
-  if (stage) url.searchParams.set('stage', stage);
-  else url.searchParams.delete('stage');
-  window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  return requestedStatusFromUrl();
 }
 
 export function createWorkflowApp() {
@@ -318,15 +307,22 @@ export function createWorkflowApp() {
       }
       showWorkspace(session.staff);
       announce('Staff session ready.');
-      if (currentStageParameter() === 'settings' && session.staff.role !== 'staff') {
+      const requestedStage = currentStageParameter();
+      if (STATUS_LABELS[requestedStage]) {
+        state.status = requestedStage;
+        for (const tab of dom.statusTabs) {
+          tab.setAttribute('aria-selected', String(tab.dataset.status === requestedStage));
+        }
+      }
+      if (requestedStage === 'settings' && session.staff.role !== 'staff') {
         switchView('settings', false);
-      } else if (currentStageParameter() === 'operations' && session.staff.role !== 'staff') {
+      } else if (requestedStage === 'operations' && session.staff.role !== 'staff') {
         switchView('operations', false);
         await loadOperations();
-      } else if (currentStageParameter() === 'additional_copies') {
+      } else if (requestedStage === 'additional_copies') {
         switchView('additional-copies', false);
         await loadAdditionalCopies();
-      } else if (currentStageParameter() === 'analytics') {
+      } else if (requestedStage === 'analytics') {
         switchView('analytics', false);
         await loadAnalytics(dom.analyticsContainer);
       } else {

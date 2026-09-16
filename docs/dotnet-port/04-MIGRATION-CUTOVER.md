@@ -29,7 +29,14 @@ Export creates a normalized UTF-8 JSON directory/package plus manifest. The expo
 
 ### Import/reconcile - new .NET server
 
-Transfer the normalized package through the trusted administrative path to the new ASAP server. Run `Asap.Migration validate/import/reconcile` there against the pre-provisioned empty SQL database.
+Transfer the normalized package through the trusted administrative path to the new ASAP server. Run `Asap.Migration validate/import/reconcile` there against the pre-provisioned empty SQL database. `validate` may omit external configuration when only package structure is being checked, but `import` and `reconcile` currently require the ACLed target external configuration path:
+
+```text
+Asap.Migration import ... --external-config <path>
+Asap.Migration reconcile ... --external-config <path>
+```
+
+The required external configuration is the target operational configuration used for schedule and processing-limit parity; do not substitute a package-local or guessed file.
 
 Do not install or run the migration executable on SQL Server itself.
 
@@ -336,11 +343,13 @@ The target external JSON uses `Hangfire:Schedules` plus `Hangfire:ProcessingLimi
 Maintain generic `LegacyPocketBaseMapping` entries for old request IDs needed by staff links/bookmarks/email history. During the temporary compatibility period:
 
 1. accept old PocketBase request ID in the existing deep-link parameter;
-2. resolve to new bigint ID;
-3. open the target request;
-4. normalize the browser URL to the new ID.
+2. resolve to a new invariant-decimal bigint ID using the type-qualified mapping (`title_request` or `additional_copy`) when needed;
+3. open the target request, then apply the ordinary current-staff eligibility and library-scope checks;
+4. normalize the browser URL to the new ID as a string while preserving supported `stage`/`status`, other navigation parameters, and the hash.
 
-Mapping cleanup is manual/explicit after the reference window; do not tie it to an automatic purge timer.
+Mapping is translation only and never grants authorization. Unknown, deleted, and out-of-scope targets have the same non-disclosing not-found behavior. A numeric-looking legacy ID remains a legacy ID when the source mapping supports it; browser code must not coerce request IDs through JavaScript `Number`.
+
+Mapping cleanup is a reviewed, explicit operator action after the reference window. Keep both request-type keys distinct when the same legacy ID text appears in both types, and do not tie cleanup to an automatic purge timer.
 
 ## 8. Reconciliation is a hard gate
 
