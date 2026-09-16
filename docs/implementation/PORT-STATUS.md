@@ -5,20 +5,103 @@ Server 2022, and IIS under the authoritative `docs/dotnet-port/` pack. This
 single final draft PR will deliver the complete port as reviewed vertical
 slices. It is not eligible for merge or production deployment yet.
 
-## Current Status - Slice 7 Bootstrap - 2026-09-15
+## Current Status - Slice 7 Acceptance Record - 2026-09-16
 
-Slice 7 is running under the authorized autonomous supervisor in
-[draft PR #267](https://github.com/clcdpc/asap-pocketbase/pull/267), from
-`e1fc18b7b9b4d2d90892e16bf0264da5e2dc6246` on
-`codex/slice-07-migration-hardening`. Initial refs, all three baseline CI
-anchors, clean-start conditions and unchanged PocketBase source pin were
-verified. The [canonical state comment](https://github.com/clcdpc/asap-pocketbase/pull/267#issuecomment-5684606992)
-and immutable events record actual progress. Current-code discovery precedes
-package selection and implementation; no Slice 7 acceptance is claimed.
+Slice 7 passed independent review and short Astra High acceptance.
+[PR #267](https://github.com/clcdpc/asap-pocketbase/pull/267) is merged into
+`codex/csharp-port` at `333330da11b5fcaeafaca3fc820eba68fc4953d3`, preserving
+the exact reviewed tree at `bcd5190ef951fcaf93a0843833b78c89b20ab2af`.
+All substantive findings have independent Terra resolution; the full-slice
+fix count is 1/3. See the [Slice 7 acceptance evidence](slice-07.md#acceptance-record---2026-09-16).
 
-The technical review base is the corrected product baseline
-`d607723e846f633ebe206163f6c232dd79566d6f`; later documentation/process bytes
-are classified separately. PR #264 remains draft. Slices 8-11 have not started.
+This documentation commit records the candidate milestone. Its exact SHA,
+normal `.NET baseline` CI result and final acceptance status are maintained
+in the [canonical Slice 7 state](https://github.com/clcdpc/asap-pocketbase/pull/267#issuecomment-5684606992)
+and PR #264, without a self-referential follow-up commit. At record creation,
+that final exact-milestone CI gate had not yet run.
+
+PR #264 remains open/draft into `main`; Slices 8-11 have not started.
+Representative-old-host, production-source and release/rehearsal evidence
+is not claimed. Next action after successful milestone CI: Review and narrow
+the Slice 8-11 roadmap before dispatching Slice 8, using integrated-slice Terra
+review as the default and deferring production-only work that is outside the
+current development-complete target. This record does not change that roadmap
+or its execution policy.
+
+## Slice Outcome Summary
+
+This is the authoritative quick status view. Exact accepted anchors are retained
+here; chronological entries below preserve checkpoint-time execution evidence.
+
+| Slice | Scope | Outcome | Accepted milestone / CI |
+| --- | --- | --- | --- |
+| 0 | Branch, skeleton, engineering baseline | Accepted | `00967778001e7ec8198ab4498d0fbd15ded4d984` / `34703502557` |
+| 1 | Patron login and submission | Accepted | Reviewed corrective milestone `1e36761c771db70d0b669087d0a843b66cf5618b` / `34731687718`; original candidate retained in chronology |
+| 2 | Staff Entra and core request workflow | Accepted | `9f946aed4b091a82407ac929345819d0a0c87b10` / `34744506275` |
+| 3 | Additional-copy workflow | Accepted | `85539b0ba34937e31396181adfc87c383b8a0cd8` / `34755432713` |
+| 4 | Administration and configuration | Accepted | `417c72430652a35bc8fc1da549ae270eabc86429` / `34861199803` |
+| 5 | Background workflows and complete email operations | Accepted | `36727414d02cbe34ba13cd3f6f1bb57980b83a6f` / `34952097695` |
+| 6 | Analytics | Accepted; later post-acceptance correction completed | Historical milestone `7ba59421176ede99ba48488be6bc81010e60f65c` / `34976630186` |
+| 7 | Migration hardening and legacy links | Independent review and short acceptance passed; integrated | Exact milestone / CI / final certification: [canonical state](https://github.com/clcdpc/asap-pocketbase/pull/267#issuecomment-5684606992) |
+| 8 | Deployment, health, monitoring, release artifacts | Not started | - |
+| 9 | CI, browser, accessibility, release integration | Not started | - |
+| 10 | Explicit synthetic seed/reset tooling | Not started | - |
+| 11 | Legacy removal, canonical docs, final review | Not started | - |
+
+The separate post-Slice-6 reviewed correction is
+`04f538ef1a04be33b31d5dbdc3a5c1751b163ee4`; corrected product/integration
+baseline `d607723e846f633ebe206163f6c232dd79566d6f` passed CI `34988112346`.
+It is not a new slice and does not replace the historical Slice 6 milestone.
+
+## Historical Checkpoints
+
+All entries below preserve checkpoint-time status and evidence. Mutable status
+is past-tense or explicitly qualified; technical contracts retain their meaning.
+
+## Slice 7 Integration And Acceptance Checkpoint - 2026-09-16
+
+The three independently reviewed packages merged as PR #268 at
+`307282fc3a53147101d80964a961f8e58e882204`, PR #269 at
+`002f8e2b0517d9116a658caf103843ae7f40e292`, and PR #270 at
+`919998a363fe78ddb690e07365a8d075607d42b0`. Integrated validation at the last
+SHA passed: build 0 warnings/errors, .NET/real-SQL 312/312 with no failures or
+skips, 175 frontend test-file processes with no failures, 18 legacy-link,
+10 patron and 20 staff browser states, and zero serious/critical accessibility
+findings. Migration remediation, published self-contained win-x64 workflows
+and Web/native SQLite/pinned DACPAC linkage passed; CI `35048541380` succeeded.
+No integration glue changes were required.
+
+Holistic Terra review from technical baseline
+`d607723e846f633ebe206163f6c232dd79566d6f` found only `S7-FULL-1` (WAL-backed
+source identity). Luna fixed it at `bcd5190ef951fcaf93a0843833b78c89b20ab2af`;
+fresh focused Terra [explicitly resolved it](https://github.com/clcdpc/asap-pocketbase/pull/267#issuecomment-5696175981).
+Affected evidence passed at that SHA: export 6/6, validation 3/3, migration CLI
+25/25, full suite 313/313, build 0 warnings/errors, published WAL/no-WAL,
+malformed-WAL rejection and fresh import/reconcile gates. Exact-SHA CI
+`35058299692` succeeded. No expensive successful local gates were repeated
+during acceptance; unaffected frontend/browser evidence remained valid.
+
+The stale FIX projection was advanced by sequence 24 `FIX_COMPLETED`, then
+independent re-review and short acceptance completed at sequences 25 and 26.
+Full-slice fix count remained 1/3, with zero unresolved substantive findings.
+PR #267 merge and resulting integration SHA were both
+`333330da11b5fcaeafaca3fc820eba68fc4953d3`; its tree matched the reviewed SHA.
+The guarded integration preserved the expected first parent
+`e1fc18b7b9b4d2d90892e16bf0264da5e2dc6246` and required no ready transition.
+The later documentation-only milestone required its own successful CI;
+its exact SHA/result and final acceptance were to be recorded in PR #267's
+journal and PR #264's Current State. Release/rehearsal gaps remained explicit.
+
+### Historical Slice 7 Bootstrap - 2026-09-15
+
+The authorized supervisor created draft PR #267 on
+`codex/slice-07-migration-hardening` from
+`e1fc18b7b9b4d2d90892e16bf0264da5e2dc6246`. Initial refs, all three baseline
+CI anchors, clean-start conditions and the unchanged PocketBase source pin
+were verified. The corrected product baseline
+`d607723e846f633ebe206163f6c232dd79566d6f` was the technical review base;
+later documentation/process bytes were classified separately. At bootstrap,
+package selection, implementation and acceptance had not yet occurred.
 
 ### Pre-bootstrap Policy Checkpoint - 2026-09-15
 
@@ -66,36 +149,6 @@ The next action at that checkpoint, after successful exact-SHA CI, was one GPT-6
 Astra High autonomous Slice 7 bootstrap/execution task using the GitHub-backed
 supervisor journal, with GPT-6 Astra Max reserved for bounded escalation.
 PR #264 remains draft; no merge, tag, deployment, rehearsal or cutover.
-
-## Slice Outcome Summary
-
-This is the authoritative quick status view. Exact accepted anchors are retained
-here; chronological entries below preserve checkpoint-time execution evidence.
-
-| Slice | Scope | Outcome | Accepted milestone / CI |
-| --- | --- | --- | --- |
-| 0 | Branch, skeleton, engineering baseline | Accepted | `00967778001e7ec8198ab4498d0fbd15ded4d984` / `34703502557` |
-| 1 | Patron login and submission | Accepted | Reviewed corrective milestone `1e36761c771db70d0b669087d0a843b66cf5618b` / `34731687718`; original candidate retained in chronology |
-| 2 | Staff Entra and core request workflow | Accepted | `9f946aed4b091a82407ac929345819d0a0c87b10` / `34744506275` |
-| 3 | Additional-copy workflow | Accepted | `85539b0ba34937e31396181adfc87c383b8a0cd8` / `34755432713` |
-| 4 | Administration and configuration | Accepted | `417c72430652a35bc8fc1da549ae270eabc86429` / `34861199803` |
-| 5 | Background workflows and complete email operations | Accepted | `36727414d02cbe34ba13cd3f6f1bb57980b83a6f` / `34952097695` |
-| 6 | Analytics | Accepted; later post-acceptance correction completed | Historical milestone `7ba59421176ede99ba48488be6bc81010e60f65c` / `34976630186` |
-| 7 | Migration hardening and legacy links | Bootstrap running; not accepted | PR #267; exact milestone pending |
-| 8 | Deployment, health, monitoring, release artifacts | Not started | - |
-| 9 | CI, browser, accessibility, release integration | Not started | - |
-| 10 | Explicit synthetic seed/reset tooling | Not started | - |
-| 11 | Legacy removal, canonical docs, final review | Not started | - |
-
-The separate post-Slice-6 reviewed correction is
-`04f538ef1a04be33b31d5dbdc3a5c1751b163ee4`; corrected product/integration
-baseline `d607723e846f633ebe206163f6c232dd79566d6f` passed CI `34988112346`.
-It is not a new slice and does not replace the historical Slice 6 milestone.
-
-## Historical Checkpoints
-
-All entries below preserve checkpoint-time status and evidence. Mutable status
-is past-tense or explicitly qualified; technical contracts retain their meaning.
 
 ## Post-Slice-6 Correction Pending Exact-SHA CI - 2026-09-15
 

@@ -1,20 +1,77 @@
 # Slice 7: Migration Hardening And Legacy Links
 
-## Authorized Bootstrap - 2026-09-15
+## Acceptance Record - 2026-09-16
 
-The autonomous Slice 7 run is authorized. Initial verification confirmed
+Slice 7 passed independent Terra review and short Astra High acceptance.
+All substantive package and holistic findings are independently resolved.
+The reviewed implementation is `bcd5190ef951fcaf93a0843833b78c89b20ab2af`;
+PR #267 merge and resulting `codex/csharp-port` integration SHA are both
+`333330da11b5fcaeafaca3fc820eba68fc4953d3`. The merge preserves the exact
+reviewed tree and expected integration parent
+`e1fc18b7b9b4d2d90892e16bf0264da5e2dc6246`.
+
+This documentation-only acceptance commit is the milestone candidate.
+At record creation its exact-milestone `.NET baseline` CI was pending.
+The [canonical PR #267 state and journal](https://github.com/clcdpc/asap-pocketbase/pull/267#issuecomment-5684606992)
+record the resulting milestone SHA, actual CI run/result and final acceptance;
+PR #264 holds the concise current summary. No extra repository commit is
+required solely to record this commit's own SHA or later CI result.
+
+| Evidence | Exact anchor / result |
+| --- | --- |
+| Technical review baseline | `d607723e846f633ebe206163f6c232dd79566d6f` |
+| Package 1, PR #268 | Merge `307282fc3a53147101d80964a961f8e58e882204`; S7-P1-1 and S7-P1-2 independently resolved |
+| Package 2, PR #269 | Merge `002f8e2b0517d9116a658caf103843ae7f40e292`; S7-P2-1 and S7-P2-2 independently resolved |
+| Package 3, PR #270 | Merge `919998a363fe78ddb690e07365a8d075607d42b0`; S7-P3-1 independently resolved |
+| Integrated candidate | `919998a363fe78ddb690e07365a8d075607d42b0`; no integration glue changes |
+| Integrated validation | Build 0 warnings/errors; .NET/real-SQL 312/312, 0 failed/skipped; 175 frontend test-file processes, 0 failed |
+| Browser/accessibility | 18 legacy-link, 10 patron, 20 staff states; 0 serious/critical accessibility findings |
+| Migration/publication | Remediation oracles, published self-contained win-x64 positive/repeat/negative workflows and Web/native SQLite/pinned DACPAC linkage passed |
+| Integrated CI | `35048541380`, success at the integrated candidate |
+| Holistic review | [Review 5218483893](https://github.com/clcdpc/asap-pocketbase/pull/267#pullrequestreview-5218483893); sole finding S7-FULL-1, WAL-backed source identity |
+| Final focused review | [Independent S7-FULL-1 RESOLVED disposition](https://github.com/clcdpc/asap-pocketbase/pull/267#issuecomment-5696175981) at `bcd5190ef951fcaf93a0843833b78c89b20ab2af` |
+| Fix validation | Export 6/6; validation 3/3; MigrationCliTests 25/25; full suite 313/313; build 0 warnings/errors; published WAL/no-WAL, malformed-WAL rejection and fresh import/reconcile passed |
+| Fix CI | `35058299692`, success at the final reviewed SHA |
+| Full-slice fix cycles | 1/3; zero unresolved substantive findings |
+
+The fix binds main DB and matching WAL identity, checks their byte stability,
+and validates WAL metadata without packaging raw source bytes or mutating
+the source DB/WAL. SHM remains transient index state. Format, migration
+contract, schema and import-report versions remain `1` / `slice-05` / `5` / `4`.
+Existing unaffected integrated frontend/browser evidence remained valid;
+acceptance repeated no successful expensive local gates or completed reviews.
+Restricted evidence remains local, including the integrated gate index
+`asap-slice07-integrated-pre-review-20260915/gate-index.json` and the published
+WAL-fix artifacts under `asap-slice07-wal-fix-20260916`.
+
+No representative-old-host run, actual production source/deployed-SHA/operator
+verification, permanent-nonproduction exact-artifact rehearsal, deployment or
+cutover is claimed. Real Polaris/Postmark/provider-webhook and final release
+validation remain outside this evidence. PR #264 remains open/draft into main;
+Slices 8-11 have not started. After successful milestone CI, review and narrow
+their roadmap before dispatching Slice 8, using integrated-slice Terra review
+as the default and deferring production-only work outside the current
+development-complete target. This record does not redesign those slices.
+
+## Historical Authorized Bootstrap - 2026-09-15
+
+At this checkpoint, the autonomous Slice 7 run was authorized. Initial verification confirmed
 `origin/codex/csharp-port` at documentation-policy branch point
 `e1fc18b7b9b4d2d90892e16bf0264da5e2dc6246`, with successful exact-SHA
-`.NET baseline` CI `34996100667`. PR #264 remains open/draft. Fetched `main`
-still matches PocketBase `150b30b776565194260cc327eeeffdfb46475e81`.
+`.NET baseline` CI `34996100667`. PR #264 was open/draft. Fetched `main`
+still matched PocketBase `150b30b776565194260cc327eeeffdfb46475e81`.
 No prior Slice 7 branch, PR, supervisor journal or worker was found.
 
-The slice branch is `codex/slice-07-migration-hardening`, targeting
-`codex/csharp-port`. Its draft PR holds the canonical supervisor state and
-immutable transition journal. Package selection awaits current-code discovery;
-implementation, validation, review and acceptance have not occurred at this
+The slice branch was `codex/slice-07-migration-hardening`, targeting
+`codex/csharp-port`. Its draft PR held the canonical supervisor state and
+immutable transition journal. Package selection awaited current-code discovery;
+implementation, validation, review and acceptance had not occurred at this
 bootstrap checkpoint. Policy-only bytes after the corrected product baseline
 are classified separately from the technical review delta.
+
+The bootstrap instructions below preserve the planning context at that
+checkpoint; their future-tense actions were subsequently completed as recorded
+above. The objective and technical contract sections remain applicable.
 
 ### Verified Prior Anchors
 
