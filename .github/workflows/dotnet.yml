@@ -307,7 +307,8 @@ jobs:
               -DeploymentZip $zipPath `
               -ExpectedZipSha256 $expectedHash `
               -ExpectedCommitSha $env:EXPECTED_COMMIT_SHA `
-              -ExpectedDeploymentLabel $env:EXPECTED_DEPLOYMENT_LABEL
+              -ExpectedDeploymentLabel $env:EXPECTED_DEPLOYMENT_LABEL `
+              -ConfigPath 'C:\ProgramData\clc-asap\config\test-deployment.json'
           }
           finally {
             Remove-Item -LiteralPath $bootstrapRoot -Recurse -Force -ErrorAction SilentlyContinue
