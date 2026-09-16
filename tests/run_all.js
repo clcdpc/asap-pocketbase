@@ -5,17 +5,7 @@ const cp = require("child_process");
 
 const testDir = __dirname;
 const filterArg = process.argv[2] ? process.argv[2].toLowerCase() : "";
-const registeredTests = [
-  "custom_fields.test.js",
-  "custom_fields_schema.test.js",
-  "config_custom_fields_scope.test.js",
-  "records_custom_fields.test.js",
-  "staff_additional_fields_ui.test.js",
-  "patron_custom_fields_ui.test.js",
-  "staff_custom_fields_request_ui.test.js"
-];
-
-const files = Array.from(new Set(registeredTests.concat(fs.readdirSync(testDir))))
+const files = fs.readdirSync(testDir)
   .filter((name) => {
     const isTest = name.endsWith(".test.js") && name !== "run_all.js";
     if (!isTest) return false;

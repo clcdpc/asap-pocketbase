@@ -3,90 +3,118 @@
 Reduced Slice 9 and Slice 11 run as one combined batch on
 `codex/final-development-completion`, targeting `codex/csharp-port`.
 
-## Bootstrap
+## Current state
 
-- Verified starting and technical review base:
-  `ce0f4693ea3e98ed81efcf93241456b99050fb56`.
-- Exact starting `.NET baseline` CI: `35109947096`, successful.
-- Slice 8 accepted; PR #264 remains open/draft into `main`.
-- Phase A: hosted browser/accessibility CI, then a validated checkpoint.
-- Phase B: consumer-led PocketBase cleanup and canonical .NET documentation,
-  followed by full validation from the cleaned tree.
-- One fresh independent Terra High holistic review follows both phases.
-  Confirmed findings use bounded Luna fixes and independent verification,
-  with at most three fix cycles.
+The Phase A browser/accessibility checkpoint is complete. Phase B consumer-led
+cleanup and canonical documentation are implemented, and the cleaned-tree
+local matrix is green through publish and focused migration checks. The
+candidate package identity/validate-only gate passed for the candidate SHA and
+will be repeated once after this receipt-only amend so the pushed SHA remains
+the manifest identity. Review, integration, exact candidate CI, and supervisor
+acceptance remain pending.
 
-The combined draft PR holds the canonical supervisor state and append-only
-events under [document 10](../dotnet-port/10-CODEX-MULTI-MODEL-TASK.md).
-Phase A implementation is recorded below; acceptance remains pending until
-every required local and hosted gate has passed.
+- Technical review base: `ce0f4693ea3e98ed81efcf93241456b99050fb56`.
+- Phase A checkpoint: `ec609e38588edcdde8cf45d5c75cc790f359cc1d`.
+- Phase A PR CI: `35124500838` succeeded; IIS was skipped.
+- Draft PR #264 remains open into `main`; this batch does not merge it.
+- The supervisor dispatches one fresh independent Terra High review after the
+  candidate CI gate. No review or acceptance is claimed here.
 
-## Phase A browser and accessibility inventory
+## Phase B consumer and retention record
 
-The baseline default .NET test run discovers and executes 313 tests, including
-the three browser fixture methods. Those methods are ordinary tests, not
-opt-in or skipped tests; they require the hosted SQL connection, the Testing
-environment's deterministic providers, Node.js, and Chromium. Their existing
-fixture lifecycle already starts loopback Kestrel, seeds isolated SQL state,
-and disposes the host and browser.
+The inventory was completed before deletion and classified actual consumers:
 
-The existing runner coverage is:
+- `src/Asap.Web` and `src/Asap.Web/Frontend` own shipped HTTP, feature, and
+  browser behavior; MSBuild copies tracked frontend source to generated
+  `wwwroot`.
+- `database/Asap.Database` owns the SQL Server 2022 DACPAC and intentionally
+  retains `LegacyPocketBaseMapping` for source IDs, legacy links, and migration
+  audit.
+- `src/Asap.Migration` directly reads a stopped legacy SQLite source, uses its
+  pinned source SHA/schema contract, and imports/reconciles SQL. It does not
+  consume the retired source migration files.
+- `tests/Asap.Tests`, `tests/browser`, `tests/run_all.js`, and the retained
+  frontend tests own current backend, migration, browser, and frontend
+  regression coverage.
 
-- Patron: 10 desktop/mobile states plus 3 authentication and session race
-  scenarios, with SQL assertions for successful and duplicate submissions.
-- Staff: 20 desktop/mobile states covering scope, recovery, queue, analytics,
-  assignment, stale mutations, and keyboard workflows.
-- Legacy links: 18 desktop/mobile success and failure states for shared,
-  numeric, and type-qualified request links.
+The cleanup removed the unconsumed PocketBase runtime/hooks/source migrations,
+legacy public/backend JavaScript, runtime SDK material, 158 legacy Node tests,
+benchmark/mock helpers, and obsolete planning/design artifacts. It retained 18
+Node tests for shipped frontend contracts, all C# and browser fixtures, pinned
+vendor assets/notices, migration/source schema notes, the `docs/dotnet-port`
+pack, accepted Slice 8 package/IIS contracts, and deferred production
+references. No legacy implementation was moved into a new runtime subtree.
 
-Every runner binds requests to the loopback app origin and fails on external
-requests, page errors, serious or critical axe findings, horizontal overflow,
-or unintended missing images. No material journey gap was found in inventory.
-The Phase A gap was CI discoverability and enforcement: the workflow had no
-explicit full browser command, no browser-specific test partition, and no
-failure-only browser diagnostic upload. Phase A wires `npm run test:browser`
-to the three existing tests, runs the remaining 310 tests separately in
-hosted CI, and uploads only ignored `.artifacts/browser` evidence on failure.
-The legacy-link fixture now writes into that same safe artifact tree.
+The root-doc audit was individual: `README.md`, `ARCHITECTURE.md`, `PLAN.md`,
+and `STACK.md` were rewritten for the actual .NET application and commands;
+`DESIGN.md` and `PRODUCT.md` remain current domain/design contracts;
+`RESEARCH.md` and `TODO.md` were obsolete source-path lists and were removed.
+Obsolete `.planning`, `.jules`, `.opencode/plans`, and `docs/superpowers` files
+were removed after link/consumer inspection. Concrete migration, schema,
+operator, accepted-slice, and deferred-release notes remain.
 
-This preserves the 313-test total without running the browser journeys twice.
-The CI checkout already uses `github.sha`, and the existing packaging identity
-gate verifies that exact commit before artifact creation. No live Polaris,
-Postmark, or IIS dependency was added. Validation results are recorded below
-after the local matrix completes.
+## Phase A validation receipt
 
-## Phase A validation record
+The checkpoint retained these results and evidence:
 
-Local validation on 2026-09-16 reached these results:
+- Release build: 0 warnings and 0 errors.
+- Real SQL: 310 non-browser plus 3 browser tests, all passed with 0 failures
+  and 0 skips; total 313.
+- Frontend: 176 test files passed before cleanup. Current validation must use
+  only the retained set and must not count removed files.
+- Browser: patron 10 states plus 3 races, staff 20 states, legacy links 18
+  states; 48 axe states with 0 serious/critical findings and 0 overflow.
+- Publish: Web 338 files; native win-x64 migration 251 files including one
+  `e_sqlite3.dll`; vendor 17/17; required DACPAC/executable present and
+  forbidden files absent.
+- Slice 8 package: 333 entries, exact checkpoint identity, SHA-256 sidecar,
+  and deployment-script `-ValidateOnly` extraction passed without host
+  mutation.
 
-- Clean Release build: passed with 0 warnings and 0 errors.
-- Real-SQL partitions: non-browser `310/310` passed with 0 failed and 0
-  skipped; browser `3/3` passed with 0 failed and 0 skipped. Together these
-  cover the baseline 313 discovered tests without duplicate browser runs.
-- Frontend and Slice 8 contract checks: all 176 frontend test files passed;
-  the test-IIS workflow, digest, isolation, and exclusion contract passed.
-- Browser evidence: patron 10 major states plus 3 race assertions, staff 20
-  states, and legacy links 18 states. All 48 axe-scanned states had 0 serious
-  or critical findings and 0 overflow states; origin, page-error, and image
-  assertions passed. Reports are under `.artifacts/browser/`.
-- Publish/native checks: Web 338 files and the self-contained win-x64
-  migration 251 files passed; all 17 vendor hashes matched, the DACPAC and
-  migration executable were present, one `e_sqlite3.dll` was present, and
-  forbidden PocketBase/Node/dev-email files were absent.
-- A current package was created at
-  `.artifacts/phase-a-current-package-20260916-1238.zip` with a matching
-  sidecar digest, 333 entries, and a manifest bound to the final checkpoint
-  commit. The deployment script's `-ValidateOnly` extraction passed without
-  host mutation. No acceptance or independent review is claimed; hosted CI
-  remains configured to execute the same gate.
+Safe evidence paths are `.artifacts/browser/`,
+`.artifacts/slice-08-validation/web/`,
+`.artifacts/slice-08-validation/migration/`, and the retained
+`.artifacts/phase-a-current-package-20260916-1238.zip` with its `.sha256`
+sidecar. These are compact artifacts only; no raw logs or transcripts are
+part of the receipt.
+
+## Required cleaned-tree validation
+
+The cleaned-tree local validation record is:
+
+- Release build: 0 warnings and 0 errors.
+- Real SQL: non-browser `310/310` plus browser `3/3`, for `313/313` total,
+  with 0 failures and 0 skips.
+- Frontend: current retained `18/18` Node tests passed; no removed test files
+  are included in the count.
+- Browser: all patron/staff/legacy-link runners passed with their existing 48
+  axe-scanned states, 3 race scenarios, origin/page-error/image/overflow
+  guards; no serious or critical findings were reported.
+- Publish: Web `338` files; self-contained win-x64 migration `251` files,
+  exactly one `e_sqlite3.dll`, required DACPAC/executable present, forbidden
+  publish files absent; source and published vendor hashes `17/17`.
+- Focused migration regression/oracles: `25/25` passed with 0 failures/skips.
+- Slice 8 package: `333` entries with `330` packaged Web files; exact manifest
+  identity, digest-before-extract, runner isolation, and deployment
+  `-ValidateOnly` passed with no host mutation. The final amended SHA receives
+  the same package gate before push.
+- Hygiene: 82 Markdown files have 0 missing relative links; no removed roots or
+  current legacy imports, no tracked generated/secret paths, the Slice 8
+  workflow/deployment contract passes, and `git diff --check` is clean.
+
+The package gate is repeated for the final amended commit to verify the exact
+identity, ZIP digest before extraction, deployment package integrity, runner
+isolation, and `-ValidateOnly` without host mutation:
+
+- the current published outputs and deployment script;
+- a package manifest bound to the final commit;
+- digest-before-extract and validate-only/no-host-mutation checks.
 
 ## Boundaries
 
-Slice 10 remains deferred/optional. Test-IIS activation remains
-`pending_runner_setup`, supported by the accepted Slice 8 journal and the
-skipped IIS job in the starting CI. Repository-variable access was unavailable
-to the bootstrap token; no activation or successful deployment is claimed.
-
-Production readiness remains [deferred](deferred-production-readiness.md).
-This batch does not activate the IIS runner, merge PR #264, create a production
-tag, deploy production, or implement optional seed/reset tooling.
+Slice 10 remains deferred/optional. `test_cd_activation:
+pending_runner_setup` remains unchanged; no runner/host activation is
+performed. No live Polaris/Postmark calls, production tag/deploy, checkout on
+IIS, PR #264 merge, repository rename, or production readiness is claimed.
+The stopped legacy source is migration/forensic input only, never a writable
+fallback after cutover.
