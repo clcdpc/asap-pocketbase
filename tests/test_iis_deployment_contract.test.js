@@ -79,7 +79,7 @@ for (const token of [
   'sqlcmd',
   '/health/ready',
   'status -eq \'healthy\'',
-  'test-deployment-state.json',
+  'deployment-state.json',
   'ValidateOnly'
 ]) {
   assert.ok(deployment.includes(token), `deployment entry point should implement ${token}`);

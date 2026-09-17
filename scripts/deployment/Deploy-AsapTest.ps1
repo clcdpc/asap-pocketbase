@@ -462,7 +462,7 @@ function Read-HostConfiguration {
     $stagingRoot = Get-FullPath -Path (Get-RequiredText -Object $config -Name 'StagingRoot') -Name 'StagingRoot'
     $backupRoot = Get-FullPath -Path (Get-RequiredText -Object $config -Name 'BackupRoot') -Name 'BackupRoot'
     $applicationConfigPath = Get-FullPath -Path (Get-RequiredText -Object $config -Name 'ExternalApplicationConfigPath') -Name 'ExternalApplicationConfigPath'
-    $statePath = Join-Path (Split-Path -Parent $configPath) 'test-deployment-state.json'
+    $statePath = Join-Path (Split-Path -Parent $configPath) 'deployment-state.json'
 
     foreach ($directory in @(
         @{ Path = $deploymentPath; Name = 'DeploymentPath' },

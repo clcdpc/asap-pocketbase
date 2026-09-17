@@ -51,7 +51,7 @@ tested SHA, validates the ZIP safely, and gates the isolated labels
 `workflow_dispatch`. The host script uses
 `C:\ProgramData\clc-asap\Config\deployment.json`, external application
 configuration at `C:\ProgramData\clc-asap\Config\application.json`, and adjacent
-`test-deployment-state.json`. It verifies that the staged `appsettings.json`
+`deployment-state.json`. It verifies that the staged `appsettings.json`
 `Asap:ConfigFile` pointer and deployment `ExternalApplicationConfigPath` agree; see
 [Test IIS Deployment Activation](test-iis-activation.md) for the later
 one-time runner task and the no-live-evidence boundary.

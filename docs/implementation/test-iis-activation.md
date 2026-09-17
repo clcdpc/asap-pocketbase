@@ -83,7 +83,7 @@ copied into or overwritten by the deployment ZIP.
 Successful state is written beside the deployment config at:
 
 ```text
-C:\ProgramData\clc-asap\Config\test-deployment-state.json
+C:\ProgramData\clc-asap\Config\deployment-state.json
 ```
 
 The state records schema version, version/label, exact commit, deployment ZIP
@@ -114,7 +114,7 @@ pruned by the script.
     `Asap:ConfigFile` pointer before stopping the app pool, then verifies the
     site path and external config.
 13. Confirm `/health/ready` returns HTTP 200 with JSON `status: healthy`.
-14. Confirm `test-deployment-state.json` records the expected exact commit and
+14. Confirm `deployment-state.json` records the expected exact commit and
     ZIP/DACPAC hashes.
 15. Record the first live test deployment evidence separately. This is the
     point at which `test_cd_activation` may become `active`.
