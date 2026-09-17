@@ -2,7 +2,7 @@
 
 [CmdletBinding()]
 param(
-    [switch] $ValidateOnly,
+    [switch] $Initialize,
     [switch] $ContractSelfTest,
 
     [Parameter(DontShow = $true)]
@@ -12,6 +12,107 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $script:ValidationErrors = [System.Collections.Generic.List[string]]::new()
+$script:InitializationRequired = $false
+
+$applicationTemplateJson = @'
+{
+  "Environment": {
+    "Name": "Test",
+    "IsNonProduction": true,
+    "UiBannerText": "NON-PRODUCTION"
+  },
+  "ConnectionStrings": {
+    "AsapDatabase": "Server=REPLACE-SQL-SERVER;Database=REPLACE-ASAP-DATABASE;Integrated Security=True;Encrypt=True;TrustServerCertificate=False",
+    "HangfireDatabase": "Server=REPLACE-SQL-SERVER;Database=REPLACE-HANGFIRE-DATABASE;Integrated Security=True;Encrypt=True;TrustServerCertificate=False"
+  },
+  "Authentication": {
+    "Entra": {
+      "ClientId": "REPLACE-CLIENT-ID",
+      "ClientSecret": "REPLACE-CLIENT-SECRET",
+      "AllowedTenantIds": [
+        "REPLACE-TENANT-ID"
+      ],
+      "InitialSuperAdmin": {
+        "TenantId": "REPLACE-TENANT-ID",
+        "ObjectId": "REPLACE-OBJECT-ID",
+        "UserPrincipalName": "REPLACE-ADMIN-UPN",
+        "DisplayName": "ASAP Initial Administrator",
+        "NotificationEmail": "REPLACE-ADMIN-EMAIL"
+      }
+    }
+  },
+  "Application": {
+    "BusinessTimeZone": "America/New_York",
+    "DataProtectionKeysPath": "REPLACE-DATA-PROTECTION-KEYS-PATH",
+    "DataProtectionKeyEncryptionCertificateThumbprint": "REPLACE-DATA-PROTECTION-CERTIFICATE-THUMBPRINT",
+    "LogPath": "REPLACE-LOG-PATH"
+  },
+  "EmailSafety": {
+    "AllowedRecipientDomains": [
+      "REPLACE-ALLOWED-DOMAIN"
+    ]
+  },
+  "PatronLoginRateLimit": {
+    "PermitLimit": 20,
+    "WindowSeconds": 300
+  },
+  "Hangfire": {
+    "Schedules": {
+      "WorkflowProcessing": "0 * * * *",
+      "IdentifierProcessing": "*/5 * * * *",
+      "OrganizationRefresh": "0 2 * * *",
+      "WeeklyStaffSummary": "0 20 * * 0",
+      "EmailOutboxSweep": "*/5 * * * *",
+      "PatronSessionCleanup": "0 3 * * *",
+      "EmailPayloadCleanup": "30 3 * * *"
+    },
+    "ProcessingLimits": {
+      "Default": {
+        "PageSize": 50,
+        "MaxPerRun": 500
+      },
+      "Timeouts": {
+        "PageSize": null,
+        "MaxPerRun": null
+      },
+      "Queues": {
+        "IdentifierProcessing": {
+          "PageSize": null,
+          "MaxPerRun": null
+        },
+        "PurchasePromotion": {
+          "PageSize": null,
+          "MaxPerRun": null
+        },
+        "HoldPlacement": {
+          "PageSize": null,
+          "MaxPerRun": null
+        },
+        "FulfillmentTracking": {
+          "PageSize": null,
+          "MaxPerRun": null
+        },
+        "OutstandingTimeout": {
+          "PageSize": null,
+          "MaxPerRun": null
+        },
+        "PendingHoldTimeout": {
+          "PageSize": null,
+          "MaxPerRun": null
+        },
+        "HoldPickupTimeout": {
+          "PageSize": null,
+          "MaxPerRun": null
+        },
+        "AdditionalCopyTimeout": {
+          "PageSize": null,
+          "MaxPerRun": null
+        }
+      }
+    }
+  }
+}
+'@
 
 function Get-Value {
     param([object] $Object, [string] $Name)
@@ -106,13 +207,7 @@ function Write-TemplateIfMissing {
 function New-ApplicationTemplate {
     param([string] $HostRoot)
 
-    $templatePath = [IO.Path]::GetFullPath(
-        (Join-Path $PSScriptRoot '..\..\docs\dotnet-port\examples\Config.example.json'))
-    if (-not (Test-Path -LiteralPath $templatePath -PathType Leaf)) {
-        throw "Canonical application configuration template is missing: $templatePath"
-    }
-
-    $template = Get-Content -LiteralPath $templatePath -Raw | ConvertFrom-Json
+    $template = $applicationTemplateJson | ConvertFrom-Json
     $template.Application.DataProtectionKeysPath = Join-Path $HostRoot 'DataProtection-Keys'
     $template.Application.LogPath = Join-Path $HostRoot 'Logs'
     return $template
@@ -156,7 +251,8 @@ function Read-JsonConfiguration {
     param([string] $Path, [string] $Name)
 
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        Add-ValidationError "$Name does not exist at $Path. Run initialization first."
+        $script:InitializationRequired = $true
+        Add-ValidationError "$Name does not exist at $Path."
         return $null
     }
 
@@ -324,6 +420,7 @@ function Test-HostPrerequisites {
     foreach ($name in @('Config', 'DataProtection-Keys', 'Logs', 'Staging', 'Backups')) {
         $directory = Join-Path $HostRoot $name
         if (-not (Test-Path -LiteralPath $directory -PathType Container)) {
+            $script:InitializationRequired = $true
             Add-ValidationError "Required ASAP directory is missing: $directory"
         }
     }
@@ -406,8 +503,8 @@ function Invoke-ContractSelfTest {
     }
 }
 
-if ($ContractSelfTest -and $ValidateOnly) {
-    throw '-ContractSelfTest and -ValidateOnly cannot be combined.'
+if ($ContractSelfTest -and $Initialize) {
+    throw '-ContractSelfTest and -Initialize cannot be combined.'
 }
 if ($ContractSelfTest) {
     Invoke-ContractSelfTest
@@ -415,17 +512,23 @@ if ($ContractSelfTest) {
 }
 
 $resolvedRoot = [IO.Path]::GetFullPath($RootPath)
-if (-not $ValidateOnly) {
+if ($Initialize) {
     Initialize-HostFiles $resolvedRoot
     Write-Host ''
-    Write-Host 'ASAP files are initialized. Edit both templates, then manually provision IIS, identities, certificates, ACLs, SQL/Entra access, and the GitHub Actions runner.'
-    Write-Host 'After host provisioning, run Initialize-AsapTestHost.ps1 -ValidateOnly.'
+    Write-Host 'ASAP-owned files and directories are initialized.'
+    Write-Host '1. Edit application.json and deployment.json.'
+    Write-Host '2. Manually provision IIS, certificates, identities, ACLs, SQL, Entra, and the GitHub Actions runner.'
+    Write-Host '3. Rerun this script with no flags to perform read-only validation.'
     return
 }
 
 $valid = Test-HostPrerequisites $resolvedRoot
 if (-not $valid) {
-    Write-Error ("ASAP test host validation failed:`n - " + ($script:ValidationErrors -join "`n - "))
+    $message = "ASAP test host validation failed:`n - " + ($script:ValidationErrors -join "`n - ")
+    if ($script:InitializationRequired) {
+        $message += "`nRun 'pwsh -File .\Initialize-AsapTestHost.ps1 -Initialize' to create missing ASAP-owned files and directories."
+    }
+    Write-Error $message
     exit 1
 }
 

@@ -53,16 +53,15 @@ The prior hold-recovery, identity/session/lifecycle, Organization/claim, Additio
 | `11-CURRENT-POCKETBASE-REFERENCE.md` | Current-system map and behavior anchors for implementers and reviewers. |
 | `12-DECISION-REGISTER.md` | Compact register of the binding architectural decisions and superseded choices. |
 | `13-SETTINGS-SCOPE-INVENTORY.md` | Normative field-by-field settings scope/storage/inheritance/reset/migration contract for the refactored domain-specific configuration model. |
-| `examples/Config.example.json` | Safe shape/example for external environment configuration, including durable Entra bootstrap identity fields. |
 | `examples/StaffIdentityMap.example.json` | Safe shape/example for the explicit PocketBase-staff -> Entra tenant/object-ID migration mapping. |
 | `examples/EffectiveLegacyRuntimeConfig.example.json` | Safe shape/example for the **system/global SQL-bound values that require runtime fallback resolution**; library-scoped configuration remains in the domain exports. |
 | `examples/EffectiveLegacyOperationalConfig.example.json` | Safe shape/example for the frozen legacy cron and queue-processing-limit snapshot used to prove external operational-config parity. |
 | `14-REMEDIATION-AUDIT.md` | Finding-by-finding closure evidence and mechanical-validation record for this revision. |
 | `PACK-MANIFEST.txt` | SHA-256 inventory of the pack payload for handoff/integrity checks. |
 
-The configuration examples contain placeholders and agreed **configuration shapes**, not deployable credentials. Exact option-class/key names may be refined during implementation as long as the documented ownership boundaries and behavior remain unchanged.
+The configuration examples contain placeholders and agreed **configuration shapes**, not deployable credentials. Exact option-class/key names may be refined during implementation as long as the documented ownership boundaries and behavior remain unchanged. The test-host operational application template, including durable Entra bootstrap identity fields, is readable JSON embedded in `scripts/deployment/Initialize-AsapTestHost.ps1` so the copied bootstrap is self-contained.
 
-`examples/Config.example.json` retains `Environment.IsNonProduction=true` and explicitly lists both `example.org` and `staff.example.org`; the parent entry alone never permits the subdomain. The full fail-closed recipient-domain contract is in `01-PORTING-SPEC.md` section 14.
+The embedded test-host template retains `Environment.IsNonProduction=true` and an explicit recipient-domain entry. A parent domain never permits its subdomains implicitly. The full fail-closed recipient-domain contract is in `01-PORTING-SPEC.md` section 14.
 
 ## Review corrections incorporated
 

@@ -7,9 +7,6 @@ const path = require('path');
 const root = path.resolve(__dirname, '..');
 const bootstrap = path.join(root, 'scripts', 'deployment', 'Initialize-AsapTestHost.ps1');
 const bootstrapSource = fs.readFileSync(bootstrap, 'utf8');
-const canonicalApplication = JSON.parse(
-  fs.readFileSync(path.join(root, 'docs', 'dotnet-port', 'examples', 'Config.example.json'), 'utf8')
-);
 const deploymentSource = fs.readFileSync(path.join(root, 'scripts', 'deployment', 'Deploy-AsapTest.ps1'), 'utf8');
 const workflowSource = fs.readFileSync(path.join(root, '.github', 'workflows', 'dotnet.yml'), 'utf8');
 const appsettings = JSON.parse(fs.readFileSync(path.join(root, 'src', 'Asap.Web', 'appsettings.json'), 'utf8'));
@@ -51,6 +48,14 @@ const parse = childProcess.spawnSync(
 );
 assert.strictEqual(parse.status, 0, parse.stderr || parse.stdout);
 
+const obsoleteMode = childProcess.spawnSync(
+  'pwsh',
+  ['-NoLogo', '-NoProfile', '-File', bootstrap, '-ValidateOnly'],
+  { encoding: 'utf8' }
+);
+assert.notStrictEqual(obsoleteMode.status, 0, '-ValidateOnly must not remain a supported switch');
+assert.match(`${obsoleteMode.stdout}\n${obsoleteMode.stderr}`, /parameter name 'ValidateOnly'/i);
+
 const selfTest = childProcess.spawnSync(
   'pwsh',
   ['-NoLogo', '-NoProfile', '-File', bootstrap, '-ContractSelfTest'],
@@ -59,14 +64,43 @@ const selfTest = childProcess.spawnSync(
 assert.strictEqual(selfTest.status, 0, selfTest.stderr || selfTest.stdout);
 assert.match(selfTest.stdout, /bootstrap self-test passed/i);
 
-const hostRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asap-bootstrap-'));
+const exclusiveModes = childProcess.spawnSync(
+  'pwsh',
+  ['-NoLogo', '-NoProfile', '-File', bootstrap, '-Initialize', '-ContractSelfTest'],
+  { encoding: 'utf8' }
+);
+assert.notStrictEqual(exclusiveModes.status, 0, '-Initialize and -ContractSelfTest must be mutually exclusive');
+
+const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'asap-bootstrap-isolated-'));
 try {
+  const standaloneBootstrap = path.join(isolatedRoot, 'Initialize-AsapTestHost.ps1');
+  const hostRoot = path.join(isolatedRoot, 'host');
+  fs.copyFileSync(bootstrap, standaloneBootstrap);
+  fs.mkdirSync(hostRoot);
+
+  const beforeDefaultValidation = snapshotTree(isolatedRoot);
+  const defaultValidation = childProcess.spawnSync(
+    'pwsh',
+    ['-NoLogo', '-NoProfile', '-File', standaloneBootstrap, '-RootPath', hostRoot],
+    { encoding: 'utf8', cwd: isolatedRoot }
+  );
+  assert.notStrictEqual(defaultValidation.status, 0, 'missing host files must fail validation');
+  const defaultValidationOutput = `${defaultValidation.stdout}\n${defaultValidation.stderr}`;
+  assert.match(defaultValidationOutput, /pwsh -File .*Initialize-AsapTestHost\.ps1/i);
+  assert.match(defaultValidationOutput, /-Initialize/i, 'validation should tell the operator how to initialize the host');
+  assert.deepStrictEqual(
+    snapshotTree(isolatedRoot),
+    beforeDefaultValidation,
+    'default validation must not mutate the script directory or supplied host root'
+  );
+
   const initialize = childProcess.spawnSync(
     'pwsh',
-    ['-NoLogo', '-NoProfile', '-File', bootstrap, '-RootPath', hostRoot],
-    { encoding: 'utf8' }
+    ['-NoLogo', '-NoProfile', '-File', standaloneBootstrap, '-Initialize', '-RootPath', hostRoot],
+    { encoding: 'utf8', cwd: isolatedRoot }
   );
   assert.strictEqual(initialize.status, 0, initialize.stderr || initialize.stdout);
+  assert.match(initialize.stdout, /rerun this script with no flags/i);
 
   for (const directory of ['Config', 'DataProtection-Keys', 'Logs', 'Staging', 'Backups']) {
     assert.ok(fs.statSync(path.join(hostRoot, directory)).isDirectory(), `${directory} should be initialized`);
@@ -78,14 +112,24 @@ try {
   );
   assert.ok(fs.statSync(path.join(hostRoot, 'Config', 'application.json')).isFile());
   assert.ok(fs.statSync(path.join(hostRoot, 'Config', 'deployment.json')).isFile());
+  assert.deepStrictEqual(fs.readdirSync(path.join(hostRoot, 'Config')).sort(), ['application.json', 'deployment.json']);
 
   const applicationPath = path.join(hostRoot, 'Config', 'application.json');
   const deploymentPath = path.join(hostRoot, 'Config', 'deployment.json');
   const generatedApplication = JSON.parse(fs.readFileSync(applicationPath, 'utf8'));
-  const expectedApplication = JSON.parse(JSON.stringify(canonicalApplication));
-  expectedApplication.Application.DataProtectionKeysPath = path.join(hostRoot, 'DataProtection-Keys');
-  expectedApplication.Application.LogPath = path.join(hostRoot, 'Logs');
-  assert.deepStrictEqual(generatedApplication, expectedApplication);
+  const generatedDeployment = JSON.parse(fs.readFileSync(deploymentPath, 'utf8'));
+  assert.deepStrictEqual(
+    Object.keys(generatedApplication).sort(),
+    [
+      'Application',
+      'Authentication',
+      'ConnectionStrings',
+      'EmailSafety',
+      'Environment',
+      'Hangfire',
+      'PatronLoginRateLimit'
+    ].sort()
+  );
   assert.deepStrictEqual(generatedApplication.PatronLoginRateLimit, {
     PermitLimit: 20,
     WindowSeconds: 300
@@ -95,6 +139,10 @@ try {
     path.join(hostRoot, 'DataProtection-Keys')
   );
   assert.strictEqual(generatedApplication.Application.LogPath, path.join(hostRoot, 'Logs'));
+  assert.strictEqual(generatedDeployment.StagingRoot, path.join(hostRoot, 'Staging'));
+  assert.strictEqual(generatedDeployment.BackupRoot, path.join(hostRoot, 'Backups'));
+  assert.strictEqual(generatedDeployment.ExternalApplicationConfigPath, applicationPath);
+
   const operatorApplication = '{\n  "operatorEdited": true\n}\n';
   const operatorDeployment = '{\n  "operatorEdited": true\n}\n';
   fs.writeFileSync(applicationPath, operatorApplication);
@@ -102,8 +150,8 @@ try {
 
   const repeat = childProcess.spawnSync(
     'pwsh',
-    ['-NoLogo', '-NoProfile', '-File', bootstrap, '-RootPath', hostRoot],
-    { encoding: 'utf8' }
+    ['-NoLogo', '-NoProfile', '-File', standaloneBootstrap, '-Initialize', '-RootPath', hostRoot],
+    { encoding: 'utf8', cwd: isolatedRoot }
   );
   assert.strictEqual(repeat.status, 0, repeat.stderr || repeat.stdout);
   assert.strictEqual(fs.readFileSync(applicationPath, 'utf8'), operatorApplication);
@@ -112,17 +160,16 @@ try {
   const beforeValidation = snapshotTree(hostRoot);
   const validation = childProcess.spawnSync(
     'pwsh',
-    ['-NoLogo', '-NoProfile', '-File', bootstrap, '-RootPath', hostRoot, '-ValidateOnly'],
-    { encoding: 'utf8' }
+    ['-NoLogo', '-NoProfile', '-File', standaloneBootstrap, '-RootPath', hostRoot],
+    { encoding: 'utf8', cwd: isolatedRoot }
   );
   assert.notStrictEqual(validation.status, 0, 'blocking validation failures should return nonzero');
-  assert.deepStrictEqual(snapshotTree(hostRoot), beforeValidation, '-ValidateOnly must not mutate the host tree');
+  assert.deepStrictEqual(snapshotTree(hostRoot), beforeValidation, 'default validation must remain read-only');
 } finally {
-  fs.rmSync(hostRoot, { recursive: true, force: true });
+  fs.rmSync(isolatedRoot, { recursive: true, force: true });
 }
 
 assert.ok(bootstrapSource.includes("[string] $RootPath = 'C:\\ProgramData\\clc-asap'"));
-assert.ok(bootstrapSource.includes('docs\\dotnet-port\\examples\\Config.example.json'));
 assert.ok(bootstrapSource.includes("$store = 'Cert:\\LocalMachine\\My'"));
 assert.ok(bootstrapSource.includes('$certificate.HasPrivateKey'));
 for (const forbidden of [
@@ -133,8 +180,13 @@ for (const forbidden of [
   'Start-WebAppPool',
   'Restart-Web',
   'New-SelfSignedCertificate',
+  'Import-PfxCertificate',
+  'New-LocalUser',
   'Add-LocalGroupMember',
   'Set-Acl',
+  'icacls',
+  'Install-WindowsFeature',
+  'Enable-WindowsOptionalFeature',
   'Get-Credential',
   '[PSCredential]',
   'Asap__ConfigFile',

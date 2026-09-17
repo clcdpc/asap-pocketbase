@@ -136,7 +136,7 @@ must not be counted as coverage.
 The test-IIS workflow builds the exact tested commit, publishes Web/DACPAC and
 the separate migration artifact, validates ZIP identity and digest before
 extraction, and keeps build/test/package jobs isolated from self-hosted
-activation. `-ValidateOnly` must not mutate a host. Do not check out or build
+activation. The deployment script's `-ValidateOnly` must not mutate a host. Do not check out or build
 on IIS, activate a runner, contact a host, create a production tag, deploy
 production, or merge the draft PR as part of ordinary implementation.
 

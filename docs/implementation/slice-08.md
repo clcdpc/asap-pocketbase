@@ -39,8 +39,10 @@ Preserve existing `/health/live` and `/health/ready`, including Hangfire compati
 Runner installation/registration, contacting the IIS host, infrastructure
 provisioning and the first real deployment are explicitly excluded. The
 repository provides `Initialize-AsapTestHost.ps1` to create only the canonical
-ASAP-owned ProgramData layout and safe configuration templates, plus a
-read-only `-ValidateOnly` prerequisite check. Acceptance requires repository
+ASAP-owned ProgramData layout and safe configuration templates when invoked
+with `-Initialize`; its no-flag default is a read-only prerequisite check.
+The bootstrap is self-contained and can be copied to the host without a
+repository checkout. Acceptance requires repository
 tests/review/exact-milestone CI, never a runner.
 Record `test_cd_activation: pending_runner_setup`; do not claim live deployment.
 Do not merge PR #264 or implement Slices 9, 10 or 11.

@@ -20,7 +20,7 @@ and its live supervisor journal. Production readiness remains deferred.
 4. Publish Web and self-contained `win-x64` migration output, verify vendor
    hashes and exclusions, and run migration regression/oracle checks.
 5. Validate the Slice 8 package contract, including exact identity, digest
-   before extraction, runner isolation, and `-ValidateOnly` without IIS host
+   before extraction, runner isolation, and deployment-script `-ValidateOnly` without IIS host
    mutation.
 6. Check documentation links, removed imports/paths/scripts, secrets,
    generated output, and whitespace from the cleaned tree.

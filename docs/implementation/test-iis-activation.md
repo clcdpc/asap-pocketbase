@@ -12,12 +12,19 @@ The responsibility boundary is deliberate:
 - Deployment operates against the already-provisioned host and verifies the
   running application.
 
-## Step 1 - Run ASAP Bootstrap
+## Step 1 - Copy The Bootstrap
 
-From an elevated PowerShell 7 session in a reviewed repository checkout, run:
+Copy only `Initialize-AsapTestHost.ps1` from the reviewed repository to the
+host. A repository clone and the repository directory structure are not
+required on the IIS server.
+
+## Step 2 - Initialize
+
+From an elevated PowerShell 7 session in the directory containing the copied
+script, run:
 
 ```powershell
-pwsh -File .\scripts\deployment\Initialize-AsapTestHost.ps1
+pwsh -File .\Initialize-AsapTestHost.ps1 -Initialize
 ```
 
 The script creates the ASAP-owned structure and safe configuration templates:
@@ -33,9 +40,9 @@ C:\ProgramData\clc-asap\
     Backups\
 ```
 
-The generated `application.json` comes from the canonical tracked template at
-`docs/dotnet-port/examples/Config.example.json`; the bootstrap changes only the
-two paths derived from `RootPath`.
+The generated `application.json` comes from the readable operational template
+embedded in the bootstrap. The script substitutes the two paths derived from
+`RootPath` before writing the file.
 
 It does not create the IIS deployment directory, IIS resources, identities,
 certificates, ACLs, SQL objects, Entra applications, or the runner. It never
@@ -43,7 +50,7 @@ overwrites an existing `application.json` or `deployment.json`.
 `deployment-state.json` is absent initially; deployment writes it only after a
 successful readiness check.
 
-## Step 2 - Manually Provision Host Infrastructure
+## Step 3 - Manually Configure Host Infrastructure
 
 Complete all work in this section before validation.
 
@@ -202,12 +209,12 @@ normalized value with the exact staged web payload.
 The deployment job downloads the exact hosted-build artifact. It does not
 check out or build the repository on the IIS host.
 
-## Step 3 - Validate
+## Step 4 - Validate
 
-Run the bootstrap in read-only validation mode:
+Run the bootstrap with no flags:
 
 ```powershell
-pwsh -File .\scripts\deployment\Initialize-AsapTestHost.ps1 -ValidateOnly
+pwsh -File .\Initialize-AsapTestHost.ps1
 ```
 
 Validation checks the ProgramData layout and JSON, unchanged placeholders,
@@ -216,12 +223,14 @@ canonical path and pointer contracts, the Data Protection certificate in
 site/app pool/path, and HTTPS binding. Application domain validation remains
 owned by `ExternalConfigurationValidator` at startup. Validation does not
 repair or create anything and exits nonzero for blocking failures.
+Running with no flags is always safe and read-only. A failed validation never
+triggers initialization or any other mutating setup.
 
 Validation checks only that `ReadinessUrl` is configured correctly. It does
 not request `/health/ready`; no application exists to answer it before the
 first deployment.
 
-## Step 4 - Enable Deployment
+## Step 5 - Enable Deployment
 
 Only after validation succeeds, set the repository variable:
 
@@ -231,7 +240,7 @@ ASAP_TEST_DEPLOYMENT_ENABLED=true
 
 Keep the gate unset or false while any prerequisite is incomplete.
 
-## Step 5 - Deploy
+## Step 6 - Deploy And Verify
 
 Use an exact reviewed test tag such as `v1.0.0-test.1`. Dispatch `.NET baseline`
 from GitHub Actions, or run:
@@ -248,7 +257,7 @@ stops the app pool before database or live-file mutation. It publishes required
 schema changes, backs up the previous web payload, replaces files, starts the
 pool, and polls `/health/ready` with normal TLS validation.
 
-## Step 6 - Verify
+### Verification Evidence
 
 After the workflow succeeds, verify:
 

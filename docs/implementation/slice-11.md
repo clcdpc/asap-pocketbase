@@ -28,7 +28,8 @@ Git history remains its archive.
   describe .NET 10, ASP.NET Core 10, SQL Server 2022, DACPAC ownership, Entra,
   EF/feature services, Hangfire, Frontend, and `Asap.Migration` commands.
 - Keep test-IIS ZIP digest-before-extract, exact identity, activation gating,
-  runner isolation, `-ValidateOnly`, and no-checkout-on-IIS rules.
+  runner isolation, deployment-script `-ValidateOnly`, and no-checkout-on-IIS
+  rules.
 
 The root `AGENTS.md` is rewritten after the cleanup shape is known. It retains
 the project norms for simplicity, settings scope, current/history truth, safe
