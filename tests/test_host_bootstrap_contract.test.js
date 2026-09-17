@@ -7,6 +7,9 @@ const path = require('path');
 const root = path.resolve(__dirname, '..');
 const bootstrap = path.join(root, 'scripts', 'deployment', 'Initialize-AsapTestHost.ps1');
 const bootstrapSource = fs.readFileSync(bootstrap, 'utf8');
+const canonicalApplication = JSON.parse(
+  fs.readFileSync(path.join(root, 'docs', 'dotnet-port', 'examples', 'Config.example.json'), 'utf8')
+);
 const deploymentSource = fs.readFileSync(path.join(root, 'scripts', 'deployment', 'Deploy-AsapTest.ps1'), 'utf8');
 const workflowSource = fs.readFileSync(path.join(root, '.github', 'workflows', 'dotnet.yml'), 'utf8');
 const appsettings = JSON.parse(fs.readFileSync(path.join(root, 'src', 'Asap.Web', 'appsettings.json'), 'utf8'));
@@ -78,6 +81,20 @@ try {
 
   const applicationPath = path.join(hostRoot, 'Config', 'application.json');
   const deploymentPath = path.join(hostRoot, 'Config', 'deployment.json');
+  const generatedApplication = JSON.parse(fs.readFileSync(applicationPath, 'utf8'));
+  const expectedApplication = JSON.parse(JSON.stringify(canonicalApplication));
+  expectedApplication.Application.DataProtectionKeysPath = path.join(hostRoot, 'DataProtection-Keys');
+  expectedApplication.Application.LogPath = path.join(hostRoot, 'Logs');
+  assert.deepStrictEqual(generatedApplication, expectedApplication);
+  assert.deepStrictEqual(generatedApplication.PatronLoginRateLimit, {
+    PermitLimit: 20,
+    WindowSeconds: 300
+  });
+  assert.strictEqual(
+    generatedApplication.Application.DataProtectionKeysPath,
+    path.join(hostRoot, 'DataProtection-Keys')
+  );
+  assert.strictEqual(generatedApplication.Application.LogPath, path.join(hostRoot, 'Logs'));
   const operatorApplication = '{\n  "operatorEdited": true\n}\n';
   const operatorDeployment = '{\n  "operatorEdited": true\n}\n';
   fs.writeFileSync(applicationPath, operatorApplication);
@@ -105,6 +122,9 @@ try {
 }
 
 assert.ok(bootstrapSource.includes("[string] $RootPath = 'C:\\ProgramData\\clc-asap'"));
+assert.ok(bootstrapSource.includes('docs\\dotnet-port\\examples\\Config.example.json'));
+assert.ok(bootstrapSource.includes("$store = 'Cert:\\LocalMachine\\My'"));
+assert.ok(bootstrapSource.includes('$certificate.HasPrivateKey'));
 for (const forbidden of [
   'New-WebAppPool',
   'New-Website',
@@ -120,7 +140,8 @@ for (const forbidden of [
   'Asap__ConfigFile',
   'Win32_Service',
   'Invoke-WebRequest',
-  'Invoke-RestMethod'
+  'Invoke-RestMethod',
+  'Cert:\\CurrentUser\\My'
 ]) {
   assert.ok(!bootstrapSource.includes(forbidden), `bootstrap must not contain provisioning behavior: ${forbidden}`);
 }

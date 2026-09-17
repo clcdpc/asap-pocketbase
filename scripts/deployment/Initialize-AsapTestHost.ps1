@@ -106,59 +106,16 @@ function Write-TemplateIfMissing {
 function New-ApplicationTemplate {
     param([string] $HostRoot)
 
-    return [ordered]@{
-        Environment = [ordered]@{ Name = 'Test'; IsNonProduction = $true; UiBannerText = 'NON-PRODUCTION' }
-        ConnectionStrings = [ordered]@{
-            AsapDatabase = 'Server=REPLACE-SQL-SERVER;Database=REPLACE-ASAP-DATABASE;Integrated Security=True;Encrypt=True;TrustServerCertificate=False'
-            HangfireDatabase = 'Server=REPLACE-SQL-SERVER;Database=REPLACE-HANGFIRE-DATABASE;Integrated Security=True;Encrypt=True;TrustServerCertificate=False'
-        }
-        Authentication = [ordered]@{
-            Entra = [ordered]@{
-                ClientId = 'REPLACE-CLIENT-ID'
-                ClientSecret = 'REPLACE-CLIENT-SECRET'
-                AllowedTenantIds = @('REPLACE-TENANT-ID')
-                InitialSuperAdmin = [ordered]@{
-                    TenantId = 'REPLACE-TENANT-ID'
-                    ObjectId = 'REPLACE-OBJECT-ID'
-                    UserPrincipalName = 'REPLACE-ADMIN-UPN'
-                    DisplayName = 'ASAP Initial Administrator'
-                    NotificationEmail = 'REPLACE-ADMIN-EMAIL'
-                }
-            }
-        }
-        Application = [ordered]@{
-            BusinessTimeZone = 'America/New_York'
-            DataProtectionKeysPath = Join-Path $HostRoot 'DataProtection-Keys'
-            DataProtectionKeyEncryptionCertificateThumbprint = 'REPLACE-DATA-PROTECTION-CERTIFICATE-THUMBPRINT'
-            LogPath = Join-Path $HostRoot 'Logs'
-        }
-        EmailSafety = [ordered]@{ AllowedRecipientDomains = @('REPLACE-ALLOWED-DOMAIN') }
-        Hangfire = [ordered]@{
-            Schedules = [ordered]@{
-                WorkflowProcessing = '0 * * * *'
-                IdentifierProcessing = '*/5 * * * *'
-                OrganizationRefresh = '0 2 * * *'
-                WeeklyStaffSummary = '0 20 * * 0'
-                EmailOutboxSweep = '*/5 * * * *'
-                PatronSessionCleanup = '0 3 * * *'
-                EmailPayloadCleanup = '30 3 * * *'
-            }
-            ProcessingLimits = [ordered]@{
-                Default = [ordered]@{ PageSize = 50; MaxPerRun = 500 }
-                Timeouts = [ordered]@{ PageSize = $null; MaxPerRun = $null }
-                Queues = [ordered]@{
-                    IdentifierProcessing = [ordered]@{ PageSize = $null; MaxPerRun = $null }
-                    PurchasePromotion = [ordered]@{ PageSize = $null; MaxPerRun = $null }
-                    HoldPlacement = [ordered]@{ PageSize = $null; MaxPerRun = $null }
-                    FulfillmentTracking = [ordered]@{ PageSize = $null; MaxPerRun = $null }
-                    OutstandingTimeout = [ordered]@{ PageSize = $null; MaxPerRun = $null }
-                    PendingHoldTimeout = [ordered]@{ PageSize = $null; MaxPerRun = $null }
-                    HoldPickupTimeout = [ordered]@{ PageSize = $null; MaxPerRun = $null }
-                    AdditionalCopyTimeout = [ordered]@{ PageSize = $null; MaxPerRun = $null }
-                }
-            }
-        }
+    $templatePath = [IO.Path]::GetFullPath(
+        (Join-Path $PSScriptRoot '..\..\docs\dotnet-port\examples\Config.example.json'))
+    if (-not (Test-Path -LiteralPath $templatePath -PathType Leaf)) {
+        throw "Canonical application configuration template is missing: $templatePath"
     }
+
+    $template = Get-Content -LiteralPath $templatePath -Raw | ConvertFrom-Json
+    $template.Application.DataProtectionKeysPath = Join-Path $HostRoot 'DataProtection-Keys'
+    $template.Application.LogPath = Join-Path $HostRoot 'Logs'
+    return $template
 }
 
 function New-DeploymentTemplate {
@@ -274,18 +231,17 @@ function Test-Certificate {
     }
     $normalized = $normalized.Replace(' ', '')
 
-    foreach ($store in @('Cert:\LocalMachine\My', 'Cert:\CurrentUser\My')) {
-        if (Test-Path -LiteralPath $store) {
-            $certificate = Get-ChildItem -LiteralPath $store | Where-Object {
-                $_.Thumbprint.Replace(' ', '').Equals($normalized, [StringComparison]::OrdinalIgnoreCase)
-            } | Select-Object -First 1
-            if ($certificate -and $certificate.HasPrivateKey) {
-                return
-            }
+    $store = 'Cert:\LocalMachine\My'
+    if (Test-Path -LiteralPath $store) {
+        $certificate = Get-ChildItem -LiteralPath $store | Where-Object {
+            $_.Thumbprint.Replace(' ', '').Equals($normalized, [StringComparison]::OrdinalIgnoreCase)
+        } | Select-Object -First 1
+        if ($certificate -and $certificate.HasPrivateKey) {
+            return
         }
     }
 
-    Add-ValidationError "Data Protection certificate '$normalized' did not resolve with a private key in CurrentUser or LocalMachine My."
+    Add-ValidationError "Data Protection certificate '$normalized' did not resolve with a private key in LocalMachine\My."
 }
 
 function Test-DotNetHosting {
@@ -376,29 +332,8 @@ function Test-HostPrerequisites {
     $deployment = Read-JsonConfiguration (Join-Path $configRoot 'deployment.json') 'deployment.json'
 
     if ($application) {
-        [void] (Require-Text (Get-NestedValue $application @('Environment', 'Name')) 'Environment.Name')
-        if ((Get-NestedValue $application @('Environment', 'IsNonProduction')) -ne $true) {
-            Add-ValidationError 'Environment.IsNonProduction must be true.'
-        }
-        foreach ($section in @('ConnectionStrings', 'Authentication', 'Application', 'EmailSafety', 'Hangfire')) {
-            if ($null -eq (Get-Value $application $section)) {
-                Add-ValidationError "application.json is missing required section '$section'."
-            }
-        }
-        Test-SqlConnectionString (Get-NestedValue $application @('ConnectionStrings', 'AsapDatabase')) 'ConnectionStrings.AsapDatabase'
-        Test-SqlConnectionString (Get-NestedValue $application @('ConnectionStrings', 'HangfireDatabase')) 'ConnectionStrings.HangfireDatabase'
-        foreach ($field in @(
-            @('Authentication', 'Entra', 'ClientId'),
-            @('Authentication', 'Entra', 'ClientSecret'),
-            @('Authentication', 'Entra', 'InitialSuperAdmin', 'TenantId'),
-            @('Authentication', 'Entra', 'InitialSuperAdmin', 'ObjectId'),
-            @('Authentication', 'Entra', 'InitialSuperAdmin', 'UserPrincipalName')
-        )) {
-            [void] (Require-Text (Get-NestedValue $application $field) ($field -join '.'))
-        }
-        $tenantIds = @(Get-NestedValue $application @('Authentication', 'Entra', 'AllowedTenantIds'))
-        if ($tenantIds.Count -eq 0 -or @($tenantIds | Where-Object { [string] $_ -match 'REPLACE-' }).Count -gt 0) {
-            Add-ValidationError 'Authentication.Entra.AllowedTenantIds requires at least one non-placeholder value.'
+        if ((Get-Content -LiteralPath $applicationPath -Raw) -match 'REPLACE-') {
+            Add-ValidationError 'application.json contains an unchanged REPLACE-* placeholder.'
         }
         if (-not (Test-EquivalentPath (Get-NestedValue $application @('Application', 'DataProtectionKeysPath')) $keysPath)) {
             Add-ValidationError "Application.DataProtectionKeysPath must be '$keysPath'."

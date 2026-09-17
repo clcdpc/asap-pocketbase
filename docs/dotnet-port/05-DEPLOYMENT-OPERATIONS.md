@@ -88,7 +88,11 @@ The bootstrap flow is intentionally explicit:
 - Permanent IIS: published `appsettings.json` points to `C:\ProgramData\clc-asap\Config\application.json`, which contains the runtime operational configuration.
 - Deployment: `C:\ProgramData\clc-asap\Config\deployment.json` points `ExternalApplicationConfigPath` to the same `application.json`; preflight requires the two pointers to agree.
 
-See `examples/Config.example.json`. `04-MIGRATION-CUTOVER.md` and `examples/EffectiveLegacyOperationalConfig.example.json` define how existing PocketBase cron/queue-limit environment values are captured and reconciled before production jobs are enabled.
+`examples/Config.example.json` is the canonical test-host application template
+used by `Initialize-AsapTestHost.ps1`. `04-MIGRATION-CUTOVER.md` and
+`examples/EffectiveLegacyOperationalConfig.example.json` define how existing
+PocketBase cron/queue-limit environment values are captured and reconciled
+before production jobs are enabled.
 
 ## 6. Data Protection
 
@@ -99,6 +103,10 @@ C:\ProgramData\clc-asap\DataProtection-Keys
 ```
 
 Grant only the environment's app-pool identity and required deployment/migration administrators access. Protect persisted production/nonproduction keys with an **environment-specific X.509 key-encryption certificate** and a stable ASAP application-name/purpose convention. The certificate private-key ACL must be equally narrow. Production and nonproduction have separate key rings and separate key-encryption certificates. Do not bind durable production rings solely to machine-scope DPAPI because recovery must work on a replacement IIS host.
+
+For permanent IIS and the test host, install the key-encryption certificate
+with its private key in `LocalMachine\My`. Certificate installation and its
+private-key ACL remain operator responsibilities.
 
 The key ring protects both cookie/antiforgery state **and reusable Polaris/Postmark credential ciphertext stored in SQL**. Therefore the key ring **and its X.509 certificate/private key** are durable recovery material: back both up securely, retain old Data Protection keys across rotation, and document importing the recovery certificate and restoring its private-key ACL before restoring/using a database on a replacement host. A SQL backup without the corresponding recoverable key ring/certificate may leave integration credentials undecryptable. Keep keys outside the deployed application directory so normal file replacement cannot remove them.
 

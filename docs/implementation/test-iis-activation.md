@@ -33,6 +33,10 @@ C:\ProgramData\clc-asap\
     Backups\
 ```
 
+The generated `application.json` comes from the canonical tracked template at
+`docs/dotnet-port/examples/Config.example.json`; the bootstrap changes only the
+two paths derived from `RootPath`.
+
 It does not create the IIS deployment directory, IIS resources, identities,
 certificates, ACLs, SQL objects, Entra applications, or the runner. It never
 overwrites an existing `application.json` or `deployment.json`.
@@ -88,10 +92,10 @@ deployment identity permission to query the `ASAP` site and app pool and to
 stop/start the pool during deployment.
 
 Install the environment-specific Data Protection key-encryption certificate
-with its private key in the runtime identity's Current User `My` store or the
-Local Machine `My` store. Grant the runtime identity private-key access. Record
-the thumbprint in `application.json`, and retain recoverable backups of both
-the certificate/private key and `DataProtection-Keys`.
+with its private key in `LocalMachine\My`. Grant the runtime identity
+private-key access. Record the thumbprint in `application.json`, and retain
+recoverable backups of both the certificate/private key and
+`DataProtection-Keys`.
 
 Install the trusted TLS certificate and configure its IIS HTTPS binding. These
 are operator tasks; the bootstrap only validates their presence.
@@ -134,6 +138,8 @@ Replace every `REPLACE-*` placeholder. Keep:
 - the Data Protection certificate thumbprint;
 - `LogPath` as `C:\ProgramData\clc-asap\Logs`;
 - nonproduction recipient-domain restrictions;
+- the `PatronLoginRateLimit` section with the template defaults unless a
+  reviewed environment-specific policy requires different values;
 - all Hangfire schedules and processing-limit keys in the template.
 
 This file contains secrets. Never commit it or place it under `D:\Sites\ASAP`.
@@ -204,10 +210,12 @@ Run the bootstrap in read-only validation mode:
 pwsh -File .\scripts\deployment\Initialize-AsapTestHost.ps1 -ValidateOnly
 ```
 
-Validation checks the ProgramData layout and JSON, canonical path contracts,
-required application settings, Data Protection certificate, .NET 10 Hosting
-Bundle, PowerShell and SQL tools, IIS site/app pool/path, and HTTPS binding. It
-does not repair or create anything and exits nonzero for blocking failures.
+Validation checks the ProgramData layout and JSON, unchanged placeholders,
+canonical path and pointer contracts, the Data Protection certificate in
+`LocalMachine\My`, .NET 10 Hosting Bundle, PowerShell and SQL tools, IIS
+site/app pool/path, and HTTPS binding. Application domain validation remains
+owned by `ExternalConfigurationValidator` at startup. Validation does not
+repair or create anything and exits nonzero for blocking failures.
 
 Validation checks only that `ReadinessUrl` is configured correctly. It does
 not request `/health/ready`; no application exists to answer it before the

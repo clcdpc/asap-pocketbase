@@ -1,4 +1,5 @@
 using Asap.Web.Infrastructure.Configuration;
+using Microsoft.Extensions.Configuration;
 
 namespace Asap.Tests.Unit;
 
@@ -11,6 +12,53 @@ public sealed class ExternalConfigurationValidatorTests
         var errors = ExternalConfigurationValidator.Validate(TestConfigurationFactory.Create());
 
         Assert.HasCount(0, errors);
+    }
+
+    [TestMethod]
+    public void CanonicalTestHostTemplateIsValid()
+    {
+        var templatePath = Path.Combine(
+            FindRepositoryRoot(),
+            "docs",
+            "dotnet-port",
+            "examples",
+            "Config.example.json");
+        var template = File.ReadAllText(templatePath);
+        foreach (var (placeholder, replacement) in new Dictionary<string, string>
+        {
+            ["REPLACE-SQL-SERVER"] = "localhost",
+            ["REPLACE-ASAP-DATABASE"] = "AsapTest",
+            ["REPLACE-HANGFIRE-DATABASE"] = "AsapHangfireTest",
+            ["REPLACE-CLIENT-ID"] = "11111111-1111-1111-1111-111111111111",
+            ["REPLACE-CLIENT-SECRET"] = "test-client-secret",
+            ["REPLACE-TENANT-ID"] = "22222222-2222-2222-2222-222222222222",
+            ["REPLACE-OBJECT-ID"] = "33333333-3333-3333-3333-333333333333",
+            ["REPLACE-ADMIN-UPN"] = "admin@example.org",
+            ["REPLACE-ADMIN-EMAIL"] = "admin@example.org",
+            ["REPLACE-DATA-PROTECTION-CERTIFICATE-THUMBPRINT"] = "AABBCC",
+            ["REPLACE-ALLOWED-DOMAIN"] = "example.org"
+        })
+        {
+            template = template.Replace(placeholder, replacement, StringComparison.Ordinal);
+        }
+
+        Assert.IsFalse(template.Contains("REPLACE-", StringComparison.Ordinal));
+        using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(template));
+        var configuration = new ConfigurationBuilder().AddJsonStream(stream).Build();
+        var configurationValue = new ExternalConfiguration();
+        // Missing sections must remain null instead of being hidden by model defaults.
+        foreach (var property in typeof(ExternalConfiguration).GetProperties()
+                     .Where(property => property.CanWrite && !property.PropertyType.IsValueType))
+        {
+            property.SetValue(configurationValue, null);
+        }
+        configuration.Bind(configurationValue);
+
+        var errors = ExternalConfigurationValidator.Validate(configurationValue);
+
+        Assert.HasCount(0, errors, string.Join(", ", errors));
+        Assert.AreEqual(20, configurationValue.PatronLoginRateLimit.PermitLimit);
+        Assert.AreEqual(300, configurationValue.PatronLoginRateLimit.WindowSeconds);
     }
 
     [TestMethod]
@@ -112,5 +160,17 @@ public sealed class ExternalConfigurationValidatorTests
         var errors = ExternalConfigurationValidator.Validate(value);
 
         CollectionAssert.Contains(errors.ToList(), expectedError);
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Asap.sln")))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName
+            ?? throw new InvalidOperationException("Could not locate the repository root.");
     }
 }
