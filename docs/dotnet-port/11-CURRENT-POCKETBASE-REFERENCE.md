@@ -204,14 +204,14 @@ Target staff identity is:
 
 - Microsoft Entra authenticates and supplies validated `tid` + `oid`;
 - SQL `StaffUser` authorizes;
-- (`EntraTenantId`, `EntraObjectId`) is the durable local lookup/authorization key;
-- readable UPN/preferred-username, display name, and notification email remain stored beside the durable IDs so the database/admin UI stays understandable, but those values never authorize or auto-rebind an account;
+- normalized staff email is the durable local lookup/authorization key;
+- Entra tenant/object IDs remain nullable last-observed metadata; display and notification values remain independently readable and app-owned;
 - roles remain `staff`, `admin`, `super_admin`;
 - normal staff/admin are library-scoped; super-admin is system organization 1. In the target, the staff relationship remains valid when a library is inactive, but authorization requires both the StaffUser and Organization to be active;
 - no general JIT creation;
-- target staff auth tickets retain the sign-in (`tid`,`oid`) tuple and every authenticated request requires exact equality with the current StaffUser durable binding plus the currently loaded tenant allowlist and common current eligibility predicate, so an explicit rebind immediately invalidates cookies issued to the old identity.
+- target staff tickets retain StaffUser ID, normalized authentication email, and sign-in tenant. Every request compares current email and tenant allowance; authentication-email changes invalidate old cookies while OID changes do not.
 
-PocketBase does not contain Entra object IDs, so migration of active staff requires an explicit operator-supplied PocketBase-staff-ID -> Entra tenant/object-ID mapping. Missing, malformed, duplicate, or conflicting active bindings block import rather than being guessed from UPN/email. Inactive historical staff may remain unbound until deliberate reactivation.
+Migration uses each PocketBase staff user's real email directly. Active missing/invalid/placeholder emails and duplicate normalized emails block import; Entra metadata remains null until successful sign-in.
 
 The old hourly identifier processor can write `isbnCheckStatus = found` without persisting `bibid`, while the newer dedicated processor persists the BIB and reconciliation/tag state. Therefore target migration cannot treat every legacy `found` as canonical: `found` without a supporting BIB is reported and blocks until resolved. Likewise, current generic staff editing can change `identifier` and `bibid` independently without automatically invalidating all identifier-derived fields/tags; the target intentionally corrects this by making identifier changes atomic invalidation boundaries.
 

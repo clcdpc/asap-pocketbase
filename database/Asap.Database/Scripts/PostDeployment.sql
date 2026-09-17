@@ -3,15 +3,15 @@ ALTER DATABASE CURRENT SET COMPATIBILITY_LEVEL = 160;
 IF NOT EXISTS (SELECT 1 FROM [asap].[SchemaVersion] WHERE [Id] = 1)
 BEGIN
     INSERT INTO [asap].[SchemaVersion] ([Id], [Version], [UpdatedUtc])
-    VALUES (1, 5, SYSUTCDATETIME());
+    VALUES (1, 6, SYSUTCDATETIME());
 END;
-ELSE IF (SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1) < 5
+ELSE IF (SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1) < 6
 BEGIN
     UPDATE [asap].[SchemaVersion]
-    SET [Version] = 5, [UpdatedUtc] = SYSUTCDATETIME()
+    SET [Version] = 6, [UpdatedUtc] = SYSUTCDATETIME()
     WHERE [Id] = 1;
 END;
-ELSE IF (SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1) > 5
+ELSE IF (SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1) > 6
 BEGIN
     THROW 51000, 'The database schema is newer than this DACPAC.', 1;
 END;

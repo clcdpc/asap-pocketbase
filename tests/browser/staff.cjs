@@ -7,7 +7,7 @@ const { URL } = require('node:url');
 
 function parseArguments(argv) {
   if (argv.length !== 25) {
-    throw new Error('Usage: node tests/browser/staff.cjs <baseURL> <artifactDirectory> <superId> <tenantId> <superObjectId> <staffId> <staffObjectId> <legacyRequestId> <primaryRequestId> <blockedRequestId> <resolutionRequestId> <otherRequestId> <copySourceRequestId> <invalidClosedCopyId> <invalidClaimantId> <legacyRuleId> <mobileCopyId> <foreignStaffId> <invalidTenantStaffId> <unboundStaffId> <staleTitleAId> <staleTitleBId> <staleCopyAId> <staleCopyBId> <staleCreateSourceId>');
+    throw new Error('Usage: node tests/browser/staff.cjs <baseURL> <artifactDirectory> <superId> <tenantId> <superEmail> <staffId> <staffEmail> <legacyRequestId> <primaryRequestId> <blockedRequestId> <resolutionRequestId> <otherRequestId> <copySourceRequestId> <invalidClosedCopyId> <invalidClaimantId> <legacyRuleId> <mobileCopyId> <foreignStaffId> <invalidTenantStaffId> <unboundStaffId> <staleTitleAId> <staleTitleBId> <staleCopyAId> <staleCopyBId> <staleCreateSourceId>');
   }
   const parsed = new URL(argv[0]);
   if (!['http:', 'https:'].includes(parsed.protocol) || parsed.pathname !== '/' ||
@@ -17,8 +17,8 @@ function parseArguments(argv) {
   return {
     baseOrigin: parsed.origin,
     artifactRoot: path.resolve(argv[1]),
-    superIdentity: { staffId: argv[2], tenantId: argv[3], objectId: argv[4] },
-    staffIdentity: { staffId: argv[5], tenantId: argv[3], objectId: argv[6] },
+    superIdentity: { staffId: argv[2], tenantId: argv[3], email: argv[4] },
+    staffIdentity: { staffId: argv[5], tenantId: argv[3], email: argv[6] },
     legacyRequestId: argv[7],
     primaryRequestId: argv[8],
     blockedRequestId: argv[9],
@@ -50,7 +50,7 @@ async function createContext(browser, viewport, baseOrigin, identity) {
     extraHTTPHeaders: identity ? {
       'X-ASAP-Test-Staff-Id': identity.staffId,
       'X-ASAP-Test-Tenant-Id': identity.tenantId,
-      'X-ASAP-Test-Object-Id': identity.objectId
+      'X-ASAP-Test-Staff-Email': identity.email
     } : undefined
   });
   const traffic = { externalRequests: 0 };
@@ -1246,8 +1246,8 @@ async function runScopedBlocked(browser, args, axeSource, report) {
     assert.ok(candidateIds.has(args.staffIdentity.staffId), 'Same-library staff candidate was omitted');
     assert.ok(candidateIds.has(args.superIdentity.staffId), 'System super-admin candidate was omitted');
     assert.equal(candidateIds.has(args.foreignStaffId), false, 'Foreign-library staff candidate leaked');
-    assert.equal(candidateIds.has(args.invalidTenantStaffId), false, 'Invalid-tenant candidate leaked');
-    assert.equal(candidateIds.has(args.unboundStaffId), false, 'Unbound candidate leaked');
+    assert.equal(candidateIds.has(args.invalidTenantStaffId), true, 'Stored tenant metadata incorrectly affected eligibility');
+    assert.equal(candidateIds.has(args.unboundStaffId), true, 'Never-signed-in candidate was omitted');
 
     const beforeForeignAssignment = await context.request.get(
       `${args.baseOrigin}/api/asap/staff/additional-copies/${args.mobileCopyId}`

@@ -198,7 +198,7 @@ public sealed class WorkflowProcessingService(
                 auditContext.AdministrativeAudits.Add(new AdministrativeAudit
                 {
                     ActorStaffUserId = manualActorEvidence.StaffUserId,
-                    ActorName = manualActorEvidence.ObjectId.ToString(),
+                    ActorName = manualActorEvidence.AuthenticationEmail,
                     OrganizationId = scopeOrganizationId ?? 1,
                     Action = "weekly_summary_force_queued",
                     TargetType = "WeeklyStaffSummary",
@@ -218,7 +218,7 @@ public sealed class WorkflowProcessingService(
         var organizationIds = organizations.Select(item => item.Id).ToHashSet();
         var staff = await readContext.StaffUsers.AsNoTracking()
             .Where(item => item.IsActive && item.WeeklyActionSummaryEnabled &&
-                           item.EntraTenantId != null && item.EntraObjectId != null &&
+                           item.NormalizedUserPrincipalName != null &&
                            (!scopeOrganizationId.HasValue || item.OrganizationId == scopeOrganizationId.Value ||
                             item.Role == "super_admin" && item.OrganizationId == 1))
             .OrderBy(item => item.Id)
@@ -277,8 +277,8 @@ public sealed class WorkflowProcessingService(
                 cancellationToken);
             if (authorization is null || !authorization.IsActive || recipient is null || !recipient.IsActive ||
                 recipient.OrganizationId != recipientSnapshot.OrganizationId || !recipient.WeeklyActionSummaryEnabled ||
-                recipient.EntraTenantId != recipientSnapshot.EntraTenantId || recipient.EntraObjectId != recipientSnapshot.EntraObjectId ||
-                !recipient.EntraTenantId.HasValue || !allowedTenantIds.Contains(recipient.EntraTenantId.Value) ||
+                recipient.NormalizedUserPrincipalName != recipientSnapshot.NormalizedUserPrincipalName ||
+                !StaffEmail.IsValidAuthenticationEmail(recipient) ||
                 !IsWeeklyRecipientRoleAllowed(recipient, authorizationOrganizationId) ||
                 !manualActorAllowed)
             {
@@ -310,8 +310,7 @@ public sealed class WorkflowProcessingService(
                 BusinessKey = businessKey,
                 DeliveryClass = "staff_authorization_sensitive",
                 RecipientStaffUserId = recipient.Id,
-                RecipientEntraTenantId = recipient.EntraTenantId,
-                RecipientEntraObjectId = recipient.EntraObjectId,
+                RecipientAuthenticationEmail = recipient.NormalizedUserPrincipalName,
                 AuthorizationOrganizationId = authorizationOrganizationId,
                 RecipientAddressKind = "weekly_summary",
                 ToAddress = currentNormalized,
@@ -1770,9 +1769,8 @@ public sealed class WorkflowProcessingService(
                 $"SELECT * FROM [asap].[StaffUser] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {evidence.StaffUserId}")
             .SingleOrDefaultAsync(cancellationToken);
         return actor is not null && actor.IsActive &&
-            actor.EntraTenantId == evidence.TenantId &&
-            actor.EntraObjectId == evidence.ObjectId &&
-            actor.EntraTenantId.HasValue && allowedTenantIds.Contains(actor.EntraTenantId.Value) &&
+            allowedTenantIds.Contains(evidence.TenantId) &&
+            StaffEmail.MatchesAuthenticationEmail(actor, evidence.AuthenticationEmail) &&
             (actor.Role == "super_admin" && actor.OrganizationId == 1 ||
             actor.Role == "admin" && actor.OrganizationId == targetOrganizationId);
     }
@@ -1941,8 +1939,7 @@ public sealed class WorkflowProcessingService(
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static bool IsWeeklyRecipientRoleAllowed(StaffUser recipient, int authorizationOrganizationId) =>
-        recipient.EntraTenantId.HasValue && recipient.EntraObjectId.HasValue &&
-        recipient.EntraTenantId != Guid.Empty && recipient.EntraObjectId != Guid.Empty &&
+        StaffEmail.IsValidAuthenticationEmail(recipient) &&
         (recipient.Role == "super_admin" && recipient.OrganizationId == 1 && authorizationOrganizationId == 1 ||
          recipient.Role is "staff" or "admin" && recipient.OrganizationId == authorizationOrganizationId &&
          authorizationOrganizationId > 1);

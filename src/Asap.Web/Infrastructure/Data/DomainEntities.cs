@@ -455,8 +455,7 @@ public sealed class EmailOutbox
     public string? BusinessKey { get; set; }
     public required string DeliveryClass { get; set; }
     public long? RecipientStaffUserId { get; set; }
-    public Guid? RecipientEntraTenantId { get; set; }
-    public Guid? RecipientEntraObjectId { get; set; }
+    public string? RecipientAuthenticationEmail { get; set; }
     public int? AuthorizationOrganizationId { get; set; }
     public string? RecipientAddressKind { get; set; }
     public string? ToAddress { get; set; }

@@ -594,13 +594,11 @@ public sealed class AdditionalCopyService(
     }
 
     private bool IsSameCurrentActor(CurrentStaff actor, StaffUser row) =>
-        row.EntraTenantId != Guid.Empty && row.EntraObjectId != Guid.Empty &&
-        row.EntraTenantId == actor.EntraTenantId && row.EntraObjectId == actor.EntraObjectId;
+        allowedTenantIds.Contains(actor.EntraTenantId) &&
+        StaffEmail.MatchesAuthenticationEmail(row, actor.AuthenticationEmail);
 
     private bool IsRelationshipEligible(StaffUser row, int organizationId) =>
-        row.IsActive && row.EntraTenantId.HasValue && row.EntraObjectId.HasValue &&
-        row.EntraTenantId != Guid.Empty && row.EntraObjectId != Guid.Empty &&
-        allowedTenantIds.Contains(row.EntraTenantId.Value) &&
+        row.IsActive && StaffEmail.IsValidAuthenticationEmail(row) &&
         (row.Role == "super_admin" && row.OrganizationId == 1 ||
          row.Role is "staff" or "admin" && row.OrganizationId == organizationId);
 
@@ -618,9 +616,7 @@ public sealed class AdditionalCopyService(
         {
             return "claimant_unmapped";
         }
-        if (!candidate.IsActive || !candidate.EntraTenantId.HasValue || !candidate.EntraObjectId.HasValue ||
-            candidate.EntraTenantId == Guid.Empty || candidate.EntraObjectId == Guid.Empty ||
-            !allowedTenantIds.Contains(candidate.EntraTenantId.Value))
+        if (!candidate.IsActive || !StaffEmail.IsValidAuthenticationEmail(candidate))
         {
             return "claimant_inactive";
         }
@@ -677,8 +673,7 @@ public sealed class AdditionalCopyService(
             BusinessKey = businessKey,
             DeliveryClass = "staff_authorization_sensitive",
             RecipientStaffUserId = recipient.Id,
-            RecipientEntraTenantId = recipient.EntraTenantId,
-            RecipientEntraObjectId = recipient.EntraObjectId,
+            RecipientAuthenticationEmail = recipient.NormalizedUserPrincipalName,
             AuthorizationOrganizationId = organizationId,
             RecipientAddressKind = "notification_email",
             ToAddress = toAddress,

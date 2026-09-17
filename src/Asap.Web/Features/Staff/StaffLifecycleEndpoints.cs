@@ -15,7 +15,6 @@ public static class StaffLifecycleEndpoints
         group.MapPatch("/{id:long}", UpdateMetadataAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/role", ChangeRoleAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapDelete("/{id:long}", DeactivateAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
-        group.MapPost("/{id:long}/rebind", RebindAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         return endpoints;
     }
 
@@ -111,18 +110,6 @@ public static class StaffLifecycleEndpoints
             input,
             cancellationToken));
 
-    private static async Task<IResult> RebindAsync(
-        HttpContext context,
-        long id,
-        StaffRebindInput input,
-        StaffLifecycleService lifecycle,
-        CancellationToken cancellationToken) =>
-        ToResult(await lifecycle.RebindAsync(
-            StaffAuthenticationEndpoints.RequireCurrentStaff(context),
-            id,
-            input,
-            cancellationToken));
-
     private static IResult ToResult(StaffLifecycleResult result, int successStatus = StatusCodes.Status200OK) =>
         result.Code switch
         {
@@ -152,8 +139,6 @@ public static class StaffLifecycleEndpoints
     internal static object ToDto(Infrastructure.Data.StaffUser user) => new
     {
         id = user.Id.ToString(),
-        tenantId = user.EntraTenantId,
-        objectId = user.EntraObjectId,
         userPrincipalName = user.UserPrincipalName,
         displayName = user.DisplayName,
         notificationEmail = user.NotificationEmail,

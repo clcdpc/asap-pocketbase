@@ -3,7 +3,7 @@ using Asap.Web.Features.Staff;
 
 namespace Asap.Web.Infrastructure.Jobs;
 
-public sealed record StaffJobEvidence(long StaffUserId, Guid TenantId, Guid ObjectId);
+public sealed record StaffJobEvidence(long StaffUserId, string AuthenticationEmail, Guid TenantId);
 
 public sealed class BackgroundWorkflowJobs(
     WorkflowProcessingService workflow,
@@ -33,7 +33,7 @@ public sealed class BackgroundWorkflowJobs(
         return await workflow.ProcessWorkflowAsync(
             scopeOrganizationId,
             cancellationToken,
-            new StaffIdentityEvidence(evidence.StaffUserId, evidence.TenantId, evidence.ObjectId));
+            new StaffIdentityEvidence(evidence.StaffUserId, evidence.AuthenticationEmail, evidence.TenantId));
     }
 
     [AutomaticRetry(Attempts = 0)]
@@ -74,7 +74,7 @@ public sealed class BackgroundWorkflowJobs(
             manualRunId: null,
             scopeOrganizationId,
             cancellationToken,
-            new StaffIdentityEvidence(evidence.StaffUserId, evidence.TenantId, evidence.ObjectId));
+            new StaffIdentityEvidence(evidence.StaffUserId, evidence.AuthenticationEmail, evidence.TenantId));
     }
 
     [AutomaticRetry(Attempts = 0)]
@@ -95,7 +95,7 @@ public sealed class BackgroundWorkflowJobs(
             manualRunId,
             scopeOrganizationId,
             cancellationToken,
-            new StaffIdentityEvidence(evidence.StaffUserId, evidence.TenantId, evidence.ObjectId));
+            new StaffIdentityEvidence(evidence.StaffUserId, evidence.AuthenticationEmail, evidence.TenantId));
     }
 
     [AutomaticRetry(Attempts = 0)]
@@ -122,7 +122,7 @@ public sealed class BackgroundWorkflowJobs(
         CancellationToken cancellationToken)
     {
         var result = await staffEligibility.EvaluateAsync(
-            new StaffIdentityEvidence(evidence.StaffUserId, evidence.TenantId, evidence.ObjectId),
+            new StaffIdentityEvidence(evidence.StaffUserId, evidence.AuthenticationEmail, evidence.TenantId),
             scopeOrganizationId,
             StaffRoleRequirement.Admin,
             requireParticipation: true,

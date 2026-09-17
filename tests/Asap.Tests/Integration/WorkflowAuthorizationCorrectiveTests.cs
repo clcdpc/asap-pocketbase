@@ -42,7 +42,8 @@ public sealed partial class PatronJourneyTests
                     {
                         LibraryOrganizationId = 2, BibId = "12345", Title = "Privileged copy race",
                         Status = delete ? "closed" : "open", ClaimedByStaffUserId = assignee.Id,
-                        ClaimedByDisplayName = assignee.DisplayName, ClaimType = "manual", ClaimedAtUtc = DateTime.UtcNow,
+                        ClaimedByDisplayName = assignee.DisplayName ?? assignee.UserPrincipalName,
+                        ClaimType = "manual", ClaimedAtUtc = DateTime.UtcNow,
                         Notes = "Committed copy history.", CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime, UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime,
                         ClosedUtc = delete ? timeProvider.GetUtcNow().UtcDateTime : null
                     };
@@ -58,7 +59,8 @@ public sealed partial class PatronJourneyTests
                         LibraryOrganizationId = 2, Barcode = Guid.NewGuid().ToString("N"), Title = "Privileged title race",
                         MaterialFormatId = await context.MaterialFormats.Where(item => item.OwnerOrganizationId == 1 && item.Code == "book").Select(item => item.Id).SingleAsync(),
                         Status = delete ? "closed" : "suggestion", CloseReason = delete ? "manual" : null, ClaimedByStaffUserId = assignee.Id,
-                        ClaimedByDisplayName = assignee.DisplayName, ClaimType = "manual", ClaimedAtUtc = DateTime.UtcNow,
+                        ClaimedByDisplayName = assignee.DisplayName ?? assignee.UserPrincipalName,
+                        ClaimType = "manual", ClaimedAtUtc = DateTime.UtcNow,
                         CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow
                     };
                     context.TitleRequests.Add(row);
@@ -182,13 +184,15 @@ public sealed partial class PatronJourneyTests
             LibraryOrganizationId = otherLibrary, MaterialFormatId = formatId,
             Barcode = Guid.NewGuid().ToString("N"), Title = "Global claimant cleanup race", Status = status,
             CloseReason = status == "closed" ? "manual" : null, ClaimedByStaffUserId = claimant.Id,
-            ClaimedByDisplayName = claimant.DisplayName, ClaimType = "automatic_format_rule", ClaimRuleId = rule.Id,
+            ClaimedByDisplayName = claimant.DisplayName ?? claimant.UserPrincipalName,
+            ClaimType = "automatic_format_rule", ClaimRuleId = rule.Id,
             ClaimedAtUtc = now, CreatedUtc = now, UpdatedUtc = now
         };
         AdditionalCopyRequest Copy(string status) => new()
         {
             LibraryOrganizationId = otherLibrary, BibId = "19001", Title = "Global claimant cleanup barrier", Status = status,
-            ClaimedByStaffUserId = claimant.Id, ClaimedByDisplayName = claimant.DisplayName,
+            ClaimedByStaffUserId = claimant.Id,
+            ClaimedByDisplayName = claimant.DisplayName ?? claimant.UserPrincipalName,
             ClaimType = "automatic_format_rule", ClaimRuleId = rule.Id, ClaimedAtUtc = now,
             CreatedUtc = now, UpdatedUtc = now, ClosedUtc = status == "closed" ? now : null,
             Notes = "Committed copy history."

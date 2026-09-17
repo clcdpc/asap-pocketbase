@@ -26,7 +26,7 @@ public sealed partial class PatronJourneyTests
         try
         {
             using var superClient = factory!.CreateClient();
-            AddTestingStaffHeaders(superClient, superAdmin.Id, superAdmin.EntraTenantId, superAdmin.EntraObjectId);
+            AddTestingStaffHeaders(superClient, superAdmin.Id, superAdmin.EntraTenantId, superAdmin.AuthenticationEmail);
             using var baseline = await superClient.GetAsync("/api/asap/staff/analytics?scope=system&range=last30");
             Assert.AreEqual(HttpStatusCode.OK, baseline.StatusCode, await baseline.Content.ReadAsStringAsync());
             using var baselineBody = JsonDocument.Parse(await baseline.Content.ReadAsStringAsync());
@@ -146,7 +146,7 @@ public sealed partial class PatronJourneyTests
             AssertAnalyticsMetricsEqual(selectedBody.RootElement, activeAfterDeactivationBody.RootElement);
 
             using var ordinaryClient = factory.CreateClient();
-            AddTestingStaffHeaders(ordinaryClient, ordinary.Id, ordinary.EntraTenantId, ordinary.EntraObjectId);
+            AddTestingStaffHeaders(ordinaryClient, ordinary.Id, ordinary.EntraTenantId, ordinary.AuthenticationEmail);
             using var forged = await ordinaryClient.GetAsync(
                 $"/api/asap/staff/analytics?scope={organizationB}&orgId={organizationB}&range=last30");
             Assert.AreEqual(HttpStatusCode.OK, forged.StatusCode, await forged.Content.ReadAsStringAsync());

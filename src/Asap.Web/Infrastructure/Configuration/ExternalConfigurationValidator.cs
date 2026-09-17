@@ -168,12 +168,19 @@ public static partial class ExternalConfigurationValidator
             errors.Add("initial_admin_missing");
             return;
         }
-        ValidateGuid(admin.TenantId, "initial_admin_tenant_invalid", errors);
-        ValidateGuid(admin.ObjectId, "initial_admin_object_invalid", errors);
+        if (!string.IsNullOrWhiteSpace(admin.TenantId))
+        {
+            ValidateGuid(admin.TenantId, "initial_admin_tenant_invalid", errors);
+        }
+        if (!string.IsNullOrWhiteSpace(admin.ObjectId))
+        {
+            ValidateGuid(admin.ObjectId, "initial_admin_object_invalid", errors);
+        }
         RequireText(admin.UserPrincipalName, "initial_admin_upn_missing", errors);
-        RequireText(admin.DisplayName, "initial_admin_display_name_missing", errors);
 
-        if (!IsEmail(admin.UserPrincipalName) || !IsEmail(admin.NotificationEmail))
+        if (!IsEmail(admin.UserPrincipalName) ||
+            admin.UserPrincipalName!.EndsWith("@staff.asap.local", StringComparison.OrdinalIgnoreCase) ||
+            !string.IsNullOrWhiteSpace(admin.NotificationEmail) && !IsEmail(admin.NotificationEmail))
         {
             errors.Add("initial_admin_email_invalid");
         }

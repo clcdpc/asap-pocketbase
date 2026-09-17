@@ -105,6 +105,40 @@ public static class StaffVersion
 
 public static class StaffEmail
 {
+    public static bool IsValidAuthenticationEmail(StaffUser staff) =>
+        TryNormalizeAuthenticationEmail(
+            staff.UserPrincipalName,
+            out _,
+            out var normalizedEmail) &&
+        string.Equals(
+            normalizedEmail,
+            staff.NormalizedUserPrincipalName,
+            StringComparison.Ordinal);
+
+    public static bool MatchesAuthenticationEmail(StaffUser staff, string normalizedAuthenticationEmail) =>
+        IsValidAuthenticationEmail(staff) &&
+        string.Equals(
+            staff.NormalizedUserPrincipalName,
+            normalizedAuthenticationEmail,
+            StringComparison.Ordinal);
+
+    public static bool TryNormalizeAuthenticationEmail(
+        string? value,
+        out string? email,
+        out string? normalizedEmail)
+    {
+        email = null;
+        normalizedEmail = null;
+        if (!TryNormalize(value, out var candidate) || candidate is null)
+        {
+            return false;
+        }
+
+        email = candidate;
+        normalizedEmail = candidate.ToUpperInvariant();
+        return true;
+    }
+
     public static bool TryNormalize(string? value, out string? normalized)
     {
         normalized = string.IsNullOrWhiteSpace(value) ? null : value.Trim();

@@ -5,8 +5,8 @@ namespace Asap.Migration;
 public static class MigrationContract
 {
     public const string PocketBaseBaselineSha = "150b30b776565194260cc327eeeffdfb46475e81";
-    public const int ExpectedSchemaVersion = 5;
-    public const string ContractVersion = "slice-05";
+    public const int ExpectedSchemaVersion = 6;
+    public const string ContractVersion = "email-identity-v1";
 
     public static object Describe() => new
     {
@@ -29,6 +29,6 @@ public static class MigrationContract
             "queue_progress_runtime_starts_empty",
             "email_outbox_operations"
         },
-        note = "Slice 5 includes bounded background workflows, durable outbox operations, and migration parity for operational configuration."
+        note = "Staff migration uses validated unique source email identities and does not require an Entra identity map."
     };
 }

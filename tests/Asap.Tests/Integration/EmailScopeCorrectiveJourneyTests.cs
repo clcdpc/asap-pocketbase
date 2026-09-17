@@ -121,7 +121,8 @@ public sealed partial class PatronJourneyTests
             LibraryOrganizationId = 2, MaterialFormatId = format.Id, Barcode = "20000000002105", Title = $"Scoped mail {Guid.NewGuid():N}",
             Status = status, BibId = status == "pending_hold" ? "9001" : null, AutoHold = true, PreferredPickupBranchId = 101,
             PreferredPickupBranchName = "Main Library", IsbnCheckStatus = status == "pending_hold" ? "found" : "not_found", CreatedUtc = now, UpdatedUtc = now,
-            ClaimedByStaffUserId = staff.Id, ClaimedByDisplayName = staff.DisplayName, ClaimedAtUtc = now, ClaimType = "manual"
+            ClaimedByStaffUserId = staff.Id, ClaimedByDisplayName = staff.DisplayName ?? staff.UserPrincipalName,
+            ClaimedAtUtc = now, ClaimType = "manual"
         };
         var title = NewRequest("suggestion");
         var source = NewRequest("pending_hold");

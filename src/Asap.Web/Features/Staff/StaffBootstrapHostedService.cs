@@ -55,16 +55,17 @@ public sealed class StaffBootstrapHostedService(
         }
 
         var options = configuration.Authentication.Entra.InitialSuperAdmin;
-        var tenantId = Guid.Parse(options.TenantId!);
-        var objectId = Guid.Parse(options.ObjectId!);
+        _ = StaffEmail.TryNormalizeAuthenticationEmail(
+            options.UserPrincipalName,
+            out var email,
+            out var normalizedEmail);
+        _ = StaffEmail.TryNormalize(options.NotificationEmail, out var notificationEmail);
         context.StaffUsers.Add(new StaffUser
         {
-            EntraTenantId = tenantId,
-            EntraObjectId = objectId,
-            UserPrincipalName = options.UserPrincipalName!.Trim(),
-            NormalizedUserPrincipalName = options.UserPrincipalName.Trim().ToUpperInvariant(),
-            DisplayName = options.DisplayName!.Trim(),
-            NotificationEmail = NormalizeEmail(options.NotificationEmail),
+            UserPrincipalName = email,
+            NormalizedUserPrincipalName = normalizedEmail,
+            DisplayName = Clean(options.DisplayName),
+            NotificationEmail = notificationEmail ?? email,
             Role = "super_admin",
             OrganizationId = 1,
             IsActive = true,
@@ -75,6 +76,6 @@ public sealed class StaffBootstrapHostedService(
         logger.LogInformation("Created the configured initial super administrator because StaffUser was empty.");
     }
 
-    private static string? NormalizeEmail(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? null : value.Trim().ToLowerInvariant();
+    private static string? Clean(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

@@ -297,7 +297,7 @@ Resolved by:
 - `05-DEPLOYMENT-OPERATIONS.md` configuration/startup gates, `13-SETTINGS-SCOPE-INVENTORY.md` section 12, and `12-DECISION-REGISTER.md` sections 7/8: stopped-app candidate validation and fail-closed startup prevent zero usable super-admins, with the same predicate and no Graph/session store/key rotation.
 
 Validated by:
-- `06-TESTING-CI.md` section 10.1 R5: real cookie middleware, persistent key ring, restart after removing a tenant, old-cookie failure and allowed-tenant success, queued-mail suppression, re-add with independent deactivation/rebind/scope invalidity, and zero-usable-admin candidate/direct-edit failures.
+- `06-TESTING-CI.md` section 10.1 R5: real cookie middleware, persistent key ring, tenant removal, authentication-email change, queued-mail suppression, independent deactivation/scope invalidity, and zero-usable-admin failures.
 - `08-RELEASE-VALIDATION-NOTES.md` section 2.1: current loaded trust rather than successful cookie decryption is the release boundary.
 
 Stale contradictory wording checked:

@@ -109,8 +109,6 @@ email-delivery-events.json
 deleted-request-audit.json
 ...other explicitly mapped current collections...
 
-# operator-supplied companion input, not derived from PocketBase:
-staff-entra-identity-map.json
 ```
 
 The export shape should expose PocketBase IDs needed to resolve relationships during import but should not reproduce PocketBase internals indiscriminately. `email-settings.json` carries only migratable sender/configuration semantics and source provenance; it must not contain the legacy SMTP password or the new Postmark server token.
@@ -138,36 +136,32 @@ A dry-run/preflight mode should validate source values and mappings before targe
 
 ### 6.2 Staff users
 
-Migration is strict because PocketBase does not contain the durable Entra identity needed by the target:
+Migration uses each PocketBase staff user's existing real email as the target authentication identity:
 
-- Prepare `staff-entra-identity-map.json` before rehearsal/cutover. Each mapping identifies a PocketBase staff-user ID and explicitly supplies `tenantId`, `objectId`, and a human-readable `userPrincipalName`/email label; optional display/notification values may also be supplied. See `examples/StaffIdentityMap.example.json`.
-- Every **active** migrated StaffUser must resolve to exactly one allowed-tenant (`tenantId`, `objectId`) mapping. Missing, malformed, duplicate, or conflicting durable bindings block import.
-- Never derive an Entra object ID from UPN/email, never authorize a migrated account by UPN/email, and never merge two source users because their readable addresses happen to match.
-- Inactive historical StaffUser rows that are retained only for history may import with null Entra tenant/object IDs; they cannot be reactivated until an administrator explicitly binds a valid allowed-tenant object ID **and** their referenced non-system library is active. An otherwise-active migrated StaffUser may legitimately reference an inactive historical library; preserve `StaffUser.IsActive` and the relationship, but authorization remains unavailable until the library is activated.
-- Preserve/import readable `UserPrincipalName` and display name so SQL remains understandable to operators. These values are not identity keys.
-- Resolve target `NotificationEmail` with explicit precedence: (1) a valid non-placeholder `notificationEmail` supplied by the operator in `staff-entra-identity-map.json`; (2) otherwise a valid real PocketBase `staff_users.email`; (3) otherwise a valid real `weekly_action_summary_email`; (4) otherwise `NULL`. Any `@staff.asap.local` address is a generated placeholder and is ignored/rejected as a notification destination. Record which source won in the migration report. A null target value is valid: administrators may deliberately clear `NotificationEmail`, and later Entra sign-in never repopulates it from claims.
+- Normalize `staff_users.email` into `UserPrincipalName`/`NormalizedUserPrincipalName`. Active rows with missing, malformed, or `@staff.asap.local` email block import.
+- Duplicate normalized staff emails block import; never silently merge source users.
+- Import Entra tenant/object metadata as null. It is populated automatically by later successful sign-ins and requires no operator mapping file.
+- Preserve display name, role, organization, active state, preferences, and historical relationships. Active staff may reference an inactive historical library, but participation remains unavailable until that library is active.
+- Initialize `NotificationEmail` from the valid source staff email, with a valid legacy weekly email only as fallback for an inactive historical row lacking a real primary email. Later Entra sign-in never repopulates it.
 - Migrate `weekly_action_summary_email` independently into `WeeklyActionSummaryEmail` when it is a valid real address; do not collapse it merely because it equals the resolved primary address. The target weekly-summary recipient is this override when nonblank, otherwise `NotificationEmail`. This intentionally normalizes current PocketBase behavior where weekly summaries require a nonblank weekly field while that same field is also used by some non-weekly notification paths.
 - The migration report must compute **old versus target effective recipient/eligibility**, not just copied field values. At minimum report: (a) every summary-enabled staff user who has no current weekly-summary recipient but gains one through target `NotificationEmail` fallback; (b) every staff user whose ordinary assignment/purchase/additional-copy notification recipient changes under the new primary-recipient contract; and (c) any staff whose target recipient becomes null. The newly eligible weekly-summary fallback is an intentional desired target behavior, but it must be visible before cutover.
 - Preserve the remaining current staff profile preference fields exactly: `weekly_action_summary_enabled` -> `WeeklyActionSummaryEnabled`, `purchase_reminder_default` -> `PurchaseReminderDefault`, `additional_copy_reminder_default` -> `AdditionalCopyReminderDefault`, and `default_mine_unclaimed_filter` -> `DefaultMineUnclaimedFilter`. These values are per-user preferences and never participate in system/library settings inheritance.
 - No `LegacyPocketBaseId` column is needed on StaffUser; use `LegacyPocketBaseMapping` if mapping is required.
 
 
-#### Active bound super-admin cutover gate
+#### Active email-authenticated super-admin cutover gate
 
 Immediately after StaffUser import, and before enabling `Asap.Web` or Hangfire, migration must prove:
 
 ```text
 COUNT(active StaffUser
       WHERE Role = super_admin
-        AND EntraTenantId is present and allowed
-        AND EntraObjectId is present
+        AND normalized authentication email is valid and unique
         AND OrganizationId = 1
         AND the common current-eligibility predicate passes) >= 1
 ```
 
-This is an explicit cutover hard gate, not an assumption delegated to normal startup bootstrap. If imported data produces zero qualifying rows, `Asap.Migration` must use the configured bootstrap identity as an explicit **migration-time provisioning** step while the application remains stopped. If that exact (`tenantId`,`objectId`) is already bound to an imported StaffUser, promote/reactivate that same row and move it to Organization `1`; do not create a duplicate identity. Otherwise insert the configured bound super-admin. Validate allowed tenant, nonblank object ID, and global durable-identity uniqueness before mutation; missing/invalid/conflicting bootstrap configuration blocks migration. Record the target-only provisioning/promotion in the transformation report, then re-run the current usable-super-admin gate under the exact target `AllowedTenantIds`. Subsequent external configuration changes use the same predicate and cannot silently remove the last usable administrator. Normal startup bootstrap must not be relied upon after StaffUser rows exist.
-
-Drop legacy Polaris/PocketBase identity machinery that the new app intentionally does not use. The staff identity-map file contains directory identifiers rather than credentials, but keep it in the same restricted administrative path because it is security-relevant identity data.
+This is an explicit cutover hard gate, not an assumption delegated to normal startup bootstrap. If import produces zero qualifying rows, migration matches the configured bootstrap normalized email, promotes/reactivates that row when present, or inserts one email-authenticated super-admin when absent. Tenant/object metadata is not required. Record the intervention and re-run the gate before startup.
 
 ### 6.3 Effective operational claimant normalization
 
@@ -179,8 +173,8 @@ An imported FK is not proof of operational eligibility. After StaffUser identity
 | Source claimant cannot map, or attribution exists without a mappable source ID | Clear | `claimant_unmapped` |
 | Mapped target inactive | Clear | `claimant_inactive` |
 | Mapped active staff/admin belongs to another library, including a demoted super-admin now outside this scope | Clear | `claimant_out_of_scope` |
-| Mapped active, validly bound/allowed, same-library staff/admin | Preserve | Eligible |
-| Mapped active, validly bound/allowed super-admin in Organization 1 | Preserve, including cross-library claims | Eligible |
+| Mapped active staff/admin with valid email in the same library | Preserve | Eligible |
+| Mapped active super-admin with valid email in Organization 1 | Preserve, including cross-library claims | Eligible |
 
 Eligibility requires valid target role/organization and identity/trust under section 6.2. Evaluate failure reasons in the listed order; unexpected invalid active identity/role shape blocks section 6.2 validation rather than silently becoming an apparently valid claim. **Organization.IsActive alone never clears a claim**: a correctly scoped claimant may remain attached to dormant library work. Do not run auto-claim rules or select a substitute person during import.
 
@@ -374,7 +368,7 @@ Required reconciliation should include at least:
 - additional-copy counts by status/library;
 - tag associations;
 - event counts and legacy-event transformations;
-- StaffUser identity counts and role/org invariants, including active/inactive StaffUsers legitimately referencing inactive non-system organizations and the separate staff/library authorization gate; explicitly prove at least one **active, durably bound, allowed-tenant super-admin** exists after import/provisioning, and report any migration-time bootstrap promotion/insertion;
+- StaffUser normalized-email uniqueness and role/org invariants, including active/inactive StaffUsers legitimately referencing inactive organizations; explicitly prove at least one active email-authenticated super-admin exists and report any migration-time bootstrap promotion/insertion;
 - StaffUser recipient mapping/source (`NotificationEmail`), independent weekly-summary override, preference values, and a per-user old-versus-target recipient/eligibility delta report covering newly eligible weekly summaries, changed ordinary-notification recipients, and target-null recipients;
 - auto-claim rule normalization counts and details, including every source-active rule imported inactive because the assignee was missing, inactive, or scope-ineligible; prove every target active rule has a valid active scope-eligible StaffUser and every historical request rule reference maps deterministically where possible;
 - organization participation/inactive history rows;
@@ -452,10 +446,10 @@ The final migration target therefore cannot contain bootstrap StaffUser/default 
 - Production SQL database/logins/permissions provisioned.
 - SQL backup destination configured on the SQL Server's local storage.
 - Tagged release + self-contained `win-x64` migration artifact staged on respective hosts.
-- Active staff Entra identity mapping file completed/validated against allowed tenants.
+- Active staff source emails validated as real and case-insensitively unique.
 - Production Postmark server token is available to the migration operator through the approved secure input mechanism; it is not stored in the migration export package or command line.
 - New server validated using temporary/internal access and a workstation hosts-file override for the **real production hostname**, backed only by the disposable preflight SQL database/config.
-- Entra redirect, durable (`tid`,`oid`) StaffUser matching, cookies, CSP, deep links, SQL, health, and static assets verified under that production hostname.
+- Entra redirect, normalized-email StaffUser matching, allowed-tenant enforcement, cookies, CSP, deep links, SQL, health, and static assets verified under that production hostname.
 - Disposable preflight database removed; final production config restored; final target SQL database recreated/reset to the defined fresh migration-target state; app pool remains stopped against that final target.
 - Final nonproduction rehearsal passed on the exact artifact.
 - Exact PocketBase production commit recorded; every post-merge emergency fix is represented in .NET and, where relevant, the migration tooling used by the passing rehearsal.
@@ -470,15 +464,15 @@ The final migration target therefore cannot contain bootstrap StaffUser/default 
 6. Transfer normalized package to the new server through the trusted path.
 7. Verify the final target SQL database is in the expected fresh migration-target state and has never been used for preflight.
 8. Use the deployment script's migration-cutover preparation mode (or equivalent explicit steps) to deploy/verify the exact DACPAC and staged web files **without starting the app pool/bootstrap**. Classify application and Hangfire/dependency schema changes under the normal backup/quiescence/compatibility rules; a truly fresh first-cutover DB alone may use the documented no-prior-dataset exception.
-9. Run migration import in dependency order, applying the validated staff Entra identity map and supplying the target system Postmark token through the secure target-provisioning input; verify the token is persisted only as Data Protection ciphertext.
-10. Run the **active bound super-admin cutover gate**. Require at least one active `super_admin` with a valid allowed-tenant (`EntraTenantId`,`EntraObjectId`) binding. If none exists, use the explicit migration-time bootstrap provisioning/promotion procedure above, record it, and re-run the gate. Do not start the application to trigger ordinary bootstrap.
-11. Run full reconciliation, including active StaffUser tenant/object-ID binding counts, recipient/preference mappings, **old-versus-target staff notification-recipient/eligibility deltas**, auto-claim-rule assignee eligibility/normalization, effective Postmark/email configuration without exposing the token, exhaustive identifier-status transformation/blocker counts, and operational-config parity. If final operational values differ from the already-staged target external JSON, update that ACLed config while the app pool remains stopped and re-run parity validation.
-12. Start the app pool only after import/reconciliation and the active-bound-super-admin gate succeed, required target-only integration configuration is present, and target schedules/processing limits pass operational parity; run readiness and authenticated diagnostics against the imported SQL database.
+9. Run migration import in dependency order with no staff identity-map input, supplying the target system Postmark token through the secure target-provisioning input; verify the token is persisted only as Data Protection ciphertext.
+10. Run the active email-authenticated super-admin cutover gate. If none exists, use the migration-time bootstrap-email promotion/insertion procedure, record it, and re-run the gate.
+11. Run full reconciliation, including normalized staff-email uniqueness/validity, null initial Entra metadata, recipient/preference mappings, notification deltas, claimant eligibility, effective email configuration, identifier transformations, and operational-config parity.
+12. Start the app pool only after import/reconciliation and the usable-super-admin gate succeed.
 13. If all gates pass, switch production hostname/DNS to the new server.
 14. Perform production smoke tests, including patron and staff critical paths.
 15. Allow normal production use; from the first accepted .NET production write onward, SQL/.NET is authoritative.
 16. Create/verify the permanent final-PocketBase historical tag so it points to the exact commit recorded and frozen for this successful cutover.
-17. Delete sensitive normalized migration packages and staff identity-map working copies from both servers after successful validation.
+17. Delete sensitive normalized migration packages from both servers after successful validation.
 
 The design favors a simple full offline maintenance window. Do not build delta synchronization/prestaging complexity solely to reduce minutes of downtime.
 

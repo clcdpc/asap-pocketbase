@@ -55,8 +55,8 @@ public sealed class AnalyticsContractTests
 
     private static CurrentStaff Staff(string role, int organizationId) => new(
         1,
+        "STAFF@EXAMPLE.ORG",
         Guid.Parse("00000000-0000-0000-0000-000000000001"),
-        Guid.Parse("00000000-0000-0000-0000-000000000002"),
         "staff@example.org",
         "Analytics tester",
         "staff@example.org",

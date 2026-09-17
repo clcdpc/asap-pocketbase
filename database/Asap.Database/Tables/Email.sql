@@ -50,8 +50,7 @@ CREATE TABLE [asap].[EmailOutbox]
     [BusinessKey] nvarchar(450) NULL,
     [DeliveryClass] nvarchar(40) NOT NULL,
     [RecipientStaffUserId] bigint NULL,
-    [RecipientEntraTenantId] uniqueidentifier NULL,
-    [RecipientEntraObjectId] uniqueidentifier NULL,
+    [RecipientAuthenticationEmail] nvarchar(320) NULL,
     [AuthorizationOrganizationId] int NULL,
     [RecipientAddressKind] nvarchar(32) NULL,
     [ToAddress] nvarchar(320) NULL,
@@ -81,24 +80,17 @@ CREATE TABLE [asap].[EmailOutbox]
     CONSTRAINT [CK_EmailOutbox_DeliveryClass] CHECK ([DeliveryClass] IN (N'business_event', N'staff_authorization_sensitive', N'operational_test')),
     CONSTRAINT [CK_EmailOutbox_Status] CHECK ([Status] IN (N'pending', N'sending', N'sent', N'failed', N'suppressed')),
     CONSTRAINT [CK_EmailOutbox_AttemptCount] CHECK ([AttemptCount] >= 0),
-    CONSTRAINT [CK_EmailOutbox_RecipientIdentityPair] CHECK
-    (
-        ([RecipientEntraTenantId] IS NULL AND [RecipientEntraObjectId] IS NULL) OR
-        ([RecipientEntraTenantId] IS NOT NULL AND [RecipientEntraObjectId] IS NOT NULL)
-    ),
     CONSTRAINT [CK_EmailOutbox_AuthorizationTuple] CHECK
     (
         ([DeliveryClass] = N'staff_authorization_sensitive' AND
          [RecipientStaffUserId] IS NOT NULL AND
-         [RecipientEntraTenantId] IS NOT NULL AND
-         [RecipientEntraObjectId] IS NOT NULL AND
+         NULLIF(LTRIM(RTRIM([RecipientAuthenticationEmail])), N'') IS NOT NULL AND
          [AuthorizationOrganizationId] IS NOT NULL AND
          [RecipientAddressKind] IS NOT NULL AND
          [RecipientAddressKind] IN (N'notification_email', N'weekly_summary')) OR
         ([DeliveryClass] <> N'staff_authorization_sensitive' AND
          [RecipientStaffUserId] IS NULL AND
-         [RecipientEntraTenantId] IS NULL AND
-         [RecipientEntraObjectId] IS NULL AND
+         [RecipientAuthenticationEmail] IS NULL AND
          [AuthorizationOrganizationId] IS NULL AND
          [RecipientAddressKind] IS NULL)
     ),

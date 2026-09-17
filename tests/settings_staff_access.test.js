@@ -69,8 +69,6 @@ function settingsData(orgId = 'system') {
 function staffUser(id, overrides = {}) {
   return {
     id: String(id),
-    tenantId: overrides.tenantId || '11111111-1111-1111-1111-111111111111',
-    objectId: overrides.objectId || `22222222-2222-2222-2222-2222222222${String(id).padStart(2, '0')}`,
     userPrincipalName: overrides.userPrincipalName || `staff${id}@example.org`,
     displayName: overrides.displayName || `Staff ${id}`,
     notificationEmail: overrides.notificationEmail || `staff${id}@example.org`,
@@ -137,11 +135,8 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     let patchBody;
     let roleBody;
     let deleteBody;
-    let rebindBody;
     const superStaff = {
       id: '1',
-      tenantId: '11111111-1111-1111-1111-111111111111',
-      objectId: '22222222-2222-2222-2222-222222222201',
       role: 'super_admin',
       organizationId: 1
     };
@@ -186,17 +181,15 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
           const body = JSON.parse(options.body);
           postBodies.push(body);
           const saved = staffUser(30 + postBodies.length, {
-            tenantId: body.tenantId,
-            objectId: body.objectId,
-            userPrincipalName: body.userPrincipalName,
-            displayName: body.displayName,
-            notificationEmail: body.notificationEmail,
+            userPrincipalName: body.email,
+            displayName: null,
+            notificationEmail: body.email,
             role: body.role,
             organizationId: body.organizationId,
             active: true,
             version: `created-${postBodies.length}`
           });
-          users = [saved, ...users.map(user => user.objectId === body.objectId ? { ...user, active: true } : user)];
+          users = [saved, ...users.map(user => user.userPrincipalName.toLowerCase() === body.email.toLowerCase() ? { ...user, active: true } : user)];
           return response(201, {
             user: saved,
             cleanup: { rulesDeactivated: 2, openTitleClaimsCleared: 3, openAdditionalCopyClaimsCleared: 4 }
@@ -205,7 +198,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
         if (requestUrl === '/api/asap/staff/users/20' && options.method === 'PATCH') {
           patchBody = JSON.parse(options.body);
           return response(200, {
-            user: { ...users[0], userPrincipalName: patchBody.userPrincipalName, version: 'patched-20' },
+            user: { ...users[0], userPrincipalName: patchBody.email, version: 'patched-20' },
             cleanup: { rulesDeactivated: 0, openTitleClaimsCleared: 0, openAdditionalCopyClaimsCleared: 0 }
           });
         }
@@ -223,13 +216,6 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
             cleanup: { rulesDeactivated: 5, openTitleClaimsCleared: 6, openAdditionalCopyClaimsCleared: 7 }
           });
         }
-        if (requestUrl === '/api/asap/staff/users/20/rebind') {
-          rebindBody = JSON.parse(options.body);
-          return response(200, {
-            user: { ...users[0], tenantId: rebindBody.tenantId, objectId: rebindBody.objectId, version: 'rebound-20' },
-            cleanup: { rulesDeactivated: 0, openTitleClaimsCleared: 0, openAdditionalCopyClaimsCleared: 0 }
-          });
-        }
         throw new Error(`Unexpected request: ${requestUrl}`);
       }
     );
@@ -242,25 +228,17 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     assert.ok(document.getElementById('settings-staff-audit-list').textContent.includes('staff_created'));
     assert.strictEqual(document.querySelectorAll('#settings-staff .settings-override-control').length, 0);
 
-    document.getElementById('staff-add-display-name').value = 'Unsaved Staff Draft';
-    document.getElementById('staff-add-display-name').dispatchEvent(new dom.window.Event('input', { bubbles: true }));
-    assert.strictEqual(controller.isDirty(), false);
-
-    document.getElementById('staff-add-tenant-id').value = '11111111-1111-1111-1111-111111111111';
-    document.getElementById('staff-add-object-id').value = '33333333-3333-3333-3333-333333333333';
-    document.getElementById('staff-add-upn').value = 'created@example.org';
-    document.getElementById('staff-add-display-name').value = 'Created Staff';
-    document.getElementById('staff-add-notification-email').value = 'created-notify@example.org';
+    assert.strictEqual(document.getElementById('staff-add-tenant-id'), null);
+    assert.strictEqual(document.getElementById('staff-add-object-id'), null);
+    assert.strictEqual(document.getElementById('staff-add-display-name'), null);
+    assert.strictEqual(document.getElementById('staff-add-notification-email'), null);
+    document.getElementById('staff-add-email').value = 'created@example.org';
     document.getElementById('staff-add-role').value = 'staff';
     document.getElementById('staff-add-organization').value = '2';
     document.getElementById('staff-add-submit').click();
     await waitFor(() => postBodies.length === 1);
     assert.deepStrictEqual(postBodies[0], {
-      tenantId: '11111111-1111-1111-1111-111111111111',
-      objectId: '33333333-3333-3333-3333-333333333333',
-      userPrincipalName: 'created@example.org',
-      displayName: 'Created Staff',
-      notificationEmail: 'created-notify@example.org',
+      email: 'created@example.org',
       role: 'staff',
       organizationId: 2
     });
@@ -272,7 +250,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     [...activeRow.querySelectorAll('button')].find(button => button.textContent === 'Save profile').click();
     await waitFor(() => Boolean(patchBody));
     assert.strictEqual(patchBody.version, 'user-version-20');
-    assert.strictEqual(patchBody.userPrincipalName, 'ada.updated@example.org');
+    assert.strictEqual(patchBody.email, 'ada.updated@example.org');
 
     activeRow.querySelector('select[aria-label^="Role"]').value = 'staff';
     [...activeRow.querySelectorAll('button')].find(button => button.textContent === 'Update access').click();
@@ -284,33 +262,19 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     assert.strictEqual(deleteBody.version, 'user-version-20');
     await waitFor(() => document.getElementById('staff-access-status').textContent.includes('5 auto-claim rules deactivated'));
 
-    const prompts = [
-      '11111111-1111-1111-1111-111111111111',
-      '44444444-4444-4444-4444-444444444444',
-      'rebound@example.org',
-      'Correct imported identity'
-    ];
-    window.prompt = () => prompts.shift();
-    [...activeRow.querySelectorAll('button')].find(button => button.textContent === 'Rebind identity').click();
-    await waitFor(() => Boolean(rebindBody));
-    assert.strictEqual(rebindBody.version, 'user-version-20');
-    assert.strictEqual(rebindBody.confirmed, true);
-    assert.strictEqual(rebindBody.userPrincipalName, 'rebound@example.org');
-    assert.strictEqual(rebindBody.reason, 'Correct imported identity');
+    assert.strictEqual([...activeRow.querySelectorAll('button')].some(button => button.textContent === 'Rebind identity'), false);
 
     const inactiveRow = [...document.querySelectorAll('.settings-staff-row')]
       .find(row => row.textContent.includes('Inactive Selector'));
     [...inactiveRow.querySelectorAll('button')].find(button => button.textContent === 'Reactivate').click();
     await waitFor(() => postBodies.length === 2);
-    assert.strictEqual(postBodies[1].objectId, users.find(user => user.displayName === 'Inactive Selector')?.objectId);
+    assert.strictEqual(postBodies[1].email, 'staff21@example.org');
 
     dom.window.close();
 
     const adminRequests = [];
     const adminStaff = {
       id: '2',
-      tenantId: '11111111-1111-1111-1111-111111111111',
-      objectId: '22222222-2222-2222-2222-222222222202',
       role: 'admin',
       organizationId: 2
     };
@@ -334,7 +298,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     assert.ok(adminRequests.includes('/api/asap/staff/audit?limit=50&organizationId=2'));
     assert.strictEqual(document.getElementById('staff-add-role').textContent.includes('Super admin'), false);
     assert.strictEqual(document.getElementById('staff-add-organization').disabled, true);
-    assert.ok([...document.querySelectorAll('.settings-staff-row button')].some(button => button.textContent === 'Rebind identity'));
+    assert.strictEqual([...document.querySelectorAll('.settings-staff-row button')].some(button => button.textContent === 'Rebind identity'), false);
     admin.dom.window.close();
 
     console.log('Settings Staff Access roster, lifecycle, audit, and scope checks passed');

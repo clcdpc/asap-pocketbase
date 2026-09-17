@@ -28,7 +28,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(HttpStatusCode.Redirect, anonymousTitle.StatusCode, $"Anonymous request returned {anonymousTitle.StatusCode}.");
 
         using var superAdmin = factory.CreateClient();
-        AddTestingStaffHeaders(superAdmin, seeded.SuperId, tenantId, Guid.Parse(identity.ObjectId!));
+        AddTestingStaffHeaders(superAdmin, seeded.SuperId, tenantId, seeded.SuperAuthenticationEmail);
         using var title = await superAdmin.GetAsync(
             $"/api/asap/staff/title-requests/{seeded.SharedLegacyId}");
         using var copy = await superAdmin.GetAsync(
@@ -45,7 +45,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("Legacy additional-copy target", copyBody.RootElement.GetProperty("title").GetString());
 
         using var ordinary = factory.CreateClient();
-        AddTestingStaffHeaders(ordinary, seeded.StaffId, tenantId, seeded.StaffObjectId);
+        AddTestingStaffHeaders(ordinary, seeded.StaffId, tenantId, seeded.StaffAuthenticationEmail);
         foreach (var request in new[]
                  {
                      ("title", seeded.NumericLegacyId, seeded.NumericTitleId.ToString(CultureInfo.InvariantCulture)),
@@ -124,9 +124,9 @@ public sealed partial class PatronJourneyTests
         startInfo.ArgumentList.Add(artifactDirectory);
         startInfo.ArgumentList.Add(seeded.SuperId.ToString());
         startInfo.ArgumentList.Add(identity.TenantId!);
-        startInfo.ArgumentList.Add(identity.ObjectId!);
+        startInfo.ArgumentList.Add(seeded.SuperAuthenticationEmail);
         startInfo.ArgumentList.Add(seeded.StaffId.ToString());
-        startInfo.ArgumentList.Add(seeded.StaffObjectId.ToString());
+        startInfo.ArgumentList.Add(seeded.StaffAuthenticationEmail);
         startInfo.ArgumentList.Add(seeded.SharedLegacyId);
         startInfo.ArgumentList.Add(seeded.NumericLegacyId);
         startInfo.ArgumentList.Add(seeded.SharedTitleId.ToString());
@@ -198,7 +198,7 @@ public sealed partial class PatronJourneyTests
             EntraTenantId = tenantId,
             EntraObjectId = staffObjectId,
             UserPrincipalName = $"legacy-links-{suffix}@example.org",
-            NormalizedUserPrincipalName = $"LEGACY-LINKS-{suffix}@EXAMPLE.ORG",
+            NormalizedUserPrincipalName = $"legacy-links-{suffix}@example.org".ToUpperInvariant(),
             DisplayName = "Legacy-link staff",
             NotificationEmail = $"legacy-links-{suffix}@example.org",
             Role = "staff",
@@ -267,8 +267,9 @@ public sealed partial class PatronJourneyTests
         var superAdmin = await ReadConfiguredSuperAdminAsync();
         return new LegacyRequestLinkSeed(
             superAdmin.Id,
+            superAdmin.AuthenticationEmail,
             staff.Id,
-            staffObjectId,
+            staff.NormalizedUserPrincipalName!,
             sharedLegacyId,
             numericLegacyId,
             sharedTitle.Id,
@@ -314,8 +315,9 @@ public sealed partial class PatronJourneyTests
 
     private sealed record LegacyRequestLinkSeed(
         long SuperId,
+        string SuperAuthenticationEmail,
         long StaffId,
-        Guid StaffObjectId,
+        string StaffAuthenticationEmail,
         string SharedLegacyId,
         string NumericLegacyId,
         long SharedTitleId,

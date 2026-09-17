@@ -396,9 +396,9 @@ public sealed partial class PatronJourneyTests
         startInfo.ArgumentList.Add(artifactDirectory);
         startInfo.ArgumentList.Add(seeded.SuperId.ToString());
         startInfo.ArgumentList.Add(identity.TenantId!);
-        startInfo.ArgumentList.Add(identity.ObjectId!);
+        startInfo.ArgumentList.Add(identity.UserPrincipalName!);
         startInfo.ArgumentList.Add(seeded.StaffId.ToString());
-        startInfo.ArgumentList.Add(staffObjectId.ToString());
+        startInfo.ArgumentList.Add("browser.staff@example.org");
         startInfo.ArgumentList.Add(seeded.LegacyRequestId);
         startInfo.ArgumentList.Add(seeded.PrimaryRequestId.ToString());
         startInfo.ArgumentList.Add(seeded.BlockedRequestId.ToString());
@@ -1045,7 +1045,7 @@ public sealed partial class PatronJourneyTests
     {
         using var client = factory!.CreateClient();
         var actor = await ReadConfiguredSuperAdminAsync();
-        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
 
         using var initialResponse = await client.GetAsync("/api/asap/staff/settings?orgId=2");
@@ -1217,7 +1217,7 @@ public sealed partial class PatronJourneyTests
     {
         using var client = factory!.CreateClient();
         var actor = await ReadConfiguredSuperAdminAsync();
-        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
 
         var libraryId = 91404;
@@ -1416,7 +1416,7 @@ public sealed partial class PatronJourneyTests
 
         try
         {
-            AddTestingStaffHeaders(client, adminId, tenantId, objectId);
+            AddTestingStaffHeaders(client, adminId, tenantId, "SCOPE.ADMIN@EXAMPLE.ORG");
             client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
 
             using (var ownSettings = await client.GetAsync("/api/asap/staff/settings?orgId=2"))
@@ -1475,7 +1475,7 @@ public sealed partial class PatronJourneyTests
             configurationPath,
             new FailingPatronCodeReferenceProvider());
         using var client = failingFactory.CreateClient();
-        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
 
         using var settingsResponse = await client.GetAsync("/api/asap/staff/settings?orgId=2");
@@ -1501,7 +1501,7 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task StaffSessionUsesCurrentDurableIdentityAndTestingAuthOnlyInTesting()
+    public async Task StaffSessionUsesCurrentEmailIdentityAndTestingAuthOnlyInTesting()
     {
         using var anonymousClient = factory!.CreateClient();
         using var anonymousResponse = await anonymousClient.GetAsync("/api/asap/staff/session");
@@ -1513,22 +1513,21 @@ public sealed partial class PatronJourneyTests
         }
 
         var tenantId = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin.TenantId!;
-        var objectId = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin.ObjectId!;
         long staffUserId;
         await using (var connection = new SqlConnection(databaseConnectionString))
         {
             await connection.OpenAsync();
             await using var command = new SqlCommand(
-                "SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @objectId;",
+                "SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = @email;",
                 connection);
-            command.Parameters.AddWithValue("@objectId", Guid.Parse(objectId));
+            command.Parameters.AddWithValue("@email", "ADMIN@EXAMPLE.ORG");
             staffUserId = Convert.ToInt64(await command.ExecuteScalarAsync());
         }
 
         using var staffClient = factory.CreateClient();
         staffClient.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", staffUserId.ToString());
         staffClient.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", tenantId);
-        staffClient.DefaultRequestHeaders.Add("X-ASAP-Test-Object-Id", objectId);
+        staffClient.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Email", "admin@example.org");
         using var staffResponse = await staffClient.GetAsync("/api/asap/staff/session");
         Assert.AreEqual(HttpStatusCode.OK, staffResponse.StatusCode);
         using (var body = JsonDocument.Parse(await staffResponse.Content.ReadAsStringAsync()))
@@ -1538,8 +1537,8 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(staffUserId.ToString(), body.RootElement.GetProperty("staff").GetProperty("id").GetString());
         }
 
-        staffClient.DefaultRequestHeaders.Remove("X-ASAP-Test-Object-Id");
-        staffClient.DefaultRequestHeaders.Add("X-ASAP-Test-Object-Id", Guid.NewGuid().ToString());
+        staffClient.DefaultRequestHeaders.Remove("X-ASAP-Test-Staff-Email");
+        staffClient.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Email", "wrong@example.org");
         using var reboundResponse = await staffClient.GetAsync("/api/asap/staff/session");
         Assert.AreEqual(HttpStatusCode.Unauthorized, reboundResponse.StatusCode);
         using var reboundBody = JsonDocument.Parse(await reboundResponse.Content.ReadAsStringAsync());
@@ -1547,7 +1546,7 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task StaffCookieSurvivesRestartButNotIdentityRebindOrTenantRemoval()
+    public async Task StaffCookieSurvivesRestartAndOidChangeButNotEmailChangeOrTenantRemoval()
     {
         await factory!.DisposeAsync();
         factory = null;
@@ -1585,7 +1584,7 @@ public sealed partial class PatronJourneyTests
                 staffId = Convert.ToInt64(await seed.ExecuteScalarAsync());
             }
 
-            originalCookie = ProtectStaffCookie(firstFactory, staffId, staffTenantId, originalObjectId);
+            originalCookie = ProtectStaffCookie(firstFactory, staffId, staffTenantId, "RESTART.STAFF@EXAMPLE.ORG");
             using var firstClient = CookieClient(firstFactory, originalCookie);
             using var firstSession = await firstClient.GetAsync("/api/asap/staff/session");
             Assert.AreEqual(HttpStatusCode.OK, firstSession.StatusCode, await firstSession.Content.ReadAsStringAsync());
@@ -1593,7 +1592,7 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(firstBody.RootElement.GetProperty("authenticated").GetBoolean());
         }
 
-        string reboundCookie;
+        string renamedCookie;
         await using (var restartedFactory = CreateApplicationFactory(initialPath))
         {
             using (var restartedClient = CookieClient(restartedFactory, originalCookie))
@@ -1606,8 +1605,10 @@ public sealed partial class PatronJourneyTests
 
             await restartedFactory.Services.GetRequiredService<StaffSignInService>()
                 .RecordSuccessfulSignInAsync(
-                    new StaffIdentityEvidence(staffId, staffTenantId, originalObjectId),
-                    " refreshed.staff@example.org ",
+                    staffId,
+                    "RESTART.STAFF@EXAMPLE.ORG",
+                    staffTenantId,
+                    reboundObjectId,
                     " Refreshed Staff ",
                     CancellationToken.None);
             using (var refreshedClient = CookieClient(restartedFactory, originalCookie))
@@ -1616,45 +1617,48 @@ public sealed partial class PatronJourneyTests
                 Assert.AreEqual(HttpStatusCode.OK, refreshedSession.StatusCode, await refreshedSession.Content.ReadAsStringAsync());
                 using var refreshedBody = JsonDocument.Parse(await refreshedSession.Content.ReadAsStringAsync());
                 var refreshed = refreshedBody.RootElement.GetProperty("staff");
-                Assert.AreEqual("refreshed.staff@example.org", refreshed.GetProperty("userPrincipalName").GetString());
+                Assert.AreEqual("restart.staff@example.org", refreshed.GetProperty("userPrincipalName").GetString());
                 Assert.AreEqual("Refreshed Staff", refreshed.GetProperty("displayName").GetString());
                 Assert.AreEqual("restart.notify@example.org", refreshed.GetProperty("notificationEmail").GetString());
+            }
+
+            using (var oidChangedClient = CookieClient(restartedFactory, originalCookie))
+            using (var oidChangedSession = await oidChangedClient.GetAsync("/api/asap/staff/session"))
+            {
+                Assert.AreEqual(HttpStatusCode.OK, oidChangedSession.StatusCode, await oidChangedSession.Content.ReadAsStringAsync());
             }
 
             await using (var connection = new SqlConnection(databaseConnectionString))
             {
                 await connection.OpenAsync();
-                await using var rebind = new SqlCommand(
-                    "UPDATE [asap].[StaffUser] SET [EntraObjectId] = @objectId WHERE [Id] = @staffId;",
+                await using var rename = new SqlCommand(
+                    "UPDATE [asap].[StaffUser] SET [UserPrincipalName] = N'renamed.staff@example.org', [NormalizedUserPrincipalName] = N'RENAMED.STAFF@EXAMPLE.ORG' WHERE [Id] = @staffId;",
                     connection);
-                rebind.Parameters.AddWithValue("@objectId", reboundObjectId);
-                rebind.Parameters.AddWithValue("@staffId", staffId);
-                Assert.AreEqual(1, await rebind.ExecuteNonQueryAsync());
+                rename.Parameters.AddWithValue("@staffId", staffId);
+                Assert.AreEqual(1, await rename.ExecuteNonQueryAsync());
             }
 
-            using (var oldTupleClient = CookieClient(restartedFactory, originalCookie))
-            using (var oldTupleSession = await oldTupleClient.GetAsync("/api/asap/staff/session"))
+            using (var oldEmailClient = CookieClient(restartedFactory, originalCookie))
+            using (var oldEmailSession = await oldEmailClient.GetAsync("/api/asap/staff/session"))
             {
-                Assert.AreEqual(HttpStatusCode.Unauthorized, oldTupleSession.StatusCode);
-                using var body = JsonDocument.Parse(await oldTupleSession.Content.ReadAsStringAsync());
+                Assert.AreEqual(HttpStatusCode.Unauthorized, oldEmailSession.StatusCode);
+                using var body = JsonDocument.Parse(await oldEmailSession.Content.ReadAsStringAsync());
                 Assert.AreEqual("staff_session_invalid", body.RootElement.GetProperty("code").GetString());
-                Assert.IsTrue(oldTupleSession.Headers.TryGetValues("Set-Cookie", out var clearedCookies));
+                Assert.IsTrue(oldEmailSession.Headers.TryGetValues("Set-Cookie", out var clearedCookies));
                 Assert.IsTrue(clearedCookies.Any(value => value.StartsWith("__Host-ASAP.Staff=", StringComparison.Ordinal)));
             }
 
-            reboundCookie = ProtectStaffCookie(restartedFactory, staffId, staffTenantId, reboundObjectId);
-            using var reboundClient = CookieClient(restartedFactory, reboundCookie);
-            using var reboundSession = await reboundClient.GetAsync("/api/asap/staff/session");
-            Assert.AreEqual(HttpStatusCode.OK, reboundSession.StatusCode, await reboundSession.Content.ReadAsStringAsync());
-            using var reboundBody = JsonDocument.Parse(await reboundSession.Content.ReadAsStringAsync());
-            Assert.IsTrue(reboundBody.RootElement.GetProperty("authenticated").GetBoolean());
+            renamedCookie = ProtectStaffCookie(restartedFactory, staffId, staffTenantId, "RENAMED.STAFF@EXAMPLE.ORG");
+            using var renamedClient = CookieClient(restartedFactory, renamedCookie);
+            using var renamedSession = await renamedClient.GetAsync("/api/asap/staff/session");
+            Assert.AreEqual(HttpStatusCode.OK, renamedSession.StatusCode, await renamedSession.Content.ReadAsStringAsync());
         }
 
         var removedTenantPath = await WriteStaffConfigurationAsync(
             $"cookie-removed-{Guid.NewGuid():N}.json",
             [baseTenantId]);
         await using var removedTenantFactory = CreateApplicationFactory(removedTenantPath);
-        using var removedTenantClient = CookieClient(removedTenantFactory, reboundCookie);
+        using var removedTenantClient = CookieClient(removedTenantFactory, renamedCookie);
         using var removedTenantSession = await removedTenantClient.GetAsync("/api/asap/staff/session");
         Assert.AreEqual(HttpStatusCode.Unauthorized, removedTenantSession.StatusCode);
         using var removedBody = JsonDocument.Parse(await removedTenantSession.Content.ReadAsStringAsync());
@@ -1662,7 +1666,7 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task StaffStartupFailsClosedWithoutRepairingPopulatedUsersForNewTenantPolicy()
+    public async Task StaffStartupUsesEmailIdentityWithoutRepairingObservedEntraMetadataForNewTenantPolicy()
     {
         using (var baselineClient = factory!.CreateClient())
         using (var baselineSession = await baselineClient.GetAsync("/api/asap/staff/session"))
@@ -1695,8 +1699,8 @@ public sealed partial class PatronJourneyTests
         using var staffShell = await client.GetAsync("/staff/");
 
         Assert.AreEqual(HttpStatusCode.OK, live.StatusCode);
-        Assert.AreEqual(HttpStatusCode.ServiceUnavailable, ready.StatusCode);
-        Assert.AreEqual(HttpStatusCode.ServiceUnavailable, business.StatusCode);
+        Assert.AreEqual(HttpStatusCode.OK, ready.StatusCode);
+        Assert.AreEqual(HttpStatusCode.OK, business.StatusCode);
         Assert.AreEqual(HttpStatusCode.OK, staffShell.StatusCode);
 
         await using (var connection = new SqlConnection(databaseConnectionString))
@@ -1714,7 +1718,7 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task StaffIdentityRebindRequiresConfirmationRejectsDuplicatesAndAuditsTheNewTuple()
+    public async Task StaffAuthenticationEmailChangeRejectsDuplicatesAndAuditsMetadataUpdate()
     {
         var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
         using var client = factory!.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
@@ -1723,26 +1727,22 @@ public sealed partial class PatronJourneyTests
         long actorId;
         long targetId;
         string targetVersion;
-        var oldObjectId = Guid.NewGuid();
-        var newObjectId = Guid.NewGuid();
         await using (var connection = new SqlConnection(databaseConnectionString))
         {
             await connection.OpenAsync();
             await using var seed = connection.CreateCommand();
             seed.CommandText =
                 """
-                DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @actorObjectId);
+                DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = @actorEmail);
                 INSERT INTO [asap].[StaffUser]
-                    ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
+                    ([UserPrincipalName], [NormalizedUserPrincipalName],
                      [DisplayName], [NotificationEmail], [Role], [OrganizationId], [IsActive])
-                VALUES (@tenantId, @oldObjectId, N'rebind.target@example.org', N'REBIND.TARGET@EXAMPLE.ORG',
-                        N'Rebind Target', N'rebind.target@example.org', N'staff', 2, 1);
+                VALUES (N'email.target@example.org', N'EMAIL.TARGET@EXAMPLE.ORG',
+                        N'Email Target', N'email.target@example.org', N'staff', 2, 1);
                 DECLARE @targetId bigint = SCOPE_IDENTITY();
                 SELECT @actorId, @targetId, [RowVersion] FROM [asap].[StaffUser] WHERE [Id] = @targetId;
                 """;
-            seed.Parameters.AddWithValue("@actorObjectId", Guid.Parse(identity.ObjectId!));
-            seed.Parameters.AddWithValue("@tenantId", Guid.Parse(identity.TenantId!));
-            seed.Parameters.AddWithValue("@oldObjectId", oldObjectId);
+            seed.Parameters.AddWithValue("@actorEmail", identity.UserPrincipalName!.ToUpperInvariant());
             await using var reader = await seed.ExecuteReaderAsync();
             Assert.IsTrue(await reader.ReadAsync());
             actorId = reader.GetInt64(0);
@@ -1750,34 +1750,19 @@ public sealed partial class PatronJourneyTests
             targetVersion = StaffVersion.Encode((byte[])reader[2]);
         }
 
-        AddTestingStaffHeaders(client, actorId, Guid.Parse(identity.TenantId!), Guid.Parse(identity.ObjectId!));
+        AddTestingStaffHeaders(client, actorId, Guid.Parse(identity.TenantId!), identity.UserPrincipalName!);
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
 
-        using var unconfirmed = await client.PostAsJsonAsync(
-            $"/api/asap/staff/users/{targetId}/rebind",
+        using var duplicate = await client.PatchAsJsonAsync(
+            $"/api/asap/staff/users/{targetId}",
             new
             {
                 version = targetVersion,
-                tenantId = identity.TenantId,
-                objectId = newObjectId,
-                userPrincipalName = "rebound@example.org",
-                confirmed = false,
-                reason = "Reviewed the corrected enterprise identity."
-            });
-        Assert.AreEqual(HttpStatusCode.BadRequest, unconfirmed.StatusCode, await unconfirmed.Content.ReadAsStringAsync());
-
-        using var duplicate = await client.PostAsJsonAsync(
-            $"/api/asap/staff/users/{targetId}/rebind",
-            new
-            {
-                version = targetVersion,
-                tenantId = identity.TenantId,
-                objectId = identity.ObjectId,
-                userPrincipalName = "rebound@example.org",
-                confirmed = true,
-                reason = "This duplicate must be rejected."
+                email = identity.UserPrincipalName,
+                displayName = "Email Target",
+                notificationEmail = "email.target@example.org"
             });
         Assert.AreEqual(HttpStatusCode.Conflict, duplicate.StatusCode, await duplicate.Content.ReadAsStringAsync());
         using (var duplicateBody = JsonDocument.Parse(await duplicate.Content.ReadAsStringAsync()))
@@ -1785,46 +1770,42 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("identity_already_exists", duplicateBody.RootElement.GetProperty("code").GetString());
         }
 
-        const string reason = "Reviewed the corrected enterprise identity.";
-        using var rebound = await client.PostAsJsonAsync(
-            $"/api/asap/staff/users/{targetId}/rebind",
+        using var changed = await client.PatchAsJsonAsync(
+            $"/api/asap/staff/users/{targetId}",
             new
             {
                 version = targetVersion,
-                tenantId = identity.TenantId,
-                objectId = newObjectId,
-                userPrincipalName = "rebound@example.org",
-                confirmed = true,
-                reason
+                email = "changed.email@example.org",
+                displayName = "Changed Email Target",
+                notificationEmail = "separate-notification@example.org"
             });
-        Assert.AreEqual(HttpStatusCode.OK, rebound.StatusCode, await rebound.Content.ReadAsStringAsync());
-        using var reboundBody = JsonDocument.Parse(await rebound.Content.ReadAsStringAsync());
-        Assert.AreEqual(newObjectId, reboundBody.RootElement.GetProperty("user").GetProperty("objectId").GetGuid());
+        Assert.AreEqual(HttpStatusCode.OK, changed.StatusCode, await changed.Content.ReadAsStringAsync());
+        using var changedBody = JsonDocument.Parse(await changed.Content.ReadAsStringAsync());
+        Assert.AreEqual("changed.email@example.org", changedBody.RootElement.GetProperty("user").GetProperty("userPrincipalName").GetString());
+        Assert.IsFalse(changedBody.RootElement.GetProperty("user").TryGetProperty("objectId", out _));
 
         await using var verify = new SqlConnection(databaseConnectionString);
         await verify.OpenAsync();
         await using var command = new SqlCommand(
             """
-            SELECT target.[EntraTenantId], target.[EntraObjectId], target.[NotificationEmail],
-                   audit.[ActorStaffUserId], audit.[Action], audit.[DetailsJson]
+            SELECT target.[UserPrincipalName], target.[NormalizedUserPrincipalName], target.[NotificationEmail],
+                   target.[EntraTenantId], target.[EntraObjectId], audit.[ActorStaffUserId], audit.[Action]
             FROM [asap].[StaffUser] target
             JOIN [asap].[AdministrativeAudit] audit
               ON audit.[TargetType] = N'StaffUser' AND audit.[TargetId] = CONVERT(nvarchar(40), target.[Id])
-            WHERE target.[Id] = @targetId AND audit.[Action] = N'staff_identity_rebound';
+            WHERE target.[Id] = @targetId AND audit.[Action] = N'staff_metadata_updated';
             """,
             verify);
         command.Parameters.AddWithValue("@targetId", targetId);
         await using var result = await command.ExecuteReaderAsync();
         Assert.IsTrue(await result.ReadAsync());
-        Assert.AreEqual(Guid.Parse(identity.TenantId!), result.GetGuid(0));
-        Assert.AreEqual(newObjectId, result.GetGuid(1));
-        Assert.AreEqual("rebind.target@example.org", result.GetString(2));
-        Assert.AreEqual(actorId, result.GetInt64(3));
-        Assert.AreEqual("staff_identity_rebound", result.GetString(4));
-        using var details = JsonDocument.Parse(result.GetString(5));
-        Assert.AreEqual(oldObjectId, details.RootElement.GetProperty("oldObjectId").GetGuid());
-        Assert.AreEqual(newObjectId, details.RootElement.GetProperty("newObjectId").GetGuid());
-        Assert.AreEqual(reason, details.RootElement.GetProperty("reason").GetString());
+        Assert.AreEqual("changed.email@example.org", result.GetString(0));
+        Assert.AreEqual("CHANGED.EMAIL@EXAMPLE.ORG", result.GetString(1));
+        Assert.AreEqual("separate-notification@example.org", result.GetString(2));
+        Assert.IsTrue(result.IsDBNull(3));
+        Assert.IsTrue(result.IsDBNull(4));
+        Assert.AreEqual(actorId, result.GetInt64(5));
+        Assert.AreEqual("staff_metadata_updated", result.GetString(6));
     }
 
     [TestMethod]
@@ -1845,7 +1826,7 @@ public sealed partial class PatronJourneyTests
         {
             await connection.OpenAsync();
             await using var command = new SqlCommand(
-                "SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @objectId;",
+                "SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG';",
                 connection);
             command.Parameters.AddWithValue("@objectId", Guid.Parse(identity.ObjectId!));
             staffUserId = Convert.ToInt64(await command.ExecuteScalarAsync());
@@ -1853,7 +1834,6 @@ public sealed partial class PatronJourneyTests
 
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", staffUserId.ToString());
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
-        client.DefaultRequestHeaders.Add("X-ASAP-Test-Object-Id", identity.ObjectId);
 
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
@@ -1966,15 +1946,13 @@ public sealed partial class PatronJourneyTests
         {
             await connection.OpenAsync();
             await using var command = new SqlCommand(
-                "SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @objectId;",
+                "SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG';",
                 connection);
-            command.Parameters.AddWithValue("@objectId", Guid.Parse(identity.ObjectId!));
             actorId = Convert.ToInt64(await command.ExecuteScalarAsync());
         }
 
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actorId.ToString());
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
-        client.DefaultRequestHeaders.Add("X-ASAP-Test-Object-Id", identity.ObjectId);
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add(
@@ -1987,11 +1965,7 @@ public sealed partial class PatronJourneyTests
             "/api/asap/staff/users",
             new
             {
-                tenantId = newTenantId,
-                objectId = newObjectId,
-                userPrincipalName = "workflow.staff@example.org",
-                displayName = "Workflow Staff",
-                notificationEmail = "ordinary@example.org",
+                email = "workflow.staff@example.org",
                 role = "staff",
                 organizationId = 2
             });
@@ -2006,7 +1980,7 @@ public sealed partial class PatronJourneyTests
             new
             {
                 version,
-                userPrincipalName = "workflow.staff@example.org",
+                email = "workflow.staff@example.org",
                 displayName = "Workflow Staff",
                 notificationEmail = (string?)null
             });
@@ -2016,8 +1990,10 @@ public sealed partial class PatronJourneyTests
 
         await factory.Services.GetRequiredService<StaffSignInService>()
             .RecordSuccessfulSignInAsync(
-                new StaffIdentityEvidence(staffId, newTenantId, newObjectId),
-                " refreshed.workflow.staff@example.org ",
+                staffId,
+                "WORKFLOW.STAFF@EXAMPLE.ORG",
+                newTenantId,
+                newObjectId,
                 " Refreshed Workflow Staff ",
                 CancellationToken.None);
         using (var refreshedUsers = await client.GetAsync("/api/asap/staff/users?orgId=2"))
@@ -2026,7 +2002,7 @@ public sealed partial class PatronJourneyTests
             using var refreshedUsersBody = JsonDocument.Parse(await refreshedUsers.Content.ReadAsStringAsync());
             var refreshed = refreshedUsersBody.RootElement.GetProperty("users").EnumerateArray()
                 .Single(item => item.GetProperty("id").GetString() == staffId.ToString());
-            Assert.AreEqual("refreshed.workflow.staff@example.org", refreshed.GetProperty("userPrincipalName").GetString());
+            Assert.AreEqual("workflow.staff@example.org", refreshed.GetProperty("userPrincipalName").GetString());
             Assert.AreEqual("Refreshed Workflow Staff", refreshed.GetProperty("displayName").GetString());
             Assert.AreEqual(JsonValueKind.Null, refreshed.GetProperty("notificationEmail").ValueKind);
             version = refreshed.GetProperty("version").GetString();
@@ -2126,7 +2102,7 @@ public sealed partial class PatronJourneyTests
             await using var seed = connection.CreateCommand();
             seed.CommandText =
                 """
-                DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @actorObjectId);
+                DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 IF NOT EXISTS (SELECT 1 FROM [asap].[Organization] WHERE [Id] = 91320)
                     INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
                     VALUES (91320, N'Role contraction library', N'RCL', 1);
@@ -2176,7 +2152,7 @@ public sealed partial class PatronJourneyTests
             closedRequestId = reader.GetInt64(5);
         }
 
-        AddTestingStaffHeaders(client, actorId, Guid.Parse(identity.TenantId!), Guid.Parse(identity.ObjectId!));
+        AddTestingStaffHeaders(client, actorId, Guid.Parse(identity.TenantId!), identity.UserPrincipalName!);
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
@@ -2251,7 +2227,7 @@ public sealed partial class PatronJourneyTests
             seed.CommandText =
                 """
                 DECLARE @firstId bigint = (
-                    SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @firstObjectId);
+                    SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = @firstEmail);
                 UPDATE [asap].[StaffUser]
                 SET [IsActive] = 1, [Role] = N'super_admin', [OrganizationId] = 1
                 WHERE [Id] = @firstId;
@@ -2266,7 +2242,7 @@ public sealed partial class PatronJourneyTests
                 JOIN [asap].[StaffUser] secondAdmin ON secondAdmin.[Id] = @secondId
                 WHERE firstAdmin.[Id] = @firstId;
                 """;
-            seed.Parameters.AddWithValue("@firstObjectId", Guid.Parse(configured.ObjectId!));
+            seed.Parameters.AddWithValue("@firstEmail", configured.UserPrincipalName!.ToUpperInvariant());
             seed.Parameters.AddWithValue("@tenantId", tenantId);
             seed.Parameters.AddWithValue("@secondObjectId", secondObjectId);
             await using var reader = await seed.ExecuteReaderAsync();
@@ -2281,8 +2257,8 @@ public sealed partial class PatronJourneyTests
         {
             using var firstClient = factory!.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
             using var secondClient = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
-            AddTestingStaffHeaders(firstClient, firstId, tenantId, Guid.Parse(configured.ObjectId!));
-            AddTestingStaffHeaders(secondClient, secondId, tenantId, secondObjectId);
+            AddTestingStaffHeaders(firstClient, firstId, tenantId, configured.UserPrincipalName!);
+            AddTestingStaffHeaders(secondClient, secondId, tenantId, "second.final.admin@example.org");
             firstClient.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(firstClient));
             secondClient.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(secondClient));
             using var firstRequest = new HttpRequestMessage(HttpMethod.Delete, $"/api/asap/staff/users/{firstId}")
@@ -2436,7 +2412,7 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task StaffMetadataRejectsChangedActorBindingAndInactiveParticipationWithoutAudit()
+    public async Task StaffMetadataRejectsChangedActorEmailAndInactiveParticipationWithoutAudit()
     {
         using (var startup = factory!.CreateClient())
         using (var session = await startup.GetAsync("/api/asap/staff/session"))
@@ -2445,29 +2421,29 @@ public sealed partial class PatronJourneyTests
         }
         var lifecycleService = factory.Services.GetRequiredService<StaffLifecycleService>();
 
-        var rebound = await SeedStaffMetadataRaceAsync("binding-changed");
-        var reboundActor = await ReadStaffMetadataActorAsync(rebound);
+        var emailChanged = await SeedStaffMetadataRaceAsync("email-changed");
+        var emailChangedActor = await ReadStaffMetadataActorAsync(emailChanged);
         await using (var connection = new SqlConnection(databaseConnectionString))
         {
             await connection.OpenAsync();
-            await using var changeBinding = new SqlCommand(
-                "UPDATE [asap].[StaffUser] SET [EntraObjectId] = @objectId WHERE [Id] = @id;",
+            await using var changeEmail = new SqlCommand(
+                "UPDATE [asap].[StaffUser] SET [UserPrincipalName] = @email, [NormalizedUserPrincipalName] = UPPER(@email) WHERE [Id] = @id;",
                 connection);
-            changeBinding.Parameters.AddWithValue("@objectId", Guid.NewGuid());
-            changeBinding.Parameters.AddWithValue("@id", rebound.ActorId);
-            Assert.AreEqual(1, await changeBinding.ExecuteNonQueryAsync());
+            changeEmail.Parameters.AddWithValue("@email", "email-changed.actor@example.org");
+            changeEmail.Parameters.AddWithValue("@id", emailChanged.ActorId);
+            Assert.AreEqual(1, await changeEmail.ExecuteNonQueryAsync());
         }
-        var reboundResult = await lifecycleService.UpdateMetadataAsync(
-            reboundActor,
-            rebound.TargetId,
+        var emailChangedResult = await lifecycleService.UpdateMetadataAsync(
+            emailChangedActor,
+            emailChanged.TargetId,
             new StaffMetadataInput(
-                StaffVersion.Encode(rebound.TargetVersion),
-                "binding-changed.updated@example.org",
-                "Binding Changed Updated",
-                "binding-changed.notice@example.org"),
+                StaffVersion.Encode(emailChanged.TargetVersion),
+                "email-changed.updated@example.org",
+                "Email Changed Updated",
+                "email-changed.notice@example.org"),
             CancellationToken.None);
-        Assert.AreEqual("staff_scope_forbidden", reboundResult.Code);
-        await AssertStaffMetadataStateAsync(rebound.TargetId, rebound.OriginalTargetDisplayName, 0);
+        Assert.AreEqual("staff_scope_forbidden", emailChangedResult.Code);
+        await AssertStaffMetadataStateAsync(emailChanged.TargetId, emailChanged.OriginalTargetDisplayName, 0);
 
         var inactive = await SeedStaffMetadataRaceAsync("participation-inactive");
         var inactiveActor = await ReadStaffMetadataActorAsync(inactive);
@@ -2722,7 +2698,7 @@ public sealed partial class PatronJourneyTests
             client,
             actor.Id,
             Guid.Parse(identity.TenantId!),
-            Guid.Parse(identity.ObjectId!));
+            actor.AuthenticationEmail);
         using (var authenticated = await client.GetAsync("/api/asap/staff/session"))
         {
             Assert.AreEqual(HttpStatusCode.OK, authenticated.StatusCode);
@@ -2830,7 +2806,7 @@ public sealed partial class PatronJourneyTests
                 END;
 
                 DECLARE @superId bigint = (
-                    SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @superObjectId);
+                    SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 INSERT INTO [asap].[StaffUser]
                     ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
                      [DisplayName], [Role], [OrganizationId], [IsActive])
@@ -2857,14 +2833,14 @@ public sealed partial class PatronJourneyTests
                      [DisplayName], [Role], [OrganizationId], [IsActive])
                 VALUES
                     (@invalidTenantId, @invalidTenantObjectId, N'candidate.tenant@example.org',
-                     N'CANDIDATE.TENANT@EXAMPLE.ORG', N'Candidate Invalid Tenant', N'staff', 2, 1);
+                     N'CANDIDATE.TENANT@EXAMPLE.ORG', N'Candidate Historical Tenant', N'staff', 2, 1);
                 DECLARE @invalidTenantStaffId bigint = SCOPE_IDENTITY();
                 INSERT INTO [asap].[StaffUser]
                     ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
                      [DisplayName], [Role], [OrganizationId], [IsActive])
                 VALUES
-                    (@tenantId, NULL, N'candidate.unbound@example.org', N'CANDIDATE.UNBOUND@EXAMPLE.ORG',
-                     N'Candidate Unbound Staff', N'staff', 2, 0);
+                    (NULL, NULL, N'candidate.unbound@example.org', N'CANDIDATE.UNBOUND@EXAMPLE.ORG',
+                     N'Candidate Never Signed In', N'staff', 2, 1);
                 DECLARE @unboundStaffId bigint = SCOPE_IDENTITY();
                 DECLARE @formatId bigint = (
                     SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
@@ -2901,7 +2877,7 @@ public sealed partial class PatronJourneyTests
             taskVersion = StaffVersion.Encode((byte[])reader[7]);
         }
 
-        AddTestingStaffHeaders(client, actorId, tenantId, actorObjectId);
+        AddTestingStaffHeaders(client, actorId, tenantId, "candidate.actor@example.org");
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
 
         using (var management = await client.GetAsync("/api/asap/staff/users?orgId=2"))
@@ -2928,8 +2904,8 @@ public sealed partial class PatronJourneyTests
         Assert.IsTrue(candidateIds.Contains(localId.ToString()));
         Assert.IsTrue(candidateIds.Contains(superId.ToString()));
         Assert.IsFalse(candidateIds.Contains(foreignId.ToString()));
-        Assert.IsFalse(candidateIds.Contains(invalidTenantStaffId.ToString()));
-        Assert.IsFalse(candidateIds.Contains(unboundStaffId.ToString()));
+        Assert.IsTrue(candidateIds.Contains(invalidTenantStaffId.ToString()));
+        Assert.IsTrue(candidateIds.Contains(unboundStaffId.ToString()));
 
         using var assignedResponse = await client.PostAsJsonAsync(
             $"/api/asap/staff/additional-copies/{taskId}/assign",
@@ -3547,7 +3523,7 @@ public sealed partial class PatronJourneyTests
         {
             await connection.OpenAsync();
             await using var actor = new SqlCommand(
-                "SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @objectId;",
+                "SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG';",
                 connection);
             actor.Parameters.AddWithValue("@objectId", Guid.Parse(identity.ObjectId!));
             actorId = Convert.ToInt64(await actor.ExecuteScalarAsync());
@@ -3588,7 +3564,6 @@ public sealed partial class PatronJourneyTests
 
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actorId.ToString());
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
-        client.DefaultRequestHeaders.Add("X-ASAP-Test-Object-Id", identity.ObjectId);
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add(
@@ -3740,7 +3715,7 @@ public sealed partial class PatronJourneyTests
             await using var seed = connection.CreateCommand();
             seed.CommandText =
                 """
-                DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @objectId);
+                DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
                     ([LibraryOrganizationId], [Barcode], [Title], [Identifier], [AutoHold], [MaterialFormatId],
@@ -3775,7 +3750,7 @@ public sealed partial class PatronJourneyTests
             successfulRequestId = reader.GetInt64(2);
         }
 
-        AddTestingStaffHeaders(client, actorId, Guid.Parse(identity.TenantId!), Guid.Parse(identity.ObjectId!));
+        AddTestingStaffHeaders(client, actorId, Guid.Parse(identity.TenantId!), identity.UserPrincipalName!);
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
@@ -3862,7 +3837,7 @@ public sealed partial class PatronJourneyTests
             await using var seed = connection.CreateCommand();
             seed.CommandText =
                 """
-                DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @objectId);
+                DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 DECLARE @foundTagId bigint = (SELECT [Id] FROM [asap].[WorkflowTag] WHERE [Code] = N'polaris_bib_found');
                 INSERT INTO [asap].[TitleRequest]
@@ -3910,7 +3885,7 @@ public sealed partial class PatronJourneyTests
             closedId = reader.GetInt64(4);
         }
 
-        AddTestingStaffHeaders(client, actorId, Guid.Parse(identity.TenantId!), Guid.Parse(identity.ObjectId!));
+        AddTestingStaffHeaders(client, actorId, Guid.Parse(identity.TenantId!), identity.UserPrincipalName!);
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
@@ -4059,7 +4034,7 @@ public sealed partial class PatronJourneyTests
             await using var seed = connection.CreateCommand();
             seed.CommandText =
                 """
-                DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @objectId);
+                DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
                     ([LegacyId], [LibraryOrganizationId], [Barcode], [Email], [Title], [Author], [Identifier], [Notes],
@@ -4093,7 +4068,7 @@ public sealed partial class PatronJourneyTests
             retainedId = reader.GetInt64(2);
         }
 
-        AddTestingStaffHeaders(client, actorId, Guid.Parse(identity.TenantId!), Guid.Parse(identity.ObjectId!));
+        AddTestingStaffHeaders(client, actorId, Guid.Parse(identity.TenantId!), identity.UserPrincipalName!);
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
@@ -4185,7 +4160,7 @@ public sealed partial class PatronJourneyTests
             seed.CommandText =
                 """
                 DECLARE @actorId bigint = (
-                    SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @objectId);
+                    SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (
                     SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
@@ -4212,7 +4187,6 @@ public sealed partial class PatronJourneyTests
 
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actorId.ToString());
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
-        client.DefaultRequestHeaders.Add("X-ASAP-Test-Object-Id", identity.ObjectId);
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add(
@@ -4278,7 +4252,7 @@ public sealed partial class PatronJourneyTests
             seed.CommandText =
                 """
                 DECLARE @actorId bigint = (
-                    SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @objectId);
+                    SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (
                     SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
@@ -4297,7 +4271,6 @@ public sealed partial class PatronJourneyTests
 
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actorId.ToString());
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
-        client.DefaultRequestHeaders.Add("X-ASAP-Test-Object-Id", identity.ObjectId);
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add(
@@ -4351,7 +4324,7 @@ public sealed partial class PatronJourneyTests
             seed.CommandText =
                 """
                 DECLARE @actorId bigint = (
-                    SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @objectId);
+                    SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (
                     SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
@@ -4370,7 +4343,6 @@ public sealed partial class PatronJourneyTests
 
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actorId.ToString());
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
-        client.DefaultRequestHeaders.Add("X-ASAP-Test-Object-Id", identity.ObjectId);
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add(
@@ -4448,7 +4420,7 @@ public sealed partial class PatronJourneyTests
             seed.CommandText =
                 """
                 DECLARE @actorId bigint = (
-                    SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @objectId);
+                    SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (
                     SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
@@ -4467,7 +4439,6 @@ public sealed partial class PatronJourneyTests
 
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actorId.ToString());
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
-        client.DefaultRequestHeaders.Add("X-ASAP-Test-Object-Id", identity.ObjectId);
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add(
@@ -4542,7 +4513,7 @@ public sealed partial class PatronJourneyTests
             seed.CommandText =
                 """
                 DECLARE @actorId bigint = (
-                    SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @objectId);
+                    SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (
                     SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
@@ -4561,7 +4532,6 @@ public sealed partial class PatronJourneyTests
 
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actorId.ToString());
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
-        client.DefaultRequestHeaders.Add("X-ASAP-Test-Object-Id", identity.ObjectId);
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add(
@@ -4630,7 +4600,7 @@ public sealed partial class PatronJourneyTests
             seed.CommandText =
                 """
                 DECLARE @actorId bigint = (
-                    SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @objectId);
+                    SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (
                     SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
@@ -4649,7 +4619,6 @@ public sealed partial class PatronJourneyTests
 
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actorId.ToString());
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
-        client.DefaultRequestHeaders.Add("X-ASAP-Test-Object-Id", identity.ObjectId);
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add(
@@ -4702,7 +4671,7 @@ public sealed partial class PatronJourneyTests
             seed.CommandText =
                 """
                 DECLARE @actorId bigint = (
-                    SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @objectId);
+                    SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (
                     SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
@@ -4721,7 +4690,6 @@ public sealed partial class PatronJourneyTests
 
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actorId.ToString());
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
-        client.DefaultRequestHeaders.Add("X-ASAP-Test-Object-Id", identity.ObjectId);
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add(
@@ -4791,7 +4759,7 @@ public sealed partial class PatronJourneyTests
             seed.CommandText =
                 """
                 DECLARE @actorId bigint = (
-                    SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @objectId);
+                    SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (
                     SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
@@ -4818,7 +4786,6 @@ public sealed partial class PatronJourneyTests
 
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actorId.ToString());
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
-        client.DefaultRequestHeaders.Add("X-ASAP-Test-Object-Id", identity.ObjectId);
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add(
@@ -4886,7 +4853,7 @@ public sealed partial class PatronJourneyTests
             await using var seed = connection.CreateCommand();
             seed.CommandText =
                 """
-                DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @objectId);
+                DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
                     ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
@@ -4917,7 +4884,7 @@ public sealed partial class PatronJourneyTests
             requestId = reader.GetInt64(1);
         }
 
-        AddTestingStaffHeaders(client, actorId, Guid.Parse(identity.TenantId!), Guid.Parse(identity.ObjectId!));
+        AddTestingStaffHeaders(client, actorId, Guid.Parse(identity.TenantId!), identity.UserPrincipalName!);
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
@@ -4985,7 +4952,7 @@ public sealed partial class PatronJourneyTests
             await using var seed = connection.CreateCommand();
             seed.CommandText =
                 """
-                DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @objectId);
+                DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
                     ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
@@ -5001,7 +4968,7 @@ public sealed partial class PatronJourneyTests
             requestId = reader.GetInt64(1);
         }
 
-        AddTestingStaffHeaders(client, actorId, Guid.Parse(identity.TenantId!), Guid.Parse(identity.ObjectId!));
+        AddTestingStaffHeaders(client, actorId, Guid.Parse(identity.TenantId!), identity.UserPrincipalName!);
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
@@ -5101,7 +5068,7 @@ public sealed partial class PatronJourneyTests
             }));
         using var client = holdFactory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
         var actor = await ReadConfiguredSuperAdminAsync();
-        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
         var requestId = await SeedPendingHoldRequestAsync("Late reply result title", "20000000002132", "9032");
         using var request = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}");
@@ -5197,7 +5164,7 @@ public sealed partial class PatronJourneyTests
             seed.CommandText =
                 """
                 DECLARE @actorId bigint = (
-                    SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @objectId);
+                    SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (
                     SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
@@ -5224,7 +5191,6 @@ public sealed partial class PatronJourneyTests
 
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actorId.ToString());
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
-        client.DefaultRequestHeaders.Add("X-ASAP-Test-Object-Id", identity.ObjectId);
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add(
@@ -5622,7 +5588,7 @@ public sealed partial class PatronJourneyTests
             await using var seed = connection.CreateCommand();
             seed.CommandText =
                 """
-                DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @objectId);
+                DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
                     ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
@@ -5640,7 +5606,6 @@ public sealed partial class PatronJourneyTests
 
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actorId.ToString());
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
-        client.DefaultRequestHeaders.Add("X-ASAP-Test-Object-Id", identity.ObjectId);
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
@@ -5711,7 +5676,7 @@ public sealed partial class PatronJourneyTests
             await using var seed = connection.CreateCommand();
             seed.CommandText =
                 """
-                DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @objectId);
+                DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
                     ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
@@ -5737,7 +5702,6 @@ public sealed partial class PatronJourneyTests
 
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actorId.ToString());
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
-        client.DefaultRequestHeaders.Add("X-ASAP-Test-Object-Id", identity.ObjectId);
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
@@ -5792,7 +5756,7 @@ public sealed partial class PatronJourneyTests
             await using var seed = connection.CreateCommand();
             seed.CommandText =
                 """
-                DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @objectId);
+                DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
                     ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
@@ -5816,7 +5780,6 @@ public sealed partial class PatronJourneyTests
 
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actorId.ToString());
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
-        client.DefaultRequestHeaders.Add("X-ASAP-Test-Object-Id", identity.ObjectId);
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
@@ -5934,7 +5897,7 @@ public sealed partial class PatronJourneyTests
             seed.CommandText =
                 """
                 DECLARE @actorId bigint = (
-                    SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @objectId);
+                    SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (
                     SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
@@ -5953,7 +5916,6 @@ public sealed partial class PatronJourneyTests
 
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actorId.ToString());
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
-        client.DefaultRequestHeaders.Add("X-ASAP-Test-Object-Id", identity.ObjectId);
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add(
@@ -6068,7 +6030,7 @@ public sealed partial class PatronJourneyTests
     {
         var actor = await ReadConfiguredSuperAdminAsync();
         using var client = factory!.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
-        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
 
         var correlated = await SeedOperatorResolutionAsync("correlated", "create_started");
@@ -6144,7 +6106,7 @@ public sealed partial class PatronJourneyTests
     {
         var actor = await ReadConfiguredSuperAdminAsync();
         using var client = factory!.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
-        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
 
         var staleRequest = await SeedOperatorResolutionAsync("stale-request", "create_started");
@@ -6205,7 +6167,7 @@ public sealed partial class PatronJourneyTests
     {
         var actor = await ReadConfiguredSuperAdminAsync();
         using var client = factory!.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
-        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
         var reconcileSeed = await SeedOperatorResolutionAsync("guard-reconcile", "create_started");
         var resolveSeed = await SeedOperatorResolutionAsync("guard-resolve", "create_started");
@@ -6233,7 +6195,7 @@ public sealed partial class PatronJourneyTests
     {
         var actor = await ReadConfiguredSuperAdminAsync();
         using var client = factory!.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
-        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
 
         var createProvider = ScriptedHoldProvider.AmbiguousCreate();
@@ -6247,7 +6209,7 @@ public sealed partial class PatronJourneyTests
                      })))
         using (var createClient = createFactory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true }))
         {
-            AddTestingStaffHeaders(createClient, actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+            AddTestingStaffHeaders(createClient, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
             createClient.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(createClient));
             var requestId = await SeedPendingHoldRequestAsync("Create marker fence", "20000000003201", "93201");
             await InstallMarkerFenceTriggerAsync("create_started");
@@ -6280,7 +6242,7 @@ public sealed partial class PatronJourneyTests
                      })))
         using (var replyClient = replyFactory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true }))
         {
-            AddTestingStaffHeaders(replyClient, actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+            AddTestingStaffHeaders(replyClient, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
             replyClient.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(replyClient));
             var requestId = await SeedPendingHoldRequestAsync("Reply marker fence", "20000000003202", "93202");
             await InstallMarkerFenceTriggerAsync("reply_started");
@@ -6551,12 +6513,12 @@ public sealed partial class PatronJourneyTests
 
                 INSERT INTO [asap].[EmailOutbox]
                     ([OrganizationId], [BusinessKey], [DeliveryClass], [RecipientStaffUserId],
-                     [RecipientEntraTenantId], [RecipientEntraObjectId], [AuthorizationOrganizationId],
+                     [RecipientAuthenticationEmail], [AuthorizationOrganizationId],
                      [RecipientAddressKind], [ToAddress], [FromAddress], [Subject], [BodyText],
                      [Status], [NextAttemptUtc], [CreatedUtc])
                 OUTPUT inserted.[Id]
                 SELECT 2, @businessKey, N'staff_authorization_sensitive', [Id],
-                       @tenantId, @objectId, 2, N'notification_email',
+                       N'OUTBOX-INACTIVE@EXAMPLE.ORG', 2, N'notification_email',
                        N'outbox-inactive@example.org', N'asap@example.org', N'Sensitive update', N'Body',
                        N'pending', SYSUTCDATETIME(), SYSUTCDATETIME()
                 FROM @staff;
@@ -6599,7 +6561,7 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task SensitiveOutboxSuppressesAfterStaffDeactivationMoveDemotionOrRebind()
+    public async Task SensitiveOutboxSuppressesAfterStaffDeactivationMoveDemotionOrEmailChange()
     {
         const int otherOrganizationId = 91230;
         await using (var connection = new SqlConnection(databaseConnectionString))
@@ -6622,7 +6584,7 @@ public sealed partial class PatronJourneyTests
             "demoted",
             role: "super_admin",
             staffOrganizationId: 1);
-        var rebound = await SeedSensitiveOutboxAsync("rebound");
+        var emailChanged = await SeedSensitiveOutboxAsync("email-change");
         await using (var connection = new SqlConnection(databaseConnectionString))
         {
             await connection.OpenAsync();
@@ -6634,19 +6596,22 @@ public sealed partial class PatronJourneyTests
                 UPDATE [asap].[StaffUser]
                 SET [Role] = N'admin', [OrganizationId] = @otherOrganizationId
                 WHERE [Id] = @demotedId;
-                UPDATE [asap].[StaffUser] SET [EntraObjectId] = NEWID() WHERE [Id] = @reboundId;
+                UPDATE [asap].[StaffUser]
+                SET [UserPrincipalName] = N'changed-authentication@example.org',
+                    [NormalizedUserPrincipalName] = N'CHANGED-AUTHENTICATION@EXAMPLE.ORG'
+                WHERE [Id] = @emailChangedId;
                 """;
             mutate.Parameters.AddWithValue("@deactivatedId", deactivated.StaffUserId);
             mutate.Parameters.AddWithValue("@movedId", moved.StaffUserId);
             mutate.Parameters.AddWithValue("@demotedId", demoted.StaffUserId);
-            mutate.Parameters.AddWithValue("@reboundId", rebound.StaffUserId);
+            mutate.Parameters.AddWithValue("@emailChangedId", emailChanged.StaffUserId);
             mutate.Parameters.AddWithValue("@otherOrganizationId", otherOrganizationId);
             Assert.AreEqual(4, await mutate.ExecuteNonQueryAsync());
         }
 
         var sender = new RecordingEmailSender();
         var jobs = CreateEmailOutboxJobs(sender, EmailOutboxRuntimeOptions.Default);
-        foreach (var outbox in new[] { deactivated, moved, demoted, rebound })
+        foreach (var outbox in new[] { deactivated, moved, demoted, emailChanged })
         {
             await jobs.DeliverAsync(outbox.OutboxId, CancellationToken.None);
             var state = await ReadOutboxStateAsync(outbox.OutboxId);
@@ -6654,6 +6619,28 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("recipient_authorization_changed", state.SuppressionReason);
         }
         Assert.AreEqual(0, sender.Envelopes.Count);
+    }
+
+    [TestMethod]
+    public async Task SensitiveOutboxDeliveryDoesNotDependOnStoredOid()
+    {
+        var queued = await SeedSensitiveOutboxAsync("oid-metadata-change");
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var mutate = new SqlCommand(
+                "UPDATE [asap].[StaffUser] SET [EntraObjectId] = NEWID() WHERE [Id] = @id;",
+                connection);
+            mutate.Parameters.AddWithValue("@id", queued.StaffUserId);
+            Assert.AreEqual(1, await mutate.ExecuteNonQueryAsync());
+        }
+
+        var sender = new RecordingEmailSender();
+        await CreateEmailOutboxJobs(sender, EmailOutboxRuntimeOptions.Default)
+            .DeliverAsync(queued.OutboxId, CancellationToken.None);
+
+        Assert.HasCount(1, sender.Envelopes);
+        Assert.AreEqual("sent", (await ReadOutboxStateAsync(queued.OutboxId)).Status);
     }
 
     [TestMethod]
@@ -7246,7 +7233,7 @@ public sealed partial class PatronJourneyTests
         WebApplicationFactory<Program> applicationFactory,
         long staffUserId,
         Guid tenantId,
-        Guid objectId)
+        string authenticationEmail)
     {
         var cookieOptions = applicationFactory.Services
             .GetRequiredService<IOptionsMonitor<CookieAuthenticationOptions>>()
@@ -7255,7 +7242,7 @@ public sealed partial class PatronJourneyTests
             [
                 new Claim(StaffClaims.StaffUserId, staffUserId.ToString()),
                 new Claim(StaffClaims.TenantId, tenantId.ToString()),
-                new Claim(StaffClaims.ObjectId, objectId.ToString())
+                new Claim(StaffClaims.AuthenticationEmail, authenticationEmail)
             ],
             StaffAuthenticationRegistration.CookieScheme);
         var properties = new AuthenticationProperties
@@ -7287,11 +7274,11 @@ public sealed partial class PatronJourneyTests
         HttpClient client,
         long staffUserId,
         Guid tenantId,
-        Guid objectId)
+        string authenticationEmail)
     {
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", staffUserId.ToString());
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", tenantId.ToString());
-        client.DefaultRequestHeaders.Add("X-ASAP-Test-Object-Id", objectId.ToString());
+        client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Email", authenticationEmail);
     }
 
     private static async Task<string> ReadAntiforgeryTokenAsync(HttpClient client)
@@ -7549,9 +7536,9 @@ public sealed partial class PatronJourneyTests
     {
         var configured = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
         var result = await factory!.Services.GetRequiredService<StaffEligibilityService>()
-            .FindByBindingAsync(
+            .FindByEmailAsync(
+                configured.UserPrincipalName!.ToUpperInvariant(),
                 Guid.Parse(configured.TenantId!),
-                Guid.Parse(configured.ObjectId!),
                 null,
                 StaffRoleRequirement.SuperAdmin,
                 requireParticipation: true,
@@ -7562,9 +7549,15 @@ public sealed partial class PatronJourneyTests
 
     private async Task<CurrentStaff> ReadStaffMetadataActorAsync(StaffMetadataRaceSeed seeded)
     {
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var context = await contextFactory.CreateDbContextAsync();
+        var authenticationEmail = await context.StaffUsers
+            .Where(item => item.Id == seeded.ActorId)
+            .Select(item => item.NormalizedUserPrincipalName)
+            .SingleAsync();
         var result = await factory!.Services.GetRequiredService<StaffEligibilityService>()
             .EvaluateAsync(
-                new StaffIdentityEvidence(seeded.ActorId, seeded.TenantId, seeded.ActorObjectId),
+                new StaffIdentityEvidence(seeded.ActorId, authenticationEmail!, seeded.TenantId),
                 2,
                 StaffRoleRequirement.Admin,
                 requireParticipation: true,
@@ -7657,8 +7650,8 @@ public sealed partial class PatronJourneyTests
             INSERT INTO [asap].[StaffUser]
                 ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
                  [DisplayName], [NotificationEmail], [Role], [OrganizationId], [IsActive])
-            VALUES (@tenantId, @objectId, @suffix + N'@example.org', UPPER(@suffix + N'@example.org'),
-                    @suffix, @suffix + N'@example.org', N'staff', 2, 1);
+            VALUES (@tenantId, @objectId, N'claim-' + @suffix + N'@example.org', UPPER(N'claim-' + @suffix + N'@example.org'),
+                    @suffix, N'claim-' + @suffix + N'@example.org', N'staff', 2, 1);
             DECLARE @staffId bigint = SCOPE_IDENTITY();
             INSERT INTO [asap].[FormatAutoClaimRule]
                 ([LibraryOrganizationId], [MaterialFormatId], [StaffUserId], [IsActive], [CreatedUtc])
@@ -7733,8 +7726,8 @@ public sealed partial class PatronJourneyTests
             INSERT INTO [asap].[StaffUser]
                 ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
                  [DisplayName], [NotificationEmail], [Role], [OrganizationId], [IsActive])
-            VALUES (@tenantId, @objectId, @suffix + N'@example.org', UPPER(@suffix + N'@example.org'),
-                    @suffix, @suffix + N'@example.org', N'staff', 2, 1);
+            VALUES (@tenantId, @objectId, N'auto-claim-' + @suffix + N'@example.org', UPPER(N'auto-claim-' + @suffix + N'@example.org'),
+                    @suffix, N'auto-claim-' + @suffix + N'@example.org', N'staff', 2, 1);
             DECLARE @staffId bigint = SCOPE_IDENTITY();
             INSERT INTO [asap].[FormatAutoClaimRule]
                 ([LibraryOrganizationId], [MaterialFormatId], [StaffUserId], [IsActive], [CreatedUtc])
@@ -8025,8 +8018,8 @@ public sealed partial class PatronJourneyTests
                 ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
                  [DisplayName], [NotificationEmail], [Role], [OrganizationId], [IsActive])
             VALUES
-                (@tenantId, NEWID(), @suffix + N'@example.org', UPPER(@suffix + N'@example.org'),
-                 N'Race claimant ' + @suffix, @suffix + N'@example.org', @staffRole, @staffOrganizationId, 1);
+                (@tenantId, NEWID(), N'additional-copy-' + @suffix + N'@example.org', UPPER(N'additional-copy-' + @suffix + N'@example.org'),
+                 N'Race claimant ' + @suffix, N'additional-copy-' + @suffix + N'@example.org', @staffRole, @staffOrganizationId, 1);
             DECLARE @staffId bigint = SCOPE_IDENTITY();
             DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code]=N'book');
 
@@ -8183,14 +8176,14 @@ public sealed partial class PatronJourneyTests
             END;
 
             DECLARE @superId bigint = (
-                SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = @superObjectId);
+                SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
             INSERT INTO [asap].[StaffUser]
                 ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
                  [DisplayName], [NotificationEmail], [Role], [OrganizationId], [IsActive],
                  [WeeklyActionSummaryEnabled], [PurchaseReminderDefault], [AdditionalCopyReminderDefault],
                  [DefaultMineUnclaimedFilter])
             VALUES
-                (@tenantId, @staffObjectId, N'browser.staff@example.org', N'browser.staff@example.org',
+                (@tenantId, @staffObjectId, N'browser.staff@example.org', N'BROWSER.STAFF@EXAMPLE.ORG',
                  N'Browser Staff', N'browser.staff@example.org', N'staff', 2, 1, 0, 0, 0, 0);
             DECLARE @staffId bigint = SCOPE_IDENTITY();
             INSERT INTO [asap].[StaffUser]
@@ -8200,7 +8193,7 @@ public sealed partial class PatronJourneyTests
                  [DefaultMineUnclaimedFilter])
             VALUES
                 (@tenantId, @invalidClaimantObjectId, N'browser.invalid-copy@example.org',
-                 N'browser.invalid-copy@example.org', N'Browser Invalid Claimant',
+                 N'BROWSER.INVALID-COPY@EXAMPLE.ORG', N'Browser Invalid Claimant',
                  N'browser.invalid-copy@example.org', N'staff', 2, 1, 0, 0, 0, 0);
             DECLARE @invalidClaimantId bigint = SCOPE_IDENTITY();
             INSERT INTO [asap].[StaffUser]
@@ -8221,8 +8214,8 @@ public sealed partial class PatronJourneyTests
                 ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
                  [DisplayName], [Role], [OrganizationId], [IsActive])
             VALUES
-                (@tenantId, NULL, N'browser.unbound@example.org', N'BROWSER.UNBOUND@EXAMPLE.ORG',
-                 N'Browser Unbound Staff', N'staff', 2, 0);
+                (NULL, NULL, N'browser.unbound@example.org', N'BROWSER.UNBOUND@EXAMPLE.ORG',
+                 N'Browser Never Signed In Staff', N'staff', 2, 1);
             DECLARE @unboundStaffId bigint = SCOPE_IDENTITY();
             DECLARE @formatId bigint = (
                 SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
@@ -8589,12 +8582,12 @@ public sealed partial class PatronJourneyTests
 
             INSERT INTO [asap].[EmailOutbox]
                 ([OrganizationId], [BusinessKey], [DeliveryClass], [RecipientStaffUserId],
-                 [RecipientEntraTenantId], [RecipientEntraObjectId], [AuthorizationOrganizationId],
+                 [RecipientAuthenticationEmail], [AuthorizationOrganizationId],
                  [RecipientAddressKind], [ToAddress], [FromAddress], [Subject], [BodyText],
                  [Status], [NextAttemptUtc], [CreatedUtc])
             OUTPUT inserted.[Id], inserted.[RecipientStaffUserId]
             SELECT @authorizationOrganizationId, @businessKey, N'staff_authorization_sensitive', [Id],
-                   @tenantId, @objectId, @authorizationOrganizationId, @addressKind,
+                   UPPER(@email), @authorizationOrganizationId, @addressKind,
                    @toAddress, N'asap@example.org', N'Sensitive update', N'Body',
                    N'pending', SYSUTCDATETIME(), SYSUTCDATETIME()
             FROM @staff;

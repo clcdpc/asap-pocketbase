@@ -22,8 +22,7 @@ internal sealed record ClaimedEmail(
     string? BusinessKey,
     string DeliveryClass,
     long? RecipientStaffUserId,
-    Guid? RecipientEntraTenantId,
-    Guid? RecipientEntraObjectId,
+    string? RecipientAuthenticationEmail,
     int? AuthorizationOrganizationId,
     string? RecipientAddressKind,
     string ToAddress,
@@ -46,10 +45,6 @@ public sealed class EmailOutboxJobs(
     ILogger<EmailOutboxJobs> logger)
 {
     private readonly string connectionString = configuration.ConnectionStrings.AsapDatabase!;
-    private readonly HashSet<Guid> allowedTenantIds = configuration.Authentication.Entra.AllowedTenantIds!
-        .Select(Guid.Parse)
-        .ToHashSet();
-
     [AutomaticRetry(Attempts = 0)]
     [Queue("asap-email")]
     public async Task DeliverAsync(long outboxId, CancellationToken cancellationToken)
@@ -216,7 +211,7 @@ public sealed class EmailOutboxJobs(
             OUTPUT
                 inserted.[Id], inserted.[OrganizationId], inserted.[BusinessKey],
                 inserted.[DeliveryClass], inserted.[RecipientStaffUserId],
-                inserted.[RecipientEntraTenantId], inserted.[RecipientEntraObjectId],
+                inserted.[RecipientAuthenticationEmail],
                 inserted.[AuthorizationOrganizationId], inserted.[RecipientAddressKind],
                 inserted.[ToAddress], inserted.[FromAddress], inserted.[FromName],
                 inserted.[Subject], inserted.[BodyText], inserted.[BodyHtml],
@@ -242,20 +237,19 @@ public sealed class EmailOutboxJobs(
                     NullableString(reader, 2),
                     reader.GetString(3),
                     NullableInt64(reader, 4),
-                    NullableGuid(reader, 5),
-                    NullableGuid(reader, 6),
-                    NullableInt32(reader, 7),
-                    NullableString(reader, 8),
+                    NullableString(reader, 5),
+                    NullableInt32(reader, 6),
+                    NullableString(reader, 7),
+                    reader.GetString(8),
                     reader.GetString(9),
-                    reader.GetString(10),
-                    NullableString(reader, 11),
-                    reader.GetString(12),
+                    NullableString(reader, 10),
+                    reader.GetString(11),
+                    NullableString(reader, 12),
                     NullableString(reader, 13),
-                    NullableString(reader, 14),
-                    reader.GetInt32(15),
-                    reader.GetDateTime(16),
-                    reader.GetGuid(17),
-                    (byte[])reader[18]);
+                    reader.GetInt32(14),
+                    reader.GetDateTime(15),
+                    reader.GetGuid(16),
+                    (byte[])reader[17]);
             }
         }
 
@@ -273,10 +267,8 @@ public sealed class EmailOutboxJobs(
         }
 
         if (!claim.RecipientStaffUserId.HasValue ||
-            !claim.RecipientEntraTenantId.HasValue ||
-            !claim.RecipientEntraObjectId.HasValue ||
-            !claim.AuthorizationOrganizationId.HasValue ||
-            !allowedTenantIds.Contains(claim.RecipientEntraTenantId.Value))
+            string.IsNullOrWhiteSpace(claim.RecipientAuthenticationEmail) ||
+            !claim.AuthorizationOrganizationId.HasValue)
         {
             return "recipient_authorization_changed";
         }
@@ -297,8 +289,7 @@ public sealed class EmailOutboxJobs(
                 ON organization.[Id] = @authorizationOrganizationId
                AND organization.[IsActive] = 1
             WHERE staff.[Id] = @staffUserId
-              AND staff.[EntraTenantId] = @tenantId
-              AND staff.[EntraObjectId] = @objectId
+              AND staff.[NormalizedUserPrincipalName] = @authenticationEmail
               AND staff.[IsActive] = 1
               AND
               (
@@ -309,8 +300,7 @@ public sealed class EmailOutboxJobs(
             connection);
         command.Parameters.Add("@addressKind", SqlDbType.NVarChar, 32).Value = claim.RecipientAddressKind!;
         command.Parameters.Add("@staffUserId", SqlDbType.BigInt).Value = claim.RecipientStaffUserId.Value;
-        command.Parameters.Add("@tenantId", SqlDbType.UniqueIdentifier).Value = claim.RecipientEntraTenantId.Value;
-        command.Parameters.Add("@objectId", SqlDbType.UniqueIdentifier).Value = claim.RecipientEntraObjectId.Value;
+        command.Parameters.Add("@authenticationEmail", SqlDbType.NVarChar, 320).Value = claim.RecipientAuthenticationEmail;
         command.Parameters.Add("@authorizationOrganizationId", SqlDbType.Int).Value =
             claim.AuthorizationOrganizationId.Value;
         var address = Convert.ToString(await command.ExecuteScalarAsync(cancellationToken));

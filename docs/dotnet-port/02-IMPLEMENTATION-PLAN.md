@@ -137,10 +137,10 @@ Migration work in this slice:
 
 Implement:
 
-- Entra OIDC, issuer/allowed-tenant validation, durable (`tid`,`oid`) identity, and initial super-admin bootstrap from configured tenant/object ID plus readable UPN/email;
-- `StaffUser` local allowlist/role/org authorization keyed only by (`EntraTenantId`,`EntraObjectId`), with readable UPN/display plus app-owned notification contact data retained beside it. The auth ticket carries `StaffUserId` and the validated sign-in (`tid`,`oid`) and every authenticated request reloads the row and requires the common current-eligibility predicate in `01-PORTING-SPEC.md` section 7.6: exact ticket tuple equality, current loaded `AllowedTenantIds`, active/role/Organization and applicable participation authorization, so an explicit durable rebind invalidates old cookies immediately. Staff/admin rows reference one non-system library even when that organization is inactive; library deactivation leaves StaffUser lifecycle state untouched, library reactivation restores eligibility for already-active staff, and explicit staff reactivation is rejected while its library remains inactive. Role/organization/deactivation mutations use the shared StaffUser serialization lock and atomically deactivate invalid auto-claim rules, clear invalid open TitleRequest claims with events, clear invalid open AdditionalCopy claims with Notes, preserve closed history, and audit per-type cleanup counts;
+- Entra OIDC with issuer/allowed-tenant validation, normalized-email local authorization, last-observed `tid`/`oid` metadata, and bootstrap by configured email;
+- `StaffUser` authorization keyed by unique normalized email. Tickets carry StaffUser ID, normalized authentication email, and sign-in tenant; every request reloads current state, compares email, checks current tenant allowance, and applies role/organization/participation rules. Stored OID is never compared. Existing lifecycle locking and scope-contraction cleanup remain unchanged;
 - complete current staff profile/preferences: weekly summary enabled/email, purchase-reminder default, additional-copy-reminder default, and mine/unclaimed default filter; preserve them through schema, migration, profile DTO/API, and frontend behavior; define `NotificationEmail` as admin-managed/nullable app contact data that Entra sign-in never auto-repopulates, and make the intentional old-versus-target recipient normalization migration-visible;
-- concurrency-safe final-usable-super-admin invariant using the common eligibility predicate and transaction-owned exclusive `sp_getapplock` resource (`ASAP:ActiveSuperAdminInvariant`) before row locks and any mutation that can reduce eligibility, including identity rebind; invariant violation returns 409. Validate staged external tenant-policy changes against the same predicate, and fail startup closed if a direct configuration edit would leave zero usable super-admins;
+- concurrency-safe final-usable-super-admin invariant based on active valid email identity and the existing transaction-owned application lock; invariant violation returns 409;
 - anonymous `/staff` shell + explicit Microsoft sign-in;
 - staff session/profile behavior;
 - scoped request listing, current full-list/client-filtering behavior, deep-link request opening;
@@ -154,7 +154,7 @@ Implement:
 
 Migration work:
 
-- StaffUser strict Entra identity mapping: active users require explicit tenant/object-ID bindings from the operator-supplied staff identity map; never derive authorization identity from UPN/email;
+- StaffUser migration from valid unique source emails with null initial Entra metadata and no operator identity map;
 - primary/weekly notification recipient migration using the binding precedence in the pack plus a deterministic old-versus-target recipient/eligibility delta report; explicitly surface newly eligible weekly-summary recipients, changed ordinary-notification recipients, and target-null recipients;
 - historical request claims and events;
 - map every imported operational claimant, then validate the target claimant independently of Organization participation; clear/report unmapped, inactive, or out-of-scope claims for both request types, preserve valid claims and closed attribution, and prove the resulting eligibility predicate in reconciliation (`04-MIGRATION-CUTOVER.md` section 6.3);
@@ -187,7 +187,7 @@ Reopening is relationship activation: lock Organization -> retained StaffUser ->
 Implement:
 
 - organization discovery/activation/deactivation and manual reference refresh, including transactionally revoking patron sessions on deactivation and preserving the session-issuance race invariant;
-- staff account management, durable Entra tenant/object-ID provisioning/rebinding, readable UPN/profile updates, role transitions, activation/deactivation, exact old-cookie invalidation on rebind, and atomic StaffUser-serialized scope-contraction cleanup of invalid auto-claim rules/open TitleRequest and AdditionalCopy claims;
+- staff account creation from email/role/library, unique authentication-email updates, role transitions, activation/deactivation, old-cookie invalidation on email change, and atomic scope-contraction cleanup;
 - administrative audit and scoped audit-history UI;
 - the complete normative configuration model from `13-SETTINGS-SCOPE-INVENTORY.md`; do not recreate a catch-all `Settings` table or EAV store;
 - system-only `SystemSettings` and `PolarisSettings`; field-inheritable `WorkflowSettings`, `PatronSettings`, and `EmailSettings`;
@@ -262,7 +262,7 @@ For this background slice, implement `01-PORTING-SPEC.md` sections 23.2 and 9.2 
 
 ### Slice 7 - Migration system hardening and legacy-link compatibility
 
-Make the migration-time active-bound-super-admin cutover gate explicit: after StaffUser import require at least one active `super_admin` with a valid allowed-tenant durable Entra binding before the application can start. If none exists, provision/promote the configured bootstrap identity inside `Asap.Migration`, report the target-only intervention, revalidate identity uniqueness/tenant allowance, and re-run the gate; never depend on normal startup bootstrap once StaffUser rows have been imported.
+Make the migration-time usable-super-admin cutover gate explicit: require at least one active system super-admin with a valid authentication email. If none exists, match/provision/promote the configured bootstrap email inside `Asap.Migration`, report the intervention, and re-run the gate.
 
 The migration executable has been growing alongside prior slices. This slice makes it production-grade as one coherent system:
 
@@ -270,7 +270,7 @@ The migration executable has been growing alongside prior slices. This slice mak
 - direct stopped-PocketBase SQLite + file-storage extraction;
 - normalized UTF-8 JSON directory/package + manifest;
 - self-contained `win-x64` migration artifact, including SQLite native/runtime dependencies, exercised on a representative old PocketBase server;
-- operator-supplied staff Entra identity map for active users (`PocketBaseStaffUserId` -> tenant ID/object ID + readable UPN/email);
+- validated source staff emails as direct authentication identities; no operator identity map;
 - frozen `effective-legacy-runtime-config.json` only for system/global SQL-bound values requiring runtime fallback resolution, plus `effective-legacy-operational-config.json` for legacy cron/queue-limit parity; library-scoped settings remain in organization-aware domain exports; reusable secret plaintext/hashes are never serialized in either snapshot;
 - dependency-ordered phases;
 - fresh migration-target enforcement: DACPAC/structural seed rows are allowed, but runtime/business/bootstrap data must be empty;

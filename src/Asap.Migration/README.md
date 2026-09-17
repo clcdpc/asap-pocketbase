@@ -6,8 +6,8 @@ and its file storage directly; it does not start PocketBase or call the web
 application.
 
 The executable is pinned to PocketBase source
-`150b30b776565194260cc327eeeffdfb46475e81`, DACPAC schema `5`, migration
-contract `slice-05`, and export format `1`. Use `describe-contract` for the
+`150b30b776565194260cc327eeeffdfb46475e81`, DACPAC schema `6`, migration
+contract `email-identity-v1`, and export format `1`. Use `describe-contract` for the
 machine-readable contract.
 
 ## Commands
@@ -23,7 +23,7 @@ Asap.Migration export --source <data.db> --storage <storage-dir> --output <packa
 Asap.Migration validate --package <package-dir> [--external-config <path>]
 
 Asap.Migration import --package <package-dir> --connection-string-env <name> \
-  --staff-identity-map <path> --allowed-tenant-ids <comma-separated-guids> --report <path> \
+  --allowed-tenant-ids <comma-separated-guids> --report <path> \
   --external-config <path> [--postmark-token-env <name>]
 
 Asap.Migration reconcile --package <package-dir> --connection-string-env <name> \
@@ -39,11 +39,11 @@ permitted structural/static seeds; the application, web host, Hangfire, and
 workers must remain stopped. A failed import is reset or recreated before a
 retry; the importer never resumes a partial target.
 
-Staff identity is supplied by an operator-controlled map of source staff IDs
-to Entra tenant/object IDs. The map is checked against the allowed tenants and
-is the only durable identity source; UPNs and email addresses are not used to
-derive identity. A configured matching bootstrap tuple may promote the
-existing target bootstrap account or insert the mapped account through the
+Staff identity comes directly from each source staff user's valid real email.
+Active rows with missing, invalid, placeholder, or duplicate normalized emails
+block import before SQL mutation. Entra tenant/object metadata imports as null
+and is populated by later successful sign-ins. A configured matching bootstrap
+email may promote the existing row or insert a new super-admin through the
 import path. There is no startup repair.
 
 Configuration is reconciled by scope: system defaults, library overrides,
@@ -100,7 +100,7 @@ protected on the target.
 ## Transfer and cleanup
 
 Use a trusted administrator-controlled transfer path with a minimal ACL limited
-to the export/import operators. Do not put packages, identity maps, source
+to the export/import operators. Do not put packages, source
 credentials, or restricted import reports in Git, release assets, ordinary CI
 artifacts, or normal command logs. Keep working copies in a restricted staging
 directory and delete them deliberately only after successful import,

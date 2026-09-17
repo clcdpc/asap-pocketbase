@@ -117,7 +117,7 @@ public static class MigrationCli
         {
             var parsed = ParseOptions(
                 args,
-                ["--package", "--connection-string-env", "--staff-identity-map", "--allowed-tenant-ids", "--report",
+                ["--package", "--connection-string-env", "--allowed-tenant-ids", "--report",
                  "--external-config", "--postmark-token-env"],
                 []);
             var environmentName = Require(parsed.Values, "--connection-string-env");
@@ -129,7 +129,6 @@ public static class MigrationCli
             var result = MigrationImporter.Import(new MigrationImportOptions(
                 Require(parsed.Values, "--package"),
                 connectionString ?? string.Empty,
-                Require(parsed.Values, "--staff-identity-map"),
                 allowedTenantIds,
                 Require(parsed.Values, "--report"),
                 Require(parsed.Values, "--external-config"),
@@ -243,7 +242,7 @@ public static class MigrationCli
         output.WriteLine("      --source-git-sha <40-char-sha> --confirm-source-stopped [--exported-at-utc <timestamp>]");
         output.WriteLine("  Asap.Migration validate --package <package-dir> [--external-config <path>]");
         output.WriteLine("  Asap.Migration import --package <package-dir> --connection-string-env <name>");
-        output.WriteLine("      --staff-identity-map <path> --allowed-tenant-ids <comma-separated-guids> --report <path>");
+        output.WriteLine("      --allowed-tenant-ids <comma-separated-guids> --report <path>");
         output.WriteLine("      --external-config <path> [--postmark-token-env <name>]");
         output.WriteLine("  Asap.Migration reconcile --package <package-dir> --connection-string-env <name> --report <path> --external-config <path>");
         output.WriteLine();

@@ -70,9 +70,9 @@ Rules:
 
 ```text
 Id bigint IDENTITY PK
-EntraTenantId uniqueidentifier NULL
-EntraObjectId uniqueidentifier NULL
-UserPrincipalName nvarchar(320) NULL       -- readable/searchable, not an auth key
+EntraTenantId uniqueidentifier NULL        -- last-observed sign-in metadata
+EntraObjectId uniqueidentifier NULL        -- last-observed sign-in metadata
+UserPrincipalName nvarchar(320) NULL       -- canonical authentication email
 NormalizedUserPrincipalName nvarchar(320) NULL
 DisplayName nvarchar(...) NULL
 NotificationEmail nvarchar(320) NULL
@@ -90,17 +90,17 @@ RowVersion rowversion
 
 Required invariants:
 
-- filtered unique index on `(EntraTenantId, EntraObjectId)` when both are non-null; this pair is the only durable authorization identity;
-- active StaffUser -> both Entra tenant and object ID are non-null; enforce structurally with a CHECK such as `IsActive = 0 OR (EntraTenantId IS NOT NULL AND EntraObjectId IS NOT NULL)`; imported inactive historical rows may remain unbound until an administrator explicitly binds them before reactivation;
-- `UserPrincipalName`/normalized UPN and `DisplayName` are retained for human readability/search and may refresh from validated Entra claims, but are never used to authorize or auto-rebind an account; `NotificationEmail` is separate app-owned contact data and never refreshes from sign-in claims;
+- filtered unique index on `NormalizedUserPrincipalName`; normalized staff email is the case-insensitive local authorization identity;
+- active StaffUser requires a nonblank, normalized, non-placeholder authentication email representation. Entra tenant/object metadata may remain null until first sign-in and is not unique;
+- `UserPrincipalName` is administrator-owned and does not refresh during sign-in. `DisplayName` may refresh from validated claims; `NotificationEmail` remains separate app-owned contact data;
 - super-admin -> Organization 1;
 - staff/admin -> exactly one non-system library Organization; that Organization may be inactive without making the StaffUser row invalid;
-- authorization uses the common current predicate in `01-PORTING-SPEC.md` section 7.6: active StaffUser, exact supplied/current durable identity tuple, membership in the loaded AllowedTenantIds, valid current role/scope, and Organization participation where required. For staff/admin interactive access this includes both `StaffUser.IsActive = 1` and the referenced `Organization.IsActive = 1`. Library deactivation does not mutate `StaffUser.IsActive`; staff reactivation while the referenced library is inactive is rejected; library reactivation restores eligibility for StaffUsers already active;
+- authorization uses current active state, exact ticket/current normalized-email equality, the ticket tenant's membership in `AllowedTenantIds`, valid role/scope, and participation where required. Stored OID is not compared;
 - any role/organization mutation that contracts or moves the StaffUser's resource scope is a transactional lifecycle mutation: in the same SQL transaction, deactivate active `FormatAutoClaimRule` rows outside the new scope; clear that user's claims from open/actionable `TitleRequest` rows outside the new scope with normal TitleRequest events; clear their claims from open `AdditionalCopyRequest` rows outside the new scope with a concise system Notes entry; preserve closed/nonactionable claimant snapshots as history; and write the administrative role/organization change plus per-type cleanup counts to `AdministrativeAudit`. Promotion to `super_admin` broadens scope and needs no cleanup; deactivation uses the same cleanup path with an empty usable scope;
-- at least one usable super-admin under the common current predicate, not just an active role row. Mutations that can remove this eligibility (including rebind) take `sp_getapplock` with `@Resource = 'ASAP:ActiveSuperAdminInvariant'`, `@LockMode = 'Exclusive'`, `@LockOwner = 'Transaction'` before the normal row locks and prospective invariant read; zero remaining means rollback/409. The stopped-app external-config and startup gates separately validate prospective AllowedTenantIds against the same predicate;
+- at least one active system super-admin with a valid authentication email. Mutations that can remove this eligibility take the existing transaction-owned application lock before prospective validation;
 - no PocketBase ID or Polaris staff ID/domain/identity-key fields.
 
-- an authenticated staff ticket carries the `StaffUserId` plus the validated Entra tenant/object tuple used at sign-in. Request authorization always reloads the row, requires exact tuple equality and the current loaded allowed tenant; rebinding the row therefore invalidates old cookies without a separate session table.
+- an authenticated staff ticket carries StaffUser ID, normalized authentication email, and sign-in tenant. Request authorization reloads the row, requires email equality and current tenant allowance, and ignores stored OID.
 
 Concurrency/locking contract: when multiple row categories are required, acquire them in this order: `Organization -> StaffUser -> TitleRequest/AdditionalCopyRequest -> dependent claim/rule/operation rows`; within one category use stable key order. `StaffUser` is the serialization point for lifecycle changes versus claim/rule relationship creation. Relationship writers (`TitleRequest` assignment, `AdditionalCopyRequest` inherited/new assignment and reopening, `FormatAutoClaimRule` changes, automatic rule execution) acquire/re-read the target StaffUser with `UPDLOCK,HOLDLOCK` or an equivalent SQL Server pattern before validating current eligibility. Participation-dependent operations lock/re-read Organization first. Never hold these transactions across external network calls.
 
@@ -687,8 +687,7 @@ OrganizationId int NOT NULL FK Organization
 BusinessKey nvarchar(450) NULL              -- deterministic idempotency key
 DeliveryClass nvarchar(...) NOT NULL CHECK (business_event/staff_authorization_sensitive/operational_test)
 RecipientStaffUserId bigint NULL FK StaffUser
-RecipientEntraTenantId uniqueidentifier NULL  -- original recipient identity evidence for sensitive mail
-RecipientEntraObjectId uniqueidentifier NULL
+RecipientAuthenticationEmail nvarchar(320) NULL -- normalized identity snapshot for sensitive mail
 AuthorizationOrganizationId int NULL FK Organization
 RecipientAddressKind nvarchar(32) NULL CHECK (notification_email/weekly_summary)
 ToAddress nvarchar(...) NULL                -- nullable only for terminal suppressed intent
@@ -724,7 +723,7 @@ CREATE UNIQUE INDEX UX_EmailOutbox_BusinessKey
 
 Deterministic business keys are globally namespaced by notification semantics; test/ad-hoc repeatable messages may leave the key null. When two writers race on the same key, SQL uniqueness is authoritative and the loser resolves the existing row as an idempotent success rather than reporting a failed enqueue. Ordinary weekly summaries use one key per recipient/reporting period. Forced weekly summaries use one generated `ManualRunId` per accepted forced invocation and keys such as `weekly-summary-force:{ManualRunId}:{StaffUserId}`; retries of that same forced Hangfire job reuse the ID.
 
-For `staff_authorization_sensitive`, `RecipientStaffUserId`, `RecipientEntraTenantId`, `RecipientEntraObjectId`, `AuthorizationOrganizationId`, and `RecipientAddressKind` are required. `RecipientAddressKind` has exactly two current values: `notification_email` for ordinary staff mail and `weekly_summary` for ordinary/forced weekly summaries; require null for other delivery classes and do not infer it from `BusinessKey`. Snapshot the recipient's current explicit binding at intent creation. Apply the common current eligibility predicate at every send/retry: the stored recipient tuple must still equal the StaffUser binding and its tenant must still be in loaded AllowedTenantIds, in addition to active/role/scope/participation checks. The delivery worker resolves the current destination from the persisted kind immediately before each send/retry: `notification_email` reads `NotificationEmail`; `weekly_summary` reads nonblank `WeeklyActionSummaryEmail` and otherwise falls back to `NotificationEmail`. Compare the normalized result with `ToAddress`. Library-scoped mail also requires the library still active, while consortium-wide summary scope uses Organization `1` and requires the recipient still be an active super-admin. Lost authorization/address ownership transitions the row to terminal `suppressed`. `business_event` rows do not acquire this send-time staff authorization dependency and may drain after later participation changes.
+For `staff_authorization_sensitive`, `RecipientStaffUserId`, `RecipientAuthenticationEmail`, `AuthorizationOrganizationId`, and `RecipientAddressKind` are required. Snapshot the normalized authentication email at intent creation. Every send/retry requires that snapshot to equal the current StaffUser authentication email, plus current active/role/scope/participation and exact destination ownership checks. Stored Entra metadata is irrelevant. An authentication-email change suppresses the stale row; an OID change does not.
 
 DB/application invariants for deliverable rows (`pending`/`sending`/`failed`) require usable recipient/sender/content snapshots. `suppressed` may retain null recipient/sender when those values were the reason the notification intent could not be delivered. Missing required notification configuration at business-transaction time creates a terminal suppressed intent rather than rolling back the business mutation; optional staff notifications with no configured destination may instead create no row where the product contract says no notification is requested. If transport configuration disappears only after a valid row was queued, record `failed`/`mail_not_configured` and retain the payload for manual retry.
 
@@ -837,7 +836,7 @@ Keep only as long as needed for old deep-link compatibility and migration diagno
 
 At implementation time verify, with real query plans where useful:
 
-- active StaffUser (`EntraTenantId`, `EntraObjectId`) lookup plus readable normalized-UPN search;
+- unique normalized StaffUser authentication-email lookup and current ticket-email revalidation;
 - StaffUser role/organization scope-contraction transaction paths that lock the StaffUser serialization row, update the user, deactivate out-of-scope active auto-claim rules, clear out-of-scope open TitleRequest and AdditionalCopy claims, and write the appropriate TitleRequest event/AdditionalCopy note/admin audit atomically; relationship writers lock/revalidate the same StaffUser so stale claim/rule creation cannot commit afterward;
 - serialized active-super-admin removal path using the transaction-owned `ASAP:ActiveSuperAdminInvariant` application lock;
 - system-only configuration ownership checks; one row per organization for inheritable scalar domains; external-provider override uniqueness; whole-set child ordering/membership constraints; custom-field/option/rule ownership, key, mode, and ordering constraints;

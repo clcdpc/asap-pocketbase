@@ -273,11 +273,7 @@ export function createSettingsController({
     staffStatus: root.querySelector('#staff-access-status'),
     staffRefresh: root.querySelector('#staff-refresh'),
     staffCreate: root.querySelector('#staff-add-submit'),
-    staffTenantId: root.querySelector('#staff-add-tenant-id'),
-    staffObjectId: root.querySelector('#staff-add-object-id'),
-    staffUpn: root.querySelector('#staff-add-upn'),
-    staffDisplayName: root.querySelector('#staff-add-display-name'),
-    staffNotificationEmail: root.querySelector('#staff-add-notification-email'),
+    staffEmail: root.querySelector('#staff-add-email'),
     staffRole: root.querySelector('#staff-add-role'),
     staffOrganization: root.querySelector('#staff-add-organization'),
     staffUsers: root.querySelector('#settings-staff-users-list'),
@@ -323,8 +319,7 @@ export function createSettingsController({
     if (!staff) return '';
     return [
       property(staff, 'id'),
-      staff.tenantId ?? staff.entraTenantId ?? staff.EntraTenantId,
-      staff.objectId ?? staff.entraObjectId ?? staff.EntraObjectId,
+      property(staff, 'userPrincipalName'),
       property(staff, 'role'),
       property(staff, 'organizationId')
     ].map(value => value === null || value === undefined ? '' : String(value)).join('|');
@@ -751,7 +746,7 @@ export function createSettingsController({
       const upn = node('input', {
         type: 'email',
         value: property(user, 'userPrincipalName') || '',
-        'aria-label': `User principal name for ${staffUserDisplay(user)}`
+        'aria-label': `Authentication email for ${staffUserDisplay(user)}`
       });
       const displayName = node('input', {
         type: 'text',
@@ -779,7 +774,7 @@ export function createSettingsController({
         text: 'Save profile'
       });
       saveMetadata.addEventListener('click', () => updateStaffMetadata(id, version, {
-        userPrincipalName: clean(upn.value),
+        email: clean(upn.value),
         displayName: clean(displayName.value),
         notificationEmail: clean(notificationEmail.value)
       }));
@@ -805,17 +800,6 @@ export function createSettingsController({
       });
 
       const actions = [saveMetadata, saveRole, lifecycle];
-      if (state.staff?.role === 'super_admin' ||
-          (state.staff?.role === 'admin' && property(user, 'role') !== 'super_admin' &&
-           String(property(user, 'organizationId')) === String(state.staff.organizationId))) {
-        const rebind = node('button', {
-          type: 'button',
-          className: 'secondary-button',
-          text: 'Rebind identity'
-        });
-        rebind.addEventListener('click', () => rebindStaffUser(user));
-        actions.push(rebind);
-      }
 
       row.replaceChildren(
         node('div', { className: 'settings-staff-heading' }, [
@@ -829,7 +813,7 @@ export function createSettingsController({
           node('span', { text: `Version ${version}` })
         ]),
         node('div', { className: 'settings-staff-controls' }, [
-          node('label', { className: 'settings-field' }, [node('span', { text: 'User principal name' }), upn]),
+          node('label', { className: 'settings-field' }, [node('span', { text: 'Authentication email' }), upn]),
           node('label', { className: 'settings-field' }, [node('span', { text: 'Display name' }), displayName]),
           node('label', { className: 'settings-field' }, [node('span', { text: 'Notification email' }), notificationEmail]),
           node('label', { className: 'settings-field' }, [node('span', { text: 'Role' }), role]),
@@ -1055,11 +1039,7 @@ export function createSettingsController({
   async function createStaffUser() {
     const role = dom.staffRole.value || 'staff';
     const body = {
-      tenantId: clean(dom.staffTenantId.value),
-      objectId: clean(dom.staffObjectId.value),
-      userPrincipalName: clean(dom.staffUpn.value),
-      displayName: clean(dom.staffDisplayName.value),
-      notificationEmail: clean(dom.staffNotificationEmail.value),
+      email: clean(dom.staffEmail.value),
       role,
       organizationId: role === 'super_admin' ? 1 : Number(dom.staffOrganization.value)
     };
@@ -1068,11 +1048,7 @@ export function createSettingsController({
       body
     }, 'Staff user saved.');
     if (response) {
-      dom.staffTenantId.value = '';
-      dom.staffObjectId.value = '';
-      dom.staffUpn.value = '';
-      dom.staffDisplayName.value = '';
-      dom.staffNotificationEmail.value = '';
+      dom.staffEmail.value = '';
     }
   }
 
@@ -1081,7 +1057,7 @@ export function createSettingsController({
       method: 'PATCH',
       body: {
         version: stringValue(version),
-        userPrincipalName: values.userPrincipalName,
+        email: values.email,
         displayName: values.displayName,
         notificationEmail: values.notificationEmail
       }
@@ -1111,46 +1087,11 @@ export function createSettingsController({
     await mutateStaffUser('/api/asap/staff/users', {
       method: 'POST',
       body: {
-        tenantId: clean(property(user, 'tenantId')),
-        objectId: clean(property(user, 'objectId')),
-        userPrincipalName: clean(property(user, 'userPrincipalName')),
-        displayName: clean(property(user, 'displayName')),
-        notificationEmail: clean(property(user, 'notificationEmail')),
+        email: clean(property(user, 'userPrincipalName')),
         role,
         organizationId: role === 'super_admin' ? 1 : Number(organizationId)
       }
     }, 'Staff user reactivated.', property(user, 'id'));
-  }
-
-  async function rebindStaffUser(user) {
-    const id = stringValue(property(user, 'id'));
-    const version = stringValue(property(user, 'version'));
-    const tenantId = clean(window.prompt('Enter the new Entra tenant ID.', property(user, 'tenantId') || ''));
-    if (!tenantId) return;
-    const objectId = clean(window.prompt('Enter the new Entra object ID.', property(user, 'objectId') || ''));
-    if (!objectId) return;
-    const userPrincipalName = clean(window.prompt('Enter the readable user principal name for this identity.', property(user, 'userPrincipalName') || ''));
-    if (!userPrincipalName) {
-      setStaffStatus('A user principal name is required before rebinding a staff identity.', 'error');
-      return;
-    }
-    const reason = clean(window.prompt('Reason for rebinding this staff identity.'));
-    if (!reason) {
-      setStaffStatus('A reason is required before rebinding a staff identity.', 'error');
-      return;
-    }
-    if (!window.confirm(`Rebind ${staffUserDisplay(user)} to the entered Entra identity?`)) return;
-    await mutateStaffUser(`/api/asap/staff/users/${encodeURIComponent(id)}/rebind`, {
-      method: 'POST',
-      body: {
-        version,
-        tenantId,
-        objectId,
-        userPrincipalName,
-        confirmed: true,
-        reason
-      }
-    }, 'Staff identity rebound.', id);
   }
 
   function collectScoped(section, fields) {

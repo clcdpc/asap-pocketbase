@@ -8,29 +8,18 @@ using Microsoft.EntityFrameworkCore.Storage;
 namespace Asap.Web.Features.Staff;
 
 public sealed record StaffCreateInput(
-    string? TenantId,
-    string? ObjectId,
-    string? UserPrincipalName,
-    string? DisplayName,
-    string? NotificationEmail,
+    string? Email,
     string? Role,
     int? OrganizationId);
 
 public sealed record StaffMetadataInput(
     string? Version,
-    string? UserPrincipalName,
+    string? Email,
     string? DisplayName,
     string? NotificationEmail);
 
 public sealed record StaffRoleInput(string? Version, string? Role, int? OrganizationId);
 public sealed record StaffDeactivateInput(string? Version);
-public sealed record StaffRebindInput(
-    string? Version,
-    string? TenantId,
-    string? ObjectId,
-    string? UserPrincipalName,
-    bool Confirmed,
-    string? Reason);
 
 public sealed record StaffLifecycleResult(
     string Code,
@@ -86,20 +75,22 @@ public sealed class StaffLifecycleService(
 
         var rows = await context.StaffUsers.AsNoTracking()
             .Where(item => item.IsActive &&
-                           item.EntraTenantId.HasValue &&
-                           item.EntraObjectId.HasValue &&
-                           item.EntraTenantId != Guid.Empty && item.EntraObjectId != Guid.Empty &&
-                           allowedTenantIds.Contains(item.EntraTenantId.Value) &&
+                           item.NormalizedUserPrincipalName != null &&
                            (item.Role == "super_admin" && item.OrganizationId == 1 ||
                             (item.Role == "staff" || item.Role == "admin") &&
                             item.OrganizationId == libraryOrganizationId))
             .OrderBy(item => item.DisplayName)
             .ThenBy(item => item.UserPrincipalName)
             .ThenBy(item => item.Id)
-            .Select(item => new { item.Id, item.DisplayName, item.UserPrincipalName })
+            .Select(item => new { item.Id, item.DisplayName, item.UserPrincipalName, item.NormalizedUserPrincipalName })
             .ToListAsync(cancellationToken);
 
-        return rows.Select(item => new StaffAssignmentCandidate(
+        return rows.Where(item => StaffEmail.TryNormalizeAuthenticationEmail(
+                item.UserPrincipalName,
+                out _,
+                out var normalizedEmail) &&
+            string.Equals(normalizedEmail, item.NormalizedUserPrincipalName, StringComparison.Ordinal))
+            .Select(item => new StaffAssignmentCandidate(
                 item.Id,
                 item.DisplayName ?? item.UserPrincipalName ?? $"Staff {item.Id}"))
             .ToArray();
@@ -110,9 +101,12 @@ public sealed class StaffLifecycleService(
         StaffCreateInput input,
         CancellationToken cancellationToken)
     {
-        if (!TryReadIdentity(input.TenantId, input.ObjectId, input.UserPrincipalName, out var tenantId, out var objectId) ||
+        if (!StaffEmail.TryNormalizeAuthenticationEmail(
+                input.Email,
+                out var email,
+                out var normalizedEmail) ||
             !TryNormalizeRoleOrganization(input.Role, input.OrganizationId, out var role, out var organizationId) ||
-            !StaffEmail.TryNormalize(input.NotificationEmail, out var notificationEmail))
+            email is null || normalizedEmail is null)
         {
             return new StaffLifecycleResult("invalid_staff_user");
         }
@@ -132,7 +126,7 @@ public sealed class StaffLifecycleService(
         }
 
         var existingSnapshot = await context.StaffUsers.AsNoTracking().SingleOrDefaultAsync(
-            item => item.EntraTenantId == tenantId && item.EntraObjectId == objectId, cancellationToken);
+            item => item.NormalizedUserPrincipalName == normalizedEmail, cancellationToken);
         var organizationIds = new[] { actorSnapshot.OrganizationId, organizationId, existingSnapshot?.OrganizationId ?? organizationId }
             .Distinct().Order().ToArray();
         var organizations = new Dictionary<int, Organization>();
@@ -168,7 +162,7 @@ public sealed class StaffLifecycleService(
             return new StaffLifecycleResult("organization_inactive");
         }
 
-        // All provisioning and rebind writers share the lifecycle application lock.
+        // All provisioning and identity-metadata writers share the lifecycle application lock.
         var existing = existingSnapshot is null ? null : locked[existingSnapshot.Id];
         if (existing is not null)
         {
@@ -189,10 +183,8 @@ public sealed class StaffLifecycleService(
             existing.IsActive = true;
             existing.Role = role;
             existing.OrganizationId = organizationId;
-            existing.UserPrincipalName = Clean(input.UserPrincipalName);
-            existing.NormalizedUserPrincipalName = NormalizeUpn(input.UserPrincipalName);
-            existing.DisplayName = Clean(input.DisplayName);
-            existing.NotificationEmail = notificationEmail;
+            existing.UserPrincipalName = email;
+            existing.NormalizedUserPrincipalName = normalizedEmail;
             AddAudit(context, actor, existing.Id, organizationId, "staff_reactivated", new { role });
             await context.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
@@ -201,12 +193,9 @@ public sealed class StaffLifecycleService(
 
         var user = new StaffUser
         {
-            EntraTenantId = tenantId,
-            EntraObjectId = objectId,
-            UserPrincipalName = Clean(input.UserPrincipalName),
-            NormalizedUserPrincipalName = NormalizeUpn(input.UserPrincipalName),
-            DisplayName = Clean(input.DisplayName),
-            NotificationEmail = notificationEmail,
+            UserPrincipalName = email,
+            NormalizedUserPrincipalName = normalizedEmail,
+            NotificationEmail = email,
             Role = role,
             OrganizationId = organizationId,
             IsActive = true
@@ -226,6 +215,10 @@ public sealed class StaffLifecycleService(
         CancellationToken cancellationToken)
     {
         if (!StaffVersion.TryDecode(input.Version, out var expectedVersion) ||
+            !StaffEmail.TryNormalizeAuthenticationEmail(
+                input.Email,
+                out var email,
+                out var normalizedEmail) ||
             !StaffEmail.TryNormalize(input.NotificationEmail, out var notificationEmail))
         {
             return new StaffLifecycleResult("invalid_staff_user");
@@ -289,11 +282,24 @@ public sealed class StaffLifecycleService(
             return new StaffLifecycleResult("stale_version");
         }
 
-        target.UserPrincipalName = Clean(input.UserPrincipalName);
-        target.NormalizedUserPrincipalName = NormalizeUpn(input.UserPrincipalName);
+        if (await context.StaffUsers.AsNoTracking().AnyAsync(
+                item => item.Id != targetId &&
+                        item.NormalizedUserPrincipalName == normalizedEmail,
+                cancellationToken))
+        {
+            return new StaffLifecycleResult("identity_already_exists");
+        }
+
+        var previousAuthenticationEmail = target.UserPrincipalName;
+        target.UserPrincipalName = email;
+        target.NormalizedUserPrincipalName = normalizedEmail;
         target.DisplayName = Clean(input.DisplayName);
         target.NotificationEmail = notificationEmail;
-        AddAudit(context, actor, target.Id, target.OrganizationId, "staff_metadata_updated", new { });
+        AddAudit(context, actor, target.Id, target.OrganizationId, "staff_metadata_updated", new
+        {
+            previousAuthenticationEmail,
+            authenticationEmail = email
+        });
         try
         {
             await context.SaveChangesAsync(cancellationToken);
@@ -319,102 +325,6 @@ public sealed class StaffLifecycleService(
         StaffDeactivateInput input,
         CancellationToken cancellationToken) =>
         ChangeLifecycleAsync(actor, targetId, input.Version, false, null, null, cancellationToken);
-
-    public async Task<StaffLifecycleResult> RebindAsync(
-        CurrentStaff actor,
-        long targetId,
-        StaffRebindInput input,
-        CancellationToken cancellationToken)
-    {
-        if (!input.Confirmed || string.IsNullOrWhiteSpace(input.Reason) ||
-            !StaffVersion.TryDecode(input.Version, out var expectedVersion) ||
-            !TryReadIdentity(input.TenantId, input.ObjectId, input.UserPrincipalName, out var tenantId, out var objectId))
-        {
-            return new StaffLifecycleResult("rebind_not_confirmed");
-        }
-
-        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
-        if (!await AcquireLifecycleLockAsync(context, cancellationToken))
-        {
-            return new StaffLifecycleResult("staff_invariant_busy");
-        }
-
-        var actorSnapshot = await context.StaffUsers.AsNoTracking()
-            .SingleOrDefaultAsync(item => item.Id == actor.Id, cancellationToken);
-        if (actorSnapshot is null)
-        {
-            return new StaffLifecycleResult("staff_scope_forbidden");
-        }
-        var targetSnapshot = await context.StaffUsers.AsNoTracking()
-            .SingleOrDefaultAsync(item => item.Id == targetId, cancellationToken);
-        if (targetSnapshot is null)
-        {
-            return new StaffLifecycleResult("not_found");
-        }
-        var organizations = new Dictionary<int, Organization>();
-        foreach (var organizationId in new[] { actorSnapshot.OrganizationId, targetSnapshot.OrganizationId }.Distinct().Order())
-        {
-            var organization = await LockOrganizationAsync(context, organizationId, cancellationToken);
-            if (organization is null)
-            {
-                return new StaffLifecycleResult("organization_not_found");
-            }
-            organizations[organizationId] = organization;
-        }
-
-        var locked = new Dictionary<long, StaffUser>();
-        foreach (var id in new[] { actor.Id, targetId }.Distinct().Order())
-        {
-            var row = await LockStaffAsync(context, id, cancellationToken);
-            if (row is null)
-            {
-                return new StaffLifecycleResult("not_found");
-            }
-            locked[id] = row;
-        }
-        if (!CanManage(
-                actor,
-                locked[actor.Id],
-                organizations.GetValueOrDefault(locked[actor.Id].OrganizationId),
-                locked[targetId].OrganizationId,
-                locked[targetId].Role))
-        {
-            return new StaffLifecycleResult("staff_scope_forbidden");
-        }
-
-        var duplicate = await context.StaffUsers.AsNoTracking().AnyAsync(
-            item => item.Id != targetId &&
-                    item.EntraTenantId == tenantId && item.EntraObjectId == objectId,
-            cancellationToken);
-        if (duplicate)
-        {
-            return new StaffLifecycleResult("identity_already_exists");
-        }
-
-        var target = locked[targetId];
-        if (!target.RowVersion.SequenceEqual(expectedVersion))
-        {
-            return new StaffLifecycleResult("stale_version");
-        }
-        var oldTenantId = target.EntraTenantId;
-        var oldObjectId = target.EntraObjectId;
-        target.EntraTenantId = tenantId;
-        target.EntraObjectId = objectId;
-        target.UserPrincipalName = Clean(input.UserPrincipalName);
-        target.NormalizedUserPrincipalName = NormalizeUpn(input.UserPrincipalName);
-        AddAudit(context, actor, target.Id, target.OrganizationId, "staff_identity_rebound", new
-        {
-            oldTenantId,
-            oldObjectId,
-            newTenantId = tenantId,
-            newObjectId = objectId,
-            reason = input.Reason!.Trim()
-        });
-        await context.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-        return new StaffLifecycleResult("updated", target);
-    }
 
     private async Task<StaffLifecycleResult> ChangeLifecycleAsync(
         CurrentStaff actor,
@@ -502,17 +412,17 @@ public sealed class StaffLifecycleService(
         }
 
         var targetWillBeUsableSuperAdmin = newActive && role == "super_admin" && organizationId == 1 &&
-                                           target.EntraTenantId.HasValue &&
-                                           target.EntraObjectId.HasValue &&
-                                           target.EntraTenantId != Guid.Empty && target.EntraObjectId != Guid.Empty &&
-                                           allowedTenantIds.Contains(target.EntraTenantId.Value);
-        var otherUsableSuperAdmins = await context.StaffUsers.AsNoTracking().CountAsync(
+                                           StaffEmail.IsValidAuthenticationEmail(target);
+        var otherSuperAdmins = await context.StaffUsers.AsNoTracking()
+            .Where(
             item => item.Id != target.Id && item.IsActive && item.Role == "super_admin" &&
-                    item.OrganizationId == 1 && item.EntraTenantId.HasValue && item.EntraObjectId.HasValue &&
-                    item.EntraTenantId != Guid.Empty && item.EntraObjectId != Guid.Empty &&
-                    allowedTenantIds.Contains(item.EntraTenantId.Value),
-            cancellationToken);
-        if (!targetWillBeUsableSuperAdmin && otherUsableSuperAdmins == 0)
+                    item.OrganizationId == 1 && item.NormalizedUserPrincipalName != null)
+            .Select(item => new { item.UserPrincipalName, item.NormalizedUserPrincipalName })
+            .ToListAsync(cancellationToken);
+        var hasOtherUsableSuperAdmin = otherSuperAdmins.Any(item =>
+            StaffEmail.TryNormalizeAuthenticationEmail(item.UserPrincipalName, out _, out var normalizedEmail) &&
+            string.Equals(normalizedEmail, item.NormalizedUserPrincipalName, StringComparison.Ordinal));
+        if (!targetWillBeUsableSuperAdmin && !hasOtherUsableSuperAdmin)
         {
             return new StaffLifecycleResult("active_super_admin_required");
         }
@@ -621,9 +531,8 @@ public sealed class StaffLifecycleService(
         lockedActorOrganization is not null && lockedActorOrganization.IsActive &&
         lockedActorOrganization.Id == lockedActor.OrganizationId &&
         allowedTenantIds.Contains(ticketActor.EntraTenantId) &&
-        lockedActor.EntraTenantId == ticketActor.EntraTenantId &&
-        lockedActor.EntraObjectId == ticketActor.EntraObjectId &&
-        ticketActor.EntraTenantId != Guid.Empty && ticketActor.EntraObjectId != Guid.Empty &&
+        StaffEmail.MatchesAuthenticationEmail(lockedActor, ticketActor.AuthenticationEmail) &&
+        ticketActor.EntraTenantId != Guid.Empty &&
         (lockedActor.Role == "super_admin" && lockedActor.OrganizationId == 1 ||
          lockedActor.Role == "admin" && lockedActor.OrganizationId > 1) &&
         (lockedActor.Role == "super_admin" ||
@@ -693,12 +602,4 @@ public sealed class StaffLifecycleService(
         });
 
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-    private static string? NormalizeUpn(string? value) => Clean(value)?.ToUpperInvariant();
-
-    private bool TryReadIdentity(string? tenant, string? subject, string? label, out Guid tenantId, out Guid objectId)
-    {
-        var validTenant = Guid.TryParse(tenant, out tenantId) && tenantId != Guid.Empty && allowedTenantIds.Contains(tenantId);
-        var validObject = Guid.TryParse(subject, out objectId) && objectId != Guid.Empty;
-        return validTenant && validObject && Clean(label) is { Length: <= 320 };
-    }
 }

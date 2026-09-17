@@ -9,7 +9,6 @@ namespace Asap.Migration;
 public sealed record MigrationImportOptions(
     string PackagePath,
     string ConnectionString,
-    string StaffIdentityMapPath,
     IReadOnlySet<Guid> AllowedTenantIds,
     string ReportPath,
     string? ExternalConfigurationPath = null,
@@ -53,7 +52,7 @@ public static class MigrationImporter
         ValidateOptions(options, package);
         var organizations = MigrationPackageReader.ReadRows(package, "organizations.json", "polaris_organizations");
         var staffUsers = MigrationPackageReader.ReadRows(package, "staff-users.json", "staff_users");
-        var identityMap = ReadIdentityMap(options.StaffIdentityMapPath, staffUsers, options.AllowedTenantIds);
+        var authenticationEmails = ValidateStaffAuthenticationEmails(staffUsers);
         ValidateSourceIdentityRows(package);
         var postmarkToken = ReadOptionalSecretEnvironment(
             options.PostmarkTokenEnvironmentName,
@@ -122,7 +121,7 @@ public static class MigrationImporter
                 connection,
                 transaction,
                 staffUsers,
-                identityMap,
+                authenticationEmails,
                 organizationIds,
                 options.AllowedTenantIds,
                 importedCounts);
@@ -138,10 +137,9 @@ public static class MigrationImporter
                 connection,
                 transaction,
                 staffUsers,
-                identityMap,
+                authenticationEmails,
                 staffIds,
                 options.AllowedTenantIds,
-                bootstrapMutatedStaffUserId,
                 transformations);
             var tagIds = ImportWorkflowTags(
                 connection,
@@ -255,7 +253,7 @@ public static class MigrationImporter
                 package,
                 organizations,
                 staffUsers,
-                identityMap,
+                authenticationEmails,
                 titleRequestRows,
                 requestIds,
                 tagIds,
@@ -515,10 +513,6 @@ public static class MigrationImporter
                 "credential_protection_configuration_missing",
                 "Target Data Protection configuration is required when a Postmark token environment input is named.");
         }
-        if (!File.Exists(options.StaffIdentityMapPath))
-        {
-            throw new MigrationOperationException("staff_identity_map_missing", "The staff Entra identity map is missing.");
-        }
         if (options.AllowedTenantIds.Count == 0 || options.AllowedTenantIds.Contains(Guid.Empty))
         {
             throw new MigrationOperationException("allowed_tenant_invalid", "At least one non-empty allowed Entra tenant ID is required.");
@@ -554,86 +548,28 @@ public static class MigrationImporter
             .Any(row => row.String("apiKey") is not null || row.String("adminPassword") is not null);
     }
 
-    private static Dictionary<string, StaffIdentity> ReadIdentityMap(
-        string path,
-        IReadOnlyList<SourceRow> staffUsers,
-        IReadOnlySet<Guid> allowedTenantIds)
+    private static Dictionary<string, string?> ValidateStaffAuthenticationEmails(
+        IReadOnlyList<SourceRow> staffUsers)
     {
-        StaffIdentityMap document;
-        try
+        var bySource = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var normalizedEmails = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var staff in staffUsers)
         {
-            document = JsonSerializer.Deserialize<StaffIdentityMap>(
-                File.ReadAllText(path),
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
-                ?? throw new JsonException("Identity map was null.");
-        }
-        catch (JsonException exception)
-        {
-            throw new MigrationOperationException("staff_identity_map_invalid", exception.Message);
-        }
-
-        if (document.Users is null)
-        {
-            throw new MigrationOperationException(
-                "staff_identity_map_invalid",
-                "The staff identity map users collection must be an array.");
-        }
-
-        var sourceIds = staffUsers.Select(row => row.RequiredString("id")).ToHashSet(StringComparer.Ordinal);
-        var bySource = new Dictionary<string, StaffIdentity>(StringComparer.Ordinal);
-        var durableIdentities = new HashSet<(Guid TenantId, Guid ObjectId)>();
-        foreach (var input in document.Users)
-        {
-            if (input is null)
+            var sourceId = staff.RequiredString("id");
+            var email = RealEmail(staff.String("email"));
+            if (staff.Bool("active") && email is null)
             {
                 throw new MigrationOperationException(
-                    "staff_identity_map_invalid",
-                    "Staff identity mappings must contain objects.");
+                    "active_staff_email_invalid",
+                    $"Active staff user {sourceId} has no valid real authentication email.");
             }
-
-            var sourceId = Clean(input.PocketBaseStaffUserId);
-            var upn = Clean(input.UserPrincipalName);
-            var displayName = Clean(input.DisplayName);
-            var notificationEmail = Clean(input.NotificationEmail);
-            if (notificationEmail is not null && RealEmail(notificationEmail) is null)
+            if (email is not null && !normalizedEmails.Add(email.ToUpperInvariant()))
             {
                 throw new MigrationOperationException(
-                    "staff_identity_map_invalid",
-                    $"Staff identity mapping {sourceId ?? "(missing)"} has an invalid notification email.");
+                    "duplicate_staff_email",
+                    $"Staff user {sourceId} duplicates another normalized authentication email.");
             }
-
-            var identity = new StaffIdentity
-            {
-                PocketBaseStaffUserId = sourceId ?? string.Empty,
-                TenantId = input.TenantId,
-                ObjectId = input.ObjectId,
-                UserPrincipalName = upn ?? string.Empty,
-                DisplayName = displayName,
-                NotificationEmail = notificationEmail
-            };
-            if (sourceId is null ||
-                identity.TenantId == Guid.Empty ||
-                identity.ObjectId == Guid.Empty ||
-                !allowedTenantIds.Contains(identity.TenantId) ||
-                identity.UserPrincipalName.Length == 0 ||
-                !sourceIds.Contains(sourceId) ||
-                !bySource.TryAdd(sourceId, identity) ||
-                !durableIdentities.Add((identity.TenantId, identity.ObjectId)))
-            {
-                throw new MigrationOperationException(
-                    "staff_identity_map_invalid",
-                    "Staff identity mappings must be unique, allowed-tenant, and reference one exported staff user.");
-            }
-        }
-
-        foreach (var staff in staffUsers.Where(row => row.Bool("active")))
-        {
-            if (!bySource.ContainsKey(staff.RequiredString("id")))
-            {
-                throw new MigrationOperationException(
-                    "active_staff_identity_missing",
-                    $"Active staff user {staff.RequiredString("id")} has no Entra identity mapping.");
-            }
+            bySource.Add(sourceId, email);
         }
         return bySource;
     }
@@ -771,7 +707,7 @@ public static class MigrationImporter
         SqlConnection connection,
         SqlTransaction transaction,
         IReadOnlyList<SourceRow> rows,
-        IReadOnlyDictionary<string, StaffIdentity> identities,
+        IReadOnlyDictionary<string, string?> authenticationEmails,
         IReadOnlyDictionary<string, int> organizationIds,
         IReadOnlySet<Guid> allowedTenantIds,
         IDictionary<string, int> importedCounts)
@@ -798,23 +734,12 @@ public static class MigrationImporter
             }
 
             var active = row.Bool("active");
-            identities.TryGetValue(sourceId, out var identity);
-            if (active && identity is null)
-            {
-                throw new MigrationOperationException("active_staff_identity_missing", $"Active staff user {sourceId} has no Entra identity mapping.");
-            }
-            if (identity is not null && !allowedTenantIds.Contains(identity.TenantId))
-            {
-                throw new MigrationOperationException("staff_tenant_not_allowed", $"Staff user {sourceId} maps to a disallowed tenant.");
-            }
-
-            var sourceEmail = RealEmail(row.String("email"));
+            var sourceEmail = authenticationEmails[sourceId];
             var weeklyEmail = RealEmail(row.String("weekly_action_summary_email"));
-            var mappedNotification = RealEmail(identity?.NotificationEmail);
-            var notificationEmail = mappedNotification ?? sourceEmail ?? weeklyEmail;
+            var notificationEmail = sourceEmail ?? weeklyEmail;
             var weeklyEnabled = row.Bool("weekly_action_summary_enabled");
-            var userPrincipalName = identity?.UserPrincipalName.Trim() ?? sourceEmail ?? row.String("username");
-            var displayName = Clean(identity?.DisplayName) ?? row.String("displayName") ?? row.String("username");
+            var userPrincipalName = sourceEmail;
+            var displayName = row.String("displayName") ?? row.String("username");
 
             using var command = new SqlCommand(
                 """
@@ -832,8 +757,8 @@ public static class MigrationImporter
                 """,
                 connection,
                 transaction);
-            command.Parameters.AddWithValue("@tenantId", (object?)identity?.TenantId ?? DBNull.Value);
-            command.Parameters.AddWithValue("@objectId", (object?)identity?.ObjectId ?? DBNull.Value);
+            command.Parameters.AddWithValue("@tenantId", DBNull.Value);
+            command.Parameters.AddWithValue("@objectId", DBNull.Value);
             command.Parameters.AddWithValue("@upn", (object?)userPrincipalName ?? DBNull.Value);
             command.Parameters.AddWithValue("@normalizedUpn", (object?)userPrincipalName?.ToUpperInvariant() ?? DBNull.Value);
             command.Parameters.AddWithValue("@displayName", (object?)displayName ?? DBNull.Value);
@@ -859,10 +784,9 @@ public static class MigrationImporter
         SqlConnection connection,
         SqlTransaction transaction,
         IReadOnlyList<SourceRow> rows,
-        IReadOnlyDictionary<string, StaffIdentity> identities,
+        IReadOnlyDictionary<string, string?> authenticationEmails,
         IReadOnlyDictionary<string, long> staffIds,
         IReadOnlySet<Guid> allowedTenantIds,
-        long? bootstrapMutatedStaffUserId,
         ICollection<object> transformations)
     {
         foreach (var row in rows.OrderBy(item => item.RequiredString("id"), StringComparer.Ordinal))
@@ -885,12 +809,12 @@ public static class MigrationImporter
             bool targetActive;
             string targetRole;
             int targetOrganizationId;
-            Guid? targetTenantId;
-            Guid? targetObjectId;
+            string? targetAuthenticationEmail;
+            string? targetNormalizedAuthenticationEmail;
             using (var command = new SqlCommand(
                        """
                        SELECT [NotificationEmail], [WeeklyActionSummaryEmail], [WeeklyActionSummaryEnabled],
-                              [IsActive], [Role], [OrganizationId], [EntraTenantId], [EntraObjectId]
+                              [IsActive], [Role], [OrganizationId], [UserPrincipalName], [NormalizedUserPrincipalName]
                        FROM [asap].[StaffUser]
                        WHERE [Id] = @id;
                        """,
@@ -909,8 +833,8 @@ public static class MigrationImporter
                 targetActive = reader.GetBoolean(3);
                 targetRole = reader.GetString(4);
                 targetOrganizationId = reader.GetInt32(5);
-                targetTenantId = reader.IsDBNull(6) ? null : reader.GetGuid(6);
-                targetObjectId = reader.IsDBNull(7) ? null : reader.GetGuid(7);
+                targetAuthenticationEmail = reader.IsDBNull(6) ? null : reader.GetString(6);
+                targetNormalizedAuthenticationEmail = reader.IsDBNull(7) ? null : reader.GetString(7);
             }
 
             var targetAssignmentRecipient = targetNotificationEmail;
@@ -921,23 +845,18 @@ public static class MigrationImporter
                 ? targetOrganizationId == 1
                 : targetRole is "staff" or "admin" && targetOrganizationId != 1;
             var targetWeeklyEligible = targetWeeklyEnabled && targetWeeklyRecipient is not null && targetActive &&
-                targetTenantId.HasValue && targetObjectId.HasValue && targetObjectId != Guid.Empty &&
-                allowedTenantIds.Contains(targetTenantId.Value) && targetScopeValid &&
+                RealEmail(targetAuthenticationEmail) is { } validAuthenticationEmail &&
+                string.Equals(validAuthenticationEmail.ToUpperInvariant(), targetNormalizedAuthenticationEmail, StringComparison.Ordinal) &&
+                targetScopeValid &&
                 OrganizationIsActive(connection, transaction, targetOrganizationId);
 
-            identities.TryGetValue(sourceId, out var identity);
-            var mappedNotification = RealEmail(identity?.NotificationEmail);
-            var sourceEmail = RealEmail(row.String("email"));
+            var sourceEmail = authenticationEmails[sourceId];
             var weeklyEmail = RealEmail(row.String("weekly_action_summary_email"));
-            var notificationSource = bootstrapMutatedStaffUserId == targetId
-                ? "migration_bootstrap"
-                : mappedNotification is not null
-                    ? "identity_map"
-                    : sourceEmail is not null
-                        ? "staff_email"
-                        : weeklyEmail is not null
-                            ? "weekly_action_summary_email"
-                            : "none";
+            var notificationSource = sourceEmail is not null
+                ? "staff_email"
+                : weeklyEmail is not null
+                    ? "weekly_action_summary_email"
+                    : "none";
 
             transformations.Add(new
             {
@@ -2461,7 +2380,7 @@ public static class MigrationImporter
     {
         using var command = new SqlCommand(
             """
-            SELECT [EntraTenantId], [EntraObjectId]
+            SELECT [UserPrincipalName], [NormalizedUserPrincipalName]
             FROM [asap].[StaffUser]
             WHERE [Role] = N'super_admin' AND [OrganizationId] = 1 AND [IsActive] = 1;
             """,
@@ -2471,12 +2390,13 @@ public static class MigrationImporter
         var found = false;
         while (reader.Read())
         {
-            found |= !reader.IsDBNull(0) && !reader.IsDBNull(1) &&
-                allowedTenantIds.Contains(reader.GetGuid(0)) && reader.GetGuid(1) != Guid.Empty;
+            var email = reader.IsDBNull(0) ? null : RealEmail(reader.GetString(0));
+            found |= email is not null && !reader.IsDBNull(1) &&
+                string.Equals(email.ToUpperInvariant(), reader.GetString(1), StringComparison.Ordinal);
         }
         if (!found)
         {
-            throw new MigrationOperationException("usable_super_admin_missing", "Import produced no active, allowed-tenant, bound system super-admin.");
+            throw new MigrationOperationException("usable_super_admin_missing", "Import produced no active system super-admin with a valid authentication email.");
         }
     }
 
@@ -2495,18 +2415,17 @@ public static class MigrationImporter
         {
             throw new MigrationOperationException(
                 "usable_super_admin_missing",
-                "Import produced no active, allowed-tenant, bound system super-admin and no target bootstrap configuration was supplied.");
+                "Import produced no active email-authenticated system super-admin and no target bootstrap configuration was supplied.");
         }
 
-        var bootstrap = ReadBootstrapIdentity(externalConfigurationPath, allowedTenantIds);
+        var bootstrap = ReadBootstrapIdentity(externalConfigurationPath);
         long? existingId;
         using (var find = new SqlCommand(
-                   "SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraTenantId] = @tenantId AND [EntraObjectId] = @objectId;",
+                   "SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = @normalizedUpn;",
                    connection,
                    transaction))
         {
-            find.Parameters.AddWithValue("@tenantId", bootstrap.TenantId);
-            find.Parameters.AddWithValue("@objectId", bootstrap.ObjectId);
+            find.Parameters.AddWithValue("@normalizedUpn", bootstrap.UserPrincipalName.ToUpperInvariant());
             existingId = find.ExecuteScalar() is { } value ? Convert.ToInt64(value) : null;
         }
 
@@ -2519,8 +2438,6 @@ public static class MigrationImporter
                 UPDATE [asap].[StaffUser]
                 SET [UserPrincipalName] = @upn,
                     [NormalizedUserPrincipalName] = @normalizedUpn,
-                    [DisplayName] = @displayName,
-                    [NotificationEmail] = @notificationEmail,
                     [Role] = N'super_admin',
                     [OrganizationId] = 1,
                     [IsActive] = 1
@@ -2538,14 +2455,14 @@ public static class MigrationImporter
             using var insert = new SqlCommand(
                 """
                 INSERT INTO [asap].[StaffUser]
-                    ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
-                     [DisplayName], [NotificationEmail], [Role], [OrganizationId], [IsActive],
+                    ([UserPrincipalName], [NormalizedUserPrincipalName], [DisplayName], [NotificationEmail],
+                     [Role], [OrganizationId], [IsActive],
                      [WeeklyActionSummaryEnabled], [PurchaseReminderDefault],
                      [AdditionalCopyReminderDefault], [DefaultMineUnclaimedFilter])
                 OUTPUT inserted.[Id]
                 VALUES
-                    (@tenantId, @objectId, @upn, @normalizedUpn,
-                     @displayName, @notificationEmail, N'super_admin', 1, 1,
+                    (@upn, @normalizedUpn, @displayName, @notificationEmail,
+                     N'super_admin', 1, 1,
                      0, 0, 0, 0);
                 """,
                 connection,
@@ -2560,7 +2477,7 @@ public static class MigrationImporter
             entity = "migration_bootstrap_super_admin",
             action,
             targetStaffUserId = targetId,
-            tenantAllowed = true,
+            authenticationEmail = bootstrap.UserPrincipalName,
             appliedAtUtc = exportedAtUtc
         });
         VerifyUsableSuperAdministrator(connection, transaction, allowedTenantIds);
@@ -2574,7 +2491,7 @@ public static class MigrationImporter
     {
         using var command = new SqlCommand(
             """
-            SELECT [EntraTenantId], [EntraObjectId]
+            SELECT [UserPrincipalName], [NormalizedUserPrincipalName]
             FROM [asap].[StaffUser]
             WHERE [Role] = N'super_admin' AND [OrganizationId] = 1 AND [IsActive] = 1;
             """,
@@ -2583,8 +2500,9 @@ public static class MigrationImporter
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
-            if (!reader.IsDBNull(0) && !reader.IsDBNull(1) &&
-                allowedTenantIds.Contains(reader.GetGuid(0)) && reader.GetGuid(1) != Guid.Empty)
+            var email = reader.IsDBNull(0) ? null : RealEmail(reader.GetString(0));
+            if (email is not null && !reader.IsDBNull(1) &&
+                string.Equals(email.ToUpperInvariant(), reader.GetString(1), StringComparison.Ordinal))
             {
                 return true;
             }
@@ -2592,9 +2510,7 @@ public static class MigrationImporter
         return false;
     }
 
-    private static BootstrapIdentity ReadBootstrapIdentity(
-        string externalConfigurationPath,
-        IReadOnlySet<Guid> allowedTenantIds)
+    private static BootstrapIdentity ReadBootstrapIdentity(string externalConfigurationPath)
     {
         try
         {
@@ -2602,19 +2518,16 @@ public static class MigrationImporter
             var authentication = JsonProperty(document.RootElement, "Authentication");
             var entra = JsonProperty(authentication, "Entra");
             var value = JsonProperty(entra, "InitialSuperAdmin");
-            var tenantId = Guid.Parse(JsonProperty(value, "TenantId").GetString() ?? string.Empty);
-            var objectId = Guid.Parse(JsonProperty(value, "ObjectId").GetString() ?? string.Empty);
             var upn = RealEmail(JsonProperty(value, "UserPrincipalName").GetString());
-            var notificationEmail = RealEmail(JsonProperty(value, "NotificationEmail").GetString());
-            var displayName = Clean(JsonProperty(value, "DisplayName").GetString());
-            if (tenantId == Guid.Empty || objectId == Guid.Empty || !allowedTenantIds.Contains(tenantId) ||
-                upn is null || notificationEmail is null || displayName is null)
+            var notificationEmail = RealEmail(JsonOptionalString(value, "NotificationEmail")) ?? upn;
+            var displayName = Clean(JsonOptionalString(value, "DisplayName"));
+            if (upn is null)
             {
                 throw new MigrationOperationException(
                     "bootstrap_identity_invalid",
-                    "The configured migration bootstrap identity is incomplete or outside the allowed tenant set.");
+                    "The configured migration bootstrap identity requires a valid real email address.");
             }
-            return new BootstrapIdentity(tenantId, objectId, upn, displayName, notificationEmail);
+            return new BootstrapIdentity(upn, displayName, notificationEmail!);
         }
         catch (MigrationOperationException)
         {
@@ -2637,13 +2550,25 @@ public static class MigrationImporter
         throw new KeyNotFoundException(name);
     }
 
+    private static string? JsonOptionalString(JsonElement value, string name)
+    {
+        foreach (var property in value.EnumerateObject())
+        {
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                return property.Value.ValueKind == JsonValueKind.String
+                    ? property.Value.GetString()
+                    : null;
+            }
+        }
+        return null;
+    }
+
     private static void AddBootstrapParameters(SqlCommand command, BootstrapIdentity bootstrap)
     {
-        command.Parameters.AddWithValue("@tenantId", bootstrap.TenantId);
-        command.Parameters.AddWithValue("@objectId", bootstrap.ObjectId);
         command.Parameters.AddWithValue("@upn", bootstrap.UserPrincipalName);
         command.Parameters.AddWithValue("@normalizedUpn", bootstrap.UserPrincipalName.ToUpperInvariant());
-        command.Parameters.AddWithValue("@displayName", bootstrap.DisplayName);
+        command.Parameters.AddWithValue("@displayName", (object?)bootstrap.DisplayName ?? DBNull.Value);
         command.Parameters.AddWithValue("@notificationEmail", bootstrap.NotificationEmail);
     }
 
@@ -2653,7 +2578,7 @@ public static class MigrationImporter
         ValidatedMigrationPackage package,
         IReadOnlyList<SourceRow> organizations,
         IReadOnlyList<SourceRow> staffUsers,
-        IReadOnlyDictionary<string, StaffIdentity> identities,
+        IReadOnlyDictionary<string, string?> authenticationEmails,
         IReadOnlyList<SourceRow> titleRequests,
         IReadOnlyDictionary<string, long> requestIds,
         IReadOnlyDictionary<string, long> tagIds,
@@ -2709,10 +2634,9 @@ public static class MigrationImporter
             using var reader = command.ExecuteReader();
             EnsureSemantic(reader.Read(), "staff user");
             var targetId = reader.GetInt64(0);
-            identities.TryGetValue(sourceId, out var identity);
             EnsureSemantic(
-                GuidEquals(reader, 1, identity?.TenantId) &&
-                GuidEquals(reader, 2, identity?.ObjectId) &&
+                reader.IsDBNull(1) &&
+                reader.IsDBNull(2) &&
                 reader.GetBoolean(9) == row.Bool("weekly_action_summary_enabled") &&
                 StringEquals(reader, 10, RealEmail(row.String("weekly_action_summary_email"))) &&
                 reader.GetBoolean(11) == row.Bool("purchase_reminder_default") &&
@@ -2725,12 +2649,11 @@ public static class MigrationImporter
             {
                 var role = row.RequiredString("role").ToLowerInvariant();
                 var organizationId = role == "super_admin" ? 1 : row.Int32("libraryOrgId")!.Value;
-                var sourceEmail = RealEmail(row.String("email"));
+                var sourceEmail = authenticationEmails[sourceId];
                 var weeklyEmail = RealEmail(row.String("weekly_action_summary_email"));
-                var mappedNotification = RealEmail(identity?.NotificationEmail);
-                var notificationEmail = mappedNotification ?? sourceEmail ?? weeklyEmail;
-                var userPrincipalName = identity?.UserPrincipalName.Trim() ?? sourceEmail ?? row.String("username");
-                var displayName = Clean(identity?.DisplayName) ?? row.String("displayName") ?? row.String("username");
+                var notificationEmail = sourceEmail ?? weeklyEmail;
+                var userPrincipalName = sourceEmail;
+                var displayName = row.String("displayName") ?? row.String("username");
                 EnsureSemantic(
                     StringEquals(reader, 3, userPrincipalName) &&
                     StringEquals(reader, 4, displayName) &&
@@ -3508,8 +3431,9 @@ public static class MigrationImporter
                 FROM [asap].[FormatAutoClaimRule] r
                 LEFT JOIN [asap].[StaffUser] s ON s.[Id] = r.[StaffUserId]
                 WHERE r.[IsActive] = 1 AND
-                      (s.[Id] IS NULL OR s.[IsActive] = 0 OR s.[EntraTenantId] IS NULL OR s.[EntraObjectId] IS NULL OR
-                       s.[EntraTenantId] NOT IN ({allowedTenants}) OR
+                      (s.[Id] IS NULL OR s.[IsActive] = 0 OR
+                       NULLIF(LTRIM(RTRIM(s.[UserPrincipalName])), N'') IS NULL OR
+                       s.[NormalizedUserPrincipalName] <> UPPER(LTRIM(RTRIM(s.[UserPrincipalName]))) OR
                        NOT ((s.[Role] IN (N'staff', N'admin') AND s.[OrganizationId] = r.[LibraryOrganizationId]) OR
                             (s.[Role] = N'super_admin' AND s.[OrganizationId] = 1)));
                 """, allowedTenantIds),
@@ -3520,8 +3444,9 @@ public static class MigrationImporter
                 LEFT JOIN [asap].[StaffUser] s ON s.[Id] = r.[ClaimedByStaffUserId]
                 WHERE r.[Status] IN (N'suggestion', N'outstanding_purchase', N'pending_hold', N'hold_placed')
                   AND r.[ClaimedByStaffUserId] IS NOT NULL
-                  AND (s.[Id] IS NULL OR s.[IsActive] = 0 OR s.[EntraTenantId] IS NULL OR s.[EntraObjectId] IS NULL OR
-                       s.[EntraTenantId] NOT IN ({allowedTenants}) OR
+                  AND (s.[Id] IS NULL OR s.[IsActive] = 0 OR
+                       NULLIF(LTRIM(RTRIM(s.[UserPrincipalName])), N'') IS NULL OR
+                       s.[NormalizedUserPrincipalName] <> UPPER(LTRIM(RTRIM(s.[UserPrincipalName]))) OR
                        NOT ((s.[Role] IN (N'staff', N'admin') AND s.[OrganizationId] = r.[LibraryOrganizationId]) OR
                             (s.[Role] = N'super_admin' AND s.[OrganizationId] = 1)));
                 """, allowedTenantIds),
@@ -3531,8 +3456,9 @@ public static class MigrationImporter
                 FROM [asap].[AdditionalCopyRequest] r
                 LEFT JOIN [asap].[StaffUser] s ON s.[Id] = r.[ClaimedByStaffUserId]
                 WHERE r.[Status] = N'open' AND r.[ClaimedByStaffUserId] IS NOT NULL
-                  AND (s.[Id] IS NULL OR s.[IsActive] = 0 OR s.[EntraTenantId] IS NULL OR s.[EntraObjectId] IS NULL OR
-                       s.[EntraTenantId] NOT IN ({allowedTenants}) OR
+                  AND (s.[Id] IS NULL OR s.[IsActive] = 0 OR
+                       NULLIF(LTRIM(RTRIM(s.[UserPrincipalName])), N'') IS NULL OR
+                       s.[NormalizedUserPrincipalName] <> UPPER(LTRIM(RTRIM(s.[UserPrincipalName]))) OR
                        NOT ((s.[Role] IN (N'staff', N'admin') AND s.[OrganizationId] = r.[LibraryOrganizationId]) OR
                             (s.[Role] = N'super_admin' AND s.[OrganizationId] = 1)));
                 """, allowedTenantIds),
@@ -4062,7 +3988,7 @@ public static class MigrationImporter
         IReadOnlySet<Guid> allowedTenantIds)
     {
         using var command = new SqlCommand(
-            "SELECT [IsActive], [Role], [OrganizationId], [EntraTenantId], [EntraObjectId] FROM [asap].[StaffUser] WHERE [Id] = @id;",
+            "SELECT [IsActive], [Role], [OrganizationId], [UserPrincipalName], [NormalizedUserPrincipalName] FROM [asap].[StaffUser] WHERE [Id] = @id;",
             connection,
             transaction);
         command.Parameters.AddWithValue("@id", staffUserId);
@@ -4071,10 +3997,11 @@ public static class MigrationImporter
         if (!reader.GetBoolean(0)) return "claimant_inactive";
         var role = reader.GetString(1);
         var organizationId = reader.GetInt32(2);
-        if (reader.IsDBNull(3) || reader.IsDBNull(4) ||
-            !allowedTenantIds.Contains(reader.GetGuid(3)) || reader.GetGuid(4) == Guid.Empty)
+        var authenticationEmail = reader.IsDBNull(3) ? null : RealEmail(reader.GetString(3));
+        if (authenticationEmail is null || reader.IsDBNull(4) ||
+            !string.Equals(authenticationEmail.ToUpperInvariant(), reader.GetString(4), StringComparison.Ordinal))
         {
-            throw new MigrationOperationException("active_staff_identity_invalid", $"Active staff user {staffUserId} has an invalid target identity.");
+            throw new MigrationOperationException("active_staff_email_invalid", $"Active staff user {staffUserId} has an invalid authentication email.");
         }
         return role switch
         {
@@ -4437,25 +4364,8 @@ public static class MigrationImporter
 
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    private sealed class StaffIdentityMap
-    {
-        public List<StaffIdentity> Users { get; init; } = [];
-    }
-
-    private sealed class StaffIdentity
-    {
-        public string PocketBaseStaffUserId { get; init; } = string.Empty;
-        public Guid TenantId { get; init; }
-        public Guid ObjectId { get; init; }
-        public string UserPrincipalName { get; init; } = string.Empty;
-        public string? DisplayName { get; init; }
-        public string? NotificationEmail { get; init; }
-    }
-
     private sealed record BootstrapIdentity(
-        Guid TenantId,
-        Guid ObjectId,
         string UserPrincipalName,
-        string DisplayName,
+        string? DisplayName,
         string NotificationEmail);
 }

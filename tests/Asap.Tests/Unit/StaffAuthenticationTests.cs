@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Asap.Web.Features.Staff;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -50,6 +51,27 @@ public sealed class StaffAuthenticationTests
             StaffAuthenticationRegistration.ValidateIssuer(
                 $"https://login.microsoftonline.com/{allowedTenant:D}/v1.0",
                 allowed));
+    }
+
+    [TestMethod]
+    public void EntraAuthenticationEmailPrefersEmailAndFallsBackToValidPreferredUsername()
+    {
+        static ClaimsPrincipal Principal(params Claim[] claims) =>
+            new(new ClaimsIdentity(claims, "test"));
+
+        Assert.AreEqual(
+            "primary@example.org",
+            StaffAuthenticationRegistration.ResolveAuthenticationEmail(Principal(
+                new Claim("email", " primary@example.org "),
+                new Claim("preferred_username", "fallback@example.org"))));
+        Assert.AreEqual(
+            "fallback@example.org",
+            StaffAuthenticationRegistration.ResolveAuthenticationEmail(Principal(
+                new Claim("email", "not-an-email"),
+                new Claim("preferred_username", " fallback@example.org "))));
+        Assert.IsNull(StaffAuthenticationRegistration.ResolveAuthenticationEmail(Principal(
+            new Claim("email", "legacy@staff.asap.local"),
+            new Claim("preferred_username", "also-invalid"))));
     }
 
     [TestMethod]

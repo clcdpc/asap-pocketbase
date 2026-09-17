@@ -123,7 +123,7 @@ public sealed partial class PatronJourneyTests
 
     [TestMethod]
     [DataRow("deactivate")]
-    [DataRow("rebind")]
+    [DataRow("email_change")]
     [DataRow("move")]
     [DataRow("demote")]
     public async Task ManualWorkflowRejectsActorContractionAfterProviderEvidence(string mutation)
@@ -150,7 +150,7 @@ public sealed partial class PatronJourneyTests
         {
             var job = workflowFactory.Services.GetRequiredService<BackgroundWorkflowJobs>();
             var execution = job.ProcessManualWorkflowAsync(
-                new StaffJobEvidence(actor.Id, actor.EntraTenantId, actor.EntraObjectId),
+                new StaffJobEvidence(actor.Id, actor.AuthenticationEmail, actor.EntraTenantId),
                 scope,
                 CancellationToken.None);
             await provider.CreateStarted.Task.WaitAsync(TimeSpan.FromSeconds(15));
@@ -183,9 +183,9 @@ public sealed partial class PatronJourneyTests
     {
         "deactivate" => ExecuteNonQueryAsync(
             "UPDATE [asap].[StaffUser] SET [IsActive] = 0 WHERE [Id] = @id;", ("@id", staffId)),
-        "rebind" => ExecuteNonQueryAsync(
-            "UPDATE [asap].[StaffUser] SET [EntraObjectId] = @objectId WHERE [Id] = @id;",
-            ("@objectId", Guid.NewGuid()), ("@id", staffId)),
+        "email_change" => ExecuteNonQueryAsync(
+            "UPDATE [asap].[StaffUser] SET [UserPrincipalName] = @email, [NormalizedUserPrincipalName] = UPPER(@email) WHERE [Id] = @id;",
+            ("@email", $"changed-{Guid.NewGuid():N}@example.org"), ("@id", staffId)),
         "move" => MoveManualActorAsync(staffId),
         "demote" => ExecuteNonQueryAsync(
             "UPDATE [asap].[StaffUser] SET [Role] = N'staff' WHERE [Id] = @id;", ("@id", staffId)),

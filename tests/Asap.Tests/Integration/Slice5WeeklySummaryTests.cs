@@ -58,7 +58,7 @@ public sealed partial class PatronJourneyTests
         try
         {
             using var client = factory.CreateClient();
-            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
             client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
 
             using (var forged = await client.PostAsync(
@@ -93,7 +93,7 @@ public sealed partial class PatronJourneyTests
                 Assert.IsNotNull(queuedEvidence);
                 Assert.AreEqual(actor.Id, queuedEvidence!.StaffUserId);
                 Assert.AreEqual(actor.EntraTenantId, queuedEvidence.TenantId);
-                Assert.AreEqual(actor.EntraObjectId, queuedEvidence.ObjectId);
+                Assert.AreEqual(actor.AuthenticationEmail, queuedEvidence.AuthenticationEmail);
                 Assert.AreEqual(scope, Convert.ToInt32(job.Args[1]));
             }
 
@@ -139,7 +139,7 @@ public sealed partial class PatronJourneyTests
     [DataRow("deactivate")]
     [DataRow("demote")]
     [DataRow("move")]
-    [DataRow("rebind")]
+    [DataRow("email_change")]
     public async Task ManualWeeklySummaryRejectsActorContractionBeforeExecution(string mutation)
     {
         var superAdmin = await ReadConfiguredSuperAdminAsync();
@@ -183,7 +183,7 @@ public sealed partial class PatronJourneyTests
         try
         {
             using var client = factory.CreateClient();
-            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
             client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
             using var response = await client.PostAsync(
                 $"/api/asap/staff/workflow/weekly-summary/run-now?organizationId={scope}&force=false",
@@ -245,7 +245,7 @@ public sealed partial class PatronJourneyTests
         try
         {
             using var client = factory.CreateClient();
-            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
             client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
 
             for (var index = 0; index < 2; index++)
@@ -437,7 +437,7 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    [DataRow("rebind")]
+    [DataRow("email_change")]
     public async Task ManualWeeklySummaryPassesEvidenceIntoLockedActorAuthorization(string mutation)
     {
         const int scope = 99006;
@@ -488,7 +488,7 @@ public sealed partial class PatronJourneyTests
         {
             var result = await scoped.Services.GetRequiredService<BackgroundWorkflowJobs>()
                 .SendManualWeeklyStaffSummaryAsync(
-                    new StaffJobEvidence(actor.Id, actor.EntraTenantId, actor.EntraObjectId),
+                    new StaffJobEvidence(actor.Id, actor.AuthenticationEmail, actor.EntraTenantId),
                     scope,
                     CancellationToken.None);
             Assert.AreEqual("completed", result.Code);
@@ -570,7 +570,7 @@ public sealed partial class PatronJourneyTests
                 manualRunId,
                 scope,
                 CancellationToken.None,
-                new StaffIdentityEvidence(actor.Id, actor.EntraTenantId, actor.EntraObjectId));
+                new StaffIdentityEvidence(actor.Id, actor.AuthenticationEmail, actor.EntraTenantId));
             Assert.AreEqual("completed", result.Code);
             Assert.AreEqual(manualRunId, result.ManualRunId);
 
@@ -585,7 +585,7 @@ public sealed partial class PatronJourneyTests
                 item.LibraryOrganizationId == scope && item.Status == "open");
             Assert.AreEqual("pending", outbox.Status);
             Assert.AreEqual("weekly_summary", outbox.RecipientAddressKind);
-            Assert.AreEqual(actor.EntraTenantId, outbox.RecipientEntraTenantId);
+            Assert.AreEqual(actor.AuthenticationEmail, outbox.RecipientAuthenticationEmail);
             StringAssert.Contains(outbox.Subject!, $"{expectedNew} new");
             StringAssert.Contains(outbox.Subject!, $"{expectedPurchases} awaiting bibs");
             StringAssert.Contains(outbox.Subject!, $"{expectedCopies} additional copies");
@@ -602,7 +602,7 @@ public sealed partial class PatronJourneyTests
                 manualRunId,
                 scope,
                 CancellationToken.None,
-                new StaffIdentityEvidence(actor.Id, actor.EntraTenantId, actor.EntraObjectId));
+                new StaffIdentityEvidence(actor.Id, actor.AuthenticationEmail, actor.EntraTenantId));
             Assert.AreEqual("completed", second.Code);
             Assert.AreEqual(1, await verify.EmailOutbox.CountAsync(item => item.BusinessKey == $"{businessPrefix}{actor.Id}"));
         }

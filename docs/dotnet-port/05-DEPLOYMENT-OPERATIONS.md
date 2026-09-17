@@ -259,7 +259,7 @@ Before the final production migration:
 - stop the app pool, restore the real production config, destroy the disposable preflight database, and recreate/reset the final SQL database to the documented fresh migration-target state;
 - do not start `Asap.Web` against that final target until the maintenance-window import/reconciliation has completed.
 
-During the maintenance window, prepare the exact DACPAC/files with the app pool stopped, import the frozen PocketBase data, run the explicit active-bound-super-admin cutover gate (including migration-time provisioning/promotion of the configured bootstrap identity if needed), then complete reconciliation before starting the app. Never rely on normal startup bootstrap after StaffUser rows have been imported. After new-server checks pass, switch production DNS/hostname traffic to the new server.
+During the maintenance window, prepare the exact DACPAC/files with the app pool stopped, import the frozen PocketBase data, run the explicit usable email-authenticated super-admin cutover gate (including migration-time provisioning/promotion by configured bootstrap email if needed), then complete reconciliation before starting the app.
 
 ## 13. Availability model
 

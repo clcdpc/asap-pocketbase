@@ -307,7 +307,7 @@ public static class AdministrationEndpoints
             return Results.Json(new { code = "staff_scope_forbidden" }, statusCode: StatusCodes.Status403Forbidden);
         }
         var effectiveScope = actor.Role == "super_admin" ? organizationId : actor.OrganizationId;
-        var evidence = new StaffJobEvidence(actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+        var evidence = new StaffJobEvidence(actor.Id, actor.AuthenticationEmail, actor.EntraTenantId);
         var jobId = jobs.Enqueue<BackgroundWorkflowJobs>(job =>
             job.ProcessManualWorkflowAsync(evidence, effectiveScope ?? 1, CancellationToken.None));
         return Results.Accepted(value: new { code = "queued", jobId, organizationId = effectiveScope ?? 1 });
@@ -328,7 +328,7 @@ public static class AdministrationEndpoints
         }
 
         var effectiveScope = actor.Role == "super_admin" ? organizationId : actor.OrganizationId;
-        var evidence = new StaffJobEvidence(actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+        var evidence = new StaffJobEvidence(actor.Id, actor.AuthenticationEmail, actor.EntraTenantId);
         if (!force)
         {
             var ordinaryJobId = jobs.Enqueue<BackgroundWorkflowJobs>(job =>

@@ -68,7 +68,8 @@ public static class StaffAuthenticationRegistration
             {
                 var principal = context.Principal!;
                 if (!Guid.TryParse(principal.FindFirstValue(StaffClaims.TenantId), out var tenantId) ||
-                    !Guid.TryParse(principal.FindFirstValue(StaffClaims.ObjectId), out var objectId))
+                    !Guid.TryParse(principal.FindFirstValue("oid"), out var objectId) ||
+                    tenantId == Guid.Empty || objectId == Guid.Empty)
                 {
                     context.Fail("Required Entra identity claims are missing.");
                     return;
@@ -80,10 +81,20 @@ public static class StaffAuthenticationRegistration
                     return;
                 }
 
+                var authenticationEmail = ResolveAuthenticationEmail(principal);
+                if (!StaffEmail.TryNormalizeAuthenticationEmail(
+                        authenticationEmail,
+                        out _,
+                        out var normalizedAuthenticationEmail))
+                {
+                    context.Fail("A valid Entra email claim is required.");
+                    return;
+                }
+
                 var eligibility = context.HttpContext.RequestServices.GetRequiredService<StaffEligibilityService>();
-                var result = await eligibility.FindByBindingAsync(
+                var result = await eligibility.FindByEmailAsync(
+                    normalizedAuthenticationEmail!,
                     tenantId,
-                    objectId,
                     null,
                     StaffRoleRequirement.Any,
                     requireParticipation: true,
@@ -97,10 +108,13 @@ public static class StaffAuthenticationRegistration
                 var staff = result.Staff!;
                 var identity = (ClaimsIdentity)principal.Identity!;
                 identity.AddClaim(new Claim(StaffClaims.StaffUserId, staff.Id.ToString()));
+                identity.AddClaim(new Claim(StaffClaims.AuthenticationEmail, normalizedAuthenticationEmail!));
                 await context.HttpContext.RequestServices.GetRequiredService<StaffSignInService>()
                     .RecordSuccessfulSignInAsync(
-                        new StaffIdentityEvidence(staff.Id, tenantId, objectId),
-                        principal.FindFirstValue("preferred_username") ?? principal.FindFirstValue(ClaimTypes.Upn),
+                        staff.Id,
+                        normalizedAuthenticationEmail!,
+                        tenantId,
+                        objectId,
                         principal.FindFirstValue("name") ?? principal.FindFirstValue(ClaimTypes.Name),
                         context.HttpContext.RequestAborted);
             };
@@ -142,6 +156,22 @@ public static class StaffAuthenticationRegistration
             issuer.TrimEnd('/'),
             $"https://login.microsoftonline.com/{tenantId:D}/v2.0",
             StringComparison.OrdinalIgnoreCase);
+
+    internal static string? ResolveAuthenticationEmail(ClaimsPrincipal principal)
+    {
+        foreach (var claimType in new[] { "email", "preferred_username" })
+        {
+            if (StaffEmail.TryNormalizeAuthenticationEmail(
+                    principal.FindFirstValue(claimType),
+                    out var email,
+                    out _))
+            {
+                return email;
+            }
+        }
+
+        return null;
+    }
 
     private static Task JsonStatus(RedirectContext<CookieAuthenticationOptions> context, int status, string code)
     {

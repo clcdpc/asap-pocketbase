@@ -764,9 +764,8 @@ public sealed class HoldPlacementService(
                     $"SELECT * FROM [asap].[StaffUser] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {manualActorEvidence.StaffUserId}")
                 .SingleOrDefaultAsync(cancellationToken);
             var permitted = manualStaff is not null && manualStaff.IsActive &&
-                manualStaff.EntraTenantId == manualActorEvidence.TenantId &&
-                manualStaff.EntraObjectId == manualActorEvidence.ObjectId &&
-                manualStaff.EntraTenantId.HasValue && allowedTenantIds.Contains(manualStaff.EntraTenantId.Value) &&
+                allowedTenantIds.Contains(manualActorEvidence.TenantId) &&
+                StaffEmail.MatchesAuthenticationEmail(manualStaff, manualActorEvidence.AuthenticationEmail) &&
                 (manualStaff.Role == "super_admin" && manualStaff.OrganizationId == 1 ||
                  manualStaff.Role == "admin" && manualStaff.OrganizationId == snapshot.LibraryOrganizationId);
             if (!permitted) return new AcquisitionResult("staff_scope_forbidden");
@@ -1178,9 +1177,8 @@ public sealed class HoldPlacementService(
                     $"SELECT * FROM [asap].[StaffUser] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {manualActorEvidence.StaffUserId}")
                 .SingleOrDefaultAsync(cancellationToken);
             var permitted = manualStaff is not null && manualStaff.IsActive &&
-                manualStaff.EntraTenantId == manualActorEvidence.TenantId &&
-                manualStaff.EntraObjectId == manualActorEvidence.ObjectId &&
-                manualStaff.EntraTenantId.HasValue && allowedTenantIds.Contains(manualStaff.EntraTenantId.Value) &&
+                allowedTenantIds.Contains(manualActorEvidence.TenantId) &&
+                StaffEmail.MatchesAuthenticationEmail(manualStaff, manualActorEvidence.AuthenticationEmail) &&
                 (manualStaff.Role == "super_admin" && manualStaff.OrganizationId == 1 ||
                  manualStaff.Role == "admin" && manualStaff.OrganizationId == requestSnapshot.LibraryOrganizationId);
             if (!permitted) return new HoldPlacementResult("staff_scope_forbidden", owner.Id);
@@ -1496,17 +1494,15 @@ public sealed class HoldPlacementService(
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
     private bool IsCurrentAndEligible(CurrentStaff actor, StaffUser row, int organizationId) =>
-        row.IsActive && row.EntraTenantId == actor.EntraTenantId && row.EntraObjectId == actor.EntraObjectId &&
-        row.EntraTenantId != Guid.Empty && row.EntraObjectId != Guid.Empty &&
-        row.EntraTenantId.HasValue && allowedTenantIds.Contains(row.EntraTenantId.Value) &&
+        row.IsActive && allowedTenantIds.Contains(actor.EntraTenantId) &&
+        StaffEmail.MatchesAuthenticationEmail(row, actor.AuthenticationEmail) &&
         (row.Role == "super_admin" && row.OrganizationId == 1 ||
          row.Role is "staff" or "admin" && row.OrganizationId == organizationId);
 
     private bool IsCurrentSuperAdmin(CurrentStaff actor, StaffUser row) =>
         row.IsActive && row.Role == "super_admin" && row.OrganizationId == 1 &&
-        row.EntraTenantId == actor.EntraTenantId && row.EntraObjectId == actor.EntraObjectId &&
-        row.EntraTenantId != Guid.Empty && row.EntraObjectId != Guid.Empty &&
-        row.EntraTenantId.HasValue && allowedTenantIds.Contains(row.EntraTenantId.Value);
+        allowedTenantIds.Contains(actor.EntraTenantId) &&
+        StaffEmail.MatchesAuthenticationEmail(row, actor.AuthenticationEmail);
 
     private static async Task<bool> LockManualOrganizationsAsync(
         AsapDbContext context,

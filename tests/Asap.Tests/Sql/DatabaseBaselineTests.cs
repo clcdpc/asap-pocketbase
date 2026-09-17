@@ -80,7 +80,7 @@ public sealed class DatabaseBaselineTests
 
         Assert.AreEqual(16, Convert.ToInt32(await Scalar(connection, "SELECT CAST(SERVERPROPERTY('ProductMajorVersion') AS int);")));
         Assert.AreEqual(160, Convert.ToInt32(await Scalar(connection, "SELECT compatibility_level FROM sys.databases WHERE name = DB_NAME();")));
-        Assert.AreEqual(5, Convert.ToInt32(await Scalar(connection, "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
+        Assert.AreEqual(6, Convert.ToInt32(await Scalar(connection, "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
         Assert.AreEqual(1, Convert.ToInt32(await Scalar(connection, "SELECT COUNT(*) FROM [asap].[DeploymentState] WHERE [Id] = 1;")));
         var expectedHash = Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(_dacpacPath))).ToLowerInvariant();
@@ -218,7 +218,7 @@ public sealed class DatabaseBaselineTests
         {
             await using var connection = new SqlConnection(_databaseConnectionString);
             await connection.OpenAsync();
-            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 5 WHERE [Id] = 1;");
+            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 6 WHERE [Id] = 1;");
         }
     }
 
@@ -234,9 +234,11 @@ public sealed class DatabaseBaselineTests
             connection,
             """
             INSERT INTO [asap].[StaffUser]
-                ([EntraTenantId], [EntraObjectId], [Role], [OrganizationId], [IsActive])
+                ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
+                 [Role], [OrganizationId], [IsActive])
             VALUES
-                ('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222', N'staff', 2, 1);
+                ('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222',
+                 N'staff@example.test', N'STAFF@EXAMPLE.TEST', N'staff', 2, 1);
             """);
 
         await Assert.ThrowsAsync<SqlException>(async () =>
@@ -244,20 +246,60 @@ public sealed class DatabaseBaselineTests
                 connection,
                 """
                 INSERT INTO [asap].[EmailOutbox]
-                    ([OrganizationId], [DeliveryClass], [RecipientStaffUserId], [RecipientEntraTenantId],
-                     [RecipientEntraObjectId], [AuthorizationOrganizationId], [RecipientAddressKind],
+                    ([OrganizationId], [DeliveryClass], [RecipientStaffUserId], [RecipientAuthenticationEmail],
+                     [AuthorizationOrganizationId], [RecipientAddressKind],
                      [ToAddress], [FromAddress], [Subject], [BodyHtml], [Status], [CreatedUtc])
                 VALUES
                     (2, N'staff_authorization_sensitive',
-                     (SELECT [Id] FROM [asap].[StaffUser] WHERE [EntraObjectId] = '22222222-2222-2222-2222-222222222222'),
-                     '11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222',
+                     (SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'STAFF@EXAMPLE.TEST'),
+                     N'STAFF@EXAMPLE.TEST',
                      2, NULL, N'staff@example.test', N'asap@example.test', N'Subject', N'<p>Body</p>',
                      N'pending', SYSUTCDATETIME());
                 """));
     }
 
     [TestMethod]
-    public async Task StaffEligibilityUsesDurableTupleCurrentTenantAndParticipation()
+    public async Task ActiveStaffRequireUniqueNormalizedEmailButNotEntraMetadata()
+    {
+        await using var connection = new SqlConnection(_databaseConnectionString);
+        await connection.OpenAsync();
+        await NonQuery(
+            connection,
+            "INSERT INTO [asap].[Organization] ([Id], [DisplayName], [IsActive]) VALUES (70001, N'Email identity library', 1);");
+        await NonQuery(
+            connection,
+            """
+            INSERT INTO [asap].[StaffUser]
+                ([UserPrincipalName], [NormalizedUserPrincipalName], [Role], [OrganizationId], [IsActive])
+            VALUES (N'email-only@example.org', N'EMAIL-ONLY@EXAMPLE.ORG', N'staff', 70001, 1);
+
+            INSERT INTO [asap].[StaffUser]
+                ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
+                 [Role], [OrganizationId], [IsActive])
+            VALUES
+                ('71111111-1111-1111-1111-111111111111', '72222222-2222-2222-2222-222222222222',
+                 N'first@example.org', N'FIRST@EXAMPLE.ORG', N'staff', 70001, 1),
+                ('71111111-1111-1111-1111-111111111111', '72222222-2222-2222-2222-222222222222',
+                 N'second@example.org', N'SECOND@EXAMPLE.ORG', N'staff', 70001, 1);
+            """);
+
+        await Assert.ThrowsAsync<SqlException>(() => NonQuery(
+            connection,
+            """
+            INSERT INTO [asap].[StaffUser]
+                ([UserPrincipalName], [NormalizedUserPrincipalName], [Role], [OrganizationId], [IsActive])
+            VALUES (N'EMAIL-ONLY@example.org', N'EMAIL-ONLY@EXAMPLE.ORG', N'staff', 70001, 1);
+            """));
+        await Assert.ThrowsAsync<SqlException>(() => NonQuery(
+            connection,
+            """
+            INSERT INTO [asap].[StaffUser] ([Role], [OrganizationId], [IsActive])
+            VALUES (N'staff', 70001, 1);
+            """));
+    }
+
+    [TestMethod]
+    public async Task StaffEligibilityUsesEmailCurrentTenantAndParticipation()
     {
         var tenantId = Guid.Parse("31111111-1111-1111-1111-111111111111");
         var objectId = Guid.Parse("32222222-2222-2222-2222-222222222222");
@@ -269,8 +311,9 @@ public sealed class DatabaseBaselineTests
                 $"""
                 INSERT INTO [asap].[Organization] ([Id], [DisplayName], [IsActive]) VALUES (6, N'Eligibility Library', 1);
                 INSERT INTO [asap].[StaffUser]
-                    ([EntraTenantId], [EntraObjectId], [Role], [OrganizationId], [IsActive])
-                VALUES ('{tenantId}', '{objectId}', N'staff', 6, 1);
+                    ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
+                     [Role], [OrganizationId], [IsActive])
+                VALUES ('{tenantId}', '{objectId}', N'staff@example.org', N'STAFF@EXAMPLE.ORG', N'staff', 6, 1);
                 """);
         }
 
@@ -287,7 +330,7 @@ public sealed class DatabaseBaselineTests
         Assert.AreEqual(
             StaffEligibilityOutcome.Allowed,
             (await service.EvaluateAsync(
-                new StaffIdentityEvidence(staffId, tenantId, objectId),
+                new StaffIdentityEvidence(staffId, "STAFF@EXAMPLE.ORG", tenantId),
                 6,
                 StaffRoleRequirement.Any,
                 requireParticipation: true,
@@ -295,7 +338,7 @@ public sealed class DatabaseBaselineTests
         Assert.AreEqual(
             StaffEligibilityOutcome.InvalidIdentity,
             (await service.EvaluateAsync(
-                new StaffIdentityEvidence(staffId, tenantId, Guid.NewGuid()),
+                new StaffIdentityEvidence(staffId, "OTHER@EXAMPLE.ORG", tenantId),
                 6,
                 StaffRoleRequirement.Any,
                 requireParticipation: true,
@@ -310,7 +353,7 @@ public sealed class DatabaseBaselineTests
         Assert.AreEqual(
             StaffEligibilityOutcome.Forbidden,
             (await service.EvaluateAsync(
-                new StaffIdentityEvidence(staffId, tenantId, objectId),
+                new StaffIdentityEvidence(staffId, "STAFF@EXAMPLE.ORG", tenantId),
                 6,
                 StaffRoleRequirement.Any,
                 requireParticipation: true,

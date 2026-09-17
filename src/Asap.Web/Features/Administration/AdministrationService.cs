@@ -657,9 +657,9 @@ public sealed class AdministrationService(
             return new AdministrationResult("staff_scope_forbidden");
         }
 
-        var before = await staffEligibility.FindByBindingAsync(
+        var before = await staffEligibility.FindByEmailAsync(
+            actor.AuthenticationEmail,
             actor.EntraTenantId,
-            actor.EntraObjectId,
             null,
             StaffRoleRequirement.SuperAdmin,
             requireParticipation: true,
@@ -669,9 +669,9 @@ public sealed class AdministrationService(
             return AuthorizationFailure(before);
         }
         var result = await polarisProvider.TestConnectionAsync(cancellationToken);
-        var after = await staffEligibility.FindByBindingAsync(
+        var after = await staffEligibility.FindByEmailAsync(
+            actor.AuthenticationEmail,
             actor.EntraTenantId,
-            actor.EntraObjectId,
             null,
             StaffRoleRequirement.SuperAdmin,
             requireParticipation: true,

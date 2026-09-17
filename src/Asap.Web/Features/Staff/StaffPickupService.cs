@@ -250,9 +250,8 @@ public sealed class StaffPickupService(
     }
 
     private bool IsCurrentAndEligible(CurrentStaff actor, StaffUser row, int organizationId) =>
-        row.IsActive && row.EntraTenantId == actor.EntraTenantId && row.EntraObjectId == actor.EntraObjectId &&
-        row.EntraTenantId != Guid.Empty && row.EntraObjectId != Guid.Empty &&
-        row.EntraTenantId.HasValue && allowedTenantIds.Contains(row.EntraTenantId.Value) &&
+        row.IsActive && allowedTenantIds.Contains(actor.EntraTenantId) &&
+        StaffEmail.MatchesAuthenticationEmail(row, actor.AuthenticationEmail) &&
         (row.Role == "super_admin" && row.OrganizationId == 1 ||
          row.Role is "staff" or "admin" && row.OrganizationId == organizationId);
 

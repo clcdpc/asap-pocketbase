@@ -31,18 +31,23 @@ CREATE TABLE [asap].[StaffUser]
     [RowVersion] rowversion NOT NULL,
     CONSTRAINT [FK_StaffUser_Organization] FOREIGN KEY ([OrganizationId]) REFERENCES [asap].[Organization]([Id]),
     CONSTRAINT [CK_StaffUser_Role] CHECK ([Role] IN (N'staff', N'admin', N'super_admin')),
-    CONSTRAINT [CK_StaffUser_ActiveIdentity] CHECK ([IsActive] = 0 OR ([EntraTenantId] IS NOT NULL AND [EntraObjectId] IS NOT NULL)),
+    CONSTRAINT [CK_StaffUser_ActiveIdentity] CHECK
+    (
+        [IsActive] = 0 OR
+        (
+            NULLIF(LTRIM(RTRIM([UserPrincipalName])), N'') IS NOT NULL AND
+            NULLIF(LTRIM(RTRIM([NormalizedUserPrincipalName])), N'') IS NOT NULL AND
+            [NormalizedUserPrincipalName] = UPPER(LTRIM(RTRIM([UserPrincipalName]))) AND
+            [NormalizedUserPrincipalName] NOT LIKE N'%@STAFF.ASAP.LOCAL'
+        )
+    ),
     CONSTRAINT [CK_StaffUser_RoleOrganization] CHECK (([Role] = N'super_admin' AND [OrganizationId] = 1) OR ([Role] IN (N'staff', N'admin') AND [OrganizationId] <> 1))
 );
 GO
 
-CREATE UNIQUE INDEX [UX_StaffUser_EntraIdentity]
-    ON [asap].[StaffUser]([EntraTenantId], [EntraObjectId])
-    WHERE [EntraTenantId] IS NOT NULL AND [EntraObjectId] IS NOT NULL;
-GO
-
-CREATE INDEX [IX_StaffUser_NormalizedUserPrincipalName]
-    ON [asap].[StaffUser]([NormalizedUserPrincipalName]);
+CREATE UNIQUE INDEX [UX_StaffUser_NormalizedUserPrincipalName]
+    ON [asap].[StaffUser]([NormalizedUserPrincipalName])
+    WHERE [NormalizedUserPrincipalName] IS NOT NULL;
 GO
 
 CREATE INDEX [IX_StaffUser_Organization_Role_Active]

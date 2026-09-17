@@ -88,9 +88,6 @@ public sealed partial class PatronSuggestionService(
         """;
 
     private readonly string connectionString = externalConfiguration.ConnectionStrings.AsapDatabase!;
-    private readonly HashSet<Guid> allowedTenantIds = externalConfiguration.Authentication.Entra.AllowedTenantIds!
-        .Select(Guid.Parse)
-        .ToHashSet();
     private readonly TimeZoneInfo businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(
         externalConfiguration.Application.BusinessTimeZone!);
 
@@ -689,14 +686,12 @@ public sealed partial class PatronSuggestionService(
 
         await using var command = new SqlCommand(
             """
-            SELECT [EntraTenantId], [DisplayName], [UserPrincipalName]
+            SELECT [DisplayName], [UserPrincipalName]
             FROM [asap].[StaffUser] WITH (UPDLOCK, HOLDLOCK)
             WHERE [Id] = @staffId
               AND [IsActive] = 1
-              AND [EntraTenantId] IS NOT NULL
-              AND [EntraObjectId] IS NOT NULL
-              AND [EntraTenantId] <> @emptyGuid
-              AND [EntraObjectId] <> @emptyGuid
+              AND NULLIF(LTRIM(RTRIM([UserPrincipalName])), N'') IS NOT NULL
+              AND [NormalizedUserPrincipalName] = UPPER(LTRIM(RTRIM([UserPrincipalName])))
               AND
               (
                   ([Role] IN (N'staff', N'admin') AND [OrganizationId] = @organizationId) OR
@@ -707,21 +702,14 @@ public sealed partial class PatronSuggestionService(
             transaction);
         Add(command, "@staffId", SqlDbType.BigInt, candidate.StaffUserId);
         Add(command, "@organizationId", SqlDbType.Int, organizationId);
-        Add(command, "@emptyGuid", SqlDbType.UniqueIdentifier, Guid.Empty);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
         {
             return null;
         }
 
-        var tenantId = reader.GetGuid(0);
-        if (!allowedTenantIds.Contains(tenantId))
-        {
-            return null;
-        }
-
-        var displayName = reader.IsDBNull(1) ? null : reader.GetString(1);
-        var userPrincipalName = reader.IsDBNull(2) ? null : reader.GetString(2);
+        var displayName = reader.IsDBNull(0) ? null : reader.GetString(0);
+        var userPrincipalName = reader.IsDBNull(1) ? null : reader.GetString(1);
         return new LockedAutoClaimTarget(
             candidate.StaffUserId,
             displayName ?? userPrincipalName ?? "Staff");

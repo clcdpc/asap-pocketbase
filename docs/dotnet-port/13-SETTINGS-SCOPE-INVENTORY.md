@@ -285,7 +285,7 @@ The authoritative current behavior should be verified against the pinned PocketB
 
 ## 12. Closure-remediation scope boundaries
 
-`Authentication.Entra.AllowedTenantIds` remains restart-loaded external environment configuration, not an inheritable SQL/library setting. The common predicate in `01-PORTING-SPEC.md` section 7.6 applies its current value to every staff cookie use, sensitive-mail delivery/retry, and usable-super-admin check. Candidate configuration must leave at least one usable system super-admin; validate before activation, and fail startup closed if direct editing bypasses preflight. Removing a tenant does not require Graph, a session table, or key rotation. Re-adding it does not undo independent deactivation/rebind/scope invalidity.
+`Authentication.Entra.AllowedTenantIds` remains restart-loaded external environment configuration, not an inheritable SQL/library setting. Its current value is applied to every staff cookie use; removing a tenant invalidates sessions established by that tenant without Graph, a session table, or key rotation. Usable-super-admin and authorization-sensitive-mail checks depend on active normalized staff email plus current role/scope/participation, not stored tenant/object metadata. Re-adding a tenant does not undo independent deactivation, authentication-email, or scope invalidity.
 
 `Organization.IsActive` still governs participation rather than stored StaffUser relationship validity. Closed history is preserved; reopen/import revalidate effective operational claimants, but library inactivity alone does not clear a valid stored claim. Recovery of an already-acquired HoldPlacementOperation is the narrowly defined inactive-library exception, not permission to start a new placement.
 

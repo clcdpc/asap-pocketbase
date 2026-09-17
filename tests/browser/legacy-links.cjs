@@ -5,7 +5,7 @@ const { URL } = require('node:url');
 
 function parseArguments(argv) {
   if (argv.length !== 19) {
-    throw new Error('Usage: node tests/browser/legacy-links.cjs <baseURL> <artifactDirectory> <superId> <tenantId> <superObjectId> <staffId> <staffObjectId> <sharedLegacyId> <numericLegacyId> <sharedTitleId> <sharedCopyId> <numericTitleId> <numericCopyId> <missingTitleId> <deletedTitleId> <outOfScopeTitleId> <missingCopyId> <deletedCopyId> <outOfScopeCopyId>');
+    throw new Error('Usage: node tests/browser/legacy-links.cjs <baseURL> <artifactDirectory> <superId> <tenantId> <superEmail> <staffId> <staffEmail> <sharedLegacyId> <numericLegacyId> <sharedTitleId> <sharedCopyId> <numericTitleId> <numericCopyId> <missingTitleId> <deletedTitleId> <outOfScopeTitleId> <missingCopyId> <deletedCopyId> <outOfScopeCopyId>');
   }
   const parsed = new URL(argv[0]);
   if (!['http:', 'https:'].includes(parsed.protocol) || parsed.pathname !== '/' ||
@@ -15,8 +15,8 @@ function parseArguments(argv) {
   return {
     baseOrigin: parsed.origin,
     artifactRoot: path.resolve(argv[1]),
-    superIdentity: { staffId: argv[2], tenantId: argv[3], objectId: argv[4] },
-    staffIdentity: { staffId: argv[5], tenantId: argv[3], objectId: argv[6] },
+    superIdentity: { staffId: argv[2], tenantId: argv[3], email: argv[4] },
+    staffIdentity: { staffId: argv[5], tenantId: argv[3], email: argv[6] },
     sharedLegacyId: argv[7],
     numericLegacyId: argv[8],
     sharedTitleId: argv[9],
@@ -42,7 +42,7 @@ async function createContext(browser, viewport, baseOrigin, identity) {
     extraHTTPHeaders: {
       'X-ASAP-Test-Staff-Id': identity.staffId,
       'X-ASAP-Test-Tenant-Id': identity.tenantId,
-      'X-ASAP-Test-Object-Id': identity.objectId
+      'X-ASAP-Test-Staff-Email': identity.email
     }
   });
   const traffic = { externalRequests: 0 };

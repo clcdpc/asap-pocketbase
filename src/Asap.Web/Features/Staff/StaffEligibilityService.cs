@@ -18,12 +18,12 @@ public enum StaffRoleRequirement
     SuperAdmin
 }
 
-public sealed record StaffIdentityEvidence(long StaffUserId, Guid TenantId, Guid ObjectId);
+public sealed record StaffIdentityEvidence(long StaffUserId, string AuthenticationEmail, Guid TenantId);
 
 public sealed record CurrentStaff(
     long Id,
+    string AuthenticationEmail,
     Guid EntraTenantId,
-    Guid EntraObjectId,
     string? UserPrincipalName,
     string? DisplayName,
     string? NotificationEmail,
@@ -52,9 +52,7 @@ public sealed class StaffEligibilityService(
         .ToHashSet();
 
     public bool IsAssignmentEligible(StaffUser row, int organizationId) =>
-        row.IsActive && row.EntraTenantId.HasValue && row.EntraObjectId.HasValue &&
-        row.EntraTenantId != Guid.Empty && row.EntraObjectId != Guid.Empty &&
-        allowedTenantIds.Contains(row.EntraTenantId.Value) &&
+        row.IsActive && HasValidAuthenticationEmail(row) &&
         (row.Role == "super_admin" && row.OrganizationId == 1 ||
          row.Role is "staff" or "admin" && row.OrganizationId == organizationId);
 
@@ -65,13 +63,23 @@ public sealed class StaffEligibilityService(
         bool requireParticipation,
         CancellationToken cancellationToken)
     {
-        if (evidence.TenantId == Guid.Empty || evidence.ObjectId == Guid.Empty) return Invalid();
+        if (evidence.TenantId == Guid.Empty ||
+            !allowedTenantIds.Contains(evidence.TenantId) ||
+            !StaffEmail.TryNormalizeAuthenticationEmail(
+                evidence.AuthenticationEmail,
+                out _,
+                out var normalizedAuthenticationEmail))
+        {
+            return Invalid();
+        }
+
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        var row = await LoadAsync(context, evidence.StaffUserId, cancellationToken);
+        var row = await LoadAsync(context, evidence.StaffUserId, evidence.TenantId, cancellationToken);
         if (row is null ||
-            row.EntraTenantId != evidence.TenantId ||
-            row.EntraObjectId != evidence.ObjectId ||
-            !allowedTenantIds.Contains(evidence.TenantId))
+            !string.Equals(
+                row.AuthenticationEmail,
+                normalizedAuthenticationEmail,
+                StringComparison.Ordinal))
         {
             return Invalid();
         }
@@ -85,22 +93,28 @@ public sealed class StaffEligibilityService(
             cancellationToken);
     }
 
-    public async Task<StaffEligibilityResult> FindByBindingAsync(
+    public async Task<StaffEligibilityResult> FindByEmailAsync(
+        string normalizedAuthenticationEmail,
         Guid tenantId,
-        Guid objectId,
         int? requestedOrganizationId,
         StaffRoleRequirement roleRequirement,
         bool requireParticipation,
         CancellationToken cancellationToken)
     {
-        if (tenantId == Guid.Empty || objectId == Guid.Empty || !allowedTenantIds.Contains(tenantId))
+        if (tenantId == Guid.Empty ||
+            !allowedTenantIds.Contains(tenantId) ||
+            !StaffEmail.TryNormalizeAuthenticationEmail(
+                normalizedAuthenticationEmail,
+                out _,
+                out var normalizedEmail))
         {
             return Invalid();
         }
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var id = await context.StaffUsers.AsNoTracking()
-            .Where(item => item.EntraTenantId == tenantId && item.EntraObjectId == objectId)
+            .Where(item => item.IsActive &&
+                           item.NormalizedUserPrincipalName == normalizedEmail)
             .Select(item => (long?)item.Id)
             .SingleOrDefaultAsync(cancellationToken);
         if (!id.HasValue)
@@ -108,7 +122,7 @@ public sealed class StaffEligibilityService(
             return Invalid();
         }
 
-        var row = await LoadAsync(context, id.Value, cancellationToken);
+        var row = await LoadAsync(context, id.Value, tenantId, cancellationToken);
         return row is null
             ? Invalid()
             : await EvaluateLoadedAsync(
@@ -121,7 +135,7 @@ public sealed class StaffEligibilityService(
     }
 
     // Administrative mutations lock organizations first, then the actor row. Revalidate the
-    // cookie evidence on that same transaction so a role, binding, or tenant-scope change cannot
+    // cookie evidence on that same transaction so a role, authentication-email, or tenant-scope change cannot
     // authorize a later write merely because the request started with a valid cookie.
     public async Task<StaffEligibilityResult> RevalidateLockedAsync(
         AsapDbContext context,
@@ -137,18 +151,25 @@ public sealed class StaffEligibilityService(
             .SingleOrDefaultAsync(cancellationToken);
         if (row is null ||
             !row.IsActive ||
-            !row.EntraTenantId.HasValue ||
-            !row.EntraObjectId.HasValue ||
-            row.EntraTenantId == Guid.Empty || row.EntraObjectId == Guid.Empty ||
-            row.EntraTenantId.Value != ticket.EntraTenantId ||
-            row.EntraObjectId.Value != ticket.EntraObjectId ||
-            !allowedTenantIds.Contains(row.EntraTenantId.Value))
+            !allowedTenantIds.Contains(ticket.EntraTenantId) ||
+            !StaffEmail.TryNormalizeAuthenticationEmail(
+                row.UserPrincipalName,
+                out _,
+                out var normalizedAuthenticationEmail) ||
+            !string.Equals(
+                normalizedAuthenticationEmail,
+                row.NormalizedUserPrincipalName,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                normalizedAuthenticationEmail,
+                ticket.AuthenticationEmail,
+                StringComparison.Ordinal))
         {
             return Invalid();
         }
 
         // The administration caller locks all routing organizations first. Do not issue a
-        // fallback organization read here: a rebound actor must fail instead of retaining a
+        // fallback organization read here: an actor moved out of scope must fail instead of retaining a
         // shared lock on an organization outside that ordered set.
         if (!lockedOrganizationIds.Contains(row.OrganizationId))
         {
@@ -163,8 +184,8 @@ public sealed class StaffEligibilityService(
 
         var current = new CurrentStaff(
             row.Id,
-            row.EntraTenantId.Value,
-            row.EntraObjectId.Value,
+            normalizedAuthenticationEmail!,
+            ticket.EntraTenantId,
             row.UserPrincipalName,
             row.DisplayName,
             row.NotificationEmail,
@@ -198,13 +219,11 @@ public sealed class StaffEligibilityService(
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var candidates = await context.StaffUsers.AsNoTracking()
             .Where(item => item.IsActive && item.Role == "super_admin" && item.OrganizationId == 1)
-            .Select(item => new { item.EntraTenantId, item.EntraObjectId })
+            .Select(item => new { item.UserPrincipalName, item.NormalizedUserPrincipalName })
             .ToListAsync(cancellationToken);
-        return candidates.Any(item =>
-            item.EntraTenantId.HasValue &&
-            item.EntraObjectId.HasValue &&
-            item.EntraTenantId != Guid.Empty && item.EntraObjectId != Guid.Empty &&
-            allowedTenantIds.Contains(item.EntraTenantId.Value));
+        return candidates.Any(item => HasValidAuthenticationEmail(
+            item.UserPrincipalName,
+            item.NormalizedUserPrincipalName));
     }
 
     private async Task<StaffEligibilityResult> EvaluateLoadedAsync(
@@ -241,34 +260,50 @@ public sealed class StaffEligibilityService(
         return new StaffEligibilityResult(StaffEligibilityOutcome.Allowed, row, "allowed");
     }
 
-    private static Task<CurrentStaff?> LoadAsync(
+    private static async Task<CurrentStaff?> LoadAsync(
         AsapDbContext context,
         long staffUserId,
+        Guid authenticationTenantId,
         CancellationToken cancellationToken) =>
-        (from staff in context.StaffUsers.AsNoTracking()
+        await (from staff in context.StaffUsers.AsNoTracking()
          join organization in context.Organizations.AsNoTracking()
              on staff.OrganizationId equals organization.Id
-         where staff.Id == staffUserId && staff.IsActive &&
-               staff.EntraTenantId != null && staff.EntraObjectId != null &&
-               staff.EntraTenantId != Guid.Empty && staff.EntraObjectId != Guid.Empty
-         select new CurrentStaff(
-             staff.Id,
-             staff.EntraTenantId!.Value,
-             staff.EntraObjectId!.Value,
-             staff.UserPrincipalName,
-             staff.DisplayName,
-             staff.NotificationEmail,
-             staff.Role,
-             staff.OrganizationId,
-             organization.DisplayName,
-             organization.IsActive,
-             staff.WeeklyActionSummaryEnabled,
-             staff.WeeklyActionSummaryEmail,
-             staff.PurchaseReminderDefault,
-             staff.AdditionalCopyReminderDefault,
-             staff.DefaultMineUnclaimedFilter,
-             staff.RowVersion))
-        .SingleOrDefaultAsync(cancellationToken);
+         where staff.Id == staffUserId && staff.IsActive
+         select new { Staff = staff, Organization = organization })
+        .SingleOrDefaultAsync(cancellationToken) is { } loaded &&
+        StaffEmail.TryNormalizeAuthenticationEmail(
+            loaded.Staff.UserPrincipalName,
+            out _,
+            out var normalizedAuthenticationEmail) &&
+        string.Equals(
+            normalizedAuthenticationEmail,
+            loaded.Staff.NormalizedUserPrincipalName,
+            StringComparison.Ordinal)
+            ? new CurrentStaff(
+                loaded.Staff.Id,
+                normalizedAuthenticationEmail!,
+                authenticationTenantId,
+                loaded.Staff.UserPrincipalName,
+                loaded.Staff.DisplayName,
+                loaded.Staff.NotificationEmail,
+                loaded.Staff.Role,
+                loaded.Staff.OrganizationId,
+                loaded.Organization.DisplayName,
+                loaded.Organization.IsActive,
+                loaded.Staff.WeeklyActionSummaryEnabled,
+                loaded.Staff.WeeklyActionSummaryEmail,
+                loaded.Staff.PurchaseReminderDefault,
+                loaded.Staff.AdditionalCopyReminderDefault,
+                loaded.Staff.DefaultMineUnclaimedFilter,
+                loaded.Staff.RowVersion)
+            : null;
+
+    private static bool HasValidAuthenticationEmail(StaffUser row) =>
+        HasValidAuthenticationEmail(row.UserPrincipalName, row.NormalizedUserPrincipalName);
+
+    private static bool HasValidAuthenticationEmail(string? email, string? normalizedEmail) =>
+        StaffEmail.TryNormalizeAuthenticationEmail(email, out _, out var expectedNormalizedEmail) &&
+        string.Equals(expectedNormalizedEmail, normalizedEmail, StringComparison.Ordinal);
 
     private static bool IsValidRoleOrganization(string role, int organizationId) =>
         role == "super_admin" ? organizationId == 1 :

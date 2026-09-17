@@ -573,14 +573,11 @@ public sealed class TitleRequestMutationService(
     }
 
     private bool IsSameCurrentActor(CurrentStaff ticket, StaffUser row) =>
-        row.IsActive && row.EntraTenantId == ticket.EntraTenantId && row.EntraObjectId == ticket.EntraObjectId &&
-        row.EntraTenantId != Guid.Empty && row.EntraObjectId != Guid.Empty &&
-        row.EntraTenantId.HasValue && allowedTenantIds.Contains(row.EntraTenantId.Value);
+        row.IsActive && allowedTenantIds.Contains(ticket.EntraTenantId) &&
+        StaffEmail.MatchesAuthenticationEmail(row, ticket.AuthenticationEmail);
 
     private bool IsEligibleForLibrary(StaffUser row, int organizationId) =>
-        row.IsActive && row.EntraTenantId.HasValue && row.EntraObjectId.HasValue &&
-        row.EntraTenantId != Guid.Empty && row.EntraObjectId != Guid.Empty &&
-        allowedTenantIds.Contains(row.EntraTenantId.Value) &&
+        row.IsActive && StaffEmail.IsValidAuthenticationEmail(row) &&
         (row.Role == "super_admin" && row.OrganizationId == 1 ||
          row.Role is "staff" or "admin" && row.OrganizationId == organizationId);
 
@@ -658,8 +655,7 @@ public sealed class TitleRequestMutationService(
             BusinessKey = businessKey,
             DeliveryClass = "staff_authorization_sensitive",
             RecipientStaffUserId = recipient.Id,
-            RecipientEntraTenantId = recipient.EntraTenantId,
-            RecipientEntraObjectId = recipient.EntraObjectId,
+            RecipientAuthenticationEmail = recipient.NormalizedUserPrincipalName,
             AuthorizationOrganizationId = request.LibraryOrganizationId,
             RecipientAddressKind = "notification_email",
             ToAddress = toAddress,

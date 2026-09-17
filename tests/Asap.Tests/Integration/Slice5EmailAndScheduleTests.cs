@@ -18,7 +18,7 @@ public sealed partial class PatronJourneyTests
         var adminSeed = await CreateCorrectiveStaffAsync(superAdmin, "admin", 2);
         var staff = await ReadCorrectiveStaffAsync(adminSeed);
         using var client = factory!.CreateClient();
-        AddTestingStaffHeaders(client, staff.Id, staff.EntraTenantId, staff.EntraObjectId);
+        AddTestingStaffHeaders(client, staff.Id, staff.EntraTenantId, staff.AuthenticationEmail);
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
 
         using var omitted = await client.PostAsync("/api/asap/staff/workflow/run-now", content: null);
@@ -33,7 +33,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("staff_scope_forbidden", forgedBody.RootElement.GetProperty("code").GetString());
 
         var superClient = factory.CreateClient();
-        AddTestingStaffHeaders(superClient, superAdmin.Id, superAdmin.EntraTenantId, superAdmin.EntraObjectId);
+        AddTestingStaffHeaders(superClient, superAdmin.Id, superAdmin.EntraTenantId, superAdmin.AuthenticationEmail);
         superClient.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(superClient));
         using var global = await superClient.PostAsync("/api/asap/staff/workflow/run-now", content: null);
         Assert.AreEqual(System.Net.HttpStatusCode.Accepted, global.StatusCode);
@@ -49,7 +49,7 @@ public sealed partial class PatronJourneyTests
         var staff = await CreateCorrectiveStaffAsync(superAdmin, "staff", 2);
         var actor = await ReadCorrectiveStaffAsync(staff);
         using var client = factory!.CreateClient();
-        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.EntraObjectId);
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
 
         using var response = await client.PostAsync(

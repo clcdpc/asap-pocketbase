@@ -27,6 +27,7 @@ public sealed class MigrationCliTests
         StringAssert.Contains(output.ToString(), "import --package");
         StringAssert.Contains(output.ToString(), "reconcile --package");
         StringAssert.Contains(output.ToString(), "Import validates a fresh target and writes a deterministic reconciliation report.");
+        Assert.IsFalse(output.ToString().Contains("staff-identity-map", StringComparison.Ordinal));
     }
 
     [TestMethod]
@@ -39,7 +40,10 @@ public sealed class MigrationCliTests
         Assert.AreEqual(
             "150b30b776565194260cc327eeeffdfb46475e81",
             contract.RootElement.GetProperty("pocketBaseBaselineSha").GetString());
-        Assert.AreEqual(5, contract.RootElement.GetProperty("expectedSchemaVersion").GetInt32());
+        Assert.AreEqual(
+            "email-identity-v1",
+            contract.RootElement.GetProperty("contractVersion").GetString());
+        Assert.AreEqual(6, contract.RootElement.GetProperty("expectedSchemaVersion").GetInt32());
         Assert.AreEqual(
             "CLC.ASAP",
             contract.RootElement.GetProperty("dataProtectionApplicationName").GetString());
@@ -512,8 +516,6 @@ public sealed class MigrationCliTests
         try
         {
             var package = CreateMinimalPackage(root);
-            var identityMap = Path.Combine(root, "staff-map.json");
-            File.WriteAllText(identityMap, "{\"users\":[]}");
             var report = Path.Combine(root, "report.json");
 
             using var importMissingError = new StringWriter();
@@ -523,7 +525,6 @@ public sealed class MigrationCliTests
                     [
                         "import", "--package", package,
                         "--connection-string-env", connectionEnvironmentName,
-                        "--staff-identity-map", identityMap,
                         "--allowed-tenant-ids", tenantId.ToString(),
                         "--report", report
                     ],
@@ -550,7 +551,6 @@ public sealed class MigrationCliTests
                 MigrationImporter.Import(new MigrationImportOptions(
                     package,
                     string.Empty,
-                    identityMap,
                     new HashSet<Guid> { tenantId },
                     report,
                     null)));
@@ -585,7 +585,6 @@ public sealed class MigrationCliTests
                     [
                         "import", "--package", package,
                         "--connection-string-env", connectionEnvironmentName,
-                        "--staff-identity-map", identityMap,
                         "--allowed-tenant-ids", tenantId.ToString(),
                         "--report", report,
                         "--external-config", configurationPath
@@ -888,7 +887,7 @@ public sealed class MigrationCliTests
     }
 
     [TestMethod]
-    public async Task ImportRequiresExplicitIdentityMapAndReconcilesFreshSqlTarget()
+    public async Task ImportUsesSourceStaffEmailAndReconcilesFreshSqlTargetWithoutIdentityMap()
     {
         var root = Path.Combine(Path.GetTempPath(), $"asap-migration-import-{Guid.NewGuid():N}");
         var databaseName = $"AsapMigrationImport_{Guid.NewGuid():N}";
@@ -916,12 +915,6 @@ public sealed class MigrationCliTests
                 .GetString();
             var tenantId = Guid.Parse("00000000-0000-0000-0000-000000000002");
             var objectId = Guid.Parse("11111111-1111-1111-1111-111111111111");
-            var identityMap = Path.Combine(root, "staff-entra-identity-map.json");
-            File.WriteAllText(
-                identityMap,
-                $$"""
-                {"users":[{"pocketBaseStaffUserId":"pb-staff-1","tenantId":"{{tenantId}}","objectId":"{{objectId}}","userPrincipalName":"admin@example.org","displayName":"Mapped Administrator","notificationEmail":"target-notify@example.org"}]}
-                """);
             var report = Path.Combine(root, "import-report.json");
 
             using (var dacpac = DacPackage.Load(FindDacpac()))
@@ -959,7 +952,6 @@ public sealed class MigrationCliTests
                     [
                         "import", "--package", package,
                         "--connection-string-env", connectionEnvironmentName,
-                        "--staff-identity-map", identityMap,
                         "--allowed-tenant-ids", tenantId.ToString(),
                         "--report", Path.Combine(root, "dirty-target-report.json"),
                         "--external-config", ExternalConfigurationPath(package)
@@ -983,7 +975,6 @@ public sealed class MigrationCliTests
                     "import",
                     "--package", package,
                     "--connection-string-env", connectionEnvironmentName,
-                    "--staff-identity-map", identityMap,
                     "--allowed-tenant-ids", tenantId.ToString(),
                     "--report", report,
                     "--external-config", ExternalConfigurationPath(package)
@@ -995,7 +986,7 @@ public sealed class MigrationCliTests
             await using var connection = new SqlConnection(target);
             await connection.OpenAsync();
             Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[Organization] WHERE [Id] = 2 AND [DisplayName] = N'Test Library' AND [IsActive] = 1;"));
-            Assert.AreEqual(1, await ScalarAsync(connection, $"SELECT COUNT(*) FROM [asap].[StaffUser] WHERE [EntraTenantId] = '{tenantId}' AND [EntraObjectId] = '{objectId}' AND [Role] = N'super_admin' AND [OrganizationId] = 1 AND [IsActive] = 1;"));
+            Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[StaffUser] WHERE [UserPrincipalName] = N'source-admin@example.org' AND [NormalizedUserPrincipalName] = N'SOURCE-ADMIN@EXAMPLE.ORG' AND [EntraTenantId] IS NULL AND [EntraObjectId] IS NULL AND [Role] = N'super_admin' AND [OrganizationId] = 1 AND [IsActive] = 1;"));
             Assert.AreEqual(2, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[LegacyPocketBaseMapping] WHERE [EntityType] IN (N'organization', N'staff_user');"));
             Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[PatronSession];"));
             Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[EmailOutbox];"));
@@ -1020,9 +1011,9 @@ public sealed class MigrationCliTests
             Assert.AreEqual("weekly@example.org", staffRecipient.GetProperty("sourcePurchaseReminderRecipient").GetString());
             Assert.AreEqual("weekly@example.org", staffRecipient.GetProperty("sourceAdditionalCopyReminderRecipient").GetString());
             Assert.AreEqual("weekly@example.org", staffRecipient.GetProperty("sourceWeeklyRecipient").GetString());
-            Assert.AreEqual("target-notify@example.org", staffRecipient.GetProperty("targetAssignmentRecipient").GetString());
-            Assert.AreEqual("target-notify@example.org", staffRecipient.GetProperty("targetPurchaseReminderRecipient").GetString());
-            Assert.AreEqual("target-notify@example.org", staffRecipient.GetProperty("targetAdditionalCopyReminderRecipient").GetString());
+            Assert.AreEqual("source-admin@example.org", staffRecipient.GetProperty("targetAssignmentRecipient").GetString());
+            Assert.AreEqual("source-admin@example.org", staffRecipient.GetProperty("targetPurchaseReminderRecipient").GetString());
+            Assert.AreEqual("source-admin@example.org", staffRecipient.GetProperty("targetAdditionalCopyReminderRecipient").GetString());
             Assert.AreEqual("weekly@example.org", staffRecipient.GetProperty("targetWeeklyRecipient").GetString());
             Assert.IsTrue(staffRecipient.GetProperty("assignmentRecipientChanged").GetBoolean());
             Assert.IsTrue(staffRecipient.GetProperty("purchaseReminderRecipientChanged").GetBoolean());
@@ -1089,7 +1080,6 @@ public sealed class MigrationCliTests
                 [
                     "import", "--package", package,
                     "--connection-string-env", secondConnectionEnvironmentName,
-                    "--staff-identity-map", identityMap,
                     "--allowed-tenant-ids", tenantId.ToString(),
                     "--report", secondReport,
                     "--external-config", ExternalConfigurationPath(package)
@@ -1470,15 +1460,6 @@ public sealed class MigrationCliTests
                         Path.Combine(directory, "migration_logo.png"));
                 });
             var tenantId = Guid.Parse("00000000-0000-0000-0000-000000000002");
-            var identityMap = Path.Combine(root, "staff-entra-identity-map.json");
-            File.WriteAllText(
-                identityMap,
-                $$"""
-                {"users":[
-                  {"pocketBaseStaffUserId":"pb-staff-1","tenantId":"{{tenantId}}","objectId":"11111111-1111-1111-1111-111111111111","userPrincipalName":"admin@example.org"},
-                  {"pocketBaseStaffUserId":"pb-staff-2","tenantId":"{{tenantId}}","objectId":"22222222-2222-2222-2222-222222222222","userPrincipalName":"selector@example.org"}
-                ]}
-                """);
             var report = Path.Combine(root, "import-report.json");
             DeployDacpac(master, databaseName);
 
@@ -1488,7 +1469,6 @@ public sealed class MigrationCliTests
                 [
                     "import", "--package", package,
                     "--connection-string-env", connectionEnvironmentName,
-                    "--staff-identity-map", identityMap,
                     "--allowed-tenant-ids", tenantId.ToString(),
                     "--report", report,
                     "--external-config", ExternalConfigurationPath(package)
@@ -1587,12 +1567,6 @@ public sealed class MigrationCliTests
         try
         {
             DeployDacpac(master, databaseName);
-            var identityMap = Path.Combine(root, "staff-entra-identity-map.json");
-            File.WriteAllText(
-                identityMap,
-                $$"""
-                {"users":[{"pocketBaseStaffUserId":"pb-staff-1","tenantId":"{{tenantId}}","objectId":"11111111-1111-1111-1111-111111111111","userPrincipalName":"admin@example.org"}]}
-                """);
             Environment.SetEnvironmentVariable(connectionEnvironmentName, target);
 
             var invalidCases = new[]
@@ -1636,7 +1610,6 @@ public sealed class MigrationCliTests
                     [
                         "import", "--package", package,
                         "--connection-string-env", connectionEnvironmentName,
-                        "--staff-identity-map", identityMap,
                         "--allowed-tenant-ids", tenantId.ToString(),
                         "--report", Path.Combine(caseRoot, "report.json"),
                         "--external-config", ExternalConfigurationPath(package)
@@ -1688,7 +1661,6 @@ public sealed class MigrationCliTests
                 [
                     "import", "--package", validPackage,
                     "--connection-string-env", connectionEnvironmentName,
-                    "--staff-identity-map", identityMap,
                     "--allowed-tenant-ids", tenantId.ToString(),
                     "--report", Path.Combine(validRoot, "report.json"),
                     "--external-config", ExternalConfigurationPath(validPackage)
@@ -1782,16 +1754,6 @@ public sealed class MigrationCliTests
                     ('request-metadata-open', '2', 'fmt-book', 'A20000000000009', 'Open metadata only', 0, 'suggestion', NULL, NULL, NULL, 'Former Selector', '2029-02-09T10:00:00Z', 'manual', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z'),
                     ('request-metadata-closed', '2', 'fmt-book', 'A20000000000010', 'Closed metadata only', 0, 'closed', 'manual', NULL, NULL, 'Former Selector', '2029-02-10T10:00:00Z', 'manual', NULL, '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
                 """);
-            var identityMap = Path.Combine(root, "staff-entra-identity-map.json");
-            File.WriteAllText(
-                identityMap,
-                $$"""
-                {"users":[
-                  {"pocketBaseStaffUserId":"pb-staff-1","tenantId":"{{tenantId}}","objectId":"11111111-1111-1111-1111-111111111111","userPrincipalName":"admin@example.org"},
-                  {"pocketBaseStaffUserId":"pb-staff-same","tenantId":"{{tenantId}}","objectId":"22222222-2222-2222-2222-222222222222","userPrincipalName":"same@example.org"},
-                  {"pocketBaseStaffUserId":"pb-staff-other","tenantId":"{{tenantId}}","objectId":"33333333-3333-3333-3333-333333333333","userPrincipalName":"other@example.org"}
-                ]}
-                """);
             DeployDacpac(master, databaseName);
             Environment.SetEnvironmentVariable(connectionEnvironmentName, target);
             var report = Path.Combine(root, "report.json");
@@ -1801,7 +1763,6 @@ public sealed class MigrationCliTests
                 [
                     "import", "--package", package,
                     "--connection-string-env", connectionEnvironmentName,
-                    "--staff-identity-map", identityMap,
                     "--allowed-tenant-ids", tenantId.ToString(),
                     "--report", report,
                     "--external-config", ExternalConfigurationPath(package)
@@ -1882,12 +1843,6 @@ public sealed class MigrationCliTests
         try
         {
             DeployDacpac(master, databaseName);
-            var identityMap = Path.Combine(root, "staff-entra-identity-map.json");
-            File.WriteAllText(
-                identityMap,
-                $$"""
-                {"users":[{"pocketBaseStaffUserId":"pb-staff-1","tenantId":"{{tenantId}}","objectId":"11111111-1111-1111-1111-111111111111","userPrincipalName":"admin@example.org"}]}
-                """);
             Environment.SetEnvironmentVariable(connectionEnvironmentName, target);
 
             var conflictCases = new[]
@@ -1916,7 +1871,6 @@ public sealed class MigrationCliTests
                     [
                         "import", "--package", package,
                         "--connection-string-env", connectionEnvironmentName,
-                        "--staff-identity-map", identityMap,
                         "--allowed-tenant-ids", tenantId.ToString(),
                         "--report", Path.Combine(caseRoot, "report.json"),
                         "--external-config", ExternalConfigurationPath(package)
@@ -1945,7 +1899,6 @@ public sealed class MigrationCliTests
                     [
                         "import", "--package", bibConflictPackage,
                         "--connection-string-env", connectionEnvironmentName,
-                        "--staff-identity-map", identityMap,
                         "--allowed-tenant-ids", tenantId.ToString(),
                         "--report", Path.Combine(bibConflictRoot, "report.json"),
                         "--external-config", ExternalConfigurationPath(bibConflictPackage)
@@ -1988,7 +1941,6 @@ public sealed class MigrationCliTests
                     [
                         "import", "--package", ambiguousPackage,
                         "--connection-string-env", connectionEnvironmentName,
-                        "--staff-identity-map", identityMap,
                         "--allowed-tenant-ids", tenantId.ToString(),
                         "--report", ambiguousReport,
                         "--external-config", ExternalConfigurationPath(ambiguousPackage)
@@ -2058,7 +2010,6 @@ public sealed class MigrationCliTests
                 [
                     "import", "--package", validPackage,
                     "--connection-string-env", connectionEnvironmentName,
-                    "--staff-identity-map", identityMap,
                     "--allowed-tenant-ids", tenantId.ToString(),
                     "--report", report,
                     "--external-config", ExternalConfigurationPath(validPackage)
@@ -2117,12 +2068,6 @@ public sealed class MigrationCliTests
         try
         {
             DeployDacpac(master, databaseName);
-            var identityMap = Path.Combine(root, "staff-entra-identity-map.json");
-            File.WriteAllText(
-                identityMap,
-                $$"""
-                {"users":[{"pocketBaseStaffUserId":"pb-staff-1","tenantId":"{{tenantId}}","objectId":"11111111-1111-1111-1111-111111111111","userPrincipalName":"admin@example.org"}]}
-                """);
             Environment.SetEnvironmentVariable(connectionEnvironmentName, target);
 
             var cases = new[]
@@ -2172,7 +2117,6 @@ public sealed class MigrationCliTests
                     [
                         "import", "--package", package,
                         "--connection-string-env", connectionEnvironmentName,
-                        "--staff-identity-map", identityMap,
                         "--allowed-tenant-ids", tenantId.ToString(),
                         "--report", report,
                         "--external-config", ExternalConfigurationPath(package)
@@ -2216,12 +2160,6 @@ public sealed class MigrationCliTests
             DeployDacpac(master, databaseName);
             Environment.SetEnvironmentVariable(connectionEnvironmentName, target);
             var tenantId = Guid.Parse("00000000-0000-0000-0000-000000000002");
-            var identityMap = Path.Combine(root, "staff-entra-identity-map.json");
-            File.WriteAllText(
-                identityMap,
-                $$"""
-                {"users":[{"pocketBaseStaffUserId":"pb-staff-1","tenantId":"{{tenantId}}","objectId":"11111111-1111-1111-1111-111111111111","userPrincipalName":"admin@example.org"}]}
-                """);
 
             foreach (var origin in new[]
                      {
@@ -2250,7 +2188,6 @@ public sealed class MigrationCliTests
                     [
                         "import", "--package", package,
                         "--connection-string-env", connectionEnvironmentName,
-                        "--staff-identity-map", identityMap,
                         "--allowed-tenant-ids", tenantId.ToString(),
                         "--report", Path.Combine(packageRoot, "report.json"),
                         "--external-config", ExternalConfigurationPath(package)
@@ -2338,12 +2275,6 @@ public sealed class MigrationCliTests
                     ('legacy-branding-2', 'pb-org-2', NULL, 'Dormant legacy logo');
                 """);
             var tenantId = Guid.Parse("00000000-0000-0000-0000-000000000002");
-            var identityMap = Path.Combine(root, "staff-entra-identity-map.json");
-            File.WriteAllText(
-                identityMap,
-                $$"""
-                {"users":[{"pocketBaseStaffUserId":"pb-staff-1","tenantId":"{{tenantId}}","objectId":"11111111-1111-1111-1111-111111111111","userPrincipalName":"admin@example.org"}]}
-                """);
             var report = Path.Combine(root, "report.json");
             DeployDacpac(master, databaseName);
             Environment.SetEnvironmentVariable(connectionEnvironmentName, target);
@@ -2353,7 +2284,6 @@ public sealed class MigrationCliTests
                 [
                     "import", "--package", package,
                     "--connection-string-env", connectionEnvironmentName,
-                    "--staff-identity-map", identityMap,
                     "--allowed-tenant-ids", tenantId.ToString(),
                     "--report", report,
                     "--external-config", ExternalConfigurationPath(package)
@@ -2451,12 +2381,6 @@ public sealed class MigrationCliTests
                      '2030-01-02T03:04:05Z', NULL, '', '', '');
                 """);
             DeployDacpac(master, databaseName);
-            var identityMap = Path.Combine(root, "staff-map.json");
-            await File.WriteAllTextAsync(
-                identityMap,
-                """
-                {"users":[{"pocketBaseStaffUserId":"pb-staff-1","tenantId":"00000000-0000-0000-0000-000000000002","objectId":"00000000-0000-0000-0000-000000000011","userPrincipalName":"admin@example.org"}]}
-                """);
             var report = Path.Combine(root, "report.json");
             Environment.SetEnvironmentVariable(environmentName, target);
             using var output = new StringWriter();
@@ -2465,7 +2389,6 @@ public sealed class MigrationCliTests
                 [
                     "import", "--package", package,
                     "--connection-string-env", environmentName,
-                    "--staff-identity-map", identityMap,
                     "--allowed-tenant-ids", "00000000-0000-0000-0000-000000000002",
                     "--report", report,
                     "--external-config", ExternalConfigurationPath(package)
@@ -2532,12 +2455,6 @@ public sealed class MigrationCliTests
                 INSERT INTO [system_settings] VALUES
                     ('settings-1', 'system', 'https://staff.example.org/staff/', 'must-not-be-lost');
                 """);
-            var identityMap = Path.Combine(root, "staff-entra-identity-map.json");
-            File.WriteAllText(
-                identityMap,
-                """
-                {"users":[{"pocketBaseStaffUserId":"pb-staff-1","tenantId":"00000000-0000-0000-0000-000000000002","objectId":"11111111-1111-1111-1111-111111111111","userPrincipalName":"admin@example.org"}]}
-                """);
             Environment.SetEnvironmentVariable(environmentName, "SQL must not be reached");
             using var error = new StringWriter();
 
@@ -2545,7 +2462,6 @@ public sealed class MigrationCliTests
                 [
                     "import", "--package", package,
                     "--connection-string-env", environmentName,
-                    "--staff-identity-map", identityMap,
                     "--allowed-tenant-ids", "00000000-0000-0000-0000-000000000002",
                     "--report", Path.Combine(root, "report.json"),
                     "--external-config", ExternalConfigurationPath(package)
@@ -2556,6 +2472,56 @@ public sealed class MigrationCliTests
             Assert.AreEqual(1, exitCode);
             StringAssert.Contains(error.ToString(), "source_field_unaccounted");
             StringAssert.Contains(error.ToString(), "futureBehaviorSwitch");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(environmentName, null);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public void ImportBlocksActiveInvalidAndDuplicateStaffAuthenticationEmailsBeforeSqlMutation()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-staff-email-{Guid.NewGuid():N}");
+        var environmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        Directory.CreateDirectory(root);
+        Environment.SetEnvironmentVariable(environmentName, "SQL must not be reached");
+        try
+        {
+            var cases = new[]
+            {
+                ("missing", "UPDATE [staff_users] SET [email] = NULL WHERE [id] = 'pb-staff-1';", "active_staff_email_invalid"),
+                ("placeholder", "UPDATE [staff_users] SET [email] = 'legacy@staff.asap.local' WHERE [id] = 'pb-staff-1';", "active_staff_email_invalid"),
+                ("duplicate",
+                    """
+                    INSERT INTO [staff_users] VALUES
+                        ('pb-staff-2', 'SOURCE-ADMIN@example.org', 'duplicate-admin', 'Duplicate Administrator',
+                         'staff', 1, '2', 0, NULL, 0, 0, 0);
+                    """,
+                    "duplicate_staff_email")
+            };
+
+            foreach (var testCase in cases)
+            {
+                var caseRoot = Path.Combine(root, testCase.Item1);
+                Directory.CreateDirectory(caseRoot);
+                var package = CreateMinimalPackage(caseRoot, testCase.Item2);
+                using var error = new StringWriter();
+                var exitCode = MigrationCli.Run(
+                    [
+                        "import", "--package", package,
+                        "--connection-string-env", environmentName,
+                        "--allowed-tenant-ids", "00000000-0000-0000-0000-000000000002",
+                        "--report", Path.Combine(caseRoot, "report.json"),
+                        "--external-config", ExternalConfigurationPath(package)
+                    ],
+                    TextWriter.Null,
+                    error);
+
+                Assert.AreEqual(1, exitCode, testCase.Item1);
+                StringAssert.Contains(error.ToString(), testCase.Item3, testCase.Item1);
+            }
         }
         finally
         {
@@ -2633,19 +2599,13 @@ public sealed class MigrationCliTests
             configuration.Application.DataProtectionKeyEncryptionCertificateThumbprint = persistedCertificate.Thumbprint;
             configuration.Authentication.Entra.InitialSuperAdmin.TenantId = tenantId.ToString();
             configuration.Authentication.Entra.InitialSuperAdmin.ObjectId = objectId.ToString();
-            configuration.Authentication.Entra.InitialSuperAdmin.UserPrincipalName = "bootstrap@example.org";
+            configuration.Authentication.Entra.InitialSuperAdmin.UserPrincipalName = "source-admin@example.org";
             configuration.Authentication.Entra.InitialSuperAdmin.DisplayName = "Bootstrap Administrator";
             configuration.Authentication.Entra.InitialSuperAdmin.NotificationEmail = "bootstrap-notify@example.org";
             var configurationPath = Path.Combine(root, "asap.settings.json");
             File.WriteAllText(
                 configurationPath,
                 JsonSerializer.Serialize(configuration, new JsonSerializerOptions { WriteIndented = true }));
-            var identityMap = Path.Combine(root, "staff-entra-identity-map.json");
-            File.WriteAllText(
-                identityMap,
-                $$"""
-                {"users":[{"pocketBaseStaffUserId":"pb-staff-1","tenantId":"{{tenantId}}","objectId":"{{objectId}}","userPrincipalName":"mapped@example.org"}]}
-                """);
             var report = Path.Combine(root, "report.json");
             Environment.SetEnvironmentVariable(connectionEnvironmentName, target);
             Environment.SetEnvironmentVariable(tokenEnvironmentName, "target-postmark-secret");
@@ -2656,7 +2616,6 @@ public sealed class MigrationCliTests
                 [
                     "import", "--package", package,
                     "--connection-string-env", connectionEnvironmentName,
-                    "--staff-identity-map", identityMap,
                     "--allowed-tenant-ids", tenantId.ToString(),
                     "--report", report,
                     "--external-config", configurationPath,
@@ -2671,7 +2630,7 @@ public sealed class MigrationCliTests
             await connection.OpenAsync();
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
-                $"SELECT COUNT(*) FROM [asap].[StaffUser] WHERE [EntraTenantId] = '{tenantId}' AND [EntraObjectId] = '{objectId}' AND [Role] = N'super_admin' AND [OrganizationId] = 1 AND [IsActive] = 1;"));
+                "SELECT COUNT(*) FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'SOURCE-ADMIN@EXAMPLE.ORG' AND [EntraTenantId] IS NULL AND [EntraObjectId] IS NULL AND [Role] = N'super_admin' AND [OrganizationId] = 1 AND [IsActive] = 1;"));
             var ciphertexts = new List<string>();
             await using (var command = connection.CreateCommand())
             {
@@ -2707,9 +2666,9 @@ public sealed class MigrationCliTests
                 var promotedRecipient = reportDocument.RootElement.GetProperty("transformations").EnumerateArray().Single(item =>
                     item.GetProperty("entity").GetString() == "staff_user" &&
                     item.GetProperty("sourceId").GetString() == "pb-staff-1");
-                Assert.AreEqual("bootstrap-notify@example.org", promotedRecipient.GetProperty("targetAssignmentRecipient").GetString());
+                Assert.AreEqual("source-admin@example.org", promotedRecipient.GetProperty("targetAssignmentRecipient").GetString());
                 Assert.IsTrue(promotedRecipient.GetProperty("targetWeeklyEligible").GetBoolean());
-                Assert.AreEqual("migration_bootstrap", promotedRecipient.GetProperty("notificationEmailSource").GetString());
+                Assert.AreEqual("staff_email", promotedRecipient.GetProperty("notificationEmailSource").GetString());
             }
 
             DeployDacpac(master, insertedDatabaseName);
@@ -2730,7 +2689,6 @@ public sealed class MigrationCliTests
                 [
                     "import", "--package", package,
                     "--connection-string-env", connectionEnvironmentName,
-                    "--staff-identity-map", identityMap,
                     "--allowed-tenant-ids", tenantId.ToString(),
                     "--report", insertedReport,
                     "--external-config", configurationPath,
@@ -2745,7 +2703,7 @@ public sealed class MigrationCliTests
             Assert.AreEqual(2, await ScalarAsync(insertedConnection, "SELECT COUNT(*) FROM [asap].[StaffUser];"));
             Assert.AreEqual(1, await ScalarAsync(
                 insertedConnection,
-                $"SELECT COUNT(*) FROM [asap].[StaffUser] WHERE [EntraTenantId] = '{tenantId}' AND [EntraObjectId] = '{insertedObjectId}' AND [Role] = N'super_admin' AND [OrganizationId] = 1 AND [IsActive] = 1;"));
+                "SELECT COUNT(*) FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'INSERTED-BOOTSTRAP@EXAMPLE.ORG' AND [EntraTenantId] IS NULL AND [EntraObjectId] IS NULL AND [Role] = N'super_admin' AND [OrganizationId] = 1 AND [IsActive] = 1;"));
             var insertedReportText = await File.ReadAllTextAsync(insertedReport);
             StringAssert.Contains(insertedReportText, "\"migration_bootstrap_staff_users\": 1");
             StringAssert.Contains(insertedReportText, "\"action\": \"inserted\"");
