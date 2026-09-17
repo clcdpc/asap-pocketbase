@@ -62,13 +62,14 @@ public sealed class ExternalConfigurationValidatorTests
 
             var templatePath = Path.Combine(hostRoot, "Config", "application.json");
             var template = File.ReadAllText(templatePath);
+            Assert.IsFalse(template.Contains("ClientSecret", StringComparison.Ordinal));
+            Assert.IsFalse(template.Contains("REPLACE-CLIENT-SECRET", StringComparison.Ordinal));
             foreach (var (placeholder, replacement) in new Dictionary<string, string>
             {
                 ["REPLACE-SQL-SERVER"] = "localhost",
                 ["REPLACE-ASAP-DATABASE"] = "AsapTest",
                 ["REPLACE-HANGFIRE-DATABASE"] = "AsapHangfireTest",
                 ["REPLACE-CLIENT-ID"] = "11111111-1111-1111-1111-111111111111",
-                ["REPLACE-CLIENT-SECRET"] = "test-client-secret",
                 ["REPLACE-TENANT-ID"] = "22222222-2222-2222-2222-222222222222",
                 ["REPLACE-OBJECT-ID"] = "33333333-3333-3333-3333-333333333333",
                 ["REPLACE-ADMIN-UPN"] = "admin@example.org",

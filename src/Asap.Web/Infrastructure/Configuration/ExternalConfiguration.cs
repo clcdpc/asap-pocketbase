@@ -42,8 +42,6 @@ public sealed class EntraOptions
 {
     public string? ClientId { get; set; }
 
-    public string? ClientSecret { get; set; }
-
     public List<string>? AllowedTenantIds { get; set; }
 
     public InitialSuperAdminOptions InitialSuperAdmin { get; set; } = new();

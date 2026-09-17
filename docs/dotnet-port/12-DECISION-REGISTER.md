@@ -90,7 +90,7 @@ Staged PRs began with Slice 6. Beginning with Slice 7, GPT-6 Astra High is the p
 - Durable authorization identity is (`EntraTenantId`, `EntraObjectId`), with a filtered unique DB constraint/index. UPN, `preferred_username`, and email are never authorization keys.
 - Persist readable `UserPrincipalName`, `DisplayName`, and `NotificationEmail` beside the durable IDs so DB/admin inspection remains human-friendly. UPN/display may refresh from validated claims; `NotificationEmail` is app-owned/nullable and is never initialized or repopulated by Entra sign-in.
 - Initial super-admin tenant ID, object ID, and readable UPN/email come from external config and are auto-created only when the StaffUser table is empty; no setup page or first-login UPN binding.
-- Use OIDC client secret from external config initially; certificate auth is future hardening.
+- Use an ID-token-only OIDC flow with no Entra client secret or client certificate; ASAP validates the signed ID token and issues its own staff cookie without acquiring or saving Entra tokens.
 - Production and nonproduction share the same Entra app registration initially, with both redirect URIs configured.
 - Normal local Visual Studio F5 uses real Entra/OIDC.
 - `/staff` may load anonymously and shows a branded sign-in screen; OIDC begins only after the user chooses Sign in with Microsoft.

@@ -95,7 +95,8 @@ Use Microsoft Entra ID/OpenID Connect from day one.
 
 - Multi-tenant Entra application.
 - Production and permanent nonproduction initially share one Entra app registration with both redirect URIs configured.
-- Entra client secret is in the external environment configuration file, not SQL and not source control.
+- Staff authentication requests and validates an ID token directly with `response_type=id_token`; ASAP does not redeem an authorization code, acquire access or refresh tokens, or save Entra tokens.
+- Configure the app registration as a Web platform with each environment's `/signin-oidc` redirect URI and enable ID tokens. ASAP requires no Entra client secret or client certificate.
 - Explicit allowed Entra tenant IDs are configured externally.
 - Require and validate both Entra `tid` (tenant ID) and `oid` (object ID) claims. Validate the OIDC issuer/tenant normally and then apply the explicit allowed-tenant policy.
 - A successful Entra identity must match an active local `StaffUser`; there is no general JIT account creation.
@@ -359,7 +360,7 @@ A library-level **Reset inherited overrides** operation clears only inheritable 
 Use one tightly ACLed JSON file outside the application directory for environment/bootstrap/infra configuration. Example setting: `Asap:ConfigFile` points to it. It contains items such as:
 
 - ASAP/Hangfire connection strings
-- Entra client ID/secret and allowed tenants
+- Entra client ID and allowed tenants; no Entra client credential is configured
 - initial super-admin tenant ID, object ID, and readable UPN/email/profile seed values
 - environment marker/name and `Environment.IsNonProduction`, the application-level switch for section 14's recipient-domain safety rule
 - filesystem paths (logs, environment-specific Data Protection key ring, backup/reporting paths as needed)
