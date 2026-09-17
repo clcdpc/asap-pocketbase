@@ -88,8 +88,13 @@ The bootstrap flow is intentionally explicit:
 - Permanent IIS: published `appsettings.json` points to `C:\ProgramData\clc-asap\Config\application.json`, which contains the runtime operational configuration.
 - Deployment: `C:\ProgramData\clc-asap\Config\deployment.json` points `ExternalApplicationConfigPath` to the same `application.json`; preflight requires the two pointers to agree.
 
-The readable JSON embedded in `Initialize-AsapTestHost.ps1` is the canonical
-test-host application template. `04-MIGRATION-CUTOVER.md` and
+The readable JSON embedded in `Initialize-AsapTestHost.ps1` is the operational
+source of truth for the test-host application template. The bootstrap has no
+runtime dependency on another repository file; administrators copy only the
+PowerShell script. `examples/Config.example.json` is the documentation-pack
+representation of that template, and automated tests generate
+`application.json`, normalize its host-derived paths, and require complete
+structural equivalence. `04-MIGRATION-CUTOVER.md` and
 `examples/EffectiveLegacyOperationalConfig.example.json` define how existing
 PocketBase cron/queue-limit environment values are captured and reconciled
 before production jobs are enabled.

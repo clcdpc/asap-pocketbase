@@ -1,0 +1,97 @@
+{
+  "Environment": {
+    "Name": "Test",
+    "IsNonProduction": true,
+    "UiBannerText": "NON-PRODUCTION"
+  },
+  "ConnectionStrings": {
+    "AsapDatabase": "Server=REPLACE-SQL-SERVER;Database=REPLACE-ASAP-DATABASE;Integrated Security=True;Encrypt=True;TrustServerCertificate=False",
+    "HangfireDatabase": "Server=REPLACE-SQL-SERVER;Database=REPLACE-HANGFIRE-DATABASE;Integrated Security=True;Encrypt=True;TrustServerCertificate=False"
+  },
+  "Authentication": {
+    "Entra": {
+      "ClientId": "REPLACE-CLIENT-ID",
+      "ClientSecret": "REPLACE-CLIENT-SECRET",
+      "AllowedTenantIds": [
+        "REPLACE-TENANT-ID"
+      ],
+      "InitialSuperAdmin": {
+        "TenantId": "REPLACE-TENANT-ID",
+        "ObjectId": "REPLACE-OBJECT-ID",
+        "UserPrincipalName": "REPLACE-ADMIN-UPN",
+        "DisplayName": "ASAP Initial Administrator",
+        "NotificationEmail": "REPLACE-ADMIN-EMAIL"
+      }
+    }
+  },
+  "Application": {
+    "BusinessTimeZone": "America/New_York",
+    "DataProtectionKeysPath": "REPLACE-DATA-PROTECTION-KEYS-PATH",
+    "DataProtectionKeyEncryptionCertificateThumbprint": "REPLACE-DATA-PROTECTION-CERTIFICATE-THUMBPRINT",
+    "LogPath": "REPLACE-LOG-PATH"
+  },
+  "EmailSafety": {
+    "AllowedRecipientDomains": [
+      "REPLACE-ALLOWED-DOMAIN"
+    ]
+  },
+  "PatronLoginRateLimit": {
+    "PermitLimit": 20,
+    "WindowSeconds": 300
+  },
+  "Hangfire": {
+    "Schedules": {
+      "WorkflowProcessing": "0 * * * *",
+      "IdentifierProcessing": "*/5 * * * *",
+      "OrganizationRefresh": "0 2 * * *",
+      "WeeklyStaffSummary": "0 20 * * 0",
+      "EmailOutboxSweep": "*/5 * * * *",
+      "PatronSessionCleanup": "0 3 * * *",
+      "EmailPayloadCleanup": "30 3 * * *"
+    },
+    "ProcessingLimits": {
+      "Default": {
+        "PageSize": 50,
+        "MaxPerRun": 500
+      },
+      "Timeouts": {
+        "PageSize": null,
+        "MaxPerRun": null
+      },
+      "Queues": {
+        "IdentifierProcessing": {
+          "PageSize": null,
+          "MaxPerRun": null
+        },
+        "PurchasePromotion": {
+          "PageSize": null,
+          "MaxPerRun": null
+        },
+        "HoldPlacement": {
+          "PageSize": null,
+          "MaxPerRun": null
+        },
+        "FulfillmentTracking": {
+          "PageSize": null,
+          "MaxPerRun": null
+        },
+        "OutstandingTimeout": {
+          "PageSize": null,
+          "MaxPerRun": null
+        },
+        "PendingHoldTimeout": {
+          "PageSize": null,
+          "MaxPerRun": null
+        },
+        "HoldPickupTimeout": {
+          "PageSize": null,
+          "MaxPerRun": null
+        },
+        "AdditionalCopyTimeout": {
+          "PageSize": null,
+          "MaxPerRun": null
+        }
+      }
+    }
+  }
+}

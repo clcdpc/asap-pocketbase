@@ -7,6 +7,9 @@ const path = require('path');
 const root = path.resolve(__dirname, '..');
 const bootstrap = path.join(root, 'scripts', 'deployment', 'Initialize-AsapTestHost.ps1');
 const bootstrapSource = fs.readFileSync(bootstrap, 'utf8');
+const documentedApplication = JSON.parse(
+  fs.readFileSync(path.join(root, 'docs', 'dotnet-port', 'examples', 'Config.example.json'), 'utf8')
+);
 const deploymentSource = fs.readFileSync(path.join(root, 'scripts', 'deployment', 'Deploy-AsapTest.ps1'), 'utf8');
 const workflowSource = fs.readFileSync(path.join(root, '.github', 'workflows', 'dotnet.yml'), 'utf8');
 const appsettings = JSON.parse(fs.readFileSync(path.join(root, 'src', 'Asap.Web', 'appsettings.json'), 'utf8'));
@@ -118,6 +121,14 @@ try {
   const deploymentPath = path.join(hostRoot, 'Config', 'deployment.json');
   const generatedApplication = JSON.parse(fs.readFileSync(applicationPath, 'utf8'));
   const generatedDeployment = JSON.parse(fs.readFileSync(deploymentPath, 'utf8'));
+  const normalizedGeneratedApplication = JSON.parse(JSON.stringify(generatedApplication));
+  normalizedGeneratedApplication.Application.DataProtectionKeysPath = 'REPLACE-DATA-PROTECTION-KEYS-PATH';
+  normalizedGeneratedApplication.Application.LogPath = 'REPLACE-LOG-PATH';
+  assert.deepStrictEqual(
+    normalizedGeneratedApplication,
+    documentedApplication,
+    'the documentation example must match the complete embedded operational template'
+  );
   assert.deepStrictEqual(
     Object.keys(generatedApplication).sort(),
     [
