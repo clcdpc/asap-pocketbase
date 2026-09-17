@@ -1,12 +1,19 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const childProcess = require('child_process');
 
 const root = path.resolve(__dirname, '..');
 const workflow = fs.readFileSync(path.join(root, '.github/workflows/dotnet.yml'), 'utf8').replace(/\r\n/g, '\n');
 const deployment = fs.readFileSync(path.join(root, 'scripts/deployment/Deploy-AsapTest.ps1'), 'utf8');
 const activation = fs.readFileSync(path.join(root, 'docs/implementation/test-iis-activation.md'), 'utf8');
 const slice8 = fs.readFileSync(path.join(root, 'docs/implementation/slice-08.md'), 'utf8');
+
+childProcess.execFileSync(
+  'pwsh',
+  ['-NoLogo', '-NoProfile', '-File', path.join(__dirname, 'test_deployment_configuration_preflight.ps1')],
+  { stdio: 'inherit' }
+);
 
 assert.ok(workflow.includes("tags:\n      - 'v*.*.*-test.*'"), 'test deployment tags should use the documented convention');
 assert.ok(workflow.includes('- codex/csharp-port'), 'integration-branch push trigger is required');
@@ -62,6 +69,7 @@ for (const token of [
   'webPayloadSha256',
   'IisSiteName',
   'ExternalApplicationConfigPath',
+  'Test-PublishedApplicationConfigPath',
   'Get-Website',
   'Stop-WebAppPool',
   'Get-WebAppPoolState',
@@ -71,7 +79,7 @@ for (const token of [
   'sqlcmd',
   '/health/ready',
   'status -eq \'healthy\'',
-  'test-deployment-state.json',
+  'deployment-state.json',
   'ValidateOnly'
 ]) {
   assert.ok(deployment.includes(token), `deployment entry point should implement ${token}`);
@@ -79,10 +87,23 @@ for (const token of [
 
 assert.ok(!deployment.includes('SkipCertificateCheck'), 'readiness must use normal TLS certificate validation');
 assert.ok(!deployment.includes('[asap].[DeploymentState]'), 'test deployment must not repurpose application DeploymentState');
+assert.ok(deployment.includes("[string] $ConfigPath = 'C:\\ProgramData\\clc-asap\\Config\\deployment.json'"), 'deployment should default to the conventional host config path');
+assert.ok(deployment.includes("(^|/)(application|deployment)\\.json$"), 'host-owned application and deployment JSON must be forbidden from the artifact');
+const archiveValidation = deployment.indexOf('$archive = Test-DeploymentArchive', deployment.indexOf('$hostConfig = Read-HostConfiguration'));
+const pointerValidation = deployment.indexOf('Test-PublishedApplicationConfigPath', archiveValidation);
+const iisValidation = deployment.indexOf('$null = Test-IisConfiguration', archiveValidation);
+const poolStop = deployment.indexOf('Stop-TestAppPool', iisValidation);
+assert.ok(archiveValidation >= 0 && pointerValidation > archiveValidation, 'the staged web payload must be available before pointer validation');
+assert.ok(pointerValidation < iisValidation && iisValidation < poolStop, 'pointer mismatch must fail before IIS validation or mutation');
 assert.ok(activation.includes('gh workflow run dotnet.yml'), 'activation docs should provide the explicit CLI dispatch');
 assert.ok(activation.includes('--ref v1.0.0-test.1'), 'activation docs should show an exact test tag ref');
 assert.ok(activation.includes('ASAP_TEST_DEPLOYMENT_ENABLED=true'), 'activation docs should describe enabling the gate');
 assert.ok(activation.includes('pending_runner_setup'), 'activation docs must distinguish repository acceptance from live activation');
-assert.ok(slice8.includes('C:\\ProgramData\\ASAP\\test-deployment.json'), 'Slice 8 should document the host-local config path');
+assert.ok(activation.includes('"IisSiteName": "ASAP"'), 'activation docs should use the application name for the IIS site');
+assert.ok(activation.includes('"IisAppPoolName": "ASAP"'), 'activation docs should use the application name for the IIS app pool');
+assert.ok(activation.includes('"DeploymentPath": "D:\\\\Sites\\\\ASAP"'), 'activation docs should use the conventional live application path');
+assert.ok(activation.includes('"StagingRoot": "C:\\\\ProgramData\\\\clc-asap\\\\Staging"'), 'activation docs should keep staging under the host root');
+assert.ok(activation.includes('"BackupRoot": "C:\\\\ProgramData\\\\clc-asap\\\\Backups"'), 'activation docs should keep backups under the host root');
+assert.ok(slice8.includes('C:\\ProgramData\\clc-asap\\Config\\deployment.json'), 'Slice 8 should document the host-local config path');
 
 console.log('Test-IIS deployment workflow and script contract tests passed.');

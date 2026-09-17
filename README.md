@@ -35,9 +35,11 @@ activation remain separate deferred work; PR #264 remains draft.
    dotnet run --project src/Asap.Web/Asap.Web.csproj --launch-profile https
    ```
 
-   The launch profile points `Asap:ConfigFile` at the external local JSON
-   file. The application serves the staff and patron portals and exposes
-   `/health/live` and `/health/ready`.
+   Checked-in `appsettings.json` contains the permanent IIS default, while
+   `appsettings.Development.json` overrides only `Asap:ConfigFile` with
+   `Development.local.json`. That ignored file is the actual local operational
+   configuration. The application serves the staff and patron portals and
+   exposes `/health/live` and `/health/ready`.
 
 3. Apply the current DACPAC to a development SQL database using the normal
    SQL Server deployment tooling before exercising persistence features.

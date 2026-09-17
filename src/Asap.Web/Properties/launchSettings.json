@@ -8,8 +8,7 @@
       "launchUrl": "health/ready",
       "applicationUrl": "https://localhost:7247;http://localhost:5247",
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development",
-        "Asap__ConfigFile": "Development.local.json"
+        "ASPNETCORE_ENVIRONMENT": "Development"
       }
     }
   }

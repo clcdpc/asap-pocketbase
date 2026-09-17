@@ -228,8 +228,8 @@ Staged PRs began with Slice 6. Beginning with Slice 7, GPT-6 Astra High is the p
 - Do not duplicate ordinary SQL-admin settings into external config.
 - Do not bootstrap/copy Polaris or Postmark operational settings from external JSON into SQL on startup. SQL is authoritative after cutover migration/provisioning. Polaris credentials migrate from PocketBase; the new Postmark server token is supplied as target-only secure import input and encrypted before persistence because SMTP credentials are not Postmark credentials.
 - External JSON is startup-only; changes require application restart. No reload-on-change behavior.
-- `Asap:ConfigFile`/equivalent points the application at the deployed external config; deployment never overwrites it.
-- Local F5 uses an ignored `Development.local.json` of the same general shape; commit only a safe example/template.
+- Checked-in `appsettings.json` points `Asap:ConfigFile` at `C:\ProgramData\clc-asap\Config\application.json`; deployment never overwrites that external file.
+- Local F5 layers checked-in `appsettings.Development.json` to point `Asap:ConfigFile` at an ignored `Development.local.json` of the same general shape; commit only a safe example/template.
 - Business timezone is `America/New_York`; persist timestamps in UTC.
 
 ## 15. SQL-stored reusable credentials
@@ -498,8 +498,8 @@ Staged PRs began with Slice 6. Beginning with Slice 7, GPT-6 Astra High is the p
 ## 31. Data protection and filesystem operations
 
 - Use normal ASP.NET Core Data Protection for cookie/auth cryptography.
-- Baseline persistent key directory: `C:\ProgramData\CLC\ASAP\DataProtection-Keys` on each IIS server/environment; production/nonproduction key rings are separate and ACLed, with persisted keys protected by separate environment-specific X.509 key-encryption certificates. The certificate/private key must be recoverable and importable on a replacement IIS host, with narrow private-key ACLs restored there. The ring protects cookies/antiforgery and persisted SQL integration-secret ciphertext, so the ring plus certificate/private key must be backed up/recovered with the database and old keys/certificate material must not be purged while ciphertext may reference them.
-- Store local application logs under a dedicated protected ASAP data/log directory; canonical example `C:\ProgramData\CLC\ASAP\Logs`.
+- Baseline persistent key directory: `C:\ProgramData\clc-asap\DataProtection-Keys` on each IIS server/environment; production/nonproduction key rings are separate and ACLed, with persisted keys protected by separate environment-specific X.509 key-encryption certificates. The certificate/private key must be recoverable and importable on a replacement IIS host, with narrow private-key ACLs restored there. The ring protects cookies/antiforgery and persisted SQL integration-secret ciphertext, so the ring plus certificate/private key must be backed up/recovered with the database and old keys/certificate material must not be purged while ciphertext may reference them.
+- Store local application logs under a dedicated protected ASAP data/log directory; canonical example `C:\ProgramData\clc-asap\Logs`.
 - External environment JSON lives outside the deployed application directory with tight ACLs and is never overwritten by deploy.
 
 ## 32. Patron embed/security boundary
