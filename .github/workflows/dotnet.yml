@@ -17,6 +17,9 @@ permissions:
 jobs:
   build-test-package:
     name: Build, test and package
+    concurrency:
+      group: ${{ github.workflow }}-build-${{ github.sha }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 45
     outputs:
