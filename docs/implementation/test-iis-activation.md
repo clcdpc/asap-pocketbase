@@ -12,9 +12,10 @@ The responsibility boundary is deliberate:
 - Deployment operates against the already-provisioned host and verifies the
   running application.
 
-## Step 1 - Copy The Bootstrap
+## Step 1 - Copy The Provisioning Scripts
 
-Copy only `Initialize-AsapTestHost.ps1` from the reviewed repository to the
+Copy `Initialize-AsapTestHost.ps1` and
+`New-AsapDataProtectionCertificate.ps1` from the reviewed repository to the
 host. A repository clone and the repository directory structure are not
 required on the IIS server.
 
@@ -45,8 +46,9 @@ embedded in the bootstrap. The script substitutes the two paths derived from
 `RootPath` before writing the file.
 
 It does not create the IIS deployment directory, IIS resources, identities,
-certificates, ACLs, SQL objects, Entra applications, or the runner. It never
-overwrites an existing `application.json` or `deployment.json`.
+certificates, ACLs, SQL objects, Entra applications, or the runner, and it does
+not invoke the certificate-provisioning helper. It never overwrites an
+existing `application.json` or `deployment.json`.
 `deployment-state.json` is absent initially; deployment writes it only after a
 successful readiness check.
 
@@ -78,6 +80,31 @@ Install and configure:
 - a dedicated GitHub Actions self-hosted runner;
 - network access to GitHub, SQL Server, Entra ID, and required providers.
 
+Create and configure the `ASAP` app pool with its dedicated runtime identity
+before provisioning the Data Protection certificate, so Windows can resolve
+the account to its SID. From an elevated PowerShell 7 session, run:
+
+```powershell
+pwsh -File .\New-AsapDataProtectionCertificate.ps1 `
+    -RuntimeIdentity 'DOMAIN\asap-test' `
+    -PfxBackupPath 'X:\SecureBackup\asap-test-data-protection.pfx'
+```
+
+The backup directory must already exist and be secured by the operator. The
+helper prompts twice for the PFX password as a secure string; it does not
+accept, print, or persist that password. It creates an exportable,
+environment-specific RSA certificate in `LocalMachine\My`, grants the resolved
+runtime SID read access to its private key, verifies the PFX contains that
+private key, and atomically replaces only the bootstrap certificate-thumbprint
+placeholder in `application.json`.
+
+If a real thumbprint is already configured, the helper retains that
+certificate, requires it to resolve with a compatible private key, ensures the
+requested runtime SID has read access, and exports a recovery PFX to the new
+operator-selected path. It never silently rebinds the configuration or
+overwrites an existing PFX. Securely retain the PFX and its separately managed
+password before continuing.
+
 ### Apply filesystem and certificate permissions
 
 Create the operator-owned deployment directory `D:\Sites\ASAP` while creating
@@ -97,12 +124,6 @@ the IIS site. Use narrow ACLs rather than broad inherited access.
 Restrict configuration-file modification to administrators. Grant the
 deployment identity permission to query the `ASAP` site and app pool and to
 stop/start the pool during deployment.
-
-Install the environment-specific Data Protection key-encryption certificate
-with its private key in `LocalMachine\My`. Grant the runtime identity
-private-key access. Record the thumbprint in `application.json`, and retain
-recoverable backups of both the certificate/private key and
-`DataProtection-Keys`.
 
 Install the trusted TLS certificate and configure its IIS HTTPS binding. These
 are operator tasks; the bootstrap only validates their presence.
@@ -136,7 +157,8 @@ Edit the template at:
 C:\ProgramData\clc-asap\Config\application.json
 ```
 
-Replace every `REPLACE-*` placeholder. Keep:
+Replace every remaining `REPLACE-*` placeholder. The certificate helper has
+already replaced the Data Protection certificate-thumbprint placeholder. Keep:
 
 - a nonproduction environment with `IsNonProduction: true` and a visible
   banner;
@@ -158,10 +180,19 @@ Published `appsettings.json` already points `Asap:ConfigFile` to this exact
 path. Do not add an `Asap__ConfigFile` IIS environment variable.
 
 The Data Protection certificate above remains required and is unrelated to
-Entra authentication credentials. It encrypts the persistent ASP.NET Core Data
-Protection key ring used for ASAP cookies, antiforgery, and protected values;
+Entra authentication credentials. ASAP's Entra login requires no client secret
+or client certificate. The Data Protection certificate encrypts the persistent
+ASP.NET Core key ring used for ASAP cookies, antiforgery, and protected values;
 removing the Entra credential requirement does not remove that certificate or
 its backup and recovery obligations.
+
+The helper does not create Data Protection key files. On first successful
+startup, ASP.NET Core generates the initial key ring under
+`C:\ProgramData\clc-asap\DataProtection-Keys`, encrypts it with the configured
+certificate, and owns later rotation. The recovery PFX/private key and the
+generated `DataProtection-Keys` directory are both required disaster-recovery
+material. Back them up securely and separately from ordinary deployment files,
+along with the separately retained PFX password.
 
 ### Complete deployment.json
 
@@ -235,6 +266,12 @@ owned by `ExternalConfigurationValidator` at startup. Validation does not
 repair or create anything and exits nonzero for blocking failures.
 Running with no flags is always safe and read-only. A failed validation never
 triggers initialization or any other mutating setup.
+
+The provisioning helper verifies the certificate, machine-key file, explicit
+SID ACL, and exported PFX as the elevated operator. It does not impersonate the
+IIS runtime identity. The application's startup Protect/Unprotect probe remains
+the authoritative verification that the runtime identity can perform Data
+Protection cryptographic operations.
 
 Validation checks only that `ReadinessUrl` is configured correctly. It does
 not request `/health/ready`; no application exists to answer it before the
