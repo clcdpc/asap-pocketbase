@@ -35,7 +35,13 @@ public sealed class ExternalConfigurationValidatorTests
             ["REPLACE-OBJECT-ID"] = "33333333-3333-3333-3333-333333333333",
             ["REPLACE-ADMIN-UPN"] = "admin@example.org",
             ["REPLACE-ADMIN-EMAIL"] = "admin@example.org",
+            ["REPLACE-DATA-PROTECTION-KEYS-PATH"] = OperatingSystem.IsWindows()
+                ? "C:/asap-test/DataProtection-Keys"
+                : "/tmp/asap-test/DataProtection-Keys",
             ["REPLACE-DATA-PROTECTION-CERTIFICATE-THUMBPRINT"] = "AABBCC",
+            ["REPLACE-LOG-PATH"] = OperatingSystem.IsWindows()
+                ? "C:/asap-test/Logs"
+                : "/tmp/asap-test/Logs",
             ["REPLACE-ALLOWED-DOMAIN"] = "example.org"
         })
         {

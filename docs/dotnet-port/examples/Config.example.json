@@ -26,9 +26,9 @@
   },
   "Application": {
     "BusinessTimeZone": "America/New_York",
-    "DataProtectionKeysPath": "C:\\ProgramData\\clc-asap\\DataProtection-Keys",
+    "DataProtectionKeysPath": "REPLACE-DATA-PROTECTION-KEYS-PATH",
     "DataProtectionKeyEncryptionCertificateThumbprint": "REPLACE-DATA-PROTECTION-CERTIFICATE-THUMBPRINT",
-    "LogPath": "C:\\ProgramData\\clc-asap\\Logs"
+    "LogPath": "REPLACE-LOG-PATH"
   },
   "EmailSafety": {
     "AllowedRecipientDomains": [
