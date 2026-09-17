@@ -99,6 +99,11 @@ assert.ok(activation.includes('gh workflow run dotnet.yml'), 'activation docs sh
 assert.ok(activation.includes('--ref v1.0.0-test.1'), 'activation docs should show an exact test tag ref');
 assert.ok(activation.includes('ASAP_TEST_DEPLOYMENT_ENABLED=true'), 'activation docs should describe enabling the gate');
 assert.ok(activation.includes('pending_runner_setup'), 'activation docs must distinguish repository acceptance from live activation');
+assert.ok(activation.includes('"IisSiteName": "ASAP"'), 'activation docs should use the application name for the IIS site');
+assert.ok(activation.includes('"IisAppPoolName": "ASAP"'), 'activation docs should use the application name for the IIS app pool');
+assert.ok(activation.includes('"DeploymentPath": "D:\\\\Sites\\\\ASAP"'), 'activation docs should use the conventional live application path');
+assert.ok(activation.includes('"StagingRoot": "C:\\\\ProgramData\\\\clc-asap\\\\Staging"'), 'activation docs should keep staging under the host root');
+assert.ok(activation.includes('"BackupRoot": "C:\\\\ProgramData\\\\clc-asap\\\\Backups"'), 'activation docs should keep backups under the host root');
 assert.ok(slice8.includes('C:\\ProgramData\\clc-asap\\Config\\deployment.json'), 'Slice 8 should document the host-local config path');
 
 console.log('Test-IIS deployment workflow and script contract tests passed.');

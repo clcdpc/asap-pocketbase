@@ -55,11 +55,11 @@ usable credentials or infrastructure values:
 
 ```json
 {
-  "IisSiteName": "ASAP-Test",
-  "IisAppPoolName": "ASAP-Test",
-  "DeploymentPath": "D:\\Sites\\ASAP-Test",
-  "StagingRoot": "D:\\ASAP\\staging",
-  "BackupRoot": "D:\\ASAP\\backups",
+  "IisSiteName": "ASAP",
+  "IisAppPoolName": "ASAP",
+  "DeploymentPath": "D:\\Sites\\ASAP",
+  "StagingRoot": "C:\\ProgramData\\clc-asap\\Staging",
+  "BackupRoot": "C:\\ProgramData\\clc-asap\\Backups",
   "ExternalApplicationConfigPath": "C:\\ProgramData\\clc-asap\\Config\\application.json",
   "ReadinessUrl": "https://test.example.invalid/health/ready",
   "AsapDatabaseConnectionString": "Server=TEST-SQL;Database=AsapTest;Integrated Security=True;Encrypt=True;TrustServerCertificate=False",
