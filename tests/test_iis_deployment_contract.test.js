@@ -101,21 +101,29 @@ for (const token of [
   "Join-Path $root 'web'",
   "Join-Path $root 'staging'",
   "Join-Path $root 'backups'",
-  'Test-RootPermissions',
+  'Test-FilesystemPermissions',
   'Test-CertificateRead',
   'Test-AppConfiguration',
   'Test-DeploymentConfiguration',
+  'Test-ExactKeys',
+  'ContractSelfTest',
   'ValidateOnly'
 ]) {
   assert.ok(bootstrap.includes(token), `test host bootstrap should implement ${token}`);
 }
 assert.ok(!bootstrap.includes('[string] $RootPath'), 'bootstrap should use one canonical ProgramData root rather than configurable RootPath');
+assert.ok(bootstrap.includes("$Object -is [System.Collections.IDictionary]"), 'Get-JsonValue must support ordered dictionaries');
+assert.ok(bootstrap.includes('ContainerInherit') && bootstrap.includes('ObjectInherit'), 'filesystem validation must require inherited directory and file rights');
+assert.ok(bootstrap.includes('has protected ACL inheritance'), 'filesystem audit must detect protected managed-child ACLs');
+assert.ok(bootstrap.includes('has explicit ACL entries instead of inheriting'), 'filesystem audit must detect explicit managed-child ACLs');
+assert.ok(bootstrap.includes("Add-Result 'INFO' $Label") && bootstrap.includes('-SkipLocalAdministrator was selected'), 'SkipLocalAdministrator must not create a blocking finding solely for absent Administrators membership');
+assert.ok(bootstrap.includes('canonical test-host schedule'), 'schedule validation should use canonical bootstrap-owned schedules');
+assert.ok(bootstrap.includes('required case-sensitive shape'), 'schedule and queue keys must use case-sensitive shape validation');
+assert.ok(bootstrap.includes('canonical bootstrap-owned SQL connection string'), 'SQL validation should use the canonical bootstrap-owned connection string');
 assert.ok(bootstrap.includes("Add-Result 'INFO' 'SQL authorization'"), 'bootstrap must leave SQL privilege grants as an explicit operator boundary');
 assert.ok(bootstrap.includes('[switch] $SkipLocalAdministrator'), 'bootstrap should allow separately provisioned narrower IIS lifecycle rights');
-assert.ok(bootstrap.includes('ACL inheritance is not protected.'), 'ValidateOnly must inspect the canonical root ACL');
 assert.ok(bootstrap.includes('does not have private-key Read'), 'ValidateOnly must inspect Data Protection private-key access');
 assert.ok(bootstrap.includes('AllowedTenantIds contains an invalid tenant GUID'), 'application validation must inspect allowed Entra tenants');
-assert.ok(bootstrap.includes('Hangfire.Schedules keys do not match the required shape'), 'application validation must inspect Hangfire schedule shape');
 assert.ok(bootstrap.includes('matches the requested host contract'), 'deployment configuration must be content-validated');
 
 const escapedBootstrapPath = bootstrapPath.replace(/'/g, "''");
@@ -123,6 +131,9 @@ const parseCommand = `$tokens = $null; $errors = $null; [System.Management.Autom
 const parseResult = cp.spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', parseCommand], { encoding: 'utf8' });
 if (!parseResult.error || parseResult.error.code !== 'ENOENT') {
   assert.strictEqual(parseResult.status, 0, `bootstrap PowerShell should parse cleanly:\n${parseResult.stdout}\n${parseResult.stderr}`);
+  const selfTest = cp.spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-File', bootstrapPath, '-ContractSelfTest'], { encoding: 'utf8' });
+  assert.strictEqual(selfTest.status, 0, `bootstrap contract self-test should pass:\n${selfTest.stdout}\n${selfTest.stderr}`);
+  assert.match(selfTest.stdout, /bootstrap contract self-test passed/i, 'contract self-test should confirm ordered-dictionary round-trip validation');
 }
 
 const canonicalConfigPath = 'C:\\ProgramData\\clc-asap\\config\\test-deployment.json';
