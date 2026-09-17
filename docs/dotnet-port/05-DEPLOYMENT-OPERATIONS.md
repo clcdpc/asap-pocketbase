@@ -83,6 +83,8 @@ The host deployment file is `C:\ProgramData\clc-asap\Config\deployment.json`. It
 The bootstrap flow is intentionally explicit:
 
 - Local development: `appsettings.json` provides the permanent default, `appsettings.Development.json` changes `Asap:ConfigFile` to `Development.local.json`, and that ignored file contains the actual local operational configuration.
+- Test-host initialization: `Initialize-AsapTestHost.ps1` creates the canonical ASAP-owned ProgramData directories and non-overwriting `application.json` and `deployment.json` templates. It does not provision Windows, IIS, identities, certificates, permissions, SQL, Entra ID, or the runner.
+- Test-host validation: after manual infrastructure provisioning, `Initialize-AsapTestHost.ps1 -ValidateOnly` performs read-only prerequisite checks. It does not call `/health/ready`; deployment owns readiness verification after the application starts.
 - Permanent IIS: published `appsettings.json` points to `C:\ProgramData\clc-asap\Config\application.json`, which contains the runtime operational configuration.
 - Deployment: `C:\ProgramData\clc-asap\Config\deployment.json` points `ExternalApplicationConfigPath` to the same `application.json`; preflight requires the two pointers to agree.
 

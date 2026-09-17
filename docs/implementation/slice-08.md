@@ -36,13 +36,17 @@ file failure leaves pool stopped; readiness failure retains new files/diagnostic
 No automatic SQL backup/rollback, production classifier or SQL DeploymentState use.
 Preserve existing `/health/live` and `/health/ready`, including Hangfire compatibility.
 
-Runner installation/registration, contacting the IIS host, host-local setup and
-the first real deployment are explicitly excluded. Document later activation.
-Acceptance requires repository tests/review/exact-milestone CI, never a runner.
+Runner installation/registration, contacting the IIS host, infrastructure
+provisioning and the first real deployment are explicitly excluded. The
+repository provides `Initialize-AsapTestHost.ps1` to create only the canonical
+ASAP-owned ProgramData layout and safe configuration templates, plus a
+read-only `-ValidateOnly` prerequisite check. Acceptance requires repository
+tests/review/exact-milestone CI, never a runner.
 Record `test_cd_activation: pending_runner_setup`; do not claim live deployment.
 Do not merge PR #264 or implement Slices 9, 10 or 11.
 
-The repository implementation lives in `.github/workflows/dotnet.yml` and
+The repository implementation lives in `.github/workflows/dotnet.yml`,
+`scripts/deployment/Initialize-AsapTestHost.ps1`, and
 `scripts/deployment/Deploy-AsapTest.ps1`. The workflow keeps the current
 Release/real-SQL/frontend/publish gates on `ubuntu-latest`, packages the exact
 tested SHA, validates the ZIP safely, and gates the isolated labels
