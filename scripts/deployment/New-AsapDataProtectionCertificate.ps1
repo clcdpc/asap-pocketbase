@@ -245,8 +245,6 @@ function New-DataProtectionCertificate {
         -KeyLength 3072 `
         -HashAlgorithm SHA256 `
         -KeyExportPolicy Exportable `
-        -KeyLocation Machine `
-        -KeySpec KeyExchange `
         -KeyUsage DataEncipherment, KeyEncipherment `
         -NotBefore ([DateTime]::UtcNow.AddMinutes(-5)) `
         -NotAfter ([DateTime]::UtcNow.AddYears(5)) `

@@ -41,7 +41,12 @@ assert.ok(provisioning.includes('-CertStoreLocation $script:CertificateStorePath
 assert.ok(provisioning.includes('-Provider $script:KeyStorageProvider'));
 assert.ok(provisioning.includes('-KeyAlgorithm RSA'));
 assert.ok(provisioning.includes('-KeyExportPolicy Exportable'));
-assert.ok(provisioning.includes('-KeyLocation Machine'));
+assert.ok(!provisioning.includes('-KeyLocation Machine'));
+assert.ok(!provisioning.includes('-KeySpec KeyExchange'));
+const keySpecValues = [...provisioning.matchAll(/-KeySpec\s+([A-Za-z]+)/g)].map((match) => match[1]);
+assert.ok(keySpecValues.every((value) => value === 'None'), 'a CNG KeySpec, if present, must be None');
+assert.ok(provisioning.includes('$rsa -isnot [Security.Cryptography.RSACng]'));
+assert.ok(provisioning.includes('$rsa.Key.Provider.Provider.Equals($script:KeyStorageProvider'));
 assert.ok(provisioning.includes('$rsa.Key.IsMachineKey'));
 assert.ok(provisioning.includes("'Microsoft\\Crypto\\Keys'"));
 assert.ok(provisioning.includes('[Security.AccessControl.FileSystemRights]::Read'));
