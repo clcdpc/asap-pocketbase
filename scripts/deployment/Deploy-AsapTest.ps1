@@ -548,6 +548,7 @@ function Get-SqlCmdArguments {
         '-d', [string] $connection.Database,
         '-E',
         '-b',
+        '-I',
         '-h', '-1',
         '-W'
     )
@@ -687,7 +688,10 @@ function Stop-TestAppPool {
         [string] $AppPoolName
     )
 
-    Stop-WebAppPool -Name $AppPoolName -ErrorAction Stop
+    if ((Get-WebAppPoolState -Name $AppPoolName -ErrorAction Stop).Value -ne 'Stopped') {
+        Stop-WebAppPool -Name $AppPoolName -ErrorAction Stop
+    }
+
     Wait-AppPoolState -AppPoolName $AppPoolName -ExpectedState 'Stopped'
 }
 
@@ -697,7 +701,10 @@ function Start-TestAppPool {
         [string] $AppPoolName
     )
 
-    Start-WebAppPool -Name $AppPoolName -ErrorAction Stop
+    if ((Get-WebAppPoolState -Name $AppPoolName -ErrorAction Stop).Value -ne 'Started') {
+        Start-WebAppPool -Name $AppPoolName -ErrorAction Stop
+    }
+
     Wait-AppPoolState -AppPoolName $AppPoolName -ExpectedState 'Started'
 }
 
