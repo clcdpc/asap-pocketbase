@@ -16,7 +16,7 @@ param(
     [ValidateNotNullOrEmpty()]
     [string] $ExpectedDeploymentLabel,
 
-    [string] $ConfigPath = 'C:\ProgramData\ASAP\test-deployment.json',
+    [string] $ConfigPath = 'C:\ProgramData\clc-asap\Config\deployment.json',
 
     [ValidateRange(1, 600)]
     [int] $ReadinessTimeoutSeconds = 120,
@@ -209,7 +209,7 @@ function Test-DeploymentArchive {
             throw "Deployment ZIP contains an unexpected file: $relative"
         }
 
-        if ($relative -match '(?i)(^|/)(node_modules|pb_data|\.git)(/|$)|pocketbase|Asap\.Migration|dev-email|\.(pfx|p12|key|pem)$') {
+        if ($relative -match '(?i)(^|/)(node_modules|pb_data|\.git)(/|$)|(^|/)(application|deployment)\.json$|pocketbase|Asap\.Migration|dev-email|\.(pfx|p12|key|pem)$') {
             throw "Deployment ZIP contains a forbidden deployment file: $relative"
         }
     }
@@ -289,6 +289,44 @@ function Test-DeploymentArchive {
         Manifest = $manifest
         ZipHash = $actualZipHash
         DacpacHash = $dacpacHash
+    }
+}
+
+function Test-PublishedApplicationConfigPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $WebRoot,
+
+        [Parameter(Mandatory = $true)]
+        [string] $ExternalApplicationConfigPath
+    )
+
+    $appsettingsPath = Join-Path $WebRoot 'appsettings.json'
+    if (-not (Test-Path -LiteralPath $appsettingsPath -PathType Leaf)) {
+        throw 'Published web payload is missing appsettings.json.'
+    }
+
+    try {
+        $bootstrapConfiguration = Get-Content -LiteralPath $appsettingsPath -Raw | ConvertFrom-Json
+    }
+    catch {
+        throw 'Published appsettings.json is not valid JSON.'
+    }
+
+    $asapProperty = $bootstrapConfiguration.PSObject.Properties['Asap']
+    if ($null -eq $asapProperty -or $null -eq $asapProperty.Value) {
+        throw 'Published appsettings.json is missing Asap.ConfigFile.'
+    }
+
+    $publishedConfigPath = Get-FullPath `
+        -Path (Get-RequiredText -Object $asapProperty.Value -Name 'ConfigFile') `
+        -Name 'Published Asap.ConfigFile'
+    $deploymentConfigPath = Get-FullPath `
+        -Path $ExternalApplicationConfigPath `
+        -Name 'ExternalApplicationConfigPath'
+
+    if (-not $publishedConfigPath.Equals($deploymentConfigPath, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Published Asap:ConfigFile '$publishedConfigPath' does not match ExternalApplicationConfigPath '$deploymentConfigPath'."
     }
 }
 
@@ -785,6 +823,9 @@ try {
         -ExpectedCommit $ExpectedCommitSha `
         -ExpectedLabel $ExpectedDeploymentLabel `
         -StagingPath $stagingPath
+    Test-PublishedApplicationConfigPath `
+        -WebRoot $archive.WebRoot `
+        -ExternalApplicationConfigPath $hostConfig.ExternalApplicationConfigPath
     $null = Test-IisConfiguration -Config $hostConfig
     $state = Read-DeploymentState -StatePath $hostConfig.StatePath
     $hangfireVersion = Get-HangfireSchemaVersion `

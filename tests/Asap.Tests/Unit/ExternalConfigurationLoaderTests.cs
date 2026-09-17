@@ -9,6 +9,27 @@ namespace Asap.Tests.Unit;
 public sealed class ExternalConfigurationLoaderTests
 {
     [TestMethod]
+    public void DevelopmentAppsettingsOverridesPermanentConfigFileDefault()
+    {
+        var webRoot = Path.Combine(FindRepositoryRoot(), "src", "Asap.Web");
+        var configuration = new ConfigurationBuilder()
+            .SetBasePath(webRoot)
+            .AddJsonFile("appsettings.json", optional: false)
+            .AddJsonFile("appsettings.Development.json", optional: false)
+            .Build();
+
+        Assert.AreEqual("Development.local.json", configuration["Asap:ConfigFile"]);
+
+        var permanentConfiguration = new ConfigurationBuilder()
+            .SetBasePath(webRoot)
+            .AddJsonFile("appsettings.json", optional: false)
+            .Build();
+        Assert.AreEqual(
+            @"C:\ProgramData\clc-asap\Config\application.json",
+            permanentConfiguration["Asap:ConfigFile"]);
+    }
+
+    [TestMethod]
     public void LoadsOneStartupOnlyJsonFile()
     {
         using var file = TemporaryFile.WithContent(
@@ -142,6 +163,18 @@ public sealed class ExternalConfigurationLoaderTests
                 ["Asap:ConfigFile"] = path
             })
             .Build();
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Asap.sln")))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName
+            ?? throw new InvalidOperationException("Could not locate the repository root.");
+    }
 
     private sealed class TemporaryFile : IDisposable
     {

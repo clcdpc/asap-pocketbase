@@ -373,7 +373,7 @@ Startup does not copy/bootstrap Polaris or Postmark settings from external JSON 
 
 External JSON is startup-only: `reloadOnChange` is not used. Changes require an application restart.
 
-For local Visual Studio F5, use an ignored `Development.local.json` with the same general shape. Commit only a safe template/example.
+For local Visual Studio F5, checked-in `appsettings.Development.json` overrides only `Asap:ConfigFile` to use an ignored `Development.local.json` with the same general shape. Commit only a safe template/example.
 
 ## 13. Sensitive operational settings
 

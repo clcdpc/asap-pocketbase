@@ -70,13 +70,21 @@ They may initially point to the same database/server but remain separate setting
 
 ## 5. External environment configuration
 
-Set an environment/bootstrap pointer such as `Asap:ConfigFile` to an ACLed JSON file outside the app directory. Deployment never overwrites this file.
+The checked-in `appsettings.json` sets `Asap:ConfigFile` to the ACLed external file at `C:\ProgramData\clc-asap\Config\application.json`. The file remains outside the app directory and deployment never overwrites it. IIS does not need a custom environment variable for this pointer.
 
 It includes environment-specific infrastructure/bootstrap values, not ordinary SQL-managed application configuration. SQL-managed configuration is split into the domain tables defined by `13-SETTINGS-SCOPE-INVENTORY.md`; there is no catch-all Settings table. Changes require application restart; there is no live reload. For AllowedTenantIds changes, stop/quiesce the app and validate a staged prospective configuration against the common current staff predicate, proving at least one usable super-admin before the operator replaces the external file/restarts. Deployment itself still never overwrites external configuration. Direct edits that bypass preflight are caught by the mandatory startup gate: no business endpoints or workers start, readiness fails, and the operator repairs the configuration. Existing cookies and queued sensitive mail recheck loaded tenant trust on next use; persistent key storage does not grandfather them.
 
 Job configuration is first-class external operational configuration. `Hangfire:Schedules` contains the complete schedule keys in `01-PORTING-SPEC.md`. `Hangfire:ProcessingLimits` contains a required global default plus nullable timeout-family and queue-specific overrides. Effective precedence is queue-specific -> timeout-family for timeout queues -> global default. Defaults/ranges remain PageSize `50` (`1..500`) and MaxPerRun `500` (`1..5000`). Known target queue keys are `IdentifierProcessing`, `PurchasePromotion`, `HoldPlacement`, `FulfillmentTracking`, `OutstandingTimeout`, `PendingHoldTimeout`, `HoldPickupTimeout`, and `AdditionalCopyTimeout`. Startup/diagnostics validates the shape and reports effective values. Persisted QueueProgress is SQL-owned operational progress, not another external setting. HoldRecovery reuses HoldPlacement limits with its separate recovery-phase budget; recovery runs before ordinary workflow phases and continues for previously acquired inactive-library operations.
 
-Local development uses an ignored `Development.local.json` with the same general structure.
+Local development layers `appsettings.Development.json` over the permanent default so that `Asap:ConfigFile` resolves to the ignored `Development.local.json`, which has the same general structure. Normal higher-precedence ASP.NET configuration providers may still override the pointer for tests and tooling.
+
+The host deployment file is `C:\ProgramData\clc-asap\Config\deployment.json`. Its `ExternalApplicationConfigPath` repeats `C:\ProgramData\clc-asap\Config\application.json`; deployment preflight compares that value with the exact staged web payload's `Asap:ConfigFile` after normalizing both absolute paths.
+
+The bootstrap flow is intentionally explicit:
+
+- Local development: `appsettings.json` provides the permanent default, `appsettings.Development.json` changes `Asap:ConfigFile` to `Development.local.json`, and that ignored file contains the actual local operational configuration.
+- Permanent IIS: published `appsettings.json` points to `C:\ProgramData\clc-asap\Config\application.json`, which contains the runtime operational configuration.
+- Deployment: `C:\ProgramData\clc-asap\Config\deployment.json` points `ExternalApplicationConfigPath` to the same `application.json`; preflight requires the two pointers to agree.
 
 See `examples/Config.example.json`. `04-MIGRATION-CUTOVER.md` and `examples/EffectiveLegacyOperationalConfig.example.json` define how existing PocketBase cron/queue-limit environment values are captured and reconciled before production jobs are enabled.
 
@@ -85,7 +93,7 @@ See `examples/Config.example.json`. `04-MIGRATION-CUTOVER.md` and `examples/Effe
 Persist ASP.NET Core Data Protection keys to an environment-specific protected location such as:
 
 ```text
-C:\ProgramData\CLC\ASAP\DataProtection-Keys
+C:\ProgramData\clc-asap\DataProtection-Keys
 ```
 
 Grant only the environment's app-pool identity and required deployment/migration administrators access. Protect persisted production/nonproduction keys with an **environment-specific X.509 key-encryption certificate** and a stable ASAP application-name/purpose convention. The certificate private-key ACL must be equally narrow. Production and nonproduction have separate key rings and separate key-encryption certificates. Do not bind durable production rings solely to machine-scope DPAPI because recovery must work on a replacement IIS host.
@@ -97,7 +105,7 @@ The key ring protects both cookie/antiforgery state **and reusable Polaris/Postm
 Suggested canonical production directory:
 
 ```text
-C:\ProgramData\CLC\ASAP\Logs
+C:\ProgramData\clc-asap\Logs
 ```
 
 NLog writes structured rolling files with:

@@ -47,7 +47,7 @@ for the default-branch/UI and branch-or-tag dispatch behavior.
 Create this file on the IIS test host only:
 
 ```text
-C:\ProgramData\ASAP\test-deployment.json
+C:\ProgramData\clc-asap\Config\deployment.json
 ```
 
 The deployment script requires this shape. Values below are placeholders, not
@@ -60,7 +60,7 @@ usable credentials or infrastructure values:
   "DeploymentPath": "D:\\Sites\\ASAP-Test",
   "StagingRoot": "D:\\ASAP\\staging",
   "BackupRoot": "D:\\ASAP\\backups",
-  "ExternalApplicationConfigPath": "C:\\ProgramData\\ASAP\\test-app.json",
+  "ExternalApplicationConfigPath": "C:\\ProgramData\\clc-asap\\Config\\application.json",
   "ReadinessUrl": "https://test.example.invalid/health/ready",
   "AsapDatabaseConnectionString": "Server=TEST-SQL;Database=AsapTest;Integrated Security=True;Encrypt=True;TrustServerCertificate=False",
   "HangfireDatabaseConnectionString": "Server=TEST-SQL;Database=AsapTest;Integrated Security=True;Encrypt=True;TrustServerCertificate=False",
@@ -69,16 +69,21 @@ usable credentials or infrastructure values:
 }
 ```
 
-`Asap:ConfigFile` is the application configuration pointer. On IIS, set the
-corresponding `Asap__ConfigFile` environment setting to the external
-`ExternalApplicationConfigPath`; that application file must in turn point to
-an existing Data Protection key directory outside `DeploymentPath`. Neither
-that file nor its keys are copied into or overwritten by the deployment ZIP.
+The published `appsettings.json` supplies `Asap:ConfigFile` as
+`C:\ProgramData\clc-asap\Config\application.json`; no custom IIS environment
+setting is required. The deployment file repeats that path in
+`ExternalApplicationConfigPath`. Preflight reads the staged web payload and
+requires the normalized absolute paths to match case-insensitively before any
+IIS, SQL, or deployed-file mutation. The application file should use
+`C:\ProgramData\clc-asap\DataProtection-Keys` and
+`C:\ProgramData\clc-asap\Logs` for those host-owned resources. The external
+configuration, keys, and logs remain outside `DeploymentPath` and are never
+copied into or overwritten by the deployment ZIP.
 
 Successful state is written beside the deployment config at:
 
 ```text
-C:\ProgramData\ASAP\test-deployment-state.json
+C:\ProgramData\clc-asap\Config\test-deployment-state.json
 ```
 
 The state records schema version, version/label, exact commit, deployment ZIP
@@ -105,8 +110,9 @@ pruned by the script.
 10. Set repository variable `ASAP_TEST_DEPLOYMENT_ENABLED=true`.
 11. Use an explicit CLI/API dispatch against one exact test tag, for example
     `gh workflow run dotnet.yml --repo clcdpc/asap-pocketbase --ref v1.0.0-test.1`.
-12. Confirm the deployment job validates the ZIP SHA-256 and manifest before
-    stopping the app pool, then verifies the site path and external config.
+12. Confirm the deployment job validates the ZIP SHA-256, manifest, and staged
+    `Asap:ConfigFile` pointer before stopping the app pool, then verifies the
+    site path and external config.
 13. Confirm `/health/ready` returns HTTP 200 with JSON `status: healthy`.
 14. Confirm `test-deployment-state.json` records the expected exact commit and
     ZIP/DACPAC hashes.
