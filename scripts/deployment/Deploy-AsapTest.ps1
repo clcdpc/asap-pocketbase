@@ -396,7 +396,7 @@ function Get-SqlConnectionDetails {
 
     try {
         $builder = [System.Data.Common.DbConnectionStringBuilder]::new()
-        $builder.ConnectionString = $ConnectionString
+        $builder.PSObject.Properties['ConnectionString'].Value = $ConnectionString
     }
     catch {
         throw 'SQL deployment connection string is not valid.'

@@ -132,8 +132,10 @@ function Get-NestedValue {
     param([object] $Object, [string[]] $Names)
 
     $value = $Object
+
     foreach ($name in $Names) {
         $value = Get-Value $value $name
+
         if ($null -eq $value) {
             return $null
         }
@@ -144,6 +146,7 @@ function Get-NestedValue {
 
 function Add-ValidationError {
     param([string] $Message)
+
     $script:ValidationErrors.Add($Message)
 }
 
@@ -151,6 +154,7 @@ function Require-Text {
     param([object] $Value, [string] $Name)
 
     $text = [string] $Value
+
     if ([string]::IsNullOrWhiteSpace($text) -or $text -match 'REPLACE-') {
         Add-ValidationError "$Name requires a non-placeholder value."
         return $null
@@ -169,6 +173,7 @@ function Test-EquivalentPath {
 
         $actualPath = [IO.Path]::GetFullPath([string] $Actual).TrimEnd('\', '/')
         $expectedPath = [IO.Path]::GetFullPath($Expected).TrimEnd('\', '/')
+
         return $actualPath.Equals($expectedPath, [StringComparison]::OrdinalIgnoreCase)
     }
     catch {
@@ -185,6 +190,7 @@ function Write-TemplateIfMissing {
     }
 
     $temporaryPath = Join-Path (Split-Path -Parent $Path) ('.' + [IO.Path]::GetFileName($Path) + '.' + [guid]::NewGuid().ToString('N') + '.tmp')
+
     try {
         [IO.File]::WriteAllText($temporaryPath, ($Value | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
         [IO.File]::Move($temporaryPath, $Path, $false)
@@ -194,6 +200,7 @@ function Write-TemplateIfMissing {
         if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
             throw
         }
+
         Write-Host "Preserved configuration created concurrently: $Path"
     }
     finally {
@@ -209,6 +216,7 @@ function New-ApplicationTemplate {
     $template = $applicationTemplateJson | ConvertFrom-Json
     $template.Application.DataProtectionKeysPath = Join-Path $HostRoot 'DataProtection-Keys'
     $template.Application.LogPath = Join-Path $HostRoot 'Logs'
+
     return $template
 }
 
@@ -235,6 +243,7 @@ function Initialize-HostFiles {
 
     foreach ($name in @('', 'Config', 'DataProtection-Keys', 'Logs', 'Staging', 'Backups')) {
         $directory = if ($name) { Join-Path $HostRoot $name } else { $HostRoot }
+
         if (-not (Test-Path -LiteralPath $directory -PathType Container)) {
             [void] [IO.Directory]::CreateDirectory($directory)
             Write-Host "Created ASAP-owned directory: $directory"
@@ -242,6 +251,7 @@ function Initialize-HostFiles {
     }
 
     $configRoot = Join-Path $HostRoot 'Config'
+
     Write-TemplateIfMissing (Join-Path $configRoot 'application.json') (New-ApplicationTemplate $HostRoot)
     Write-TemplateIfMissing (Join-Path $configRoot 'deployment.json') (New-DeploymentTemplate $HostRoot)
 }
@@ -268,28 +278,58 @@ function Test-SqlConnectionString {
     param([object] $Value, [string] $Name)
 
     $text = Require-Text $Value $Name
+
     if (-not $text) {
         return
     }
 
     try {
         $builder = [Data.Common.DbConnectionStringBuilder]::new()
-        $builder.ConnectionString = $text
-        $values = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::OrdinalIgnoreCase)
-        foreach ($key in $builder.Keys) {
-            $values[[string] $key] = [string] $builder[$key]
+
+        # DbConnectionStringBuilder implements IDictionary. Access the actual
+        # ConnectionString property explicitly so PowerShell does not treat
+        # "ConnectionString" as a dictionary key instead of parsing the value.
+        $builder.PSObject.Properties['ConnectionString'].Value = $text
+
+        $server = if ($builder.ContainsKey('Server')) {
+            [string] $builder['Server']
+        }
+        elseif ($builder.ContainsKey('Data Source')) {
+            [string] $builder['Data Source']
+        }
+        else {
+            $null
         }
 
-        $server = if ($values.ContainsKey('Server')) { $values['Server'] } elseif ($values.ContainsKey('Data Source')) { $values['Data Source'] } else { $null }
-        $database = if ($values.ContainsKey('Database')) { $values['Database'] } elseif ($values.ContainsKey('Initial Catalog')) { $values['Initial Catalog'] } else { $null }
-        $integrated = if ($values.ContainsKey('Integrated Security')) { $values['Integrated Security'] } elseif ($values.ContainsKey('Trusted_Connection')) { $values['Trusted_Connection'] } else { $null }
-        if (-not $server -or -not $database) {
+        $database = if ($builder.ContainsKey('Database')) {
+            [string] $builder['Database']
+        }
+        elseif ($builder.ContainsKey('Initial Catalog')) {
+            [string] $builder['Initial Catalog']
+        }
+        else {
+            $null
+        }
+
+        $integrated = if ($builder.ContainsKey('Integrated Security')) {
+            [string] $builder['Integrated Security']
+        }
+        elseif ($builder.ContainsKey('Trusted_Connection')) {
+            [string] $builder['Trusted_Connection']
+        }
+        else {
+            $null
+        }
+
+        if ([string]::IsNullOrWhiteSpace($server) -or [string]::IsNullOrWhiteSpace($database)) {
             throw 'server and database are required'
         }
+
         if ($integrated -notmatch '^(?i:true|yes|sspi|1)$') {
             throw 'Windows Integrated Security is required'
         }
-        if ($values.ContainsKey('User ID') -or $values.ContainsKey('Password')) {
+
+        if ($builder.ContainsKey('User ID') -or $builder.ContainsKey('Password')) {
             throw 'embedded SQL credentials are forbidden'
         }
     }
@@ -302,6 +342,7 @@ function Test-Tool {
     param([object] $ConfiguredPath, [string] $Name)
 
     $path = Require-Text $ConfiguredPath $Name
+
     if (-not $path) {
         return
     }
@@ -312,6 +353,7 @@ function Test-Tool {
     else {
         $null -ne (Get-Command $path -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1)
     }
+
     if (-not $found) {
         Add-ValidationError "$Name was not found at or through '$path'."
     }
@@ -320,17 +362,20 @@ function Test-Tool {
 function Test-Certificate {
     param([object] $Thumbprint)
 
-    $normalized = (Require-Text $Thumbprint 'Application.DataProtectionKeyEncryptionCertificateThumbprint')
+    $normalized = Require-Text $Thumbprint 'Application.DataProtectionKeyEncryptionCertificateThumbprint'
+
     if (-not $normalized) {
         return
     }
-    $normalized = $normalized.Replace(' ', '')
 
+    $normalized = $normalized.Replace(' ', '')
     $store = 'Cert:\LocalMachine\My'
+
     if (Test-Path -LiteralPath $store) {
         $certificate = Get-ChildItem -LiteralPath $store | Where-Object {
             $_.Thumbprint.Replace(' ', '').Equals($normalized, [StringComparison]::OrdinalIgnoreCase)
         } | Select-Object -First 1
+
         if ($certificate -and $certificate.HasPrivateKey) {
             return
         }
@@ -341,6 +386,7 @@ function Test-Certificate {
 
 function Test-DotNetHosting {
     $dotnet = Get-Command 'dotnet' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+
     if (-not $dotnet) {
         Add-ValidationError 'dotnet was not found.'
     }
@@ -350,6 +396,7 @@ function Test-DotNetHosting {
 
     $programFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
     $aspNetCoreModule = if ($programFiles) { Join-Path $programFiles 'IIS\Asp.Net Core Module\V2\aspnetcorev2.dll' } else { $null }
+
     if (-not $aspNetCoreModule -or -not (Test-Path -LiteralPath $aspNetCoreModule -PathType Leaf)) {
         Add-ValidationError 'The .NET 10 ASP.NET Core Hosting Bundle/IIS module is not installed.'
     }
@@ -362,6 +409,7 @@ function Test-IisConfiguration {
         Add-ValidationError 'IIS validation must run on the provisioned Windows host.'
         return
     }
+
     try {
         Import-Module WebAdministration -ErrorAction Stop
     }
@@ -373,11 +421,13 @@ function Test-IisConfiguration {
     $siteName = Require-Text (Get-Value $Deployment 'IisSiteName') 'IisSiteName'
     $poolName = Require-Text (Get-Value $Deployment 'IisAppPoolName') 'IisAppPoolName'
     $deploymentPath = Require-Text (Get-Value $Deployment 'DeploymentPath') 'DeploymentPath'
+
     if (-not $siteName -or -not $poolName -or -not $deploymentPath) {
         return
     }
 
     $site = Get-Website -Name $siteName -ErrorAction SilentlyContinue
+
     if (-not $site) {
         Add-ValidationError "IIS site '$siteName' does not exist."
     }
@@ -385,19 +435,24 @@ function Test-IisConfiguration {
         if (-not (Test-EquivalentPath ([Environment]::ExpandEnvironmentVariables([string] $site.PhysicalPath)) $deploymentPath)) {
             Add-ValidationError "IIS site '$siteName' does not point at '$deploymentPath'."
         }
+
         if (-not ([string] $site.ApplicationPool).Equals($poolName, [StringComparison]::OrdinalIgnoreCase)) {
             Add-ValidationError "IIS site '$siteName' does not use app pool '$poolName'."
         }
+
         $readinessText = [string] (Get-Value $Deployment 'ReadinessUrl')
         $readinessUri = $null
         $httpsBindings = @(Get-WebBinding -Name $siteName -Protocol 'https' -ErrorAction SilentlyContinue)
         $hasExpectedBinding = $false
+
         if ([Uri]::TryCreate($readinessText, [UriKind]::Absolute, [ref] $readinessUri)) {
             $bindingSuffix = ":$($readinessUri.Port):$($readinessUri.DnsSafeHost)"
+
             $hasExpectedBinding = $null -ne ($httpsBindings | Where-Object {
                 ([string] $_.bindingInformation).EndsWith($bindingSuffix, [StringComparison]::OrdinalIgnoreCase)
             } | Select-Object -First 1)
         }
+
         if (-not $hasExpectedBinding) {
             Add-ValidationError "IIS site '$siteName' has no HTTPS binding for the configured readiness host and port."
         }
@@ -418,6 +473,7 @@ function Test-HostPrerequisites {
 
     foreach ($name in @('Config', 'DataProtection-Keys', 'Logs', 'Staging', 'Backups')) {
         $directory = Join-Path $HostRoot $name
+
         if (-not (Test-Path -LiteralPath $directory -PathType Container)) {
             $script:InitializationRequired = $true
             Add-ValidationError "Required ASAP directory is missing: $directory"
@@ -431,12 +487,15 @@ function Test-HostPrerequisites {
         if ((Get-Content -LiteralPath $applicationPath -Raw) -match 'REPLACE-') {
             Add-ValidationError 'application.json contains an unchanged REPLACE-* placeholder.'
         }
+
         if (-not (Test-EquivalentPath (Get-NestedValue $application @('Application', 'DataProtectionKeysPath')) $keysPath)) {
             Add-ValidationError "Application.DataProtectionKeysPath must be '$keysPath'."
         }
+
         if (-not (Test-EquivalentPath (Get-NestedValue $application @('Application', 'LogPath')) $logsPath)) {
             Add-ValidationError "Application.LogPath must be '$logsPath'."
         }
+
         Test-Certificate (Get-NestedValue $application @('Application', 'DataProtectionKeyEncryptionCertificateThumbprint'))
     }
 
@@ -452,15 +511,22 @@ function Test-HostPrerequisites {
         }
 
         $deploymentDirectory = Require-Text (Get-Value $deployment 'DeploymentPath') 'DeploymentPath'
+
         if ($deploymentDirectory -and -not (Test-Path -LiteralPath $deploymentDirectory -PathType Container)) {
             Add-ValidationError "DeploymentPath '$deploymentDirectory' does not exist; the operator must create it with the IIS site."
         }
+
         $readinessText = Require-Text (Get-Value $deployment 'ReadinessUrl') 'ReadinessUrl'
         $readinessUri = $null
-        if ($readinessText -and (-not [Uri]::TryCreate($readinessText, [UriKind]::Absolute, [ref] $readinessUri) -or
-            $readinessUri.Scheme -ne 'https' -or $readinessUri.AbsolutePath.TrimEnd('/') -ne '/health/ready')) {
+
+        if ($readinessText -and (
+            -not [Uri]::TryCreate($readinessText, [UriKind]::Absolute, [ref] $readinessUri) -or
+            $readinessUri.Scheme -ne 'https' -or
+            $readinessUri.AbsolutePath.TrimEnd('/') -ne '/health/ready'
+        )) {
             Add-ValidationError 'ReadinessUrl must be an absolute HTTPS /health/ready URL for deployment-time use.'
         }
+
         Test-SqlConnectionString (Get-Value $deployment 'AsapDatabaseConnectionString') 'AsapDatabaseConnectionString'
         Test-SqlConnectionString (Get-Value $deployment 'HangfireDatabaseConnectionString') 'HangfireDatabaseConnectionString'
         Test-Tool (Get-Value $deployment 'SqlPackagePath') 'SqlPackage'
@@ -470,7 +536,9 @@ function Test-HostPrerequisites {
     if ($PSVersionTable.PSVersion.Major -lt 7) {
         Add-ValidationError 'Validation requires PowerShell 7 or later.'
     }
+
     Test-DotNetHosting
+
     if ($deployment) {
         Test-IisConfiguration $deployment
     }
@@ -480,19 +548,36 @@ function Test-HostPrerequisites {
 
 function Invoke-ContractSelfTest {
     $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('asap-host-bootstrap-' + [guid]::NewGuid().ToString('N'))
+
     try {
         Initialize-HostFiles $testRoot
+
         foreach ($name in @('Config', 'DataProtection-Keys', 'Logs', 'Staging', 'Backups')) {
             if (-not (Test-Path -LiteralPath (Join-Path $testRoot $name) -PathType Container)) {
                 throw "Initialization did not create $name."
             }
         }
+
         $applicationPath = Join-Path $testRoot 'Config\application.json'
         $original = Get-Content -LiteralPath $applicationPath -Raw
+
         Initialize-HostFiles $testRoot
+
         if ((Get-Content -LiteralPath $applicationPath -Raw) -cne $original) {
             throw 'Initialization overwrote existing application configuration.'
         }
+
+        $validationErrorCount = $script:ValidationErrors.Count
+
+        Test-SqlConnectionString `
+            'Server=devdb;Database=asap;Integrated Security=True;Encrypt=True;TrustServerCertificate=True' `
+            'ContractSelfTestDatabase'
+
+        if ($script:ValidationErrors.Count -ne $validationErrorCount) {
+            $newErrors = @($script:ValidationErrors | Select-Object -Skip $validationErrorCount)
+            throw "A valid SQL Server connection string failed validation: $($newErrors -join '; ')"
+        }
+
         Write-Host 'ASAP test-host bootstrap self-test passed.'
     }
     finally {
@@ -505,28 +590,35 @@ function Invoke-ContractSelfTest {
 if ($ContractSelfTest -and $Initialize) {
     throw '-ContractSelfTest and -Initialize cannot be combined.'
 }
+
 if ($ContractSelfTest) {
     Invoke-ContractSelfTest
     return
 }
 
 $resolvedRoot = [IO.Path]::GetFullPath($RootPath)
+
 if ($Initialize) {
     Initialize-HostFiles $resolvedRoot
+
     Write-Host ''
     Write-Host 'ASAP-owned files and directories are initialized.'
     Write-Host '1. Edit application.json and deployment.json.'
     Write-Host '2. Manually provision IIS, certificates, identities, ACLs, SQL, Entra, and the GitHub Actions runner.'
     Write-Host '3. Rerun this script with no flags to perform read-only validation.'
+
     return
 }
 
 $valid = Test-HostPrerequisites $resolvedRoot
+
 if (-not $valid) {
     $message = "ASAP test host validation failed:`n - " + ($script:ValidationErrors -join "`n - ")
+
     if ($script:InitializationRequired) {
         $message += "`nRun 'pwsh -File .\Initialize-AsapTestHost.ps1 -Initialize' to create missing ASAP-owned files and directories."
     }
+
     Write-Error $message
     exit 1
 }
