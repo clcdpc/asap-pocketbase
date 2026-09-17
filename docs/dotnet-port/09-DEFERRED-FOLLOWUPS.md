@@ -5,7 +5,6 @@ These items are intentionally outside the initial port unless implementation exp
 ## Identity / security
 
 - Split production and nonproduction into separate Entra app registrations.
-- Replace Entra client secret with certificate/workload credential if operationally justified.
 - Evaluate gMSA for the already-separated production/nonproduction runtime identities once deployment/operations are stable.
 - Consider replacing the built-in Data Protection approach with an external enterprise secret-management system only if later operational requirements justify the added dependency.
 - Consider a stricter nonproduction patron allowlist if the public test environment needs additional protection.

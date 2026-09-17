@@ -119,9 +119,12 @@ are operator tasks; the bootstrap only validates their presence.
 4. Verify both identities can connect to the intended databases with Windows
    Integrated Security, and that the runtime identity cannot perform schema or
    deployment operations.
-5. Register the nonproduction Entra application. Configure
-   `https://<test-host>/signin-oidc`, create the client secret, record allowed
-   tenant IDs, and identify the initial super-admin.
+5. Register the nonproduction Entra application with a Web platform. Configure
+   `https://<test-host>/signin-oidc` as its redirect URI, enable ID tokens under
+   the web authentication implicit/hybrid settings, record the client ID and
+   allowed tenant IDs, and identify the initial super-admin. ASAP uses the
+   signed ID token only and issues its own staff cookie. No Entra client secret
+   or client certificate is required by ASAP.
 
 The deployment script does not create SQL databases or take SQL backups.
 
@@ -139,7 +142,7 @@ Replace every `REPLACE-*` placeholder. Keep:
   banner;
 - separate runtime `AsapDatabase` and `HangfireDatabase` Integrated Security
   connection strings;
-- Entra client, secret, allowed tenants, and initial super-admin values;
+- Entra client ID, allowed tenants, and initial super-admin values;
 - `DataProtectionKeysPath` as
   `C:\ProgramData\clc-asap\DataProtection-Keys`;
 - the Data Protection certificate thumbprint;
@@ -149,9 +152,16 @@ Replace every `REPLACE-*` placeholder. Keep:
   reviewed environment-specific policy requires different values;
 - all Hangfire schedules and processing-limit keys in the template.
 
-This file contains secrets. Never commit it or place it under `D:\Sites\ASAP`.
+This host-owned file may contain sensitive operational configuration. Never
+commit it or place it under `D:\Sites\ASAP`.
 Published `appsettings.json` already points `Asap:ConfigFile` to this exact
 path. Do not add an `Asap__ConfigFile` IIS environment variable.
+
+The Data Protection certificate above remains required and is unrelated to
+Entra authentication credentials. It encrypts the persistent ASP.NET Core Data
+Protection key ring used for ASAP cookies, antiforgery, and protected values;
+removing the Entra credential requirement does not remove that certificate or
+its backup and recovery obligations.
 
 ### Complete deployment.json
 
@@ -286,5 +296,5 @@ idempotent when readiness is healthy. Backups are not automatically pruned.
 - Deployment performs no automatic SQL backup, database rollback, file
   rollback, or production deployment behavior.
 
-Never commit runner tokens, PATs, connection or Entra secrets, certificates,
+Never commit runner tokens, PATs, connection secrets, certificates,
 private keys, Data Protection keys, or either host-local JSON file.

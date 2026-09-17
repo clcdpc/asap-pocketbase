@@ -26,7 +26,6 @@ internal static class TestConfigurationFactory
                 Entra = new EntraOptions
                 {
                     ClientId = "00000000-0000-0000-0000-000000000001",
-                    ClientSecret = "test-only-secret",
                     AllowedTenantIds = ["00000000-0000-0000-0000-000000000002"],
                     InitialSuperAdmin = new InitialSuperAdminOptions
                     {

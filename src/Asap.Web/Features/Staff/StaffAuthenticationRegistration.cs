@@ -3,6 +3,7 @@ using Asap.Web.Infrastructure.Configuration;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 
 namespace Asap.Web.Features.Staff;
@@ -49,11 +50,16 @@ public static class StaffAuthenticationRegistration
         {
             options.Authority = "https://login.microsoftonline.com/organizations/v2.0";
             options.ClientId = entra.ClientId!;
-            options.ClientSecret = entra.ClientSecret!;
-            options.ResponseType = "code";
+            options.ResponseType = OpenIdConnectResponseType.IdToken;
+            options.ResponseMode = OpenIdConnectResponseMode.FormPost;
+            options.UsePkce = false;
             options.SignInScheme = CookieScheme;
             options.SaveTokens = false;
             options.GetClaimsFromUserInfoEndpoint = false;
+            options.Scope.Clear();
+            options.Scope.Add(OpenIdConnectScope.OpenId);
+            options.Scope.Add(OpenIdConnectScope.Profile);
+            options.Scope.Add(OpenIdConnectScope.Email);
             options.TokenValidationParameters.ValidateIssuer = true;
             options.TokenValidationParameters.IssuerValidator = (issuer, _, _) =>
                 ValidateIssuer(issuer, allowedTenants);

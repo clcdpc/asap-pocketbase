@@ -28,7 +28,6 @@ $applicationTemplateJson = @'
   "Authentication": {
     "Entra": {
       "ClientId": "REPLACE-CLIENT-ID",
-      "ClientSecret": "REPLACE-CLIENT-SECRET",
       "AllowedTenantIds": [
         "REPLACE-TENANT-ID"
       ],

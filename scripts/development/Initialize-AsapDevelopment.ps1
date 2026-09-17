@@ -48,8 +48,6 @@ $certificate = New-SelfSignedCertificate `
     -CertStoreLocation 'Cert:\CurrentUser\My' `
     -NotAfter (Get-Date).AddYears(5)
 
-$secret = Read-Host 'Entra client secret' -AsSecureString
-$plainSecret = ([System.Net.NetworkCredential]::new('', $secret)).Password
 $connectionString = "Server=$SqlServer;Database=$DatabaseName;Integrated Security=True;TrustServerCertificate=True"
 
 $configuration = [ordered]@{
@@ -65,7 +63,6 @@ $configuration = [ordered]@{
     Authentication = [ordered]@{
         Entra = [ordered]@{
             ClientId = $EntraClientId
-            ClientSecret = $plainSecret
             AllowedTenantIds = @($EntraTenantId)
             InitialSuperAdmin = [ordered]@{
                 TenantId = $EntraTenantId

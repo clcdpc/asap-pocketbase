@@ -144,12 +144,6 @@ public static partial class ExternalConfigurationValidator
     private static void ValidateEntra(EntraOptions entra, ICollection<string> errors)
     {
         ValidateGuid(entra.ClientId, "entra_client_id_invalid", errors);
-        if (string.IsNullOrWhiteSpace(entra.ClientSecret) ||
-            entra.ClientSecret.StartsWith("REPLACE-", StringComparison.OrdinalIgnoreCase))
-        {
-            errors.Add("entra_client_secret_missing");
-        }
-
         var tenantIds = entra.AllowedTenantIds;
         if (tenantIds is null || tenantIds.Count == 0)
         {

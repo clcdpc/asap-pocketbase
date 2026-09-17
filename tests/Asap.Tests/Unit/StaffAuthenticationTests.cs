@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 
 namespace Asap.Tests.Unit;
@@ -83,6 +84,20 @@ public sealed class StaffAuthenticationTests
             var options = provider.GetRequiredService<IOptions<AuthenticationOptions>>().Value;
             Assert.AreEqual(StaffAuthenticationRegistration.CookieScheme, options.DefaultSignInScheme, environmentName);
             Assert.AreEqual(StaffAuthenticationRegistration.EntraScheme, options.DefaultChallengeScheme, environmentName);
+
+            var oidc = provider.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>()
+                .Get(StaffAuthenticationRegistration.EntraScheme);
+            Assert.AreEqual(TestConfigurationFactory.Create().Authentication.Entra.ClientId, oidc.ClientId, environmentName);
+            Assert.IsTrue(string.IsNullOrEmpty(oidc.ClientSecret), environmentName);
+            Assert.AreEqual(OpenIdConnectResponseType.IdToken, oidc.ResponseType, environmentName);
+            Assert.AreEqual(OpenIdConnectResponseMode.FormPost, oidc.ResponseMode, environmentName);
+            Assert.IsFalse(oidc.UsePkce, environmentName);
+            Assert.IsFalse(oidc.SaveTokens, environmentName);
+            Assert.IsFalse(oidc.GetClaimsFromUserInfoEndpoint, environmentName);
+            CollectionAssert.AreEquivalent(
+                new[] { OpenIdConnectScope.OpenId, OpenIdConnectScope.Profile, OpenIdConnectScope.Email },
+                oidc.Scope.ToArray(),
+                environmentName);
         }
     }
 

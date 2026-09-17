@@ -371,8 +371,13 @@ public sealed partial class PatronJourneyTests
         {
             Assert.AreEqual(HttpStatusCode.Redirect, challenge.StatusCode);
             Assert.AreEqual("login.microsoftonline.com", challenge.Headers.Location!.Host);
-            StringAssert.Contains(challenge.Headers.Location.Query, "response_type=code");
-            Assert.AreEqual("select_account", Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(challenge.Headers.Location.Query)["prompt"].ToString());
+            var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(challenge.Headers.Location.Query);
+            Assert.AreEqual(OpenIdConnectResponseType.IdToken, query["response_type"].ToString());
+            Assert.AreEqual(OpenIdConnectResponseMode.FormPost, query["response_mode"].ToString());
+            CollectionAssert.AreEquivalent(
+                new[] { OpenIdConnectScope.OpenId, OpenIdConnectScope.Profile, OpenIdConnectScope.Email },
+                query["scope"].ToString().Split(' ', StringSplitOptions.RemoveEmptyEntries));
+            Assert.AreEqual("select_account", query["prompt"].ToString());
         }
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
         using var signedOut = await client.PostAsync("/api/asap/staff/sign-out", null);
