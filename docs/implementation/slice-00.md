@@ -26,7 +26,7 @@ Read root `AGENTS.md` and the relevant pack sections in full:
 - `07-API-FRONTEND-COMPATIBILITY.md`: exact asset preservation/copy strategy.
 - `10-CODEX-MULTI-MODEL-TASK.md`: model ownership and milestone gates.
 - `13-SETTINGS-SCOPE-INVENTORY.md`: external versus SQL configuration boundary.
-- `examples/Config.example.json`: accepted shape, not usable credentials.
+- `scripts/deployment/Initialize-AsapTestHost.ps1`: embedded operational configuration shape, not usable credentials.
 
 ## Exact Legacy Anchors
 
