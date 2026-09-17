@@ -305,7 +305,7 @@ function Set-ApplicationCertificateThumbprint {
     try {
         $json = $current.Configuration | ConvertTo-Json -Depth 100
         [IO.File]::WriteAllText($temporaryPath, $json + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
-        [IO.File]::Replace($temporaryPath, $Path, $null)
+        [IO.File]::Replace($temporaryPath, $Path, [System.Management.Automation.Language.NullString]::Value)
     }
     finally {
         if ([IO.File]::Exists($temporaryPath)) {
