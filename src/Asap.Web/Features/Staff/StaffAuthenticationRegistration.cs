@@ -53,6 +53,7 @@ public static class StaffAuthenticationRegistration
             options.ResponseType = OpenIdConnectResponseType.IdToken;
             options.ResponseMode = OpenIdConnectResponseMode.FormPost;
             options.UsePkce = false;
+            options.MapInboundClaims = false;
             options.SignInScheme = CookieScheme;
             options.SaveTokens = false;
             options.GetClaimsFromUserInfoEndpoint = false;

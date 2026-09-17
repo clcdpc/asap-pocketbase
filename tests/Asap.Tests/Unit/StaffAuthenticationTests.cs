@@ -92,6 +92,7 @@ public sealed class StaffAuthenticationTests
             Assert.AreEqual(OpenIdConnectResponseType.IdToken, oidc.ResponseType, environmentName);
             Assert.AreEqual(OpenIdConnectResponseMode.FormPost, oidc.ResponseMode, environmentName);
             Assert.IsFalse(oidc.UsePkce, environmentName);
+            Assert.IsFalse(oidc.MapInboundClaims, environmentName);
             Assert.IsFalse(oidc.SaveTokens, environmentName);
             Assert.IsFalse(oidc.GetClaimsFromUserInfoEndpoint, environmentName);
             CollectionAssert.AreEquivalent(
