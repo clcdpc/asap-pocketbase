@@ -17,7 +17,12 @@ $functionNames = @(
     'Get-RequiredText',
     'Get-FullPath',
     'Test-PathWithin',
-    'Test-PublishedApplicationConfigPath'
+    'Test-PublishedApplicationConfigPath',
+    'Get-SqlConnectionDetails',
+    'Get-SqlCmdArguments',
+    'Wait-AppPoolState',
+    'Stop-TestAppPool',
+    'Start-TestAppPool'
 )
 foreach ($functionName in $functionNames) {
     $functionAst = $scriptAst.Find(
@@ -55,6 +60,67 @@ function Assert-ThrowsLike {
     }
 
     throw "Expected an error like '$Pattern'."
+}
+
+$sqlArguments = @(
+    Get-SqlCmdArguments `
+        -ConnectionString 'Server=sql.example;Database=Asap;Integrated Security=True;TrustServerCertificate=False'
+)
+$expectedSqlArguments = @('-S', 'sql.example', '-d', 'Asap', '-E', '-b', '-I', '-h', '-1', '-W')
+if (($sqlArguments -join "`n") -ne ($expectedSqlArguments -join "`n")) {
+    throw "Unexpected sqlcmd arguments: $($sqlArguments -join ' ')"
+}
+
+$trustedSqlArguments = @(
+    Get-SqlCmdArguments `
+        -ConnectionString 'Server=sql.example;Database=Asap;Integrated Security=True;TrustServerCertificate=True'
+)
+$expectedTrustedSqlArguments = @($expectedSqlArguments) + '-C'
+if (($trustedSqlArguments -join "`n") -ne ($expectedTrustedSqlArguments -join "`n")) {
+    throw "Unexpected trusted sqlcmd arguments: $($trustedSqlArguments -join ' ')"
+}
+
+$script:appPoolState = 'Stopped'
+$script:appPoolStateReads = 0
+$script:stopWebAppPoolCalls = 0
+function Get-WebAppPoolState {
+    [CmdletBinding()]
+    param([string] $Name)
+
+    $script:appPoolStateReads++
+    return [pscustomobject]@{ Value = $script:appPoolState }
+}
+function Stop-WebAppPool {
+    [CmdletBinding()]
+    param([string] $Name)
+
+    $script:stopWebAppPoolCalls++
+}
+
+Stop-TestAppPool -AppPoolName 'ASAP'
+if ($script:stopWebAppPoolCalls -ne 0) {
+    throw 'Stop-TestAppPool must not stop an application pool that is already stopped.'
+}
+if ($script:appPoolStateReads -ne 2) {
+    throw 'Stop-TestAppPool must read the current state and verify the final stopped state.'
+}
+
+$script:appPoolState = 'Started'
+$script:appPoolStateReads = 0
+$script:startWebAppPoolCalls = 0
+function Start-WebAppPool {
+    [CmdletBinding()]
+    param([string] $Name)
+
+    $script:startWebAppPoolCalls++
+}
+
+Start-TestAppPool -AppPoolName 'ASAP'
+if ($script:startWebAppPoolCalls -ne 0) {
+    throw 'Start-TestAppPool must not start an application pool that is already started.'
+}
+if ($script:appPoolStateReads -ne 2) {
+    throw 'Start-TestAppPool must read the current state and verify the final started state.'
 }
 
 $fixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ("asap-deployment-config-test-" + [guid]::NewGuid().ToString('N'))
