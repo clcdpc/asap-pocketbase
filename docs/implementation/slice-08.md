@@ -22,8 +22,9 @@ The small ZIP contains Web publish, DACPAC, deployment PowerShell and a manifest
 with label, exact commit, UTC build time, DACPAC SHA-256 and web file identity.
 Verify final ZIP SHA-256 before mutation and exact expected manifest identity.
 Exclude source, secrets, external config, keys, Git, Node, PocketBase and migration
-executables/packages. Load host settings outside the site, preferably
-`C:\ProgramData\ASAP\test-deployment.json`; successful state lives beside it.
+executables/packages. Load host settings outside the site at
+`C:\ProgramData\clc-asap\config\test-deployment.json`; successful state lives
+beside it at `C:\ProgramData\clc-asap\config\test-deployment-state.json`.
 
 Preflight staging, identity, payload, IIS/pool/path, external configuration,
 SqlPackage and prior state before mutation. Stop/verify pool before changed
@@ -43,13 +44,14 @@ Record `test_cd_activation: pending_runner_setup`; do not claim live deployment.
 Do not merge PR #264 or implement Slices 9, 10 or 11.
 
 The repository implementation lives in `.github/workflows/dotnet.yml` and
-`scripts/deployment/Deploy-AsapTest.ps1`. The workflow keeps the current
+`scripts/deployment/Deploy-AsapTest.ps1`; the one-time host setup is
+`scripts/deployment/Initialize-AsapTestHost.ps1`. The workflow keeps the current
 Release/real-SQL/frontend/publish gates on `ubuntu-latest`, packages the exact
 tested SHA, validates the ZIP safely, and gates the isolated labels
 `self-hosted`, `windows`, `x64`, `asap-test-iis` on
 `vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true'` for matching tag pushes or
 `workflow_dispatch`. The host script uses
-`C:\ProgramData\ASAP\test-deployment.json`, external `Asap:ConfigFile` application
+`C:\ProgramData\clc-asap\config\test-deployment.json`, external `Asap:ConfigFile` application
 configuration and adjacent `test-deployment-state.json`; see
 [Test IIS Deployment Activation](test-iis-activation.md) for the later
 one-time runner task and the no-live-evidence boundary.

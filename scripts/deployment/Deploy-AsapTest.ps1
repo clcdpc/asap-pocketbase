@@ -16,7 +16,7 @@ param(
     [ValidateNotNullOrEmpty()]
     [string] $ExpectedDeploymentLabel,
 
-    [string] $ConfigPath = 'C:\ProgramData\ASAP\test-deployment.json',
+    [string] $ConfigPath = 'C:\ProgramData\clc-asap\config\test-deployment.json',
 
     [ValidateRange(1, 600)]
     [int] $ReadinessTimeoutSeconds = 120,

@@ -184,6 +184,7 @@ jobs:
           }
 
           Copy-Item -LiteralPath scripts/deployment/Deploy-AsapTest.ps1 -Destination (Join-Path $packageDeployment 'Deploy-AsapTest.ps1') -Force
+          Copy-Item -LiteralPath scripts/deployment/Initialize-AsapTestHost.ps1 -Destination (Join-Path $packageDeployment 'Initialize-AsapTestHost.ps1') -Force
           Copy-Item -LiteralPath scripts/hangfire/1.8.25/install.sql -Destination (Join-Path $packageHangfire 'install.sql') -Force
 
           $webEntries = @(
@@ -307,7 +308,8 @@ jobs:
               -DeploymentZip $zipPath `
               -ExpectedZipSha256 $expectedHash `
               -ExpectedCommitSha $env:EXPECTED_COMMIT_SHA `
-              -ExpectedDeploymentLabel $env:EXPECTED_DEPLOYMENT_LABEL
+              -ExpectedDeploymentLabel $env:EXPECTED_DEPLOYMENT_LABEL `
+              -ConfigPath 'C:\ProgramData\clc-asap\config\test-deployment.json'
           }
           finally {
             Remove-Item -LiteralPath $bootstrapRoot -Recurse -Force -ErrorAction SilentlyContinue
