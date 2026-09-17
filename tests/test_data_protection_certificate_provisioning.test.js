@@ -71,7 +71,7 @@ assert.ok(provisioning.includes('Retaining configured Data Protection certificat
 assert.ok(provisioning.includes('The existing application.json value was not changed.'));
 assert.ok(provisioning.includes('$initialThumbprint -ceq $script:BootstrapPlaceholder'));
 assert.ok(provisioning.includes('$current.Thumbprint -cne $ExpectedValue'));
-assert.ok(provisioning.includes('[IO.File]::Replace($temporaryPath, $Path, $null)'));
+assert.ok(provisioning.includes('[IO.File]::Replace($temporaryPath, $Path, [System.Management.Automation.Language.NullString]::Value)'));
 assert.ok(
   provisioning.lastIndexOf('Export-AndVerifyPfx -Certificate') <
     provisioning.lastIndexOf('Set-ApplicationCertificateThumbprint `'),
