@@ -14,9 +14,13 @@ if ($parseErrors.Count -ne 0) {
 }
 
 $functionNames = @(
+    'Get-Sha256Hex',
     'Get-RequiredText',
+    'Get-ManifestText',
     'Get-FullPath',
     'Test-PathWithin',
+    'Get-WebPayloadIdentity',
+    'Test-DeploymentArchive',
     'Test-PublishedApplicationConfigPath',
     'Get-SqlConnectionDetails',
     'Get-SqlCmdArguments',
@@ -158,6 +162,68 @@ try {
 }
 finally {
     Remove-Item -LiteralPath $fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+$archiveFixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ("asap-deployment-schema-test-" + [guid]::NewGuid().ToString('N'))
+try {
+    $packageRoot = Join-Path $archiveFixtureRoot 'package'
+    $webRoot = Join-Path $packageRoot 'web'
+    $databaseRoot = Join-Path $webRoot 'Database'
+    $deploymentRoot = Join-Path $packageRoot 'deployment'
+    $hangfireRoot = Join-Path $packageRoot 'hangfire\1.8.25'
+    New-Item -ItemType Directory -Force -Path $databaseRoot, $deploymentRoot, $hangfireRoot | Out-Null
+    [IO.File]::WriteAllText((Join-Path $webRoot 'Asap.Web.dll'), 'web', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $databaseRoot 'Asap.Database.dacpac'), 'dacpac', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $deploymentRoot 'Deploy-AsapTest.ps1'), 'deployment', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $hangfireRoot 'install.sql'), 'hangfire', [Text.UTF8Encoding]::new($false))
+
+    $webIdentity = Get-WebPayloadIdentity -WebRoot $webRoot
+    $manifest = [ordered]@{
+        schemaVersion = 1
+        deploymentKind = 'asap-test-iis'
+        versionOrLabel = 'schema-contract-test'
+        commitSha = '1111111111111111111111111111111111111111'
+        buildUtc = '2026-09-17T00:00:00.000Z'
+        applicationSchemaVersion = 6
+        hangfireSchemaVersion = 9
+        dacpacSha256 = (Get-FileHash -LiteralPath (Join-Path $databaseRoot 'Asap.Database.dacpac') -Algorithm SHA256).Hash.ToLowerInvariant()
+        webPayloadSha256 = $webIdentity.Hash
+        webFileCount = $webIdentity.FileCount
+        webPayloadBytes = $webIdentity.Bytes
+        hangfireInstallSha256 = (Get-FileHash -LiteralPath (Join-Path $hangfireRoot 'install.sql') -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    $manifestPath = Join-Path $packageRoot 'manifest.json'
+    [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+
+    $validZip = Join-Path $archiveFixtureRoot 'valid.zip'
+    Compress-Archive -Path (Join-Path $packageRoot '*') -DestinationPath $validZip
+    $accepted = Test-DeploymentArchive `
+        -ZipPath $validZip `
+        -ExpectedHash (Get-FileHash -LiteralPath $validZip -Algorithm SHA256).Hash `
+        -ExpectedCommit $manifest.commitSha `
+        -ExpectedLabel $manifest.versionOrLabel `
+        -StagingPath (Join-Path $archiveFixtureRoot 'valid-staging')
+    if ([int] $accepted.Manifest.applicationSchemaVersion -ne 6) {
+        throw 'Schema 6 deployment manifest was not accepted.'
+    }
+
+    $manifest.applicationSchemaVersion = 5
+    [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+    $invalidZip = Join-Path $archiveFixtureRoot 'invalid.zip'
+    Compress-Archive -Path (Join-Path $packageRoot '*') -DestinationPath $invalidZip
+    Assert-ThrowsLike `
+        -Action {
+            Test-DeploymentArchive `
+                -ZipPath $invalidZip `
+                -ExpectedHash (Get-FileHash -LiteralPath $invalidZip -Algorithm SHA256).Hash `
+                -ExpectedCommit $manifest.commitSha `
+                -ExpectedLabel $manifest.versionOrLabel `
+                -StagingPath (Join-Path $archiveFixtureRoot 'invalid-staging')
+        } `
+        -Pattern 'Deployment manifest contains an unsupported schema contract.'
+}
+finally {
+    Remove-Item -LiteralPath $archiveFixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host 'Deployment application-configuration preflight tests passed.'

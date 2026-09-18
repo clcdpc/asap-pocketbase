@@ -223,6 +223,36 @@ public sealed class DatabaseBaselineTests
     }
 
     [TestMethod]
+    public async Task SchemaSixRejectsInPlaceDeploymentOverAnOlderApplicationDatabase()
+    {
+        await using (var connection = new SqlConnection(_databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 5 WHERE [Id] = 1;");
+        }
+
+        try
+        {
+            Assert.Throws<DacServicesException>(() =>
+                new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath));
+
+            await using var connection = new SqlConnection(_databaseConnectionString);
+            await connection.OpenAsync();
+            Assert.AreEqual(
+                5,
+                Convert.ToInt32(await Scalar(
+                    connection,
+                    "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
+        }
+        finally
+        {
+            await using var connection = new SqlConnection(_databaseConnectionString);
+            await connection.OpenAsync();
+            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 6 WHERE [Id] = 1;");
+        }
+    }
+
+    [TestMethod]
     public async Task AuthorizationSensitiveOutboxRequiresExplicitAddressKind()
     {
         await using var connection = new SqlConnection(_databaseConnectionString);

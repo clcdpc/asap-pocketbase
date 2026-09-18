@@ -15,8 +15,6 @@
         "00000000-0000-0000-0000-000000000002"
       ],
       "InitialSuperAdmin": {
-        "TenantId": "00000000-0000-0000-0000-000000000002",
-        "ObjectId": "00000000-0000-0000-0000-000000000003",
         "UserPrincipalName": "admin@example.org",
         "DisplayName": "ASAP Development Administrator",
         "NotificationEmail": "admin@example.org"

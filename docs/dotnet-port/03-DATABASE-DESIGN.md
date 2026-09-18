@@ -30,6 +30,8 @@ UpdatedUtc datetime2 NOT NULL
 
 The integer changes only for contract-affecting schema changes. Application startup compares the expected build value with SQL. Mismatch keeps liveness healthy but readiness unhealthy and blocks normal application functions. It is not used to decide whether a DACPAC needs deployment.
 
+Schema 6 is the pre-release hard-reset boundary for email identity. A database carrying an earlier application schema is disposable and must be recreated from the schema-6 DACPAC; the post-deployment script refuses to advance a pre-6 version in place. Fresh creation contains only the final email-based staff and EmailOutbox shape.
+
 ### `[asap].[DeploymentState]`
 
 Purpose: deployment bookkeeping independent of the application/database compatibility contract.

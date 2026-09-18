@@ -15,9 +15,7 @@
         "REPLACE-TENANT-ID"
       ],
       "InitialSuperAdmin": {
-        "TenantId": "REPLACE-TENANT-ID",
-        "ObjectId": "REPLACE-OBJECT-ID",
-        "UserPrincipalName": "REPLACE-ADMIN-UPN",
+        "UserPrincipalName": "REPLACE-ADMIN-EMAIL",
         "DisplayName": "ASAP Initial Administrator",
         "NotificationEmail": "REPLACE-ADMIN-EMAIL"
       }

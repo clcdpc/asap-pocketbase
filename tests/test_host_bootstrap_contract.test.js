@@ -121,6 +121,24 @@ try {
   const deploymentPath = path.join(hostRoot, 'Config', 'deployment.json');
   const generatedApplication = JSON.parse(fs.readFileSync(applicationPath, 'utf8'));
   const generatedDeployment = JSON.parse(fs.readFileSync(deploymentPath, 'utf8'));
+  assert.deepStrictEqual(generatedApplication.Authentication.Entra.InitialSuperAdmin, {
+    UserPrincipalName: 'REPLACE-ADMIN-EMAIL',
+    DisplayName: 'ASAP Initial Administrator',
+    NotificationEmail: 'REPLACE-ADMIN-EMAIL'
+  });
+  assert.ok(
+    !Object.hasOwn(generatedApplication.Authentication.Entra.InitialSuperAdmin, 'TenantId'),
+    'new bootstrap configuration must not emit a tenant identity field'
+  );
+  assert.ok(
+    !Object.hasOwn(generatedApplication.Authentication.Entra.InitialSuperAdmin, 'ObjectId'),
+    'new bootstrap configuration must not emit an object identity field'
+  );
+  assert.deepStrictEqual(
+    generatedApplication.Authentication.Entra.AllowedTenantIds,
+    ['REPLACE-TENANT-ID'],
+    'AllowedTenantIds remains required in the generated configuration'
+  );
   const normalizedGeneratedApplication = JSON.parse(JSON.stringify(generatedApplication));
   normalizedGeneratedApplication.Application.DataProtectionKeysPath = 'REPLACE-DATA-PROTECTION-KEYS-PATH';
   normalizedGeneratedApplication.Application.LogPath = 'REPLACE-LOG-PATH';

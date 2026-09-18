@@ -292,8 +292,8 @@ Remaining ambiguity:
 ### Prior finding R5
 
 Resolved by:
-- `01-PORTING-SPEC.md` sections 7.3-7.6 and 14: one current predicate for ticket/recipient tuple equality, loaded tenant trust, active StaffUser, current role/organization/scope and required participation; every request and sensitive-mail send/retry uses it.
-- `03-DATABASE-DESIGN.md` sections 3/11 and `07-API-FRONTEND-COMPATIBILITY.md` authentication/delivery contracts: persist mail recipient tuple; removed-tenant cookie rejection/expiry and API 401; scope/participation denial remains the ordinary authorization response; stale mail suppresses terminally.
+- `01-PORTING-SPEC.md` sections 7.3-7.6 and 14: one current predicate for ticket/recipient authentication-email equality, loaded tenant trust, active StaffUser, current role/organization/scope and required participation; every request and sensitive-mail send/retry uses it.
+- `03-DATABASE-DESIGN.md` sections 3/11 and `07-API-FRONTEND-COMPATIBILITY.md` authentication/delivery contracts: persist mail recipient StaffUser ID and normalized authentication-email snapshot; removed-tenant cookie rejection/expiry and API 401; scope/participation denial remains the ordinary authorization response; stale mail suppresses terminally.
 - `05-DEPLOYMENT-OPERATIONS.md` configuration/startup gates, `13-SETTINGS-SCOPE-INVENTORY.md` section 12, and `12-DECISION-REGISTER.md` sections 7/8: stopped-app candidate validation and fail-closed startup prevent zero usable super-admins, with the same predicate and no Graph/session store/key rotation.
 
 Validated by:

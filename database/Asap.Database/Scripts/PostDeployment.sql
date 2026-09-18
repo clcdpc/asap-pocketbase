@@ -7,9 +7,7 @@ BEGIN
 END;
 ELSE IF (SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1) < 6
 BEGIN
-    UPDATE [asap].[SchemaVersion]
-    SET [Version] = 6, [UpdatedUtc] = SYSUTCDATETIME()
-    WHERE [Id] = 1;
+    THROW 51000, 'Schema 6 is a pre-release reset boundary. Recreate the application database from this DACPAC.', 1;
 END;
 ELSE IF (SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1) > 6
 BEGIN

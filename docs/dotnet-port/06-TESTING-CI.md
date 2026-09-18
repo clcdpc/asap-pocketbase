@@ -157,7 +157,7 @@ Requirements:
 - Production and normal Development never register the scheme.
 - There is no ordinary `TestAuth:Enabled=true` switch that could accidentally enable bypass in production.
 - `Environment.IsNonProduction` governs only the recipient-domain safety concern here and never enables this scheme; section 4.1 verifies that the two switches remain independent.
-- CI Playwright launches the actual web application under `Testing` and authenticates as seeded StaffUser identities/roles, with realistic `tid` + `oid` claims so the same durable local lookup path is exercised.
+- CI Playwright launches the actual web application under `Testing` and authenticates as seeded StaffUser identities/roles, with realistic `tid` + `oid` claims so the same normalized-email local authorization path and last-observed metadata capture are exercised.
 - Normal F5 uses real Entra/OIDC.
 
 Test authorization must still flow through the normal local StaffUser/scope policies after authentication so Playwright exercises role/library enforcement rather than bypassing it.
@@ -270,7 +270,7 @@ Assert map-then-eligibility ordering, exact reason/count per type/library, effec
 
 Use the real application cookie middleware and persistent Data Protection ring/certificate, not the Testing-only fake authentication handler. Issue valid cookies in two allowed tenants; retain another qualifying super-admin so the removal configuration is valid. Restart against the same SQL database/key ring after removing one tenant. On next use, that tenant's old cookie is rejected/expired and protected API returns 401 with no redirect loop or sliding renewal; the other tenant's cookie still succeeds. Test staff shell/session UX and a direct protected endpoint, not only a fresh OIDC login.
 
-Queue authorization-sensitive mail with the removed tenant's snapshotted tuple before restart; dispatch/retry suppresses it without provider call. Re-add the tenant and verify independently deactivated/rebound/moved/demoted authorization remains invalid for the corresponding resource; suppressed mail does not revive. Confirm sensitive mail also rejects a tuple rebound away and usable-admin counts include loaded trust. Candidate configuration leaving zero usable system super-admins is rejected before activation; a direct-file bypass fails startup readiness closed with workers/protected endpoints disabled, while liveness/diagnostics permit repair. Empty-database bootstrap and stopped migration gate remain the documented distinct exceptions, never repair a populated table silently.
+Queue authorization-sensitive mail with the removed tenant's StaffUser ID and authentication-email snapshot before restart; dispatch/retry suppresses it without provider call. Re-add the tenant and verify independently deactivated, email-changed, moved, or demoted authorization remains invalid for the corresponding resource; suppressed mail does not revive. Confirm sensitive mail also rejects a stale authentication-email snapshot and usable-admin counts include loaded trust. Candidate configuration leaving zero usable system super-admins is rejected before activation; a direct-file bypass fails startup readiness closed with workers/protected endpoints disabled, while liveness/diagnostics permit repair. Empty-database bootstrap and stopped migration gate remain the documented distinct exceptions, never repair a populated table silently.
 
 #### R6 - Bounded queue fairness and phase order
 
@@ -391,6 +391,8 @@ Version tags produce:
 - exact expected SchemaVersion.
 
 Release/deployment tests must cover changed DACPAC with unchanged SchemaVersion, unchanged DACPAC with no dependency DDL (true file-only), unchanged DACPAC with required Hangfire DDL (database-changing), and inconsistent changed SchemaVersion with unchanged DACPAC (blocked). Section 10.1 R7 and `05-DEPLOYMENT-OPERATIONS.md` sections 9-10 govern backup/quiescence, compatibility, and failure ordering; application SchemaVersion alone cannot authorize restart/rollback.
+
+For the schema-6 email-identity revision, test fresh DACPAC creation and the pre-release hard boundary separately: a fresh database has only the final email-based StaffUser/EmailOutbox shape, while a target reporting an application schema below 6 is rejected and must be recreated. Deployment/package tests require exact application schema version 6, retain `BlockOnPossibleDataLoss=True` and `DropObjectsNotInSource=False`, and reject manifests carrying any other application schema version.
 
 Do not rebuild production from an untagged branch state after a rehearsal. If a fix changes code, create a new tag/artifact and rehearse that exact replacement.
 

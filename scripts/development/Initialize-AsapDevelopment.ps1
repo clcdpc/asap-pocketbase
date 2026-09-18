@@ -14,10 +14,6 @@ param(
     [string] $EntraTenantId,
 
     [Parameter(Mandatory = $true)]
-    [ValidateScript({ try { [void][guid]$_; $true } catch { $false } })]
-    [string] $EntraObjectId,
-
-    [Parameter(Mandatory = $true)]
     [ValidatePattern('^[^@\s]+@[^@\s]+$')]
     [string] $AdminEmail,
 
@@ -65,8 +61,6 @@ $configuration = [ordered]@{
             ClientId = $EntraClientId
             AllowedTenantIds = @($EntraTenantId)
             InitialSuperAdmin = [ordered]@{
-                TenantId = $EntraTenantId
-                ObjectId = $EntraObjectId
                 UserPrincipalName = $AdminEmail
                 DisplayName = 'ASAP Development Administrator'
                 NotificationEmail = $AdminEmail

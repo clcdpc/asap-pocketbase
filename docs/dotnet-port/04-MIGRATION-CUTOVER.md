@@ -115,7 +115,7 @@ The export shape should expose PocketBase IDs needed to resolve relationships du
 
 ## 5. Import execution model
 
-- Target database must be a fresh migration target for the one-time import: the intended DACPAC may already be deployed and deterministic structural/static seed rows such as `SchemaVersion`, `DeploymentState`, and app-owned taxonomy/default scaffolding may exist, but runtime/business/bootstrap rows (`StaffUser`, requests, imported configuration-domain rows, outbox, etc.) must be empty. The final target must never have been used for production-hostname preflight.
+- Target database must be a fresh schema-6 migration target for the one-time import: the intended DACPAC may already be deployed and deterministic structural/static seed rows such as `SchemaVersion`, `DeploymentState`, and app-owned taxonomy/default scaffolding may exist, but runtime/business/bootstrap rows (`StaffUser`, requests, imported configuration-domain rows, outbox, etc.) must be empty. Schema 6 is a pre-release reset boundary, so any application database created from the earlier OID-based staff identity schema is recreated from the schema-6 DACPAC rather than upgraded in place. The final target must never have been used for production-hostname preflight.
 - If import fails, reset/recreate target and rerun; do not create a complicated resume-in-place engine.
 - Execute dependency-ordered phases.
 - Use a transaction per coherent phase rather than one giant transaction if data size/operability favors bounded phases.

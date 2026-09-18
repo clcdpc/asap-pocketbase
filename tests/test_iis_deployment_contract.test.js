@@ -6,6 +6,22 @@ const childProcess = require('child_process');
 const root = path.resolve(__dirname, '..');
 const workflow = fs.readFileSync(path.join(root, '.github/workflows/dotnet.yml'), 'utf8').replace(/\r\n/g, '\n');
 const deployment = fs.readFileSync(path.join(root, 'scripts/deployment/Deploy-AsapTest.ps1'), 'utf8');
+const runtimeSchemaVersion = fs.readFileSync(
+  path.join(root, 'src', 'Asap.Web', 'Infrastructure', 'Data', 'SchemaVersion.cs'),
+  'utf8'
+);
+const postDeployment = fs.readFileSync(
+  path.join(root, 'database', 'Asap.Database', 'Scripts', 'PostDeployment.sql'),
+  'utf8'
+);
+const migrationContract = fs.readFileSync(
+  path.join(root, 'src', 'Asap.Migration', 'MigrationContract.cs'),
+  'utf8'
+);
+const migrationProject = fs.readFileSync(
+  path.join(root, 'src', 'Asap.Migration', 'Asap.Migration.csproj'),
+  'utf8'
+);
 const activation = fs.readFileSync(path.join(root, 'docs/implementation/test-iis-activation.md'), 'utf8');
 const slice8 = fs.readFileSync(path.join(root, 'docs/implementation/slice-08.md'), 'utf8');
 
@@ -26,6 +42,24 @@ assert.ok(workflow.includes('--minimum-expected-tests 310'), 'the non-browser re
 assert.ok(workflow.includes('run: npm test'), 'the frontend test gate must remain');
 assert.ok(workflow.includes('dotnet publish src/Asap.Web/Asap.Web.csproj'), 'Web publish must remain a hosted check');
 assert.ok(workflow.includes('dotnet publish src/Asap.Migration/Asap.Migration.csproj'), 'native migration publish check must remain');
+
+const schemaVersions = {
+  workflow: Number(workflow.match(/applicationSchemaVersion = (\d+)/)?.[1]),
+  deployment: Number(deployment.match(/manifest\.applicationSchemaVersion -ne (\d+)/)?.[1]),
+  runtime: Number(runtimeSchemaVersion.match(/ExpectedVersion = (\d+)/)?.[1]),
+  postDeployment: Number(postDeployment.match(/VALUES \(1, (\d+), SYSUTCDATETIME\(\)\)/)?.[1]),
+  migrationContract: Number(migrationContract.match(/ExpectedSchemaVersion = (\d+)/)?.[1]),
+  migrationProject: Number(migrationProject.match(/ExpectedSchemaVersion" Value="(\d+)"/)?.[1])
+};
+assert.ok(
+  Object.values(schemaVersions).every((version) => version === 6),
+  `application schema version must be 6 in every package/runtime contract: ${JSON.stringify(schemaVersions)}`
+);
+assert.match(
+  postDeployment,
+  /Schema 6 is a pre-release reset boundary\. Recreate the application database from this DACPAC\./,
+  'the DACPAC must reject in-place upgrades from pre-schema-6 databases'
+);
 
 const deploymentJobStart = workflow.indexOf('  deploy-test-iis:');
 assert.ok(deploymentJobStart > 0, 'the deployment job should be present');
@@ -87,6 +121,8 @@ for (const token of [
 
 assert.ok(!deployment.includes('SkipCertificateCheck'), 'readiness must use normal TLS certificate validation');
 assert.ok(!deployment.includes('[asap].[DeploymentState]'), 'test deployment must not repurpose application DeploymentState');
+assert.ok(deployment.includes("'/p:BlockOnPossibleDataLoss=True'"), 'deployment must retain DACPAC data-loss protection');
+assert.ok(deployment.includes("'/p:DropObjectsNotInSource=False'"), 'deployment must preserve objects outside the DACPAC');
 assert.ok(deployment.includes("[string] $ConfigPath = 'C:\\ProgramData\\clc-asap\\Config\\deployment.json'"), 'deployment should default to the conventional host config path');
 assert.ok(deployment.includes("(^|/)(application|deployment)\\.json$"), 'host-owned application and deployment JSON must be forbidden from the artifact');
 const archiveValidation = deployment.indexOf('$archive = Test-DeploymentArchive', deployment.indexOf('$hostConfig = Read-HostConfiguration'));

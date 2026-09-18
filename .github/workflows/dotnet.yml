@@ -215,7 +215,7 @@ jobs:
             versionOrLabel = $env:DEPLOYMENT_LABEL
             commitSha = $env:GITHUB_SHA
             buildUtc = $buildUtc
-            applicationSchemaVersion = 5
+            applicationSchemaVersion = 6
             hangfireSchemaVersion = 9
             dacpacSha256 = $dacpacHash
             webPayloadSha256 = $webIdentityHash

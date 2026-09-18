@@ -226,7 +226,7 @@ Reopening revalidates a retained claimant under Organization -> StaffUser -> tas
 
 ### Current tenant-policy session response
 
-Every authenticated staff endpoint, including session, diagnostics and Hangfire dashboard, uses `01-PORTING-SPEC.md` section 7.6. Missing/deactivated/rebound/removed-tenant identities reject the principal and expire the cookie; APIs return JSON `401 staff_session_invalid`, never an OIDC redirect. Current scope/participation denial for an otherwise valid identity returns 403. The staff shell displays a sign-in/access explanation on session loss, not an endless silent retry. Persistent Data Protection keys do not exempt old cookies from loaded tenant policy. The external-config usable-admin startup gate is an operator repair condition, not an invitation to create a new staff session.
+Every authenticated staff endpoint, including session, diagnostics and Hangfire dashboard, uses `01-PORTING-SPEC.md` section 7.6. Missing, deactivated, authentication-email-changed, or removed-tenant identities reject the principal and expire the cookie; APIs return JSON `401 staff_session_invalid`, never an OIDC redirect. Current scope/participation denial for an otherwise valid identity returns 403. The staff shell displays a sign-in/access explanation on session loss, not an endless silent retry. Persistent Data Protection keys do not exempt old cookies from loaded tenant policy. The external-config usable-admin startup gate is an operator repair condition, not an invitation to create a new staff session.
 
 ## 15. Settings UX
 
