@@ -144,7 +144,10 @@ async function runJourney(scenario) {
     await afterFocusFrame(dom.window);
     let newerFocus;
     if (scenario === 'view-navigation') {
-      document.querySelector('[data-view="profile"]').click();
+      const profileTrigger = document.getElementById('profile-trigger');
+      profileTrigger.focus();
+      profileTrigger.click();
+      assert.strictEqual(profileTrigger.getAttribute('aria-current'), 'page');
       newerFocus = document.getElementById('profile-title');
     } else if (scenario === 'new-dialog') {
       opener('92').focus();
