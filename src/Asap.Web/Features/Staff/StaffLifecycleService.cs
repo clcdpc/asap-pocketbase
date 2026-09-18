@@ -291,6 +291,16 @@ public sealed class StaffLifecycleService(
         }
 
         var previousAuthenticationEmail = target.UserPrincipalName;
+        var authenticationIdentityChanged = !string.Equals(
+            target.NormalizedUserPrincipalName,
+            normalizedEmail,
+            StringComparison.Ordinal);
+        if (authenticationIdentityChanged)
+        {
+            target.EntraTenantId = null;
+            target.EntraObjectId = null;
+            target.LastLoginUtc = null;
+        }
         target.UserPrincipalName = email;
         target.NormalizedUserPrincipalName = normalizedEmail;
         target.DisplayName = Clean(input.DisplayName);

@@ -61,6 +61,110 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task AuthenticationEmailChangeClearsObservedEntraMetadataAndNewSignInRepopulatesIt()
+    {
+        using var startup = factory!.CreateClient();
+        await startup.GetAsync("/api/asap/staff/session");
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var target = await CreateCorrectiveStaffAsync(actor, "staff", 2);
+        var signIn = factory.Services.GetRequiredService<StaffSignInService>();
+        var originalObjectId = Guid.NewGuid();
+        await signIn.RecordSuccessfulSignInAsync(
+            target.Id,
+            target.NormalizedUserPrincipalName!,
+            actor.EntraTenantId,
+            originalObjectId,
+            "Observed Staff",
+            CancellationToken.None);
+
+        var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var context = await contextFactory.CreateDbContextAsync();
+        var observed = await context.StaffUsers.SingleAsync(item => item.Id == target.Id);
+        Assert.AreEqual(actor.EntraTenantId, observed.EntraTenantId);
+        Assert.AreEqual(originalObjectId, observed.EntraObjectId);
+        Assert.IsNotNull(observed.LastLoginUtc);
+
+        var newEmail = $"changed.{Guid.NewGuid():N}@example.org";
+        var changed = await factory.Services.GetRequiredService<StaffLifecycleService>().UpdateMetadataAsync(
+            actor,
+            target.Id,
+            new StaffMetadataInput(
+                StaffVersion.Encode(observed.RowVersion),
+                $" {newEmail} ",
+                observed.DisplayName,
+                observed.NotificationEmail),
+            CancellationToken.None);
+
+        Assert.AreEqual("updated", changed.Code);
+        await context.Entry(observed).ReloadAsync();
+        Assert.AreEqual(newEmail, observed.UserPrincipalName);
+        Assert.AreEqual(newEmail.ToUpperInvariant(), observed.NormalizedUserPrincipalName);
+        Assert.IsNull(observed.EntraTenantId);
+        Assert.IsNull(observed.EntraObjectId);
+        Assert.IsNull(observed.LastLoginUtc);
+        Assert.AreEqual("Observed Staff", observed.DisplayName);
+        Assert.AreEqual(target.NotificationEmail, observed.NotificationEmail);
+
+        var newObjectId = Guid.NewGuid();
+        await signIn.RecordSuccessfulSignInAsync(
+            target.Id,
+            newEmail.ToUpperInvariant(),
+            actor.EntraTenantId,
+            newObjectId,
+            null,
+            CancellationToken.None);
+
+        await context.Entry(observed).ReloadAsync();
+        Assert.AreEqual(actor.EntraTenantId, observed.EntraTenantId);
+        Assert.AreEqual(newObjectId, observed.EntraObjectId);
+        Assert.IsNotNull(observed.LastLoginUtc);
+        Assert.AreEqual(newEmail, observed.UserPrincipalName);
+        Assert.AreEqual(newEmail.ToUpperInvariant(), observed.NormalizedUserPrincipalName);
+        Assert.AreEqual(target.NotificationEmail, observed.NotificationEmail);
+        Assert.AreEqual("Observed Staff", observed.DisplayName);
+    }
+
+    [TestMethod]
+    public async Task EquivalentNormalizedAuthenticationEmailPreservesObservedEntraMetadata()
+    {
+        using var startup = factory!.CreateClient();
+        await startup.GetAsync("/api/asap/staff/session");
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var target = await CreateCorrectiveStaffAsync(actor, "staff", 2);
+        var objectId = Guid.NewGuid();
+        await factory.Services.GetRequiredService<StaffSignInService>().RecordSuccessfulSignInAsync(
+            target.Id,
+            target.NormalizedUserPrincipalName!,
+            actor.EntraTenantId,
+            objectId,
+            "Equivalent Identity",
+            CancellationToken.None);
+
+        var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var context = await contextFactory.CreateDbContextAsync();
+        var observed = await context.StaffUsers.SingleAsync(item => item.Id == target.Id);
+        var originalLastLoginUtc = observed.LastLoginUtc;
+        Assert.IsNotNull(originalLastLoginUtc);
+
+        var changed = await factory.Services.GetRequiredService<StaffLifecycleService>().UpdateMetadataAsync(
+            actor,
+            target.Id,
+            new StaffMetadataInput(
+                StaffVersion.Encode(observed.RowVersion),
+                $"  {target.UserPrincipalName!.ToUpperInvariant()}  ",
+                observed.DisplayName,
+                observed.NotificationEmail),
+            CancellationToken.None);
+
+        Assert.AreEqual("updated", changed.Code);
+        await context.Entry(observed).ReloadAsync();
+        Assert.AreEqual(target.NormalizedUserPrincipalName, observed.NormalizedUserPrincipalName);
+        Assert.AreEqual(actor.EntraTenantId, observed.EntraTenantId);
+        Assert.AreEqual(objectId, observed.EntraObjectId);
+        Assert.AreEqual(originalLastLoginUtc, observed.LastLoginUtc);
+    }
+
+    [TestMethod]
     public async Task NeverSignedInStaffCanReceiveExplicitAndAutomaticClaims()
     {
         using var startup = factory!.CreateClient();
@@ -393,6 +497,47 @@ public sealed partial class PatronJourneyTests
         using var replacementBody = JsonDocument.Parse(await replacement.Content.ReadAsStringAsync());
         Assert.IsTrue(replacementBody.RootElement.GetProperty("accessAllowed").GetBoolean());
         Assert.AreEqual(superAdmin.Id.ToString(), replacementBody.RootElement.GetProperty("staff").GetProperty("id").GetString());
+    }
+
+    [TestMethod]
+    public async Task AuthenticationEmailChangeInvalidatesExistingProtectedStaffCookie()
+    {
+        using var startup = factory!.CreateClient();
+        await startup.GetAsync("/api/asap/staff/session");
+        var superAdmin = await ReadConfiguredSuperAdminAsync();
+        var staff = await CreateCorrectiveStaffAsync(superAdmin, "staff", 2);
+        await using var cookieApplication = factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureServices(services =>
+                services.PostConfigure<AuthenticationOptions>(options =>
+                    options.DefaultAuthenticateScheme = StaffAuthenticationRegistration.CookieScheme));
+        });
+        var protectedCookie = ProtectStaffCookie(
+            cookieApplication,
+            staff.Id,
+            superAdmin.EntraTenantId,
+            staff.NormalizedUserPrincipalName!);
+        using var client = CookieClient(cookieApplication, protectedCookie);
+        using (var currentIdentity = await client.GetAsync("/api/asap/staff/title-requests"))
+        {
+            Assert.AreEqual(HttpStatusCode.OK, currentIdentity.StatusCode, await currentIdentity.Content.ReadAsStringAsync());
+        }
+
+        var changed = await factory.Services.GetRequiredService<StaffLifecycleService>().UpdateMetadataAsync(
+            superAdmin,
+            staff.Id,
+            new StaffMetadataInput(
+                StaffVersion.Encode(staff.RowVersion),
+                $"changed.{Guid.NewGuid():N}@example.org",
+                staff.DisplayName,
+                staff.NotificationEmail),
+            CancellationToken.None);
+        Assert.AreEqual("updated", changed.Code);
+
+        using var rejected = await client.GetAsync("/api/asap/staff/title-requests");
+        Assert.AreEqual(HttpStatusCode.Unauthorized, rejected.StatusCode);
+        using var body = JsonDocument.Parse(await rejected.Content.ReadAsStringAsync());
+        Assert.AreEqual("staff_session_invalid", body.RootElement.GetProperty("code").GetString());
     }
 
     [TestMethod]
