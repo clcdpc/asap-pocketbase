@@ -82,6 +82,7 @@ export function createWorkflowApp() {
     workspace: document.querySelector('#workspace'),
     sessionActions: document.querySelector('#session-actions'),
     staffIdentity: document.querySelector('#staff-identity'),
+    profileTrigger: document.querySelector('#profile-trigger'),
     signOut: document.querySelector('#sign-out'),
     queueView: document.querySelector('#queue-view'),
     additionalCopyView: document.querySelector('#additional-copy-view'),
@@ -236,6 +237,8 @@ export function createWorkflowApp() {
     state.returnFocus = null;
     state.createCopyRequest = null;
     state.createCopyReturnFocus = null;
+    dom.profileTrigger.classList.remove('active');
+    dom.profileTrigger.removeAttribute('aria-current');
     latestLoads.begin('queue').abort();
     latestLoads.begin('additional-copies').abort();
     latestLoads.begin('operations').abort();
@@ -258,6 +261,7 @@ export function createWorkflowApp() {
     dom.signedOut.hidden = true;
     dom.workspace.hidden = false;
     dom.sessionActions.hidden = false;
+    dom.profileTrigger.hidden = false;
     dom.staffIdentity.textContent = staff.displayName || staff.userPrincipalName || 'Staff user';
     dom.staffIdentity.title = `${statusLabel(staff.role)} · ${staff.organizationName}`;
     dom.scopeField.hidden = staff.role !== 'super_admin';
@@ -279,6 +283,7 @@ export function createWorkflowApp() {
   function showAccessUnavailable() {
     showSignedOut('Staff access is not currently available. Sign out or use a different authorized Microsoft account.');
     dom.sessionActions.hidden = false;
+    dom.profileTrigger.hidden = true;
     dom.staffIdentity.textContent = 'Access unavailable';
     dom.staffIdentity.title = '';
   }
@@ -1651,6 +1656,10 @@ export function createWorkflowApp() {
       if (active) tab.setAttribute('aria-current', 'page');
       else tab.removeAttribute('aria-current');
     }
+    const profileActive = name === 'profile';
+    dom.profileTrigger.classList.toggle('active', profileActive);
+    if (profileActive) dom.profileTrigger.setAttribute('aria-current', 'page');
+    else dom.profileTrigger.removeAttribute('aria-current');
     if (updateUrl) replaceStageParameter(
       name === 'additional-copies' ? 'additional_copies' : name === 'analytics' ? 'analytics' : name === 'settings' ? 'settings' : name === 'operations' ? 'operations' : null
     );
@@ -1738,6 +1747,10 @@ export function createWorkflowApp() {
           announce('Sign out did not complete. Please try again.', 'error');
         }
       }
+    });
+    dom.profileTrigger.addEventListener('click', () => {
+      if (dom.dialog.open) closeDialog();
+      switchView('profile');
     });
     dom.refresh.addEventListener('click', () => loadQueue({ skipDeepLink: true }));
     dom.scope.addEventListener('change', () => {
