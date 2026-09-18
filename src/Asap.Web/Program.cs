@@ -106,6 +106,10 @@ if (externalConfiguration is not null)
     builder.Services.AddSingleton<IntegrationCredentialProtector>();
     builder.Services.AddSingleton(TimeProvider.System);
     builder.Services.AddHttpClient("Polaris");
+    builder.Services.AddHttpClient<PostmarkEmailSender>(client =>
+    {
+        client.BaseAddress = new Uri("https://api.postmarkapp.com/", UriKind.Absolute);
+    });
     builder.Services.AddSingleton<PatronConfigurationService>();
     builder.Services.AddSingleton<PatronSessionService>();
     builder.Services.AddSingleton<PatronSuggestionService>();
@@ -152,8 +156,16 @@ if (externalConfiguration is not null)
     builder.Services.AddSingleton<EmailOperationsService>();
     builder.Services.AddSingleton<IEmailOutboxDispatcher, EmailOutboxDispatcher>();
     builder.Services.AddSingleton<IHangfireSchemaCompatibilityChecker, HangfireSchemaCompatibilityChecker>();
-    builder.Services.AddSingleton<IEmailSender>(_ => new FileEmailSender(
+    builder.Services.AddSingleton<FileEmailSender>(_ => new FileEmailSender(
         Path.Combine(builder.Environment.ContentRootPath, ".artifacts", "dev-email")));
+    builder.Services.AddSingleton<IEmailServerTokenResolver, EmailServerTokenResolver>();
+    builder.Services.AddSingleton<IEmailSender>(services =>
+        string.Equals(
+            externalConfiguration.EmailTransport.Mode,
+            EmailDeliveryModes.Live,
+            StringComparison.OrdinalIgnoreCase)
+            ? services.GetRequiredService<PostmarkEmailSender>()
+            : services.GetRequiredService<FileEmailSender>());
     builder.Services.AddSingleton<DacpacDeploymentService>();
     builder.Services.AddHostedService<DevelopmentDatabaseInitializer>();
     builder.Services.AddHostedService<StaffBootstrapHostedService>();

@@ -9,11 +9,24 @@ public interface IEmailSender
     Task<EmailSendResult> SendAsync(EmailEnvelope envelope, CancellationToken cancellationToken);
 }
 
-public sealed record EmailTransportReadiness(bool IsConfigured)
+public static class EmailDeliveryModes
 {
-    public static EmailTransportReadiness Configured { get; } = new(true);
+    public const string Capture = "capture";
+    public const string Live = "live";
+}
 
-    public static EmailTransportReadiness NotConfigured { get; } = new(false);
+public sealed record EmailTransportReadiness(
+    bool IsConfigured,
+    string DeliveryMode = EmailDeliveryModes.Capture,
+    string? Code = null)
+{
+    public bool IsLive => string.Equals(DeliveryMode, EmailDeliveryModes.Live, StringComparison.Ordinal);
+
+    public static EmailTransportReadiness Configured { get; } =
+        new(true, EmailDeliveryModes.Capture, "non_delivery_mode");
+
+    public static EmailTransportReadiness NotConfigured { get; } =
+        new(false, EmailDeliveryModes.Live, "mail_not_configured");
 }
 
 public sealed record EmailEnvelope(
@@ -30,10 +43,15 @@ public sealed record EmailEnvelope(
 public enum EmailSendOutcome
 {
     Sent,
-    NotConfigured
+    NotConfigured,
+    Rejected
 }
 
-public sealed record EmailSendResult(EmailSendOutcome Outcome, string? ProviderMessageId)
+public sealed record EmailSendResult(
+    EmailSendOutcome Outcome,
+    string? ProviderMessageId,
+    string? DeliveryMode = null,
+    string? ErrorCode = null)
 {
     public EmailSendResult(string providerMessageId) : this(EmailSendOutcome.Sent, providerMessageId)
     {
@@ -41,4 +59,22 @@ public sealed record EmailSendResult(EmailSendOutcome Outcome, string? ProviderM
 
     public static EmailSendResult NotConfigured { get; } =
         new(EmailSendOutcome.NotConfigured, null);
+}
+
+public sealed class EmailTransportException : Exception
+{
+    public EmailTransportException(
+        string code,
+        string detail,
+        bool isAmbiguous,
+        Exception? innerException = null)
+        : base(detail, innerException)
+    {
+        Code = code;
+        IsAmbiguous = isAmbiguous;
+    }
+
+    public string Code { get; }
+
+    public bool IsAmbiguous { get; }
 }

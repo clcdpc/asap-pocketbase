@@ -49,6 +49,9 @@ CREATE TABLE [asap].[EmailOutbox]
     [OrganizationId] int NOT NULL,
     [BusinessKey] nvarchar(450) NULL,
     [DeliveryClass] nvarchar(40) NOT NULL,
+    [RequestedByStaffUserId] bigint NULL,
+    [RequestId] nvarchar(128) NULL,
+    [DeliveryMode] nvarchar(16) NULL,
     [RecipientStaffUserId] bigint NULL,
     [RecipientAuthenticationEmail] nvarchar(320) NULL,
     [AuthorizationOrganizationId] int NULL,
@@ -75,10 +78,12 @@ CREATE TABLE [asap].[EmailOutbox]
     [SuppressedUtc] datetime2(7) NULL,
     [RowVersion] rowversion NOT NULL,
     CONSTRAINT [FK_EmailOutbox_Organization] FOREIGN KEY ([OrganizationId]) REFERENCES [asap].[Organization]([Id]),
+    CONSTRAINT [FK_EmailOutbox_RequestedByStaffUser] FOREIGN KEY ([RequestedByStaffUserId]) REFERENCES [asap].[StaffUser]([Id]),
     CONSTRAINT [FK_EmailOutbox_RecipientStaffUser] FOREIGN KEY ([RecipientStaffUserId]) REFERENCES [asap].[StaffUser]([Id]),
     CONSTRAINT [FK_EmailOutbox_AuthorizationOrganization] FOREIGN KEY ([AuthorizationOrganizationId]) REFERENCES [asap].[Organization]([Id]),
     CONSTRAINT [CK_EmailOutbox_DeliveryClass] CHECK ([DeliveryClass] IN (N'business_event', N'staff_authorization_sensitive', N'operational_test')),
     CONSTRAINT [CK_EmailOutbox_Status] CHECK ([Status] IN (N'pending', N'sending', N'sent', N'failed', N'suppressed')),
+    CONSTRAINT [CK_EmailOutbox_DeliveryMode] CHECK ([DeliveryMode] IS NULL OR [DeliveryMode] IN (N'capture', N'live')),
     CONSTRAINT [CK_EmailOutbox_AttemptCount] CHECK ([AttemptCount] >= 0),
     CONSTRAINT [CK_EmailOutbox_AuthorizationTuple] CHECK
     (
@@ -124,6 +129,18 @@ GO
 
 CREATE UNIQUE INDEX [UX_EmailOutbox_BusinessKey]
     ON [asap].[EmailOutbox]([BusinessKey]) WHERE [BusinessKey] IS NOT NULL;
+GO
+
+CREATE UNIQUE INDEX [UX_EmailOutbox_OperationalRequest]
+    ON [asap].[EmailOutbox]([RequestedByStaffUserId], [OrganizationId], [RequestId])
+    WHERE [DeliveryClass] = N'operational_test'
+      AND [RequestedByStaffUserId] IS NOT NULL
+      AND [RequestId] IS NOT NULL;
+GO
+
+CREATE INDEX [IX_EmailOutbox_OperationalCooldown]
+    ON [asap].[EmailOutbox]([RequestedByStaffUserId], [OrganizationId], [CreatedUtc])
+    WHERE [DeliveryClass] = N'operational_test';
 GO
 
 CREATE INDEX [IX_EmailOutbox_Pending]

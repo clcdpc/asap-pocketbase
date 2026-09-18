@@ -1,5 +1,14 @@
 import { authorizedJson, isAbortError, latestLoads } from './http.js';
 import { createSettingsDomainEditors } from './settings-domains.js';
+import {
+  createEmailTestRequestId,
+  emailTestContextMessage,
+  emailTestStatusMessage,
+  isEmailTestAbort,
+  loadEmailTestContext,
+  queueEmailTest,
+  waitForEmailTest
+} from './email-test.js';
 
 const WORKFLOW_FIELDS = [
   ['suggestionLimit', 'suggestion-limit', 'number'],
@@ -85,7 +94,9 @@ const SETTINGS_OPERATION_SLOTS = [
   'administration-settings-organization-sync',
   'administration-settings-participation',
   'administration-staff-access',
-  'administration-staff-mutation'
+  'administration-staff-mutation',
+  'administration-email-test-context',
+  'administration-email-test'
 ];
 
 const TEMPLATE_FIELDS = [
@@ -284,7 +295,11 @@ export function createSettingsController({
     logo: root.querySelector('#branding-logo'),
     brandingStatus: root.querySelector('#branding-status'),
     saveTitle: root.querySelector('#settings-save-title'),
-    saveDetail: root.querySelector('#settings-save-detail')
+    saveDetail: root.querySelector('#settings-save-detail'),
+    emailTestContext: root.querySelector('#settings-email-test-context'),
+    emailTestButton: root.querySelector('#settings-send-test-email'),
+    emailTestLink: root.querySelector('#settings-email-operations-link'),
+    emailTestStatus: root.querySelector('#settings-email-test-status')
   };
 
   const state = {
@@ -303,6 +318,8 @@ export function createSettingsController({
     baselineTemplates: new Map(),
     baselineOverrides: new Map(),
     pendingDeletedFormats: [],
+    emailTestContext: null,
+    emailTestBusy: false,
     bound: false
   };
 
@@ -437,6 +454,93 @@ export function createSettingsController({
       ? 'Changes are local until you save this settings context.'
       : 'Everything in this settings context is saved.';
     dom.reset.hidden = isSystem();
+    updateEmailTestState();
+  }
+
+  function setEmailTestStatus(message, kind = '') {
+    if (!dom.emailTestStatus) return;
+    dom.emailTestStatus.textContent = message || '';
+    dom.emailTestStatus.className = `settings-result${kind ? ` ${kind}` : ''}`;
+  }
+
+  function renderEmailTestContext() {
+    if (!dom.emailTestContext) return;
+    dom.emailTestContext.replaceChildren();
+    const context = state.emailTestContext;
+    if (!context) {
+      dom.emailTestContext.append(node('dt', { text: 'Readiness' }), node('dd', { text: 'Loading saved transport status…' }));
+      updateEmailTestState();
+      return;
+    }
+    const rows = [
+      ['Scope', context.organizationName || `Organization ${context.organizationId}`],
+      ['Saved From', [context.fromName, context.fromAddress].filter(Boolean).join(' <') + (context.fromName && context.fromAddress ? '>' : '') || 'Not configured'],
+      ['Primary recipient', context.recipientAddress || 'Not configured'],
+      ['Transport', context.deliveryMode === 'live' ? 'Live Postmark' : 'Capture (no mailbox delivery)'],
+      ['Readiness', context.canSend ? 'Ready' : emailTestContextMessage(context)]
+    ];
+    for (const [label, value] of rows) {
+      dom.emailTestContext.append(node('dt', { text: label }), node('dd', { text: value }));
+    }
+    updateEmailTestState();
+  }
+
+  function updateEmailTestState() {
+    if (!dom.emailTestButton) return;
+    const context = state.emailTestContext;
+    const disabled = state.emailTestBusy || isDirty() || !context?.canSend;
+    dom.emailTestButton.disabled = disabled;
+    dom.emailTestButton.title = isDirty()
+      ? 'Save or discard settings changes before sending a test email.'
+      : context && !context.canSend ? emailTestContextMessage(context) : '';
+  }
+
+  async function sendEmailTest() {
+    if (isDirty()) {
+      setEmailTestStatus('Save or discard your settings changes before sending a test email.', 'error');
+      return;
+    }
+    const context = state.emailTestContext;
+    if (!context?.canSend) {
+      setEmailTestStatus(emailTestContextMessage(context), 'error');
+      return;
+    }
+
+    const operation = beginSettingsOperation('administration-email-test');
+    state.emailTestBusy = true;
+    updateEmailTestState();
+    setEmailTestStatus('Requesting test email…');
+    try {
+      const response = await queueEmailTest(state.scope, createEmailTestRequestId(), { signal: operation.signal });
+      if (!isSettingsOperationCurrent(operation)) return;
+      const data = response?.data ?? response;
+      if (!data?.id) {
+        setEmailTestStatus(response?.code === 'cooldown'
+          ? `A test email was requested recently. Try again in about ${data?.retryAfterSeconds || 60} seconds.`
+          : 'The test email request did not return an operation reference.', 'error');
+        return;
+      }
+      const observed = await waitForEmailTest({
+        id: data.id,
+        scope: state.scope,
+        signal: operation.signal,
+        onUpdate: item => {
+          if (isSettingsOperationCurrent(operation)) setEmailTestStatus(emailTestStatusMessage(item));
+        }
+      });
+      if (!isSettingsOperationCurrent(operation)) return;
+      setEmailTestStatus(emailTestStatusMessage(observed.item, observed.timedOut),
+        observed.timedOut || observed.item?.status === 'failed' ? 'error' : 'success');
+      if (dom.emailTestLink) dom.emailTestLink.href = `?stage=operations&organizationId=${encodeURIComponent(organizationId())}`;
+    } catch (error) {
+      if (isSettingsOperationCurrent(operation) && !isEmailTestAbort(error) && error.status !== 401) {
+        setEmailTestStatus(error.message || 'The test email could not be requested.', 'error');
+      }
+    } finally {
+      state.emailTestBusy = false;
+      updateEmailTestState();
+      latestLoads.finish('administration-email-test', operation.token);
+    }
   }
 
   function rawSection(section) {
@@ -928,12 +1032,19 @@ export function createSettingsController({
     const context = captureSettingsContext();
     const loadState = latestLoads.begin('administration-settings');
     dom.refresh.disabled = true;
+    state.emailTestContext = null;
+    renderEmailTestContext();
     if (!options.silent) notify('Loading settings...');
     try {
-      const [settingsResponse, organizationsResponse, patronCodesResponse] = await Promise.all([
+      const [settingsResponse, organizationsResponse, patronCodesResponse, emailTestResponse] = await Promise.all([
         authorizedJson(`/api/asap/staff/settings?orgId=${currentScopeForRequest()}`, { signal: loadState.signal }),
         authorizedJson('/api/asap/staff/organizations', { signal: loadState.signal }),
         authorizedJson(`/api/asap/staff/polaris/patron-codes?orgId=${currentScopeForRequest()}`, { signal: loadState.signal })
+          .catch(error => {
+            if (isAbortError(error) || error.status === 401) throw error;
+            return null;
+          }),
+        loadEmailTestContext(state.scope, { signal: loadState.signal })
           .catch(error => {
             if (isAbortError(error) || error.status === 401) throw error;
             return null;
@@ -949,6 +1060,9 @@ export function createSettingsController({
       const patronCodeChoices = patronCodesResponse?.data ?? patronCodesResponse;
       data.patronCodeChoices = Array.isArray(patronCodeChoices) ? patronCodeChoices : [];
       populate(data || {});
+      state.emailTestContext = emailTestResponse?.data ?? emailTestResponse;
+      renderEmailTestContext();
+      if (dom.emailTestLink) dom.emailTestLink.href = `?stage=operations&organizationId=${encodeURIComponent(organizationId())}`;
       if (state.activePanel === 'staff') void loadStaffAccess({ silent: true });
       if (!options.silent && loadState.isCurrent() && isSettingsContextCurrent(context)) notify('Settings loaded.');
     } catch (error) {
@@ -1580,6 +1694,7 @@ export function createSettingsController({
     dom.reset.addEventListener('click', resetSettings);
     dom.testPolaris.addEventListener('click', testPolaris);
     dom.syncOrganizations.addEventListener('click', syncOrganizations);
+    dom.emailTestButton?.addEventListener('click', sendEmailTest);
     dom.staffRole.addEventListener('change', populateStaffCreateControls);
     dom.staffCreate.addEventListener('click', createStaffUser);
     dom.staffRefresh.addEventListener('click', () => loadStaffAccess());

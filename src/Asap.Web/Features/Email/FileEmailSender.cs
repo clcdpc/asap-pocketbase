@@ -19,7 +19,10 @@ public sealed class FileEmailSender : IEmailSender
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(EmailTransportReadiness.Configured);
+        return Task.FromResult(new EmailTransportReadiness(
+            true,
+            EmailDeliveryModes.Capture,
+            "non_delivery_mode"));
     }
 
     public async Task<EmailSendResult> SendAsync(
@@ -41,7 +44,10 @@ public sealed class FileEmailSender : IEmailSender
             await File.WriteAllTextAsync(temporaryPath, document, Utf8WithoutBom, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             File.Move(temporaryPath, finalPath);
-            return new EmailSendResult($"file:{fileId}");
+            return new EmailSendResult(
+                EmailSendOutcome.Sent,
+                $"file:{fileId}",
+                EmailDeliveryModes.Capture);
         }
         catch
         {

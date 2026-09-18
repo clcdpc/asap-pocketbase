@@ -33,7 +33,9 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
   assert.equal(url.pathname, pathPart);
   assert.equal(url.searchParams.get('organizationId'), expectedScope);
   assert.equal(request.options.method, 'POST');
-  assert.deepEqual(request.options.body ? JSON.parse(request.options.body) : null, expectedBody);
+  const actualBody = request.options.body ? JSON.parse(request.options.body) : null;
+  if (typeof expectedBody === 'function') expectedBody(actualBody);
+  else assert.deepEqual(actualBody, expectedBody);
 }
 
 (async () => {
@@ -103,6 +105,15 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
         if (pending) return pending.promise;
         return response(200, queuePayload(scope));
       }
+      if (url.includes('/email-operations/') && !url.includes('/retry')) {
+        return response(200, { code: 'ok', data: {
+          id: 99,
+          status: 'sent',
+          deliveryMode: 'capture',
+          providerMessageId: 'file:test-message',
+          version: 'status-version'
+        } });
+      }
       if (url.includes('/email-operations') && !url.includes('/retry') && !url.includes('/test')) {
         const scope = new URL(`https://localhost${url}`).searchParams.get('organizationId') || 'all';
         const pending = operationsReads.get(`email:${scope}`);
@@ -148,7 +159,12 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
     assertRequest(requests.find(item => item.url.includes('force=true')), '/api/asap/staff/workflow/weekly-summary/run-now', '3', null);
     document.getElementById('send-test-email').click();
     await settle();
-    assertRequest(requests.find(item => item.url.includes('/email-operations/test')), '/api/asap/staff/email-operations/test', '3', null);
+    const testEmailRequest = requests.find(item => item.url.includes('/email-operations/test'));
+    assertRequest(
+      testEmailRequest,
+      '/api/asap/staff/email-operations/test',
+      '3',
+      body => assert.match(body.requestId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i));
 
     const retry = document.querySelector('#email-operations-table button');
     assert.ok(retry, 'failed rows should expose Retry');
