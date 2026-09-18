@@ -32,6 +32,11 @@ assert.match(workflow, /\/api\/asap\/config\?libraryOrgId=/, 'staff editor shoul
 assert.doesNotMatch(workflow, /Format code/, 'staff editor should present the configured format selector, not an internal code input');
 assert.match(workflow, /canChangeWorkflowState/, 'workflow controls should honor backend operation capabilities');
 assert.match(styles, /table\.gridjs-table\s*\{[^}]*min-width:\s*\d+px/s, 'queue table should retain readable mobile columns inside its scroll wrapper');
+assert.match(
+  styles,
+  /\.settings-domain-heading\s*\{[^}]*display:\s*flex;[^}]*justify-content:\s*space-between;[^}]*flex-wrap:\s*wrap;[^}]*gap:\s*[^;}]+;/s,
+  'settings section action buttons should retain responsive spacing from their heading text'
+);
 assert.match(app, /createWorkflowApp/);
 assert.match(http, /X-ASAP-Antiforgery/);
 assert.match(http, /createLatestLoad/);
