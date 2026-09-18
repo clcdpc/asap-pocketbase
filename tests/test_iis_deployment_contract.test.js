@@ -35,6 +35,13 @@ assert.ok(workflow.includes("tags:\n      - 'v*.*.*-test.*'"), 'test deployment 
 assert.ok(workflow.includes('- codex/csharp-port'), 'integration-branch push trigger is required');
 assert.ok(workflow.includes('- codex/slice-08-test-deployment'), 'candidate push trigger is required');
 assert.ok(workflow.includes('  workflow_dispatch:\n'), 'manual dispatch should be declared');
+assert.ok(
+  workflow.includes(
+    'concurrency:\n  group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}\n  cancel-in-progress: true\n\njobs:'
+  ),
+  'workflow concurrency should deduplicate PR, push, tag, and manual runs by source commit'
+);
+assert.ok(!workflow.includes('\n    concurrency:'), 'build-test-package must not retain job-level concurrency');
 assert.ok(workflow.includes('Generate ephemeral SQL test credentials'), 'CI SQL credentials should be generated per run');
 assert.ok(!workflow.includes('Asap_Slice0_SQL_2026'), 'CI must not retain the historical hard-coded SQL password');
 assert.ok(workflow.includes('ref: ${{ github.sha }}'), 'the hosted job should check out the exact event SHA');
