@@ -1,0 +1,318 @@
+name: .NET baseline
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - codex/csharp-port
+      - codex/slice-08-test-deployment
+    tags:
+      - 'v*.*.*-test.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  build-test-package:
+    name: Build, test and package
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      artifact_name: ${{ steps.identity.outputs.artifact_name }}
+      deployment_label: ${{ steps.identity.outputs.deployment_label }}
+      zip_sha256: ${{ steps.package.outputs.zip_sha256 }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: |
+            **/*.csproj
+            **/*.sqlproj
+            Directory.Packages.props
+
+      - name: Generate ephemeral SQL test credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          sql_password="Asap$(openssl rand -hex 32)Aa1!"
+          echo "::add-mask::$sql_password"
+          echo "ASAP_TEST_SQL_SA_PASSWORD=$sql_password" >> "$GITHUB_ENV"
+          echo "ASAP_TEST_SQL_CONNECTION_STRING=Server=localhost,1433;Database=master;User ID=sa;Password=$sql_password;Encrypt=True;TrustServerCertificate=True" >> "$GITHUB_ENV"
+
+      - name: Start SQL Server 2022
+        shell: bash
+        run: >-
+          docker run --detach --name asap-sql
+          --publish 1433:1433
+          --env ACCEPT_EULA=Y
+          --env "MSSQL_SA_PASSWORD=$ASAP_TEST_SQL_SA_PASSWORD"
+          mcr.microsoft.com/mssql/server:2022-latest
+
+      - name: Wait for SQL Server
+        shell: bash
+        run: |
+          for attempt in {1..30}; do
+            if docker exec asap-sql /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$ASAP_TEST_SQL_SA_PASSWORD" -C -Q 'SELECT 1' >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs asap-sql
+          exit 1
+
+      - name: Restore and build
+        run: dotnet build Asap.sln --configuration Release
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install browser acceptance dependencies
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run .NET and real SQL tests (non-browser partition)
+        run: >-
+          dotnet test --project tests/Asap.Tests/Asap.Tests.csproj
+          --configuration Release --no-build --minimum-expected-tests 319
+          --filter
+          'FullyQualifiedName!~PatronBrowserJourneyRunsOnKestrelWithRealSqlAndRecordingEmailTransport&FullyQualifiedName!~StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers&FullyQualifiedName!~LegacyRequestLinksReplaceDesktopAndMobileUrlsWithoutLeakingFailures'
+
+      - name: Run legacy/frontend unit tests
+        run: npm test
+
+      - name: Run browser accessibility tests
+        run: npm run test:browser
+
+      - name: Upload browser diagnostics on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-diagnostics-${{ github.sha }}
+          path: .artifacts/browser
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Verify publish artifacts
+        shell: pwsh
+        run: |
+          dotnet publish src/Asap.Web/Asap.Web.csproj -c Release -o .artifacts/web
+          dotnet publish src/Asap.Migration/Asap.Migration.csproj -c Release -r win-x64 --self-contained true -o .artifacts/migration
+          if (Get-ChildItem .artifacts -Recurse -File | Where-Object Name -Match 'pocketbase|node(.exe)?|npm(.cmd)?') {
+            throw 'Published artifacts contain a forbidden PocketBase or Node runtime file.'
+          }
+          if (Get-ChildItem .artifacts -Recurse -File | Where-Object FullName -Match 'dev-email') {
+            throw 'Published or CI artifacts contain temporary development email output.'
+          }
+          if (-not (Test-Path .artifacts/web/Database/Asap.Database.dacpac)) {
+            throw 'Web publish is missing Asap.Database.dacpac.'
+          }
+          if (-not (Test-Path .artifacts/migration/Asap.Migration.exe)) {
+            throw 'Migration publish is not a self-contained win-x64 executable.'
+          }
+          $manifest = Get-Content src/Asap.Web/Frontend/vendor-manifest.json -Raw | ConvertFrom-Json
+          $entries = @($manifest.packages | ForEach-Object { $_.files.psobject.Properties })
+          foreach ($entry in $entries) {
+            $path = Join-Path .artifacts/web/wwwroot $entry.Name
+            if (-not (Test-Path -LiteralPath $path)) {
+              throw "Published frontend asset is missing: $($entry.Name)"
+            }
+            $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $entry.Value) {
+              throw "Published frontend asset hash mismatch: $($entry.Name)"
+            }
+          }
+
+      - name: Determine exact artifact identity
+        id: identity
+        shell: pwsh
+        run: |
+          $commit = (git rev-parse HEAD).Trim()
+          if ($commit -ne $env:GITHUB_SHA) {
+            throw "Checked out commit $commit does not match GITHUB_SHA $env:GITHUB_SHA."
+          }
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $label = $env:GITHUB_REF_NAME
+          }
+          else {
+            $label = "manual-$($env:GITHUB_REF_NAME)"
+          }
+          $artifactName = "asap-test-deployment-$commit"
+          "commit=$commit" >> $env:GITHUB_OUTPUT
+          "deployment_label=$label" >> $env:GITHUB_OUTPUT
+          "artifact_name=$artifactName" >> $env:GITHUB_OUTPUT
+
+      - name: Create exact test-IIS deployment ZIP
+        id: package
+        shell: pwsh
+        env:
+          DEPLOYMENT_LABEL: ${{ steps.identity.outputs.deployment_label }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $publishRoot = (Resolve-Path .artifacts/web).Path
+          $packageRoot = Join-Path (Resolve-Path .artifacts).Path 'test-deployment-root'
+          $packageWeb = Join-Path $packageRoot 'web'
+          $packageDeployment = Join-Path $packageRoot 'deployment'
+          $packageHangfire = Join-Path $packageRoot 'hangfire\1.8.25'
+          $zipPath = Join-Path (Resolve-Path .artifacts).Path 'asap-test-deployment.zip'
+          $digestPath = "$zipPath.sha256"
+
+          Remove-Item -LiteralPath $packageRoot -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $digestPath -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $packageWeb, $packageDeployment, $packageHangfire | Out-Null
+
+          foreach ($source in Get-ChildItem -LiteralPath $publishRoot -Recurse -File -Force) {
+            $relative = [IO.Path]::GetRelativePath($publishRoot, $source.FullName)
+            if ($relative -match '^Database[\\/]Hangfire(?:[\\/]|$)') {
+              continue
+            }
+            $destination = Join-Path $packageWeb $relative
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
+            Copy-Item -LiteralPath $source.FullName -Destination $destination -Force
+          }
+
+          Copy-Item -LiteralPath scripts/deployment/Deploy-AsapTest.ps1 -Destination (Join-Path $packageDeployment 'Deploy-AsapTest.ps1') -Force
+          Copy-Item -LiteralPath scripts/hangfire/1.8.25/install.sql -Destination (Join-Path $packageHangfire 'install.sql') -Force
+
+          $webEntries = @(
+            Get-ChildItem -LiteralPath $packageWeb -Recurse -File -Force |
+              ForEach-Object {
+                [pscustomobject]@{
+                  RelativePath = [IO.Path]::GetRelativePath($packageWeb, $_.FullName).Replace([IO.Path]::DirectorySeparatorChar, '/')
+                  Length = $_.Length
+                  Hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+                }
+              } |
+              Sort-Object RelativePath
+          )
+          $webIdentityText = ($webEntries | ForEach-Object { "$($_.RelativePath)|$($_.Length)|$($_.Hash)" }) -join "`n"
+          $webIdentity = [System.Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($webIdentityText))
+          $webIdentityHash = [Convert]::ToHexString($webIdentity).ToLowerInvariant()
+          $dacpacPath = Join-Path $packageWeb 'Database\Asap.Database.dacpac'
+          $dacpacHash = (Get-FileHash -LiteralPath $dacpacPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $hangfirePath = Join-Path $packageHangfire 'install.sql'
+          $hangfireHash = (Get-FileHash -LiteralPath $hangfirePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $buildUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+
+          $manifest = [ordered]@{
+            schemaVersion = 1
+            deploymentKind = 'asap-test-iis'
+            versionOrLabel = $env:DEPLOYMENT_LABEL
+            commitSha = $env:GITHUB_SHA
+            buildUtc = $buildUtc
+            applicationSchemaVersion = 6
+            hangfireSchemaVersion = 9
+            dacpacSha256 = $dacpacHash
+            webPayloadSha256 = $webIdentityHash
+            webFileCount = $webEntries.Count
+            webPayloadBytes = [long](($webEntries | Measure-Object -Property Length -Sum).Sum)
+            hangfireInstallSha256 = $hangfireHash
+          }
+          $manifestJson = $manifest | ConvertTo-Json -Depth 4
+          [IO.File]::WriteAllText((Join-Path $packageRoot 'manifest.json'), $manifestJson, [Text.UTF8Encoding]::new($false))
+          Compress-Archive -Path (Join-Path $packageRoot '*') -DestinationPath $zipPath -CompressionLevel Optimal
+          $zipHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText($digestPath, $zipHash, [Text.UTF8Encoding]::new($false))
+          "zip_sha256=$zipHash" >> $env:GITHUB_OUTPUT
+          Write-Host "Created $zipPath ($zipHash)"
+
+      - name: Validate test-IIS package without host mutation
+        shell: pwsh
+        env:
+          EXPECTED_DEPLOYMENT_LABEL: ${{ steps.identity.outputs.deployment_label }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $zipPath = (Resolve-Path .artifacts/asap-test-deployment.zip).Path
+          $expectedHash = (Get-Content -LiteralPath "$zipPath.sha256" -Raw).Trim()
+          $bootstrapRoot = Join-Path $env:RUNNER_TEMP ("asap-test-package-validation-" + [guid]::NewGuid().ToString('N'))
+          try {
+            Expand-Archive -LiteralPath $zipPath -DestinationPath $bootstrapRoot -Force
+            & (Join-Path $bootstrapRoot 'deployment/Deploy-AsapTest.ps1') `
+              -DeploymentZip $zipPath `
+              -ExpectedZipSha256 $expectedHash `
+              -ExpectedCommitSha $env:GITHUB_SHA `
+              -ExpectedDeploymentLabel $env:EXPECTED_DEPLOYMENT_LABEL `
+              -ValidateOnly
+          }
+          finally {
+            Remove-Item -LiteralPath $bootstrapRoot -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Upload exact test-IIS deployment artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.identity.outputs.artifact_name }}
+          path: |
+            .artifacts/asap-test-deployment.zip
+            .artifacts/asap-test-deployment.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove SQL Server test container
+        if: ${{ always() }}
+        shell: bash
+        run: docker rm --force asap-sql >/dev/null 2>&1 || true
+
+  deploy-test-iis:
+    name: Deploy exact artifact to test IIS
+    needs: build-test-package
+    if: ${{ vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))) }}
+    runs-on: [self-hosted, windows, x64, asap-test-iis]
+    environment: asap-test-iis
+    timeout-minutes: 20
+
+    steps:
+      - name: Download exact tested deployment artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-test-package.outputs.artifact_name }}
+          path: .artifacts/incoming
+
+      - name: Deploy exact tested artifact
+        shell: pwsh
+        env:
+          EXPECTED_ZIP_SHA256: ${{ needs.build-test-package.outputs.zip_sha256 }}
+          EXPECTED_COMMIT_SHA: ${{ github.sha }}
+          EXPECTED_DEPLOYMENT_LABEL: ${{ needs.build-test-package.outputs.deployment_label }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $zipPath = (Resolve-Path .artifacts/incoming/asap-test-deployment.zip).Path
+          $expectedHash = $env:EXPECTED_ZIP_SHA256
+          if ([string]::IsNullOrWhiteSpace($expectedHash)) {
+            throw 'Hosted build did not provide the expected deployment ZIP SHA-256.'
+          }
+          $expectedHash = $expectedHash.Trim().ToLowerInvariant()
+          $actualHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if (-not $actualHash.Equals($expectedHash, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Deployment ZIP SHA-256 mismatch: expected $expectedHash, got $actualHash."
+          }
+          $bootstrapRoot = Join-Path $env:RUNNER_TEMP ("asap-test-deployment-bootstrap-" + [guid]::NewGuid().ToString('N'))
+          try {
+            Expand-Archive -LiteralPath $zipPath -DestinationPath $bootstrapRoot -Force
+            & (Join-Path $bootstrapRoot 'deployment/Deploy-AsapTest.ps1') `
+              -DeploymentZip $zipPath `
+              -ExpectedZipSha256 $expectedHash `
+              -ExpectedCommitSha $env:EXPECTED_COMMIT_SHA `
+              -ExpectedDeploymentLabel $env:EXPECTED_DEPLOYMENT_LABEL
+          }
+          finally {
+            Remove-Item -LiteralPath $bootstrapRoot -Recurse -Force -ErrorAction SilentlyContinue
+          }

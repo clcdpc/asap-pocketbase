@@ -1,0 +1,2 @@
+CREATE SCHEMA [asap]
+    AUTHORIZATION [dbo];
