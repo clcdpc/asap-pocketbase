@@ -64,8 +64,6 @@ public sealed class PolarisSettings
     public string? ProtectedAdminPassword { get; set; }
     public int? WorkstationId { get; set; }
     public int? SystemPolarisUserId { get; set; }
-    public int? OrganizationIdForRequests { get; set; }
-    public int? PickupOrganizationId { get; set; }
     public DateTime UpdatedUtc { get; set; }
     public byte[] RowVersion { get; set; } = [];
 }

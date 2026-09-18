@@ -11,7 +11,7 @@ public interface IPatronProvider
         CancellationToken cancellationToken);
 
     Task UpdatePreferredPickupBranchAsync(
-        string barcode,
+        PatronSnapshot patron,
         int pickupBranchId,
         CancellationToken cancellationToken);
 

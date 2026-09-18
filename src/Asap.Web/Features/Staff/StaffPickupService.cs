@@ -135,7 +135,7 @@ public sealed class StaffPickupService(
             pickupChanged = selectedBranch.Id != liveCurrentId;
             if (pickupChanged)
             {
-                await patronProvider.UpdatePreferredPickupBranchAsync(barcode, selectedBranch.Id, cancellationToken);
+                await patronProvider.UpdatePreferredPickupBranchAsync(patron, selectedBranch.Id, cancellationToken);
             }
         }
         catch (InvalidPickupSelectionException)

@@ -551,7 +551,7 @@ public sealed partial class PatronJourneyTests
             CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task UpdatePreferredPickupBranchAsync(
-            string barcode,
+            PatronSnapshot patron,
             int pickupBranchId,
             CancellationToken cancellationToken) => throw new NotSupportedException();
 

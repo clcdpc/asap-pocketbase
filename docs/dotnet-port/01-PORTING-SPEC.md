@@ -546,6 +546,17 @@ Workflow tags are a relational, seeded taxonomy (`WorkflowTag` + join table). Th
 
 Patron submission snapshots remain historical and immutable: barcode, submitted email/name, patron code ID/description, patron organization, effective library/name, and staff-created-library snapshot where applicable. `PreferredPickupBranchId`/`PreferredPickupBranchName` are the one deliberate exception: they are the request's **current recorded pickup preference** and may change only through the dedicated validated pickup-preference workflow. On successful Polaris update, update those two request fields and append the normal note/event; on Polaris failure leave them unchanged. Normal generic request edits cannot change them.
 
+For hold placement, those request pickup fields are temporary display/audit
+state only. Immediately before a new Polaris hold create, refresh the live
+patron and eligible pickup branches. Use the patron's registered Polaris
+organization as `RequestingOrgID`; use the live default pickup organization
+when it is eligible, otherwise use the registered organization only when it is
+an eligible pickup location. A stale or ineligible live default is an
+actionable validation failure and must not dispatch a hold. Once the create
+operation is marked as dispatched, snapshot both resolved IDs and reuse them
+for reply/recovery; never substitute the staff actor's organization or a
+retired connection setting.
+
 Keep `LegacyId` as a nullable historical/provenance field distinct from PocketBase migration mapping.
 
 Remove broad `editedBy` state; use events/audit where provenance matters.

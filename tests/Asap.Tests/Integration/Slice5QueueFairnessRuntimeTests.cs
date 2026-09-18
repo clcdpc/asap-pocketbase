@@ -322,7 +322,7 @@ public sealed partial class PatronJourneyTests
         public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(PatronSnapshot patron, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<PickupBranch>>([]);
 
-        public Task UpdatePreferredPickupBranchAsync(string barcode, int pickupBranchId, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task UpdatePreferredPickupBranchAsync(PatronSnapshot patron, int pickupBranchId, CancellationToken cancellationToken) => Task.CompletedTask;
 
         public Task<IdentifierLookupResult> LookupIdentifierAsync(string identifier, CancellationToken cancellationToken) =>
             Task.FromResult(IdentifierResult);

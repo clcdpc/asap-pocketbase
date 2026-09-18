@@ -996,7 +996,7 @@ export function createWorkflowApp() {
     addDetail(details, 'Identifier', request.identifier);
     addDetail(details, 'BIB ID', request.bibid);
     addDetail(details, 'Publication', request.publication);
-    addDetail(details, 'Pickup', request.preferredPickupBranchName || request.preferredPickupBranchId);
+    addDetail(details, 'Pickup snapshot', request.preferredPickupBranchName || request.preferredPickupBranchId);
     addDetail(details, 'Identifier check', request.isbnCheckStatus);
     body.append(details);
 
@@ -1418,6 +1418,10 @@ export function createWorkflowApp() {
       if (options.selectedPickupBranchId) select.value = String(options.selectedPickupBranchId);
       const form = element('form', { className: 'inline-form' }, [
         labeledInput('Preferred pickup branch', select),
+        element('p', {
+          className: 'wide',
+          text: 'This updates the patron’s account-wide Polaris preference. The pickup saved on this request is an audit snapshot; hold placement rechecks the live preference immediately before dispatch.'
+        }),
         element('button', { type: 'submit', className: 'primary-button', disabled: options.readOnly }, [icon('map-marker'), 'Update pickup'])
       ]);
       if (options.pickupBranchWarning) form.append(element('p', { className: 'wide', text: options.pickupBranchWarning }));

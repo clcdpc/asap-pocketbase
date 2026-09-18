@@ -222,6 +222,13 @@ public static class TitleRequestEndpoints
         "stale_version" or "hold_operation_incomplete" or "operation_ownership_lost" or
             "hold_identity_ambiguous" or "hold_operator_required" =>
             Results.Conflict(new { code, message = "Hold placement is blocked or requires reconciliation." }),
+        "pickup_missing" or "pickup_invalid" or "patron_registration_missing" or "patron_scope_changed" or
+            "polaris_settings_missing" or "request_not_found" =>
+            Results.UnprocessableEntity(new
+            {
+                code,
+                message = "Current patron registration or pickup information is unavailable. Refresh the patron before retrying; no hold was dispatched."
+            }),
         "hold_provider_error" => Results.Json(
             new { code, message = "Hold placement could not be confirmed." },
             statusCode: StatusCodes.Status502BadGateway),

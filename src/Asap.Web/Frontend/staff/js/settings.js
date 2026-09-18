@@ -71,9 +71,7 @@ const POLARIS_FIELDS = [
   ['staffDomain', 'polaris-domain'],
   ['adminUser', 'polaris-admin-user'],
   ['workstationId', 'polaris-workstation-id'],
-  ['systemPolarisUserId', 'polaris-system-user-id'],
-  ['organizationIdForRequests', 'polaris-requesting-org-id'],
-  ['pickupOrganizationId', 'polaris-pickup-org-id']
+  ['systemPolarisUserId', 'polaris-system-user-id']
 ];
 
 const SETTINGS_OPERATION_SLOTS = [
