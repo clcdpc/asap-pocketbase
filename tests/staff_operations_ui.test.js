@@ -119,6 +119,8 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
     assert.equal(operationsTab.hidden, false, 'admins should see Operations');
     assert.equal(document.getElementById('operations-view').hidden, false);
     assert.equal(document.getElementById('operations-scope').value, 'all');
+    assert.equal(document.getElementById('app-status').textContent, '',
+      'A completed operations load must not announce a passive success message');
     assert.equal(document.querySelectorAll('#email-operations-table tbody tr').length, 2);
     assert.equal(document.querySelector('#email-operations-table').textContent.includes('<unsafe-error>'), true);
     assert.equal(document.querySelector('#email-operations-table').querySelector('script'), null, 'runtime text must not become markup');
@@ -149,6 +151,8 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
     document.getElementById('send-test-email').click();
     await settle();
     assertRequest(requests.find(item => item.url.includes('/email-operations/test')), '/api/asap/staff/email-operations/test', '3', null);
+    assert.equal(document.getElementById('app-status').textContent, 'Test email',
+      'Operation action feedback must remain visible after the silent table refresh');
 
     const retry = document.querySelector('#email-operations-table button');
     assert.ok(retry, 'failed rows should expose Retry');
@@ -173,6 +177,8 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
     operationsReads.set('email:2', oldEmail);
     scope.dispatchEvent(new dom.window.Event('change'));
     await settle();
+    assert.equal(document.getElementById('app-status').textContent, 'Loading workflow operations...',
+      'A pending operations refresh must retain its loading status');
     scope.value = '3';
     scope.dispatchEvent(new dom.window.Event('change'));
     await settle();

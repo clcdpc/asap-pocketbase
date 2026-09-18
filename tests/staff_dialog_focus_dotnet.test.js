@@ -97,6 +97,8 @@ async function runJourney(scenario) {
     const opener = (id = '91') => document.querySelector(`[aria-label="${openerLabel} ${id}"]`);
     const claimLabel = () => opener()?.closest('tr').querySelector('.claim-label');
     await until(() => opener() && opener('92') && opener('93'), 'The real Grid.js must render the initial tasks');
+    assert.strictEqual(document.getElementById('app-status').textContent, '',
+      'A completed list load must not announce a passive success message');
     const initialOpener = opener();
     const claimFilter = document.getElementById(titleRequest ? 'claim-filter' : 'additional-copy-claim-filter');
     claimFilter.value = replacesFocusedOpener ? 'mine_unclaimed' : 'unclaimed';
@@ -163,7 +165,8 @@ async function runJourney(scenario) {
       const scope = document.getElementById('additional-copy-library-scope');
       scope.value = '3';
       scope.dispatchEvent(new dom.window.Event('change'));
-      await until(() => document.getElementById('app-status').textContent === '0 authorized additional-copy tasks loaded.', 'The newer library scope must load');
+      await until(() => document.getElementById('additional-copy-summary').textContent === '0 open tasks' &&
+        document.getElementById('app-status').textContent === '', 'The newer library scope must load without a passive success message');
       newerFocus = document.activeElement;
     }
     renderReleased.resolve();
