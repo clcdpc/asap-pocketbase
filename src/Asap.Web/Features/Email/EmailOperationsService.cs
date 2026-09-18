@@ -122,7 +122,7 @@ public sealed class EmailOperationsService(
         {
             query = query.Where(item => item.Status == "failed");
         }
-        return await query
+        var rows = await query
             .OrderByDescending(item => item.Status == "failed")
             .ThenByDescending(item => item.CreatedUtc)
             .Take(500)
@@ -131,6 +131,11 @@ public sealed class EmailOperationsService(
                 item.RecipientAddressKind, item.AttemptCount, item.LastErrorCode, item.SuppressionReason,
                 item.CreatedUtc, item.SentUtc, StaffVersion.Encode(item.RowVersion)))
             .ToListAsync(cancellationToken);
+        return rows.Select(item => item with
+        {
+            CreatedUtc = AsUtc(item.CreatedUtc),
+            SentUtc = AsUtc(item.SentUtc)
+        }).ToList();
     }
 
     public async Task<EmailOperationResult> RetryAsync(
@@ -248,4 +253,7 @@ public sealed class EmailOperationsService(
     }
 
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static DateTime AsUtc(DateTime value) => DateTime.SpecifyKind(value, DateTimeKind.Utc);
+    private static DateTime? AsUtc(DateTime? value) => value.HasValue ? AsUtc(value.Value) : null;
 }

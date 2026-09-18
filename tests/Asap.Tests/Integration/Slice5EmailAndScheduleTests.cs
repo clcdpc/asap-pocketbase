@@ -1,4 +1,6 @@
+using System.Net;
 using System.Security.Cryptography;
+using System.Text.Json;
 using Asap.Web.Features.Email;
 using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Data;
@@ -66,6 +68,107 @@ public sealed partial class PatronJourneyTests
         using var weeklyBody = System.Text.Json.JsonDocument.Parse(await weeklyResponse.Content.ReadAsStringAsync());
         Assert.AreEqual("staff_scope_forbidden", weeklyBody.RootElement.GetProperty("code").GetString());
         await DeactivateCorrectiveStaffAsync(staff.Id);
+    }
+
+    [TestMethod]
+    public async Task OperationsEndpointsSerializeUtcTimestampsForLocalDisplay()
+    {
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        const string queueName = QueueNames.IdentifierProcessing;
+        var storedUtc = DateTime.SpecifyKind(new DateTime(2031, 4, 5, 12, 0, 0), DateTimeKind.Unspecified);
+        var businessKeyPrefix = $"issue-282-{Guid.NewGuid():N}";
+        var businessKey = $"{businessKeyPrefix}:timestamp";
+        var pendingBusinessKey = $"{businessKeyPrefix}:pending";
+
+        await using var context = await contextFactory.CreateDbContextAsync();
+        var testOrganizationId = 900282;
+        while (await context.Organizations.AnyAsync(item => item.Id == testOrganizationId))
+        {
+            testOrganizationId++;
+        }
+        var organization = new Organization
+        {
+            Id = testOrganizationId,
+            DisplayName = $"Issue 282 {businessKeyPrefix}",
+            IsActive = false
+        };
+        var queue = new QueueProgress { QueueName = queueName, ScopeOrganizationId = testOrganizationId };
+
+        queue.CycleMaxId = 901;
+        queue.LastCreatedUtc = storedUtc;
+        queue.LastItemId = 902;
+        queue.LastOutcomeItemId = 902;
+        queue.LastOutcomeCode = "processed";
+        queue.LastOutcomeUtc = storedUtc.AddMinutes(1);
+        queue.UpdatedUtc = storedUtc.AddMinutes(2);
+        var outbox = NewCleanupOutbox(
+            businessKeyPrefix,
+            "timestamp",
+            storedUtc,
+            status: "sent",
+            sentUtc: storedUtc.AddMinutes(3),
+            organizationId: testOrganizationId);
+        var pendingOutbox = NewCleanupOutbox(
+            businessKeyPrefix,
+            "pending",
+            storedUtc,
+            status: "pending",
+            organizationId: testOrganizationId);
+        context.Organizations.Add(organization);
+
+        try
+        {
+            await context.SaveChangesAsync();
+            context.QueueProgress.Add(queue);
+            context.EmailOutbox.Add(outbox);
+            context.EmailOutbox.Add(pendingOutbox);
+            await context.SaveChangesAsync();
+            using var client = factory.CreateClient();
+            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+
+            using var queueResponse = await client.GetAsync(
+                $"/api/asap/staff/workflow/queues?organizationId={testOrganizationId}");
+            Assert.AreEqual(HttpStatusCode.OK, queueResponse.StatusCode, await queueResponse.Content.ReadAsStringAsync());
+            using var queueBody = JsonDocument.Parse(await queueResponse.Content.ReadAsStringAsync());
+            var queueItem = queueBody.RootElement.GetProperty("items").EnumerateArray()
+                .Single(item => item.GetProperty("queueName").GetString() == queueName);
+            AssertUtcJsonTimestamp(queueItem, "lastCreatedUtc", storedUtc);
+            AssertUtcJsonTimestamp(queueItem, "lastOutcomeUtc", storedUtc.AddMinutes(1));
+            AssertUtcJsonTimestamp(queueItem, "updatedUtc", storedUtc.AddMinutes(2));
+
+            using var emailResponse = await client.GetAsync(
+                $"/api/asap/staff/email-operations?organizationId={testOrganizationId}");
+            Assert.AreEqual(HttpStatusCode.OK, emailResponse.StatusCode, await emailResponse.Content.ReadAsStringAsync());
+            using var emailBody = JsonDocument.Parse(await emailResponse.Content.ReadAsStringAsync());
+            var emailItem = emailBody.RootElement.GetProperty("items").EnumerateArray()
+                .Single(item => item.GetProperty("businessKey").GetString() == businessKey);
+            AssertUtcJsonTimestamp(emailItem, "createdUtc", storedUtc);
+            AssertUtcJsonTimestamp(emailItem, "sentUtc", storedUtc.AddMinutes(3));
+            var pendingEmailItem = emailBody.RootElement.GetProperty("items").EnumerateArray()
+                .Single(item => item.GetProperty("businessKey").GetString() == pendingBusinessKey);
+            Assert.AreEqual(JsonValueKind.Null, pendingEmailItem.GetProperty("sentUtc").ValueKind);
+        }
+        finally
+        {
+            context.EmailOutbox.Remove(outbox);
+            context.EmailOutbox.Remove(pendingOutbox);
+            context.QueueProgress.Remove(queue);
+            await context.SaveChangesAsync();
+            context.Organizations.Remove(organization);
+            await context.SaveChangesAsync();
+        }
+
+        static void AssertUtcJsonTimestamp(JsonElement item, string propertyName, DateTime expectedUtc)
+        {
+            var value = item.GetProperty(propertyName).GetString();
+            Assert.IsNotNull(value);
+            Assert.IsTrue(value!.EndsWith("Z", StringComparison.Ordinal),
+                $"{propertyName} should include a UTC designator: {value}");
+            Assert.AreEqual(
+                expectedUtc,
+                DateTimeOffset.Parse(value, System.Globalization.CultureInfo.InvariantCulture).UtcDateTime);
+        }
     }
 
     [TestMethod]
@@ -410,9 +513,10 @@ public sealed partial class PatronJourneyTests
         string? errorCode = null,
         DateTime? sentUtc = null,
         DateTime? suppressedUtc = null,
-        string? suppressionReason = null) => new()
+        string? suppressionReason = null,
+        int organizationId = 2) => new()
         {
-            OrganizationId = 2,
+            OrganizationId = organizationId,
             BusinessKey = $"{prefix}:{key}",
             DeliveryClass = "operational_test",
             ToAddress = "cleanup@example.org",
