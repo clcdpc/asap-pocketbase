@@ -206,6 +206,10 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-result { min-height: 22px; margin: 8px 0 0; color: var(--muted); }
 .settings-result.error { color: var(--danger); font-weight: 700; }
 .settings-result.success { color: var(--success); font-weight: 700; }
+.settings-domain-block { display: grid; gap: 10px; min-width: 0; }
+.settings-domain-block + .settings-domain-block { margin-top: 16px; }
+.settings-domain-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 16px; min-width: 0; margin-bottom: 10px; }
+.settings-domain-block > .settings-domain-heading { margin-bottom: 0; }
 .settings-inline-actions { flex-wrap: wrap; align-items: center; }
 .settings-row-editor { display: grid; gap: 10px; min-width: 0; }
 .settings-editor-row {
