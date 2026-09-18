@@ -109,10 +109,12 @@ modes (103 states and 14 CSP cases). These are prior-slice baselines, not Slice 
 results. Adapt retained harnesses under fresh Slice 5 names without overwriting
 historical evidence; run the complete required gates for final candidate bytes.
 
-The only approved temporary transport substitution remains `FileEmailSender`
-at the final provider boundary. Real cancellable Rest 3-compatible CLC Postmark,
-webhook/provider and release/rehearsal checks remain explicitly deferred release
-requirements, not Slice 5 blockers or permission to fake provider delivery.
+`FileEmailSender` remains available only as the explicit `capture` mode at the
+final provider boundary. Issue #293 adds the explicit cancellable Postmark REST
+transport, protected scoped-token resolution, provider-boundary tests, and the
+real outbox-backed administrator test-email flow. Live mailbox acceptance,
+provider webhook work, and release/rehearsal checks remain deferred; no fake
+provider delivery is used.
 Analytics and all other later-slice work remain outside this implementation.
 
 Astra Max refreshes this packet against accepted prior implementation and
@@ -226,12 +228,12 @@ required evidence; do not write parallel PAPI signing/protocol machinery.
    super-admin-only Hangfire dashboard, and useful scoped queue/recovery/email
    diagnostics. Infrastructure continues for inactive libraries. No secret,
    recipient PII or raw patron payload is logged.
-10. Retain the minimal cancellable file sender only at final transport until
-    the real maintained Rest 3-compatible CLC Postmark adapter is available.
-    Generated previews remain ignored and excluded from app/CI artifacts.
-    Do not implement fake provider webhook/delivery behavior. Provider-specific
-    work and transport/release tests remain explicitly incomplete release and
-    rehearsal gates; this exception does not waive any SQL/application test.
+10. Keep file capture and live Postmark as explicit transport modes. Generated
+    capture previews remain ignored and excluded from app/CI artifacts. The
+    live adapter must require a provider success response plus a usable message
+    ID, classify known rejection versus ambiguous transport outcomes, and never
+    fall back from live to capture. Do not implement fake provider webhook or
+    mailbox-delivery behavior; live mailbox acceptance remains a release gate.
 
 ## Migration And Tests
 
@@ -272,8 +274,9 @@ Retain full detailed logs as evidence and return compact command/result/count/
 hash/path/warning receipts under document 10. Preserve the detailed tests above
 and the established fake-provider/real-SQL distinction. Use the existing Testing
 browser-auth boundary and retain required real-cookie/OIDC regression coverage;
-these gates add no live Entra browser authentication or live Postmark requirement.
-The documented temporary transport and later real-provider release gates remain.
+these gates add no live Entra browser authentication or live Postmark mailbox
+requirement. The documented live-email runbook and human mailbox acceptance
+gate remain.
 
 At the user's direction, Astra may push `WIP Slice 5 review candidate` at this
 boundary. `PORT-STATUS.md`/handoff material must say

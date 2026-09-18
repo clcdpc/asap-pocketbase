@@ -1,3 +1,4 @@
+using Asap.Web.Features.Email;
 using Asap.Web.Infrastructure.Configuration;
 
 namespace Asap.Tests;
@@ -47,6 +48,10 @@ internal static class TestConfigurationFactory
             EmailSafety = new EmailSafetyOptions
             {
                 AllowedRecipientDomains = allowedDomains
+            },
+            EmailTransport = new EmailTransportOptions
+            {
+                Mode = EmailDeliveryModes.Capture
             },
             Hangfire = new HangfireOptions
             {

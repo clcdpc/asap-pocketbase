@@ -194,6 +194,30 @@ public sealed class ExternalConfigurationValidatorTests
         Assert.AreEqual(300, value.PatronLoginRateLimit.WindowSeconds);
     }
 
+    [DataRow("live")]
+    [DataRow("capture")]
+    [TestMethod]
+    public void EmailTransportModeMustBeExplicitlySupported(string mode)
+    {
+        var value = TestConfigurationFactory.Create();
+        value.EmailTransport.Mode = mode;
+
+        var errors = ExternalConfigurationValidator.Validate(value);
+
+        Assert.IsFalse(errors.Contains("email_transport_mode_invalid"));
+    }
+
+    [TestMethod]
+    public void UnknownEmailTransportModeFailsValidation()
+    {
+        var value = TestConfigurationFactory.Create();
+        value.EmailTransport.Mode = "file-but-not-capture";
+
+        var errors = ExternalConfigurationValidator.Validate(value);
+
+        CollectionAssert.Contains(errors.ToList(), "email_transport_mode_invalid");
+    }
+
     [DataRow(0, 300, "patron_login_rate_limit_permit_invalid")]
     [DataRow(20, 0, "patron_login_rate_limit_window_invalid")]
     [TestMethod]

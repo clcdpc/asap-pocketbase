@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net.Mail;
 using System.Text.RegularExpressions;
+using Asap.Web.Features.Email;
 using Cronos;
 using Microsoft.Data.SqlClient;
 
@@ -44,6 +45,7 @@ public static partial class ExternalConfigurationValidator
             value.Authentication?.Entra is null ||
             value.Application is null ||
             value.EmailSafety is null ||
+            value.EmailTransport is null ||
             value.PatronLoginRateLimit is null ||
             value.Hangfire?.ProcessingLimits is null)
         {
@@ -70,6 +72,7 @@ public static partial class ExternalConfigurationValidator
         ValidateEntra(value.Authentication.Entra, errors);
         ValidateApplication(value.Application, errors);
         ValidateRecipientDomains(value.EmailSafety.AllowedRecipientDomains, errors);
+        ValidateEmailTransport(value.EmailTransport, errors);
         ValidatePatronLoginRateLimit(value.PatronLoginRateLimit, errors);
         ValidateHangfire(value.Hangfire, errors);
 
@@ -241,6 +244,17 @@ public static partial class ExternalConfigurationValidator
         if (domains.Distinct(StringComparer.OrdinalIgnoreCase).Count() != domains.Count)
         {
             errors.Add("recipient_domain_duplicate");
+        }
+    }
+
+    private static void ValidateEmailTransport(
+        EmailTransportOptions options,
+        ICollection<string> errors)
+    {
+        if (!string.Equals(options.Mode, EmailDeliveryModes.Capture, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(options.Mode, EmailDeliveryModes.Live, StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add("email_transport_mode_invalid");
         }
     }
 

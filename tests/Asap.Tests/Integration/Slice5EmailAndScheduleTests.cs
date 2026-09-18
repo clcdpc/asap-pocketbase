@@ -98,13 +98,25 @@ public sealed partial class PatronJourneyTests
 
         try
         {
-            var queued = await service.QueueTestAsync(actor, null, CancellationToken.None);
+            var requestId = Guid.NewGuid();
+            var queued = await service.QueueTestAsync(actor, null, requestId.ToString(), CancellationToken.None);
             Assert.AreEqual("queued", queued.Code);
             var queuedId = Convert.ToInt64(queued.Data!.GetType().GetProperty("id")!.GetValue(queued.Data));
             createdOutboxIds.Add(queuedId);
             var outbox = await context.EmailOutbox.AsNoTracking().SingleAsync(item => item.Id == queuedId);
             Assert.AreEqual("system.sender@example.org", outbox.FromAddress);
             Assert.AreEqual("Library Notices", outbox.FromName);
+            Assert.AreEqual(actor.Id, outbox.RequestedByStaffUserId);
+            Assert.AreEqual(requestId.ToString("N"), outbox.RequestId);
+            Assert.AreEqual(EmailDeliveryModes.Capture, outbox.DeliveryMode);
+            StringAssert.Contains(outbox.BodyText!, $"Reference: {queuedId}.");
+
+            var duplicate = await service.QueueTestAsync(actor, null, requestId.ToString(), CancellationToken.None);
+            Assert.AreEqual("duplicate", duplicate.Code);
+            Assert.AreEqual(queuedId, Convert.ToInt64(duplicate.Data!.GetType().GetProperty("id")!.GetValue(duplicate.Data)));
+
+            var cooldown = await service.QueueTestAsync(actor, null, Guid.NewGuid().ToString(), CancellationToken.None);
+            Assert.AreEqual("cooldown", cooldown.Code);
 
             Assert.AreEqual("staff_scope_forbidden",
                 (await service.QueueTestAsync(ordinaryStaff, 2, CancellationToken.None)).Code);

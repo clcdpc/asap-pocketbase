@@ -21,6 +21,7 @@ internal sealed record ClaimedEmail(
     int OrganizationId,
     string? BusinessKey,
     string DeliveryClass,
+    string? DeliveryMode,
     long? RecipientStaffUserId,
     string? RecipientAuthenticationEmail,
     int? AuthorizationOrganizationId,
@@ -73,7 +74,14 @@ public sealed class EmailOutboxJobs(
             cancellationToken);
         if (!readiness.IsConfigured)
         {
-            await FailNotConfiguredAsync(claim, cancellationToken);
+            await FailNotConfiguredAsync(claim, readiness.Code ?? "mail_not_configured", cancellationToken);
+            return;
+        }
+
+        if (claim.DeliveryMode is not null &&
+            !string.Equals(claim.DeliveryMode, readiness.DeliveryMode, StringComparison.OrdinalIgnoreCase))
+        {
+            await FailNotConfiguredAsync(claim, "mail_transport_mode_changed", cancellationToken);
             return;
         }
 
@@ -106,14 +114,26 @@ public sealed class EmailOutboxJobs(
                 timeout.Token);
             if (result.Outcome == EmailSendOutcome.NotConfigured)
             {
-                await FailNotConfiguredAsync(claim, cancellationToken);
+                await FailNotConfiguredAsync(claim, result.ErrorCode ?? "mail_not_configured", cancellationToken);
+                return;
+            }
+            if (result.Outcome == EmailSendOutcome.Rejected)
+            {
+                await FailProviderAsync(
+                    claim,
+                    result.ErrorCode ?? "provider_rejected",
+                    cancellationToken);
                 return;
             }
             if (string.IsNullOrWhiteSpace(result.ProviderMessageId))
             {
                 throw new InvalidOperationException("A successful email transport result requires a provider message ID.");
             }
-            await CompleteAsync(claim, result.ProviderMessageId, cancellationToken);
+            await CompleteAsync(
+                claim,
+                result.ProviderMessageId,
+                result.DeliveryMode ?? readiness.DeliveryMode,
+                cancellationToken);
         }
         catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
@@ -121,6 +141,26 @@ public sealed class EmailOutboxJobs(
                 claim,
                 "provider_timeout",
                 exception.GetType().Name,
+                cancellationToken);
+        }
+        catch (EmailTransportException exception) when (!exception.IsAmbiguous)
+        {
+            logger.LogWarning(
+                "Email outbox {OutboxId} was rejected by the configured provider with code {ErrorCode}.",
+                claim.Id,
+                exception.Code);
+            await FailProviderAsync(claim, exception.Code, cancellationToken);
+        }
+        catch (EmailTransportException exception)
+        {
+            logger.LogWarning(
+                "Email outbox {OutboxId} has an ambiguous provider outcome with code {ErrorCode}.",
+                claim.Id,
+                exception.Code);
+            await RecordAmbiguousFailureAsync(
+                claim,
+                exception.Code,
+                exception.Message,
                 cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -210,7 +250,7 @@ public sealed class EmailOutboxJobs(
                 [LastErrorDetail] = NULL
             OUTPUT
                 inserted.[Id], inserted.[OrganizationId], inserted.[BusinessKey],
-                inserted.[DeliveryClass], inserted.[RecipientStaffUserId],
+                inserted.[DeliveryClass], inserted.[DeliveryMode], inserted.[RecipientStaffUserId],
                 inserted.[RecipientAuthenticationEmail],
                 inserted.[AuthorizationOrganizationId], inserted.[RecipientAddressKind],
                 inserted.[ToAddress], inserted.[FromAddress], inserted.[FromName],
@@ -236,20 +276,21 @@ public sealed class EmailOutboxJobs(
                     reader.GetInt32(1),
                     NullableString(reader, 2),
                     reader.GetString(3),
-                    NullableInt64(reader, 4),
-                    NullableString(reader, 5),
-                    NullableInt32(reader, 6),
-                    NullableString(reader, 7),
-                    reader.GetString(8),
+                    NullableString(reader, 4),
+                    NullableInt64(reader, 5),
+                    NullableString(reader, 6),
+                    NullableInt32(reader, 7),
+                    NullableString(reader, 8),
                     reader.GetString(9),
-                    NullableString(reader, 10),
-                    reader.GetString(11),
-                    NullableString(reader, 12),
+                    reader.GetString(10),
+                    NullableString(reader, 11),
+                    reader.GetString(12),
                     NullableString(reader, 13),
-                    reader.GetInt32(14),
-                    reader.GetDateTime(15),
-                    reader.GetGuid(16),
-                    (byte[])reader[17]);
+                    NullableString(reader, 14),
+                    reader.GetInt32(15),
+                    reader.GetDateTime(16),
+                    reader.GetGuid(17),
+                    (byte[])reader[18]);
             }
         }
 
@@ -312,6 +353,7 @@ public sealed class EmailOutboxJobs(
     private Task CompleteAsync(
         ClaimedEmail claim,
         string providerMessageId,
+        string deliveryMode,
         CancellationToken cancellationToken) =>
         FinalizeAsync(
             claim,
@@ -319,6 +361,7 @@ public sealed class EmailOutboxJobs(
             UPDATE [asap].[EmailOutbox]
             SET [Status] = N'sent',
                 [ProviderMessageId] = @detail,
+                [DeliveryMode] = @deliveryMode,
                 [SentUtc] = SYSUTCDATETIME(),
                 [NextAttemptUtc] = NULL,
                 [SendingStartedUtc] = NULL,
@@ -329,6 +372,29 @@ public sealed class EmailOutboxJobs(
               AND [LeaseExpiresUtc] > SYSUTCDATETIME();
             """,
             providerMessageId,
+            cancellationToken,
+            deliveryMode);
+
+    private Task FailProviderAsync(
+        ClaimedEmail claim,
+        string errorCode,
+        CancellationToken cancellationToken) =>
+        FinalizeAsync(
+            claim,
+            """
+            UPDATE [asap].[EmailOutbox]
+            SET [Status] = N'failed',
+                [LastErrorCode] = @detail,
+                [LastErrorDetail] = N'The configured email provider rejected the message.',
+                [NextAttemptUtc] = NULL,
+                [SendingStartedUtc] = NULL,
+                [LeaseId] = NULL,
+                [LeaseExpiresUtc] = NULL
+            WHERE [Id] = @id AND [Status] = N'sending'
+              AND [LeaseId] = @leaseId AND [RowVersion] = @rowVersion
+              AND [LeaseExpiresUtc] > SYSUTCDATETIME();
+            """,
+            errorCode,
             cancellationToken);
 
     private Task SuppressAsync(
@@ -355,6 +421,7 @@ public sealed class EmailOutboxJobs(
 
     private Task FailNotConfiguredAsync(
         ClaimedEmail claim,
+        string errorCode,
         CancellationToken cancellationToken) =>
         FinalizeAsync(
             claim,
@@ -371,7 +438,7 @@ public sealed class EmailOutboxJobs(
               AND [LeaseId] = @leaseId AND [RowVersion] = @rowVersion
               AND [LeaseExpiresUtc] > SYSUTCDATETIME();
             """,
-            "mail_not_configured",
+            errorCode,
             cancellationToken);
 
     private async Task RecordAmbiguousFailureAsync(
@@ -420,12 +487,15 @@ public sealed class EmailOutboxJobs(
         ClaimedEmail claim,
         string sql,
         string detail,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? deliveryMode = null)
     {
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
         await using var command = new SqlCommand(sql, connection);
         command.Parameters.Add("@detail", SqlDbType.NVarChar, 256).Value = detail;
+        command.Parameters.Add("@deliveryMode", SqlDbType.NVarChar, 16).Value =
+            (object?)deliveryMode ?? DBNull.Value;
         AddFence(command, claim);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }

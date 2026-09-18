@@ -49,6 +49,9 @@ $applicationTemplateJson = @'
       "REPLACE-ALLOWED-DOMAIN"
     ]
   },
+  "EmailTransport": {
+    "Mode": "capture"
+  },
   "PatronLoginRateLimit": {
     "PermitLimit": 20,
     "WindowSeconds": 300

@@ -1,3 +1,5 @@
+using Asap.Web.Features.Email;
+
 namespace Asap.Web.Infrastructure.Configuration;
 
 public sealed class ExternalConfiguration
@@ -11,6 +13,10 @@ public sealed class ExternalConfiguration
     public ApplicationOptions Application { get; set; } = new();
 
     public EmailSafetyOptions EmailSafety { get; set; } = new();
+
+    // System-only deployment switch. Library email settings can override sender
+    // and credentials, but cannot change capture versus live delivery mode.
+    public EmailTransportOptions EmailTransport { get; set; } = new();
 
     public PatronLoginRateLimitOptions PatronLoginRateLimit { get; set; } = new();
 
@@ -74,6 +80,11 @@ public sealed class ApplicationOptions
 public sealed class EmailSafetyOptions
 {
     public List<string>? AllowedRecipientDomains { get; set; }
+}
+
+public sealed class EmailTransportOptions
+{
+    public string Mode { get; set; } = EmailDeliveryModes.Capture;
 }
 
 public sealed class PatronLoginRateLimitOptions

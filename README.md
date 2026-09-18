@@ -59,7 +59,8 @@ npm test
 
 The Node suite discovers the retained frontend regression files under
 `tests/*.test.js`. The complete .NET suite uses real SQL Server and deterministic
-Polaris/Postmark boundaries:
+Polaris/Postmark boundaries; the Postmark adapter tests mock only the HTTP
+provider boundary:
 
 ```powershell
 dotnet test --project tests/Asap.Tests/Asap.Tests.csproj --configuration Release --minimum-expected-tests 313
@@ -103,11 +104,13 @@ for the separately pending runner/host task. The IIS job remains skipped until
 
 ## Scope and release boundary
 
-Production provider validation, live Polaris/Postmark mutations, production
-tagging, cutover, backup/recovery rehearsal, and IIS activation are deferred.
-The temporary email transport is a deterministic development/test boundary,
-not production evidence. A stopped legacy source is forensic/migration input
-only and is never documented as a writable fallback after cutover.
+Live mailbox acceptance, live Polaris mutations, production tagging, cutover,
+backup/recovery rehearsal, and IIS activation are deferred. The application now
+supports an explicit `capture` transport for development/test and an explicit
+`live` Postmark transport for authorized deployments; capture output is never
+production evidence. A stopped legacy source is forensic/migration input only
+and is never documented as a writable fallback after cutover. See the
+[email test runbook](docs/implementation/email-test-runbook.md).
 
 See [ARCHITECTURE.md](ARCHITECTURE.md), [DESIGN.md](DESIGN.md),
 [PRODUCT.md](PRODUCT.md), [STACK.md](STACK.md), and the current

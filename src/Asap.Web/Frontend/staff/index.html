@@ -209,6 +209,7 @@
           </section>
           <section class="operations-panel" aria-labelledby="email-operations-title">
             <h2 id="email-operations-title">Email operations</h2>
+            <p id="operations-email-test-status" class="operations-test-status" role="status" aria-live="polite"></p>
             <div id="email-operations-table" class="operations-table" aria-live="polite" tabindex="0"></div>
           </section>
         </div>
@@ -322,6 +323,16 @@
                   <label class="settings-field" data-setting-section="email" data-setting-key="postmarkToken" data-secret="true"><span>Postmark server token</span><input id="email-postmark-token" type="password" autocomplete="new-password"></label>
                   <label class="settings-field"><span>Clear stored Postmark token</span><input id="email-clear-postmark-token" type="checkbox"></label>
                 </div>
+              </fieldset>
+              <fieldset id="settings-email-test" class="settings-fieldset" data-settings-ignore="true">
+                <legend>Test email</legend>
+                <p class="settings-callout">Send one real test message using the saved sender, protected credentials, and primary notification email for this scope. Unsaved changes are never used.</p>
+                <dl id="settings-email-test-context" class="settings-email-test-context"></dl>
+                <div class="form-actions settings-inline-actions">
+                  <button id="settings-send-test-email" class="secondary-button" type="button" disabled><i class="fa fa-paper-plane" aria-hidden="true"></i> Send test email</button>
+                  <a id="settings-email-operations-link" class="secondary-button" href="?stage=operations">View email operations</a>
+                </div>
+                <p id="settings-email-test-status" class="settings-result" role="status" aria-live="polite"></p>
               </fieldset>
             </section>
 
