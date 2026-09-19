@@ -95,15 +95,18 @@ public sealed class QueueProgressService(IDbContextFactory<AsapDbContext> contex
             : new QueueProgressSnapshot(
                 progress.QueueName,
                 progress.ScopeOrganizationId,
-                progress.LastCreatedUtc,
+                AsUtc(progress.LastCreatedUtc),
                 progress.LastItemId,
                 progress.CycleMaxId,
                 progress.LastOutcomeItemId,
                 progress.LastOutcomeCode,
-                progress.LastOutcomeUtc,
-                progress.UpdatedUtc,
+                AsUtc(progress.LastOutcomeUtc),
+                AsUtc(progress.UpdatedUtc),
                 Convert.ToBase64String(progress.RowVersion));
     }
 
     public static int NormalizeScope(int? scopeOrganizationId) => scopeOrganizationId ?? 1;
+
+    private static DateTime AsUtc(DateTime value) => DateTime.SpecifyKind(value, DateTimeKind.Utc);
+    private static DateTime? AsUtc(DateTime? value) => value.HasValue ? AsUtc(value.Value) : null;
 }
