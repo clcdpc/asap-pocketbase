@@ -68,12 +68,23 @@ async function scan(page, axeSource, artifactRoot, report, viewport, state) {
         const bounds = image.getBoundingClientRect();
         return bounds.width > 0 && bounds.height > 0;
       })
-      .every(image => image.complete && image.naturalWidth > 0)
+      .every(image => image.complete && image.naturalWidth > 0),
+    overflowing: [...document.querySelectorAll('body *')]
+      .filter(element => {
+        const bounds = element.getBoundingClientRect();
+        return bounds.width > 0 && (bounds.right > innerWidth + 1 || bounds.left < -1);
+      })
+      .slice(0, 12)
+      .map(element => ({ tag: element.tagName, id: element.id, className: element.className, bounds: element.getBoundingClientRect().toJSON() }))
   }));
   await page.screenshot({ path: path.join(artifactRoot, `${viewport}-${state}.png`), fullPage: true });
   report.states.push({ viewport, state, accessibility, layout });
-  assert.deepEqual(accessibility, [], `Serious or critical accessibility violation in ${viewport}/${state}`);
-  assert.ok(layout.scrollWidth <= layout.width, `Horizontal document overflow in ${viewport}/${state}`);
+  assert.equal(
+    accessibility.length,
+    0,
+    `Serious or critical accessibility violation in ${viewport}/${state}: ${JSON.stringify(accessibility.map(item => ({ id: item.id, targets: item.nodes.map(node => node.target) })))}`
+  );
+  assert.ok(layout.scrollWidth <= layout.width, `Horizontal document overflow in ${viewport}/${state}: ${JSON.stringify(layout)}`);
   assert.equal(layout.visibleImagesLoaded, true, `Visible image failed in ${viewport}/${state}`);
 }
 
@@ -90,12 +101,21 @@ async function openAndAssert(page, args, type, viewport, legacyId, targetId, sta
   await page.goto(
     deepLink(args.baseOrigin, stage, legacyId, `${type}-${viewport}`),
     { waitUntil: 'networkidle' });
-  await page.locator('#workspace').waitFor({ state: 'visible' });
-  await page.locator('#request-dialog[open]').waitFor();
-  const kicker = await page.locator('#request-dialog-kicker').textContent();
-  assert.match(
-    kicker,
-    type === 'title' ? new RegExp(`Request ${targetId}$`) : new RegExp(`Additional copy ${targetId}$`));
+  await page.locator('#app-container').waitFor({ state: 'visible' });
+  try {
+    await page.locator('#editModal[open]').waitFor({ timeout: 10000 });
+  } catch (error) {
+    const diagnostics = await page.evaluate(() => ({
+      job: document.getElementById('job-msg')?.textContent || '',
+      announcement: document.getElementById('status-announcer')?.textContent || '',
+      appVisible: !document.getElementById('app-container')?.classList.contains('hidden'),
+      apiResources: performance.getEntriesByType('resource')
+        .map(entry => entry.name)
+        .filter(name => name.includes('/api/asap/'))
+    }));
+    throw new Error(`Legacy request dialog did not open: ${JSON.stringify(diagnostics)} at ${page.url()}`);
+  }
+  assert.equal(await page.locator('#edit-id').inputValue(), targetId);
   const normalized = new URL(page.url());
   assert.equal(normalized.searchParams.get('request'), targetId);
   assert.equal(normalized.searchParams.get('marker'), `${type}-${viewport}`);
@@ -105,20 +125,20 @@ async function openAndAssert(page, args, type, viewport, legacyId, targetId, sta
     stage.value,
     `supported ${stage.name} parameter was lost for ${type}/${viewport}`);
   await scan(page, axeSource, args.artifactRoot, report, viewport, state);
-  await page.getByRole('button', { name: 'Close request details' }).click();
-  await page.locator('#request-dialog').waitFor({ state: 'hidden' });
+  await page.locator('#close-modal-x').click();
+  await page.locator('#editModal').waitFor({ state: 'hidden' });
 }
 
 async function assertUnavailable(page, args, type, viewport, legacyId, stage, state, axeSource, report) {
   await page.goto(
     deepLink(args.baseOrigin, stage, legacyId, `${type}-failure-${state}`),
     { waitUntil: 'networkidle' });
-  await page.locator('#workspace').waitFor({ state: 'visible' });
+  await page.locator('#app-container').waitFor({ state: 'visible' });
   const message = type === 'title'
     ? 'That request is no longer available.'
     : 'That additional-copy task is no longer available.';
   await page.getByText(message, { exact: true }).waitFor();
-  assert.equal(await page.locator('#request-dialog[open]').count(), 0);
+  assert.equal(await page.locator('#editModal[open]').count(), 0);
   const current = new URL(page.url());
   assert.equal(current.searchParams.get('request'), legacyId);
   assert.equal(current.searchParams.get(stage.name), stage.value);

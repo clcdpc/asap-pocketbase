@@ -93,7 +93,7 @@ async function waitFor(predicate) {
 }
 
 async function setupController(settingsModule, frontendRoot, staff, fetchHandler) {
-  const dom = new JSDOM(fs.readFileSync(path.join(frontendRoot, 'staff', 'index.html'), 'utf8'), {
+  const dom = new JSDOM(fs.readFileSync(path.join(frontendRoot, 'staff-next', 'index.html'), 'utf8'), {
     url: 'http://localhost/staff/'
   });
   global.window = dom.window;
@@ -120,7 +120,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
   const repositoryRoot = path.join(__dirname, '..');
   const frontendRoot = path.join(repositoryRoot, 'src', 'Asap.Web', 'Frontend');
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'asap-settings-staff-access-'));
-  fs.cpSync(path.join(frontendRoot, 'staff'), path.join(temporary, 'staff'), { recursive: true });
+  fs.cpSync(path.join(frontendRoot, 'staff-next'), path.join(temporary, 'staff'), { recursive: true });
   fs.cpSync(path.join(frontendRoot, 'shared'), path.join(temporary, 'shared'), { recursive: true });
   fs.writeFileSync(path.join(temporary, 'package.json'), '{"type":"module"}\n');
 

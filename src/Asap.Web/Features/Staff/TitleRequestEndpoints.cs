@@ -4,6 +4,8 @@ namespace Asap.Web.Features.Staff;
 
 public static class TitleRequestEndpoints
 {
+    public sealed record BibLookupInput(string? BibId);
+
     public static IEndpointRouteBuilder MapTitleRequestEndpoints(this IEndpointRouteBuilder endpoints)
     {
         var group = endpoints.MapGroup("/api/asap/staff/title-requests").RequireAuthorization();
@@ -30,7 +32,39 @@ public static class TitleRequestEndpoints
         endpoints.MapDelete("/api/asap/staff/requests/{id:long}", DeleteAsync)
             .RequireAuthorization()
             .AddEndpointFilter<StaffAntiforgeryFilter>();
+        endpoints.MapPost("/api/asap/staff/bib-lookup", BibLookupAsync)
+            .RequireAuthorization()
+            .AddEndpointFilter<StaffAntiforgeryFilter>();
         return endpoints;
+    }
+
+    private static async Task<IResult> BibLookupAsync(
+        BibLookupInput input,
+        IStaffPolarisProvider provider,
+        CancellationToken cancellationToken)
+    {
+        if (!int.TryParse(input.BibId, out var bibId) || bibId <= 0)
+        {
+            return Results.BadRequest(new { code = "invalid_bib", message = "Enter a positive Polaris BIB ID." });
+        }
+
+        try
+        {
+            var result = await provider.ValidateBibAsync(bibId, cancellationToken);
+            return result.IsValid
+                ? Results.Json(new { bibId = bibId.ToString(), result.Title, result.Author })
+                : Results.NotFound(new { code = "bib_not_found", message = "The Polaris BIB was not found." });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return Results.Json(
+                new { code = "bib_validation_unavailable", message = "Catalog validation is temporarily unavailable." },
+                statusCode: StatusCodes.Status502BadGateway);
+        }
     }
 
     private static async Task<IResult> ListAsync(

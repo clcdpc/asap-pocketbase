@@ -35,12 +35,12 @@ async function runJourney(scenario) {
   const openerLabel = titleRequest ? 'Open request' : 'Open additional-copy task';
   const source = path.join(__dirname, '..', 'src', 'Asap.Web', 'Frontend');
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'asap-dialog-focus-'));
-  fs.cpSync(path.join(source, 'staff'), path.join(temporary, 'staff'), { recursive: true });
+  fs.cpSync(path.join(source, 'staff-next'), path.join(temporary, 'staff'), { recursive: true });
   fs.cpSync(path.join(source, 'shared'), path.join(temporary, 'shared'), { recursive: true });
   fs.writeFileSync(path.join(temporary, 'package.json'), '{"type":"module"}');
   let dom;
   try {
-    dom = new JSDOM(fs.readFileSync(path.join(source, 'staff', 'index.html'), 'utf8'), {
+    dom = new JSDOM(fs.readFileSync(path.join(source, 'staff-next', 'index.html'), 'utf8'), {
       url: `https://localhost/staff/${titleRequest ? '' : '?stage=additional_copies'}`,
       pretendToBeVisual: true
     });
