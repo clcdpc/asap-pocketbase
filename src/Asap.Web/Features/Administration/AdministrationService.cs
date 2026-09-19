@@ -293,6 +293,15 @@ public sealed class AdministrationService(
             {
                 return patronCodeFailure;
             }
+
+            if (organizationId == 1)
+            {
+                var leapUrlFailure = ValidateLeapUrlPayload(payload);
+                if (leapUrlFailure is not null)
+                {
+                    return leapUrlFailure;
+                }
+            }
         }
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
@@ -1286,6 +1295,57 @@ public sealed class AdministrationService(
                 "patron_code_unknown",
                 new { ids = unknown },
                 "One or more selected patron-code IDs are not present in Polaris.");
+    }
+
+    private static AdministrationResult? ValidateLeapUrlPayload(JsonElement payload)
+    {
+        var sections = new[]
+        {
+            GetObject(payload, "systemSettings", "system"),
+            payload
+        };
+        foreach (var section in sections)
+        {
+            if (TryGetAny(section, out var bibPattern, "leapBibUrlPattern"))
+            {
+                var failure = ValidateLeapPatternField(
+                    bibPattern,
+                    LeapUrlPattern.ValidateBibPattern,
+                    "invalid_leap_bib_url_pattern");
+                if (failure is not null)
+                {
+                    return failure;
+                }
+            }
+
+            if (TryGetAny(section, out var patronPattern, "leapPatronUrlPattern"))
+            {
+                var failure = ValidateLeapPatternField(
+                    patronPattern,
+                    LeapUrlPattern.ValidatePatronPattern,
+                    "invalid_leap_patron_url_pattern");
+                if (failure is not null)
+                {
+                    return failure;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static AdministrationResult? ValidateLeapPatternField(
+        JsonElement value,
+        Func<string?, string?> validator,
+        string code)
+    {
+        if (value.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+        {
+            return new AdministrationResult(code, Message: "The URL pattern must be a string or null.");
+        }
+
+        var failure = validator(value.ValueKind == JsonValueKind.String ? value.GetString() : null);
+        return failure is null ? null : new AdministrationResult(code, Message: failure);
     }
 
     private static bool TryValidateSettingsVersion(

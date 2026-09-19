@@ -71,7 +71,10 @@ public sealed record TitleRequestDto(
     DateTime Updated,
     string Version,
     TitleRequestCapabilities Capabilities,
-    HoldOperationSummary? HoldOperation);
+    HoldOperationSummary? HoldOperation,
+    string? PolarisPatronId,
+    string? LeapBibUrlPattern,
+    string? LeapPatronUrlPattern);
 
 public sealed record TitleRequestScopeResult(
     IReadOnlyList<TitleRequestDto> Items,
@@ -238,6 +241,23 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
         var organizations = await context.Organizations.AsNoTracking()
             .Where(item => requests.Select(request => request.LibraryOrganizationId).Contains(item.Id))
             .ToDictionaryAsync(item => item.Id, cancellationToken);
+        var barcodes = requests
+            .Select(item => item.Barcode)
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var patronIdentities = (await context.PatronIdentities.AsNoTracking()
+                .Where(item => barcodes.Contains(item.Barcode))
+                .ToListAsync(cancellationToken))
+            .ToDictionary(item => item.Barcode, StringComparer.OrdinalIgnoreCase);
+        var systemLinks = await context.SystemSettings.AsNoTracking()
+            .Where(item => item.OrganizationId == 1)
+            .Select(item => new
+            {
+                item.LeapBibUrlPattern,
+                item.LeapPatronUrlPattern
+            })
+            .SingleOrDefaultAsync(cancellationToken);
         var formats = await context.MaterialFormats.AsNoTracking()
             .Where(item => requests.Select(request => request.MaterialFormatId).Contains(item.Id))
             .ToDictionaryAsync(item => item.Id, cancellationToken);
@@ -344,7 +364,10 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
                     operation.LastErrorCode,
                     staff.Role == "super_admin" && canTakeOverOperation,
                     staff.Role == "super_admin" && canResolveOperation && operation.Phase != "acquired",
-                    staff.Role == "super_admin" && canResolveOperation)));
+                    staff.Role == "super_admin" && canResolveOperation),
+                patronIdentities.GetValueOrDefault(request.Barcode)?.PolarisPatronId,
+                systemLinks?.LeapBibUrlPattern,
+                systemLinks?.LeapPatronUrlPattern));
         }
 
         return result

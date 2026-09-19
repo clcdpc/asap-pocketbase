@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Text.Json;
 using Clc.Polaris.Api;
@@ -816,7 +817,7 @@ public sealed class PolarisPatronProvider(
             ?? throw new PolarisOperationalException(
                 "polaris_home_library_missing",
                 "The patron home library could not be resolved from Polaris.");
-        return new PatronSnapshot(
+        var snapshot = new PatronSnapshot(
             patron.PatronID,
             (patron.Barcode ?? barcode).Trim(),
             Clean(patron.EmailAddress),
@@ -828,6 +829,44 @@ public sealed class PolarisPatronProvider(
             home.OrganizationID,
             home.DisplayName ?? home.Name ?? home.Abbreviation ?? home.OrganizationID.ToString(),
             ResolvePreferredPickupId(patron.RequestPickupBranchID, patron.PatronOrgID, rawContent));
+        await CachePatronIdentityAsync(snapshot.Barcode, snapshot.PatronId, cancellationToken);
+        return snapshot;
+    }
+
+    private async Task CachePatronIdentityAsync(
+        string barcode,
+        int patronId,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(barcode) || patronId <= 0)
+        {
+            return;
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        await using var transaction = await context.Database.BeginTransactionAsync(
+            System.Data.IsolationLevel.Serializable,
+            cancellationToken);
+        var identity = await context.PatronIdentities.SingleOrDefaultAsync(
+            item => item.Barcode == barcode,
+            cancellationToken);
+        if (identity is null)
+        {
+            context.PatronIdentities.Add(new PatronIdentity
+            {
+                Barcode = barcode,
+                PolarisPatronId = patronId.ToString(CultureInfo.InvariantCulture),
+                UpdatedUtc = DateTime.UtcNow
+            });
+        }
+        else
+        {
+            identity.PolarisPatronId = patronId.ToString(CultureInfo.InvariantCulture);
+            identity.UpdatedUtc = DateTime.UtcNow;
+        }
+
+        await context.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     private static async Task<IReadOnlyList<OrganizationsGetRow>> LoadOrganizationsAsync(
