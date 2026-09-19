@@ -87,7 +87,7 @@ async function flush() {
   const repositoryRoot = path.join(__dirname, '..');
   const frontendRoot = path.join(repositoryRoot, 'src', 'Asap.Web', 'Frontend');
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'asap-settings-race-'));
-  fs.cpSync(path.join(frontendRoot, 'staff'), path.join(temporary, 'staff'), { recursive: true });
+  fs.cpSync(path.join(frontendRoot, 'staff-next'), path.join(temporary, 'staff'), { recursive: true });
   fs.cpSync(path.join(frontendRoot, 'shared'), path.join(temporary, 'shared'), { recursive: true });
   fs.writeFileSync(path.join(temporary, 'package.json'), '{"type":"module"}\n');
 
@@ -95,7 +95,7 @@ async function flush() {
     const settingsModule = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings.js')).href);
 
     for (const outcome of ['success', 'conflict']) {
-      const html = fs.readFileSync(path.join(frontendRoot, 'staff', 'index.html'), 'utf8');
+      const html = fs.readFileSync(path.join(frontendRoot, 'staff-next', 'index.html'), 'utf8');
       const dom = new JSDOM(html, { url: 'http://localhost/staff/' });
       global.window = dom.window;
       global.document = dom.window.document;

@@ -41,10 +41,10 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
   let dom;
   let ordinaryDom;
   try {
-    fs.cpSync(path.join(source, 'staff'), path.join(temporary, 'staff'), { recursive: true });
+    fs.cpSync(path.join(source, 'staff-next'), path.join(temporary, 'staff'), { recursive: true });
     fs.cpSync(path.join(source, 'shared'), path.join(temporary, 'shared'), { recursive: true });
     fs.writeFileSync(path.join(temporary, 'package.json'), '{"type":"module"}');
-    dom = new JSDOM(fs.readFileSync(path.join(source, 'staff', 'index.html'), 'utf8'), {
+    dom = new JSDOM(fs.readFileSync(path.join(source, 'staff-next', 'index.html'), 'utf8'), {
       url: 'https://localhost/staff/?stage=operations',
       pretendToBeVisual: true
     });
@@ -182,7 +182,7 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
     assert.doesNotMatch(document.getElementById('app-status').textContent, /stale old scope failure/);
     assert.equal(scope.value, '3');
 
-    ordinaryDom = new JSDOM(fs.readFileSync(path.join(source, 'staff', 'index.html'), 'utf8'), {
+    ordinaryDom = new JSDOM(fs.readFileSync(path.join(source, 'staff-next', 'index.html'), 'utf8'), {
       url: 'https://localhost/staff/?stage=operations',
       pretendToBeVisual: true
     });

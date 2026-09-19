@@ -784,7 +784,7 @@ export function createWorkflowApp() {
     if (request.sourceTitleRequest) {
       body.append(element('a', {
         className: 'source-link',
-        href: `/staff/?request=${encodeURIComponent(request.sourceTitleRequest)}`
+        href: `/staff-next/?request=${encodeURIComponent(request.sourceTitleRequest)}`
       }, [icon('external-link'), 'Open source title request']));
     } else {
       body.append(element('p', { text: 'The source title request is no longer available.' }));
