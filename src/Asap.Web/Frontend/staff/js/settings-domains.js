@@ -1,3 +1,5 @@
+import { sortByDisplayLabel, staffDisplayName } from './display-order.js';
+
 function element(tag, attributes = {}, children = []) {
   const value = document.createElement(tag);
   for (const [name, attribute] of Object.entries(attributes)) {
@@ -335,10 +337,10 @@ export function createSettingsDomainEditors({ root, onChange = () => {} }) {
       return;
     }
     const choices = type === 'code'
-      ? array(property(state.data, 'patronCodeChoices')).map((choice) => ({
+      ? sortByDisplayLabel(array(property(state.data, 'patronCodeChoices')).map((choice) => ({
         value: stringId(property(choice, 'id')),
         label: `${clean(property(choice, 'description')) || 'Patron code'} (${stringId(property(choice, 'id')) || '?'})`
-      })).filter(choice => choice.value)
+      })).filter(choice => choice.value), choice => choice.label, choice => choice.value)
       : [];
     for (const [index, value] of values.entries()) {
       const currentValue = type === 'creator' ? value : property(value, 'id') ?? value;
@@ -699,7 +701,19 @@ export function createSettingsDomainEditors({ root, onChange = () => {} }) {
     for (const [index, value] of values.entries()) {
       const formatId = stringId(property(value, 'materialFormatId') ?? property(value, 'formatId'));
       const staffId = stringId(property(value, 'staffUserId') ?? property(value, 'staffId'));
-      const staffOptions = staff.map(item => ({ value: stringId(property(item, 'id')), label: property(item, 'label') || property(item, 'displayName') || `Staff ${property(item, 'id')}` })).filter(item => item.value);
+      const staffOptions = sortByDisplayLabel(
+        staff.map(item => ({
+          value: stringId(property(item, 'id')),
+          label: staffDisplayName({
+            id: property(item, 'id'),
+            label: property(item, 'label'),
+            displayName: property(item, 'displayName'),
+            userPrincipalName: property(item, 'userPrincipalName')
+          })
+        })).filter(item => item.value),
+        item => item.label,
+        item => item.value
+      );
       if (staffId && !staffOptions.some(item => item.value === staffId)) staffOptions.unshift({ value: staffId, label: `Staff ${staffId}` });
       const row = element('div', { className: 'settings-editor-row', 'data-domain-row': 'true' }, [
         field('Format', select(formatOptions, formatId, { 'data-domain-editable': 'true' })),

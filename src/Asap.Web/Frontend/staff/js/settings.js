@@ -1,5 +1,10 @@
 import { authorizedJson, isAbortError, latestLoads } from './http.js';
 import { createSettingsDomainEditors } from './settings-domains.js';
+import {
+  organizationDisplayName,
+  sortByDisplayLabel,
+  staffDisplayName
+} from './display-order.js';
 
 const WORKFLOW_FIELDS = [
   ['suggestionLimit', 'suggestion-limit', 'number'],
@@ -361,7 +366,7 @@ export function createSettingsController({
     const scope = scopedStaffOrganizationId();
     if (!scope) return 'all organizations';
     const organization = state.organizations.find(item => String(item.id) === String(scope));
-    return organization?.name || `organization ${scope}`;
+    return organization ? organizationDisplayName(organization) : `organization ${scope}`;
   }
 
   function roleLabel(role) {
@@ -385,9 +390,9 @@ export function createSettingsController({
     const organizations = staffScope
       ? state.organizations.filter(item => String(item.id) === String(staffScope))
       : state.organizations.filter(item => Number(item.id) > 1);
-    return organizations.map(item => ({
+    return sortByDisplayLabel(organizations, organizationDisplayName, item => item.id).map(item => ({
       value: String(item.id),
-      label: item.name || `Library ${item.id}`
+      label: organizationDisplayName(item)
     }));
   }
 
@@ -650,7 +655,11 @@ export function createSettingsController({
 
   function populateParticipation() {
     dom.enabledLibraries.replaceChildren();
-    const libraries = state.organizations.filter(item => Number(item.id) > 1);
+    const libraries = sortByDisplayLabel(
+      state.organizations.filter(item => Number(item.id) > 1),
+      organizationDisplayName,
+      item => item.id
+    );
     if (libraries.length === 0) {
       dom.enabledLibraries.append(node('p', { className: 'settings-empty', text: 'No synced library organizations.' }));
       return;
@@ -660,11 +669,11 @@ export function createSettingsController({
         type: 'checkbox',
         value: organization.id,
         checked: organization.active,
-        'aria-label': `Enable ${organization.name}`
+        'aria-label': `Enable ${organizationDisplayName(organization)}`
       });
       dom.enabledLibraries.append(node('label', { className: 'settings-list-row' }, [
         checkbox,
-        node('span', { text: organization.name })
+        node('span', { text: organizationDisplayName(organization) })
       ]));
     }
   }
@@ -675,18 +684,19 @@ export function createSettingsController({
       dom.organizations.append(node('li', { className: 'settings-empty', text: 'No organizations are available.' }));
       return;
     }
-    for (const organization of state.organizations) {
+    const organizations = sortByDisplayLabel(state.organizations, organizationDisplayName, item => item.id);
+    for (const organization of organizations) {
       const active = Boolean(organization.active);
       const item = node('li', { className: 'settings-list-row' }, [
-        node('span', { className: 'settings-organization-name', text: `${organization.name}${organization.abbreviation ? ` (${organization.abbreviation})` : ''}` }),
+        node('span', { className: 'settings-organization-name', text: `${organizationDisplayName(organization)}${organization.abbreviation ? ` (${organization.abbreviation})` : ''}` }),
         node('span', { className: `status-badge${active ? '' : ' blocked'}`, text: active ? 'Active' : 'Inactive' })
       ]);
       if (Number(organization.id) > 1 && state.staff?.role === 'super_admin') {
         const action = node('button', {
           type: 'button',
           className: 'secondary-button',
-          title: active ? `Deactivate ${organization.name}` : `Activate ${organization.name}`,
-          'aria-label': active ? `Deactivate ${organization.name}` : `Activate ${organization.name}`
+          title: active ? `Deactivate ${organizationDisplayName(organization)}` : `Activate ${organizationDisplayName(organization)}`,
+          'aria-label': active ? `Deactivate ${organizationDisplayName(organization)}` : `Activate ${organizationDisplayName(organization)}`
         }, [node('i', { className: `fa fa-${active ? 'ban' : 'check'}`, 'aria-hidden': 'true' })]);
         action.addEventListener('click', () => setOrganizationActive(organization, !active));
         item.append(action);
@@ -708,15 +718,17 @@ export function createSettingsController({
   }
 
   function staffUserDisplay(user) {
-    return clean(property(user, 'displayName')) ||
-      clean(property(user, 'userPrincipalName')) ||
-      `Staff ${stringValue(property(user, 'id')) || '?'}`;
+    return staffDisplayName({
+      id: property(user, 'id'),
+      displayName: property(user, 'displayName'),
+      userPrincipalName: property(user, 'userPrincipalName')
+    });
   }
 
   function staffUserOrganizationName(user) {
     const id = clean(property(user, 'organizationId'));
     const organization = state.organizations.find(item => String(item.id) === String(id));
-    return organization?.name || (id === '1' ? 'System level' : `Library ${id || '?'}`);
+    return organization ? organizationDisplayName(organization) : (id === '1' ? 'System level' : `Library ${id || '?'}`);
   }
 
   function userRoleChoices(user) {
@@ -738,7 +750,8 @@ export function createSettingsController({
       return;
     }
 
-    for (const user of state.staffUsers) {
+    const users = sortByDisplayLabel(state.staffUsers, staffUserDisplay, user => property(user, 'id'));
+    for (const user of users) {
       const id = stringValue(property(user, 'id'));
       const version = stringValue(property(user, 'version'));
       const active = property(user, 'active') !== false;
@@ -890,7 +903,7 @@ export function createSettingsController({
 
     dom.contextSummary.textContent = isSystem()
       ? 'System level configuration'
-      : `Library configuration for ${data.organization?.name || `organization ${organizationId()}`}`;
+      : `Library configuration for ${data.organization ? organizationDisplayName(data.organization) : `organization ${organizationId()}`}`;
     dom.version.value = data.version || '';
     setSystemFields(systemSettings);
     setPolarisFields(configuredSystem.polaris || stored.polaris);
@@ -1440,7 +1453,8 @@ export function createSettingsController({
   }
 
   async function setOrganizationActive(organization, active) {
-    if (!window.confirm(`${active ? 'Activate' : 'Deactivate'} ${organization.name}?`)) return;
+    const label = organizationDisplayName(organization);
+    if (!window.confirm(`${active ? 'Activate' : 'Deactivate'} ${label}?`)) return;
     const mutation = beginSettingsOperation('administration-settings-participation');
     try {
       await authorizedJson(`/api/asap/staff/organizations/${encodeURIComponent(organization.id)}/${active ? 'activate' : 'deactivate'}`, {
@@ -1450,7 +1464,7 @@ export function createSettingsController({
       });
       if (!isSettingsOperationCurrent(mutation)) return;
       await load({ silent: true });
-      if (isSettingsOperationCurrent(mutation)) notify(`${organization.name} ${active ? 'activated' : 'deactivated'}.`, 'success');
+      if (isSettingsOperationCurrent(mutation)) notify(`${label} ${active ? 'activated' : 'deactivated'}.`, 'success');
     } catch (error) {
       if (!isSettingsOperationCurrent(mutation)) return;
       if (error.status === 409) {
@@ -1504,11 +1518,16 @@ export function createSettingsController({
       const organization = state.organizations.find(item => String(item.id) === staffScope);
       dom.scope.append(node('option', {
         value: staffScope,
-        text: organization?.name || `Library ${staffScope}`
+        text: organization ? organizationDisplayName(organization) : `Library ${staffScope}`
       }));
     } else {
-      for (const organization of state.organizations.filter(item => Number(item.id) > 1)) {
-        dom.scope.append(node('option', { value: String(organization.id), text: organization.name }));
+      const libraries = sortByDisplayLabel(
+        state.organizations.filter(item => Number(item.id) > 1),
+        organizationDisplayName,
+        item => item.id
+      );
+      for (const organization of libraries) {
+        dom.scope.append(node('option', { value: String(organization.id), text: organizationDisplayName(organization) }));
       }
     }
     dom.scope.value = [...dom.scope.options].some(option => option.value === selected)
