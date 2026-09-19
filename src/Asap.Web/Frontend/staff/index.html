@@ -493,8 +493,22 @@
             <section id="settings-templates" class="settings-panel" role="tabpanel" tabindex="-1" data-settings-panel-content="templates" aria-labelledby="settings-nav-templates" hidden>
               <div class="settings-panel-heading">
                 <h2>Email templates</h2>
-                <p>Subject and body content preserve system identity and library lineage.</p>
+                <p>Customize the email messages your library sends to patrons.</p>
               </div>
+              <aside id="email-template-placeholder-helper" class="email-template-placeholder-helper" data-settings-ignore="true" aria-labelledby="email-template-placeholder-title">
+                <h3 id="email-template-placeholder-title">Available placeholders</h3>
+                <p>Select a Subject or Body field, then choose a placeholder to insert it at the cursor. Availability depends on the selected template.</p>
+                <p id="email-template-placeholder-target" class="email-template-placeholder-target">No insertion target selected.</p>
+                <div class="email-template-placeholder-button-group" role="group" aria-labelledby="email-template-placeholder-button-label">
+                  <span id="email-template-placeholder-button-label" class="sr-only">Available placeholder insertion buttons</span>
+                  <div id="email-template-placeholder-buttons" class="email-template-placeholder-buttons"></div>
+                </div>
+                <p id="email-template-placeholder-status" class="email-template-placeholder-status" role="status" aria-live="polite"></p>
+                <details class="email-template-placeholder-details">
+                  <summary>What each placeholder means</summary>
+                  <div id="email-template-placeholder-reference"></div>
+                </details>
+              </aside>
               <fieldset class="settings-fieldset">
                 <legend>Sender details</legend>
                 <div class="settings-grid">
@@ -503,30 +517,30 @@
                 </div>
               </fieldset>
               <div id="settings-template-editor" class="settings-template-list">
-                <fieldset class="settings-fieldset settings-template" data-template-key="suggestion_submitted" data-template-prefix="submit">
+                <fieldset class="settings-fieldset settings-template" data-template-key="suggestion_submitted" data-template-label="Submission confirmation" data-template-prefix="submit">
                   <legend>Submission confirmation</legend>
-                  <label class="settings-field"><span>Subject</span><input id="email-submit-subject" type="text"></label>
-                  <label class="settings-field wide"><span>Body</span><textarea id="email-submit-body" rows="7"></textarea></label>
+                  <label class="settings-field"><span>Subject</span><input id="email-submit-subject" type="text" data-placeholder-target="true" data-template-field="subject"></label>
+                  <label class="settings-field wide"><span>Body</span><textarea id="email-submit-body" rows="7" data-placeholder-target="true" data-template-field="body"></textarea></label>
                 </fieldset>
-                <fieldset class="settings-fieldset settings-template" data-template-key="purchase_approved" data-template-prefix="purchase-approved">
+                <fieldset class="settings-fieldset settings-template" data-template-key="purchase_approved" data-template-label="Purchase approved" data-template-prefix="purchase-approved">
                   <legend>Purchase approved</legend>
-                  <label class="settings-field"><span>Subject</span><input id="email-purchase-approved-subject" type="text"></label>
-                  <label class="settings-field wide"><span>Body</span><textarea id="email-purchase-approved-body" rows="7"></textarea></label>
+                  <label class="settings-field"><span>Subject</span><input id="email-purchase-approved-subject" type="text" data-placeholder-target="true" data-template-field="subject"></label>
+                  <label class="settings-field wide"><span>Body</span><textarea id="email-purchase-approved-body" rows="7" data-placeholder-target="true" data-template-field="body"></textarea></label>
                 </fieldset>
-                <fieldset class="settings-fieldset settings-template" data-template-key="already_owned" data-template-prefix="owned">
+                <fieldset class="settings-fieldset settings-template" data-template-key="already_owned" data-template-label="Already owned" data-template-prefix="owned">
                   <legend>Already owned</legend>
-                  <label class="settings-field"><span>Subject</span><input id="email-owned-subject" type="text"></label>
-                  <label class="settings-field wide"><span>Body</span><textarea id="email-owned-body" rows="7"></textarea></label>
+                  <label class="settings-field"><span>Subject</span><input id="email-owned-subject" type="text" data-placeholder-target="true" data-template-field="subject"></label>
+                  <label class="settings-field wide"><span>Body</span><textarea id="email-owned-body" rows="7" data-placeholder-target="true" data-template-field="body"></textarea></label>
                 </fieldset>
-                <fieldset class="settings-fieldset settings-template" data-template-key="hold_placed" data-template-prefix="hold">
+                <fieldset class="settings-fieldset settings-template" data-template-key="hold_placed" data-template-label="Hold placed" data-template-prefix="hold">
                   <legend>Hold placed</legend>
-                  <label class="settings-field"><span>Subject</span><input id="email-hold-subject" type="text"></label>
-                  <label class="settings-field wide"><span>Body</span><textarea id="email-hold-body" rows="7"></textarea></label>
+                  <label class="settings-field"><span>Subject</span><input id="email-hold-subject" type="text" data-placeholder-target="true" data-template-field="subject"></label>
+                  <label class="settings-field wide"><span>Body</span><textarea id="email-hold-body" rows="7" data-placeholder-target="true" data-template-field="body"></textarea></label>
                 </fieldset>
-                <fieldset class="settings-fieldset settings-template" data-template-key="rejected" data-template-prefix="rejected">
+                <fieldset class="settings-fieldset settings-template" data-template-key="rejected" data-template-label="Rejected" data-template-prefix="rejected">
                   <legend>Rejected</legend>
-                  <label class="settings-field"><span>Subject</span><input id="email-rejected-subject" type="text"></label>
-                  <label class="settings-field wide"><span>Body</span><textarea id="email-rejected-body" rows="7"></textarea></label>
+                  <label class="settings-field"><span>Subject</span><input id="email-rejected-subject" type="text" data-placeholder-target="true" data-template-field="subject"></label>
+                  <label class="settings-field wide"><span>Body</span><textarea id="email-rejected-body" rows="7" data-placeholder-target="true" data-template-field="body"></textarea></label>
                 </fieldset>
               </div>
               <div class="settings-domain-block">

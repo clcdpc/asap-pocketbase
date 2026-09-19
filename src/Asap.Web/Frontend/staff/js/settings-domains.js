@@ -776,6 +776,8 @@ export function createSettingsDomainEditors({ root, onChange = () => {} }) {
       const row = element('div', {
         className: 'settings-editor-row settings-template-row',
         'data-domain-row': 'true',
+        'data-template-row': 'true',
+        'data-template-key': clean(value.templateKey) || '',
         'data-template-id': stringId(value.id) || '',
         'data-template-version': stringId(value.version) || '',
         'data-template-source-id': stringId(value.sourceTemplateId) || '',
@@ -803,11 +805,15 @@ export function createSettingsDomainEditors({ root, onChange = () => {} }) {
           type: 'text',
           className: 'template-subject',
           value: value.subject || '',
+          'data-placeholder-target': 'true',
+          'data-template-field': 'subject',
           'data-domain-editable': 'true'
         })),
         field('Body', element('textarea', {
           rows: '5',
           className: 'template-body',
+          'data-placeholder-target': 'true',
+          'data-template-field': 'body',
           'data-domain-editable': 'true'
         }, [value.body || ''])),
         element('label', { className: 'settings-domain-check' }, [element('input', {

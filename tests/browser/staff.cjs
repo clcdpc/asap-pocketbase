@@ -391,6 +391,57 @@ async function runSuperAdmin(browser, args, axeSource, report) {
   }
 }
 
+async function runSettingsPlaceholders(browser, args, axeSource, report) {
+  for (const [name, viewport] of [['desktop', { width: 1280, height: 900 }], ['mobile', { width: 390, height: 844 }]]) {
+    const { context, traffic } = await createContext(browser, viewport, args.baseOrigin, args.superIdentity);
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    try {
+      await page.goto(`${args.baseOrigin}/staff/?stage=settings`, { waitUntil: 'networkidle' });
+      await page.locator('#settings-view').waitFor({ state: 'visible' });
+      await page.getByRole('tab', { name: 'Email templates', exact: true }).click();
+      await page.locator('#settings-templates').waitFor({ state: 'visible' });
+
+      const subject = page.locator('#email-submit-subject');
+      const originalSubject = await subject.inputValue();
+      await subject.fill('Browser ');
+      const titleButton = page.locator('[data-placeholder-token="title"]');
+      assert.equal(await titleButton.count(), 1);
+      assert.equal(await titleButton.isEnabled(), true);
+      await titleButton.click();
+      assert.equal(await subject.inputValue(), 'Browser {{title}}');
+      assert.match(await page.locator('#email-template-placeholder-target').textContent(), /Submission confirmation · Subject/);
+      assert.match(await titleButton.getAttribute('aria-label'), /Insert \{\{title\}\}/);
+
+      const purchaseSubject = page.locator('#email-purchase-approved-subject');
+      await purchaseSubject.focus();
+      assert.equal(
+        await page.evaluate(() => document.activeElement?.id),
+        'email-purchase-approved-subject',
+        'Purchase approved Subject should own browser focus'
+      );
+      assert.match(await page.locator('#email-template-placeholder-target').textContent(), /Purchase approved · Subject/);
+      assert.equal(await page.locator('#email-template-placeholder-buttons button').count(), 0);
+      assert.match(await page.locator('#email-template-placeholder-status').textContent(), /No ASP\.NET sending path/);
+      await subject.evaluate(element => element.dispatchEvent(new Event('select', { bubbles: true })));
+      assert.match(await page.locator('#email-template-placeholder-target').textContent(), /Purchase approved · Subject/);
+      assert.equal(await page.locator('#email-template-placeholder-buttons button').count(), 0);
+      assert.match(await page.locator('#email-template-placeholder-status').textContent(), /No ASP\.NET sending path/);
+
+      page.once('dialog', dialog => dialog.accept());
+      await page.getByRole('button', { name: 'Discard changes', exact: true }).click();
+      await page.waitForFunction(expected => document.querySelector('#email-submit-subject')?.value === expected, originalSubject);
+      assert.equal(await page.locator('#settings-save').isDisabled(), true);
+      await scan(page, axeSource, args.artifactRoot, report, name, 'settings-placeholders');
+      assert.deepEqual(errors, [], `${name} settings placeholder flow raised a browser error: ${errors.join('; ')}`);
+      assert.equal(traffic.externalRequests, 0, `${name} settings placeholder flow requested an external asset`);
+    } finally {
+      await context.close();
+    }
+  }
+}
+
 async function runAnalytics(browser, args, axeSource, report) {
   const superContextState = await createContext(
     browser,
@@ -1446,6 +1497,7 @@ async function main() {
   try {
     await runAnonymous(browser, args, axeSource, report);
     await runSuperAdmin(browser, args, axeSource, report);
+    await runSettingsPlaceholders(browser, args, axeSource, report);
     await runAnalytics(browser, args, axeSource, report);
     await runStaleAssignmentCandidates(browser, args, report);
     await runOrdinaryTitleAssignment(browser, args, report);
@@ -1454,7 +1506,7 @@ async function main() {
     await runAdditionalCopies(browser, args, axeSource, report);
     await runOperatorResolution(browser, args, axeSource, report);
     await runScopedBlocked(browser, args, axeSource, report);
-    assert.equal(report.states.length, 20, 'Expected twenty major staff browser states');
+    assert.equal(report.states.length, 22, 'Expected twenty-two major staff browser states');
     await fs.writeFile(
       path.join(args.artifactRoot, 'staff-browser-results.json'),
       JSON.stringify(report, null, 2),

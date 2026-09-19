@@ -1,5 +1,6 @@
 import { authorizedJson, isAbortError, latestLoads } from './http.js';
 import { createSettingsDomainEditors } from './settings-domains.js';
+import { createEmailTemplatePlaceholderHelper } from './email-template-placeholders.js';
 
 const WORKFLOW_FIELDS = [
   ['suggestionLimit', 'suggestion-limit', 'number'],
@@ -256,6 +257,7 @@ export function createSettingsController({
     scopeField: root.querySelector('#settings-scope-field'),
     scope: root.querySelector('#settings-scope'),
     form: root.querySelector('#settings-form'),
+    templatesPanel: root.querySelector('#settings-templates'),
     version: root.querySelector('#settings-version'),
     nav: [...root.querySelectorAll('#settings-nav [data-settings-panel]')],
     panels: [...root.querySelectorAll('[data-settings-panel-content]')],
@@ -332,6 +334,11 @@ export function createSettingsController({
   function isSettingsContextCurrent(context) {
     return context && context.scope === String(state.scope) && context.staff === staffContextKey(state.staff);
   }
+
+  const placeholderHelper = createEmailTemplatePlaceholderHelper({
+    panel: dom.templatesPanel,
+    getContextKey: () => `${state.scope}|${staffContextKey(state.staff)}`
+  });
 
   function beginSettingsOperation(slot) {
     const operation = latestLoads.begin(slot);
@@ -868,6 +875,7 @@ export function createSettingsController({
   }
 
   function populate(data) {
+    placeholderHelper.invalidate();
     state.data = data;
     state.scope = String(data.orgId || state.scope);
     const stored = object(data.stored);
@@ -1471,6 +1479,7 @@ export function createSettingsController({
       return;
     }
     cancelSettingsOperations();
+    placeholderHelper.invalidate('Select an editable Subject or Body field in the current settings context first.');
     state.scope = next;
     state.staffUsers = [];
     state.staffAudit = [];
@@ -1483,6 +1492,8 @@ export function createSettingsController({
 
   function activatePanel(name) {
     state.activePanel = name;
+    if (name === 'templates') placeholderHelper.refresh();
+    else placeholderHelper.invalidate();
     for (const button of dom.nav) {
       const active = button.dataset.settingsPanel === name;
       button.setAttribute('aria-selected', String(active));
@@ -1519,7 +1530,10 @@ export function createSettingsController({
   }
 
   function setStaff(staff) {
-    if (staffContextKey(state.staff) !== staffContextKey(staff)) cancelSettingsOperations();
+    if (staffContextKey(state.staff) !== staffContextKey(staff)) {
+      cancelSettingsOperations();
+      placeholderHelper.invalidate();
+    }
     state.staff = staff;
     tab.hidden = !staff || staff.role === 'staff';
     if (staff?.role === 'super_admin') {
@@ -1539,6 +1553,7 @@ export function createSettingsController({
 
   function signedOut() {
     cancelSettingsOperations();
+    placeholderHelper.invalidate();
     state.staff = null;
     state.data = null;
     state.organizations = [];

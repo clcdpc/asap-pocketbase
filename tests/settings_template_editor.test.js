@@ -73,8 +73,13 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(rows.length, 2);
     const lineage = rows.find(row => row.dataset.templateKind === 'lineage');
     assert.strictEqual(lineage.dataset.templateSourceId, systemTemplate.id);
+    assert.strictEqual(lineage.dataset.templateKey, systemTemplate.templateKey);
     assert.strictEqual(lineage.querySelector('.template-subject').value, 'System subject');
     assert.strictEqual(lineage.querySelector('.template-body').value, 'Library body');
+    assert.strictEqual(lineage.querySelector('.template-subject').dataset.placeholderTarget, 'true');
+    assert.strictEqual(lineage.querySelector('.template-subject').dataset.templateField, 'subject');
+    assert.strictEqual(lineage.querySelector('.template-body').dataset.placeholderTarget, 'true');
+    assert.strictEqual(lineage.querySelector('.template-body').dataset.templateField, 'body');
     assert.strictEqual(lineage.querySelector('.template-subject').disabled, false);
 
     lineage.querySelector('.settings-template-override').checked = false;
