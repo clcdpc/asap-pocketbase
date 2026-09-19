@@ -1509,7 +1509,7 @@ public sealed class MigrationCliTests
             Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[EmailOutbox];"));
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
-                "SELECT COUNT(*) FROM [asap].[SystemSettings] WHERE [OrganizationId] = 1 AND [StaffApplicationUrl] = N'https://staff.example.org/staff/' AND [SystemNotEnabledMessage] = N'{{library}} is paused.';"));
+                "SELECT COUNT(*) FROM [asap].[SystemSettings] WHERE [OrganizationId] = 1 AND [StaffApplicationUrl] = N'https://staff.example.org/staff/' AND [LeapBibUrlPattern] = N'https://leap.example/bib/{{bibId}}' AND [LeapPatronUrlPattern] = N'https://leap.example/patron/{{barcode}}' AND [SystemNotEnabledMessage] = N'{{library}} is paused.';"));
             Assert.AreEqual(3, await ScalarAsync(
                 connection,
                 "SELECT COUNT(*) FROM [asap].[PatronEmbedAllowedOrigin] WHERE [NormalizedOrigin] IN (N'https://*.library.example.invalid:443', N'http://localhost:1234', N'https://exact.example.invalid');"));

@@ -1,5 +1,6 @@
 import { authorizedJson, isAbortError, latestLoads } from './http.js';
 import { createSettingsDomainEditors } from './settings-domains.js';
+import { validateLeapBibUrlPattern, validateLeapPatronUrlPattern } from './url-utils.js';
 
 const WORKFLOW_FIELDS = [
   ['suggestionLimit', 'suggestion-limit', 'number'],
@@ -1274,6 +1275,14 @@ export function createSettingsController({
     notify('Saving settings...');
     try {
       const payload = collectPayload();
+      if (isSystem()) {
+        const bibFailure = validateLeapBibUrlPattern(payload.systemSettings?.leapBibUrlPattern);
+        const patronFailure = validateLeapPatronUrlPattern(payload.systemSettings?.leapPatronUrlPattern);
+        if (bibFailure || patronFailure) {
+          notify(bibFailure || patronFailure, 'error');
+          return;
+        }
+      }
       const deletedFormats = state.pendingDeletedFormats.slice();
       const response = await authorizedJson('/api/asap/staff/settings', {
         method: 'POST',

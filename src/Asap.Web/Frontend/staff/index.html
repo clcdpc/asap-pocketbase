@@ -255,10 +255,12 @@
                     <span>Staff URL</span><input id="system-staff-url" type="url" autocomplete="url">
                   </label>
                   <label class="settings-field" data-setting-section="systemSettings" data-setting-key="leapBibUrlPattern" data-system-only="true">
-                    <span>Leap bib record URL pattern</span><input id="leap-bib-url-pattern" type="url">
+                    <span>Leap bib record URL pattern</span><input id="leap-bib-url-pattern" type="text" inputmode="url" aria-describedby="leap-bib-url-pattern-help">
+                    <small id="leap-bib-url-pattern-help" class="settings-help">Optional. Use <code>{{bibid}}</code> where the Polaris BIB ID should be inserted. Example: https://leap-sso.example.org/LeapWebApp/staff/default#bibrecords/{{bibid}}</small>
                   </label>
                   <label class="settings-field" data-setting-section="systemSettings" data-setting-key="leapPatronUrlPattern" data-system-only="true">
-                    <span>Leap patron record URL pattern</span><input id="leap-patron-url-pattern" type="url">
+                    <span>Leap patron record URL pattern</span><input id="leap-patron-url-pattern" type="text" inputmode="url" aria-describedby="leap-patron-url-pattern-help">
+                    <small id="leap-patron-url-pattern-help" class="settings-help">Optional. Use <code>{{patron-id}}</code> where the Polaris Patron ID should be inserted. Example: https://leap-sso.example.org/LeapWebApp/staff/default#patrons/{{patron-id}}/checkout</small>
                   </label>
                   <label class="settings-field" data-setting-section="systemSettings" data-setting-key="formatIconUrlPattern" data-system-only="true">
                     <span>Format icon URL pattern</span><input id="format-icon-url-pattern" type="text">

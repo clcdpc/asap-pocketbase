@@ -23,14 +23,22 @@ new Function('holder', `${source}\nholder.result = {
   requestedRequestIdFromUrl,
   replaceRequestUrl,
   replaceStageUrl,
-  statusStages
+  statusStages,
+  validateLeapBibUrlPattern,
+  validateLeapPatronUrlPattern,
+  leapBibUrl,
+  leapPatronUrl
 };`)(holder);
 const {
   requestedStatusFromUrl,
   requestedRequestIdFromUrl,
   replaceRequestUrl,
   replaceStageUrl,
-  statusStages
+  statusStages,
+  validateLeapBibUrlPattern,
+  validateLeapPatronUrlPattern,
+  leapBibUrl,
+  leapPatronUrl
 } = holder.result;
 
 const origin = 'https://staff.example.test';
@@ -89,5 +97,22 @@ assert.equal(switched.hash, '#details');
 for (const stage of ['suggestion', 'outstanding_purchase', 'pending_hold', 'hold_placed', 'additional_copies', 'closed', 'settings', 'analytics']) {
   assert.ok(statusStages.includes(stage), `missing supported stage ${stage}`);
 }
+
+assert.equal(validateLeapBibUrlPattern('https://leap.example/bib/{{bibid}}'), null);
+assert.notEqual(validateLeapBibUrlPattern('https://leap.example/bib/42'), null);
+assert.notEqual(validateLeapBibUrlPattern('javascript:alert(1)/{{bibid}}'), null);
+assert.equal(validateLeapPatronUrlPattern('https://leap.example/patron/{{patronId}}'), null);
+assert.notEqual(validateLeapPatronUrlPattern('https://leap.example/patron/{{barcode}}'), null);
+assert.equal(
+  leapBibUrl('https://leap.example/bib/{{bibid}}/{{bibid}}', 'BIB/42 7'),
+  'https://leap.example/bib/BIB%2F42%207/BIB%2F42%207'
+);
+assert.equal(
+  leapPatronUrl('https://leap.example/patron/{{patron-id}}?again={{patronId}}', '9123'),
+  'https://leap.example/patron/9123?again=9123'
+);
+assert.equal(leapBibUrl('https://leap.example/bib/{{bibid}}', ''), '');
+assert.equal(leapPatronUrl('javascript:alert(1)/{{patron-id}}', '9123'), '');
+assert.equal(leapPatronUrl('https://leap.example/patron/{{patron-id}}', null), '');
 
 console.log('Staff legacy-link URL contract checks passed');

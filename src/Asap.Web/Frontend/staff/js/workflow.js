@@ -9,6 +9,8 @@ import {
 import { createSettingsController } from './settings.js';
 import { loadAnalytics, resetAnalytics } from './analytics.js';
 import {
+  leapBibUrl,
+  leapPatronUrl,
   requestedRequestIdFromUrl,
   requestedStatusFromUrl,
   replaceRequestParameter,
@@ -64,6 +66,31 @@ function dateTime(value) {
 
 function statusLabel(value) {
   return STATUS_LABELS[value] || text(value, 'Unknown');
+}
+
+function gridExternalLink(value, href, ariaLabel) {
+  const display = text(value);
+  if (!href || display === 'Not recorded') return display;
+  return window.gridjs.h('a', {
+    href,
+    target: '_blank',
+    rel: 'noopener noreferrer',
+    'aria-label': ariaLabel
+  }, display);
+}
+
+function renderPatronGridCell(request) {
+  const name = [request.nameLast, request.nameFirst].filter(Boolean).join(', ');
+  const display = name || request.barcode;
+  const href = leapPatronUrl(request.leapPatronUrlPattern, request.polarisPatronId);
+  if (!href || !name || !request.barcode) {
+    return gridExternalLink(display, href, `Open patron ${display} in Leap`);
+  }
+  return window.gridjs.h('span', {}, [
+    name,
+    ' ',
+    gridExternalLink(request.barcode, href, `Open patron ${request.barcode} in Leap`)
+  ]);
 }
 
 function currentRequestParameter() {
@@ -579,7 +606,14 @@ export function createWorkflowApp() {
       state.grid = new window.gridjs.Grid({
         columns: [
           { name: 'Title', width: '25%' },
-          { name: 'Patron', width: '17%' },
+          {
+            name: 'Patron',
+            width: '17%',
+            formatter: (cell, row) => {
+              const request = state.requests.find(item => item.id === row.cells[6].data);
+              return request ? renderPatronGridCell(request) : text(cell);
+            }
+          },
           { name: 'Library', width: '14%' },
           { name: 'Tags', width: '16%' },
           {
@@ -682,7 +716,18 @@ export function createWorkflowApp() {
       state.additionalCopyGrid = new window.gridjs.Grid({
         columns: [
           { name: 'Title', width: '27%' },
-          { name: 'BIB ID', width: '14%' },
+          {
+            name: 'BIB ID',
+            width: '14%',
+            formatter: (cell, row) => {
+              const request = state.additionalCopies.find(item => item.id === row.cells[6].data);
+              return gridExternalLink(
+                cell,
+                leapBibUrl(request?.leapBibUrlPattern, request?.bibid),
+                `Open BIB ${cell} in Leap`
+              );
+            }
+          },
           { name: 'Library', width: '17%' },
           { name: 'Format', width: '14%' },
           {
@@ -771,7 +816,11 @@ export function createWorkflowApp() {
       buildAdditionalCopyActionBar(request)
     );
     const details = element('dl', { className: 'detail-grid' });
-    addDetail(details, 'BIB ID', request.bibid);
+    addDetail(details, 'BIB ID', externalLink(
+      request.bibid,
+      leapBibUrl(request.leapBibUrlPattern, request.bibid),
+      `Open BIB ${request.bibid} in Leap`
+    ));
     addDetail(details, 'Format', request.formatLabel || request.format);
     addDetail(details, 'Author', request.author);
     addDetail(details, 'Identifier', request.identifier);
@@ -957,8 +1006,22 @@ export function createWorkflowApp() {
 
   function addDetail(list, label, value) {
     const wrapper = element('div');
-    wrapper.append(element('dt', { text: label }), element('dd', { text: text(value) }));
+    wrapper.append(
+      element('dt', { text: label }),
+      value instanceof Node ? element('dd', {}, value) : element('dd', { text: text(value) })
+    );
     list.append(wrapper);
+  }
+
+  function externalLink(value, href, ariaLabel) {
+    const display = text(value);
+    if (!href || display === 'Not recorded') return display;
+    return element('a', {
+      href,
+      target: '_blank',
+      rel: 'noopener noreferrer',
+      'aria-label': ariaLabel
+    }, display);
   }
 
   function renderRequest(request, configuration, { preserveDialogMutation = false } = {}) {
@@ -990,11 +1053,19 @@ export function createWorkflowApp() {
 
     const details = element('dl', { className: 'detail-grid' });
     addDetail(details, 'Patron', [request.nameFirst, request.nameLast].filter(Boolean).join(' '));
-    addDetail(details, 'Barcode', request.barcode);
+    addDetail(details, 'Barcode', externalLink(
+      request.barcode,
+      leapPatronUrl(request.leapPatronUrlPattern, request.polarisPatronId),
+      `Open patron ${request.barcode} in Leap`
+    ));
     addDetail(details, 'Email', request.email);
     addDetail(details, 'Format', request.formatLabel || request.format);
     addDetail(details, 'Identifier', request.identifier);
-    addDetail(details, 'BIB ID', request.bibid);
+    addDetail(details, 'BIB ID', externalLink(
+      request.bibid,
+      leapBibUrl(request.leapBibUrlPattern, request.bibid),
+      `Open BIB ${request.bibid} in Leap`
+    ));
     addDetail(details, 'Publication', request.publication);
     addDetail(details, 'Pickup', request.preferredPickupBranchName || request.preferredPickupBranchId);
     addDetail(details, 'Identifier check', request.isbnCheckStatus);
