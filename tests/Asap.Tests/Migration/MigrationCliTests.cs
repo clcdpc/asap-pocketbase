@@ -2669,6 +2669,16 @@ public sealed class MigrationCliTests
                 Assert.AreEqual("source-admin@example.org", promotedRecipient.GetProperty("targetAssignmentRecipient").GetString());
                 Assert.IsTrue(promotedRecipient.GetProperty("targetWeeklyEligible").GetBoolean());
                 Assert.AreEqual("staff_email", promotedRecipient.GetProperty("notificationEmailSource").GetString());
+                var polarisAccounting = reportDocument.RootElement.GetProperty("transformations").EnumerateArray().Single(item =>
+                    item.GetProperty("entity").GetString() == "source_field_accounting" &&
+                    item.GetProperty("collection").GetString() == "polaris_settings" &&
+                    item.GetProperty("sourceId").GetString() == "polaris-1");
+                CollectionAssert.AreEquivalent(
+                    new[] { "pickupOrgId", "requestingOrgId" },
+                    polarisAccounting.GetProperty("intentionallyDroppedFields")
+                        .EnumerateArray()
+                        .Select(item => item.GetString())
+                        .ToArray());
             }
 
             DeployDacpac(master, insertedDatabaseName);

@@ -39,9 +39,8 @@ END;
 IF NOT EXISTS (SELECT 1 FROM [asap].[PolarisSettings] WHERE [OrganizationId] = 1)
 BEGIN
     INSERT INTO [asap].[PolarisSettings]
-        ([OrganizationId], [AccessId], [WorkstationId], [SystemPolarisUserId],
-         [OrganizationIdForRequests], [PickupOrganizationId], [UpdatedUtc])
-    VALUES (1, N'SuggestAPI', 1, 1, 3, 0, SYSUTCDATETIME());
+        ([OrganizationId], [AccessId], [WorkstationId], [SystemPolarisUserId], [UpdatedUtc])
+    VALUES (1, N'SuggestAPI', 1, 1, SYSUTCDATETIME());
 END;
 
 IF NOT EXISTS (SELECT 1 FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = 1)

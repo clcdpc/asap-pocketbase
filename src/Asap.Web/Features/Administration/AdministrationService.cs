@@ -960,10 +960,6 @@ public sealed class AdministrationService(
         ApplyInt(polarisSection, "workstationId", value => polaris.WorkstationId = value);
         ApplyInt(polarisSection, "systemPolarisUserId", value => polaris.SystemPolarisUserId = value);
         ApplyInt(polarisSection, "userId", value => polaris.SystemPolarisUserId = value);
-        ApplyInt(polarisSection, "organizationIdForRequests", value => polaris.OrganizationIdForRequests = value);
-        ApplyInt(polarisSection, "requestingOrgId", value => polaris.OrganizationIdForRequests = value);
-        ApplyInt(polarisSection, "pickupOrganizationId", value => polaris.PickupOrganizationId = value);
-        ApplyInt(polarisSection, "pickupOrgId", value => polaris.PickupOrganizationId = value);
         ApplySecret(polarisSection, "apiKey", value => polaris.ProtectedApiKey = credentialProtector.Protect(value));
         ApplySecret(polarisSection, "adminPassword", value => polaris.ProtectedAdminPassword = credentialProtector.Protect(value));
         if (GetBool(polarisSection, "clearApiKey") == true) polaris.ProtectedApiKey = null;
@@ -1580,8 +1576,6 @@ public sealed class AdministrationService(
         adminUser = row.AdminUser,
         workstationId = row.WorkstationId,
         systemPolarisUserId = row.SystemPolarisUserId,
-        organizationIdForRequests = row.OrganizationIdForRequests,
-        pickupOrganizationId = row.PickupOrganizationId,
         hasApiKey = !string.IsNullOrWhiteSpace(row.ProtectedApiKey),
         hasAdminPassword = !string.IsNullOrWhiteSpace(row.ProtectedAdminPassword),
         version = StaffVersion.Encode(row.RowVersion)

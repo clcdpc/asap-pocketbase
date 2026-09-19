@@ -257,6 +257,14 @@ For every transformed record, include the source value, target value, and reason
 
 Preserve historical submission snapshots as data: barcode, email/name where present, patron code, patron org, library/name, current recorded pickup branch, creation timestamps, custom fields, workflow/current processing state, etc. These are not refreshed from Polaris during migration. After import, `PreferredPickupBranchId`/`PreferredPickupBranchName` are mutable only through the dedicated validated pickup-preference workflow; they are not generic editable fields.
 
+The imported pickup fields are display/audit snapshots, not routing overrides.
+When a new hold is placed, runtime refreshes the patron and eligible pickup
+locations, resolves the requesting organization from the patron registration,
+and freezes the live pickup/requesting values only at dispatch. Existing
+in-flight operation snapshots and completed history are preserved. Legacy
+Polaris settings `requestingOrgId` and `pickupOrgId` are explicitly accounted
+for and dropped during import; they are never copied to target SQL.
+
 Preserve `LegacyId` as the current business/provenance field.
 
 #### Placed-BIB history guard

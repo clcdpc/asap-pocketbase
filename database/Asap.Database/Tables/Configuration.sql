@@ -38,8 +38,6 @@ CREATE TABLE [asap].[PolarisSettings]
     [ProtectedAdminPassword] nvarchar(max) NULL,
     [WorkstationId] int NULL,
     [SystemPolarisUserId] int NULL,
-    [OrganizationIdForRequests] int NULL,
-    [PickupOrganizationId] int NULL,
     [UpdatedUtc] datetime2(7) NOT NULL,
     [RowVersion] rowversion NOT NULL,
     CONSTRAINT [FK_PolarisSettings_Organization] FOREIGN KEY ([OrganizationId]) REFERENCES [asap].[Organization]([Id]),

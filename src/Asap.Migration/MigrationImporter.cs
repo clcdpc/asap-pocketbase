@@ -328,7 +328,8 @@ public static class MigrationImporter
                     "materialTypesCache", "materialTypesCacheUpdated"),
                 Fields(
                     "settingsKey", "overridePassword", "langId", "appId", "orgId", "autoPromote",
-                    "firstSuccessfulSaveAt", "materialTypesCache", "materialTypesCacheUpdated")),
+                    "firstSuccessfulSaveAt", "materialTypesCache", "materialTypesCacheUpdated", "pickupOrgId",
+                    "requestingOrgId")),
             new ConfigurationSourceFields(
                 "email-settings.json",
                 "smtp_settings",

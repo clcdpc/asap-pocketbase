@@ -133,7 +133,7 @@ public sealed partial class PatronSuggestionService(
             try
             {
                 await patronProvider.UpdatePreferredPickupBranchAsync(
-                    session.Barcode,
+                    patron,
                     selectedBranch.Id,
                     cancellationToken);
             }
