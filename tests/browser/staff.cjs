@@ -416,6 +416,16 @@ async function runSettingsPlaceholders(browser, args, axeSource, report) {
 
       const purchaseSubject = page.locator('#email-purchase-approved-subject');
       await purchaseSubject.focus();
+      assert.equal(
+        await page.evaluate(() => document.activeElement?.id),
+        'email-purchase-approved-subject',
+        'Purchase approved Subject should own browser focus'
+      );
+      assert.match(await page.locator('#email-template-placeholder-target').textContent(), /Purchase approved · Subject/);
+      assert.equal(await page.locator('#email-template-placeholder-buttons button').count(), 0);
+      assert.match(await page.locator('#email-template-placeholder-status').textContent(), /No ASP\.NET sending path/);
+      await subject.evaluate(element => element.dispatchEvent(new Event('select', { bubbles: true })));
+      assert.match(await page.locator('#email-template-placeholder-target').textContent(), /Purchase approved · Subject/);
       assert.equal(await page.locator('#email-template-placeholder-buttons button').count(), 0);
       assert.match(await page.locator('#email-template-placeholder-status').textContent(), /No ASP\.NET sending path/);
 

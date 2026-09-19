@@ -93,14 +93,34 @@ async function flush() {
     assert.strictEqual(body.value, 'Café & {{format}}friends');
 
     const purchaseSubject = document.getElementById('email-purchase-approved-subject');
+    const subjectBeforeStaleSelection = subject.value;
+    const purchaseBeforeStaleSelection = purchaseSubject.value;
     purchaseSubject.focus();
     purchaseSubject.setSelectionRange(0, 0);
     purchaseSubject.dispatchEvent(new dom.window.Event('select', { bubbles: true }));
+    assert.strictEqual(document.activeElement, purchaseSubject);
+    assert.match(document.getElementById('email-template-placeholder-target').textContent, /Purchase approved · Subject/);
     assert.strictEqual(buttons().length, 0);
     assert.match(document.getElementById('email-template-placeholder-status').textContent, /No ASP\.NET sending path/);
+    subject.dispatchEvent(new dom.window.Event('select', { bubbles: true }));
+    assert.strictEqual(document.activeElement, purchaseSubject);
+    assert.match(document.getElementById('email-template-placeholder-target').textContent, /Purchase approved · Subject/);
+    assert.strictEqual(buttons().length, 0);
+    assert.match(document.getElementById('email-template-placeholder-status').textContent, /No ASP\.NET sending path/);
+    assert.strictEqual(subject.value, subjectBeforeStaleSelection);
+    assert.strictEqual(purchaseSubject.value, purchaseBeforeStaleSelection);
     purchaseSubject.value = 'unchanged';
     helper.refresh();
     assert.strictEqual(purchaseSubject.value, 'unchanged');
+
+    subject.value = 'prefix suffix';
+    subject.focus();
+    subject.setSelectionRange('prefix '.length, 'prefix '.length);
+    subject.dispatchEvent(new dom.window.Event('select', { bubbles: true }));
+    assert.match(document.getElementById('email-template-placeholder-target').textContent, /Submission confirmation · Subject/);
+    buttonFor('title').click();
+    assert.strictEqual(subject.value, 'prefix {{title}}suffix');
+    assert.strictEqual(document.activeElement, subject);
 
     const dynamicRow = document.createElement('div');
     dynamicRow.className = 'settings-editor-row settings-template-row';

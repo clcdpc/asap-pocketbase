@@ -351,10 +351,13 @@ export function createEmailTemplatePlaceholderHelper({
 
   function onSelection(event) {
     const element = targetFromEvent(event);
-    if (isPlaceholderTarget(element)) {
-      if (selected?.element !== element) remember(element);
-      else rememberSelection(element);
+    if (!isPlaceholderTarget(element)) return;
+    if (selected?.element === element) {
+      rememberSelection(element);
+      return;
     }
+    if (document.activeElement !== element) return;
+    remember(element);
   }
 
   function onInput(event) {
