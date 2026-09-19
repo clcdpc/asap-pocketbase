@@ -1131,7 +1131,12 @@ public sealed class HoldPlacementService(
             return new PatronHoldScopeCheck(false, "request_not_found");
         }
 
-        var changed = request.PatronOrganizationId != patron.PatronOrganizationId;
+        // A null stored value is an unknown historical snapshot, not positive
+        // evidence that the patron's registered organization changed. New work
+        // still passes the normal organization, request, and authorization
+        // checks during acquisition before reaching this post-refresh check.
+        var changed = request.PatronOrganizationId is int storedOrganizationId &&
+            storedOrganizationId != patron.PatronOrganizationId;
         if (!changed)
         {
             return new PatronHoldScopeCheck(false, null);

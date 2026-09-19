@@ -124,6 +124,7 @@ public sealed partial class PatronJourneyTests
         var recoveryRequests = Enumerable.Range(0, recoveryCount).Select(index => new TitleRequest
         {
             LibraryOrganizationId = requestScope,
+            PatronOrganizationId = 2,
             Barcode = $"s5-cr-{Guid.NewGuid():N}",
             Title = $"Slice 5 coupled recovery {index}",
             MaterialFormatId = format.Id,
@@ -136,6 +137,7 @@ public sealed partial class PatronJourneyTests
         var placementRequests = Enumerable.Range(0, placementCount).Select(index => new TitleRequest
         {
             LibraryOrganizationId = requestScope,
+            PatronOrganizationId = 2,
             Barcode = $"s5-cp-{Guid.NewGuid():N}",
             Title = $"Slice 5 coupled placement {index}",
             MaterialFormatId = format.Id,

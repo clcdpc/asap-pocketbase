@@ -4560,6 +4560,134 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task StaffHoldPlacementFallsBackToLiveRegisteredOrganizationWhenDefaultIsAbsent()
+    {
+        var holdProvider = ScriptedHoldProvider.ReplyRequiredThenSuccess();
+        holdProvider.LivePatronOrganizationId = 201;
+        holdProvider.LivePreferredPickupBranchId = null;
+        holdProvider.EligiblePickupBranches = [new PickupBranch(201, "Registered library")];
+        await using var holdFactory = factory!.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IPatronProvider>();
+                services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IPatronProvider>(holdProvider);
+                services.AddSingleton<IStaffPolarisProvider>(holdProvider);
+            }));
+
+        var requestId = await SeedPendingHoldRequestAsync(
+            "Live registered fallback title",
+            "20000000002107",
+            "9007",
+            patronOrganizationId: 201);
+        await using var context = await holdFactory.Services
+            .GetRequiredService<IDbContextFactory<AsapDbContext>>()
+            .CreateDbContextAsync();
+        var requestVersion = await context.TitleRequests.AsNoTracking()
+            .Where(item => item.Id == requestId)
+            .Select(item => item.RowVersion)
+            .SingleAsync();
+
+        var result = await holdFactory.Services.GetRequiredService<HoldPlacementService>()
+            .PlaceBackgroundAsync(requestId, requestVersion, CancellationToken.None);
+
+        Assert.AreEqual("updated", result.Code);
+        Assert.AreEqual(1, holdProvider.CreateCount);
+        Assert.AreEqual(1, holdProvider.ReplyCount);
+        Assert.IsNotNull(holdProvider.LastCreateCommand);
+        Assert.AreEqual(201, holdProvider.LastCreateCommand!.RequestingOrganizationId);
+        Assert.AreEqual(201, holdProvider.LastCreateCommand.PickupBranchId);
+    }
+
+    [TestMethod]
+    public async Task StaffHoldPlacementRejectsMissingRegisteredPickupFallbackBeforeCreate()
+    {
+        var holdProvider = ScriptedHoldProvider.ReplyRequiredThenSuccess();
+        holdProvider.LivePatronOrganizationId = 201;
+        holdProvider.LivePreferredPickupBranchId = null;
+        holdProvider.EligiblePickupBranches = [new PickupBranch(202, "Other library")];
+        await using var holdFactory = factory!.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IPatronProvider>();
+                services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IPatronProvider>(holdProvider);
+                services.AddSingleton<IStaffPolarisProvider>(holdProvider);
+            }));
+
+        var requestId = await SeedPendingHoldRequestAsync(
+            "Missing live registered fallback title",
+            "20000000002108",
+            "9008",
+            patronOrganizationId: 201);
+        await using var context = await holdFactory.Services
+            .GetRequiredService<IDbContextFactory<AsapDbContext>>()
+            .CreateDbContextAsync();
+        var requestVersion = await context.TitleRequests.AsNoTracking()
+            .Where(item => item.Id == requestId)
+            .Select(item => item.RowVersion)
+            .SingleAsync();
+
+        var result = await holdFactory.Services.GetRequiredService<HoldPlacementService>()
+            .PlaceBackgroundAsync(requestId, requestVersion, CancellationToken.None);
+
+        Assert.AreEqual("pickup_missing", result.Code);
+        Assert.AreEqual(0, holdProvider.CreateCount);
+        Assert.AreEqual(0, holdProvider.ReplyCount);
+    }
+
+    [TestMethod]
+    public async Task RecoveredAcquiredHoldTreatsNullHistoricalPatronOrganizationAsUnknown()
+    {
+        var holdProvider = ScriptedHoldProvider.ReplyRequiredThenSuccess();
+        await using var holdFactory = factory!.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IPatronProvider>();
+                services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IPatronProvider>(holdProvider);
+                services.AddSingleton<IStaffPolarisProvider>(holdProvider);
+            }));
+
+        var requestId = await SeedPendingHoldRequestAsync(
+            "Unknown historical patron organization title",
+            "20000000002109",
+            "9009",
+            patronOrganizationId: null);
+        long operationId;
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                INSERT INTO [asap].[HoldPlacementOperation]
+                    ([TitleRequestId], [PatronBarcodeSnapshot], [BibIdSnapshot], [PickupBranchIdSnapshot],
+                     [AttemptNumber], [State], [Phase], [OwnerToken], [ExecutionEpoch], [LeaseExpiresUtc], [RequestStartedUtc])
+                VALUES (@requestId, N'20000000002109', N'9009', 101, 1, N'in_progress', N'acquired',
+                        NEWID(), 1, DATEADD(minute, -1, SYSUTCDATETIME()), SYSUTCDATETIME());
+                SELECT CONVERT(bigint, SCOPE_IDENTITY());
+                """;
+            command.Parameters.AddWithValue("@requestId", requestId);
+            operationId = Convert.ToInt64(await command.ExecuteScalarAsync());
+        }
+
+        try
+        {
+            var result = await holdFactory.Services.GetRequiredService<HoldPlacementService>()
+                .RecoverBackgroundOperationAsync(operationId, 2, CancellationToken.None);
+
+            Assert.AreEqual("updated", result.Code);
+            Assert.AreEqual(1, holdProvider.CreateCount);
+            Assert.AreEqual(1, holdProvider.ReplyCount);
+        }
+        finally
+        {
+            await DeleteRequestAsync(requestId);
+        }
+    }
+
+    [TestMethod]
     public async Task StaffHoldPlacementAdoptsOneLiveSameBibHoldWithoutMutationMarkers()
     {
         var holdProvider = ScriptedHoldProvider.AmbiguousCreate();
@@ -4840,9 +4968,9 @@ public sealed partial class PatronJourneyTests
                 INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
                 VALUES (91211, N'Inactive recovery library', N'IRL', 0);
                 INSERT INTO [asap].[TitleRequest]
-                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
+                    ([LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES (91211, N'20000000002111', N'Expired acquired hold title', 1, @formatId, N'pending_hold', N'9005',
+                VALUES (91211, 101, N'20000000002111', N'Expired acquired hold title', 1, @formatId, N'pending_hold', N'9005',
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 DECLARE @requestId bigint = SCOPE_IDENTITY();
                 INSERT INTO [asap].[HoldPlacementOperation]
@@ -7501,7 +7629,11 @@ public sealed partial class PatronJourneyTests
         await command.ExecuteNonQueryAsync();
     }
 
-    private static async Task<long> SeedPendingHoldRequestAsync(string title, string barcode, string bibId)
+    private static async Task<long> SeedPendingHoldRequestAsync(
+        string title,
+        string barcode,
+        string bibId,
+        int? patronOrganizationId = 101)
     {
         await using var connection = new SqlConnection(databaseConnectionString);
         await connection.OpenAsync();
@@ -7510,9 +7642,9 @@ public sealed partial class PatronJourneyTests
             DECLARE @formatId bigint = (
                 SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
             INSERT INTO [asap].[TitleRequest]
-                ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
+                ([LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
                  [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-            VALUES (2, @barcode, @title, 1, @formatId, N'pending_hold', @bibId,
+            VALUES (2, @patronOrganizationId, @barcode, @title, 1, @formatId, N'pending_hold', @bibId,
                     101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
             SELECT CONVERT(bigint, SCOPE_IDENTITY());
             """,
@@ -7520,6 +7652,7 @@ public sealed partial class PatronJourneyTests
         command.Parameters.AddWithValue("@title", title);
         command.Parameters.AddWithValue("@barcode", barcode);
         command.Parameters.AddWithValue("@bibId", bibId);
+        command.Parameters.AddWithValue("@patronOrganizationId", patronOrganizationId ?? (object)DBNull.Value);
         return Convert.ToInt64(await command.ExecuteScalarAsync());
     }
 

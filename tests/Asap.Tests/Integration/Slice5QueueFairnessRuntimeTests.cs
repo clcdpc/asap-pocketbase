@@ -320,7 +320,7 @@ public sealed partial class PatronJourneyTests
             Task.FromResult(new PatronSnapshot(7105, barcode, "fairness@example.org", "Fair", "Tester", "1", "Standard", 2, 2, "Library", 101));
 
         public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(PatronSnapshot patron, CancellationToken cancellationToken) =>
-            Task.FromResult<IReadOnlyList<PickupBranch>>([]);
+            Task.FromResult<IReadOnlyList<PickupBranch>>([new PickupBranch(101, "Main Library")]);
 
         public Task UpdatePreferredPickupBranchAsync(PatronSnapshot patron, int pickupBranchId, CancellationToken cancellationToken) => Task.CompletedTask;
 

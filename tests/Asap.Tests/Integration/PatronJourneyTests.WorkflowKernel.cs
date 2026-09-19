@@ -396,9 +396,9 @@ public sealed partial class PatronJourneyTests
             """
             DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
             INSERT INTO [asap].[TitleRequest]
-                ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
+                ([LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
                  [CreatedUtc], [UpdatedUtc])
-            VALUES (@scope, @barcode, @title, 1, @formatId, N'pending_hold', N'99001',
+            VALUES (@scope, 101, @barcode, @title, 1, @formatId, N'pending_hold', N'99001',
                     DATEADD(day, -1, SYSUTCDATETIME()), SYSUTCDATETIME());
             SELECT CAST(SCOPE_IDENTITY() AS bigint), [RowVersion]
             FROM [asap].[TitleRequest]
