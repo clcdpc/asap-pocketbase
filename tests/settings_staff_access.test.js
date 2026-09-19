@@ -127,8 +127,8 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
   try {
     const settingsModule = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings.js')).href);
     let users = [
-      staffUser(20, { displayName: 'Ada Admin', role: 'admin', version: 'user-version-20' }),
-      staffUser(21, { displayName: 'Inactive Selector', active: false, version: 'user-version-21' })
+      staffUser(21, { displayName: 'Inactive Selector', active: false, version: 'user-version-21' }),
+      staffUser(20, { displayName: 'Ada Admin', role: 'admin', version: 'user-version-20' })
     ];
     const requests = [];
     const postBodies = [];
@@ -154,8 +154,10 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
         if (requestUrl.endsWith('/api/asap/staff/organizations')) {
           return response(200, [
             { id: 1, name: 'System', active: true, version: 'org-v1' },
-            { id: 2, name: 'Library Two', active: true, version: 'org-v2' },
-            { id: 3, name: 'Library Three', active: true, version: 'org-v3' }
+            { id: 5, name: 'Zeta Library', active: true, version: 'org-v5' },
+            { id: 4, name: null, active: true, version: 'org-v4' },
+            { id: 3, name: 'alpha library', active: true, version: 'org-v3' },
+            { id: 2, name: 'Alpha Library', active: true, version: 'org-v2' }
           ]);
         }
         if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) return response(200, { code: 'ok', data: [] });
@@ -198,21 +200,21 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
         if (requestUrl === '/api/asap/staff/users/20' && options.method === 'PATCH') {
           patchBody = JSON.parse(options.body);
           return response(200, {
-            user: { ...users[0], userPrincipalName: patchBody.email, version: 'patched-20' },
+            user: { ...users.find(user => user.id === '20'), userPrincipalName: patchBody.email, version: 'patched-20' },
             cleanup: { rulesDeactivated: 0, openTitleClaimsCleared: 0, openAdditionalCopyClaimsCleared: 0 }
           });
         }
         if (requestUrl === '/api/asap/staff/users/20/role') {
           roleBody = JSON.parse(options.body);
           return response(200, {
-            user: { ...users[0], role: roleBody.role, organizationId: roleBody.organizationId, version: 'role-20' },
+            user: { ...users.find(user => user.id === '20'), role: roleBody.role, organizationId: roleBody.organizationId, version: 'role-20' },
             cleanup: { rulesDeactivated: 1, openTitleClaimsCleared: 0, openAdditionalCopyClaimsCleared: 0 }
           });
         }
         if (requestUrl === '/api/asap/staff/users/20' && options.method === 'DELETE') {
           deleteBody = JSON.parse(options.body);
           return response(200, {
-            user: { ...users[0], active: false, version: 'inactive-20' },
+            user: { ...users.find(user => user.id === '20'), active: false, version: 'inactive-20' },
             cleanup: { rulesDeactivated: 5, openTitleClaimsCleared: 6, openAdditionalCopyClaimsCleared: 7 }
           });
         }
@@ -227,6 +229,35 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     assert.ok(requests.includes('/api/asap/staff/audit?limit=50'));
     assert.ok(document.getElementById('settings-staff-audit-list').textContent.includes('staff_created'));
     assert.strictEqual(document.querySelectorAll('#settings-staff .settings-override-control').length, 0);
+    assert.deepStrictEqual(
+      [...document.getElementById('settings-scope').options].map(option => [option.value, option.textContent]),
+      [
+        ['system', 'System level'],
+        ['2', 'Alpha Library'],
+        ['3', 'alpha library'],
+        ['4', 'Library 4'],
+        ['5', 'Zeta Library']
+      ]
+    );
+    assert.deepStrictEqual(
+      [...document.querySelectorAll('#enabled-libraries-checkbox-container .settings-list-row span')]
+        .map(item => item.textContent),
+      ['Alpha Library', 'alpha library', 'Library 4', 'Zeta Library']
+    );
+    assert.deepStrictEqual(
+      [...document.querySelectorAll('#settings-organizations-list .settings-organization-name')]
+        .map(item => item.textContent),
+      ['Alpha Library', 'alpha library', 'Library 4', 'System', 'Zeta Library']
+    );
+    assert.deepStrictEqual(
+      [...document.getElementById('staff-add-organization').options].map(option => [option.value, option.textContent]),
+      [['2', 'Alpha Library'], ['3', 'alpha library'], ['4', 'Library 4'], ['5', 'Zeta Library']]
+    );
+    assert.deepStrictEqual(
+      [...document.querySelectorAll('#settings-staff-users-list .settings-staff-heading strong')]
+        .map(item => item.textContent),
+      ['Ada Admin', 'Inactive Selector']
+    );
 
     assert.strictEqual(document.getElementById('staff-add-tenant-id'), null);
     assert.strictEqual(document.getElementById('staff-add-object-id'), null);

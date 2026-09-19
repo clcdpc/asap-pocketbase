@@ -20,7 +20,11 @@ const payload = (scope, range, label) => ({
     superAdmin: true
   },
   dateRange: { key: range, start: '2026-09-01T04:00:00Z', end: '2026-09-16T03:59:59Z' },
-  availableLibraries: [{ orgId: '2', name: 'Library Two' }, { orgId: '3', name: 'Library Three' }],
+  availableLibraries: [
+    { orgId: '3', name: 'Zeta Library' },
+    { orgId: '4', name: null },
+    { orgId: '2', name: 'Alpha Library' }
+  ],
   summary: { newSuggestions: 1, openRequests: 2, closedRequests: 3, heldRequests: 4, averageDaysToHold: 2.5 },
   stageCounts: { suggestion: 1, outstanding_purchase: 0, pending_hold: 0, hold_placed: 1, closed: 1, additional_copies: 0 },
   closedReasons: [],
@@ -71,6 +75,10 @@ async function flush() {
     pending[0].resolve(response(200, payload('all', 'lastMonth', 'All libraries')));
     await initial;
     assert.ok(container.textContent.includes('All libraries'));
+    assert.deepStrictEqual(
+      [...container.querySelector('#analytics-scope').options].map(option => [option.value, option.textContent]),
+      [['all', 'All libraries'], ['2', 'Alpha Library (ID 2)'], ['4', 'Library 4 (ID 4)'], ['3', 'Zeta Library (ID 3)']]
+    );
 
     const scope = container.querySelector('#analytics-scope');
     scope.value = '2';

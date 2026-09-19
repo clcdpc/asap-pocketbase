@@ -1,4 +1,5 @@
 import { authorizedJson, isAbortError, latestLoads } from './http.js';
+import { organizationDisplayName, sortByDisplayLabel } from './display-order.js';
 
 const dateRangeLabels = {
   last30: 'Last 30 days',
@@ -164,15 +165,15 @@ function renderScopeControl(data) {
   allOption.textContent = 'All libraries';
   select.append(allOption);
 
-  const libraries = (data.availableLibraries || []).slice();
+  const libraries = [...(Array.isArray(data.availableLibraries) ? data.availableLibraries : [])];
   if (data.scope.mode === 'library' && data.scope.libraryOrgId &&
       !libraries.some(item => item.orgId === data.scope.libraryOrgId)) {
     libraries.push({ orgId: data.scope.libraryOrgId, name: data.scope.label || 'Current library' });
   }
-  for (const library of libraries) {
+  for (const library of sortByDisplayLabel(libraries, organizationDisplayName, item => item.orgId)) {
     const option = document.createElement('option');
     option.value = library.orgId;
-    option.textContent = `${library.name} (ID ${library.orgId})`;
+    option.textContent = `${organizationDisplayName(library)} (ID ${library.orgId})`;
     select.append(option);
   }
   select.value = data.scope.mode === 'all' ? 'all' : data.scope.libraryOrgId;
