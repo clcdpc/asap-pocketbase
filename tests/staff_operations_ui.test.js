@@ -137,6 +137,9 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
       ),
       'queue cursors should display in the browser locale'
     );
+    const updatedTime = document.querySelector('#queue-progress-table tbody tr time');
+    assert.equal(updatedTime.textContent, new Date(queuePayload('all').items[0].updatedUtc).toLocaleString(), 'queue updates should display in the browser locale');
+    assert.equal(updatedTime.getAttribute('datetime'), queuePayload('all').items[0].updatedUtc, 'queue time elements should retain the canonical UTC value');
 
     const scope = document.getElementById('operations-scope');
     scope.value = '2';

@@ -94,6 +94,12 @@ public sealed partial class PatronJourneyTests
             IsActive = false
         };
         var queue = new QueueProgress { QueueName = queueName, ScopeOrganizationId = testOrganizationId };
+        var nullableQueue = new QueueProgress
+        {
+            QueueName = QueueNames.PurchasePromotion,
+            ScopeOrganizationId = testOrganizationId,
+            UpdatedUtc = storedUtc.AddMinutes(4)
+        };
 
         queue.CycleMaxId = 901;
         queue.LastCreatedUtc = storedUtc;
@@ -121,6 +127,7 @@ public sealed partial class PatronJourneyTests
         {
             await context.SaveChangesAsync();
             context.QueueProgress.Add(queue);
+            context.QueueProgress.Add(nullableQueue);
             context.EmailOutbox.Add(outbox);
             context.EmailOutbox.Add(pendingOutbox);
             await context.SaveChangesAsync();
@@ -136,6 +143,11 @@ public sealed partial class PatronJourneyTests
             AssertUtcJsonTimestamp(queueItem, "lastCreatedUtc", storedUtc);
             AssertUtcJsonTimestamp(queueItem, "lastOutcomeUtc", storedUtc.AddMinutes(1));
             AssertUtcJsonTimestamp(queueItem, "updatedUtc", storedUtc.AddMinutes(2));
+            var nullableQueueItem = queueBody.RootElement.GetProperty("items").EnumerateArray()
+                .Single(item => item.GetProperty("queueName").GetString() == QueueNames.PurchasePromotion);
+            Assert.AreEqual(JsonValueKind.Null, nullableQueueItem.GetProperty("lastCreatedUtc").ValueKind);
+            Assert.AreEqual(JsonValueKind.Null, nullableQueueItem.GetProperty("lastOutcomeUtc").ValueKind);
+            AssertUtcJsonTimestamp(nullableQueueItem, "updatedUtc", storedUtc.AddMinutes(4));
 
             using var emailResponse = await client.GetAsync(
                 $"/api/asap/staff/email-operations?organizationId={testOrganizationId}");
@@ -154,6 +166,7 @@ public sealed partial class PatronJourneyTests
             context.EmailOutbox.Remove(outbox);
             context.EmailOutbox.Remove(pendingOutbox);
             context.QueueProgress.Remove(queue);
+            context.QueueProgress.Remove(nullableQueue);
             await context.SaveChangesAsync();
             context.Organizations.Remove(organization);
             await context.SaveChangesAsync();
