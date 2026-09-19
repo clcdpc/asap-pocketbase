@@ -81,9 +81,12 @@ export async function closeDuplicateRequest(id) {
   }
 }
 
-document.getElementById('close-modal-x').addEventListener('click', () => {
+function closeEditModal() {
   document.getElementById('editModal').close();
-});
-document.getElementById('close-modal-btn').addEventListener('click', () => {
-  document.getElementById('editModal').close();
-});
+  const url = new URL(window.location.href);
+  url.searchParams.delete('request');
+  window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+}
+
+document.getElementById('close-modal-x').addEventListener('click', closeEditModal);
+document.getElementById('close-modal-btn').addEventListener('click', closeEditModal);

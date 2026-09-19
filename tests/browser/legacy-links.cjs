@@ -137,7 +137,7 @@ async function assertUnavailable(page, args, type, viewport, legacyId, stage, st
   const message = type === 'title'
     ? 'That request is no longer available.'
     : 'That additional-copy task is no longer available.';
-  await page.getByText(message, { exact: true }).waitFor();
+  await page.locator('#job-msg').getByText(message, { exact: true }).waitFor();
   assert.equal(await page.locator('#editModal[open]').count(), 0);
   const current = new URL(page.url());
   assert.equal(current.searchParams.get('request'), legacyId);

@@ -352,6 +352,7 @@ export function openActionMenu(triggerButton, actionIds, ctx) {
   layer.appendChild(menu);
   positionActionMenu(triggerButton, menu);
   ctx.setActiveActionMenu({ triggerButton, menu });
+  menu.querySelector('[role="menuitem"]')?.focus();
 }
 
 export function positionActionMenu(triggerButton, menu) {

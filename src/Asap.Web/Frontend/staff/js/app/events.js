@@ -1,4 +1,4 @@
-import { staffSession, setStaffSession, normalizeSessionStaff, loginForm, setupForm, logoutBtn, profileBtn, grid, gridSearchInput, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, additionalCopyStatusFilterSelect, closedTypeFilterSelect, currentStatus, setCurrentStatus, setActiveTagFilter, setGridSearchKeyword, setCurrentClaimFilter, setCurrentSimilarRequestFilter, setCurrentAdditionalCopyStatus, setCurrentClosedTypeFilter } from '../state.js';
+import { staffSession, setStaffSession, normalizeSessionStaff, loginForm, setupForm, logoutBtn, profileBtn, gridSearchInput, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, additionalCopyStatusFilterSelect, closedTypeFilterSelect, currentStatus, setCurrentStatus, setActiveTagFilter, setGridSearchKeyword, setCurrentClaimFilter, setCurrentSimilarRequestFilter, setCurrentAdditionalCopyStatus, setCurrentClosedTypeFilter } from '../state.js';
 import { loadTab, renderCurrentGrid } from '../grid.js';
 import { showToast } from '../dialogs.js';
 import { authorizedJson } from '../http.js';
@@ -127,14 +127,7 @@ if (gridSearchInput) {
   gridSearchInput.addEventListener('input', event => {
     const keyword = event.target.value;
     setGridSearchKeyword(keyword);
-    if (grid) {
-      grid.updateConfig({
-        search: {
-          ...grid.config.search,
-          keyword: keyword
-        }
-      }).forceRender();
-    }
+    renderCurrentGrid(currentStatus);
   });
 }
 

@@ -245,6 +245,7 @@ body {
 }
 
 .analytics-card-label {
+  color: #495057;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   font-weight: 700;
@@ -971,7 +972,14 @@ body {
 }
 
 #tab-desc a {
+  color: var(--asap-color-primary-dark);
   text-decoration: underline;
+}
+
+#recentSuggestionsBtn,
+#profile-btn,
+#status-tabs .nav-link.text-primary {
+  color: var(--asap-color-primary-dark) !important;
 }
 
 #edit-pending-audit-preview {

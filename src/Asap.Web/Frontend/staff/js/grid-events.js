@@ -180,7 +180,11 @@ export function setupGridEvents(ctx) {
   });
 
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') ctx.closeActionMenu();
+    if (event.key === 'Escape' && ctx.activeActionMenu) {
+      const trigger = ctx.activeActionMenu.triggerButton;
+      ctx.closeActionMenu();
+      trigger?.focus();
+    }
   });
   window.addEventListener('resize', ctx.closeActionMenu);
   window.addEventListener('scroll', ctx.closeActionMenu, true);

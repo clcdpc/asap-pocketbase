@@ -146,10 +146,21 @@ async function runSuperAdmin(browser, args, axeSource, report) {
 
     await page.locator('#close-modal-x').click();
     await page.locator('#editModal').waitFor({ state: 'hidden' });
+    const patronLookupResponse = await post(
+      context,
+      args.baseOrigin,
+      '/api/asap/staff/patron-lookup',
+      { query: '20000000000001', libraryOrgId: '2' }
+    );
+    assert.equal(patronLookupResponse.status(), 200);
+    const patronLookup = await patronLookupResponse.json();
+    assert.equal(patronLookup.barcode, '20000000000001');
+    assert.ok(patronLookup.pickupBranches.length > 0);
+    report.patronLookup = { status: patronLookupResponse.status(), barcode: patronLookup.barcode };
     const tabs = page.locator('#status-tabs [data-status]');
     assert.ok(await tabs.count() >= 8, 'Legacy status/settings navigation was not rendered');
     await page.locator('#grid-search-input').fill('no-result-browser-filter');
-    await page.getByText('No suggestions found.', { exact: true }).waitFor();
+    await page.getByText('No matching records found', { exact: false }).waitFor();
     await page.locator('#grid-search-input').fill('');
     await page.locator('#grid-container .gridjs-container').waitFor();
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'queue-search-tabs');
@@ -174,23 +185,35 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.locator('#editModal[open]').waitFor();
     assert.equal(await page.locator('#edit-id').inputValue(), args.staleTitleBId);
     await page.locator('#close-modal-x').click();
-    const marker = page.locator(`[data-suggestion-id="${args.staleTitleBId}"]`).first();
-    const row = marker.locator('xpath=ancestor::tr');
-    await row.waitFor();
-    const menu = row.locator('.row-action-menu-trigger');
-    await menu.click();
-    const claim = page.getByRole('menuitem', { name: 'Claim', exact: true });
-    const unclaim = page.getByRole('menuitem', { name: 'Unclaim', exact: true });
-    if (await claim.count()) {
-      await claim.click();
+    await page.locator('#editModal').waitFor({ state: 'hidden' });
+    const openRowMenu = async () => {
+      const marker = page.locator(`[data-suggestion-id="${args.staleTitleBId}"]`).first();
+      const row = marker.locator('xpath=ancestor::tr');
+      await row.waitFor();
+      await row.locator('.row-action-menu-trigger').evaluate(button => button.click());
+      return page.evaluate(() => Array.from(document.querySelectorAll('#action-menu-layer [role="menuitem"]'))
+        .map(button => button.textContent?.trim() || ''));
+    };
+    const menuActions = await openRowMenu();
+    if (menuActions.includes('Claim')) {
+      await page.evaluate(() => Array.from(document.querySelectorAll('#action-menu-layer [role="menuitem"]'))
+        .find(button => button.textContent?.trim() === 'Claim')?.click());
       await page.getByText('Request claimed.', { exact: true }).waitFor();
-      const refreshedMarker = page.locator(`[data-suggestion-id="${args.staleTitleBId}"]`).first();
-      const refreshedRow = refreshedMarker.locator('xpath=ancestor::tr');
-      await refreshedRow.locator('.row-action-menu-trigger').click();
-      await page.getByRole('menuitem', { name: 'Unclaim', exact: true }).click();
+      if (await page.locator('#editModal[open]').count()) {
+        await page.locator('#close-modal-x').click();
+        await page.locator('#editModal').waitFor({ state: 'hidden' });
+      }
+      const refreshedActions = await openRowMenu();
+      assert.ok(refreshedActions.includes('Unclaim'), `Expected Unclaim after claiming, saw ${refreshedActions.join(', ')}`);
+      await page.evaluate(() => Array.from(document.querySelectorAll('#action-menu-layer [role="menuitem"]'))
+        .find(button => button.textContent?.trim() === 'Unclaim')?.click());
       await page.getByText('Request unclaimed.', { exact: true }).waitFor();
-    } else if (await unclaim.count()) {
-      await menu.press('Escape');
+    } else if (menuActions.includes('Unclaim')) {
+      await page.evaluate(() => Array.from(document.querySelectorAll('#action-menu-layer [role="menuitem"]'))
+        .find(button => button.textContent?.trim() === 'Unclaim')?.click());
+      await page.getByText('Request unclaimed.', { exact: true }).waitFor();
+    } else {
+      throw new Error(`Expected a claim action for request ${args.staleTitleBId}, saw ${menuActions.join(', ')}`);
     }
     report.concurrency = { staleStatus: staleResponse.status() };
 
@@ -206,6 +229,14 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.locator('#tab-staff').click();
     await page.locator('#settings-staff.active').waitFor();
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'settings-staff-access');
+    await page.waitForFunction(() => {
+      const select = document.getElementById('select-library-context');
+      return select && !select.disabled && select.options.length > 1;
+    });
+    await page.locator('#select-library-context').selectOption('2', { force: true });
+    await page.locator('#library-context-display').getByText(/ID 2/).waitFor();
+    assert.ok(await page.locator('#btn-reset-library-settings').count(), 'Inherited override reset control is missing');
+    assert.ok(await page.locator('#settings-form button[type="submit"]').count(), 'Settings save control is missing');
 
     await page.locator('[data-status="analytics"]').click();
     await page.locator('#analytics-title').waitFor();
@@ -216,7 +247,9 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.locator('#profile-dialog[open]').waitFor();
     await page.locator('#profile-weekly-action-summary-email').waitFor();
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'profile');
-    await page.locator('#profile-cancel').click();
+    await page.locator('#profile-save').click();
+    await page.getByText('Profile preferences saved.', { exact: true }).first().waitFor();
+    await page.locator('#profile-dialog').waitFor({ state: 'hidden' });
 
     await page.locator('#logout-btn').click();
     await page.locator('#login-container').waitFor({ state: 'visible' });
@@ -245,7 +278,7 @@ async function runScopedStaff(browser, args, axeSource, report) {
     assert.ok([403, 404].includes(forbidden.status()), 'Out-of-scope request was exposed');
     await page.goto(`${args.baseOrigin}/staff/?request=${args.otherRequestId}`, { waitUntil: 'networkidle' });
     await page.locator('#app-container').waitFor({ state: 'visible' });
-    await page.getByText('That request is no longer available.', { exact: true }).waitFor();
+    await page.locator('#job-msg').getByText('That request is no longer available.', { exact: true }).waitFor();
     assert.equal(await page.locator('#editModal[open]').count(), 0);
     assert.equal(await page.locator('#nav-settings').isVisible(), false);
     await scan(page, axeSource, args.artifactRoot, report, 'mobile', 'library-scope-denied');
@@ -284,7 +317,7 @@ async function main() {
     await runAnonymous(browser, args, axeSource, report);
     await runSuperAdmin(browser, args, axeSource, report);
     await runScopedStaff(browser, args, axeSource, report);
-    assert.equal(report.states.length, 8, 'Expected eight primary legacy staff browser states');
+    assert.equal(report.states.length, 9, 'Expected nine primary legacy staff browser states');
     await fs.writeFile(
       path.join(args.artifactRoot, 'staff-legacy-browser-results.json'),
       JSON.stringify(report, null, 2),

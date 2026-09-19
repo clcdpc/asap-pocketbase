@@ -22,9 +22,10 @@ async function afterFocusFrame(window) {
 }
 async function settleGridWork(window) {
   // Grid.js schedules follow-up renders after its data promise resolves.
-  await afterFocusFrame(window);
-  await afterFocusFrame(window);
-  await new Promise(resolve => window.setTimeout(resolve, 0));
+  for (let frame = 0; frame < 4; frame += 1) {
+    await afterFocusFrame(window);
+  }
+  await new Promise(resolve => window.setTimeout(resolve, 25));
 }
 
 async function runJourney(scenario) {

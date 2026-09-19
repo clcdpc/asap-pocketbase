@@ -40,6 +40,15 @@ function workflowScope(result) {
 
 function adaptResponse(path, result) {
   rememberVersions(result);
+  if (/^\/api\/asap\/staff\/organizations(?:\?|$)/.test(path) && Array.isArray(result?.data)) {
+    return result.data;
+  }
+  if (/^\/api\/asap\/staff\/polaris\/patron-codes(?:\?|$)/.test(path) && Array.isArray(result?.data)) {
+    return result.data;
+  }
+  if (path === '/api/asap/staff/organizations/sync' && result?.data) {
+    return { ...result.data, synced: result.data.changed || 0 };
+  }
   if (/\/api\/asap\/staff\/(title-requests|additional-copies)\?/.test(path) && Array.isArray(result?.items)) {
     return workflowScope(result);
   }

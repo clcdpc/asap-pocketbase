@@ -386,7 +386,8 @@ export async function announceTabLoaded(status, ctx) {
 
   const requestId = requestedRequestIdFromUrl();
   if (requestId) {
-    let row = ctx.allSuggestions.find(r => r.id === requestId);
+    const expectedType = status === 'additional_copies' ? 'additional_copy' : 'title_request';
+    let row = ctx.allSuggestions.find(r => r.id === requestId && (r.type || 'title_request') === expectedType);
     if (!row) {
       try {
         const collection = status === 'additional_copies' ? 'additional-copies' : 'title-requests';

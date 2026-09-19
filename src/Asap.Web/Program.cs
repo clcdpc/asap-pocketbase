@@ -202,6 +202,7 @@ if (externalConfiguration is not null)
     app.MapStaffLifecycleEndpoints();
     app.MapAdministrationEndpoints();
     app.MapTitleRequestEndpoints();
+    app.MapStaffSuggestionCompatibilityEndpoints();
     app.MapAdditionalCopyEndpoints();
     app.MapAnalyticsEndpoints();
     app.UseHangfireDashboard(

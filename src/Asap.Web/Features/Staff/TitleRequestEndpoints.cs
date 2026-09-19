@@ -1,3 +1,4 @@
+using Asap.Web.Features.Patron;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Asap.Web.Features.Staff;
@@ -59,7 +60,7 @@ public static class TitleRequestEndpoints
         {
             throw;
         }
-        catch (Exception)
+        catch (PolarisOperationalException)
         {
             return Results.Json(
                 new { code = "bib_validation_unavailable", message = "Catalog validation is temporarily unavailable." },

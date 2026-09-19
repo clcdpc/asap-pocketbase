@@ -75,6 +75,20 @@ function collect(directory) {
 collect(legacyRoot);
 const legacyRuntime = runtimeFiles.map(file => fs.readFileSync(file, 'utf8')).join('\n');
 assert.doesNotMatch(legacyRuntime, /PocketBase|authStore|pocketbase\.umd|\.collection\(/i);
+for (const retiredRoute of [
+  '/api/asap/jobs/hold-check',
+  '/api/asap/jobs/promoter-check',
+  '/api/asap/staff/material-types/sync',
+  '/api/asap/staff/requests/delete-closed',
+  '/api/asap/staff/test-polaris',
+  '/api/asap/staff/test-smtp'
+]) {
+  assert.ok(!legacyRuntime.includes(retiredRoute), `legacy staff should not call retired route ${retiredRoute}`);
+}
+assert.match(legacyRuntime, /\/api\/asap\/staff\/patron-lookup/);
+assert.match(legacyRuntime, /\/api\/asap\/staff\/suggestions/);
+assert.match(legacyRuntime, /\/api\/asap\/staff\/workflow\/run-now/);
+assert.match(legacyRuntime, /\/api\/asap\/staff\/email-operations\/test/);
 
 assert.match(nextApp, /createWorkflowApp/);
 assert.match(nextIndex, /href="\/staff-next\/"/);
