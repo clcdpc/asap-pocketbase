@@ -3,7 +3,7 @@ using Asap.Web.Features.Staff;
 
 namespace Asap.Web.Infrastructure.Testing;
 
-public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaffPolarisProvider, IPolarisReferenceProvider
+public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaffPatronLookupProvider, IStaffCatalogSearchProvider, IStaffPolarisProvider, IPolarisReferenceProvider
 {
     private static readonly IReadOnlyList<PolarisPatronCodeSnapshot> PatronCodes =
     [
@@ -64,6 +64,37 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
     {
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult(CreatePatron(barcode));
+    }
+
+    public Task<IReadOnlyList<StaffPatronSearchCandidate>> SearchAsync(
+        string query,
+        int? organizationId,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var normalized = query.Trim();
+        IReadOnlyList<StaffPatronSearchCandidate> candidates =
+            string.Equals(normalized, "multiple", StringComparison.OrdinalIgnoreCase)
+                ?
+                [
+                    new("29001234567890", "Test Patron One", organizationId ?? 2),
+                    new("29001234567891", "Test Patron Two", organizationId ?? 2)
+                ]
+                :
+                [new("29001234567890", "Test Patron", organizationId ?? 2)];
+        return Task.FromResult(candidates);
+    }
+
+    public Task<IReadOnlyList<StaffCatalogSearchCandidate>> SearchAsync(
+        string query,
+        string mode,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        IReadOnlyList<StaffCatalogSearchCandidate> candidates = string.IsNullOrWhiteSpace(query)
+            ? []
+            : [new(9001, $"Catalog result for {query.Trim()}", "Catalog author", "9780000000001", "2026")];
+        return Task.FromResult(candidates);
     }
 
     public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(

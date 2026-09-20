@@ -1,3 +1,4 @@
+using Asap.Web.Features.Patron;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Asap.Web.Features.Staff;
@@ -9,6 +10,7 @@ public static class TitleRequestEndpoints
         var group = endpoints.MapGroup("/api/asap/staff/title-requests").RequireAuthorization();
         group.MapGet("", ListAsync);
         group.MapGet("/{id}", GetAsync);
+        group.MapPost("", CreateSuggestionAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/claim", ClaimAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/unclaim", UnclaimAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/assign", AssignAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
@@ -30,8 +32,77 @@ public static class TitleRequestEndpoints
         endpoints.MapDelete("/api/asap/staff/requests/{id:long}", DeleteAsync)
             .RequireAuthorization()
             .AddEndpointFilter<StaffAntiforgeryFilter>();
+        endpoints.MapPost("/api/asap/staff/patron-lookup", LookupPatronAsync)
+            .RequireAuthorization()
+            .AddEndpointFilter<StaffAntiforgeryFilter>();
+        endpoints.MapPost("/api/asap/staff/catalog-search", SearchCatalogAsync)
+            .RequireAuthorization()
+            .AddEndpointFilter<StaffAntiforgeryFilter>();
         return endpoints;
     }
+
+    private static async Task<IResult> LookupPatronAsync(
+        HttpContext context,
+        StaffPatronLookupInput input,
+        StaffSuggestionService suggestions,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return Results.Json(await suggestions.LookupAsync(
+                Current(context),
+                input,
+                cancellationToken));
+        }
+        catch (StaffSuggestionException exception)
+        {
+            return StaffSuggestionError(exception);
+        }
+    }
+
+    private static async Task<IResult> CreateSuggestionAsync(
+        HttpContext context,
+        StaffSuggestionInput input,
+        StaffSuggestionService suggestions,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await suggestions.CreateAsync(Current(context), input, cancellationToken);
+            return Results.Json(result, statusCode: StatusCodes.Status201Created);
+        }
+        catch (StaffSuggestionException exception)
+        {
+            return StaffSuggestionError(exception);
+        }
+        catch (PatronFlowException exception)
+        {
+            return Results.Json(
+                exception.Response ?? new { code = "staff_suggestion_invalid", message = exception.Message },
+                statusCode: exception.StatusCode);
+        }
+    }
+
+    private static async Task<IResult> SearchCatalogAsync(
+        HttpContext context,
+        StaffCatalogSearchInput input,
+        StaffSuggestionService suggestions,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var results = await suggestions.SearchCatalogAsync(Current(context), input, cancellationToken);
+            return Results.Json(new { results });
+        }
+        catch (StaffSuggestionException exception)
+        {
+            return StaffSuggestionError(exception);
+        }
+    }
+
+    private static IResult StaffSuggestionError(StaffSuggestionException exception) => Results.Json(
+        new { code = exception.Code, message = exception.Message },
+        statusCode: exception.StatusCode);
 
     private static async Task<IResult> ListAsync(
         HttpContext context,

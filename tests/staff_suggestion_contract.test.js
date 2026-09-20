@@ -1,0 +1,39 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const root = path.join(__dirname, '..');
+const web = path.join(root, 'src', 'Asap.Web');
+const endpoints = fs.readFileSync(path.join(web, 'Features', 'Staff', 'TitleRequestEndpoints.cs'), 'utf8');
+const service = fs.readFileSync(path.join(web, 'Features', 'Staff', 'StaffSuggestionService.cs'), 'utf8');
+const creation = fs.readFileSync(path.join(web, 'Features', 'Patron', 'PatronSuggestionService.cs'), 'utf8');
+const workflow = fs.readFileSync(path.join(web, 'Frontend', 'staff', 'js', 'workflow.js'), 'utf8');
+const index = fs.readFileSync(path.join(web, 'Frontend', 'staff', 'index.html'), 'utf8');
+
+assert.match(endpoints, /MapPost\("", CreateSuggestionAsync\)/);
+assert.match(endpoints, /MapPost\("\/api\/asap\/staff\/patron-lookup", LookupPatronAsync\)/);
+assert.match(endpoints, /MapPost\("\/api\/asap\/staff\/catalog-search", SearchCatalogAsync\)/);
+assert.match(endpoints, /CreateSuggestionAsync[\s\S]*StaffAntiforgeryFilter/);
+assert.match(endpoints, /LookupPatronAsync[\s\S]*StaffAntiforgeryFilter/);
+assert.match(endpoints, /SearchCatalogAsync[\s\S]*StaffAntiforgeryFilter/);
+assert.match(service, /candidates\.Take\(10\)/);
+assert.match(service, /EnsurePatronScopeAsync/);
+assert.match(service, /servicing_library_required/);
+assert.match(service, /patron_library_forbidden/);
+assert.match(creation, /enforcePatronLimit: false/);
+assert.match(creation, /sendSubmissionEmail: input\.EmailPatronConfirmation/);
+assert.match(creation, /StaffLibraryOrganizationIdCreatedBy/);
+assert.match(creation, /@actorType/);
+assert.match(creation, /pickupPreferenceChanged/);
+assert.match(workflow, /\/api\/asap\/staff\/patron-lookup/);
+assert.match(workflow, /\/api\/asap\/staff\/title-requests/);
+assert.match(workflow, /\/api\/asap\/staff\/catalog-search/);
+assert.match(workflow, /currentPreferredPickupBranchIdAtLoad/);
+assert.match(workflow, /emailPatronConfirmation/);
+assert.match(workflow, /multiple_matches/);
+assert.match(index, /id="new-suggestion"/);
+assert.match(index, /id="staff-suggestion-dialog"/);
+assert.match(workflow, /grid-quick-suggest/);
+assert.doesNotMatch(workflow, /\.innerHTML\s*=/);
+
+console.log('Staff-assisted suggestion contract regression checks passed');

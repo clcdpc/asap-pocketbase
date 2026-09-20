@@ -66,10 +66,15 @@
             <h1 id="queue-title" tabindex="-1">Title requests</h1>
             <p id="queue-summary">Loading authorized requests...</p>
           </div>
-          <label id="scope-field" class="compact-field" hidden>
-            <span>Library scope</span>
-            <select id="library-scope"></select>
-          </label>
+          <div class="section-heading-actions">
+            <label id="scope-field" class="compact-field" hidden>
+              <span>Library scope</span>
+              <select id="library-scope"></select>
+            </label>
+            <button id="new-suggestion" class="primary-button" type="button">
+              <i class="fa fa-plus" aria-hidden="true"></i> New suggestion
+            </button>
+          </div>
         </div>
 
         <div id="status-tabs" class="status-tabs" role="tablist" aria-label="Request status">
@@ -586,6 +591,26 @@
           <button id="cancel-additional-copy" class="secondary-button" type="button">Cancel</button>
           <button class="primary-button" type="submit"><i class="fa fa-clone" aria-hidden="true"></i>Create task</button>
         </div>
+      </form>
+    </div>
+  </dialog>
+
+  <dialog id="staff-suggestion-dialog" aria-labelledby="staff-suggestion-title" aria-describedby="staff-suggestion-description">
+    <div class="dialog-shell">
+      <header class="dialog-header">
+        <div>
+          <p class="kicker">Staff-assisted request</p>
+          <h2 id="staff-suggestion-title">New suggestion</h2>
+          <p id="staff-suggestion-description">Submit a suggestion on behalf of a patron.</p>
+        </div>
+        <button id="close-staff-suggestion" class="icon-button" type="button" title="Close new suggestion" aria-label="Close new suggestion">
+          <i class="fa fa-times" aria-hidden="true"></i>
+        </button>
+      </header>
+      <form id="staff-suggestion-form" class="dialog-body">
+        <p id="staff-suggestion-status" class="dialog-status" role="status" aria-live="polite"></p>
+        <div id="staff-suggestion-body"></div>
+        <div id="staff-suggestion-actions" class="form-actions"></div>
       </form>
     </div>
   </dialog>

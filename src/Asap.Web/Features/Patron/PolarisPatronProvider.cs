@@ -14,7 +14,7 @@ namespace Asap.Web.Features.Patron;
 public sealed class PolarisPatronProvider(
     IDbContextFactory<AsapDbContext> contextFactory,
     IntegrationCredentialProtector credentialProtector,
-    IHttpClientFactory httpClientFactory) : IPatronProvider, IStaffPolarisProvider, IPolarisReferenceProvider
+    IHttpClientFactory httpClientFactory) : IPatronProvider, IStaffPatronLookupProvider, IStaffCatalogSearchProvider, IStaffPolarisProvider, IPolarisReferenceProvider
 {
     private static readonly HashSet<int> DocumentedCreateNoEffectStatuses =
         [6, -4002, -4004, -4006, -4007, -4020, -4021, -4022];
@@ -190,6 +190,121 @@ public sealed class PolarisPatronProvider(
         catch (Exception exception)
         {
             throw Operational("polaris_patron_refresh_failed", exception);
+        }
+    }
+
+    public async Task<IReadOnlyList<StaffPatronSearchCandidate>> SearchAsync(
+        string query,
+        int? organizationId,
+        CancellationToken cancellationToken)
+    {
+        var (client, _) = await CreateClientAsync(cancellationToken);
+        try
+        {
+            var response = await client.PatronSearchAsync(
+                query.Trim(),
+                page: 1,
+                pageSize: 10,
+                sortBy: PatronSortKeys.PATN,
+                orgId: organizationId,
+                cancellationToken: cancellationToken);
+            var result = response.Data;
+            if (response.Response?.IsSuccessStatusCode != true ||
+                result is null ||
+                result.PAPIErrorCode < 0)
+            {
+                throw new PolarisOperationalException(
+                    "polaris_patron_search_failed",
+                    "Polaris did not return patron search results.");
+            }
+
+            return result.PatronSearchRows
+                .Where(row => !string.IsNullOrWhiteSpace(row.Barcode) && row.PatronID > 0)
+                .Take(10)
+                .Select(row => new StaffPatronSearchCandidate(
+                    row.Barcode!.Trim(),
+                    Clean(row.PatronFirstLastName) ?? row.Barcode.Trim(),
+                    row.OrganizationID))
+                .ToArray();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (PolarisOperationalException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw Operational("polaris_patron_search_failed", exception);
+        }
+    }
+
+    public async Task<IReadOnlyList<StaffCatalogSearchCandidate>> SearchAsync(
+        string query,
+        string mode,
+        CancellationToken cancellationToken)
+    {
+        var (client, settings) = await CreateClientAsync(cancellationToken);
+        try
+        {
+            var qualifier = mode switch
+            {
+                "author" => SearchQualifiers.AU,
+                "identifier" => SearchQualifiers.ISBN,
+                _ => SearchQualifiers.TI
+            };
+            var branchId = settings.PickupOrganizationId is > 0
+                ? settings.PickupOrganizationId.Value
+                : settings.OrganizationIdForRequests is > 0
+                    ? settings.OrganizationIdForRequests.Value
+                    : 0;
+            var response = await client.BibSearchAsync(
+                new BibSearchOptions
+                {
+                    Term = query.Trim(),
+                    SearchType = BibSearchTypes.keyword,
+                    SortOption = SearchSortOptions.RELEVANCE,
+                    Qualifier = qualifier,
+                    Limit = "10",
+                    Branch = branchId,
+                    Page = 1,
+                    PageSize = 10
+                },
+                cancellationToken);
+            var result = response.Data;
+            if (response.Response?.IsSuccessStatusCode != true ||
+                result is null ||
+                result.PAPIErrorCode < 0)
+            {
+                throw new PolarisOperationalException(
+                    "polaris_catalog_search_failed",
+                    "Polaris did not return catalog search results.");
+            }
+
+            return result.BibSearchRows
+                .Where(row => row.ControlNumber > 0 && !string.IsNullOrWhiteSpace(row.Title))
+                .Take(10)
+                .Select(row => new StaffCatalogSearchCandidate(
+                    row.ControlNumber,
+                    Clean(row.Title) ?? row.ControlNumber.ToString(),
+                    Clean(row.Author),
+                    Clean(row.ISBN),
+                    Clean(row.PublicationDate)))
+                .ToArray();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (PolarisOperationalException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw Operational("polaris_catalog_search_failed", exception);
         }
     }
 
@@ -782,6 +897,13 @@ public sealed class PolarisPatronProvider(
         var patron = result?.PatronBasicData;
         if (response.Response?.IsSuccessStatusCode != true)
         {
+            if (response.Response?.StatusCode == HttpStatusCode.NotFound)
+            {
+                throw new PolarisOperationalException(
+                    "polaris_patron_not_found",
+                    "Polaris did not find the patron.");
+            }
+
             throw new PolarisOperationalException(
                 "polaris_patron_transport_failed",
                 "Polaris patron data was unavailable.");
@@ -799,7 +921,10 @@ public sealed class PolarisPatronProvider(
         {
             throw string.IsNullOrEmpty(pin)
                 ? new PolarisOperationalException(
-                    "polaris_patron_refresh_failed",
+                    response.Response?.StatusCode == HttpStatusCode.NotFound ||
+                    LooksLikePatronNotFound(rawContent)
+                        ? "polaris_patron_not_found"
+                        : "polaris_patron_refresh_failed",
                     "Polaris did not return the patron.")
                 : new PatronAuthenticationException("Incorrect Login - Please try again");
         }
@@ -829,6 +954,11 @@ public sealed class PolarisPatronProvider(
             home.DisplayName ?? home.Name ?? home.Abbreviation ?? home.OrganizationID.ToString(),
             ResolvePreferredPickupId(patron.RequestPickupBranchID, patron.PatronOrgID, rawContent));
     }
+
+    private static bool LooksLikePatronNotFound(string content) =>
+        content.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
+        content.Contains("does not exist", StringComparison.OrdinalIgnoreCase) ||
+        content.Contains("no patron", StringComparison.OrdinalIgnoreCase);
 
     private static async Task<IReadOnlyList<OrganizationsGetRow>> LoadOrganizationsAsync(
         PapiClient client,

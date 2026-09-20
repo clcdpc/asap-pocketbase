@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using Asap.Web.Features.Email;
+using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Configuration;
 using Asap.Web.Infrastructure.Security;
 
@@ -39,7 +40,17 @@ internal sealed record ValidatedSuggestion(
     string? Identifier,
     string? Publication,
     bool AutoHold,
-    string? CustomFieldsJson);
+    string? CustomFieldsJson,
+    DateOnly? ExactPublicationDate,
+    string? Notes);
+
+internal sealed record CreationActor(
+    string ActorType,
+    long? StaffUserId,
+    string? ActorName,
+    int? StaffLibraryOrganizationId,
+    bool EmailPatronConfirmation,
+    bool PickupPreferenceChanged);
 
 internal sealed record AutoClaimCandidate(long RuleId, long StaffUserId);
 
@@ -61,6 +72,14 @@ public sealed partial class PatronSuggestionService(
     TimeProvider timeProvider,
     ILogger<PatronSuggestionService> logger)
 {
+    private static readonly CreationActor PatronActor = new(
+        "patron",
+        null,
+        null,
+        null,
+        true,
+        false);
+
     private const string IdentifierMutationBarrierPredicate = """
               AND [Status] = N'suggestion'
               AND NOT EXISTS
@@ -162,14 +181,17 @@ public sealed partial class PatronSuggestionService(
             try
             {
                 (requestId, outboxId, expectedRowVersion) = await InsertAsync(
-                    session,
+                    session.Barcode,
                     patron,
                     selectedBranch,
                     suggestion,
                     configuration,
                     autoClaimCandidate,
                     emailTransportReadiness,
-                    cancellationToken);
+                    PatronActor,
+                    enforcePatronLimit: true,
+                    sendSubmissionEmail: true,
+                    cancellationToken: cancellationToken);
                 break;
             }
             catch (AutoClaimCandidateChangedException) when (attempt < 5)
@@ -216,14 +238,212 @@ public sealed partial class PatronSuggestionService(
             configuration.SuccessMessage);
     }
 
+    public async Task<PatronSuggestionResult> CreateForStaffAsync(
+        CurrentStaff actor,
+        int organizationId,
+        StaffSuggestionInput input,
+        CancellationToken cancellationToken)
+    {
+        var configuration = await configurationService.GetAsync(organizationId, cancellationToken)
+            ?? throw new PatronFlowException(403, "The selected servicing library could not be determined.");
+        if (!configuration.IsActive)
+        {
+            throw new PatronFlowException(403, configuration.SystemNotEnabledMessage);
+        }
+
+        var barcode = Clean(input.Barcode)
+            ?? throw new PatronFlowException(400, "Verify a patron before submitting the suggestion.");
+        PatronSnapshot patron;
+        IReadOnlyList<PickupBranch> pickupBranches;
+        try
+        {
+            patron = await patronProvider.RefreshAsync(barcode, cancellationToken);
+            pickupBranches = await patronProvider.GetPickupBranchesAsync(patron, cancellationToken);
+        }
+        catch (PolarisOperationalException exception)
+        {
+            throw new PatronFlowException(
+                502,
+                "Current patron information could not be loaded from Polaris. Please try again.",
+                innerException: exception);
+        }
+
+        if (!configuration.AllowAnyRegisteredCardLogin &&
+            patron.HomeLibraryOrganizationId != organizationId)
+        {
+            throw new PatronFlowException(
+                403,
+                "This patron is not eligible for the selected servicing library.",
+                new { code = "patron_library_forbidden" });
+        }
+
+        var selectedBranch = pickupBranches.SingleOrDefault(
+            branch => branch.Id == input.PreferredPickupBranchId);
+        if (selectedBranch is null)
+        {
+            throw new PatronFlowException(400, "Choose a valid preferred pickup location.");
+        }
+
+        if (input.CurrentPreferredPickupBranchIdAtLoad.HasValue &&
+            input.CurrentPreferredPickupBranchIdAtLoad != patron.PreferredPickupBranchId &&
+            selectedBranch.Id == input.CurrentPreferredPickupBranchIdAtLoad)
+        {
+            throw new PatronFlowException(
+                409,
+                "The patron's preferred pickup location changed. Refresh the patron and review the current selection.",
+                new { code = "pickup_changed_since_load" });
+        }
+
+        var suggestion = Validate(
+            new PatronSuggestionInput(
+                input.Format,
+                input.Title,
+                input.Author,
+                input.Identifier,
+                input.Publication,
+                input.PreferredPickupBranchId,
+                input.Autohold,
+                input.CustomFields),
+            configuration,
+            allowInformationalMessage: true,
+            forcedAutoHold: input.Autohold,
+            exactPublicationDate: input.ExactPublicationDate,
+            notes: input.Notes);
+        var emailTransportReadiness = input.EmailPatronConfirmation
+            ? await emailSender.CheckReadinessAsync(organizationId, cancellationToken)
+            : EmailTransportReadiness.NotConfigured;
+        var pickupPreferenceChanged = patron.PreferredPickupBranchId != selectedBranch.Id;
+        if (pickupPreferenceChanged)
+        {
+            try
+            {
+                await patronProvider.UpdatePreferredPickupBranchAsync(
+                    barcode,
+                    selectedBranch.Id,
+                    cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                throw new PatronFlowException(
+                    502,
+                    "The patron's preferred pickup location could not be updated in Polaris. The suggestion was not created.",
+                    new { code = "pickup_update_failed" },
+                    exception);
+            }
+        }
+
+        var creationActor = new CreationActor(
+            "staff",
+            actor.Id,
+            actor.DisplayName ?? actor.UserPrincipalName ?? actor.AuthenticationEmail,
+            organizationId,
+            input.EmailPatronConfirmation,
+            pickupPreferenceChanged);
+
+        long requestId = 0;
+        long? outboxId = null;
+        byte[] expectedRowVersion = [];
+        try
+        {
+            for (var attempt = 1; attempt <= 5; attempt++)
+            {
+                var autoClaimCandidate = await FindAutoClaimCandidateAsync(
+                    organizationId,
+                    suggestion.Format.Id,
+                    cancellationToken);
+                try
+                {
+                    (requestId, outboxId, expectedRowVersion) = await InsertAsync(
+                        barcode,
+                        patron,
+                        selectedBranch,
+                        suggestion,
+                        configuration,
+                        autoClaimCandidate,
+                        emailTransportReadiness,
+                        creationActor,
+                        enforcePatronLimit: false,
+                        sendSubmissionEmail: input.EmailPatronConfirmation,
+                        cancellationToken: cancellationToken);
+                    break;
+                }
+                catch (AutoClaimCandidateChangedException) when (attempt < 5)
+                {
+                    continue;
+                }
+                catch (AutoClaimCandidateChangedException exception)
+                {
+                    throw new PatronFlowException(
+                        409,
+                        "The automatic assignment changed while the suggestion was submitted. Please try again.",
+                        innerException: exception);
+                }
+            }
+        }
+        catch (PatronFlowException exception) when (pickupPreferenceChanged)
+        {
+            throw new PatronFlowException(
+                exception.StatusCode,
+                $"The suggestion was not created, but the patron's preferred pickup location was changed successfully. {exception.Message}",
+                new
+                {
+                    code = "request_not_created_pickup_changed",
+                    message = $"The suggestion was not created, but the patron's preferred pickup location was changed successfully. {exception.Message}",
+                    originalResponse = exception.Response
+                },
+                exception);
+        }
+        catch (Exception exception) when (pickupPreferenceChanged && exception is not OperationCanceledException)
+        {
+            throw new PatronFlowException(
+                500,
+                "The suggestion was not created, but the patron's preferred pickup location was changed successfully. Try submitting again.",
+                new { code = "request_not_created_pickup_changed" },
+                exception);
+        }
+
+        if (outboxId.HasValue)
+        {
+            try
+            {
+                outboxDispatcher.Enqueue(outboxId.Value);
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(
+                    exception,
+                    "Staff-created submission email outbox {OutboxId} will be recovered by the sweeper.",
+                    outboxId.Value);
+            }
+        }
+
+        if (suggestion.Identifier is not null)
+        {
+            await ProcessIdentifierLookupAsync(
+                requestId,
+                suggestion.Identifier,
+                organizationId,
+                expectedRowVersion,
+                cancellationToken);
+        }
+
+        return new PatronSuggestionResult(
+            requestId,
+            configuration.SuccessTitle,
+            configuration.SuccessMessage);
+    }
+
     private async Task<(long RequestId, long? OutboxId, byte[] RowVersion)> InsertAsync(
-        PatronSessionContext session,
+        string barcode,
         PatronSnapshot patron,
         PickupBranch selectedBranch,
         ValidatedSuggestion suggestion,
         EffectivePatronConfiguration configuration,
         AutoClaimCandidate? autoClaimCandidate,
         EmailTransportReadiness emailTransportReadiness,
+        CreationActor creationActor,
+        bool enforcePatronLimit,
+        bool sendSubmissionEmail,
         CancellationToken cancellationToken)
     {
         await using var connection = new SqlConnection(connectionString);
@@ -249,16 +469,19 @@ public sealed partial class PatronSuggestionService(
             configuration.OrganizationId,
             suggestion,
             cancellationToken);
-        await EnforceLimitAsync(
-            connection,
-            transaction,
-            session.Barcode,
-            configuration,
-            cancellationToken);
+        if (enforcePatronLimit)
+        {
+            await EnforceLimitAsync(
+                connection,
+                transaction,
+                barcode,
+                configuration,
+                cancellationToken);
+        }
         await EnforceDuplicateAsync(
             connection,
             transaction,
-            session.Barcode,
+            barcode,
             suggestion,
             configuration,
             cancellationToken);
@@ -267,17 +490,17 @@ public sealed partial class PatronSuggestionService(
         await using (var insert = new SqlCommand(
             """
             INSERT INTO [asap].[TitleRequest]
-                ([LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Email],
+                ([LibraryOrganizationId], [PatronOrganizationId], [StaffLibraryOrganizationIdCreatedBy], [Barcode], [Email],
                  [NameFirst], [NameLast], [PatronCodeId], [PatronCodeDescription],
                  [PreferredPickupBranchId], [PreferredPickupBranchName], [LibraryNameSnapshot],
-                 [Title], [Author], [Identifier], [Publication], [CustomFieldsJson], [AutoHold],
+                 [Title], [Author], [Identifier], [Publication], [ExactPublicationDate], [CustomFieldsJson], [AutoHold], [Notes],
                  [MaterialFormatId], [Status], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
             OUTPUT inserted.[Id]
             VALUES
-                (@libraryOrganizationId, @patronOrganizationId, @barcode, @email,
+                (@libraryOrganizationId, @patronOrganizationId, @staffLibraryOrganizationIdCreatedBy, @barcode, @email,
                  @nameFirst, @nameLast, @patronCodeId, @patronCodeDescription,
                  @pickupBranchId, @pickupBranchName, @libraryName,
-                 @title, @author, @identifier, @publication, @customFieldsJson, @autoHold,
+                 @title, @author, @identifier, @publication, @exactPublicationDate, @customFieldsJson, @autoHold, @notes,
                  @materialFormatId, N'suggestion', @isbnCheckStatus, SYSUTCDATETIME(), SYSUTCDATETIME());
             """,
             connection,
@@ -285,7 +508,8 @@ public sealed partial class PatronSuggestionService(
         {
             Add(insert, "@libraryOrganizationId", SqlDbType.Int, configuration.OrganizationId);
             Add(insert, "@patronOrganizationId", SqlDbType.Int, patron.PatronOrganizationId);
-            Add(insert, "@barcode", SqlDbType.NVarChar, session.Barcode, 50);
+            Add(insert, "@staffLibraryOrganizationIdCreatedBy", SqlDbType.Int, creationActor.StaffLibraryOrganizationId);
+            Add(insert, "@barcode", SqlDbType.NVarChar, barcode, 50);
             Add(insert, "@email", SqlDbType.NVarChar, patron.Email, 320);
             Add(insert, "@nameFirst", SqlDbType.NVarChar, patron.NameFirst, 256);
             Add(insert, "@nameLast", SqlDbType.NVarChar, patron.NameLast, 256);
@@ -298,8 +522,14 @@ public sealed partial class PatronSuggestionService(
             Add(insert, "@author", SqlDbType.NVarChar, suggestion.Author, 500);
             Add(insert, "@identifier", SqlDbType.NVarChar, suggestion.Identifier, 100);
             Add(insert, "@publication", SqlDbType.NVarChar, suggestion.Publication, 200);
+            Add(
+                insert,
+                "@exactPublicationDate",
+                SqlDbType.Date,
+                suggestion.ExactPublicationDate?.ToDateTime(TimeOnly.MinValue));
             Add(insert, "@customFieldsJson", SqlDbType.NVarChar, suggestion.CustomFieldsJson, -1);
             Add(insert, "@autoHold", SqlDbType.Bit, suggestion.AutoHold);
+            Add(insert, "@notes", SqlDbType.NVarChar, suggestion.Notes, -1);
             Add(insert, "@materialFormatId", SqlDbType.BigInt, suggestion.Format.Id);
             Add(
                 insert,
@@ -323,20 +553,29 @@ public sealed partial class PatronSuggestionService(
             connection,
             transaction,
             requestId,
-            session.Barcode,
+            barcode,
             configuration.OrganizationId,
             suggestion.Identifier,
             cancellationToken);
-        await InsertCreationEventAsync(connection, transaction, requestId, cancellationToken);
-        var outboxId = await InsertSubmissionEmailAsync(
+        await InsertCreationEventAsync(
             connection,
             transaction,
             requestId,
-            patron,
-            suggestion,
+            creationActor,
             configuration,
-            emailTransportReadiness,
+            patron,
             cancellationToken);
+        var outboxId = sendSubmissionEmail
+            ? await InsertSubmissionEmailAsync(
+                connection,
+                transaction,
+                requestId,
+                patron,
+                suggestion,
+                configuration,
+                emailTransportReadiness,
+                cancellationToken)
+            : null;
         byte[] rowVersion;
         await using (var version = new SqlCommand(
             "SELECT [RowVersion] FROM [asap].[TitleRequest] WHERE [Id] = @requestId;",
@@ -901,18 +1140,37 @@ public sealed partial class PatronSuggestionService(
         SqlConnection connection,
         SqlTransaction transaction,
         long requestId,
+        CreationActor actor,
+        EffectivePatronConfiguration configuration,
+        PatronSnapshot patron,
         CancellationToken cancellationToken)
     {
+        var message = actor.ActorType == "staff"
+            ? $"Suggestion created on behalf of patron by {actor.ActorName ?? "staff"}."
+            : "Suggestion submitted by patron.";
+        var metadata = JsonSerializer.Serialize(new
+        {
+            servicingLibraryOrganizationId = configuration.OrganizationId,
+            patronOrganizationId = patron.PatronOrganizationId,
+            homeLibraryOrganizationId = patron.HomeLibraryOrganizationId,
+            emailPatronConfirmation = actor.EmailPatronConfirmation,
+            pickupPreferenceChanged = actor.PickupPreferenceChanged
+        });
         await using var command = new SqlCommand(
             """
             INSERT INTO [asap].[TitleRequestEvent]
-                ([TitleRequestId], [EventType], [Status], [ActorType], [Message], [CreatedUtc])
+                ([TitleRequestId], [EventType], [Status], [ActorType], [StaffUserId], [ActorName], [Message], [MetadataJson], [CreatedUtc])
             VALUES
-                (@requestId, N'created', N'suggestion', N'patron', N'Suggestion submitted by patron.', SYSUTCDATETIME());
+                (@requestId, N'created', N'suggestion', @actorType, @staffUserId, @actorName, @message, @metadataJson, SYSUTCDATETIME());
             """,
             connection,
             transaction);
         Add(command, "@requestId", SqlDbType.BigInt, requestId);
+        Add(command, "@actorType", SqlDbType.NVarChar, actor.ActorType, 16);
+        Add(command, "@staffUserId", SqlDbType.BigInt, actor.StaffUserId);
+        Add(command, "@actorName", SqlDbType.NVarChar, actor.ActorName, 256);
+        Add(command, "@message", SqlDbType.NVarChar, message, -1);
+        Add(command, "@metadataJson", SqlDbType.NVarChar, metadata, -1);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -1309,7 +1567,11 @@ public sealed partial class PatronSuggestionService(
 
     private static ValidatedSuggestion Validate(
         PatronSuggestionInput input,
-        EffectivePatronConfiguration configuration)
+        EffectivePatronConfiguration configuration,
+        bool allowInformationalMessage = false,
+        bool? forcedAutoHold = null,
+        DateOnly? exactPublicationDate = null,
+        string? notes = null)
     {
         var formatCode = Clean(input.Format) ?? "book";
         var format = configuration.Formats.SingleOrDefault(item =>
@@ -1319,7 +1581,8 @@ public sealed partial class PatronSuggestionService(
             throw new PatronFlowException(400, "Choose a valid material format.");
         }
 
-        if (!string.Equals(format.MessageBehavior, "none", StringComparison.Ordinal))
+        if (!allowInformationalMessage &&
+            !string.Equals(format.MessageBehavior, "none", StringComparison.Ordinal))
         {
             var message = format.MessageBehavior switch
             {
@@ -1345,14 +1608,22 @@ public sealed partial class PatronSuggestionService(
         }
 
         var customFields = ValidateCustomFields(input.CustomFields, format, configuration.CustomFields);
+        var cleanedNotes = Clean(notes);
+        if (cleanedNotes?.Length > 10000)
+        {
+            throw new PatronFlowException(400, "Notes cannot exceed 10000 characters.");
+        }
+
         return new ValidatedSuggestion(
             format,
             TitleCase(title!),
             author,
             identifier,
             publication,
-            configuration.AllowPatronAutoholdOptOut ? input.Autohold ?? true : true,
-            customFields);
+            forcedAutoHold ?? (configuration.AllowPatronAutoholdOptOut ? input.Autohold ?? true : true),
+            customFields,
+            exactPublicationDate,
+            cleanedNotes);
     }
 
     private static string? ValidateField(
