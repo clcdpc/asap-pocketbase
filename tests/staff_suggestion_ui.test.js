@@ -63,12 +63,12 @@ async function until(predicate, message) {
             title: { mode: 'required', label: 'Title' },
             author: { mode: 'optional', label: 'Author' },
             identifier: { mode: 'optional', label: 'Identifier' },
-            publication: { mode: 'optional', label: 'Publication' }
+            publication: { mode: 'required', label: 'Publication Timing' }
           },
           customFields: {}
         }
       },
-      publicationOptions: ['not_published'],
+      publicationOptions: ['Already published'],
       additionalFieldDefinitions: []
     };
     let lookupCount = 0;
@@ -130,6 +130,8 @@ async function until(predicate, message) {
         assert.equal(body.currentPreferredPickupBranchIdAtLoad, 101);
         assert.equal(body.emailPatronConfirmation, false);
         assert.equal(body.preferredPickupBranchId, 101);
+        assert.equal(body.publication, 'Already published');
+        assert.equal(body.exactPublicationDate, null);
         return response(201, { id: 41, successTitle: 'Created', successMessage: 'Created' });
       }
       throw new Error(`Unexpected request ${url}`);
@@ -152,6 +154,8 @@ async function until(predicate, message) {
     assert.equal(document.querySelector('.staff-suggestion-fields input[maxlength="500"]').value, 'Catalog-selected title');
     const title = document.querySelector('.staff-suggestion-fields input[required]');
     title.value = 'A staff-created suggestion';
+    const publication = document.querySelector('.staff-suggestion-fields select[aria-label="Publication Timing"]');
+    publication.value = 'Already published';
     document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
     await until(() => document.getElementById('staff-suggestion-dialog').open === false, 'successful staff suggestion must close the dialog');
     assert.equal(lookupCount, 2, 'candidate selection must perform a second authoritative lookup');

@@ -45,7 +45,7 @@ public sealed partial class PatronJourneyTests
                 title,
                 "Staff Author",
                 null,
-                null,
+                "Already published",
                 new DateOnly(2026, 9, 20),
                 "Requested during a staff desk interaction.",
                 101,
@@ -64,6 +64,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(2, request.StaffLibraryOrganizationIdCreatedBy);
             Assert.AreEqual("29001234567890", request.Barcode);
             Assert.AreEqual(title, request.Title);
+            Assert.AreEqual("Already published", request.Publication);
             Assert.AreEqual(new DateOnly(2026, 9, 20), request.ExactPublicationDate);
             Assert.AreEqual("Requested during a staff desk interaction.", request.Notes);
             Assert.IsFalse(await context.EmailOutbox.AnyAsync(item => item.BusinessKey == $"patron-submission:{created.Id}"));
@@ -83,6 +84,43 @@ public sealed partial class PatronJourneyTests
                 .Where(item => item.Id == created.Id)
                 .ExecuteDeleteAsync();
         }
+    }
+
+    [TestMethod]
+    public async Task StaffSuggestionRequiresPublicationTimingEvenWhenExactPublicationDateIsProvided()
+    {
+        using var startup = factory!.CreateClient();
+        await startup.GetAsync("/api/asap/staff/session");
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var suggestions = factory.Services.GetRequiredService<StaffSuggestionService>();
+        var title = $"Staff publication validation {Guid.NewGuid():N}";
+
+        var exception = await Assert.ThrowsAsync<PatronFlowException>(() =>
+            suggestions.CreateAsync(
+                actor,
+                new StaffSuggestionInput(
+                    2,
+                    "29001234567890",
+                    "book",
+                    title,
+                    "Staff Author",
+                    null,
+                    null,
+                    new DateOnly(2026, 9, 20),
+                    "This request should fail before persistence.",
+                    101,
+                    101,
+                    true,
+                    false,
+                    new Dictionary<string, string?>()),
+                CancellationToken.None));
+
+        Assert.AreEqual(400, exception.StatusCode);
+        StringAssert.Contains("Publication Timing is required.", exception.Message);
+
+        var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var context = await contextFactory.CreateDbContextAsync();
+        Assert.IsFalse(await context.TitleRequests.AnyAsync(item => item.Title == title));
     }
 
     [TestMethod]
