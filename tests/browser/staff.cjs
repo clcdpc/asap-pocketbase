@@ -111,6 +111,64 @@ async function assertReadableMobileQueue(page, selector = '#request-grid') {
   assert.ok(geometry.wrapperRight <= geometry.viewportWidth + 1, 'Queue wrapper must stay inside the viewport');
 }
 
+async function assertStaffTabGeometry(page, viewport, report) {
+  const geometry = await page.evaluate(() => {
+    const selectors = ['.view-tabs', '#status-tabs'];
+    return {
+      viewportWidth: innerWidth,
+      documentWidth: document.documentElement.scrollWidth,
+      strips: selectors.map(selector => {
+        const element = document.querySelector(selector);
+        if (!element) return { selector, missing: true };
+        const bounds = element.getBoundingClientRect();
+        const styles = getComputedStyle(element);
+        return {
+          selector,
+          missing: false,
+          clientHeight: element.clientHeight,
+          scrollHeight: element.scrollHeight,
+          clientWidth: element.clientWidth,
+          scrollWidth: element.scrollWidth,
+          overflowX: styles.overflowX,
+          overflowY: styles.overflowY,
+          left: bounds.left,
+          right: bounds.right,
+          top: bounds.top,
+          bottom: bounds.bottom
+        };
+      })
+    };
+  });
+
+  assert.equal(geometry.strips.some(strip => strip.missing), false, `${viewport} staff tab strip is missing`);
+  for (const strip of geometry.strips) {
+    assert.ok(
+      strip.scrollHeight <= strip.clientHeight,
+      `${viewport} ${strip.selector} has vertical overflow (${strip.scrollHeight} > ${strip.clientHeight})`
+    );
+    assert.notEqual(strip.overflowY, 'auto', `${viewport} ${strip.selector} must not compute overflow-y to auto`);
+    assert.notEqual(strip.overflowY, 'scroll', `${viewport} ${strip.selector} must not compute overflow-y to scroll`);
+    assert.ok(strip.left >= -1, `${viewport} ${strip.selector} extends left of the viewport`);
+    assert.ok(
+      strip.right <= geometry.viewportWidth + 1,
+      `${viewport} ${strip.selector} extends right of the viewport`
+    );
+  }
+  assert.ok(
+    geometry.documentWidth <= geometry.viewportWidth + 1,
+    `${viewport} staff queue introduced document-level horizontal overflow`
+  );
+  if (viewport === 'mobile') {
+    assert.ok(
+      geometry.strips.some(strip => strip.scrollWidth > strip.clientWidth),
+      'Mobile staff tabs should retain horizontal scrolling when the row is wider than the viewport'
+    );
+  }
+
+  report.tabStrips ??= [];
+  report.tabStrips.push({ viewport, ...geometry });
+}
+
 async function session(context, baseOrigin) {
   const response = await context.request.get(`${baseOrigin}/api/asap/staff/session`);
   assert.equal(response.status(), 200, 'Could not load the staff session contract');
@@ -369,6 +427,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
 
     await page.getByRole('button', { name: 'Requests' }).click();
     assert.equal(await page.evaluate(() => document.activeElement.id), 'queue-title');
+    await assertStaffTabGeometry(page, 'desktop', report);
     const suggestionTab = page.locator('[data-status="suggestion"]');
     await suggestionTab.focus();
     await page.keyboard.press('ArrowRight');
@@ -1211,6 +1270,7 @@ async function runScopedBlocked(browser, args, axeSource, report) {
     await scan(page, axeSource, args.artifactRoot, report, 'mobile', 'scoped-blocked-recovery');
     await page.getByRole('button', { name: 'Close request details' }).click();
     await page.locator('#request-dialog').waitFor({ state: 'hidden' });
+    await assertStaffTabGeometry(page, 'mobile', report);
     await assertReadableMobileQueue(page);
     await scan(page, axeSource, args.artifactRoot, report, 'mobile', 'scoped-queue');
 
