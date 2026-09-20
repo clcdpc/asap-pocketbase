@@ -12,6 +12,145 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
+    public async Task PostmarkTransportCredentialIsSystemOwnedAcrossSettingsAndEffectiveResolution()
+    {
+        var appFactory = factory!;
+        using var client = appFactory.CreateClient();
+        var actor = await ReadConfiguredSuperAdminAsync();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+
+        const int libraryId = 91405;
+        await UpsertTestOrganizationAsync(libraryId, "Postmark Scope Library", "PSL");
+        var contextFactory = appFactory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        string? originalSystemToken;
+        string? originalSystemFromAddress;
+        string? originalSystemFromName;
+        await using (var context = await contextFactory.CreateDbContextAsync())
+        {
+            var system = await context.EmailSettings.SingleAsync(item => item.OrganizationId == 1);
+            originalSystemToken = system.ProtectedServerToken;
+            originalSystemFromAddress = system.FromAddress;
+            originalSystemFromName = system.FromName;
+        }
+
+        try
+        {
+            using var initialSystem = await ReadSettingsDocumentAsync(client, "system");
+            using (var saveSystem = await SaveSettingsDocumentAsync(
+                       client,
+                       initialSystem.RootElement,
+                       "system",
+                       new Dictionary<string, object?>
+                       {
+                           ["email"] = new Dictionary<string, object?>
+                           {
+                               ["postmarkToken"] = "system-owned-token-sentinel"
+                           }
+                       }))
+            {
+                Assert.AreEqual("saved", saveSystem.RootElement.GetProperty("code").GetString());
+            }
+
+            string systemCiphertext;
+            await using (var context = await contextFactory.CreateDbContextAsync())
+            {
+                systemCiphertext = (await context.EmailSettings.SingleAsync(item => item.OrganizationId == 1))
+                    .ProtectedServerToken!;
+                Assert.AreNotEqual("system-owned-token-sentinel", systemCiphertext);
+            }
+
+            await using (var context = await contextFactory.CreateDbContextAsync())
+            {
+                context.EmailSettings.Add(new EmailSettings
+                {
+                    OrganizationId = libraryId,
+                    ProtectedServerToken = "legacy-library-ciphertext",
+                    UpdatedUtc = DateTime.UtcNow
+                });
+                await context.SaveChangesAsync();
+            }
+
+            using var initialLibrary = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            using (var forgedLibrarySave = await SaveSettingsDocumentAsync(
+                       client,
+                       initialLibrary.RootElement,
+                       libraryId.ToString(),
+                       new Dictionary<string, object?>
+                       {
+                           ["email"] = new Dictionary<string, object?>
+                           {
+                               ["fromAddress"] = "library.sender@example.org",
+                               ["fromName"] = "Library Sender",
+                               ["postmarkToken"] = "forged-library-token",
+                               ["clearPostmarkToken"] = true
+                           }
+                       }))
+            {
+                Assert.AreEqual("saved", forgedLibrarySave.RootElement.GetProperty("code").GetString());
+            }
+
+            using var observedLibrary = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            var libraryEmail = observedLibrary.RootElement.GetProperty("stored")
+                .GetProperty("libraryOverride").GetProperty("email");
+            Assert.IsFalse(libraryEmail.GetProperty("hasPostmarkToken").GetBoolean());
+            Assert.AreEqual("library.sender@example.org", libraryEmail.GetProperty("fromAddress").GetString());
+            Assert.AreEqual("Library Sender", libraryEmail.GetProperty("fromName").GetString());
+            Assert.IsTrue(observedLibrary.RootElement.GetProperty("effective").GetProperty("email")
+                .GetProperty("hasServerToken").GetBoolean());
+
+            await using (var context = await contextFactory.CreateDbContextAsync())
+            {
+                var system = await context.EmailSettings.AsNoTracking().SingleAsync(item => item.OrganizationId == 1);
+                var library = await context.EmailSettings.AsNoTracking().SingleAsync(item => item.OrganizationId == libraryId);
+                Assert.AreEqual(systemCiphertext, system.ProtectedServerToken);
+                Assert.IsNull(library.ProtectedServerToken);
+            }
+
+            var effective = await appFactory.Services.GetRequiredService<PatronConfigurationService>()
+                .GetAsync(libraryId, CancellationToken.None);
+            Assert.IsNotNull(effective);
+            Assert.AreEqual(systemCiphertext, effective!.Email.ProtectedServerToken);
+
+            using var systemWithToken = await ReadSettingsDocumentAsync(client, "system");
+            using (var clearSystem = await SaveSettingsDocumentAsync(
+                       client,
+                       systemWithToken.RootElement,
+                       "system",
+                       new Dictionary<string, object?>
+                       {
+                           ["email"] = new Dictionary<string, object?>
+                           {
+                               ["clearPostmarkToken"] = true
+                           }
+                       }))
+            {
+                Assert.AreEqual("saved", clearSystem.RootElement.GetProperty("code").GetString());
+            }
+
+            using var clearedSystem = await ReadSettingsDocumentAsync(client, "system");
+            Assert.IsFalse(clearedSystem.RootElement.GetProperty("stored").GetProperty("configuredSystem")
+                .GetProperty("email").GetProperty("hasPostmarkToken").GetBoolean());
+        }
+        finally
+        {
+            await using (var context = await contextFactory.CreateDbContextAsync())
+            {
+                var system = await context.EmailSettings.SingleAsync(item => item.OrganizationId == 1);
+                system.ProtectedServerToken = originalSystemToken;
+                system.FromAddress = originalSystemFromAddress;
+                system.FromName = originalSystemFromName;
+                await context.SaveChangesAsync();
+            }
+
+            await CleanupScalarSettingsTestDataAsync(
+                libraryId,
+                $"postmark-scope-{Guid.NewGuid():N}",
+                $"postmark-scope-{Guid.NewGuid():N}");
+        }
+    }
+
+    [TestMethod]
     [DataRow("system.sender@example.org", null, "system.sender@example.org")]
     [DataRow("system.sender@example.org", "library.sender@example.org", "library.sender@example.org")]
     [DataRow(null, "library.sender@example.org", "library.sender@example.org")]

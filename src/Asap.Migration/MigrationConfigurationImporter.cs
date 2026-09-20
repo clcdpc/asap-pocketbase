@@ -506,6 +506,25 @@ internal static class MigrationConfigurationImporter
                 "credential_protection_not_configured",
                 "A target Postmark token requires the target Data Protection import inputs.");
         }
+
+        using (var cleanup = new SqlCommand(
+                   "UPDATE [asap].[EmailSettings] SET [ProtectedServerToken] = NULL, [UpdatedUtc] = @updatedUtc WHERE [OrganizationId] <> 1 AND [ProtectedServerToken] IS NOT NULL;",
+                   connection,
+                   transaction))
+        {
+            cleanup.Parameters.AddWithValue("@updatedUtc", exportedAtUtc);
+            var cleanedRows = cleanup.ExecuteNonQuery();
+            if (cleanedRows > 0)
+            {
+                transformations.Add(new
+                {
+                    entity = "email_settings",
+                    rows = cleanedRows,
+                    disposition = "cleared_legacy_library_postmark_credentials"
+                });
+            }
+        }
+
         var templateRows = MigrationPackageReader.ReadRowsOrEmpty(
             package,
             "email-templates.json",
@@ -1152,6 +1171,16 @@ internal static class MigrationConfigurationImporter
                 "library email settings");
             counter.Rows++;
             counter.Fields += 2;
+        }
+
+        using (var command = new SqlCommand(
+                   "SELECT COUNT_BIG(*) FROM [asap].[EmailSettings] WHERE [OrganizationId] <> 1 AND [ProtectedServerToken] IS NOT NULL;",
+                   connection,
+                   transaction))
+        {
+            var legacyCredentialRows = Convert.ToInt64(command.ExecuteScalar() ?? 0L);
+            EnsureConfiguration(legacyCredentialRows == 0, "library email transport credentials");
+            counter.Fields++;
         }
     }
 

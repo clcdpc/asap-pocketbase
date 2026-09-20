@@ -80,7 +80,8 @@ const { JSDOM } = require('jsdom');
     editors.populate(data, false);
 
     assert.strictEqual(root.querySelectorAll('textarea[data-settings-json]').length, 0);
-    assert.strictEqual(root.querySelector('[data-setting-key="postmarkToken"]').dataset.systemOnly, undefined);
+    assert.strictEqual(root.querySelector('[data-setting-key="postmarkToken"]').dataset.systemOnly, 'true');
+    assert.strictEqual(document.getElementById('settings-email-transport').dataset.systemOnly, 'true');
     assert.strictEqual(document.getElementById('publication-options-use-system').checked, false);
     assert.strictEqual(document.querySelectorAll('#publication-options-editor [data-domain-row]').length, 2);
     assert.strictEqual(document.getElementById('add-publication-option').disabled, false);

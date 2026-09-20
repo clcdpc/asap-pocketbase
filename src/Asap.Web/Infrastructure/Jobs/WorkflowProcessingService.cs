@@ -286,9 +286,13 @@ public sealed class WorkflowProcessingService(
             }
             if (await context.EmailOutbox.AnyAsync(item => item.BusinessKey == businessKey, cancellationToken)) continue;
             var librarySettings = await context.EmailSettings.AsNoTracking()
-                .SingleOrDefaultAsync(item => item.OrganizationId == recipient.OrganizationId, cancellationToken);
+                .Where(item => item.OrganizationId == recipient.OrganizationId)
+                .Select(item => new { item.FromAddress, item.FromName })
+                .SingleOrDefaultAsync(cancellationToken);
             var systemEmail = await context.EmailSettings.AsNoTracking()
-                .SingleOrDefaultAsync(item => item.OrganizationId == 1, cancellationToken);
+                .Where(item => item.OrganizationId == 1)
+                .Select(item => new { item.FromAddress, item.FromName })
+                .SingleOrDefaultAsync(cancellationToken);
             var fromAddress = Clean(librarySettings?.FromAddress) ?? Clean(systemEmail?.FromAddress);
             var fromName = Clean(librarySettings?.FromName) ?? Clean(systemEmail?.FromName);
             var currentAddress = !string.IsNullOrWhiteSpace(recipient.WeeklyActionSummaryEmail)
@@ -1511,11 +1515,15 @@ public sealed class WorkflowProcessingService(
         CancellationToken cancellationToken)
     {
         var systemEmail = await context.EmailSettings.AsNoTracking()
-            .SingleOrDefaultAsync(item => item.OrganizationId == 1, cancellationToken);
+            .Where(item => item.OrganizationId == 1)
+            .Select(item => new { item.FromAddress, item.FromName })
+            .SingleOrDefaultAsync(cancellationToken);
         var libraryEmail = request.LibraryOrganizationId == 1
             ? null
             : await context.EmailSettings.AsNoTracking()
-                .SingleOrDefaultAsync(item => item.OrganizationId == request.LibraryOrganizationId, cancellationToken);
+                .Where(item => item.OrganizationId == request.LibraryOrganizationId)
+                .Select(item => new { item.FromAddress, item.FromName })
+                .SingleOrDefaultAsync(cancellationToken);
         var fromAddress = Clean(libraryEmail?.FromAddress) ?? Clean(systemEmail?.FromAddress);
         var fromName = Clean(libraryEmail?.FromName) ?? Clean(systemEmail?.FromName);
         var template = settings.OutstandingTimeoutRejectionTemplateId.HasValue

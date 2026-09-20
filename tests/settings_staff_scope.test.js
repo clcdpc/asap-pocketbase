@@ -148,6 +148,20 @@ async function flush() {
     assert.deepStrictEqual(settingsRequests, ['/api/asap/staff/settings?orgId=2']);
     assert.strictEqual(document.getElementById('settings-scope').value, '2');
     assert.strictEqual(document.getElementById('settings-scope-field').hidden, true);
+    assert.strictEqual(document.getElementById('settings-scope-callout').hidden, false);
+    assert.match(document.getElementById('settings-scope-callout-title').textContent, /Library Two/);
+    assert.strictEqual(document.getElementById('settings-switch-to-system').hidden, true);
+    assert.strictEqual(document.querySelector('#settings-nav-start [data-system-only-label]').hidden, false);
+    assert.strictEqual(document.querySelector('#settings-nav-polaris [data-system-only-label]').hidden, false);
+    assert.strictEqual(document.getElementById('settings-email-transport').disabled, true);
+    assert.strictEqual(document.getElementById('email-postmark-token').disabled, true);
+    assert.strictEqual(document.getElementById('email-clear-postmark-token').disabled, true);
+    assert.strictEqual(document.querySelector('[data-setting-key="postmarkToken"] .settings-override-control'), null);
+
+    // Disabled controls can still be forged by a direct caller. The payload must
+    // remain scope-safe even if a script assigns a legacy token and clear flag.
+    document.getElementById('email-postmark-token').value = 'forged-library-token';
+    document.getElementById('email-clear-postmark-token').checked = true;
 
     const note = document.getElementById('patron-login-note');
     note.value = 'Own library edit';
@@ -161,6 +175,7 @@ async function flush() {
 
     assert.strictEqual(saveBody.orgId, '2');
     assert.strictEqual(saveBody.patron.loginNote, 'Own library edit');
+    assert.deepStrictEqual(saveBody.email, {});
     assert.strictEqual(Object.prototype.hasOwnProperty.call(saveBody, 'systemSettings'), false);
     assert.strictEqual(Object.prototype.hasOwnProperty.call(saveBody, 'polaris'), false);
     assert.ok(settingsRequests.every(url => url === '/api/asap/staff/settings?orgId=2'));

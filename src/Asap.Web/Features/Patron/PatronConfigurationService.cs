@@ -98,6 +98,11 @@ public sealed record EffectivePatronConfiguration(
 
 public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> contextFactory)
 {
+    private sealed record EmailSettingsRead(
+        string? FromAddress,
+        string? FromName,
+        string? ProtectedServerToken);
+
     public async Task<EffectivePatronConfiguration?> GetAsync(
         int organizationId,
         CancellationToken cancellationToken)
@@ -385,15 +390,22 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
         CancellationToken cancellationToken)
     {
         var system = await context.EmailSettings.AsNoTracking()
-            .SingleAsync(item => item.OrganizationId == 1, cancellationToken);
+            .Where(item => item.OrganizationId == 1)
+            .Select(item => new EmailSettingsRead(
+                item.FromAddress,
+                item.FromName,
+                item.ProtectedServerToken))
+            .SingleAsync(cancellationToken);
         var library = organizationId == 1
             ? null
             : await context.EmailSettings.AsNoTracking()
-                .SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
+                .Where(item => item.OrganizationId == organizationId)
+                .Select(item => new EmailSettingsRead(item.FromAddress, item.FromName, null))
+                .SingleOrDefaultAsync(cancellationToken);
         return new EffectiveEmailConfiguration(
             Inherit(library?.FromAddress, system.FromAddress),
             Inherit(library?.FromName, system.FromName),
-            Inherit(library?.ProtectedServerToken, system.ProtectedServerToken));
+            system.ProtectedServerToken);
     }
 
     private static async Task<EffectiveEmailTemplate?> LoadSubmissionTemplateAsync(

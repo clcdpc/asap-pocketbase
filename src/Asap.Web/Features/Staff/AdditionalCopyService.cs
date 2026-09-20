@@ -644,9 +644,13 @@ public sealed class AdditionalCopyService(
             return null;
         }
         var system = await context.EmailSettings.AsNoTracking()
-            .SingleOrDefaultAsync(item => item.OrganizationId == 1, cancellationToken);
+            .Where(item => item.OrganizationId == 1)
+            .Select(item => new { item.FromAddress, item.FromName })
+            .SingleOrDefaultAsync(cancellationToken);
         var library = await context.EmailSettings.AsNoTracking()
-            .SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
+            .Where(item => item.OrganizationId == organizationId)
+            .Select(item => new { item.FromAddress, item.FromName })
+            .SingleOrDefaultAsync(cancellationToken);
         var fromAddress = Clean(library?.FromAddress) ?? Clean(system?.FromAddress);
         var fromName = Clean(library?.FromName) ?? Clean(system?.FromName);
         string? suppressionReason = null;
