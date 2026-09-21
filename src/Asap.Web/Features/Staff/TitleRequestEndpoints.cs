@@ -6,7 +6,7 @@ namespace Asap.Web.Features.Staff;
 public static class TitleRequestEndpoints
 {
     public sealed record BibLookupInput(string? BibId, string? Mode, string? Query, string? Title, string? Author,
-        string? RequestId, string? Barcode);
+        string? RequestId, string? Barcode, string? LibraryOrgId);
 
     public static IEndpointRouteBuilder MapTitleRequestEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -46,6 +46,9 @@ public static class TitleRequestEndpoints
         IStaffPolarisProvider provider,
         IPatronProvider patrons,
         PatronConfigurationService configurations,
+        TitleRequestViewService views,
+        StaffEligibilityService staffEligibility,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         var mode = input.Mode?.Trim().ToLowerInvariant();
@@ -79,23 +82,57 @@ public static class TitleRequestEndpoints
                 return Results.NotFound(new { code = "bib_not_found", message = "The Polaris BIB was not found." });
             }
             var actor = StaffAuthenticationEndpoints.RequireCurrentStaff(context);
-            var holdingsSummary = await provider.GetBibHoldingsAsync(bibId, actor.OrganizationId, cancellationToken);
+            var scope = await ResolveBibLookupScopeAsync(
+                actor,
+                input,
+                views,
+                staffEligibility,
+                cancellationToken);
+            if (scope.Error is not null)
+            {
+                return scope.Error;
+            }
+            var configuration = await configurations.GetAsync(scope.OrganizationId, cancellationToken);
+            if (configuration is null)
+            {
+                return Results.NotFound(new { code = "organization_not_found" });
+            }
+            var holdingsSummary = await provider.GetBibHoldingsAsync(bibId, scope.OrganizationId, cancellationToken);
             object? patronHoldCheck = null;
             if (!string.IsNullOrWhiteSpace(input.Barcode))
             {
-                var patron = await patrons.RefreshAsync(input.Barcode.Trim(), cancellationToken);
-                var organizationId = actor.Role == "super_admin" ? patron.HomeLibraryOrganizationId : actor.OrganizationId;
-                var configuration = await configurations.GetAsync(organizationId, cancellationToken);
-                if (configuration is null || !configuration.IsActive)
+                var barcode = input.Barcode.Trim();
+                try
                 {
-                    return Results.Json(new { code = "patron_library_forbidden" }, statusCode: StatusCodes.Status403Forbidden);
+                    var patron = await patrons.RefreshAsync(barcode, cancellationToken);
+                    if (!configuration.AllowAnyRegisteredCardLogin &&
+                        patron.HomeLibraryOrganizationId != scope.OrganizationId)
+                    {
+                        return Results.Json(
+                            new
+                            {
+                                code = "patron_library_forbidden",
+                                message = "This patron belongs to a different library."
+                            },
+                            statusCode: StatusCodes.Status403Forbidden);
+                    }
+                    var holds = await provider.GetPatronHoldsAsync(patron.Barcode, cancellationToken);
+                    var hasHold = holds.Any(hold => hold.BibId == bibId &&
+                        !new[] { "cancel", "expire", "filled", "deleted" }.Any(terminal =>
+                            (hold.StatusDescription ?? string.Empty).Contains(terminal, StringComparison.OrdinalIgnoreCase)));
+                    patronHoldCheck = new { ok = true, statusValue = hasHold ? 29 : 0, readOnly = true };
                 }
-                PatronSuggestionService.EnforceStaffPatronEligibility(configuration, patron);
-                var holds = await provider.GetPatronHoldsAsync(patron.Barcode, cancellationToken);
-                var hasHold = holds.Any(hold => hold.BibId == bibId &&
-                    !new[] { "cancel", "expire", "filled", "deleted" }.Any(terminal =>
-                        (hold.StatusDescription ?? string.Empty).Contains(terminal, StringComparison.OrdinalIgnoreCase)));
-                patronHoldCheck = new { ok = true, statusValue = hasHold ? 29 : 0, readOnly = true };
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (PolarisOperationalException exception)
+                {
+                    loggerFactory.CreateLogger("Asap.Web.Features.Staff.TitleRequestEndpoints")
+                        .LogWarning(exception,
+                            "Patron hold check failed during BIB lookup for patron barcode {PatronBarcode}",
+                            barcode);
+                }
             }
             return Results.Json(new { bibId = bibId.ToString(), result.Title, result.Author,
                 result.Publication, result.Format, result.Identifier, result.Publisher, holdingsSummary, patronHoldCheck });
@@ -114,6 +151,86 @@ public static class TitleRequestEndpoints
         {
             return Results.Json(exception.Response ?? new { message = exception.Message }, statusCode: exception.StatusCode);
         }
+    }
+
+    private static async Task<BibLookupScopeResult> ResolveBibLookupScopeAsync(
+        CurrentStaff actor,
+        BibLookupInput input,
+        TitleRequestViewService views,
+        StaffEligibilityService staffEligibility,
+        CancellationToken cancellationToken)
+    {
+        int? requestedOrganizationId = null;
+        if (!string.IsNullOrWhiteSpace(input.LibraryOrgId))
+        {
+            if (!int.TryParse(input.LibraryOrgId, out var parsedOrganizationId) || parsedOrganizationId <= 1)
+            {
+                return actor.Role == "super_admin"
+                    ? BibLookupScopeResult.BadRequest()
+                    : BibLookupScopeResult.Forbidden();
+            }
+            requestedOrganizationId = parsedOrganizationId;
+        }
+
+        if (actor.Role != "super_admin" &&
+            requestedOrganizationId.HasValue &&
+            requestedOrganizationId.Value != actor.OrganizationId)
+        {
+            return BibLookupScopeResult.Forbidden();
+        }
+
+        if (!string.IsNullOrWhiteSpace(input.RequestId))
+        {
+            var request = await views.GetAsync(actor, input.RequestId.Trim(), cancellationToken);
+            if (request is null)
+            {
+                return new BibLookupScopeResult(
+                    0,
+                    Results.NotFound(new { code = "request_not_found" }));
+            }
+            requestedOrganizationId = request.LibraryOrgId;
+        }
+
+        var effectiveOrganizationId = actor.Role == "super_admin"
+            ? requestedOrganizationId
+            : actor.OrganizationId;
+        if (!effectiveOrganizationId.HasValue || effectiveOrganizationId.Value <= 1)
+        {
+            return BibLookupScopeResult.BadRequest();
+        }
+
+        var eligibility = await staffEligibility.EvaluateAsync(
+            new StaffIdentityEvidence(actor.Id, actor.AuthenticationEmail, actor.EntraTenantId),
+            effectiveOrganizationId.Value,
+            StaffRoleRequirement.Any,
+            requireParticipation: true,
+            cancellationToken);
+        if (eligibility.Outcome == StaffEligibilityOutcome.InvalidIdentity)
+        {
+            return new BibLookupScopeResult(
+                0,
+                Results.Json(new { code = "staff_session_invalid" }, statusCode: StatusCodes.Status401Unauthorized));
+        }
+        if (eligibility.Outcome != StaffEligibilityOutcome.Allowed)
+        {
+            return BibLookupScopeResult.Forbidden();
+        }
+        return new BibLookupScopeResult(effectiveOrganizationId.Value, null);
+    }
+
+    private sealed record BibLookupScopeResult(int OrganizationId, IResult? Error)
+    {
+        public static BibLookupScopeResult BadRequest() => new(
+            0,
+            Results.BadRequest(new
+            {
+                code = "library_scope_required",
+                message = "Select a servicing library before looking up a BIB."
+            }));
+
+        public static BibLookupScopeResult Forbidden() => new(
+            0,
+            Results.Json(new { code = "staff_scope_forbidden" }, statusCode: StatusCodes.Status403Forbidden));
     }
 
     private static async Task<IResult> ListAsync(

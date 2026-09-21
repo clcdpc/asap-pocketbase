@@ -4,7 +4,7 @@ import { authorizedJson } from '../http.js';
 import { showToast, showAlert } from '../dialogs.js';
 import { applySelectedPolarisResultToEditForm } from '../settings-ui.js';
 import { escapeAttr } from '../grid-utils.js';
-import { staffSession, publicationOptions } from '../state.js';
+import { staffSession, publicationOptions, currentWorkflowOrgScopeId } from '../state.js';
 import { submitTitleRequestAction } from './edit-submit.js';
 
 let holdingsLookupUnavailable = false;
@@ -77,12 +77,19 @@ function polarisSearchElements() {
 }
 
 async function fetchPolarisSearch(row, mode, query, options, ctx) {
+  const selectedSuggestionLibrary = document.getElementById('new-suggestion-library')?.value || '';
+  const workflowLibrary = currentWorkflowOrgScopeId && !['all', 'system'].includes(currentWorkflowOrgScopeId)
+    ? currentWorkflowOrgScopeId
+    : '';
+  const libraryOrgId = row.libraryOrgId || selectedSuggestionLibrary || workflowLibrary ||
+    (staffSession.staff?.role === 'super_admin' ? '' : staffSession.staff?.libraryOrgId || '');
   const payload = {
     mode,
     query: query,
     title: options?.title || '',
     author: options?.author || '',
-    requestId: row.id || ''
+    requestId: row.id || '',
+    libraryOrgId: String(libraryOrgId)
   };
   if (options?.bibId) {
     payload.bibId = options.bibId;

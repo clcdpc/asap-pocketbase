@@ -32,7 +32,12 @@ export async function lookupEditBibById(options = {}) {
 
     const data = await authorizedJson('/api/asap/staff/bib-lookup', {
       method: 'POST',
-      body: { bibId, barcode }
+      body: {
+        bibId,
+        barcode,
+        requestId: row ? row.id : '',
+        libraryOrgId: String(row ? row.libraryOrgId : '')
+      }
     });
 
     display.classList.remove('hidden', 'alert-danger', 'alert-warning');

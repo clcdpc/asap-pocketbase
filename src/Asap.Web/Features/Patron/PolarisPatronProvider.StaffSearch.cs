@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using Asap.Web.Features.Staff;
 using Clc.Polaris.Api;
 using Clc.Polaris.Api.Models;
+using Microsoft.EntityFrameworkCore;
 
 namespace Asap.Web.Features.Patron;
 
@@ -157,6 +158,11 @@ public sealed partial class PolarisPatronProvider
             var seen = new HashSet<string>(StringComparer.Ordinal);
             var total = 0;
             PolarisOperationalException? failure = null;
+            await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+            var formatIconUrlPattern = await context.SystemSettings.AsNoTracking()
+                .Where(item => item.OrganizationId == 1)
+                .Select(item => item.MaterialTypeIconUrlPattern)
+                .SingleAsync(cancellationToken);
             foreach (var search in requests)
             {
                 var request = PapiRestRequest.Get($"/public/v1/1033/100/{branch}/search/bibs/{search.Path}");
@@ -188,12 +194,22 @@ public sealed partial class PolarisPatronProvider
                     {
                         continue;
                     }
+                    var format = BibFormat(row, tom);
+                    var materialTypeDescription = SearchValue(row,
+                        "MaterialTypeDescription", "MaterialType", "materialTypeDesc");
+                    var materialTypeSearchCode = SearchValue(row, "SearchCode", "MaterialTypeSearchCode");
                     var result = new StaffBibSearchRow(bibId,
                         SearchValue(row, "DisplayTitle", "FullTitle", "Title", "SortTitle"),
                         SearchValue(row, "Author", "PrimaryAuthor", "AuthorDisplay", "SortAuthor"),
                         SearchValue(row, "PublicationDate", "PublicationYear", "PublishDate", "PublishedDate", "Date"),
-                        BibFormat(row, tom),
-                        SearchValue(row, "ISBN", "ISSN", "UPC", "Identifier"));
+                        format,
+                        SearchValue(row, "ISBN", "ISSN", "UPC", "Identifier"),
+                        tom,
+                        materialTypeDescription,
+                        FormatMaterialIconUrl(formatIconUrlPattern, tom, materialTypeSearchCode),
+                        Clean(materialTypeDescription) ?? format,
+                        materialTypeSearchCode,
+                        SearchValue(row, "Description"));
                     if (!string.IsNullOrEmpty(search.FilterAuthor) &&
                         !SearchLabel(result.Author).Contains(SearchLabel(search.FilterAuthor), StringComparison.Ordinal))
                     {
@@ -227,6 +243,21 @@ public sealed partial class PolarisPatronProvider
     private static string NormalizeSearchIdentifier(string value) => Regex.Replace(value, "[\\s\\-_.:/]+", string.Empty).ToUpperInvariant();
     private static string QuoteSearch(string value) => "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
     private static string SearchLabel(string? value) => (value ?? string.Empty).TrimEnd(':').Trim().ToLowerInvariant();
+
+    private static string? FormatMaterialIconUrl(string? pattern, string materialTypeId, string searchCode)
+    {
+        if (string.IsNullOrWhiteSpace(pattern) || string.IsNullOrWhiteSpace(materialTypeId))
+        {
+            return null;
+        }
+        var id = materialTypeId.Trim();
+        return pattern
+            .Replace("{MARCTypeOfMaterialID}", id, StringComparison.Ordinal)
+            .Replace("{MARCTypeOfMaterialID2}", id.PadLeft(2, '0'), StringComparison.Ordinal)
+            .Replace("{id}", id, StringComparison.Ordinal)
+            .Replace("{id2}", id.PadLeft(2, '0'), StringComparison.Ordinal)
+            .Replace("{SearchCode}", Uri.EscapeDataString(searchCode), StringComparison.Ordinal);
+    }
 
     private static string SearchValue(JsonElement row, params string[] names)
     {

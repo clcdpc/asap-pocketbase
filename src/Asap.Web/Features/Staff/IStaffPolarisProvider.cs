@@ -51,7 +51,13 @@ public sealed record BibValidationResult(bool IsValid, string? Title = null, str
     string? Publication = null, string? Format = null, string? Identifier = null, string? Publisher = null);
 
 public sealed record StaffBibSearchRow(string BibId, string? Title, string? Author,
-    string? Publication, string? Format, string? Identifier);
+    string? Publication, string? Format, string? Identifier,
+    string? PrimaryTomId = null,
+    string? MaterialTypeDesc = null,
+    string? FormatIconUrl = null,
+    string? FormatIconAlt = null,
+    string? MaterialTypeSearchCode = null,
+    string? PhysicalDescription = null);
 
 public sealed record StaffBibSearchResult(IReadOnlyList<StaffBibSearchRow> Results, int TotalMatches);
 
