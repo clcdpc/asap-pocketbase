@@ -1,5 +1,5 @@
 import { settingsContainer, settingsLoading, currentLibraryContextOrgId, currentSettingsSection, setSettingsLoading, setAdditionalFieldDefinitions, setCurrentPatronFieldConfig, staffSession, setCurrentLibraryContextOrgId, workflowSettings, organizationsStatus } from '../state.js';
-import { setVisible, isSuperAdminStaff, activateSettingsSection, initSettingsNavigation, checkAuth, loadSetupStatus, markSettingsClean, setFieldValue, setFieldChecked, isRequestCanceledError } from '../api.js';
+import { setVisible, isSuperAdminStaff, activateSettingsSection, initSettingsNavigation, checkAuth, markSettingsClean, setFieldValue, setFieldChecked, isRequestCanceledError } from '../api.js';
 import { updateSaveButtonText } from './save-ui.js';
 import { authorizedJson, loadStaffSession } from '../http.js';
 import { closeOpenDialogs } from '../dialogs.js';
@@ -122,7 +122,6 @@ function populatePolarisSettingsForm(polaris) {
   setFieldValue('polaris-domain', polaris.staffDomain || '');
   setFieldValue('polaris-admin-user', polaris.adminUser || '');
   setFieldValue('polaris-admin-pass', polaris.adminPassword || '');
-  setFieldValue('polaris-override-pass', polaris.overridePassword || '');
   setFieldValue('polaris-workstation-id', polaris.workstationId || '1');
 }
 
@@ -178,12 +177,10 @@ export async function loadStaffConfig() {
     if (config) {
       if (config.logoUrl) {
         document.getElementById('app-icon').href = config.logoUrl;
-        document.getElementById('setup-logo').src = config.logoUrl;
         document.getElementById('login-logo').src = config.logoUrl;
         document.getElementById('nav-logo').src = config.logoUrl;
       }
       if (config.logoAlt) {
-        document.getElementById('setup-logo').alt = config.logoAlt;
         document.getElementById('login-logo').alt = config.logoAlt;
         document.getElementById('nav-logo').alt = config.logoAlt;
       }
@@ -203,7 +200,6 @@ export async function initStaffApp() {
   closeActionMenu?.();
   initSettingsNavigation();
   await loadStaffConfig();
-  await loadSetupStatus();
   await loadStaffSession();
   checkAuth();
 }

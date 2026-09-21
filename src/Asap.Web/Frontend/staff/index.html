@@ -14,77 +14,16 @@
 
 <body>
 <main>
-  <div id="setup-container" class="hidden">
-    <div class="text-center mb-4">
-      <img id="setup-logo" src="" alt="Library Logo" class="staff-logo-large">
-      <h2 class="h4 mt-2">Initial Setup</h2>
-      <p class="text-muted">Configure Polaris before staff login is enabled. The first staff account created here will
-        be the consortium super admin; later staff logins will be non-admin staff accounts.</p>
-    </div>
-    <form id="setup-form">
-      <div class="alert alert-info">
-        Enter the Polaris PAPI credentials first. You can adjust advanced settings after setup from the Settings tab.
-      </div>
-      <div class="form-group">
-        <label for="setup-admin-username">Initial Super Admin Username</label>
-        <input type="text" id="setup-admin-username" name="adminUsername" class="form-control" required>
-        <small class="form-text text-muted">Use the staff identity this admin will later use for Polaris login, such as
-          DOMAIN\username or username@domain.</small>
-      </div>
-      <div class="form-group">
-        <label for="setup-polaris-host">Polaris Host</label>
-        <input type="text" id="setup-polaris-host" name="polarisHost" class="form-control" required
-          placeholder="https://your-papi-server.example.org">
-      </div>
-      <div class="form-row">
-        <div class="form-group col-md-6">
-          <label for="setup-polaris-access-id">PAPI access ID</label>
-          <input type="text" id="setup-polaris-access-id" name="polarisAccessId" class="form-control" required>
-        </div>
-        <div class="form-group col-md-6">
-          <label for="setup-polaris-api-key">PAPI API key</label>
-          <input type="password" id="setup-polaris-api-key" name="polarisApiKey" class="form-control" required>
-        </div>
-      </div>
-      <div class="form-group">
-        <label for="setup-polaris-staff-domain">Staff domain</label>
-        <input type="text" id="setup-polaris-staff-domain" name="polarisStaffDomain" class="form-control">
-      </div>
-      <div class="form-row">
-        <div class="form-group col-md-6">
-          <label for="setup-polaris-admin-user">System staff username</label>
-          <input type="text" id="setup-polaris-admin-user" name="polarisAdminUser" class="form-control">
-        </div>
-        <div class="form-group col-md-6">
-          <label for="setup-polaris-admin-password">System staff password</label>
-          <input type="password" id="setup-polaris-admin-password" name="polarisAdminPassword" class="form-control">
-        </div>
-      </div>
-      <small class="form-text text-muted mb-3">Used for patron lookup, patron login, hold placement, and the Polaris
-        connection test.</small>
-      <div class="form-group">
-        <label for="setup-polaris-override-password">Emergency override password</label>
-        <input type="password" id="setup-polaris-override-password" name="polarisOverridePassword" class="form-control">
-        <small class="form-text text-muted">Optional. Leave blank unless you need a temporary local bypass while
-          configuring Polaris.</small>
-      </div>
-      <div class="d-flex align-items-center flex-wrap mb-3">
-        <button type="button" class="btn btn-info mr-2" id="setup-test-polaris-btn">Test Polaris</button>
-        <span id="setup-polaris-test-result" aria-live="polite"></span>
-      </div>
-      <button type="submit" class="btn btn-primary btn-block" id="setup-btn">Complete Setup</button>
-      <div id="setup-error" class="text-danger mt-2 font-weight-bold hidden text-center" aria-live="assertive"></div>
-    </form>
-  </div>
-
   <div id="login-container" class="hidden">
     <div class="text-center mb-4">
       <img id="login-logo" src="" alt="Library Logo" class="staff-logo-large">
       <h2 class="h4 mt-2">Staff Login</h2>
     </div>
     <form id="login-form">
+      <div id="login-status" class="alert alert-warning hidden" role="status" aria-live="polite"></div>
       <p class="text-muted text-center">Use your organization Microsoft account to access the staff application.</p>
       <button type="submit" class="btn btn-primary btn-block">Sign in with Microsoft</button>
+      <button type="button" id="login-sign-out-btn" class="btn btn-link btn-block hidden">Sign out of this staff session</button>
       <div id="login-error" class="text-danger mt-2 font-weight-bold hidden text-center" aria-live="assertive"></div>
     </form>
   </div>
@@ -110,7 +49,6 @@
         <a href="#" id="logout-btn">Logout</a>
       </div>
     </div>
-    <div id="bootstrap-admin-alert" class="alert alert-info hidden" role="status"></div>
     <div id="email-status-banner" class="alert alert-warning hidden" role="status">
       <strong>Email notifications are not configured.</strong> Patrons can still submit suggestions and staff can still
       process suggestions, but ASAP will not send status emails. To enable email, an administrator must open Settings and
@@ -379,8 +317,6 @@
                         type="text" id="polaris-admin-user" class="form-control"></div>
                     <div class="form-group col-md-6"><label for="polaris-admin-pass">System staff password</label><input
                         type="password" id="polaris-admin-pass" class="form-control"></div>
-                    <div class="form-group col-md-6"><label for="polaris-override-pass">Override password (bypass
-                        Polaris)</label><input type="password" id="polaris-override-pass" class="form-control"></div>
                     <div class="form-group col-md-6" id="polaris-workstation-id-group">
                       <label for="polaris-workstation-id">Polaris workstation ID</label>
                       <input type="text" id="polaris-workstation-id" class="form-control">
@@ -427,8 +363,9 @@
                     <div class="card-body">
                       <div class="form-row">
                         <div class="form-group col-md-4">
-                          <label for="staff-add-identity">Username / identity</label>
-                          <input id="staff-add-identity" class="form-control" placeholder="DOMAIN\username or user@domain">
+                          <label for="staff-add-identity">Authentication email / UPN</label>
+                          <input id="staff-add-identity" type="email" class="form-control" autocomplete="off"
+                            placeholder="staff@example.org">
                         </div>
                         <div id="staff-add-library-group" class="form-group col-md-4">
                           <label for="staff-add-library">Library</label>
@@ -463,14 +400,14 @@
                         <table class="table table-sm table-striped mb-0 staff-access-table">
                           <thead>
                             <tr>
-                              <th>Username</th>
-                              <th>Domain</th>
-                              <th>Library</th>
-                              <th title="Current name">Name</th>
+                              <th>Authentication email / UPN</th>
+                              <th>Display name</th>
+                              <th>Notification email</th>
                               <th>Role</th>
-                              <th>Last Login</th>
-
-                              <th>Action</th>
+                              <th>Library</th>
+                              <th>Status</th>
+                              <th>Version</th>
+                              <th>Actions</th>
                             </tr>
                           </thead>
                           <tbody id="staff-users-table-body"></tbody>
@@ -1751,10 +1688,10 @@
       <label class="custom-control-label font-weight-bold" for="profile-default-mine-unclaimed-filter">Default request filter to mine + unclaimed</label>
     </div>
     <div class="form-group mb-2">
-      <label for="profile-weekly-action-summary-email" class="font-weight-bold">Staff email address</label>
+      <label for="profile-weekly-action-summary-email" class="font-weight-bold">Weekly summary email override</label>
       <input type="email" id="profile-weekly-action-summary-email" class="form-control" autocomplete="email">
     </div>
-    <p class="text-muted small mb-3">Used for weekly summaries and purchase reminder emails.</p>
+    <p class="text-muted small mb-3">Optional. Leave blank to send weekly summaries to your primary notification email. Purchase reminders and other staff notifications always use the primary notification email managed in Staff access.</p>
     <div id="profile-msg" class="mb-3 font-weight-bold" aria-live="polite"></div>
     <div class="asap-dialog-actions">
       <button type="button" id="profile-cancel" class="btn btn-sm btn-secondary">Cancel</button>

@@ -1,4 +1,4 @@
-import { staffSession, loginContainer, setupContainer, appContainer, bootstrapAdminMessage, setBootstrapAdminMessage, setupRequired, setSetupRequired, currentEmailStatus, setCurrentEmailStatus, currentStatus, setCurrentStatus, setCurrentClaimFilter, claimFilterSelect } from '../state.js';
+import { staffSession, loginContainer, appContainer, currentEmailStatus, setCurrentEmailStatus, currentStatus, setCurrentStatus, setCurrentClaimFilter, claimFilterSelect } from '../state.js';
 import { loadTab, renderCurrentGrid, closeActionMenu } from '../grid.js';
 import { closeOpenDialogs } from '../dialogs.js';
 import { authorizedJson } from '../http.js';
@@ -23,18 +23,6 @@ export function isSuperAdminStaff() {
 
 export function isAdminStaff() {
   return ['admin', 'super_admin'].includes(staffRole());
-}
-
-export function showBootstrapAdminMessage() {
-  const alert = document.getElementById('bootstrap-admin-alert');
-  if (!alert) return;
-  if (bootstrapAdminMessage) {
-    setText('bootstrap-admin-alert', bootstrapAdminMessage);
-    setVisible('bootstrap-admin-alert', true);
-  } else {
-    setText('bootstrap-admin-alert', '');
-    setVisible('bootstrap-admin-alert', false);
-  }
 }
 
 export function updateEmailStatusBanner(status) {
@@ -73,15 +61,16 @@ export async function loadEmailStatus(orgId) {
 
 export function checkAuth() {
   if (staffSession.authenticated && staffSession.accessAllowed && staffSession.staff) {
-    setupContainer.classList.add('hidden');
     loginContainer.classList.add('hidden');
     appContainer.classList.remove('hidden');
+    setText('login-status', '');
+    setVisible('login-status', false);
+    setVisible('login-sign-out-btn', false);
     const libraryName = staffSession.staff.libraryOrgName || (isSuperAdminStaff() ? 'System' : '');
     const identityLabel = staffSession.staff.identityKey || staffSession.staff.username;
     document.getElementById('display-user').textContent = (staffSession.staff.displayName || identityLabel) + (libraryName ? ` (${libraryName})` : '');
     const isAdmin = isAdminStaff();
     setVisible('nav-settings', isAdmin);
-    showBootstrapAdminMessage();
     loadEmailStatus();
     applyProfileClaimFilterDefault();
     renderRecentSuggestionsSwitcher();
@@ -106,16 +95,19 @@ export function checkAuth() {
   } else {
     closeOpenDialogs();
     closeActionMenu?.();
-    setupContainer.classList.toggle('hidden', !setupRequired);
-    loginContainer.classList.toggle('hidden', setupRequired);
+    loginContainer.classList.remove('hidden');
     appContainer.classList.add('hidden');
-    setBootstrapAdminMessage('');
-    showBootstrapAdminMessage();
+    const accessUnavailable = staffSession.authenticated && !staffSession.accessAllowed;
+    const sessionEnded = staffSession.code === 'staff_session_invalid';
+    const status = accessUnavailable
+      ? 'Your Microsoft account is signed in, but staff access is not currently available. Your account or library access may have changed. Contact an administrator or sign out and try another account.'
+      : sessionEnded
+        ? 'Your staff session ended because the account is no longer valid for this application. Sign in again to continue.'
+        : '';
+    setText('login-status', status);
+    setVisible('login-status', !!status);
+    setVisible('login-sign-out-btn', accessUnavailable);
   }
-}
-
-export async function loadSetupStatus() {
-  setSetupRequired(false);
 }
 
 let appliedProfileClaimFilterDefaultForStaffId = '';

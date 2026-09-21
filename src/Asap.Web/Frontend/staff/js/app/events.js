@@ -1,4 +1,4 @@
-import { staffSession, setStaffSession, normalizeSessionStaff, loginForm, setupForm, logoutBtn, profileBtn, gridSearchInput, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, additionalCopyStatusFilterSelect, closedTypeFilterSelect, currentStatus, setCurrentStatus, setActiveTagFilter, setGridSearchKeyword, setCurrentClaimFilter, setCurrentSimilarRequestFilter, setCurrentAdditionalCopyStatus, setCurrentClosedTypeFilter } from '../state.js';
+import { staffSession, setStaffSession, normalizeSessionStaff, loginForm, logoutBtn, loginSignOutBtn, profileBtn, gridSearchInput, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, additionalCopyStatusFilterSelect, closedTypeFilterSelect, currentStatus, setCurrentStatus, setActiveTagFilter, setGridSearchKeyword, setCurrentClaimFilter, setCurrentSimilarRequestFilter, setCurrentAdditionalCopyStatus, setCurrentClosedTypeFilter } from '../state.js';
 import { loadTab, renderCurrentGrid } from '../grid.js';
 import { showToast } from '../dialogs.js';
 import { authorizedJson } from '../http.js';
@@ -15,23 +15,7 @@ loginForm.addEventListener('submit', async (e) => {
   window.location.assign(`/api/asap/staff/sign-in?returnUrl=${encodeURIComponent(returnUrl)}`);
 });
 
-setupForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const errDiv = document.getElementById('setup-error');
-  errDiv.textContent = 'Initial setup is managed by the ASP.NET Core deployment configuration.';
-  errDiv.classList.remove('hidden');
-});
-
-const setupTestPolarisBtn = document.getElementById('setup-test-polaris-btn');
-if (setupTestPolarisBtn) {
-  setupTestPolarisBtn.addEventListener('click', async (e) => {
-    e.preventDefault();
-    const result = document.getElementById('setup-polaris-test-result');
-    result.textContent = 'Initial setup is managed by the ASP.NET Core deployment configuration.';
-  });
-}
-
-logoutBtn.addEventListener('click', async (e) => {
+async function signOut(e) {
   e.preventDefault();
   try {
     await authorizedJson('/api/asap/staff/sign-out', { method: 'POST' });
@@ -39,6 +23,16 @@ logoutBtn.addEventListener('click', async (e) => {
     setStaffSession({ authenticated: false, antiforgeryToken: staffSession.antiforgeryToken });
     clearAppliedProfileClaimFilterDefault();
     setCurrentClaimFilter('all');
+    checkAuth();
+  }
+}
+
+logoutBtn.addEventListener('click', signOut);
+loginSignOutBtn?.addEventListener('click', signOut);
+
+window.addEventListener('asap:session-invalid', checkAuth);
+window.addEventListener('asap:access-forbidden', (event) => {
+  if (event.detail?.accessAllowed === false) {
     checkAuth();
   }
 });

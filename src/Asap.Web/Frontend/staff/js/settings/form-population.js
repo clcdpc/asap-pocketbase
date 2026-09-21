@@ -138,7 +138,6 @@ export function applyLibrarySettingsToForm(settings) {
     setFieldValue('polaris-domain', polaris.staffDomain || '');
     setFieldValue('polaris-admin-user', polaris.adminUser || '');
     setFieldValue('polaris-admin-pass', polaris.adminPassword || '');
-    setFieldValue('polaris-override-pass', polaris.overridePassword || '');
     setFieldValue('polaris-workstation-id', polaris.workstationId || '1');
 
   }

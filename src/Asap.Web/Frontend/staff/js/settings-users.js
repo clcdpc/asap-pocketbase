@@ -1,257 +1,318 @@
-import { staffSession, canAssignSuperAdmin, setCanAssignSuperAdmin, formatMap, availableFormats, currentFormatClaimRules, setCurrentFormatClaimRules, currentLibraryContextOrgId } from './state.js';
-import { setFieldValue, getFieldValue, isSuperAdminStaff, markSettingsDirty } from './api.js';
+import { staffSession, canAssignSuperAdmin, setCanAssignSuperAdmin, currentLibraryContextOrgId } from './state.js';
+import { isSuperAdminStaff } from './api.js';
 import { authorizedJson } from './http.js';
 import { showAlert, showConfirm } from './dialogs.js';
-import { escapeAttr } from './grid.js';
-import { updateFormatClaimRuleState } from './settings-formats.js';
 
-export function formatLastLogin(lastLogin) {
-  const raw = String(lastLogin || '').trim();
-  if (!raw) return 'Never';
-  const date = new Date(raw);
-  if (Number.isNaN(date.getTime())) return 'Never';
-  return date.toLocaleString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit'
-  });
+let staffOrganizations = [];
+
+function clean(value) {
+  return String(value ?? '').trim();
+}
+
+function staffDisplayName(user) {
+  return clean(user.displayName) || clean(user.userPrincipalName) || `Staff ${clean(user.id) || '?'}`;
+}
+
+function roleLabel(role) {
+  if (role === 'super_admin') return 'Super Admin';
+  if (role === 'admin') return 'Admin';
+  return 'Staff';
+}
+
+function roleOptions(selectedRole) {
+  const roles = canAssignSuperAdmin ? ['staff', 'admin', 'super_admin'] : ['staff', 'admin'];
+  if (!roles.includes(selectedRole)) roles.push(selectedRole);
+  return roles.map(role => new Option(roleLabel(role), role, false, role === selectedRole));
+}
+
+function organizationOptions(role, selectedOrganizationId) {
+  if (role === 'super_admin') {
+    return [new Option('System', '1', false, String(selectedOrganizationId) === '1')];
+  }
+
+  const currentStaffOrganizationId = clean(staffSession.staff?.organizationId);
+  const organizations = isSuperAdminStaff()
+    ? staffOrganizations.filter(item => Number(item.id) > 1)
+    : staffOrganizations.filter(item => String(item.id) === currentStaffOrganizationId);
+  return organizations.map(item => new Option(
+    `${item.displayName || item.name || `Library ${item.id}`} (ID ${item.id})`,
+    String(item.id),
+    false,
+    String(item.id) === String(selectedOrganizationId)
+  ));
+}
+
+function replaceOrganizationOptions(select, role, selectedOrganizationId) {
+  select.replaceChildren(...organizationOptions(role, selectedOrganizationId));
+  if (role === 'super_admin') {
+    select.value = '1';
+  } else if ([...select.options].some(option => option.value === String(selectedOrganizationId))) {
+    select.value = String(selectedOrganizationId);
+  }
+  select.disabled = role === 'super_admin' || !isSuperAdminStaff();
+}
+
+function inputCell(type, value, className, label) {
+  const cell = document.createElement('td');
+  const input = document.createElement('input');
+  input.type = type;
+  input.value = value || '';
+  input.className = `form-control form-control-sm ${className}`;
+  input.setAttribute('aria-label', label);
+  cell.appendChild(input);
+  return cell;
+}
+
+function setStaffMessage(message, className) {
+  const element = document.getElementById('staff-users-msg');
+  if (!element) return;
+  element.textContent = message;
+  element.className = className;
+}
+
+function cleanupSummary(cleanup) {
+  if (!cleanup) return '';
+  return ` Cleanup: ${Number(cleanup.rulesDeactivated || 0)} auto-claim rules deactivated; ` +
+    `${Number(cleanup.openTitleClaimsCleared || 0)} open title claims cleared; ` +
+    `${Number(cleanup.openAdditionalCopyClaimsCleared || 0)} open additional-copy claims cleared.`;
+}
+
+function staffUsersUrl() {
+  const requestedOrganizationId = isSuperAdminStaff()
+    ? (currentLibraryContextOrgId !== 'system' ? currentLibraryContextOrgId : '')
+    : clean(staffSession.staff?.organizationId);
+  return requestedOrganizationId
+    ? `/api/asap/staff/users?orgId=${encodeURIComponent(requestedOrganizationId)}`
+    : '/api/asap/staff/users';
 }
 
 export async function loadStaffUsers() {
-  const msgEl = document.getElementById('staff-users-msg');
-  const bodyEl = document.getElementById('staff-users-table-body');
-  const refreshBtn = document.getElementById('btn-refresh-staff-users');
-  if (!msgEl || !bodyEl) {
-    return;
-  }
+  const body = document.getElementById('staff-users-table-body');
+  const refresh = document.getElementById('btn-refresh-staff-users');
+  if (!body) return;
 
-  if (refreshBtn) refreshBtn.disabled = true;
-  msgEl.textContent = 'Loading staff users...';
-  msgEl.className = 'mb-2 text-muted';
-    bodyEl.innerHTML = '<tr><td colspan="7" class="text-muted">Loading staff users...</td></tr>';
-
+  if (refresh) refresh.disabled = true;
+  setStaffMessage('Loading staff users...', 'mb-2 text-muted');
+  body.replaceChildren();
+  const loadingRow = document.createElement('tr');
+  const loadingCell = document.createElement('td');
+  loadingCell.colSpan = 8;
+  loadingCell.className = 'text-muted';
+  loadingCell.textContent = 'Loading staff users...';
+  loadingRow.appendChild(loadingCell);
+  body.appendChild(loadingRow);
 
   try {
-    const orgId = currentLibraryContextOrgId || 'system';
-    const result = await authorizedJson(`/api/asap/staff/users?orgId=${encodeURIComponent(orgId)}`);
+    const result = await authorizedJson(staffUsersUrl());
     const users = Array.isArray(result.users) ? result.users : [];
-    const totalAcrossSystem = result.totalAcrossSystem;
     setCanAssignSuperAdmin(!!result.canAssignSuperAdmin);
     renderStaffUsers(users);
-    msgEl.textContent = users.length ? `Loaded ${users.length} staff user${users.length === 1 ? '' : 's'}.` : 'No staff users found.';
-
-    if (isSuperAdminStaff() && currentLibraryContextOrgId && currentLibraryContextOrgId !== 'system' && totalAcrossSystem !== undefined) {
-      const others = totalAcrossSystem - users.length;
-      if (others > 0) {
-        msgEl.textContent += ` (${others} other staff user${others === 1 ? '' : 's'} in different libraries)`;
-      }
-    }
-
-    msgEl.className = 'mb-2 text-muted';
-  } catch (err) {
-    console.error('Failed to load staff users', err);
-    msgEl.textContent = err.message || 'Failed to load staff users.';
-    msgEl.className = 'mb-2 text-danger font-weight-bold';
-    bodyEl.innerHTML = '<tr><td colspan="7" class="text-muted">Unable to load staff users.</td></tr>';
-
+    setStaffMessage(
+      users.length ? `Loaded ${users.length} staff user${users.length === 1 ? '' : 's'}.` : 'No staff users found.',
+      'mb-2 text-muted'
+    );
+  } catch (error) {
+    console.error('Failed to load staff users', error);
+    setStaffMessage(error.message || 'Failed to load staff users.', 'mb-2 text-danger font-weight-bold');
+    body.replaceChildren();
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.colSpan = 8;
+    cell.className = 'text-muted';
+    cell.textContent = 'Unable to load staff users.';
+    row.appendChild(cell);
+    body.appendChild(row);
   } finally {
-    if (refreshBtn) refreshBtn.disabled = false;
+    if (refresh) refresh.disabled = false;
   }
 }
 
 export function renderStaffUsers(users) {
-  const bodyEl = document.getElementById('staff-users-table-body');
-  if (!bodyEl) {
-    return;
-  }
-
-  bodyEl.innerHTML = '';
+  const body = document.getElementById('staff-users-table-body');
+  if (!body) return;
+  body.replaceChildren();
 
   if (!users.length) {
-    const tr = document.createElement('tr');
-    const td = document.createElement('td');
-      td.colSpan = 7;
-
-    td.className = 'text-muted';
-    td.textContent = 'No staff users found.';
-    tr.appendChild(td);
-    bodyEl.appendChild(tr);
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.colSpan = 8;
+    cell.className = 'text-muted';
+    cell.textContent = 'No staff users found.';
+    row.appendChild(cell);
+    body.appendChild(row);
     return;
   }
 
-
   for (const user of users) {
-    const tr = document.createElement('tr');
-    tr.setAttribute('data-staff-id', user.id || '');
+    const id = clean(user.id);
+    const version = clean(user.version);
+    const active = user.active !== false;
+    const role = ['staff', 'admin', 'super_admin'].includes(clean(user.role).toLowerCase())
+      ? clean(user.role).toLowerCase()
+      : 'staff';
+    const display = staffDisplayName(user);
+    const row = document.createElement('tr');
+    row.setAttribute('data-staff-id', id);
+    row.setAttribute('data-staff-version', version);
+    row.setAttribute('data-staff-active', String(active));
+    if (!active) row.classList.add('staff-user-inactive');
 
-    const tdUsername = document.createElement('td');
-    const strongUsername = document.createElement('strong');
-    strongUsername.textContent = user.username || '';
-    tdUsername.appendChild(strongUsername);
-    tr.appendChild(tdUsername);
+    row.appendChild(inputCell('email', user.userPrincipalName, 'staff-authentication-email', `Authentication email for ${display}`));
+    row.appendChild(inputCell('text', user.displayName, 'staff-display-name', `Display name for ${display}`));
+    row.appendChild(inputCell('email', user.notificationEmail, 'staff-notification-email', `Notification email for ${display}`));
 
-    const tdDomain = document.createElement('td');
-    if (user.domain) {
-      tdDomain.textContent = user.domain;
-    } else {
-      const span = document.createElement('span');
-      span.className = 'text-muted';
-      span.textContent = 'Default';
-      tdDomain.appendChild(span);
-    }
-    tr.appendChild(tdDomain);
+    const roleCell = document.createElement('td');
+    const roleSelect = document.createElement('select');
+    roleSelect.className = 'form-control form-control-sm staff-role-select';
+    roleSelect.setAttribute('aria-label', `Role for ${display}`);
+    roleSelect.replaceChildren(...roleOptions(role));
+    roleCell.appendChild(roleSelect);
+    row.appendChild(roleCell);
 
-    const tdLibrary = document.createElement('td');
-    tdLibrary.textContent = user.libraryOrgName || user.libraryOrgId || (user.scope === 'system' ? 'System' : 'Unmapped');
-    tr.appendChild(tdLibrary);
+    const libraryCell = document.createElement('td');
+    const librarySelect = document.createElement('select');
+    librarySelect.className = 'form-control form-control-sm staff-library-select';
+    librarySelect.setAttribute('aria-label', `Library for ${display}`);
+    replaceOrganizationOptions(librarySelect, role, user.organizationId);
+    roleSelect.addEventListener('change', () => {
+      replaceOrganizationOptions(librarySelect, roleSelect.value, librarySelect.value);
+    });
+    libraryCell.appendChild(librarySelect);
+    row.appendChild(libraryCell);
 
-    const tdDisplayName = document.createElement('td');
-    if (user.displayName) {
-      tdDisplayName.textContent = user.displayName;
-    } else {
-      const span = document.createElement('span');
-      span.className = 'text-muted';
-      span.textContent = 'No display name';
-      tdDisplayName.appendChild(span);
-    }
-    tr.appendChild(tdDisplayName);
+    const statusCell = document.createElement('td');
+    const status = document.createElement('span');
+    status.className = active ? 'badge staff-status-active' : 'badge staff-status-inactive';
+    status.textContent = active ? 'Active' : 'Inactive';
+    statusCell.appendChild(status);
+    row.appendChild(statusCell);
 
-    const tdRole = document.createElement('td');
-    tdRole.className = 'staff-role-cell';
-    const select = document.createElement('select');
-    select.className = 'form-control form-control-sm staff-role-select';
+    const versionCell = document.createElement('td');
+    versionCell.className = 'staff-version-cell text-muted small';
+    versionCell.textContent = version;
+    row.appendChild(versionCell);
 
-    const role = ['staff', 'admin', 'super_admin'].includes(String(user.role || '').toLowerCase()) ? String(user.role || '').toLowerCase() : 'staff';
-
-    select.appendChild(new Option('Staff', 'staff', false, role === 'staff'));
-    select.appendChild(new Option('Admin', 'admin', false, role === 'admin'));
-
-    if (canAssignSuperAdmin) {
-      select.appendChild(new Option('Super Admin', 'super_admin', false, role === 'super_admin'));
-    }
-
-    tdRole.appendChild(select);
-    tr.appendChild(tdRole);
-
-
-    const tdLastLogin = document.createElement('td');
-    tdLastLogin.className = 'staff-last-login-cell';
-    const lastLoginText = formatLastLogin(user.lastLogin);
-    tdLastLogin.textContent = lastLoginText;
-    if (lastLoginText === 'Never') tdLastLogin.classList.add('text-muted');
-    tr.appendChild(tdLastLogin);
-
-    const tdSave = document.createElement('td');
-    tdSave.className = 'staff-actions-cell';
-    const actionWrap = document.createElement('div');
-    actionWrap.className = 'staff-actions-wrap';
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'btn btn-sm btn-primary staff-role-save mr-1';
-    btn.textContent = 'Save Role';
-    actionWrap.appendChild(btn);
-    const del = document.createElement('button');
-    del.type = 'button';
-    del.className = 'btn btn-sm btn-outline-danger staff-user-delete';
-    del.textContent = 'Remove';
-    actionWrap.appendChild(del);
-    tdSave.appendChild(actionWrap);
-    tr.appendChild(tdSave);
-
-    bodyEl.appendChild(tr);
+    const actionsCell = document.createElement('td');
+    actionsCell.className = 'staff-actions-cell';
+    const actions = document.createElement('div');
+    actions.className = 'staff-actions-wrap';
+    const saveMetadata = document.createElement('button');
+    saveMetadata.type = 'button';
+    saveMetadata.className = 'btn btn-sm btn-outline-primary staff-metadata-save';
+    saveMetadata.textContent = 'Save profile';
+    const saveAccess = document.createElement('button');
+    saveAccess.type = 'button';
+    saveAccess.className = 'btn btn-sm btn-primary staff-role-save';
+    saveAccess.textContent = 'Update access';
+    const lifecycle = document.createElement('button');
+    lifecycle.type = 'button';
+    lifecycle.className = active
+      ? 'btn btn-sm btn-outline-danger staff-user-deactivate'
+      : 'btn btn-sm btn-outline-success staff-user-reactivate';
+    lifecycle.textContent = active ? 'Deactivate' : 'Reactivate';
+    actions.append(saveMetadata, saveAccess, lifecycle);
+    actionsCell.appendChild(actions);
+    row.appendChild(actionsCell);
+    body.appendChild(row);
   }
 }
 
-function formatAssignmentMapFromDom() {
-  const byFormat = {};
-  // 1. Start with the state variable (Source of truth for user intent)
-  (currentFormatClaimRules || []).forEach(rule => {
-    if (rule && rule.format) byFormat[rule.format] = rule.staffUserId || '';
-  });
-  // 2. Overlay with current DOM values if the Formats tab has been rendered.
-  // This captures any pending changes made directly in the Formats tab dropdowns.
-  document.querySelectorAll('.format-setting-row').forEach(row => {
-    const format = row.getAttribute('data-key');
-    const staffUserId = row.querySelector('.format-claim-staff-select')?.value || '';
-    if (format) byFormat[format] = staffUserId;
-  });
-  return byFormat;
+async function refreshStaffAccess() {
+  await populateStaffLibraryOptions();
+  await loadStaffUsers();
 }
 
-
+async function runStaffMutation(button, message, operation) {
+  button.disabled = true;
+  setStaffMessage(`${message}...`, 'mb-2 text-muted');
+  try {
+    const result = await operation();
+    await refreshStaffAccess();
+    setStaffMessage(`${message}.${cleanupSummary(result?.cleanup)}`, 'mb-2 text-success font-weight-bold');
+  } catch (error) {
+    console.error(message, error);
+    setStaffMessage(error.message || 'The staff access change could not be saved.', 'mb-2 text-danger font-weight-bold');
+  } finally {
+    button.disabled = false;
+  }
+}
 
 const staffUsersTableBody = document.getElementById('staff-users-table-body');
-if (staffUsersTableBody) {
-  staffUsersTableBody.addEventListener('click', async (e) => {
-    const row = e.target.closest('tr[data-staff-id]');
-    if (!row) return;
-    const delBtn = e.target.closest('.staff-user-delete');
-    if (delBtn) {
-      const id = row.getAttribute('data-staff-id');
-      const ok = await showConfirm('Remove staff member', 'Are you sure you want to remove this staff user from access?');
-      if (!ok) return;
-      delBtn.disabled = true;
-      try {
-        await authorizedJson(`/api/asap/staff/users/${encodeURIComponent(id)}`, { method: 'DELETE' });
-        await populateStaffLibraryOptions();
-    await loadStaffUsers();
-      } catch (err) {
-        const msgEl = document.getElementById('staff-users-msg');
-        if (msgEl) { msgEl.textContent = err.message || 'Failed to remove staff user.'; msgEl.className = 'mb-2 text-danger font-weight-bold'; }
-      } finally { delBtn.disabled = false; }
-      return;
-    }
+staffUsersTableBody?.addEventListener('click', async event => {
+  const row = event.target.closest('tr[data-staff-id]');
+  if (!row) return;
+  const id = row.getAttribute('data-staff-id');
+  const version = row.getAttribute('data-staff-version');
 
+  const metadataButton = event.target.closest('.staff-metadata-save');
+  if (metadataButton) {
+    await runStaffMutation(metadataButton, 'Staff profile saved', () => authorizedJson(
+      `/api/asap/staff/users/${encodeURIComponent(id)}`,
+      {
+        method: 'PATCH',
+        body: {
+          version,
+          email: clean(row.querySelector('.staff-authentication-email')?.value),
+          displayName: clean(row.querySelector('.staff-display-name')?.value),
+          notificationEmail: clean(row.querySelector('.staff-notification-email')?.value)
+        }
+      }
+    ));
+    return;
+  }
 
-    const btn = e.target.closest('.staff-role-save');
-    if (!btn) return;
+  const accessButton = event.target.closest('.staff-role-save');
+  if (accessButton) {
+    const role = row.querySelector('.staff-role-select')?.value || 'staff';
+    const organizationId = role === 'super_admin'
+      ? 1
+      : Number(row.querySelector('.staff-library-select')?.value);
+    await runStaffMutation(accessButton, 'Staff access updated', () => authorizedJson(
+      `/api/asap/staff/users/${encodeURIComponent(id)}/role`,
+      { method: 'POST', body: { version, role, organizationId } }
+    ));
+    return;
+  }
 
+  const deactivateButton = event.target.closest('.staff-user-deactivate');
+  if (deactivateButton) {
+    const ok = await showConfirm('Deactivate staff member', `Deactivate ${staffDisplayName({
+      id,
+      displayName: row.querySelector('.staff-display-name')?.value,
+      userPrincipalName: row.querySelector('.staff-authentication-email')?.value
+    })}?`);
+    if (!ok) return;
+    await runStaffMutation(deactivateButton, 'Staff user deactivated', () => authorizedJson(
+      `/api/asap/staff/users/${encodeURIComponent(id)}`,
+      { method: 'DELETE', body: { version } }
+    ));
+    return;
+  }
 
-    if (!row) return;
-
-    const id = row.getAttribute('data-staff-id');
-    const select = row.querySelector('.staff-role-select');
-    const nextRole = select ? select.value : 'staff';
-    const msgEl = document.getElementById('staff-users-msg');
-
-    btn.disabled = true;
-    if (msgEl) {
-      msgEl.textContent = 'Saving role...';
-      msgEl.className = 'mb-2 text-muted';
-    }
-
-    try {
-      await authorizedJson(`/api/asap/staff/users/${encodeURIComponent(id)}/role`, {
+  const reactivateButton = event.target.closest('.staff-user-reactivate');
+  if (reactivateButton) {
+    const role = row.querySelector('.staff-role-select')?.value || 'staff';
+    const organizationId = role === 'super_admin'
+      ? 1
+      : Number(row.querySelector('.staff-library-select')?.value);
+    await runStaffMutation(reactivateButton, 'Staff user reactivated', () => authorizedJson(
+      '/api/asap/staff/users',
+      {
         method: 'POST',
-        body: { role: nextRole }
-      });
-      if (msgEl) {
-        msgEl.textContent = 'Staff role updated successfully.';
-        msgEl.className = 'mb-2 text-success font-weight-bold';
+        body: {
+          email: clean(row.querySelector('.staff-authentication-email')?.value),
+          role,
+          organizationId
+        }
       }
-      await populateStaffLibraryOptions();
-    await loadStaffUsers();
-    } catch (err) {
-      console.error('Failed to update staff role', err);
-      if (msgEl) {
-        msgEl.textContent = err.message || 'Failed to update staff role.';
-        msgEl.className = 'mb-2 text-danger font-weight-bold';
-      }
-    } finally {
-      btn.disabled = false;
-    }
-  });
-}
+    ));
+  }
+});
 
-const refreshStaffUsersBtn = document.getElementById('btn-refresh-staff-users');
-if (refreshStaffUsersBtn) {
-  refreshStaffUsersBtn.addEventListener('click', (e) => {
-    e.preventDefault();
-    loadStaffUsers();
-  });
-}
+document.getElementById('btn-refresh-staff-users')?.addEventListener('click', event => {
+  event.preventDefault();
+  loadStaffUsers();
+});
 
 export async function populateStaffLibraryOptions() {
   const select = document.getElementById('staff-add-library');
@@ -260,76 +321,65 @@ export async function populateStaffLibraryOptions() {
 
   const me = staffSession.staff || {};
   const isSuper = isSuperAdminStaff();
-
   if (isSuper) {
-    // Super admins always get the dropdown so they can add staff to any library.
     select.classList.remove('hidden');
     context.classList.add('hidden');
-
-    const isLibraryContext = currentLibraryContextOrgId && currentLibraryContextOrgId !== 'system';
-    
-    select.innerHTML = '<option value="">Select library</option>';
-    const orgs = await authorizedJson('/api/asap/staff/organizations');
-    orgs.forEach(org => select.appendChild(new Option(`${org.displayName || org.name} (ID ${org.id})`, org.id)));
-
-    if (isLibraryContext) {
-      select.value = currentLibraryContextOrgId;
-    }
+    staffOrganizations = await authorizedJson('/api/asap/staff/organizations');
   } else {
+    const libraryId = clean(me.organizationId || me.libraryOrgId);
+    const libraryName = me.organizationName || me.libraryOrgName || `Library ${libraryId || '?'}`;
+    staffOrganizations = [{ id: libraryId, displayName: libraryName }];
     select.classList.add('hidden');
     context.classList.remove('hidden');
-    const libraryName = me.libraryOrgName || me.libraryOrgId || 'My Library';
-    context.textContent = `${libraryName} (ID ${me.libraryOrgId || '?'})`;
-    select.innerHTML = '';
-    select.appendChild(new Option(libraryName, me.libraryOrgId));
-    select.value = me.libraryOrgId;
+    context.textContent = `${libraryName} (ID ${libraryId || '?'})`;
   }
+
+  const role = document.getElementById('staff-add-role')?.value || 'staff';
+  const selectedOrganizationId = currentLibraryContextOrgId !== 'system'
+    ? currentLibraryContextOrgId
+    : clean(me.organizationId || me.libraryOrgId);
+  replaceOrganizationOptions(select, role, selectedOrganizationId);
+  if (isSuper && role !== 'super_admin') select.disabled = false;
 }
 
-const addStaffBtn = document.getElementById('btn-add-staff-user');
-if (addStaffBtn) {
-  addStaffBtn.addEventListener('click', async () => {
-    const identityInput = document.getElementById('staff-add-identity');
-    const libSelect = document.getElementById('staff-add-library');
-    const roleSelect = document.getElementById('staff-add-role');
-    const msgEl = document.getElementById('staff-users-msg');
+const addStaffRole = document.getElementById('staff-add-role');
+addStaffRole?.addEventListener('change', () => {
+  const select = document.getElementById('staff-add-library');
+  if (!select) return;
+  replaceOrganizationOptions(select, addStaffRole.value, select.value);
+  if (isSuperAdminStaff() && addStaffRole.value !== 'super_admin') select.disabled = false;
+});
 
-    const identity = (identityInput.value || '').trim();
-    const libraryOrgId = (libSelect.value || '').trim();
-    const role = (roleSelect.value || '').trim() || 'staff';
+const addStaffButton = document.getElementById('btn-add-staff-user');
+addStaffButton?.addEventListener('click', async () => {
+  const emailInput = document.getElementById('staff-add-identity');
+  const librarySelect = document.getElementById('staff-add-library');
+  const roleSelect = document.getElementById('staff-add-role');
+  const email = clean(emailInput?.value);
+  const role = clean(roleSelect?.value) || 'staff';
+  const organizationId = role === 'super_admin' ? 1 : Number(librarySelect?.value);
 
-    if (!identity) return showAlert('Enter a staff username or identity.');
-    if (role !== 'super_admin' && !libraryOrgId) return showAlert('Select a library for this staff member.');
+  if (!email) {
+    await showAlert('Enter the staff authentication email / UPN.');
+    return;
+  }
+  if (role !== 'super_admin' && !organizationId) {
+    await showAlert('Select a library for this staff member.');
+    return;
+  }
 
-    addStaffBtn.disabled = true;
-    try {
-      const opt = libSelect && libSelect.selectedIndex >= 0 ? libSelect.options[libSelect.selectedIndex] : null;
-      await authorizedJson('/api/asap/staff/users', {
-        method: 'POST',
-        body: {
-          username: identity,
-          libraryOrgId,
-          libraryOrgName: opt ? opt.text : '',
-          role
-        }
-      });
-
-      identityInput.value = '';
-
-      if (msgEl) {
-        msgEl.innerHTML = '<i class="fa fa-check-circle"></i> Staff record created or updated. This user still signs in with their Polaris credentials.';
-        msgEl.className = 'mb-2 text-success font-weight-bold';
-      }
-
-      await populateStaffLibraryOptions();
-      await loadStaffUsers();
-    } catch (err) {
-      if (msgEl) {
-        msgEl.textContent = err.message || 'Failed to add staff member.';
-        msgEl.className = 'mb-2 text-danger font-weight-bold';
-      }
-    } finally {
-      addStaffBtn.disabled = false;
-    }
-  });
-}
+  addStaffButton.disabled = true;
+  try {
+    await authorizedJson('/api/asap/staff/users', {
+      method: 'POST',
+      body: { email, role, organizationId }
+    });
+    emailInput.value = '';
+    await refreshStaffAccess();
+    setStaffMessage('Staff user saved. They can sign in with the matching Microsoft account.', 'mb-2 text-success font-weight-bold');
+  } catch (error) {
+    setStaffMessage(error.message || 'Failed to add staff member.', 'mb-2 text-danger font-weight-bold');
+  } finally {
+    addStaffButton.disabled = false;
+  }
+});

@@ -402,43 +402,74 @@ body {
   padding-right: var(--asap-spacing-md) !important;
 }
 
-.staff-access-table td:nth-child(1) {
-  min-width: 120px;
-}
-
+.staff-access-table td:nth-child(1),
 .staff-access-table td:nth-child(3) {
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 220px;
 }
 
-.staff-access-table td:nth-child(4) {
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.staff-access-table td:nth-child(2) {
+  min-width: 180px;
 }
 
-.staff-access-table th:nth-child(5),
-.staff-access-table .staff-role-cell {
-  width: 140px;
+.staff-access-table th:nth-child(4),
+.staff-access-table th:nth-child(5) {
+  min-width: 145px;
 }
 
-.staff-access-table th:nth-child(6),
-.staff-access-table .staff-last-login-cell {
-  min-width: 150px;
-  white-space: nowrap;
-}
-
-.staff-access-table th:nth-child(7),
+.staff-access-table th:nth-child(8),
 .staff-access-table .staff-actions-cell {
-  min-width: 200px;
+  min-width: 310px;
 }
 
-.staff-access-table .staff-role-select {
+.staff-access-table .staff-role-select,
+.staff-access-table .staff-library-select {
   max-width: 150px;
   min-width: 140px;
+}
+
+.staff-access-table .staff-version-cell {
+  max-width: 130px;
+  overflow-wrap: anywhere;
+}
+
+.staff-access-table .staff-user-inactive td:not(.staff-actions-cell) {
+  background-color: #f3f4f6;
+}
+
+.staff-access-table .staff-status-active {
+  background: #146c43;
+  color: #fff;
+}
+
+.staff-access-table .staff-status-inactive {
+  background: #495057;
+  color: #fff;
+}
+
+.staff-access-table .staff-user-deactivate {
+  background: #9f1d2b;
+  border-color: #9f1d2b;
+  color: #fff;
+}
+
+.staff-access-table .staff-user-deactivate:hover,
+.staff-access-table .staff-user-deactivate:focus {
+  background: #721520;
+  border-color: #721520;
+  color: #fff;
+}
+
+.staff-access-table .staff-user-reactivate {
+  background: #146c43;
+  border-color: #146c43;
+  color: #fff;
+}
+
+.staff-access-table .staff-user-reactivate:hover,
+.staff-access-table .staff-user-reactivate:focus {
+  background: #0e4c2f;
+  border-color: #0e4c2f;
+  color: #fff;
 }
 
 .staff-access-table .staff-actions-cell {
@@ -661,8 +692,7 @@ body {
 }
 
 /* 8. Authentication and App Shell */
-#login-container,
-#setup-container {
+#login-container {
   max-width: 560px;
   margin: 100px auto;
   background: var(--asap-color-surface);

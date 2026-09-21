@@ -123,9 +123,19 @@ export async function authorizedJson(path, options = {}) {
     return adaptResponse(path, result);
   } catch (error) {
     if (error?.status === 401) {
-      setStaffSession({ authenticated: false, antiforgeryToken: staffSession.antiforgeryToken });
+      setStaffSession({
+        authenticated: false,
+        code: error.response?.code || 'staff_session_invalid',
+        antiforgeryToken: staffSession.antiforgeryToken
+      });
       window.dispatchEvent(new CustomEvent('asap:session-invalid'));
-    } else if (error?.status === 403) {
+    } else if (error?.status === 403 && error.response?.accessAllowed === false) {
+      setStaffSession({
+        authenticated: true,
+        accessAllowed: false,
+        code: error.response?.code || 'staff_scope_forbidden',
+        antiforgeryToken: staffSession.antiforgeryToken
+      });
       window.dispatchEvent(new CustomEvent('asap:access-forbidden', { detail: error.response }));
     } else if (error?.status === 409) {
       window.dispatchEvent(new CustomEvent('asap:stale-write', { detail: error.response }));

@@ -4,6 +4,7 @@ export const staffSession = {
   authenticated: false,
   accessAllowed: true,
   antiforgeryToken: '',
+  code: '',
   staff: null
 };
 
@@ -27,15 +28,15 @@ export function setStaffSession(session) {
   staffSession.authenticated = !!session?.authenticated;
   staffSession.accessAllowed = session?.accessAllowed !== false;
   staffSession.antiforgeryToken = session?.antiforgeryToken || staffSession.antiforgeryToken || '';
+  staffSession.code = session?.code || '';
   staffSession.staff = normalizeSessionStaff(session?.staff || null);
 }
 export const SETTINGS_RECORD_ID = 'settings0000001';
 export const loginContainer = document.getElementById('login-container');
-export const setupContainer = document.getElementById('setup-container');
 export const appContainer = document.getElementById('app-container');
 export const loginForm = document.getElementById('login-form');
-export const setupForm = document.getElementById('setup-form');
 export const logoutBtn = document.getElementById('logout-btn');
+export const loginSignOutBtn = document.getElementById('login-sign-out-btn');
 export const profileBtn = document.getElementById('profile-btn');
 export const gridContainer = document.getElementById('grid-container');
 export const staffGridFilterBar = document.getElementById('staff-grid-filter-bar');
@@ -155,12 +156,6 @@ export function incrementLibraryContextLoadSerial() { libraryContextLoadSerial++
 
 export let librarySelectorBound = false;
 export function setLibrarySelectorBound(bound) { librarySelectorBound = bound; }
-
-export let bootstrapAdminMessage = '';
-export function setBootstrapAdminMessage(msg) { bootstrapAdminMessage = msg; }
-
-export let setupRequired = false;
-export function setSetupRequired(req) { setupRequired = req; }
 
 export let canAssignSuperAdmin = false;
 export function setCanAssignSuperAdmin(canAssign) { canAssignSuperAdmin = canAssign; }

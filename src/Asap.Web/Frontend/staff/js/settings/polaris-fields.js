@@ -80,7 +80,6 @@ export function collectSettingsPolaris() {
     staffDomain: getFieldValue('polaris-domain'),
     adminUser: getFieldValue('polaris-admin-user'),
     adminPassword: getFieldValue('polaris-admin-pass'),
-    overridePassword: getFieldValue('polaris-override-pass'),
     langId: "1033",
     appId: "100",
     orgId: "1",
