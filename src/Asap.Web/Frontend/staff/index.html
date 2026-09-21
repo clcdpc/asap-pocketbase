@@ -113,8 +113,8 @@
     <div id="bootstrap-admin-alert" class="alert alert-info hidden" role="status"></div>
     <div id="email-status-banner" class="alert alert-warning hidden" role="status">
       <strong>Email notifications are not configured.</strong> Patrons can still submit suggestions and staff can still
-      process suggestions, but ASAP will not send status emails. To enable email, a super admin must open Settings and
-      configure the SMTP connection and sender address.
+      process suggestions, but ASAP will not send status emails. To enable email, an administrator must open Settings and
+      configure the Postmark server token and sender address.
     </div>
 
     <div class="mb-3">
@@ -212,7 +212,7 @@
               <button type="button" id="tab-polaris" role="tab" class="settings-nav-link" data-settings-target="polaris"
                 aria-controls="settings-polaris" aria-selected="false">Polaris</button>
               <button type="button" id="tab-smtp" role="tab" class="settings-nav-link" data-settings-target="smtp"
-                aria-controls="settings-smtp" aria-selected="false">Email / SMTP</button>
+                aria-controls="settings-smtp" aria-selected="false">Email / Postmark</button>
               <button type="button" id="tab-staff" role="tab" class="settings-nav-link" data-settings-target="staff"
                 aria-controls="settings-staff" aria-selected="false">Staff access</button>
               <button type="button" id="tab-workflow" role="tab" class="settings-nav-link"
@@ -268,9 +268,8 @@
                 </div>
                 <div class="card-body">
                   <div class="alert alert-info mb-4">
-                    <strong>Tip:</strong> Changes from any section are saved together. Use the sticky save bar below
-                    after editing, or use the save-and-test buttons in Polaris and SMTP when you want to validate those
-                    integrations immediately.
+                    <strong>Tip:</strong> Use the sticky save bar below after editing, or use the save-and-test buttons
+                    in Polaris and Postmark. Saving from Postmark updates only the email token and sender settings.
                   </div>
                   <div class="row">
                     <div class="col-md-6 mb-3">
@@ -489,52 +488,34 @@
               aria-labelledby="tab-smtp" tabindex="-1">
               <div class="card settings-panel-card">
                 <div class="card-header">
-                  <h2 class="h4 mb-1">Email / SMTP</h2>
-                  <p class="text-muted mb-0">Optional: SMTP is only needed for patron notification emails. The suggestion
+                  <h2 class="h4 mb-1">Email / Postmark</h2>
+                  <p class="text-muted mb-0">Optional: Postmark configuration is used for patron notification emails. The suggestion
                     workflow will continue to function without it.</p>
                 </div>
                 <div class="card-body">
-                  <div id="smtp-readiness-message" class="alert alert-warning small">
-                    Email notifications are optional. Configure both SMTP and a sender address when you want ASAP to send
+                  <div id="smtp-readiness-message" class="alert alert-warning small" role="status">
+                    Email notifications are optional. Configure a Postmark server token and sender address when you want ASAP to send
                     patron emails.
                   </div>
                   <div class="form-row">
-                    <div class="form-group col-md-6"><label for="smtp-host">Host <span class="text-muted small">(optional for workflow, required for emails)</span></label><input type="text"
-                        id="smtp-host" class="form-control">
-                    </div>
-                    <div class="form-group col-md-6"><label for="smtp-port">Port <span class="text-muted small">(required for emails)</span></label><input type="number"
-                        id="smtp-port" class="form-control">
-                    </div>
-                    <div class="form-group col-md-6"><label for="smtp-username">Username <span class="text-muted small">(if required by SMTP)</span></label><input type="text"
-                        id="smtp-username" class="form-control">
-                      <small class="form-text text-muted">Stored value will be kept unless replaced.</small>
-                      <div id="smtp-username-status" class="small text-success hidden mt-1"><i class="fa fa-check"></i> SMTP username is currently saved.</div>
-                    </div>
-                    <div class="form-group col-md-6"><label for="smtp-password">Password <span class="text-muted small">(if required by SMTP)</span></label><input type="password"
-                        id="smtp-password" class="form-control">
-                      <small class="form-text text-muted">Stored value will be kept unless replaced.</small>
-                      <div id="smtp-password-status" class="small text-success hidden mt-1"><i class="fa fa-check"></i> SMTP password is currently saved.</div>
-                    </div>
-                    <div class="form-group col-md-6"><label for="smtp-from">System Default From Email <span class="text-muted small">(required for emails)</span></label><input
-                        type="email" id="smtp-from" class="form-control"></div>
-                    <div class="form-group col-md-6"><label for="smtp-from-name">System Default From Name <span class="text-muted small">(optional)</span></label><input
-                        type="text" id="smtp-from-name" class="form-control"></div>
-                    <div class="form-group col-md-12">
-                      <div class="custom-control custom-checkbox">
-                        <input type="checkbox" class="custom-control-input" id="smtp-tls">
-                        <label class="custom-control-label" for="smtp-tls">Use TLS (For port 465)</label>
+                    <div class="form-group col-md-12"><label for="postmark-token">Postmark server token</label><input type="password"
+                        id="postmark-token" class="form-control" autocomplete="new-password" aria-describedby="postmark-token-help">
+                      <small id="postmark-token-help" class="form-text text-muted">Leave blank to keep the saved token. A new token replaces it for the selected scope.</small>
+                      <div id="postmark-token-status" class="small text-dark hidden mt-1" role="status">A Postmark token is configured.</div>
+                      <div class="custom-control custom-checkbox mt-2">
+                        <input type="checkbox" class="custom-control-input" id="postmark-clear-token">
+                        <label class="custom-control-label" for="postmark-clear-token">Clear token at this scope (libraries then inherit the system token)</label>
                       </div>
-                      <small class="form-text text-muted">Uncheck this if you are using port 587 (STARTTLS). Most modern
-                        mail servers use port 587.</small>
                     </div>
+                    <div class="form-group col-md-6"><label for="smtp-from">From Email <span class="text-muted small">(required for emails)</span></label><input
+                        type="email" id="smtp-from" class="form-control"></div>
+                    <div class="form-group col-md-6"><label for="smtp-from-name">From Name <span class="text-muted small">(optional)</span></label><input
+                        type="text" id="smtp-from-name" class="form-control"></div>
                   </div>
                   <div class="mt-4 pt-3 border-top">
                     <div class="form-group mb-0">
-                      <label for="smtp-test-email" class="small font-weight-bold text-muted uppercase">Test SMTP
-                        Connection</label>
+                      <p class="small font-weight-bold text-muted">Test delivery to your staff notification address</p>
                       <div class="input-group input-group-sm smtp-test-group">
-                        <input type="email" id="smtp-test-email" class="form-control"
-                          placeholder="Enter recipient email address">
                         <div class="input-group-append">
                           <button type="button" id="btn-test-smtp" class="btn btn-info">Save & Send Test</button>
                         </div>

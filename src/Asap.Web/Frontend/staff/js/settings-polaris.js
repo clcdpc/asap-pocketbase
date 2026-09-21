@@ -5,6 +5,7 @@ import { showToast } from './dialogs.js';
 import { refreshCurrentStaffView, refreshStaffStatus } from './grid.js';
 import { collectSettingsPolaris, renderLibraryParticipationCheckboxes, collectEnabledLibraryIds } from './settings/polaris-fields.js';
 import { syncPolarisOrganizations } from './settings/polaris-sync.js';
+import { saveSettings } from './settings/save-controller.js';
 
 export { collectSettingsPolaris, renderLibraryParticipationCheckboxes, collectEnabledLibraryIds };
 
@@ -171,6 +172,7 @@ document.getElementById('btn-test-smtp').addEventListener('click', async (e) => 
   resSpan.className = "mt-2 text-muted small";
 
   try {
+    if (!await saveSettings({ button: btn })) return;
     const orgId = currentLibraryContextOrgId !== 'system' ? currentLibraryContextOrgId : '';
     const data = await authorizedJson(`/api/asap/staff/email-operations/test${orgId ? `?organizationId=${encodeURIComponent(orgId)}` : ''}`, {
       method: 'POST'

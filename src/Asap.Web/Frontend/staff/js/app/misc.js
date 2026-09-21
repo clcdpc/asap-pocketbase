@@ -8,35 +8,6 @@ export function isRequestCanceledError(err) {
   return !!(err && err.status === 0 && /aborted|auto.?cancel/i.test(message));
 }
 
-export function isValidSmtpHost(host) {
-  const value = String(host || '').trim();
-  if (!value) return false;
-  if (value.toLowerCase() === 'localhost') return true;
-  if (value.includes('://') || value.includes('/') || value.includes(':') || /\s/.test(value)) return false;
-  const ipv4Pattern = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
-  if (ipv4Pattern.test(value)) return true;
-  const labels = value.split('.');
-  if (labels.length < 2) return false;
-  return labels.every(label => /^[a-z0-9-]{1,63}$/i.test(label) && !label.startsWith('-') && !label.endsWith('-'));
-}
-
-export function validateSmtpHostField(showMessage = false) {
-  const host = getFieldValue('smtp-host').trim();
-  const resultEl = document.getElementById('smtp-test-result');
-  if (!host || isValidSmtpHost(host)) {
-    if (showMessage && resultEl) {
-      resultEl.textContent = '';
-      resultEl.className = 'd-block mt-2';
-    }
-    return true;
-  }
-  if (showMessage && resultEl) {
-    resultEl.textContent = 'Enter a valid SMTP host (DNS name or IP only, no protocol or port).';
-    resultEl.className = 'mt-2 text-danger font-weight-bold small';
-  }
-  return false;
-}
-
 export function updateOrganizationsStatusUi(status, message) {
   setOrganizationsStatus(status || 'not_loaded');
   setOrganizationsStatusMessage(message || '');

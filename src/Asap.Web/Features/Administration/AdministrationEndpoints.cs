@@ -1,6 +1,7 @@
 using Asap.Shared;
 using Asap.Web.Features.Staff;
 using Asap.Web.Features.Email;
+using Asap.Web.Features.Patron;
 using Asap.Web.Infrastructure.Jobs;
 using Hangfire;
 
@@ -18,6 +19,8 @@ public static class AdministrationEndpoints
             .RequireAuthorization()
             .AddEndpointFilter<StaffAntiforgeryFilter>();
         endpoints.MapGet("/api/asap/staff/settings", GetSettingsAsync)
+            .RequireAuthorization();
+        endpoints.MapGet("/api/asap/staff/email-status", GetEmailStatusAsync)
             .RequireAuthorization();
         endpoints.MapPost("/api/asap/staff/settings", SaveSettingsAsync)
             .RequireAuthorization()
@@ -70,6 +73,42 @@ public static class AdministrationEndpoints
             .RequireAuthorization()
             .AddEndpointFilter<StaffAntiforgeryFilter>();
         return endpoints;
+    }
+
+    private static async Task<IResult> GetEmailStatusAsync(
+        HttpContext context, string? orgId, PatronConfigurationService configurations,
+        CancellationToken cancellationToken)
+    {
+        var actor = StaffAuthenticationEndpoints.RequireCurrentStaff(context);
+        var organizationId = actor.OrganizationId;
+        if (!string.IsNullOrWhiteSpace(orgId))
+        {
+            if (orgId == "system")
+            {
+                organizationId = 1;
+            }
+            else if (!int.TryParse(orgId, out organizationId) || organizationId <= 0)
+            {
+                return Results.BadRequest(new { code = "invalid_scope" });
+            }
+        }
+        if (actor.Role != "super_admin" && organizationId != actor.OrganizationId)
+        {
+            return Results.Json(new { code = "staff_scope_forbidden" }, statusCode: StatusCodes.Status403Forbidden);
+        }
+        var configuration = await configurations.GetAsync(organizationId, cancellationToken);
+        if (configuration is null)
+        {
+            return Results.NotFound();
+        }
+        var hasPostmarkToken = !string.IsNullOrWhiteSpace(configuration.Email.ProtectedServerToken);
+        var enabled = hasPostmarkToken && !string.IsNullOrWhiteSpace(configuration.Email.FromAddress);
+        return Results.Json(new
+        {
+            enabled, hasPostmarkToken,
+            message = enabled ? "Postmark configuration is complete. Delivery uses the configured backend transport."
+                : "Postmark is not configured. Set a server token and sender address. Suggestions and staff workflows still work."
+        });
     }
 
     private static async Task<IResult> GetSettingsAsync(

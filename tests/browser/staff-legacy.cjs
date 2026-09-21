@@ -74,11 +74,8 @@ async function scan(page, axeSource, artifactRoot, report, viewport, state) {
   }));
   await page.screenshot({ path: path.join(artifactRoot, `legacy-${viewport}-${state}.png`), fullPage: true });
   report.states.push({ viewport, state, accessibility, layout });
-  assert.equal(
-    accessibility.length,
-    0,
-    `Serious or critical accessibility violation in ${viewport}/${state}: ${JSON.stringify(accessibility.map(item => ({ id: item.id, targets: item.nodes.map(node => node.target) })))}`
-  );
+  // Report accessibility failures after all journeys so a legacy defect cannot
+  // prevent verification of the remaining compatibility workflows. The gate still fails.
   assert.ok(layout.scrollWidth <= layout.width, `Horizontal document overflow in ${viewport}/${state}: ${JSON.stringify(layout)}`);
   assert.equal(layout.visibleImagesLoaded, true, `Visible image failed in ${viewport}/${state}`);
 }
@@ -144,6 +141,25 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     assert.equal(await page.evaluate(() => document.activeElement.id), 'close-modal-btn');
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'deep-link-detail');
 
+    await page.locator('#edit-title-polaris-search').click();
+    await page.locator('#polarisSearchDialog[open]').waitFor();
+    await page.locator('.polaris-search-result-title-text').getByText('Catalog title 9001', { exact: true }).waitFor();
+    for (const mode of ['identifier', 'title', 'author', 'title_author']) {
+      await page.locator('#polaris-search-mode').selectOption(mode);
+      await page.locator('#polaris-search-input').fill(mode === 'identifier' ? '9780000000001' : 'Catalog title');
+      if (mode === 'title_author') await page.locator('#polaris-search-author').fill('Catalog author');
+      const search = page.waitForResponse(response => response.url().endsWith('/staff/bib-lookup') &&
+        response.request().postDataJSON()?.mode === mode && !response.request().postDataJSON()?.bibId);
+      await page.locator('#polaris-search-rerun-btn').click();
+      assert.equal((await search).status(), 200);
+      await page.locator('.polaris-search-result-meta').getByText(/Publication: 2020.*Format: Book.*Identifier: 9780000000001/).waitFor();
+    }
+    await page.getByText('Owned by consortium (1)', { exact: true }).waitFor();
+    await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'polaris-search');
+    report.polarisSearchModes = ['identifier', 'title', 'author', 'title_author'];
+    await page.locator('#close-polaris-search-btn').click();
+    await page.locator('#editModal[open]').waitFor();
+
     await page.locator('#close-modal-x').click();
     await page.locator('#editModal').waitFor({ state: 'hidden' });
     const patronLookupResponse = await post(
@@ -157,6 +173,39 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     assert.equal(patronLookup.barcode, '20000000000001');
     assert.ok(patronLookup.pickupBranches.length > 0);
     report.patronLookup = { status: patronLookupResponse.status(), barcode: patronLookup.barcode };
+    // Load this fixture library's publication options through the existing settings context.
+    await page.locator('[data-status="settings"]').click();
+    await page.waitForFunction(() => {
+      const select = document.getElementById('select-library-context');
+      return select && !select.disabled && select.options.length > 1;
+    });
+    await page.locator('#select-library-context').selectOption('2', { force: true });
+    await page.waitForFunction(() => [...document.getElementById('new-publication').options]
+      .some(option => option.value === 'Library early release'));
+    await page.locator('[data-status="suggestion"]').click();
+    await page.locator('#btn-new-suggestion').click();
+    await page.locator('#newSuggestionModal[open]').waitFor();
+    await page.locator('#new-barcode').fill('Test Patron');
+    await page.locator('#btn-lookup-patron').click();
+    await page.waitForFunction(() => document.getElementById('new-barcode').value === '20000000000001');
+    await page.locator('#new-barcode').fill('Multiple Patrons');
+    await page.locator('#btn-lookup-patron').click();
+    await page.locator('#patronSearchDialog[open]').waitFor();
+    await page.locator('#patron-search-results button').first().click();
+    await page.locator('#newSuggestionModal[open]').waitFor();
+    await page.locator('#new-title').fill('Staff port browser submission');
+    await page.locator('#new-author').fill('Browser author');
+    await page.locator('#new-identifier').fill('9780000000881');
+    await page.locator('#new-suggestion-library').selectOption('2');
+    // Book has a required custom-field fixture; the pinned staff form has no custom-field editor.
+    await page.locator('#new-format').selectOption('dvd');
+    await page.locator('#new-publication').selectOption('Library early release');
+    await page.locator('#new-pickup-branch').selectOption('101');
+    const createdSuggestion = page.waitForResponse(response => response.url().endsWith('/staff/suggestions'));
+    await page.locator('#btn-submit-new').click();
+    const created = await createdSuggestion;
+    assert.equal(created.status(), 201, await created.text());
+    await page.locator('#newSuggestionModal').waitFor({ state: 'hidden' });
     const tabs = page.locator('#status-tabs [data-status]');
     assert.ok(await tabs.count() >= 8, 'Legacy status/settings navigation was not rendered');
     await page.locator('#grid-search-input').fill('no-result-browser-filter');
@@ -238,6 +287,40 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     assert.ok(await page.locator('#btn-reset-library-settings').count(), 'Inherited override reset control is missing');
     assert.ok(await page.locator('#settings-form button[type="submit"]').count(), 'Settings save control is missing');
 
+    await page.locator('#tab-smtp').click();
+    await page.locator('#settings-smtp.active').waitFor();
+    assert.equal(await page.locator('#smtp-host, #smtp-port, #smtp-password').count(), 0);
+    const beforeEmailSettings = await (await context.request.get(`${args.baseOrigin}/api/asap/staff/settings?orgId=2`)).json();
+    const saveEmail = async () => {
+      const saved = page.waitForResponse(response => response.url().endsWith('/staff/settings/library') && response.request().method() === 'POST');
+      await page.locator('#settings-form button[type="submit"]').click();
+      assert.equal((await saved).status(), 200);
+      await page.waitForFunction(() => document.getElementById('postmark-token').value === '' &&
+        document.querySelector('#settings-form button[type="submit"]').disabled === false);
+    };
+    await page.locator('#postmark-token').fill('browser-postmark-token');
+    await page.locator('#smtp-from').fill('browser-port@example.org');
+    await page.locator('#smtp-from-name').fill('Browser sender');
+    await saveEmail();
+    await page.locator('#postmark-token-status').waitFor({ state: 'visible' });
+    await page.locator('#smtp-readiness-message').getByText(/configuration is complete/).waitFor();
+    await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'postmark-settings');
+    await page.locator('#smtp-from-name').fill('Updated browser sender');
+    await saveEmail();
+    await page.locator('#postmark-token-status').waitFor({ state: 'visible' });
+    await page.locator('#postmark-token').fill('replacement-browser-token');
+    await saveEmail();
+    await page.locator('#postmark-clear-token').focus();
+    await page.locator('#postmark-clear-token').press('Space');
+    assert.equal(await page.locator('#postmark-clear-token').isChecked(), true);
+    await saveEmail();
+    assert.equal(await page.locator('#postmark-token').inputValue(), '');
+    const afterEmailSettings = await (await context.request.get(`${args.baseOrigin}/api/asap/staff/settings?orgId=2`)).json();
+    assert.deepEqual(afterEmailSettings.stored.libraryOverride.publicationOptions,
+      beforeEmailSettings.stored.libraryOverride.publicationOptions, 'Email saves must preserve library publication choices');
+    assert.deepEqual(afterEmailSettings.stored.libraryOverride.workflow,
+      beforeEmailSettings.stored.libraryOverride.workflow, 'Email saves must preserve workflow settings');
+
     await page.locator('[data-status="analytics"]').click();
     await page.locator('#analytics-title').waitFor();
     assert.equal(await page.locator('#analytics-scope').inputValue(), 'all');
@@ -317,12 +400,16 @@ async function main() {
     await runAnonymous(browser, args, axeSource, report);
     await runSuperAdmin(browser, args, axeSource, report);
     await runScopedStaff(browser, args, axeSource, report);
-    assert.equal(report.states.length, 9, 'Expected nine primary legacy staff browser states');
+    assert.equal(report.states.length, 11, 'Expected eleven primary legacy staff browser states');
     await fs.writeFile(
       path.join(args.artifactRoot, 'staff-legacy-browser-results.json'),
       JSON.stringify(report, null, 2),
       'utf8'
     );
+    const accessibilityFailures = report.states.filter(state => state.accessibility.length > 0)
+      .map(state => ({ viewport: state.viewport, state: state.state,
+        violations: state.accessibility.map(item => ({ id: item.id, targets: item.nodes.map(node => node.target) })) }));
+    assert.deepEqual(accessibilityFailures, [], `Serious or critical accessibility violations: ${JSON.stringify(accessibilityFailures)}`);
   } finally {
     await browser.close();
   }

@@ -94,7 +94,8 @@ public sealed partial class PatronSuggestionService(
     public async Task<PatronSuggestionResult> CreateAsync(
         PatronSessionContext session,
         PatronSuggestionInput input,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool staffSubmission = false)
     {
         var configuration = await configurationService.GetAsync(
             session.EffectiveOrganizationId,
@@ -110,6 +111,10 @@ public sealed partial class PatronSuggestionService(
         try
         {
             patron = await patronProvider.RefreshAsync(session.Barcode, cancellationToken);
+            if (staffSubmission)
+            {
+                EnforceStaffPatronEligibility(configuration, patron);
+            }
             pickupBranches = await patronProvider.GetPickupBranchesAsync(patron, cancellationToken);
         }
         catch (PolarisOperationalException exception)
@@ -169,6 +174,7 @@ public sealed partial class PatronSuggestionService(
                     configuration,
                     autoClaimCandidate,
                     emailTransportReadiness,
+                    staffSubmission,
                     cancellationToken);
                 break;
             }
@@ -224,6 +230,7 @@ public sealed partial class PatronSuggestionService(
         EffectivePatronConfiguration configuration,
         AutoClaimCandidate? autoClaimCandidate,
         EmailTransportReadiness emailTransportReadiness,
+        bool staffSubmission,
         CancellationToken cancellationToken)
     {
         await using var connection = new SqlConnection(connectionString);
@@ -249,12 +256,16 @@ public sealed partial class PatronSuggestionService(
             configuration.OrganizationId,
             suggestion,
             cancellationToken);
-        await EnforceLimitAsync(
-            connection,
-            transaction,
-            session.Barcode,
-            configuration,
-            cancellationToken);
+        // The pinned staff-create workflow bypasses only the public submission count.
+        if (!staffSubmission)
+        {
+            await EnforceLimitAsync(
+                connection,
+                transaction,
+                session.Barcode,
+                configuration,
+                cancellationToken);
+        }
         await EnforceDuplicateAsync(
             connection,
             transaction,
@@ -1443,6 +1454,19 @@ public sealed partial class PatronSuggestionService(
         return snapshot.Count == 0 ? null : JsonSerializer.Serialize(snapshot);
     }
 
+    internal static void EnforceStaffPatronEligibility(
+        EffectivePatronConfiguration configuration,
+        PatronSnapshot patron)
+    {
+        if (!configuration.AllowAnyRegisteredCardLogin &&
+            patron.HomeLibraryOrganizationId != configuration.OrganizationId)
+        {
+            throw new PatronFlowException(403, "That patron is not registered at the selected library.",
+                new { code = "patron_library_forbidden", message = "That patron is not registered at the selected library." });
+        }
+        EnforcePatronCodeEligibility(configuration, patron);
+    }
+
     private static void EnforcePatronCodeEligibility(
         EffectivePatronConfiguration configuration,
         PatronSnapshot patron)
@@ -1455,7 +1479,8 @@ public sealed partial class PatronSuggestionService(
             return;
         }
 
-        throw new PatronFlowException(403, configuration.PatronCodeEligibilityMessage);
+        throw new PatronFlowException(403, configuration.PatronCodeEligibilityMessage,
+            new { code = "patron_code_forbidden", message = configuration.PatronCodeEligibilityMessage });
     }
 
     private static string? Missing(

@@ -1796,6 +1796,7 @@ public sealed class AdministrationService(
 
     private static object ToEffectivePatronText(EffectivePatronConfiguration row) => new
     {
+        row.PublicationOptions,
         row.PageTitle,
         row.BarcodeLabel,
         row.PinLabel,

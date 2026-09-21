@@ -1,0 +1,449 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
+using Asap.Web.Features.Patron;
+using Asap.Web.Features.Staff;
+using Asap.Web.Infrastructure.Data;
+using Asap.Web.Infrastructure.Security;
+using Asap.Web.Infrastructure.Testing;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+
+namespace Asap.Tests.Integration;
+
+public sealed partial class PatronJourneyTests
+{
+    [TestMethod]
+    [DataRow("identifier", "keyword/ISBN", "9781234567890")]
+    [DataRow("title", "keyword/TI", "Port title")]
+    [DataRow("author", "keyword/AU", "Port author")]
+    [DataRow("title_author", "boolean", "TI=\"Port title\" AND AU=\"Port author\"")]
+    public async Task StaffPortBibSearchPreservesLegacyQueriesAndBoundedResponse(string mode, string path, string query)
+    {
+        using var startup = factory!.CreateClient();
+        var rows = Enumerable.Range(1, 15).Select(id => new
+        {
+            ControlNumber = id, DisplayTitle = "Port title", Author = "Port author",
+            PublicationDate = "2020", MaterialTypeDescription = "Book", ISBN = "9781234567890",
+            PrimaryTypeOfMaterial = "1"
+        });
+        var handler = new StaffSearchResponseHandler(_ => JsonSerializer.Serialize(new
+        {
+            PAPIErrorCode = 0, TotalRecordsFound = 40, BibSearchRows = rows
+        }));
+        var provider = await CreatePolarisProviderAsync(handler);
+        await using var app = WithStaffPortProviders(provider);
+        using var client = await StaffPortClientAsync(app);
+        using var response = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", new
+        {
+            mode, query = mode == "identifier" ? "978-1-234567-89-0" : "Port title",
+            title = "Port title", author = "Port author", requestId = "legacy-id"
+        });
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode, await response.Content.ReadAsStringAsync());
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = document.RootElement;
+        Assert.AreEqual("found", root.GetProperty("status").GetString());
+        Assert.AreEqual(40, root.GetProperty("totalMatches").GetInt32());
+        Assert.IsTrue(root.GetProperty("multipleMatches").GetBoolean());
+        Assert.AreEqual(10, root.GetProperty("results").GetArrayLength());
+        var row = root.GetProperty("results")[0];
+        foreach (var field in new[] { "bibId", "title", "author", "publication", "format", "identifier" })
+        {
+            Assert.IsFalse(string.IsNullOrWhiteSpace(row.GetProperty(field).GetString()), field);
+        }
+        Assert.HasCount(1, handler.Requests);
+        StringAssert.EndsWith(handler.Requests[0].AbsolutePath, path);
+        var parameters = QueryHelpers.ParseQuery(handler.Requests[0].Query);
+        Assert.AreEqual(query, parameters["q"].ToString());
+        Assert.AreEqual("10", parameters["bibsperpage"].ToString());
+    }
+
+    [TestMethod]
+    public async Task StaffPortExactBibLookupIncludesLegacyMetadata()
+    {
+        using var startup = factory!.CreateClient();
+        var handler = new StaffSearchResponseHandler(uri => uri.AbsolutePath.EndsWith("holdings", StringComparison.Ordinal)
+            ? """
+              {"PAPIErrorCode":0,"BibHoldingsGetRows":[
+                {"LocationID":"101","Holdable":"1","ItemsTotal":"50"},
+                {"LocationID":"101","Holdable":"false"},{"LocationID":"102","Holdable":"yes"}]}
+              """
+            : uri.AbsolutePath.Contains("authenticator/staff", StringComparison.OrdinalIgnoreCase)
+                ? "{\"PAPIErrorCode\":0,\"AccessToken\":\"protected-token\",\"AccessSecret\":\"secret\",\"AuthExpDate\":\"2035-01-01T00:00:00Z\"}"
+            : uri.AbsolutePath.Contains("holdrequests", StringComparison.OrdinalIgnoreCase)
+                ? """
+                  {"PAPIErrorCode":0,"PatronHoldRequestsGetRows":[
+                    {"HoldRequestID":1,"BibID":123,"StatusDescription":"Active"},
+                    {"HoldRequestID":2,"BibID":124,"StatusDescription":"Cancelled"}]}
+                  """
+            : uri.AbsolutePath.Contains("organizations", StringComparison.OrdinalIgnoreCase)
+                ? """
+                  {"PAPIErrorCode":0,"OrganizationsGetRows":[
+                    {"OrganizationID":2,"OrganizationCodeID":2},
+                    {"OrganizationID":101,"OrganizationCodeID":3,"ParentOrganizationID":2},
+                    {"OrganizationID":3,"OrganizationCodeID":2},
+                    {"OrganizationID":102,"OrganizationCodeID":3,"ParentOrganizationID":3}]}
+                  """
+                : """
+            {"PAPIErrorCode":0,"BibGetRows":[
+              {"ElementID":35,"Value":"Exact title"},{"ElementID":18,"Value":"Exact author"},
+              {"ElementID":2,"Value":"Publisher, 2021"},{"ElementID":17,"Value":"Book"},
+              {"ElementID":6,"Value":"9781234567890"}]}
+            """);
+        var provider = await CreatePolarisProviderAsync(handler);
+        await using var app = WithStaffPortProviders(provider, new StaffPortPatronProvider());
+        using var client = await StaffPortClientAsync(app);
+        await ConfigureStaffPortLibraryAsync(client, false);
+        using var response = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", new { bibId = "123" });
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.AreEqual("123", document.RootElement.GetProperty("bibId").GetString());
+        Assert.AreEqual("Exact title", document.RootElement.GetProperty("title").GetString());
+        Assert.AreEqual("Exact author", document.RootElement.GetProperty("author").GetString());
+        Assert.AreEqual("Book", document.RootElement.GetProperty("format").GetString());
+        Assert.AreEqual("9781234567890", document.RootElement.GetProperty("identifier").GetString());
+        Assert.AreEqual("Publisher, 2021", document.RootElement.GetProperty("publisher").GetString());
+        var summary = document.RootElement.GetProperty("holdingsSummary");
+        Assert.AreEqual(3, summary.GetProperty("consortiumCount").GetInt32());
+        Assert.IsTrue(summary.GetProperty("isHoldable").GetBoolean());
+        using var withPatron = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", new { bibId = "123", barcode = "port-local" });
+        Assert.AreEqual(HttpStatusCode.OK, withPatron.StatusCode, await withPatron.Content.ReadAsStringAsync());
+        using var checkedPatron = JsonDocument.Parse(await withPatron.Content.ReadAsStringAsync());
+        Assert.AreEqual(29, checkedPatron.RootElement.GetProperty("patronHoldCheck").GetProperty("statusValue").GetInt32());
+        using var denied = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", new { bibId = "123", barcode = "port-restricted" });
+        Assert.AreEqual(HttpStatusCode.Forbidden, denied.StatusCode);
+        var local = await provider.GetBibHoldingsAsync(123, 2, CancellationToken.None);
+        Assert.AreEqual(new StaffBibHoldingsSummary(2, 1, 3, true, true), local);
+        var empty = await CreatePolarisProviderAsync(new StaffSearchResponseHandler(_ => "{\"PAPIErrorCode\":-1}"));
+        Assert.AreEqual(new StaffBibHoldingsSummary(0, 0, 0, false, false),
+            await empty.GetBibHoldingsAsync(123, 2, CancellationToken.None));
+        var failed = await CreatePolarisProviderAsync(new StaffSearchResponseHandler(_ => "{\"PAPIErrorCode\":-999}"));
+        await Assert.ThrowsAsync<PolarisOperationalException>(() => failed.GetBibHoldingsAsync(123, 2, CancellationToken.None));
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => provider.GetBibHoldingsAsync(123, 2, canceled.Token));
+    }
+
+    [TestMethod]
+    public async Task StaffPortBibFallbacksFilterDigitalMaterialsAndReportFailures()
+    {
+        using var startup = factory!.CreateClient();
+        var handler = new StaffSearchResponseHandler(uri => uri.AbsolutePath.EndsWith("boolean", StringComparison.Ordinal)
+            ? "{\"PAPIErrorCode\":-1}"
+            : """
+              {"PAPIErrorCode":0,"TotalRecordsFound":3,"BibSearchRows":[
+                {"ControlNumber":1,"Title":"Port title","Author":"Port author","PrimaryTypeOfMaterial":36},
+                {"ControlNumber":2,"Title":"Port title","Author":"Other"},
+                {"ControlNumber":3,"Title":"Port title","Author":"Port author"}]}
+              """);
+        var provider = await CreatePolarisProviderAsync(handler);
+        var found = await provider.SearchBibsAsync("title_author", "Port title", "Port title", "Port author", CancellationToken.None);
+        Assert.AreEqual("3", found.Results.Single().BibId);
+        Assert.HasCount(2, handler.Requests);
+        var noResults = await CreatePolarisProviderAsync(new StaffSearchResponseHandler(_ => "{\"PAPIErrorCode\":-1}"));
+        Assert.HasCount(0, (await noResults.SearchBibsAsync("identifier", "123", "", "", CancellationToken.None)).Results);
+        var failed = await CreatePolarisProviderAsync(new StaffSearchResponseHandler(_ => "{\"PAPIErrorCode\":-999}"));
+        await Assert.ThrowsAsync<PolarisOperationalException>(() => failed.SearchBibsAsync("title", "Port", "", "", CancellationToken.None));
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => provider.SearchBibsAsync("title", "Port", "", "", canceled.Token));
+    }
+
+    [TestMethod]
+    public async Task StaffPortPatronProviderUsesLegacyNameQueryAndResolvesActualScope()
+    {
+        using var startup = factory!.CreateClient();
+        var handler = new StaffSearchResponseHandler(uri =>
+        {
+            var path = uri.AbsolutePath;
+            if (path.Contains("authenticator/staff", StringComparison.OrdinalIgnoreCase))
+            {
+                return "{\"PAPIErrorCode\":0,\"AccessToken\":\"protected-token\",\"AccessSecret\":\"secret\",\"AuthExpDate\":\"2035-01-01T00:00:00Z\"}";
+            }
+            if (path.Contains("search/patrons", StringComparison.OrdinalIgnoreCase))
+            {
+                return "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"PatronSearchRows\":[{\"PatronID\":123,\"Barcode\":\"port-barcode\"}]}";
+            }
+            if (path.Contains("organizations", StringComparison.OrdinalIgnoreCase))
+            {
+                return "{\"PAPIErrorCode\":1,\"OrganizationsGetRows\":[{\"OrganizationID\":300,\"OrganizationCodeID\":2,\"DisplayName\":\"Actual Library\"}]}";
+            }
+            return "{\"PAPIErrorCode\":0,\"PatronBasicData\":{\"PatronID\":123,\"Barcode\":\"port-barcode\",\"NameFirst\":\"Pat\",\"NameLast\":\"Reader\",\"PatronOrgID\":300,\"PatronCodeID\":14}}";
+        });
+        var provider = await CreatePolarisProviderAsync(handler);
+        var patrons = await provider.SearchPatronsAsync("Pat Reader", CancellationToken.None);
+        Assert.AreEqual(300, patrons.Single().HomeLibraryOrganizationId);
+        Assert.AreEqual("14", patrons.Single().PatronCodeId);
+        var search = handler.Requests.Single(uri => uri.AbsolutePath.Contains("search/patrons", StringComparison.OrdinalIgnoreCase));
+        StringAssert.Contains(search.AbsolutePath, "protected-token");
+        var parameters = QueryHelpers.ParseQuery(search.Query);
+        Assert.AreEqual("PATNF=\"Pat Reader\"", parameters["q"].ToString());
+        Assert.AreEqual("PATNF", parameters["sortby"].ToString());
+        Assert.AreEqual("10", parameters["patronsperpage"].ToString());
+        var missing = await CreatePolarisProviderAsync(new StaffSearchResponseHandler(uri =>
+            uri.AbsolutePath.Contains("authenticator/staff", StringComparison.OrdinalIgnoreCase)
+                ? "{\"PAPIErrorCode\":0,\"AccessToken\":\"token\",\"AccessSecret\":\"secret\",\"AuthExpDate\":\"2035-01-01T00:00:00Z\"}"
+                : "{\"PAPIErrorCode\":-1}"));
+        Assert.HasCount(0, await missing.SearchPatronsAsync("Missing Reader", CancellationToken.None));
+        var invalid = await CreatePolarisProviderAsync(new StaffSearchResponseHandler(uri =>
+            uri.AbsolutePath.Contains("authenticator/staff", StringComparison.OrdinalIgnoreCase)
+                ? "{\"PAPIErrorCode\":0,\"AccessToken\":\"token\",\"AccessSecret\":\"secret\",\"AuthExpDate\":\"2035-01-01T00:00:00Z\"}"
+                : "{\"PatronSearchRows\":[]}"));
+        await Assert.ThrowsAsync<PolarisOperationalException>(() => invalid.SearchPatronsAsync("Reader", CancellationToken.None));
+    }
+
+    [TestMethod]
+    [DataRow("port-local", "selected", 1)]
+    [DataRow("Single Reader", "selected", 1)]
+    [DataRow("Reader", "multiple", 2)]
+    [DataRow("Many Readers", "multiple", 10)]
+    [DataRow("Missing Reader", "not_found", 0)]
+    public async Task StaffPortPatronLookupPreservesSelectionAndFiltersCandidates(string query, string status, int count)
+    {
+        var provider = new StaffPortPatronProvider();
+        await using var app = WithStaffPortProviders(provider, provider);
+        using var client = await StaffPortClientAsync(app);
+        await ConfigureStaffPortLibraryAsync(client, false);
+        using var response = await client.PostAsJsonAsync("/api/asap/staff/patron-lookup", new { query, libraryOrgId = "91632" });
+        Assert.AreEqual(count == 0 ? HttpStatusCode.NotFound : HttpStatusCode.OK, response.StatusCode,
+            await response.Content.ReadAsStringAsync());
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.AreEqual(status, document.RootElement.GetProperty("status").GetString());
+        if (status == "multiple")
+        {
+            Assert.AreEqual(count, document.RootElement.GetProperty("totalMatches").GetInt32());
+            foreach (var candidate in document.RootElement.GetProperty("results").EnumerateArray())
+            {
+                Assert.AreEqual(91632, candidate.GetProperty("libraryOrgId").GetInt32());
+            }
+        }
+        else if (count == 1)
+        {
+            Assert.AreEqual("port-local", document.RootElement.GetProperty("barcode").GetString());
+            Assert.AreEqual(2, document.RootElement.GetProperty("pickupBranches").GetArrayLength());
+        }
+        if (query == "Reader")
+        {
+            Assert.HasCount(1, provider.DirectLookups);
+            Assert.AreEqual("Reader", provider.DirectLookups[0]);
+        }
+        Assert.DoesNotContain("port-foreign", await response.Content.ReadAsStringAsync());
+        Assert.DoesNotContain("port-restricted", await response.Content.ReadAsStringAsync());
+    }
+
+    [TestMethod]
+    [DataRow("port-local", false, true)]
+    [DataRow("port-foreign", false, false)]
+    [DataRow("port-foreign", true, true)]
+    [DataRow("port-restricted", true, false)]
+    public async Task StaffPortDirectSubmissionRevalidatesEligibilityBeforePickupMutation(string barcode, bool crossLibrary, bool allowed)
+    {
+        var provider = new StaffPortPatronProvider();
+        await using var app = WithStaffPortProviders(provider, provider);
+        using var client = await StaffPortClientAsync(app);
+        await ConfigureStaffPortLibraryAsync(client, crossLibrary);
+        using var response = await client.PostAsJsonAsync("/api/asap/staff/suggestions", StaffPortSuggestion(barcode));
+        Assert.AreEqual(allowed ? HttpStatusCode.Created : HttpStatusCode.Forbidden, response.StatusCode,
+            await response.Content.ReadAsStringAsync());
+        Assert.AreEqual(allowed ? 1 : 0, provider.PickupUpdates);
+        if (!allowed)
+        {
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.AreEqual(barcode == "port-restricted" ? "patron_code_forbidden" : "patron_library_forbidden",
+                document.RootElement.GetProperty("code").GetString());
+        }
+    }
+
+    [TestMethod]
+    public async Task StaffPortBypassesOnlyPublicCountLimit()
+    {
+        var provider = new StaffPortPatronProvider();
+        await using var app = WithStaffPortProviders(provider, provider);
+        using var client = await StaffPortClientAsync(app);
+        await ConfigureStaffPortLibraryAsync(client, false);
+        var barcode = "limit-" + Guid.NewGuid().ToString("N");
+        using var login = await client.PostAsJsonAsync("/api/asap/patron/login", new { barcode, pin = "1234", libraryOrgId = 91632 });
+        Assert.AreEqual(HttpStatusCode.OK, login.StatusCode, await login.Content.ReadAsStringAsync());
+        using var loginDocument = JsonDocument.Parse(await login.Content.ReadAsStringAsync());
+        using var publicClient = app.CreateClient();
+        publicClient.DefaultRequestHeaders.Authorization = new("Bearer", loginDocument.RootElement.GetProperty("token").GetString());
+        var title = "Public port limit " + Guid.NewGuid().ToString("N");
+        using var first = await publicClient.PostAsJsonAsync("/api/asap/patron/suggestions", new
+        {
+            format = "book", title, author = "Port author", publication = "Coming soon", preferredPickupBranchId = 101
+        });
+        Assert.AreEqual(HttpStatusCode.Created, first.StatusCode, await first.Content.ReadAsStringAsync());
+        using var limited = await publicClient.PostAsJsonAsync("/api/asap/patron/suggestions", new
+        {
+            format = "book", title = title + " second", author = "Port author", publication = "Coming soon", preferredPickupBranchId = 101
+        });
+        Assert.AreEqual(HttpStatusCode.NotAcceptable, limited.StatusCode, await limited.Content.ReadAsStringAsync());
+        var staffInput = StaffPortSuggestion(barcode);
+        using var staff = await client.PostAsJsonAsync("/api/asap/staff/suggestions", staffInput);
+        Assert.AreEqual(HttpStatusCode.Created, staff.StatusCode, await staff.Content.ReadAsStringAsync());
+        using var duplicate = await client.PostAsJsonAsync("/api/asap/staff/suggestions", staffInput);
+        Assert.AreEqual(HttpStatusCode.Conflict, duplicate.StatusCode, await duplicate.Content.ReadAsStringAsync());
+        using var invalid = await client.PostAsJsonAsync("/api/asap/staff/suggestions", staffInput with { Format = "not-a-format" });
+        Assert.AreEqual(HttpStatusCode.BadRequest, invalid.StatusCode);
+        using var pickup = await client.PostAsJsonAsync("/api/asap/staff/suggestions", staffInput with { PreferredPickupBranchId = "999" });
+        Assert.AreEqual(HttpStatusCode.BadRequest, pickup.StatusCode);
+    }
+
+    [TestMethod]
+    public async Task StaffPortPostmarkSettingsPreserveSecretsAndReportEffectiveReadiness()
+    {
+        using var client = await StaffPortClientAsync(factory!);
+        const string orgId = "91631";
+        await UpsertTestOrganizationAsync(91631, "Postmark port", "PMP");
+        var protector = factory!.Services.GetRequiredService<IntegrationCredentialProtector>();
+        var contexts = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        foreach (var (token, clear, expected) in new[]
+                 { ("first-private-token", false, "first-private-token"), ("", false, "first-private-token"),
+                   ("replacement-private-token", false, "replacement-private-token"), ("", true, (string?)null) })
+        {
+            using var before = await ReadSettingsDocumentAsync(client, orgId);
+            using var saved = await SaveSettingsDocumentAsync(client, before.RootElement, orgId, new Dictionary<string, object?>
+            {
+                ["emails"] = new { fromAddress = "port@example.org", fromName = "Port sender", postmarkToken = token, clearPostmarkToken = clear },
+                ["smtp"] = new { host = "obsolete.invalid", password = "obsolete-secret" }
+            });
+            using var loaded = await ReadSettingsDocumentAsync(client, orgId);
+            var email = loaded.RootElement.GetProperty("stored").GetProperty("libraryOverride").GetProperty("email");
+            Assert.AreEqual(expected is not null, email.GetProperty("hasPostmarkToken").GetBoolean());
+            Assert.AreEqual("port@example.org", email.GetProperty("fromAddress").GetString());
+            Assert.AreEqual("Port sender", email.GetProperty("fromName").GetString());
+            Assert.DoesNotContain("private-token", loaded.RootElement.GetRawText());
+            Assert.DoesNotContain("obsolete-secret", loaded.RootElement.GetRawText());
+            await using var context = await contexts.CreateDbContextAsync();
+            var stored = await context.EmailSettings.SingleAsync(row => row.OrganizationId == 91631);
+            Assert.AreEqual(expected, stored.ProtectedServerToken is null ? null : protector.Unprotect(stored.ProtectedServerToken));
+        }
+        using var current = await ReadSettingsDocumentAsync(client, orgId);
+        using var blankSender = await SaveSettingsDocumentAsync(client, current.RootElement, orgId, new Dictionary<string, object?>
+        {
+            ["emails"] = new { fromAddress = "", postmarkToken = "configured-token" }
+        });
+        await using var readinessContext = await contexts.CreateDbContextAsync();
+        var systemEmail = await readinessContext.EmailSettings.SingleAsync(row => row.OrganizationId == 1);
+        var originalSender = systemEmail.FromAddress;
+        var originalToken = systemEmail.ProtectedServerToken;
+        try
+        {
+            // A blank library sender inherits. Remove the system sender to test truly missing configuration.
+            systemEmail.FromAddress = null;
+            systemEmail.ProtectedServerToken = null;
+            await readinessContext.SaveChangesAsync();
+            using var status = await client.GetAsync($"/api/asap/staff/email-status?orgId={orgId}");
+            using var statusDocument = JsonDocument.Parse(await status.Content.ReadAsStringAsync());
+            Assert.IsFalse(statusDocument.RootElement.GetProperty("enabled").GetBoolean());
+            Assert.IsTrue(statusDocument.RootElement.GetProperty("hasPostmarkToken").GetBoolean());
+            using var systemStatus = await client.GetAsync("/api/asap/staff/email-status?orgId=system");
+            using var systemDocument = JsonDocument.Parse(await systemStatus.Content.ReadAsStringAsync());
+            Assert.IsFalse(systemDocument.RootElement.GetProperty("enabled").GetBoolean());
+            Assert.IsFalse(systemDocument.RootElement.GetProperty("hasPostmarkToken").GetBoolean());
+        }
+        finally
+        {
+            systemEmail.FromAddress = originalSender;
+            systemEmail.ProtectedServerToken = originalToken;
+            await readinessContext.SaveChangesAsync();
+        }
+    }
+
+    private WebApplicationFactory<Program> WithStaffPortProviders(IStaffPolarisProvider staff, IPatronProvider? patron = null) =>
+        factory!.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+        {
+            services.RemoveAll<IStaffPolarisProvider>();
+            services.AddSingleton(staff);
+            if (patron is not null)
+            {
+                services.RemoveAll<IPatronProvider>();
+                services.AddSingleton(patron);
+            }
+        }));
+
+    private async Task<HttpClient> StaffPortClientAsync(WebApplicationFactory<Program> app)
+    {
+        var client = app.CreateClient();
+        var actor = await ReadConfiguredSuperAdminAsync();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+        return client;
+    }
+
+    private static async Task ConfigureStaffPortLibraryAsync(HttpClient client, bool crossLibrary)
+    {
+        await UpsertTestOrganizationAsync(91632, "Staff port tests", "SPT");
+        using var current = await ReadSettingsDocumentAsync(client, "91632");
+        using var saved = await SaveSettingsDocumentAsync(client, current.RootElement, "91632", new Dictionary<string, object?>
+        {
+            ["workflow"] = new { suggestionLimit = 1, allowAnyRegisteredCardLogin = crossLibrary,
+                patronCodeEligibilityEnabled = true, allowedPatronCodeIds = new[] { "1" } }
+        });
+    }
+
+    private static StaffSuggestionInput StaffPortSuggestion(string barcode) => new(
+        barcode, "Staff port " + Guid.NewGuid().ToString("N"), "Port author", null, "book", "Coming soon", null, "102", true, "91632");
+
+    private sealed class StaffSearchResponseHandler(Func<Uri, string> respond) : HttpMessageHandler
+    {
+        public List<Uri> Requests { get; } = [];
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Requests.Add(request.RequestUri!);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(respond(request.RequestUri!)), RequestMessage = request
+            });
+        }
+    }
+
+    private sealed class StaffPortPatronProvider : IPatronProvider, IStaffPolarisProvider
+    {
+        private readonly DeterministicTestingPatronProvider inner = new();
+        public List<string> DirectLookups { get; } = [];
+        public int PickupUpdates { get; private set; }
+        public async Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
+        {
+            DirectLookups.Add(barcode);
+            if (barcode == "Reader")
+            {
+                throw new PolarisOperationalException("polaris_patron_not_found", "Not found");
+            }
+            return await SnapshotAsync(barcode, cancellationToken);
+        }
+        private async Task<PatronSnapshot> SnapshotAsync(string barcode, CancellationToken cancellationToken) =>
+            (await inner.RefreshAsync(barcode, cancellationToken)) with
+            {
+                HomeLibraryOrganizationId = barcode == "port-foreign" ? 3 : 91632,
+                PatronCodeId = barcode == "port-restricted" ? "3" : "1"
+            };
+        public async Task<IReadOnlyList<PatronSnapshot>> SearchPatronsAsync(string query, CancellationToken cancellationToken)
+        {
+            var barcodes = query switch
+            {
+                "Single Reader" => new[] { "port-local", "port-foreign", "port-restricted" },
+                "Reader" => ["port-local", "port-second", "port-foreign", "port-restricted"],
+                "Many Readers" => Enumerable.Range(1, 15).Select(index => $"port-{index}").ToArray(),
+                _ => []
+            };
+            return await Task.WhenAll(barcodes.Select(barcode => SnapshotAsync(barcode, cancellationToken)));
+        }
+        public Task<PatronSnapshot> AuthenticateAsync(string barcode, string pin, CancellationToken token) => SnapshotAsync(barcode, token);
+        public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(PatronSnapshot patron, CancellationToken token) => inner.GetPickupBranchesAsync(patron, token);
+        public Task UpdatePreferredPickupBranchAsync(string barcode, int pickupBranchId, CancellationToken token)
+        {
+            PickupUpdates++;
+            return inner.UpdatePreferredPickupBranchAsync(barcode, pickupBranchId, token);
+        }
+        public Task<IdentifierLookupResult> LookupIdentifierAsync(string identifier, CancellationToken token) => inner.LookupIdentifierAsync(identifier, token);
+        public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken token) => inner.ValidateBibAsync(bibId, token);
+        public Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(string barcode, CancellationToken token) => inner.GetPatronHoldsAsync(barcode, token);
+        public Task<HoldProviderResult> CreateHoldAsync(HoldCreateCommand command, CancellationToken token) => inner.CreateHoldAsync(command, token);
+        public Task<HoldProviderResult> ReplyToHoldAsync(HoldReplyCommand command, CancellationToken token) => inner.ReplyToHoldAsync(command, token);
+    }
+}

@@ -117,7 +117,35 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
     public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(new BibValidationResult(bibId > 0, $"Catalog title {bibId}", "Catalog author"));
+        return Task.FromResult(new BibValidationResult(bibId > 0, $"Catalog title {bibId}", "Catalog author",
+            "2020", "Book", "9780000000001"));
+    }
+
+    public Task<StaffBibSearchResult> SearchBibsAsync(
+        string mode, string query, string title, string author, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(new StaffBibSearchResult(
+            [new("9001", "Catalog title 9001", "Catalog author", "2020", "Book", "9780000000001")], 1));
+    }
+
+    public Task<StaffBibHoldingsSummary> GetBibHoldingsAsync(int bibId, int organizationId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(new StaffBibHoldingsSummary(organizationId == 2 ? 1 : 0,
+            organizationId == 2 ? 0 : 1, 1, true, organizationId == 2));
+    }
+
+    public Task<IReadOnlyList<PatronSnapshot>> SearchPatronsAsync(string query, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        IReadOnlyList<PatronSnapshot> results = query switch
+        {
+            "Test Patron" => [CreatePatron("20000000000001")],
+            "Multiple Patrons" => [CreatePatron("20000000000001"), CreatePatron("20000000000002")],
+            _ => []
+        };
+        return Task.FromResult(results);
     }
 
     public Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(

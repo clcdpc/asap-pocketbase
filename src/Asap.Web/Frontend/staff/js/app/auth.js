@@ -8,6 +8,10 @@ import { renderRecentSuggestionsSwitcher } from '../recent-suggestions.js';
 import { setText, setVisible, setFieldChecked, setFieldValue } from './dom.js';
 import { requestedStatusFromUrl, updateStageQuery } from './url-utils.js';
 import { getSettingsSectionFromHash, activateStatusTab, updateSettingsSaveBarVisibility } from './nav.js';
+import { createLatestLoad } from '../../../shared/latest-load.js';
+import { isAbortError } from '../../../shared/http.js';
+
+const emailStatusLoads = createLatestLoad();
 
 export function staffRole() {
   return staffSession.staff ? String(staffSession.staff.role || '').toLowerCase() : '';
@@ -34,7 +38,7 @@ export function showBootstrapAdminMessage() {
 }
 
 export function updateEmailStatusBanner(status) {
-  setCurrentEmailStatus(status || currentEmailStatus || { enabled: true });
+  setCurrentEmailStatus(status || currentEmailStatus || { enabled: false });
   const smtpMessage = document.getElementById('smtp-readiness-message');
   const configured = !!currentEmailStatus.enabled;
   const message = currentEmailStatus.message || 'Email notifications are not configured. Suggestions and staff workflows still work, but patron emails will not be sent.';
@@ -50,7 +54,21 @@ export async function loadEmailStatus(orgId) {
   if (!staffSession.authenticated || !staffSession.accessAllowed || !staffSession.staff) {
     return;
   }
-  updateEmailStatusBanner({ enabled: true });
+  const guard = emailStatusLoads.begin('email-status');
+  const staff = staffSession.staff;
+  updateEmailStatusBanner({ enabled: false, message: 'Checking Postmark configuration…' });
+  try {
+    const status = await authorizedJson(`/api/asap/staff/email-status${orgId ? `?orgId=${encodeURIComponent(orgId)}` : ''}`, { signal: guard.signal });
+    if (guard.isCurrent() && staff === staffSession.staff && staffSession.authenticated) {
+      updateEmailStatusBanner(status);
+    }
+  } catch (error) {
+    if (!isAbortError(error) && guard.isCurrent()) {
+      updateEmailStatusBanner({ enabled: false, message: 'Postmark configuration status could not be loaded.' });
+    }
+  } finally {
+    emailStatusLoads.finish('email-status', guard.token);
+  }
 }
 
 export function checkAuth() {

@@ -5,7 +5,8 @@ namespace Asap.Web.Features.Staff;
 
 public static class TitleRequestEndpoints
 {
-    public sealed record BibLookupInput(string? BibId);
+    public sealed record BibLookupInput(string? BibId, string? Mode, string? Query, string? Title, string? Author,
+        string? RequestId, string? Barcode);
 
     public static IEndpointRouteBuilder MapTitleRequestEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -40,21 +41,64 @@ public static class TitleRequestEndpoints
     }
 
     private static async Task<IResult> BibLookupAsync(
+        HttpContext context,
         BibLookupInput input,
         IStaffPolarisProvider provider,
+        IPatronProvider patrons,
+        PatronConfigurationService configurations,
         CancellationToken cancellationToken)
     {
-        if (!int.TryParse(input.BibId, out var bibId) || bibId <= 0)
+        var mode = input.Mode?.Trim().ToLowerInvariant();
+        var search = string.IsNullOrWhiteSpace(input.BibId) && !string.IsNullOrEmpty(mode);
+        if (search && mode is not ("identifier" or "title" or "author" or "title_author"))
+        {
+            return Results.BadRequest(new { message = "Invalid Polaris search mode." });
+        }
+        var bibId = 0;
+        if (!search && (!int.TryParse(input.BibId, out bibId) || bibId <= 0))
         {
             return Results.BadRequest(new { code = "invalid_bib", message = "Enter a positive Polaris BIB ID." });
         }
 
         try
         {
+            if (search)
+            {
+                var found = await provider.SearchBibsAsync(mode!, input.Query ?? string.Empty,
+                    input.Title ?? string.Empty, input.Author ?? string.Empty, cancellationToken);
+                var results = found.Results.Take(10).ToArray();
+                return Results.Json(new
+                {
+                    success = true, mode, query = input.Query, status = results.Length == 0 ? "not_found" : "found",
+                    found.TotalMatches, multipleMatches = found.TotalMatches > 1 || results.Length > 1, results, error = string.Empty
+                });
+            }
             var result = await provider.ValidateBibAsync(bibId, cancellationToken);
-            return result.IsValid
-                ? Results.Json(new { bibId = bibId.ToString(), result.Title, result.Author })
-                : Results.NotFound(new { code = "bib_not_found", message = "The Polaris BIB was not found." });
+            if (!result.IsValid)
+            {
+                return Results.NotFound(new { code = "bib_not_found", message = "The Polaris BIB was not found." });
+            }
+            var actor = StaffAuthenticationEndpoints.RequireCurrentStaff(context);
+            var holdingsSummary = await provider.GetBibHoldingsAsync(bibId, actor.OrganizationId, cancellationToken);
+            object? patronHoldCheck = null;
+            if (!string.IsNullOrWhiteSpace(input.Barcode))
+            {
+                var patron = await patrons.RefreshAsync(input.Barcode.Trim(), cancellationToken);
+                var organizationId = actor.Role == "super_admin" ? patron.HomeLibraryOrganizationId : actor.OrganizationId;
+                var configuration = await configurations.GetAsync(organizationId, cancellationToken);
+                if (configuration is null || !configuration.IsActive)
+                {
+                    return Results.Json(new { code = "patron_library_forbidden" }, statusCode: StatusCodes.Status403Forbidden);
+                }
+                PatronSuggestionService.EnforceStaffPatronEligibility(configuration, patron);
+                var holds = await provider.GetPatronHoldsAsync(patron.Barcode, cancellationToken);
+                var hasHold = holds.Any(hold => hold.BibId == bibId &&
+                    !new[] { "cancel", "expire", "filled", "deleted" }.Any(terminal =>
+                        (hold.StatusDescription ?? string.Empty).Contains(terminal, StringComparison.OrdinalIgnoreCase)));
+                patronHoldCheck = new { ok = true, statusValue = hasHold ? 29 : 0, readOnly = true };
+            }
+            return Results.Json(new { bibId = bibId.ToString(), result.Title, result.Author,
+                result.Publication, result.Format, result.Identifier, result.Publisher, holdingsSummary, patronHoldCheck });
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -65,6 +109,10 @@ public static class TitleRequestEndpoints
             return Results.Json(
                 new { code = "bib_validation_unavailable", message = "Catalog validation is temporarily unavailable." },
                 statusCode: StatusCodes.Status502BadGateway);
+        }
+        catch (PatronFlowException exception)
+        {
+            return Results.Json(exception.Response ?? new { message = exception.Message }, statusCode: exception.StatusCode);
         }
     }
 

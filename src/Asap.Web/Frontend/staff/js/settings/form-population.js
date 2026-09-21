@@ -1,4 +1,4 @@
-import { setFieldValue, setFieldChecked, setVisible, updateLibraryOverrideStatusVisibility, updateEmailStatusBanner, updateOrganizationsStatusUi, activateSettingsSection, updateAutoRejectEmailControls } from '../api.js';
+import { setFieldValue, setFieldChecked, setVisible, updateLibraryOverrideStatusVisibility, loadEmailStatus, updateOrganizationsStatusUi, activateSettingsSection, updateAutoRejectEmailControls } from '../api.js';
 import { currentLibraryContextOrgId, currentSettingsSection, settingsLoading, formatMap, availableFormats, setAvailableFormats, workflowSettings, lastWorkflowEnabledList, setLastWorkflowEnabledList, defaultPublicationOptions, setCurrentFormatClaimRules, setFormatClaimStaffOptions, setLeapBibUrlPattern, setLeapPatronUrlPattern, leapBibUrlPattern, leapPatronUrlPattern, setAdditionalFieldDefinitions, setCurrentPatronFieldConfig } from '../state.js';
 import { toggleTimeoutGroup, toggleHoldPickupTimeoutGroup, togglePendingHoldTimeoutGroup, toggleAdditionalCopyTimeoutGroup, toggleCommonAuthorsGroup } from './toggles.js';
 import { renderFormatSettings, updateModalFormatDropdowns } from '../settings-formats.js';
@@ -67,7 +67,6 @@ export function applyLibrarySettingsToForm(settings) {
   settings = settings || {};
   const isOverride = !!settings.isOverride;
   const emails = settings.emails || {};
-  const smtp = settings.smtp || {};
   const polaris = settings.polaris || {};
   setCurrentFormatClaimRules(settings.formatClaimRules || []);
   setFormatClaimStaffOptions(settings.formatClaimStaffOptions || []);
@@ -127,16 +126,12 @@ export function applyLibrarySettingsToForm(settings) {
   }
   updatePatronEmbedSnippet(settings);
 
+  setFieldValue('postmark-token', '');
+  setFieldChecked('postmark-clear-token', false);
+  setVisible('postmark-token-status', !!emails.hasPostmarkToken);
+  setFieldValue('smtp-from', emails.fromAddress || '');
+  setFieldValue('smtp-from-name', emails.fromName || '');
   if (currentLibraryContextOrgId === 'system') {
-    setFieldValue('smtp-host', smtp.host || '');
-    setFieldValue('smtp-port', smtp.port || 587);
-    setFieldValue('smtp-username', '');
-    setFieldValue('smtp-password', '');
-    setVisible('smtp-username-status', !!smtp.usernameSet);
-    setVisible('smtp-password-status', !!smtp.passwordSet);
-    setFieldChecked('smtp-tls', smtp.tls !== false);
-    setFieldValue('smtp-from', emails.fromAddress || '');
-    setFieldValue('smtp-from-name', emails.fromName || '');
     setFieldValue('polaris-host', polaris.host || '');
     setFieldValue('polaris-api-key', polaris.apiKey || '');
     setFieldValue('polaris-access-id', polaris.accessId || '');
@@ -160,7 +155,7 @@ export function applyLibrarySettingsToForm(settings) {
   workflowSettings.additionalCopyTimeoutDays = parseInt(((settings.workflow || {}).additionalCopyTimeoutDays) || '14', 10) || 14;
   workflowSettings.autoPromote = !!(settings.workflow || {}).autoPromote;
   workflowSettings.allowAnyRegisteredCardLogin = !!(settings.workflow || {}).allowAnyRegisteredCardLogin;
-    updateEmailStatusBanner(settings.emailStatus);
+    loadEmailStatus(currentLibraryContextOrgId);
     if (settings.organizationSync) {
       const state = settings.organizationSync.status || 'not_loaded';
       const message = settings.organizationSync.error || settings.organizationSync.message || '';

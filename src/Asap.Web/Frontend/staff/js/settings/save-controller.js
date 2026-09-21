@@ -1,7 +1,7 @@
-import { isSuperAdminStaff, validateSmtpHostField, isRequestCanceledError, updateSaveBarState, markSettingsClean } from '../api.js';
+import { isRequestCanceledError, updateSaveBarState, markSettingsClean, getFieldValue, getFieldChecked } from '../api.js';
 import { authorizedJson } from '../http.js';
 import { showToast } from '../dialogs.js';
-import { settingsForm, currentLibraryContextOrgId, initialSettingsSnapshot, settingsDirty, setSettingsSaving, setSettingsLoading, setInitialSettingsSnapshot, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId } from '../state.js';
+import { settingsForm, currentLibraryContextOrgId, currentSettingsSection, initialSettingsSnapshot, settingsDirty, setSettingsSaving, setSettingsLoading, setInitialSettingsSnapshot, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId } from '../state.js';
 import { refreshSettingsView, loadStaffConfig } from './refresh.js';
 import { loadStaffUsers } from '../settings-users.js';
 import { cloneLibrarySettingsSnapshot, captureSettingsBaseline, serializeSettingsState, buildSettingsPayload } from './serialize-save.js';
@@ -24,21 +24,24 @@ export async function saveSettings(options = {}) {
   msg.className = 'mt-2 font-weight-bold text-info';
 
   try {
-    if (isSuperAdminStaff() && currentLibraryContextOrgId === 'system') {
-      if (!validateSmtpHostField(true)) {
-        throw new Error('SMTP host is invalid.');
-      }
-    }
-    const isSuper = isSuperAdminStaff();
-    const payload = buildSettingsPayload();
+    const isEmailSave = currentSettingsSection === 'smtp';
+    const payload = isEmailSave ? { emails: {
+      fromAddress: getFieldValue('smtp-from'),
+      fromName: getFieldValue('smtp-from-name'),
+      postmarkToken: getFieldValue('postmark-token').trim(),
+      clearPostmarkToken: getFieldChecked('postmark-clear-token')
+    } } : buildSettingsPayload();
 
     const isSystemSave = currentLibraryContextOrgId === 'system';
     const libraryPayload = {
       orgId: currentLibraryContextOrgId,
+      version: lastSavedLibrarySettingsOrgId === currentLibraryContextOrgId
+        ? lastSavedLibrarySettingsSnapshot?.version : null,
       emails: payload.emails,
-      ui_text: payload.ui_text,
-      formatClaimRules: isSystemSave ? [] : payload.formatClaimRules,
-      workflow: {
+      ...(isEmailSave ? {} : {
+        ui_text: payload.ui_text,
+        formatClaimRules: isSystemSave ? [] : payload.formatClaimRules,
+        workflow: {
         suggestionLimit: payload.suggestionLimit,
         suggestionLimitMessage: payload.suggestionLimitMessage,
         outstandingTimeoutEnabled: payload.outstandingTimeoutEnabled,
@@ -75,14 +78,14 @@ export async function saveSettings(options = {}) {
         externalSearch4Enabled: payload.externalSearch4Enabled,
         externalSearch4Label: payload.externalSearch4Label,
         externalSearch4UrlTemplate: payload.externalSearch4UrlTemplate
-      }
+        }
+      })
     };
 
-    if (isSystemSave) {
+    if (isSystemSave && !isEmailSave) {
       libraryPayload.staffUrl = payload.staffUrl;
       libraryPayload.leapBibUrlPattern = payload.leapBibUrlPattern;
       libraryPayload.leapPatronUrlPattern = payload.leapPatronUrlPattern;
-      libraryPayload.smtp = payload.smtp;
       libraryPayload.polaris = payload.polaris;
       libraryPayload.patronEmbedAllowedOrigins = payload.patronEmbedAllowedOrigins;
     }

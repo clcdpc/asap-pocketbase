@@ -82,6 +82,8 @@ function _serializeSettingsState(validate = false) {
   };
 
   const emails = {
+    postmarkToken: getFieldValue('postmark-token').trim(),
+    clearPostmarkToken: getFieldChecked('postmark-clear-token'),
     fromAddress: getFieldValue('email-from-address'),
     fromName: getFieldValue('email-from-name'),
     suggestion_submitted: {
@@ -167,13 +169,6 @@ function _serializeSettingsState(validate = false) {
   };
 
   if (isSystemContext) {
-    payload.smtp = {
-      host: getFieldValue('smtp-host').trim(),
-      port: positiveInt('smtp-port', 587, 'SMTP port'),
-      username: getFieldValue('smtp-username').trim(),
-      password: getFieldValue('smtp-password'),
-      tls: getFieldChecked('smtp-tls', true)
-    };
     payload.polaris = collectSettingsPolaris();
     payload.staffUrl = staffUrl;
     payload.leapBibUrlPattern = nextLeapBibUrlPattern;

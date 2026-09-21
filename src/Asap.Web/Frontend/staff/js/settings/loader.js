@@ -11,7 +11,7 @@ import { loadStaffAccessSettings } from './staff-access.js';
 import { registerSettingsRefreshHandlers } from './refresh.js';
 import { createLatestLoad } from '../../../shared/latest-load.js';
 
-const adminSettingsSections = ['start', 'staff', 'templates', 'workflow', 'patron'];
+const adminSettingsSections = ['start', 'smtp', 'staff', 'templates', 'workflow', 'patron'];
 const settingsLoads = createLatestLoad();
 
 function maybeSyncPolarisOrganizations(polaris) {
@@ -99,22 +99,17 @@ export function hideSettingsAccessDenied() {
 }
 
 function populateSystemSettingsForms(settings) {
-  const smtp = (settings && settings.smtp) || {};
   const polaris = (settings && settings.polaris) || {};
   const emails = (settings && settings.emails) || {};
 
-  populateSmtpSettingsForm(smtp, emails);
+  populatePostmarkSettingsForm(emails);
   populatePolarisSettingsForm(polaris);
 }
 
-function populateSmtpSettingsForm(smtp, emails) {
-  setFieldValue('smtp-host', smtp.host || '');
-  setFieldValue('smtp-port', smtp.port || 587);
-  setFieldValue('smtp-username', '');
-  setFieldValue('smtp-password', '');
-  setVisible('smtp-username-status', !!smtp.usernameSet);
-  setVisible('smtp-password-status', !!smtp.passwordSet);
-  setFieldChecked('smtp-tls', smtp.tls !== false);
+function populatePostmarkSettingsForm(emails) {
+  setFieldValue('postmark-token', '');
+  setFieldChecked('postmark-clear-token', false);
+  setVisible('postmark-token-status', !!emails.hasPostmarkToken);
 
   setFieldValue('smtp-from', emails.fromAddress || '');
   setFieldValue('smtp-from-name', emails.fromName || '');

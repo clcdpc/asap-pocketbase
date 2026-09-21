@@ -33,50 +33,86 @@ public static class StaffSuggestionCompatibilityEndpoints
         HttpContext context,
         StaffPatronLookupInput input,
         IPatronProvider patrons,
+        IStaffPolarisProvider searches,
         PatronConfigurationService configurations,
         CancellationToken cancellationToken)
     {
         var actor = StaffAuthenticationEndpoints.RequireCurrentStaff(context);
-        var barcode = Clean(input.Barcode) ?? Clean(input.Query);
-        if (barcode is null)
+        var query = Clean(input.Query) ?? Clean(input.Barcode);
+        if (query is null)
         {
-            return Results.BadRequest(new { code = "patron_barcode_required", message = "Enter a patron barcode." });
+            return Results.BadRequest(new { code = "patron_barcode_required", message = "Enter a patron barcode or name." });
         }
 
         try
         {
-            var patron = await patrons.RefreshAsync(barcode, cancellationToken);
-            var requestedOrganizationId = actor.Role == "super_admin" && string.IsNullOrWhiteSpace(input.LibraryOrgId)
-                ? patron.HomeLibraryOrganizationId.ToString()
-                : input.LibraryOrgId;
-            var scope = await ResolveScopeAsync(actor, requestedOrganizationId, configurations, cancellationToken);
-            if (scope.Error is not null)
+            PatronSnapshot? patron = null;
+            if (System.Text.RegularExpressions.Regex.IsMatch(query, "^[A-Za-z0-9._:-]+$"))
             {
-                return scope.Error;
+                try
+                {
+                    patron = await patrons.RefreshAsync(query, cancellationToken);
+                }
+                catch (PolarisOperationalException exception) when (
+                    exception.Code == "polaris_patron_not_found" && Clean(input.Query) is not null)
+                {
+                    // A barcode-like query (including a single name) falls back only on not-found.
+                }
             }
-            if (!scope.Configuration!.AllowAnyRegisteredCardLogin &&
-                patron.HomeLibraryOrganizationId != scope.OrganizationId)
+            var candidates = patron is null
+                ? await searches.SearchPatronsAsync(query, cancellationToken)
+                : [patron];
+            var usable = new List<PatronSnapshot>();
+            ScopeResult? selectedScope = null;
+            foreach (var candidate in candidates.DistinctBy(item => item.Barcode).Take(10))
             {
-                return Results.Json(
-                    new { code = "patron_library_forbidden", message = "That patron is not registered at the selected library." },
-                    statusCode: StatusCodes.Status403Forbidden);
-            }
-            if (scope.Configuration.PatronCodeEligibilityEnabled &&
-                scope.Configuration.AllowedPatronCodeIds.Count > 0 &&
-                !string.IsNullOrWhiteSpace(patron.PatronCodeId) &&
-                !scope.Configuration.AllowedPatronCodeIds.Contains(patron.PatronCodeId))
-            {
-                return Results.Json(
-                    new { code = "patron_code_forbidden", message = scope.Configuration.PatronCodeEligibilityMessage },
-                    statusCode: StatusCodes.Status403Forbidden);
+                var requestedOrganizationId = actor.Role == "super_admin" && string.IsNullOrWhiteSpace(input.LibraryOrgId)
+                    ? candidate.HomeLibraryOrganizationId.ToString()
+                    : input.LibraryOrgId;
+                var scope = await ResolveScopeAsync(actor, requestedOrganizationId, configurations, cancellationToken);
+                if (scope.Error is not null)
+                {
+                    return scope.Error;
+                }
+                try
+                {
+                    PatronSuggestionService.EnforceStaffPatronEligibility(scope.Configuration!, candidate);
+                }
+                catch (PatronFlowException) when (patron is null)
+                {
+                    continue;
+                }
+                selectedScope = scope;
+                usable.Add(candidate);
             }
 
+            if (usable.Count == 0)
+            {
+                return Results.NotFound(new { status = "not_found", results = Array.Empty<object>(),
+                    message = "No patron found. Try barcode, name, or first name then last name." });
+            }
+            if (usable.Count > 1)
+            {
+                return Results.Json(new
+                {
+                    status = "multiple", totalMatches = usable.Count,
+                    patronSearchLimitedToLibrary = !selectedScope!.Configuration!.AllowAnyRegisteredCardLogin,
+                    results = usable.Select(item => new
+                    {
+                        status = "candidate", item.Barcode, item.NameFirst, item.NameLast, item.Email,
+                        name = string.Join(' ', new[] { item.NameFirst, item.NameLast }.Where(value => !string.IsNullOrWhiteSpace(value))),
+                        patronOrgId = item.PatronOrganizationId, libraryOrgId = item.HomeLibraryOrganizationId,
+                        libraryOrgName = item.HomeLibraryOrganizationName
+                    })
+                });
+            }
+            patron = usable[0];
             var branches = await patrons.GetPickupBranchesAsync(patron, cancellationToken);
             var selected = branches.SingleOrDefault(item => item.Id == patron.PreferredPickupBranchId);
             return Results.Json(new
             {
-                status = "single",
-                patronSearchLimitedToLibrary = !scope.Configuration.AllowAnyRegisteredCardLogin,
+                status = "selected",
+                patronSearchLimitedToLibrary = !selectedScope!.Configuration!.AllowAnyRegisteredCardLogin,
                 patron.PatronId,
                 polarisPatronId = patron.PatronId,
                 patron.Barcode,
@@ -92,6 +128,14 @@ public static class StaffSuggestionCompatibilityEndpoints
                 selectedPickupBranchId = selected?.Id,
                 pickupBranchWarning = selected is null ? "Choose a preferred pickup location before submitting." : string.Empty
             });
+        }
+        catch (PatronFlowException exception)
+        {
+            return Results.Json(exception.Response ?? new { message = exception.Message }, statusCode: exception.StatusCode);
+        }
+        catch (PolarisOperationalException exception) when (exception.Code == "polaris_patron_not_found")
+        {
+            return Results.NotFound(new { status = "not_found", results = Array.Empty<object>(), message = "No patron found." });
         }
         catch (PolarisOperationalException)
         {
@@ -142,7 +186,8 @@ public static class StaffSuggestionCompatibilityEndpoints
                     pickupBranchId,
                     input.Autohold,
                     null),
-                cancellationToken);
+                cancellationToken,
+                staffSubmission: true);
             return Results.Json(created, statusCode: StatusCodes.Status201Created);
         }
         catch (PatronFlowException exception)
