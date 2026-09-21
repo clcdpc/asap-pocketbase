@@ -74,7 +74,6 @@ public sealed partial class PatronJourneyTests
             originalLibraryEmail = libraryEmail is null ? null : new EmailSettings
             {
                 OrganizationId = scope,
-                ProtectedServerToken = libraryEmail.ProtectedServerToken,
                 FromAddress = libraryEmail.FromAddress,
                 FromName = libraryEmail.FromName,
                 UpdatedUtc = libraryEmail.UpdatedUtc
@@ -87,6 +86,7 @@ public sealed partial class PatronJourneyTests
             }
             systemEmail.FromAddress = "system.sender@example.org";
             systemEmail.FromName = "System Sender";
+            libraryEmail.ProtectedServerToken = null;
             libraryEmail.FromAddress = null;
             libraryEmail.FromName = "Library Sender";
 

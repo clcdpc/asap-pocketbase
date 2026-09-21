@@ -269,7 +269,7 @@ Use explicit columns for the fixed status-label taxonomy; do not reintroduce a g
 
 ### `[asap].[EmailSettings]`
 
-Postmark transport/sender configuration with system + library field-level inheritance.
+Sender identity with system default + library override, and one system-owned Postmark transport credential.
 
 ```text
 OrganizationId int PK/FK Organization
@@ -281,7 +281,7 @@ UpdatedUtc datetime2 NOT NULL
 RowVersion rowversion
 ```
 
-A null library field inherits from Organization `1`. Protected token/secret values are opaque Data Protection ciphertext in SQL. Secret API semantics remain blank=preserve, explicit Clear=remove override/system value according to authorization/confirmation rules.
+`FromAddress` and `FromName` may be overridden per library; the `ProtectedServerToken` is valid only on Organization `1`. Library ciphertext is obsolete and must remain `NULL` after service/deployment cleanup. Protected token/secret values are opaque Data Protection ciphertext in SQL. Secret API semantics remain blank=preserve and explicit Clear removes the system credential; library payloads never write or clear transport credentials.
 
 ### `[asap].[ExternalSearchProvider]`
 

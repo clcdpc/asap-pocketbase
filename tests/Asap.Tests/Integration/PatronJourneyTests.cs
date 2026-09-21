@@ -1227,6 +1227,8 @@ public sealed partial class PatronJourneyTests
 
         using var initialSystem = await ReadSettingsDocumentAsync(client, "system");
         var initialPayload = CaptureScalarRestorePayload(initialSystem.RootElement);
+        var initialSystemTokenPresent = initialSystem.RootElement.GetProperty("stored")
+            .GetProperty("configuredSystem").GetProperty("email").GetProperty("hasPostmarkToken").GetBoolean();
 
         try
         {
@@ -1349,8 +1351,11 @@ public sealed partial class PatronJourneyTests
             }
 
             using var withSecret = await ReadSettingsDocumentAsync(client, libraryId.ToString());
-            AssertScalarEquals(true, withSecret.RootElement.GetProperty("stored")
-                .GetProperty("libraryOverride").GetProperty("email"), "hasPostmarkToken", "library secret saved");
+            AssertScalarEquals(false, withSecret.RootElement.GetProperty("stored")
+                .GetProperty("libraryOverride").GetProperty("email"), "hasPostmarkToken", "library secret ignored");
+            using var systemAfterLibraryTokenAttempt = await ReadSettingsDocumentAsync(client, "system");
+            AssertScalarEquals(initialSystemTokenPresent, systemAfterLibraryTokenAttempt.RootElement.GetProperty("stored")
+                .GetProperty("configuredSystem").GetProperty("email"), "hasPostmarkToken", "library secret did not alter system token");
             using var clearSecret = await SaveSettingsDocumentAsync(
                 client,
                 withSecret.RootElement,
@@ -1369,7 +1374,7 @@ public sealed partial class PatronJourneyTests
             var emailOverride = afterSecretClear.RootElement.GetProperty("stored")
                 .GetProperty("libraryOverride")
                 .GetProperty("email");
-            AssertScalarEquals(false, emailOverride, "hasPostmarkToken", "library secret cleared");
+            AssertScalarEquals(false, emailOverride, "hasPostmarkToken", "library secret remains absent");
             AssertScalarEquals("slice4-secret-sentinel@example.org", emailOverride, "fromAddress", "sender override preserved beside secret clear");
         }
         finally

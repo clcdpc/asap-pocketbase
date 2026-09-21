@@ -626,9 +626,13 @@ public sealed class TitleRequestMutationService(
             return null;
         }
         var system = await context.EmailSettings.AsNoTracking()
-            .SingleOrDefaultAsync(item => item.OrganizationId == 1, cancellationToken);
+            .Where(item => item.OrganizationId == 1)
+            .Select(item => new { item.FromAddress, item.FromName })
+            .SingleOrDefaultAsync(cancellationToken);
         var library = await context.EmailSettings.AsNoTracking()
-            .SingleOrDefaultAsync(item => item.OrganizationId == request.LibraryOrganizationId, cancellationToken);
+            .Where(item => item.OrganizationId == request.LibraryOrganizationId)
+            .Select(item => new { item.FromAddress, item.FromName })
+            .SingleOrDefaultAsync(cancellationToken);
         var fromAddress = Clean(library?.FromAddress) ?? Clean(system?.FromAddress);
         var fromName = Clean(library?.FromName) ?? Clean(system?.FromName);
         string? suppressionReason = null;

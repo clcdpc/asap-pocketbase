@@ -226,13 +226,21 @@
           </label>
         </div>
 
+        <div id="settings-scope-callout" class="settings-scope-callout" role="region" aria-labelledby="settings-scope-callout-title" hidden>
+          <div>
+            <strong id="settings-scope-callout-title"></strong>
+            <p id="settings-scope-callout-detail"></p>
+          </div>
+          <button id="settings-switch-to-system" class="secondary-button" type="button" hidden>Switch to System level</button>
+        </div>
+
         <p id="settings-message" class="settings-message" role="status" aria-live="polite"></p>
         <div class="settings-layout">
           <aside class="settings-sidebar" aria-label="Settings sections">
             <nav id="settings-nav" class="settings-nav" role="tablist" aria-label="Settings categories">
-              <button id="settings-nav-start" type="button" role="tab" aria-selected="true" aria-controls="settings-start" data-settings-panel="start">Getting started</button>
-              <button id="settings-nav-polaris" type="button" role="tab" aria-selected="false" aria-controls="settings-polaris" data-settings-panel="polaris">Polaris</button>
-              <button id="settings-nav-smtp" type="button" role="tab" aria-selected="false" aria-controls="settings-smtp" data-settings-panel="smtp">Email / SMTP</button>
+              <button id="settings-nav-start" type="button" role="tab" aria-selected="true" aria-controls="settings-start" data-settings-panel="start" data-settings-system-only="true">Getting started <span class="settings-system-only-indicator" data-system-only-label hidden>System only</span></button>
+              <button id="settings-nav-polaris" type="button" role="tab" aria-selected="false" aria-controls="settings-polaris" data-settings-panel="polaris" data-settings-system-only="true">Polaris <span class="settings-system-only-indicator" data-system-only-label hidden>System only</span></button>
+              <button id="settings-nav-smtp" type="button" role="tab" aria-selected="false" aria-controls="settings-smtp" data-settings-panel="smtp">Email</button>
               <button id="settings-nav-staff" type="button" role="tab" aria-selected="false" aria-controls="settings-staff" data-settings-panel="staff">Staff access</button>
               <button id="settings-nav-workflow" type="button" role="tab" aria-selected="false" aria-controls="settings-workflow" data-settings-panel="workflow">Workflow</button>
               <button id="settings-nav-patron" type="button" role="tab" aria-selected="false" aria-controls="settings-patron" data-settings-panel="patron">Patron experience</button>
@@ -243,7 +251,7 @@
           <form id="settings-form" class="settings-form">
             <input id="settings-version" type="hidden">
 
-            <section id="settings-start" class="settings-panel active" role="tabpanel" tabindex="-1" data-settings-panel-content="start" aria-labelledby="settings-nav-start">
+            <section id="settings-start" class="settings-panel active" role="tabpanel" tabindex="-1" data-settings-panel-content="start" data-settings-system-only="true" aria-labelledby="settings-nav-start">
               <div class="settings-panel-heading">
                 <h2>Getting started</h2>
                 <p>System links, participation, and configuration health.</p>
@@ -281,7 +289,7 @@
               </fieldset>
             </section>
 
-            <section id="settings-polaris" class="settings-panel" role="tabpanel" tabindex="-1" data-settings-panel-content="polaris" aria-labelledby="settings-nav-polaris" hidden>
+            <section id="settings-polaris" class="settings-panel" role="tabpanel" tabindex="-1" data-settings-panel-content="polaris" data-settings-system-only="true" aria-labelledby="settings-nav-polaris" hidden>
               <div class="settings-panel-heading">
                 <h2>Polaris</h2>
                 <p>System-only integration identity and reference synchronization.</p>
@@ -311,17 +319,23 @@
 
             <section id="settings-smtp" class="settings-panel" role="tabpanel" tabindex="-1" data-settings-panel-content="smtp" aria-labelledby="settings-nav-smtp" hidden>
               <div class="settings-panel-heading">
-                <h2>Email / SMTP</h2>
-                <p>Sender identity is inherited by library scope; transport credentials remain protected.</p>
+                <h2>Email</h2>
+                <p>Sender identity can be customized per library; transport credentials remain system-only.</p>
               </div>
               <fieldset class="settings-fieldset">
                 <legend>Sender identity</legend>
                 <div class="settings-grid">
                   <label class="settings-field" data-setting-section="email" data-setting-key="fromAddress"><span>From email address</span><input id="email-from-address" type="email" autocomplete="email"></label>
                   <label class="settings-field" data-setting-section="email" data-setting-key="fromName"><span>From name</span><input id="email-from-name" type="text"></label>
-                  <label class="settings-field" data-setting-section="email" data-setting-key="postmarkToken" data-secret="true"><span>Postmark server token</span><input id="email-postmark-token" type="password" autocomplete="new-password"></label>
-                  <label class="settings-field"><span>Clear stored Postmark token</span><input id="email-clear-postmark-token" type="checkbox"></label>
                 </div>
+              </fieldset>
+              <fieldset id="settings-email-transport" class="settings-fieldset" data-system-only="true">
+                <legend>Email transport</legend>
+                <div class="settings-grid">
+                  <label class="settings-field" data-setting-section="email" data-setting-key="postmarkToken" data-secret="true" data-system-only="true"><span>Postmark server token</span><input id="email-postmark-token" type="password" autocomplete="new-password"></label>
+                  <label class="settings-field check-field" data-system-only="true"><input id="email-clear-postmark-token" type="checkbox"><span>Clear stored Postmark token</span></label>
+                </div>
+                <p class="settings-help">This Postmark credential is shared by every library and can only be edited at System level.</p>
               </fieldset>
             </section>
 

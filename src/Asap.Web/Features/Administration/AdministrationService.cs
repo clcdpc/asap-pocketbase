@@ -40,6 +40,12 @@ public sealed class AdministrationService(
     IPolarisReferenceProvider polarisProvider,
     TimeProvider timeProvider)
 {
+    private sealed record EmailSettingsRead(
+        string? FromAddress,
+        string? FromName,
+        byte[] RowVersion,
+        string? ProtectedServerToken);
+
     private static readonly string[] WorkflowTextFields =
     [
         "suggestionLimitMessage", "commonAuthorsLabel", "commonAuthorsHelp", "commonAuthorsMessage",
@@ -133,7 +139,13 @@ public sealed class AdministrationService(
         var systemPatron = await context.PatronSettings.AsNoTracking()
             .SingleAsync(item => item.OrganizationId == 1, cancellationToken);
         var systemEmail = await context.EmailSettings.AsNoTracking()
-            .SingleAsync(item => item.OrganizationId == 1, cancellationToken);
+            .Where(item => item.OrganizationId == 1)
+            .Select(item => new EmailSettingsRead(
+                item.FromAddress,
+                item.FromName,
+                item.RowVersion,
+                item.ProtectedServerToken))
+            .SingleAsync(cancellationToken);
         var libraryWorkflow = organizationId == 1
             ? null
             : await context.WorkflowSettings.AsNoTracking().SingleOrDefaultAsync(
@@ -144,8 +156,14 @@ public sealed class AdministrationService(
                 item => item.OrganizationId == organizationId, cancellationToken);
         var libraryEmail = organizationId == 1
             ? null
-            : await context.EmailSettings.AsNoTracking().SingleOrDefaultAsync(
-                item => item.OrganizationId == organizationId, cancellationToken);
+            : await context.EmailSettings.AsNoTracking()
+                .Where(item => item.OrganizationId == organizationId)
+                .Select(item => new EmailSettingsRead(
+                    item.FromAddress,
+                    item.FromName,
+                    item.RowVersion,
+                    null))
+                .SingleOrDefaultAsync(cancellationToken);
         var effective = await patronConfiguration.GetAsync(context, organizationId, cancellationToken);
         if (effective is null)
         {
@@ -198,7 +216,7 @@ public sealed class AdministrationService(
         {
             workflow = ToWorkflow(systemWorkflow),
             patron = ToPatron(systemPatron),
-            email = ToEmail(systemEmail),
+            email = ToEmail(systemEmail, includePostmarkToken: true),
             publicationOptions = await LoadPublicationSnapshotAsync(context, 1, cancellationToken),
             commonCreators = await LoadCommonCreatorSnapshotAsync(context, 1, cancellationToken),
             allowedPatronCodeIds = await LoadPatronCodeSnapshotAsync(context, 1, cancellationToken),
@@ -213,7 +231,7 @@ public sealed class AdministrationService(
             {
                 workflow = libraryWorkflow is null ? null : ToWorkflow(libraryWorkflow),
                 patron = libraryPatron is null ? null : ToPatron(libraryPatron),
-                email = libraryEmail is null ? null : ToEmail(libraryEmail),
+                email = libraryEmail is null ? null : ToEmail(libraryEmail, includePostmarkToken: false),
                 publicationOptions = await LoadPublicationSnapshotAsync(context, organizationId, cancellationToken),
                 commonCreators = await LoadCommonCreatorSnapshotAsync(context, organizationId, cancellationToken),
                 allowedPatronCodeIds = await LoadPatronCodeSnapshotAsync(context, organizationId, cancellationToken),
@@ -230,7 +248,10 @@ public sealed class AdministrationService(
             libraryOverride,
             workflow = ToWorkflow(libraryWorkflow ?? systemWorkflow),
             patron = ToPatron(libraryPatron ?? systemPatron),
-            email = ToEmail(libraryEmail ?? systemEmail),
+            email = ToEmail(
+                libraryEmail ?? systemEmail,
+                includePostmarkToken: true,
+                postmarkTokenExists: !string.IsNullOrWhiteSpace(systemEmail.ProtectedServerToken)),
             origins,
             publicationOptions,
             commonCreators,
@@ -1035,8 +1056,12 @@ public sealed class AdministrationService(
         var email = await GetOrCreateEmailAsync(context, organizationId, cancellationToken);
         ApplyText(emailSection, "fromAddress", value => email.FromAddress = NormalizeScopedText(value, isSystem));
         ApplyText(emailSection, "fromName", value => email.FromName = NormalizeScopedText(value, isSystem));
-        ApplySecret(emailSection, "postmarkToken", value => email.ProtectedServerToken = credentialProtector.Protect(value));
-        if (GetBool(emailSection, "clearPostmarkToken") == true) email.ProtectedServerToken = null;
+        if (!isSystem)
+        {
+            // Postmark transport credentials are system-owned. Clear any legacy library
+            // ciphertext without reading, decrypting, or copying it into a response.
+            email.ProtectedServerToken = null;
+        }
 
         await ApplyWholeSetsAsync(context, organizationId, workflowSection, patronSection, cancellationToken);
         await ApplyProvidersAsync(context, organizationId, workflowSection, payload, cancellationToken);
@@ -1658,15 +1683,24 @@ public sealed class AdministrationService(
 
     private static object? ToPatron(PatronSettings? row) => row is null ? null : ToPatronRow(row);
 
-    private static object ToEmailRow(EmailSettings row) => new
+    private static object ToEmailRow(
+        EmailSettingsRead row,
+        bool includePostmarkToken,
+        bool? postmarkTokenExists = null) => new
     {
         fromAddress = row.FromAddress,
         fromName = row.FromName,
-        hasPostmarkToken = !string.IsNullOrWhiteSpace(row.ProtectedServerToken),
+        hasPostmarkToken = includePostmarkToken &&
+            (postmarkTokenExists ?? !string.IsNullOrWhiteSpace(row.ProtectedServerToken)),
         version = StaffVersion.Encode(row.RowVersion)
     };
 
-    private static object? ToEmail(EmailSettings? row) => row is null ? null : ToEmailRow(row);
+    private static object? ToEmail(
+        EmailSettingsRead? row,
+        bool includePostmarkToken,
+        bool? postmarkTokenExists = null) => row is null
+        ? null
+        : ToEmailRow(row, includePostmarkToken, postmarkTokenExists);
 
     private static object ToBranding(Branding? row) => new
     {
@@ -3175,7 +3209,7 @@ public sealed class AdministrationService(
     ];
 
     private static bool IsEmpty(EmailSettings value) =>
-        value.ProtectedServerToken is null && value.FromAddress is null && value.FromName is null;
+        value.FromAddress is null && value.FromName is null;
 
     private static bool IsEmpty(ExternalSearchProviderOverride value) =>
         value.IsEnabled is null && value.Label is null && value.UrlTemplate is null;

@@ -29,7 +29,7 @@ function settingsData(organizationId, version, prefix) {
     branding: { hasLogo: false, altText: null }
   };
   return {
-    orgId: String(organizationId),
+    orgId: organizationId === 1 ? 'system' : String(organizationId),
     version,
     organization: { id: organizationId, name: prefix + ' Library', abbreviation: prefix, active: true, version },
     stored: {
@@ -200,6 +200,17 @@ async function flush() {
         [],
         `${outcome} completion must not announce the old library-two result in library three`
       );
+
+      scope.value = '2';
+      scope.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+      await flush();
+      assert.strictEqual(document.getElementById('settings-scope-callout').hidden, false);
+      assert.strictEqual(document.getElementById('settings-switch-to-system').hidden, false);
+      document.getElementById('settings-switch-to-system').click();
+      await flush();
+      assert.strictEqual(scope.value, 'system');
+      assert.strictEqual(document.getElementById('settings-scope-callout').hidden, true);
+      assert.strictEqual(settingsRequests.at(-1), 'system');
 
       dom.window.close();
     }

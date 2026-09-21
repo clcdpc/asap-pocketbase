@@ -221,9 +221,13 @@ public sealed class EmailOperationsService(
         CancellationToken cancellationToken)
     {
         var system = await context.EmailSettings.AsNoTracking()
-            .SingleOrDefaultAsync(item => item.OrganizationId == 1, cancellationToken);
+            .Where(item => item.OrganizationId == 1)
+            .Select(item => new { item.FromAddress, item.FromName })
+            .SingleOrDefaultAsync(cancellationToken);
         var library = organizationId == 1 ? null : await context.EmailSettings.AsNoTracking()
-            .SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
+            .Where(item => item.OrganizationId == organizationId)
+            .Select(item => new { item.FromAddress, item.FromName })
+            .SingleOrDefaultAsync(cancellationToken);
         return new EffectiveEmailSettings(
             Clean(library?.FromAddress) ?? Clean(system?.FromAddress),
             Clean(library?.FromName) ?? Clean(system?.FromName));

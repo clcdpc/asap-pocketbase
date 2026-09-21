@@ -344,7 +344,7 @@ Use these primary configuration domains:
 - `[asap].[PolarisSettings]` — system-only Polaris integration configuration/credentials; constrained to Organization `1`.
 - `[asap].[WorkflowSettings]` — limits, eligibility, automation, timeout behavior, and related common-creator behavior/text; Organization `1` is the complete system default and library rows contain only nullable field overrides.
 - `[asap].[PatronSettings]` — patron-facing page/messages and fixed duplicate-status labels with the same field-level inheritance model.
-- `[asap].[EmailSettings]` — Postmark transport/sender configuration with system default + nullable library overrides; reusable secret values are protected ciphertext.
+- `[asap].[EmailSettings]` — sender identity with system default + nullable library overrides, plus one system-owned Postmark transport credential; reusable secret values are protected ciphertext.
 
 Use relational tables rather than JSON when the configuration has meaningful identity, ordering, children, or whole-set override semantics: `PatronEmbedAllowedOrigin`, `ExternalSearchProvider`/`ExternalSearchProviderOverride`, `PublicationOptionSet`/`PublicationOption`, `CommonCreatorSet`/`CommonCreatorTerm`, `PatronCodeEligibilitySet`/`PatronCodeEligibilityMember`, and `PatronCustomField`/`PatronCustomFieldOption`/`MaterialFormatCustomFieldRule`. Keep `MaterialFormat`/`MaterialFormatOverride`, `FormatAutoClaimRule`, `EmailTemplate`, and `Branding` as specialized domain models. Built-in material-format field behavior is strongly typed; custom-field per-format mode/label behavior uses `MaterialFormatCustomFieldRule`. No competing JSON rule blob remains.
 
@@ -406,7 +406,7 @@ Because SQL secrets now depend on the Data Protection key ring, disaster recover
 
 Use the latest `Clc.Postmark.Api`. Postmark is the transport; templates remain application-owned.
 
-Email configuration uses system defaults plus library overrides in `[asap].[EmailSettings]`, including credential inheritance semantics. Do not collapse Postmark configuration into a system-only model merely because Polaris is system-only.
+Email configuration uses system defaults plus library overrides for sender identity in `[asap].[EmailSettings]`. The Postmark transport credential is system-only on Organization `1`; library rows never inherit, write, or fall back to a transport token. Do not expose the credential as a library override merely because sender identity remains scoped.
 
 All business email is durable, but notification availability never rolls back an otherwise valid ordinary business mutation:
 
@@ -440,13 +440,13 @@ Delivery workers claim one `pending` row atomically by moving it to `sending`, s
 
 Every expired `sending` lease is potentially transport-ambiguous, including one whose worker may actually have crashed before the provider call; persisted state does not claim to distinguish those cases. Only after `LeaseExpiresUtc <= now` may the five-minute sweeper atomically reclaim the row to the bounded retry path, and a second provider call may begin only after a new worker has successfully claimed it with a new lease. A worker's final success/failure update must compare `Status = sending`, the expected `LeaseId`, and the post-claim rowversion/equivalent ownership state. If an old worker returns after reclaim or a newer attempt, its compare-and-set fails and it must not overwrite state or enqueue another retry. Database-enforced business/outbox idempotency prevents duplicate local messages, but a crash or timeout during/after Postmark acceptance may still cause duplicate delivery after the safety boundary; transport remains explicitly at-least-once and no exactly-once guarantee is made.
 
-Outbox retries use the original recipient/sender/content snapshot but resolve the current effective transport credential/configuration for the owning organization at delivery/retry time. Use bounded transient retries, explicit failed status/details, stale-lease recovery, and manual retry. Record enough lease/attempt/provider metadata to diagnose ambiguous delivery without persisting the reusable Postmark token. Authorization-sensitive staff rows additionally perform the send-time authorization/address revalidation above.
+Outbox retries use the original recipient/sender/content snapshot but resolve the current system-owned Postmark transport credential and the owning organization's effective sender configuration at delivery/retry time. Use bounded transient retries, explicit failed status/details, stale-lease recovery, and manual retry. Record enough lease/attempt/provider metadata to diagnose ambiguous delivery without persisting the reusable Postmark token. Authorization-sensitive staff rows additionally perform the send-time authorization/address revalidation above.
 
 Delivery metadata is retained indefinitely initially. Payload retention is state-aware: `pending`, `sending`, and `failed` rows retain recipient/sender/subject/body payload for as long as they can still be delivered or manually retried. Only terminal `sent` and `suppressed` rows are eligible for subject/body payload purge after 90 days; retain status/provider/attempt/suppression metadata. Provider webhooks are validated and idempotently recorded. Business trigger idempotency must prevent duplicate notification creation.
 
 Historical PocketBase delivery audit is migrated, but the new outbox starts empty: migration never replays historical mail.
 
-**Test email** uses the real durable outbox + Hangfire + Postmark route, not a synchronous shortcut. Library admins may send tests for their own library; super-admins may test any context.
+**Test email** uses the real durable outbox + Hangfire + Postmark route, not a synchronous shortcut. The selected library determines authorization and effective sender identity; the single system-owned Postmark credential supplies transport. Library admins may send tests for their own library; super-admins may test any context.
 
 The nonproduction recipient-domain safety contract uses the existing external configuration and the same outbox/delivery path:
 

@@ -48,7 +48,7 @@ The tables are:
 
 - `[asap].[WorkflowSettings]` — limits, eligibility, automation, timeout behavior, and common-creator presentation/behavior that belongs to those workflows;
 - `[asap].[PatronSettings]` — patron-facing text/messages and duplicate-request status labels;
-- `[asap].[EmailSettings]` — Postmark transport/sender configuration with system + library inheritance; reusable secret values are Data Protection ciphertext.
+- `[asap].[EmailSettings]` — sender identity with system default + library override, plus one system-owned Postmark transport credential; reusable secret values are Data Protection ciphertext.
 
 ### 3.3 Whole-set replacement tables
 
@@ -87,7 +87,7 @@ Do not add an EAV `SettingKey/Value` table or a whole-configuration JSON documen
 | **Nonparticipating-library message** | `systemNotEnabledMessage` | **System-only** | `SystemSettings.SystemNotEnabledMessage`. |
 | **Misconfiguration message** | `misconfiguredMessage` | **System-only** | `SystemSettings.MisconfiguredMessage`. Treat the current save-path gap as a defect, not intended behavior. |
 | **Polaris integration** | `host`, `accessId`, `apiKey`, `staffDomain`, `adminUser`, `adminPassword`, `overridePassword`, `workstationId`, fixed/default IDs | **System-only** | `PolarisSettings`. Keep only fields required by `Clc.Polaris.Api` and the target system/application credential model. Remove legacy per-staff authentication fields. Reusable secrets are protected ciphertext. |
-| **Email transport** | current `smtp_settings` | **System default + library override in target** | `EmailSettings`; replace SMTP with approved Postmark configuration. SMTP host/port/user/password/TLS do not map to Postmark credentials and are intentionally dropped. The target Postmark token is separately provisioned as a new secret. Missing effective sender/transport configuration is a notification-state concern, not a business-transaction veto: notification intent is terminally suppressed when required configuration is absent at creation, or a previously valid queued row becomes retryable `failed/mail_not_configured` if transport configuration disappears before delivery. |
+| **Email transport** | current `smtp_settings` | **System-only** | `EmailSettings.ProtectedServerToken` on Organization `1`; replace SMTP with approved Postmark configuration. SMTP host/port/user/password/TLS do not map to Postmark credentials and are intentionally dropped. The target Postmark token is separately provisioned as a new system secret. Library rows never own, inherit, or write transport credentials; legacy library ciphertext is cleared. Missing effective sender/transport configuration is a notification-state concern, not a business-transaction veto: notification intent is terminally suppressed when required configuration is absent at creation, or a previously valid queued row becomes retryable `failed/mail_not_configured` if transport configuration disappears before delivery. |
 | **Email sender identity** | `fromAddress`, `fromName` | **System default + library override** | `EmailSettings.FromAddress` / `FromName`; do not duplicate sender configuration on every template. |
 | **Weekly suggestion limit** | `suggestionLimit`, `suggestionLimitMessage` | **System default + library override** | `WorkflowSettings`. |
 | **Unreviewed-suggestion timeout / auto-reject (`OutstandingTimeout`)** | `outstandingTimeoutEnabled`, `outstandingTimeoutDays`, `outstandingTimeoutSendEmail`, `outstandingTimeoutRejectionTemplate` | **System default + library override** | `WorkflowSettings`: eligible status `suggestion`, age from `CreatedUtc`, strict threshold, result `closed/rejected`; effective send-email switch/template govern the auto-rejection notification. No `outstanding_purchase` expiry. Template selection references target `EmailTemplate` identity with scope validation; full predicate in porting-spec section 23.2. |
@@ -130,7 +130,7 @@ Migration note: `effective-legacy-runtime-config.json` is intentionally limited 
 
 ### 5.1 Scalar domains
 
-`WorkflowSettings`, `PatronSettings`, and `EmailSettings` resolve each field independently. A partial library row does not cut off fallback for its other fields.
+`WorkflowSettings` and `PatronSettings` resolve each field independently. `EmailSettings.FromAddress` and `FromName` use the same system-default -> library-override rule, while `ProtectedServerToken` is always read from the system row. A partial library row does not cut off fallback for its other sender fields.
 
 The system row is required and should be seeded if missing without overwriting administrator edits. Readiness/diagnostics must report missing required system configuration rather than silently manufacturing operational secrets.
 
@@ -165,7 +165,7 @@ An individual reset removes only the selected override.
 
 **Reset inherited overrides** removes only configuration whose semantics are inheritance from organization 1:
 
-- nullable library values/rows in `WorkflowSettings`, `PatronSettings`, and `EmailSettings`;
+- nullable library values/rows in `WorkflowSettings`, `PatronSettings`, and the sender fields of `EmailSettings` (never the system Postmark credential);
 - library `ExternalSearchProviderOverride` rows;
 - library `PublicationOptionSet` and children;
 - library `CommonCreatorSet` and children;
@@ -213,7 +213,7 @@ In particular:
 - transform global/system fields into `SystemSettings` and `PolarisSettings`;
 - transform workflow scalar defaults/overrides into `WorkflowSettings`;
 - transform patron text/status/eBook messages into `PatronSettings` with corrected field-level inheritance;
-- transform only semantically equivalent SMTP-era configuration: move effective sender identity into Postmark-oriented `EmailSettings` and template content into `EmailTemplate`; intentionally drop legacy SMTP host/port/username/password/TLS transport fields rather than pretending they are Postmark settings; provision the target Postmark token separately through secure target-only import input and persist only its Data Protection ciphertext;
+- transform only semantically equivalent SMTP-era configuration: move effective sender identity into Postmark-oriented `EmailSettings` and template content into `EmailTemplate`; intentionally drop legacy SMTP host/port/username/password/TLS transport fields rather than pretending they are Postmark settings; provision the target system Postmark token separately through secure target-only import input and persist only its Data Protection ciphertext; do not create library token overrides;
 - create system/library provider rows/overrides from the current four external-search slots;
 - create whole-set rows for publication options (preserving normalized option IDs), common creators, and patron-code IDs; blank library source values map to no set/inherit, while meaningful library values create complete replacement sets;
 - normalize custom-field definitions/options relationally, preserving stable option IDs/enabled/order without inventing unsupported behavior;

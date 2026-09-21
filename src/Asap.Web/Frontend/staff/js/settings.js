@@ -52,8 +52,7 @@ const PATRON_FIELDS = [
 
 const EMAIL_FIELDS = [
   ['fromAddress', 'email-from-address'],
-  ['fromName', 'email-from-name'],
-  ['postmarkToken', 'email-postmark-token']
+  ['fromName', 'email-from-name']
 ];
 
 const SYSTEM_FIELDS = [
@@ -252,6 +251,10 @@ export function createSettingsController({
 }) {
   const dom = {
     contextSummary: root.querySelector('#settings-context-summary'),
+    scopeCallout: root.querySelector('#settings-scope-callout'),
+    scopeCalloutTitle: root.querySelector('#settings-scope-callout-title'),
+    scopeCalloutDetail: root.querySelector('#settings-scope-callout-detail'),
+    switchToSystem: root.querySelector('#settings-switch-to-system'),
     message: root.querySelector('#settings-message'),
     scopeField: root.querySelector('#settings-scope-field'),
     scope: root.querySelector('#settings-scope'),
@@ -364,6 +367,101 @@ export function createSettingsController({
     return organization?.name || `organization ${scope}`;
   }
 
+  function currentSettingsOrganizationName() {
+    if (isSystem()) return 'System level';
+    const organization = state.data?.organization || state.organizations.find(item =>
+      String(item.id) === String(state.scope)
+    );
+    return organization?.name || `Library ${state.scope}`;
+  }
+
+  function canSwitchToSystem() {
+    return state.staff?.role === 'super_admin';
+  }
+
+  function createSystemOnlyCallout() {
+    const button = node('button', {
+      type: 'button',
+      className: 'secondary-button settings-system-only-action',
+      text: 'Switch to System level'
+    });
+    button.addEventListener('click', switchToSystem);
+    return node('div', { className: 'settings-system-only-callout' }, [
+      node('div', {}, [
+        node('strong', { className: 'settings-system-only-title' }),
+        node('p', { className: 'settings-system-only-detail' })
+      ]),
+      button
+    ]);
+  }
+
+  function updateSystemOnlyCallout(callout, title) {
+    const library = !isSystem();
+    const detail = canSwitchToSystem()
+      ? `These settings apply to all libraries and cannot be changed for ${currentSettingsOrganizationName()}. Switch to System level to edit them.`
+      : 'These settings apply to all libraries and can only be changed by a super admin at System level.';
+    callout.hidden = !library;
+    callout.querySelector('.settings-system-only-title').textContent = title;
+    callout.querySelector('.settings-system-only-detail').textContent = detail;
+    callout.querySelector('.settings-system-only-action').hidden = !library || !canSwitchToSystem();
+  }
+
+  function updateScopeClarity() {
+    const library = !isSystem();
+    const organizationName = currentSettingsOrganizationName();
+    if (dom.scopeCallout) {
+      dom.scopeCallout.hidden = !library;
+      if (dom.scopeCalloutTitle) dom.scopeCalloutTitle.textContent = `Editing ${organizationName} settings`;
+      if (dom.scopeCalloutDetail) {
+        dom.scopeCalloutDetail.textContent = canSwitchToSystem()
+          ? 'Settings marked System only apply to every library. Switch to System level to edit them; your unsaved changes will follow the normal confirmation path.'
+          : 'Settings marked System only apply to every library and are managed at System level.';
+      }
+      if (dom.switchToSystem) dom.switchToSystem.hidden = !library || !canSwitchToSystem();
+    }
+
+    for (const button of dom.nav) {
+      const indicator = button.querySelector('[data-system-only-label]');
+      if (indicator) indicator.hidden = !library || button.dataset.settingsSystemOnly !== 'true';
+    }
+
+    for (const panel of dom.panels) {
+      if (panel.dataset.settingsSystemOnly !== 'true') continue;
+      if (!panel.__settingsSystemOnlyCallout) {
+        panel.__settingsSystemOnlyCallout = createSystemOnlyCallout();
+        panel.querySelector('.settings-panel-heading')?.after(panel.__settingsSystemOnlyCallout);
+      }
+      updateSystemOnlyCallout(panel.__settingsSystemOnlyCallout, 'System-only section');
+    }
+
+    for (const fieldset of root.querySelectorAll('fieldset[data-system-only="true"]')) {
+      const legend = fieldset.querySelector('legend');
+      if (legend) {
+        let badge = legend.querySelector('[data-system-only-badge]');
+        if (!badge) {
+          badge = node('span', {
+            className: 'settings-system-only-badge',
+            'data-system-only-badge': 'true',
+            text: 'System only'
+          });
+          legend.append(badge);
+        }
+        badge.hidden = !library;
+      }
+      fieldset.disabled = library;
+      for (const control of fieldset.querySelectorAll('input, textarea, select, button')) {
+        control.disabled = library;
+      }
+      const panel = fieldset.closest('[data-settings-panel-content]');
+      if (panel?.dataset.settingsSystemOnly === 'true') continue;
+      if (!fieldset.__settingsSystemOnlyCallout) {
+        fieldset.__settingsSystemOnlyCallout = createSystemOnlyCallout();
+        fieldset.before(fieldset.__settingsSystemOnlyCallout);
+      }
+      updateSystemOnlyCallout(fieldset.__settingsSystemOnlyCallout, 'System-only setting');
+    }
+  }
+
   function roleLabel(role) {
     if (role === 'super_admin') return 'Super admin';
     if (role === 'admin') return 'Library admin';
@@ -450,9 +548,6 @@ export function createSettingsController({
   }
 
   function hasRawOverride(section, key) {
-    if (section === 'email' && key === 'postmarkToken') {
-      return Boolean(property(rawSection(section), 'hasPostmarkToken'));
-    }
     return meaningful(property(rawSection(section), key));
   }
 
@@ -514,9 +609,7 @@ export function createSettingsController({
         createOverrideToggle(field, section, key);
       }
     }
-    for (const fieldset of root.querySelectorAll('fieldset[data-system-only="true"]')) {
-      fieldset.disabled = !system;
-    }
+    updateScopeClarity();
   }
 
   function setScopedFields(section, fields) {
@@ -916,6 +1009,7 @@ export function createSettingsController({
     renderStaffAudit();
     dom.scope.value = state.scope;
     state.baselineSnapshot = snapshotForm(dom.form);
+    updateScopeClarity();
     updateDirtyState();
   }
 
@@ -1247,8 +1341,12 @@ export function createSettingsController({
     if (domainData.domainsChanged.rules) payload.formatRules = domainValues.rules;
     if (domainData.domainsChanged.fields && !isSystem()) payload.customFields = domainValues.fields;
     if (domainData.domainsChanged.claims && !isSystem()) payload.autoClaimRules = domainValues.claims;
-    if (document.getElementById('email-clear-postmark-token').checked) {
-      payload.email.clearPostmarkToken = true;
+    if (isSystem()) {
+      const postmarkToken = clean(document.getElementById('email-postmark-token').value);
+      if (postmarkToken) payload.email.postmarkToken = postmarkToken;
+      if (document.getElementById('email-clear-postmark-token').checked) {
+        payload.email.clearPostmarkToken = true;
+      }
     }
     if (Object.keys(branding).length > 0) payload.branding = branding;
 
@@ -1472,6 +1570,7 @@ export function createSettingsController({
     }
     cancelSettingsOperations();
     state.scope = next;
+    updateScopeClarity();
     state.staffUsers = [];
     state.staffAudit = [];
     state.staffAccessLoaded = false;
@@ -1516,6 +1615,13 @@ export function createSettingsController({
       : 'system';
     state.scope = dom.scope.value;
     dom.scopeField.hidden = state.staff?.role !== 'super_admin';
+    updateScopeClarity();
+  }
+
+  async function switchToSystem() {
+    if (isSystem()) return;
+    dom.scope.value = 'system';
+    await changeScope();
   }
 
   function setStaff(staff) {
@@ -1535,6 +1641,7 @@ export function createSettingsController({
     populateStaffCreateControls();
     renderStaffUsers();
     renderStaffAudit();
+    updateScopeClarity();
   }
 
   function signedOut() {
@@ -1549,6 +1656,7 @@ export function createSettingsController({
     state.baselineSnapshot = [];
     renderStaffUsers();
     renderStaffAudit();
+    updateScopeClarity();
     updateDirtyState();
   }
 
@@ -1559,6 +1667,7 @@ export function createSettingsController({
     dom.form.addEventListener('input', updateDirtyState);
     dom.form.addEventListener('change', updateDirtyState);
     dom.scope.addEventListener('change', changeScope);
+    dom.switchToSystem?.addEventListener('click', switchToSystem);
     for (const button of dom.nav) {
       button.addEventListener('click', () => activatePanel(button.dataset.settingsPanel));
       button.addEventListener('keydown', event => {
@@ -1621,7 +1730,10 @@ export function createSettingsController({
     if (!state.staff || state.staff.role === 'staff') return;
     populateScopeOptions();
     if (!state.data || String(state.data.orgId) !== String(state.scope)) await load();
-    else configureScopedFields();
+    else {
+      configureScopedFields();
+      updateScopeClarity();
+    }
   }
 
   return {

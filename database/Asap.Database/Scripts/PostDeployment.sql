@@ -92,6 +92,14 @@ BEGIN
     VALUES (1, SYSUTCDATETIME());
 END;
 
+-- Postmark transport credentials are system-owned. Remove obsolete ciphertext
+-- from legacy library rows without decrypting or copying it anywhere.
+UPDATE [asap].[EmailSettings]
+SET [ProtectedServerToken] = NULL,
+    [UpdatedUtc] = SYSUTCDATETIME()
+WHERE [OrganizationId] <> 1
+  AND [ProtectedServerToken] IS NOT NULL;
+
 IF NOT EXISTS (SELECT 1 FROM [asap].[CommonCreatorSet] WHERE [OrganizationId] = 1)
     INSERT INTO [asap].[CommonCreatorSet] ([OrganizationId]) VALUES (1);
 

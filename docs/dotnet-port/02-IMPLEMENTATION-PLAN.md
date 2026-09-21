@@ -193,7 +193,7 @@ Implement:
 - system-only `SystemSettings` and `PolarisSettings`; field-inheritable `WorkflowSettings`, `PatronSettings`, and `EmailSettings`;
 - explicit inherited-vs-overridden UI and **Reset inherited overrides** behavior that never deletes library-owned configuration;
 - system-only Polaris configuration/test with reusable secret values protected by Data Protection before SQL persistence;
-- system+library Postmark/email configuration with write-only/masked UI/API behavior and Data Protection-protected SQL ciphertext;
+- system-owned Postmark transport plus system-default/library-override sender identity, with write-only/masked UI/API behavior and Data Protection-protected SQL ciphertext;
 - relational external-search providers/overrides, publication-option sets, common-creator sets, patron-code eligibility sets, and patron custom fields/options and per-format custom-field rules;
 - branding table/upload/inheritance;
 - EmailTemplate system/library inheritance, rejection-template behavior, and preservation of library-owned custom templates on inherited reset;
