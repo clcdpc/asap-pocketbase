@@ -6,6 +6,7 @@ import { applySelectedPolarisResultToEditForm } from '../settings-ui.js';
 import { escapeAttr } from '../grid-utils.js';
 import { staffSession, publicationOptions, currentWorkflowOrgScopeId } from '../state.js';
 import { submitTitleRequestAction } from './edit-submit.js';
+import { editRequestIdentity, findWorkflowRow, requestIdentity } from '../request-identity.mjs';
 
 let holdingsLookupUnavailable = false;
 
@@ -88,9 +89,13 @@ async function fetchPolarisSearch(row, mode, query, options, ctx) {
     query: query,
     title: options?.title || '',
     author: options?.author || '',
-    requestId: row.id || '',
     libraryOrgId: String(libraryOrgId)
   };
+  const identity = requestIdentity(row);
+  if (identity.id) {
+    payload.requestId = identity.id;
+    payload.requestType = identity.type;
+  }
   if (options?.bibId) {
     payload.bibId = options.bibId;
   }
@@ -464,13 +469,14 @@ function currentEditPolarisSearchRow(context = 'edit', ctx) {
     };
   }
 
-  const id = document.getElementById('edit-id')?.value || '';
-  const existing = ctx.currentSuggestions.find(r => r.id === id) || ctx.allSuggestions.find(r => r.id === id) || {};
+  const identity = editRequestIdentity(document.getElementById('edit-id'));
+  const existing = findWorkflowRow(identity, ctx.currentSuggestions, ctx.allSuggestions) || {};
   const title = document.getElementById('edit-title')?.value || '';
   const author = document.getElementById('edit-author')?.value || '';
   const identifier = document.getElementById('edit-identifier')?.value || '';
   return Object.assign({}, existing, {
-    id: id || existing.id || '',
+    id: identity.id || existing.id || '',
+    type: identity.type,
     title,
     author,
     identifier,

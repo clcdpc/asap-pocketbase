@@ -93,12 +93,22 @@ export function requestedRequestIdFromUrl() {
   }
 }
 
-export function replaceResolvedRequestId(id, additionalCopy = false) {
+export function requestedRequestTypeFromUrl(status = '') {
+  try {
+    const params = new URLSearchParams(window.location.search || '');
+    const type = String(params.get('requestType') || '').trim();
+    if (type === 'title_request' || type === 'additional_copy') return type;
+  } catch (err) {}
+  return status === 'additional_copies' ? 'additional_copy' : 'title_request';
+}
+
+export function replaceResolvedRequestId(id, requestType = 'title_request') {
   const value = String(id || '').trim();
   if (!value) return;
   const url = new URL(window.location.href);
   url.searchParams.set('request', value);
-  if (additionalCopy) {
+  url.searchParams.set('requestType', requestType === 'additional_copy' ? 'additional_copy' : 'title_request');
+  if (requestType === 'additional_copy' && !url.searchParams.has('stage')) {
     url.searchParams.set('stage', 'additional_copies');
   }
   window.history.replaceState(null, '', url.pathname + url.search + url.hash);

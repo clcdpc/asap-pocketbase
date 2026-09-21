@@ -1,4 +1,5 @@
 import { workflowStatusLabel } from './utils.js';
+import { editRequestIdentity, findWorkflowRow } from '../request-identity.mjs';
 
 export function buildPendingAuditPreview(row, nextStatus, actionStr, ctx) {
   const username = ctx.staffSession.staff?.username || 'staff';
@@ -42,8 +43,8 @@ export function renderPendingAuditPreview(row, nextStatus, actionStr, ctx) {
 }
 
 export function refreshEditAuditPreview(ctx) {
-  const id = ctx.id.value;
-  const row = ctx.currentSuggestions.find(r => r.id === id) || ctx.allSuggestions.find(r => r.id === id);
+  const identity = editRequestIdentity(ctx.id);
+  const row = findWorkflowRow(identity, ctx.currentSuggestions, ctx.allSuggestions);
   const nextStatus = ctx.nextStatus.value;
   const actionStr = ctx.action.value;
   if (row) renderPendingAuditPreview(row, nextStatus, actionStr, ctx);

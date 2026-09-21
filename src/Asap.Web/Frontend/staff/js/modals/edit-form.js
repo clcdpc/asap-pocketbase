@@ -9,9 +9,10 @@ import { renderEditWorkflowTags, renderEditClaimState } from './claim-tags.js';
 import { renderPendingAuditPreview } from './audit-preview.js';
 import { renderRejectionTemplateSelector } from './rejection-templates.js';
 import { renderEditPatronContext } from './patron-context.js';
+import { findWorkflowRow, requestIdentity, setEditRequestIdentity } from '../request-identity.mjs';
 
-export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel, ctx) {
-  const row = ctx.currentSuggestions.find(r => r.id === id) || ctx.allSuggestions.find(r => r.id === id);
+export function openEdit(identity, nextStatus, dialogTitle, actionStr, buttonLabel, ctx) {
+  const row = findWorkflowRow(identity, ctx.currentSuggestions, ctx.allSuggestions);
   if (!row) return;
   const isAdditionalCopy = row.type === 'additional_copy';
 
@@ -19,7 +20,7 @@ export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel, ct
   renderRecentSuggestionsSwitcher();
 
   ctx.modalLabel.textContent = dialogTitle;
-  ctx.id.value = row.id;
+  setEditRequestIdentity(ctx.id, requestIdentity(row));
   ctx.nextStatus.value = nextStatus;
   ctx.action.value = actionStr;
   setBibIdRequirement(nextStatus, ctx);

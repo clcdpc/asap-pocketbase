@@ -3,6 +3,7 @@ import { isAdminStaff } from './api.js';
 import { authorizedJson } from './http.js';
 import { showToast, showAlert, showConfirm } from './dialogs.js';
 import { refreshCurrentStaffView, escapeAttr } from './grid.js';
+import { findWorkflowRow, requestIdentity } from './request-identity.mjs';
 
 export function undoConfirmMessage(type) {
   if (type === 'additional_copy') {
@@ -11,9 +12,10 @@ export function undoConfirmMessage(type) {
   return 'Undo action and return this suggestion to Suggestions?';
 }
 
-export async function undoRow(id) {
-  const row = currentSuggestions.find(r => r.id === id) || allSuggestions.find(r => r.id === id);
+export async function undoRow(identity) {
+  const row = findWorkflowRow(identity, currentSuggestions, allSuggestions);
   if (!row) return;
+  const id = row.id;
 
   if (!await showConfirm('Undo action', undoConfirmMessage(row.type))) return;
 
@@ -39,12 +41,17 @@ export async function undoRow(id) {
   }
 }
 
-export async function deleteClosedRequest(id) {
+export async function deleteClosedRequest(identity) {
   if (!isAdminStaff()) return;
+  const row = findWorkflowRow(identity, currentSuggestions, allSuggestions);
+  if (!row) return;
   const confirmed = await showConfirm('Delete this closed request?', 'This cannot be undone.');
   if (!confirmed) return;
   try {
-    await authorizedJson(`/api/asap/staff/requests/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const url = row.type === 'additional_copy'
+      ? `/api/asap/staff/additional-copies/${encodeURIComponent(row.id)}`
+      : `/api/asap/staff/requests/${encodeURIComponent(row.id)}`;
+    await authorizedJson(url, { method: 'DELETE' });
     showToast('Closed request deleted.', 'success');
     refreshCurrentStaffView();
   } catch (err) {
@@ -52,9 +59,10 @@ export async function deleteClosedRequest(id) {
   }
 }
 
-export async function closeDuplicateRequest(id) {
-  const row = currentSuggestions.find(r => r.id === id) || allSuggestions.find(r => r.id === id);
-  if (!row) return;
+export async function closeDuplicateRequest(identity) {
+  const row = findWorkflowRow(identity, currentSuggestions, allSuggestions);
+  if (!row || requestIdentity(row).type !== 'title_request') return;
+  const id = row.id;
   const confirmed = await showConfirm('Close this duplicate request?', 'The patron already has an open request or hold for this BIB ID.');
   if (!confirmed) return;
   try {
@@ -85,6 +93,7 @@ function closeEditModal() {
   document.getElementById('editModal').close();
   const url = new URL(window.location.href);
   url.searchParams.delete('request');
+  url.searchParams.delete('requestType');
   window.history.replaceState(null, '', url.pathname + url.search + url.hash);
 }
 

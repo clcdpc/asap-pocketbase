@@ -4,6 +4,7 @@ import { submitEditForm } from './edit-submit.js';
 import { reactiveCleanupWorkflowFlags } from './claim-tags.js';
 import { launchEditPolarisSearch, closePolarisSearchDialog } from './polaris-search.js';
 import { openProfileDialog } from '../api.js';
+import { editRequestIdentity, findWorkflowRow, requestIdentity } from '../request-identity.mjs';
 
 let eventsBound = false;
 
@@ -24,8 +25,8 @@ export function initModalEvents(ctx, { onRefresh } = {}) {
 
   const refreshPreview = () => refreshEditAuditPreview(ctx);
   const refreshFields = () => {
-    const id = ctx.id.value;
-    const row = ctx.currentSuggestions.find(r => r.id === id) || ctx.allSuggestions.find(r => r.id === id);
+    const identity = editRequestIdentity(ctx.id);
+    const row = findWorkflowRow(identity, ctx.currentSuggestions, ctx.allSuggestions);
     if (row) renderEditCustomFieldsForCurrentFormat(row, ctx);
   };
 
@@ -37,8 +38,8 @@ export function initModalEvents(ctx, { onRefresh } = {}) {
   document.getElementById('edit-bibid')?.addEventListener('input', refreshPreview);
 
   window.addEventListener('asap-bib-verified', (e) => {
-    const { rowId } = e.detail;
-    reactiveCleanupWorkflowFlags(rowId, ctx);
+    const { rowId, requestType } = e.detail;
+    reactiveCleanupWorkflowFlags(requestIdentity({ id: rowId, type: requestType }), ctx);
     refreshEditAuditPreview(ctx);
   });
 

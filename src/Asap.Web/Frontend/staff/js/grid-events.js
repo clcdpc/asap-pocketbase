@@ -4,9 +4,10 @@ import { showToast } from './dialogs.js';
 import { renderNoteActivity } from './note-activity.js';
 import { normalizeStatus } from './grid-policy.mjs';
 import { renderAdditionalCopySourceCell } from './grid-rendering.js';
+import { findWorkflowRow, requestIdentity, requestIdentityFromElement } from './request-identity.mjs';
 
-function findSuggestion(recordId, ctx) {
-  return ctx.currentSuggestions.find(item => item.id === recordId) || ctx.allSuggestions.find(item => item.id === recordId);
+function findSuggestion(identity, ctx) {
+  return findWorkflowRow(identity, ctx.currentSuggestions, ctx.allSuggestions);
 }
 
 export function shouldIgnoreRowEditClick(target, event) {
@@ -36,8 +37,8 @@ export function shouldIgnoreRowEditClick(target, event) {
   ].join(','));
 }
 
-export function openSuggestionEditFromRow(recordId, ctx) {
-  const row = findSuggestion(recordId, ctx);
+export function openSuggestionEditFromRow(identity, ctx) {
+  const row = findSuggestion(identity, ctx);
   if (!row) {
     showToast('Could not find that suggestion. Refresh and try again.', 'error');
     return;
@@ -47,7 +48,7 @@ export function openSuggestionEditFromRow(recordId, ctx) {
   const isAdditionalCopy = row.type === 'additional_copy';
   const defaultTitle = isAdditionalCopy ? 'Edit additional-copy task' : (status === 'suggestion' ? 'Edit suggestion' : 'Edit');
 
-  ctx.openEdit(row.id, status || ctx.currentStatus, defaultTitle, '', 'Save');
+  ctx.openEdit(requestIdentity(row), status || ctx.currentStatus, defaultTitle, '', 'Save');
 }
 
 export function setupGridEvents(ctx) {
@@ -77,8 +78,8 @@ export function setupGridEvents(ctx) {
     if (truncateBtn && ctx.gridContainer.contains(truncateBtn)) {
       e.preventDefault();
       e.stopPropagation();
-      const recordId = truncateBtn.getAttribute('data-note-record-id');
-      const row = findSuggestion(recordId, ctx);
+      const identity = requestIdentityFromElement(truncateBtn, 'data-note-record-id');
+      const row = findSuggestion(identity, ctx);
       const content = document.getElementById('noteDialogContent');
       const dialog = document.getElementById('noteDialog');
       if (!row || !content || !dialog) {
@@ -140,9 +141,9 @@ export function setupGridEvents(ctx) {
     if (polarisSearchBtn && ctx.gridContainer.contains(polarisSearchBtn)) {
       e.preventDefault();
       e.stopPropagation();
-      const recordId = polarisSearchBtn.getAttribute('data-suggestion-id');
+      const identity = requestIdentityFromElement(polarisSearchBtn);
       const mode = polarisSearchBtn.getAttribute('data-polaris-search-mode') || 'title';
-      const row = findSuggestion(recordId, ctx);
+      const row = findSuggestion(identity, ctx);
       if (row) {
         openPolarisSearch(row, mode);
       } else {
@@ -157,10 +158,10 @@ export function setupGridEvents(ctx) {
     if (!tableRow || !ctx.gridContainer.contains(tableRow)) return;
 
     const marker = tableRow.querySelector('[data-suggestion-id]');
-    const recordId = marker ? marker.getAttribute('data-suggestion-id') : '';
-    if (!recordId) return;
+    const identity = requestIdentityFromElement(marker);
+    if (!identity.id) return;
 
-    openSuggestionEditFromRow(recordId, ctx);
+    openSuggestionEditFromRow(identity, ctx);
   });
 
   document.addEventListener('click', (event) => {
@@ -197,8 +198,8 @@ export function setupGridEvents(ctx) {
   });
 
   document.addEventListener('asap:recent-suggestion-selected', async event => {
-    const { id, status } = event.detail || {};
+    const { id, type, status } = event.detail || {};
     await ctx.loadTab(status || 'suggestion');
-    openSuggestionEditFromRow(id, ctx);
+    openSuggestionEditFromRow(requestIdentity({ id, type }), ctx);
   });
 }

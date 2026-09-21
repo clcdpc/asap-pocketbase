@@ -1,5 +1,6 @@
-import { currentSuggestions, setVerifiedBibId } from '../state.js';
+import { currentSuggestions, allSuggestions, setVerifiedBibId } from '../state.js';
 import { authorizedJson } from '../http.js';
+import { editRequestIdentity, findWorkflowRow, requestIdentity } from '../request-identity.mjs';
 
 export async function lookupEditBibById(options = {}) {
   const bibInput = document.getElementById('edit-bibid');
@@ -27,7 +28,8 @@ export async function lookupEditBibById(options = {}) {
   display.classList.add('hidden');
 
   try {
-    const row = currentSuggestions.find(r => r.id === document.getElementById('edit-id').value);
+    const identity = editRequestIdentity(document.getElementById('edit-id'));
+    const row = findWorkflowRow(identity, currentSuggestions, allSuggestions);
     const barcode = row ? row.barcode : '';
 
     const data = await authorizedJson('/api/asap/staff/bib-lookup', {
@@ -36,6 +38,7 @@ export async function lookupEditBibById(options = {}) {
         bibId,
         barcode,
         requestId: row ? row.id : '',
+        requestType: row ? requestIdentity(row).type : '',
         libraryOrgId: String(row ? row.libraryOrgId : '')
       }
     });
@@ -74,7 +77,9 @@ export async function lookupEditBibById(options = {}) {
 
     text.textContent = infoText;
     setVerifiedBibId(bibId);
-    window.dispatchEvent(new CustomEvent('asap-bib-verified', { detail: { bibId, rowId: document.getElementById('edit-id').value } }));
+    window.dispatchEvent(new CustomEvent('asap-bib-verified', {
+      detail: { bibId, rowId: identity.id, requestType: identity.type }
+    }));
     return data;
   } catch (err) {
     display.classList.remove('hidden', 'alert-info');
@@ -175,8 +180,10 @@ export function applySelectedPolarisResultToEditForm(result = {}, context = 'edi
 
   if (bibId) {
     setVerifiedBibId(bibId);
-    const rowId = document.getElementById('edit-id')?.value || '';
-    window.dispatchEvent(new CustomEvent('asap-bib-verified', { detail: { bibId, rowId } }));
+    const identity = editRequestIdentity(document.getElementById('edit-id'));
+    window.dispatchEvent(new CustomEvent('asap-bib-verified', {
+      detail: { bibId, rowId: identity.id, requestType: identity.type }
+    }));
   }
 }
 

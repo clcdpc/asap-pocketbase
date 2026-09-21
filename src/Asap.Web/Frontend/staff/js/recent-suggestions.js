@@ -1,5 +1,6 @@
 import { staffSession } from './state.js';
 import { workflowStatusLabel } from './modals.js';
+import { requestIdentity, sameRequestIdentity } from './request-identity.mjs';
 
 function getStorageKey() {
   const userId = staffSession.staff?.id;
@@ -10,9 +11,6 @@ function getStorageKey() {
 export function rememberRecentSuggestion(row) {
   if (!row || !row.id) return;
   
-  // We're focusing on title_requests for the first version as per the plan
-  if (row.type === 'additional_copy') return; 
-
   const storageKey = getStorageKey();
   if (!storageKey) return;
 
@@ -28,7 +26,7 @@ export function rememberRecentSuggestion(row) {
   let recent = getRecentSuggestions();
   
   // Deduplicate
-  recent = recent.filter(r => r.id !== suggestion.id);
+  recent = recent.filter(r => !sameRequestIdentity(r, suggestion));
   
   // Add to front
   recent.unshift(suggestion);
@@ -50,7 +48,7 @@ export function updateRecentSuggestion(row, options = {}) {
   if (!storageKey) return;
 
   let recent = getRecentSuggestions();
-  const index = recent.findIndex(r => r.id === row.id);
+  const index = recent.findIndex(r => sameRequestIdentity(r, row));
   if (index < 0) return;
 
   const existing = recent[index];
@@ -170,7 +168,10 @@ export function renderRecentSuggestionsSwitcher() {
 
       // Dispatch custom event to let grid.js handle the jump
       document.dispatchEvent(new CustomEvent('asap:recent-suggestion-selected', {
-        detail: { id: r.id, status: r.status }
+        detail: {
+          ...requestIdentity(r),
+          status: r.type === 'additional_copy' && r.status !== 'closed' ? 'additional_copies' : r.status
+        }
       }));
     });
 

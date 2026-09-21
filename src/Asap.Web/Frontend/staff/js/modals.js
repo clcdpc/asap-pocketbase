@@ -15,8 +15,8 @@ import { initModalEvents } from './modals/events.js';
 const ctx = createModalContext(state);
 initModalEvents(ctx, { onRefresh: refreshCurrentStaffView });
 
-export function openEdit(id, nextStatus, dialogTitle, actionStr, buttonLabel) {
-  return editFormOpen(id, nextStatus, dialogTitle, actionStr, buttonLabel, ctx);
+export function openEdit(identity, nextStatus, dialogTitle, actionStr, buttonLabel) {
+  return editFormOpen(identity, nextStatus, dialogTitle, actionStr, buttonLabel, ctx);
 }
 
 export function renderEditClaimState(row) {

@@ -10,8 +10,8 @@ const {
 } = require('./legacy-accessibility-baseline.cjs');
 
 function parseArguments(argv) {
-  if (argv.length !== 25) {
-    throw new Error('Usage: node tests/browser/staff-legacy.cjs <baseURL> <artifactDirectory> <superId> <tenantId> <superEmail> <staffId> <staffEmail> <legacyRequestId> <primaryRequestId> <blockedRequestId> <resolutionRequestId> <otherRequestId> <copySourceRequestId> <invalidClosedCopyId> <invalidClaimantId> <legacyRuleId> <mobileCopyId> <foreignStaffId> <invalidTenantStaffId> <unboundStaffId> <staleTitleAId> <staleTitleBId> <staleCopyAId> <staleCopyBId> <staleCreateSourceId>');
+  if (argv.length !== 26) {
+    throw new Error('Usage: node tests/browser/staff-legacy.cjs <baseURL> <artifactDirectory> <superId> <tenantId> <superEmail> <staffId> <staffEmail> <legacyRequestId> <primaryRequestId> <blockedRequestId> <resolutionRequestId> <otherRequestId> <copySourceRequestId> <invalidClosedCopyId> <invalidClaimantId> <legacyRuleId> <mobileCopyId> <foreignStaffId> <invalidTenantStaffId> <unboundStaffId> <staleTitleAId> <staleTitleBId> <staleCopyAId> <staleCopyBId> <staleCreateSourceId> <collidingRequestId>');
   }
   const parsed = new URL(argv[0]);
   if (!['http:', 'https:'].includes(parsed.protocol) || parsed.pathname !== '/' ||
@@ -27,7 +27,8 @@ function parseArguments(argv) {
     primaryRequestId: argv[8],
     otherRequestId: argv[11],
     mobileCopyId: argv[16],
-    staleTitleBId: argv[21]
+    staleTitleBId: argv[21],
+    collidingRequestId: argv[25]
   };
 }
 
@@ -276,6 +277,93 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     assert.match(await page.locator('#editModalLabel').textContent(), /additional-copy|edit/i);
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'additional-copy-detail');
     await page.locator('#close-modal-x').click();
+
+    const collisionUrl = requestType =>
+      `${args.baseOrigin}/staff/?stage=closed&request=${args.collidingRequestId}&requestType=${requestType}`;
+    await page.goto(collisionUrl('title_request'), { waitUntil: 'networkidle' });
+    await page.locator('#editModal[open]').waitFor();
+    assert.equal(await page.locator('#edit-title').inputValue(), 'Browser collision title');
+    assert.equal(await page.locator('#edit-id').getAttribute('data-request-type'), 'title_request');
+    await page.locator('#close-modal-x').click();
+
+    await page.goto(collisionUrl('additional_copy'), { waitUntil: 'networkidle' });
+    await page.locator('#editModal[open]').waitFor();
+    assert.equal(await page.locator('#edit-title').inputValue(), 'Browser collision additional copy');
+    assert.equal(await page.locator('#edit-id').getAttribute('data-request-type'), 'additional_copy');
+    const exactBibResponse = page.waitForResponse(response => {
+      if (!response.url().endsWith('/staff/bib-lookup')) return false;
+      const body = response.request().postDataJSON();
+      return body?.bibId === '92921';
+    });
+    await page.locator('#btn-bib-lookup').click();
+    const exactBib = await exactBibResponse;
+    assert.equal(exactBib.status(), 200, await exactBib.text());
+    assert.deepEqual(
+      {
+        requestType: exactBib.request().postDataJSON().requestType,
+        requestId: exactBib.request().postDataJSON().requestId
+      },
+      { requestType: 'additional_copy', requestId: args.collidingRequestId }
+    );
+    await page.locator('#close-modal-x').click();
+    await page.locator('#grid-search-input').fill('Browser collision');
+
+    const collisionRow = type => page
+      .locator(`[data-suggestion-id="${args.collidingRequestId}"][data-request-type="${type}"]`)
+      .locator('xpath=ancestor::tr');
+    const titleCollisionRow = collisionRow('title_request');
+    const copyCollisionRow = collisionRow('additional_copy');
+    await page.waitForTimeout(250);
+    const collisionMarkers = await page.evaluate(id =>
+      [...document.querySelectorAll('[data-suggestion-id]')]
+        .filter(element => element.getAttribute('data-suggestion-id') === id)
+        .map(element => ({ type: element.getAttribute('data-request-type'), html: element.outerHTML })),
+      args.collidingRequestId);
+    assert.deepEqual([...new Set(collisionMarkers.map(marker => marker.type))].sort(), ['additional_copy', 'title_request'],
+      `Expected both colliding rows in the closed grid: ${JSON.stringify(collisionMarkers)}`);
+
+    await titleCollisionRow.locator('.staff-title-main').click();
+    await page.locator('#editModal[open]').waitFor();
+    assert.equal(await page.locator('#edit-title').inputValue(), 'Browser collision title');
+    await page.locator('#close-modal-x').click();
+    await copyCollisionRow.locator('.staff-title-main').click();
+    await page.locator('#editModal[open]').waitFor();
+    assert.equal(await page.locator('#edit-title').inputValue(), 'Browser collision additional copy');
+    await page.locator('#close-modal-x').click();
+
+    await titleCollisionRow.locator('.truncate-note').click();
+    await page.locator('#noteDialog[open]').waitFor();
+    assert.match(await page.locator('#noteDialogContent').textContent(), /Title collision note/);
+    assert.doesNotMatch(await page.locator('#noteDialogContent').textContent(), /Additional-copy collision note/);
+    await page.locator('#noteDialogCloseBtn').click();
+    await copyCollisionRow.locator('.truncate-note').click();
+    await page.locator('#noteDialog[open]').waitFor();
+    assert.match(await page.locator('#noteDialogContent').textContent(), /Additional-copy collision note/);
+    assert.doesNotMatch(await page.locator('#noteDialogContent').textContent(), /Title collision note/);
+    await page.locator('#noteDialogCloseBtn').click();
+
+    const assertPolarisRowIdentity = async (row, requestType) => {
+      const requestPromise = page.waitForRequest(request => {
+        if (!request.url().endsWith('/staff/bib-lookup')) return false;
+        const body = request.postDataJSON();
+        return body?.mode === 'title' && !body?.bibId && body?.requestId === args.collidingRequestId;
+      });
+      await row.locator('[data-polaris-search-mode="title"]').click();
+      const request = await requestPromise;
+      assert.equal(request.postDataJSON().requestType, requestType);
+      await page.locator('#polarisSearchDialog[open]').waitFor();
+      await page.locator('#close-polaris-search-btn').click();
+    };
+    await assertPolarisRowIdentity(titleCollisionRow, 'title_request');
+    await assertPolarisRowIdentity(copyCollisionRow, 'additional_copy');
+    await page.locator('#grid-search-input').fill('');
+    report.requestIdentityCollision = {
+      rowClicks: true,
+      deepLinks: true,
+      notes: true,
+      polarisSearches: true,
+      additionalCopyBibLookup: true
+    };
 
     await page.locator('[data-status="settings"]').click();
     await page.locator('#settings-container').waitFor({ state: 'visible' });

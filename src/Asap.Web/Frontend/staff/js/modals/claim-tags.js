@@ -1,4 +1,5 @@
 import { renderWorkflowTags } from '../grid.js';
+import { findWorkflowRow } from '../request-identity.mjs';
 
 export function renderEditClaimState(row, ctx) {
   const container = ctx.claimState;
@@ -61,8 +62,8 @@ export function renderEditWorkflowTags(tags, row, ctx) {
   container.appendChild(valueWrap);
 }
 
-export function reactiveCleanupWorkflowFlags(rowId, ctx) {
-  const row = ctx.currentSuggestions.find(r => r.id === rowId) || ctx.allSuggestions.find(r => r.id === rowId);
+export function reactiveCleanupWorkflowFlags(identity, ctx) {
+  const row = findWorkflowRow(identity, ctx.currentSuggestions, ctx.allSuggestions);
   if (!row || !row.workflowTags) return;
 
   const staleFlags = ['Hold failed', '! Hold failed', 'No holdable items'];
@@ -73,6 +74,6 @@ export function reactiveCleanupWorkflowFlags(rowId, ctx) {
   if (nextTags.length !== originalTags.length) {
     row.workflowTags = nextTags;
     renderEditWorkflowTags(nextTags, row, ctx);
-    console.log(`Cleaned up stale workflow flags for row ${rowId}`);
+    console.log(`Cleaned up stale workflow flags for row ${row.id}`);
   }
 }

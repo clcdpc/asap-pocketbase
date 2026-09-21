@@ -308,12 +308,12 @@ export function claimActionsForRow(row) {
   return claimActionsForRowWithContext(row, currentGridActionContext(), refreshCurrentStaffView);
 }
 
-export async function claimRequest(requestId) {
-  await claimRequestWithContext(requestId, currentGridActionContext(), refreshCurrentStaffView);
+export async function claimRequest(identity) {
+  await claimRequestWithContext(identity, currentGridActionContext(), refreshCurrentStaffView);
 }
 
-export async function unclaimRequest(requestId) {
-  await unclaimRequestWithContext(requestId, currentGridActionContext(), refreshCurrentStaffView);
+export async function unclaimRequest(identity) {
+  await unclaimRequestWithContext(identity, currentGridActionContext(), refreshCurrentStaffView);
 }
 
 export async function runRowAction(action) {

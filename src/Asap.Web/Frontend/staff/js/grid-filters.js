@@ -1,5 +1,6 @@
 import { normalizeLabel, getFlagDisplay, getIsbnCheckLabel, effectiveWorkflowFlagsForRow, getFilterableLabelsForRow, cleanWorkflowTags, normalizeStatus } from './grid-policy.mjs';
 import { escapeAttr } from './grid-utils.js';
+import { requestIdentityDomKey, sameRequestIdentity } from './request-identity.mjs';
 
 export const duplicateStatusNames = {
   suggestion: 'Suggestions',
@@ -55,7 +56,7 @@ export function getDuplicateSummary(row, ctx) {
   if (!allSuggestions.length) return null;
 
   const matches = allSuggestions.map(r => {
-    if (r.id === row.id) return false;
+    if (sameRequestIdentity(r, row)) return false;
     const reasons = duplicateMatchReasons(row, r);
     return reasons.length ? { row: r, reasons } : null;
   }).filter(Boolean);
@@ -219,7 +220,7 @@ export function renderDuplicateSummary(row, ctx) {
   const summary = getDuplicateSummary(row, ctx);
   if (!summary) return '';
 
-  const id = `duplicate-details-${escapeAttr(row.id || '')}`;
+  const id = `duplicate-details-${escapeAttr(requestIdentityDomKey(row))}`;
   const label = summary.count === 1
     ? 'Similar request elsewhere'
     : `Similar request elsewhere: ${summary.count} matches`;

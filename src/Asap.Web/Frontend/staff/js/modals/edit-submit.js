@@ -4,6 +4,7 @@ import { actionErrorMessage } from './utils.js';
 import { confirmDuplicateOpenRequestClose } from './confirm-duplicate.js';
 import { rememberRecentSuggestion, updateRecentSuggestion, renderRecentSuggestionsSwitcher } from '../recent-suggestions.js';
 import { collectEditCustomFieldValues } from '../request-custom-fields.js';
+import { editRequestIdentity, findWorkflowRow } from '../request-identity.mjs';
 
 export async function submitTitleRequestAction(id, payload, options = {}) {
   const {
@@ -77,7 +78,7 @@ export async function submitTitleRequestAction(id, payload, options = {}) {
       err.code = err.response.code || '';
     }
     if (err && err.code === 'duplicate_open_request') {
-      const confirmed = await confirmDuplicateOpenRequestClose(err, id);
+      const confirmed = await confirmDuplicateOpenRequestClose(err, { type: 'title_request', id });
       if (confirmed) {
         if (typeof onRefresh === 'function') onRefresh();
         return;
@@ -91,9 +92,18 @@ export async function submitEditForm(e, ctx, options = {}) {
   const { onRefresh } = options;
   e.preventDefault();
 
-  const id = ctx.id.value;
+  const identity = editRequestIdentity(ctx.id);
+  const id = identity.id;
   const nextStatus = ctx.nextStatus.value;
-  const row = ctx.currentSuggestions.find(r => r.id === id) || ctx.allSuggestions.find(r => r.id === id);
+  const row = findWorkflowRow(identity, ctx.currentSuggestions, ctx.allSuggestions);
+  if (!row) {
+    await showAlert('Could not find that request. Refresh and try again.');
+    return;
+  }
+  if (identity.type === 'additional_copy') {
+    await showAlert('Use the additional-copy task controls to change this request.');
+    return;
+  }
   const bibInput = ctx.bibid;
   const bibid = row && row.status === 'hold_placed'
     ? String(row.bibid || '').trim()

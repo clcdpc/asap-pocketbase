@@ -9,6 +9,7 @@ import {
   renderDuplicateSummary
 } from './grid-filters.js';
 import { getGridColumns } from './grid-columns.js';
+import { requestIdentityKey, requestType } from './request-identity.mjs';
 
 export function renderBibIdCell(row, ctx) {
   const bibId = String(row?.bibid || '').trim();
@@ -19,7 +20,7 @@ export function renderBibIdCell(row, ctx) {
 }
 
 export function rowMarker(row) {
-  return `<span class="asap-row-marker" data-suggestion-id="${escapeAttr(row.id)}" hidden></span>`;
+  return `<span class="asap-row-marker" data-suggestion-id="${escapeAttr(row.id)}" data-request-type="${escapeAttr(requestType(row.type))}" hidden></span>`;
 }
 
 export function renderBarcodeCell(row, ctx) {
@@ -57,6 +58,7 @@ export function renderAdditionalCopySourceCell(row) {
   const url = new URL(window.location.href);
   url.searchParams.set('stage', row.sourceStatus || 'pending_hold');
   url.searchParams.set('request', sourceId);
+  url.searchParams.set('requestType', 'title_request');
   const label = sourceId.slice(0, 8);
   const statusText = row.sourceStatus ? ` (${row.sourceStatus.replace(/_/g, ' ')})` : '';
   const wrapper = document.createElement('div');
@@ -78,7 +80,8 @@ export function renderPolarisRowSearchButton(row, mode, ctx) {
   return ctx.renderPolarisSearchButtonMarkup(mode, {
     'data-no-row-edit': 'true',
     'data-polaris-search-mode': mode,
-    'data-suggestion-id': row.id
+    'data-suggestion-id': row.id,
+    'data-request-type': requestType(row.type)
   });
 }
 
@@ -161,9 +164,10 @@ export function claimSortValue(row) {
 }
 
 export function getGridDataRow(row, status, ctx) {
+  const identityKey = requestIdentityKey(row);
   if (status === 'additional_copies') {
     return {
-      id: row.id,
+      id: identityKey,
       title: normalizedSortText(row.title),
       author: normalizedSortText(row.author),
       bibid: bibSortValue(row.bibid),
@@ -173,12 +177,12 @@ export function getGridDataRow(row, status, ctx) {
       createdBy: normalizedSortText(row.createdByUsername),
       created: dateSortValue(row.created),
       notes: normalizedSortText(row.notes),
-      actions: row.id
+      actions: identityKey
     };
   }
 
   const base = {
-    id: row.id,
+    id: identityKey,
     barcode: normalizedSortText(row.barcode),
     title: normalizedSortText(row.title),
     author: normalizedSortText(row.author),
@@ -189,7 +193,7 @@ export function getGridDataRow(row, status, ctx) {
     submitted: dateSortValue(row.created),
     claimedBy: claimSortValue(row),
     notes: normalizedSortText(row.notes),
-    actions: row.id
+    actions: identityKey
   };
 
   if (status === 'closed') {
@@ -254,7 +258,7 @@ export function renderCurrentGrid(status = null, ctx) {
   }
 
   const rowById = new Map();
-  visibleRecords.forEach(row => rowById.set(row.id, row));
+  visibleRecords.forEach(row => rowById.set(requestIdentityKey(row), row));
 
   const g = new gridjs.Grid({
     columns: getGridColumns(gridStatus, rowById, ctx),

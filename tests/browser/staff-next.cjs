@@ -6,8 +6,8 @@ const path = require('node:path');
 const { URL } = require('node:url');
 
 function parseArguments(argv) {
-  if (argv.length !== 25) {
-    throw new Error('Usage: node tests/browser/staff.cjs <baseURL> <artifactDirectory> <superId> <tenantId> <superEmail> <staffId> <staffEmail> <legacyRequestId> <primaryRequestId> <blockedRequestId> <resolutionRequestId> <otherRequestId> <copySourceRequestId> <invalidClosedCopyId> <invalidClaimantId> <legacyRuleId> <mobileCopyId> <foreignStaffId> <invalidTenantStaffId> <unboundStaffId> <staleTitleAId> <staleTitleBId> <staleCopyAId> <staleCopyBId> <staleCreateSourceId>');
+  if (argv.length !== 26) {
+    throw new Error('Usage: node tests/browser/staff.cjs <baseURL> <artifactDirectory> <superId> <tenantId> <superEmail> <staffId> <staffEmail> <legacyRequestId> <primaryRequestId> <blockedRequestId> <resolutionRequestId> <otherRequestId> <copySourceRequestId> <invalidClosedCopyId> <invalidClaimantId> <legacyRuleId> <mobileCopyId> <foreignStaffId> <invalidTenantStaffId> <unboundStaffId> <staleTitleAId> <staleTitleBId> <staleCopyAId> <staleCopyBId> <staleCreateSourceId> <collidingRequestId>');
   }
   const parsed = new URL(argv[0]);
   if (!['http:', 'https:'].includes(parsed.protocol) || parsed.pathname !== '/' ||
@@ -36,7 +36,8 @@ function parseArguments(argv) {
     staleTitleBId: argv[21],
     staleCopyAId: argv[22],
     staleCopyBId: argv[23],
-    staleCreateSourceId: argv[24]
+    staleCreateSourceId: argv[24],
+    collidingRequestId: argv[25]
   };
 }
 
@@ -374,10 +375,14 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.keyboard.press('ArrowRight');
     assert.equal(await page.evaluate(() => document.activeElement.dataset.status), 'outstanding_purchase');
     await page.keyboard.press('Enter');
+    const scopedRequests = page.waitForResponse(response =>
+      response.url().includes('/api/asap/staff/title-requests?scope=2') && response.status() === 200);
     await page.locator('#library-scope').selectOption('2');
-    await page.getByRole('button', { name: `Open request ${args.primaryRequestId}` }).waitFor();
+    await scopedRequests;
+    await page.getByText('Other browser library title', { exact: true }).waitFor({ state: 'detached' });
+    await page.getByRole('button', { name: `Open request ${args.primaryRequestId}`, exact: true }).waitFor();
     assert.equal(await page.getByText('Other browser library title', { exact: true }).count(), 0);
-    const open = page.getByRole('button', { name: `Open request ${args.primaryRequestId}` });
+    const open = page.getByRole('button', { name: `Open request ${args.primaryRequestId}`, exact: true });
     await open.click();
     await page.locator('#request-dialog[open]').waitFor();
     await page.keyboard.press('Escape');
@@ -959,13 +964,13 @@ async function runStaleOperationErrorCompletion(browser, args, report) {
     await page.locator('#request-dialog').waitFor({ state: 'hidden' });
     await page.locator('[data-status="suggestion"]').click();
     await page.locator('#claim-filter').selectOption('all');
-    await page.getByRole('button', { name: `Open request ${args.staleTitleBId}` }).click();
+    await page.getByRole('button', { name: `Open request ${args.staleTitleBId}`, exact: true }).click();
     await page.locator('#request-dialog-kicker').filter({ hasText: `Request ${args.staleTitleBId}` }).waitFor();
     await page.keyboard.press('Escape');
     await page.locator('#request-dialog').waitFor({ state: 'hidden' });
     await page.locator('[data-status="pending_hold"]').click();
 
-    await page.getByRole('button', { name: `Open request ${args.resolutionRequestId}` }).click();
+    await page.getByRole('button', { name: `Open request ${args.resolutionRequestId}`, exact: true }).click();
     await page.locator('#request-dialog-kicker').filter({ hasText: `Request ${args.resolutionRequestId}` }).waitFor();
     await page.getByText('Hold placement recovery', { exact: true }).waitFor();
     await fillOperatorResolution(page, true);
@@ -1070,10 +1075,10 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     assert.equal(await page.evaluate(() => document.activeElement.dataset.copyStatus), 'open');
     await page.locator('#additional-copy-claim-filter').selectOption('mine');
     await page.locator('#additional-copy-search').fill('Browser additional copy source');
-    await page.getByRole('button', { name: `Open additional-copy task ${created.id}` }).waitFor();
+    await page.getByRole('button', { name: `Open additional-copy task ${created.id}`, exact: true }).waitFor();
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'additional-copy-grid');
 
-    await page.getByRole('button', { name: `Open additional-copy task ${created.id}` }).click();
+    await page.getByRole('button', { name: `Open additional-copy task ${created.id}`, exact: true }).click();
     await page.locator('#request-dialog[open]').waitFor();
     assert.equal(
       await page.getByRole('link', { name: 'Open source title request' }).getAttribute('href'),
@@ -1150,7 +1155,7 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     await page.locator('#additional-copy-search').fill('');
     await page.locator('#additional-copy-claim-filter').selectOption('all');
     await page.locator('[data-copy-status="closed"]').click();
-    await page.getByRole('button', { name: `Open additional-copy task ${args.invalidClosedCopyId}` }).click();
+    await page.getByRole('button', { name: `Open additional-copy task ${args.invalidClosedCopyId}`, exact: true }).click();
     const [reopenResponse] = await Promise.all([
       page.waitForResponse(candidate =>
         candidate.request().method() === 'POST' &&
@@ -1216,7 +1221,7 @@ async function runScopedBlocked(browser, args, axeSource, report) {
 
     await page.getByRole('button', { name: 'Additional copies' }).click();
     assert.equal(await page.evaluate(() => document.activeElement.id), 'additional-copy-title');
-    await page.getByRole('button', { name: `Open additional-copy task ${args.mobileCopyId}` }).waitFor();
+    await page.getByRole('button', { name: `Open additional-copy task ${args.mobileCopyId}`, exact: true }).waitFor();
     const openTab = page.locator('[data-copy-status="open"]');
     await openTab.focus();
     await page.keyboard.press('ArrowRight');
@@ -1224,11 +1229,11 @@ async function runScopedBlocked(browser, args, axeSource, report) {
     await page.keyboard.press('ArrowLeft');
     assert.equal(await page.evaluate(() => document.activeElement.dataset.copyStatus), 'open');
     await page.keyboard.press('Enter');
-    await page.getByRole('button', { name: `Open additional-copy task ${args.mobileCopyId}` }).waitFor();
+    await page.getByRole('button', { name: `Open additional-copy task ${args.mobileCopyId}`, exact: true }).waitFor();
     await page.locator('#additional-copy-claim-filter').selectOption('mine_unclaimed');
     await assertReadableMobileQueue(page, '#additional-copy-grid');
     await scan(page, axeSource, args.artifactRoot, report, 'mobile', 'additional-copy-scoped-grid');
-    const openCopy = page.getByRole('button', { name: `Open additional-copy task ${args.mobileCopyId}` });
+    const openCopy = page.getByRole('button', { name: `Open additional-copy task ${args.mobileCopyId}`, exact: true });
     await openCopy.click();
     await page.getByText('The source title request is no longer available.', { exact: true }).waitFor();
     const managementResponse = await context.request.get(`${args.baseOrigin}/api/asap/staff/users?orgId=2`);

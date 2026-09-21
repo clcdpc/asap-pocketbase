@@ -417,6 +417,7 @@ public sealed partial class PatronJourneyTests
         startInfo.ArgumentList.Add(seeded.StaleCopyAId.ToString());
         startInfo.ArgumentList.Add(seeded.StaleCopyBId.ToString());
         startInfo.ArgumentList.Add(seeded.StaleCreateSourceId.ToString());
+        startInfo.ArgumentList.Add(seeded.CollidingRequestId.ToString());
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Could not start the staff browser runner.");
@@ -465,6 +466,17 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(report.RootElement.GetProperty("staleMutationCompletions").GetProperty("sameIdRerender").GetBoolean());
             Assert.IsTrue(report.RootElement.GetProperty("staleMutationCompletions").GetProperty("signedOutContext").GetBoolean());
             Assert.IsTrue(report.RootElement.GetProperty("staleMutationCompletions").GetProperty("holdOperationError").GetBoolean());
+        }
+
+        using (var legacyReport = JsonDocument.Parse(
+                   await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "staff-legacy-browser-results.json"))))
+        {
+            var collision = legacyReport.RootElement.GetProperty("requestIdentityCollision");
+            Assert.IsTrue(collision.GetProperty("rowClicks").GetBoolean());
+            Assert.IsTrue(collision.GetProperty("deepLinks").GetBoolean());
+            Assert.IsTrue(collision.GetProperty("notes").GetBoolean());
+            Assert.IsTrue(collision.GetProperty("polarisSearches").GetBoolean());
+            Assert.IsTrue(collision.GetProperty("additionalCopyBibLookup").GetBoolean());
         }
 
         await using var verify = new SqlConnection(databaseConnectionString);
@@ -8394,10 +8406,40 @@ public sealed partial class PatronJourneyTests
                  '2026-09-01T13:04:00', '2026-09-01T13:04:00');
             DECLARE @staleCreateSourceId bigint = SCOPE_IDENTITY();
 
+            DECLARE @collidingRequestId bigint = (
+                SELECT ISNULL(MAX([Id]), 0) + 1000
+                FROM (
+                    SELECT [Id] FROM [asap].[TitleRequest]
+                    UNION ALL
+                    SELECT [Id] FROM [asap].[AdditionalCopyRequest]
+                ) ids);
+            SET IDENTITY_INSERT [asap].[TitleRequest] ON;
+            INSERT INTO [asap].[TitleRequest]
+                ([Id], [LibraryOrganizationId], [Barcode], [Title], [Author], [AutoHold], [MaterialFormatId],
+                 [Status], [CloseReason], [BibId], [Notes], [CreatedUtc], [UpdatedUtc])
+            VALUES
+                (@collidingRequestId, 2, N'20000000002920', N'Browser collision title', N'Collision Title Author',
+                 0, @formatId, N'closed', N'manual', N'92920', N'Title collision note',
+                 '2026-09-01T13:10:00', '2026-09-01T13:10:00');
+            SET IDENTITY_INSERT [asap].[TitleRequest] OFF;
+
+            SET IDENTITY_INSERT [asap].[AdditionalCopyRequest] ON;
+            INSERT INTO [asap].[AdditionalCopyRequest]
+                ([Id], [LibraryOrganizationId], [BibId], [Title], [Author], [Status], [Notes],
+                 [CreatedByStaffUserId], [CreatedByDisplayName], [CreatedUtc], [UpdatedUtc],
+                 [ClosedByStaffUserId], [ClosedByDisplayName], [ClosedUtc])
+            VALUES
+                (@collidingRequestId, 2, N'92921', N'Browser collision additional copy', N'Collision Copy Author',
+                 N'closed', N'Additional-copy collision note', @superId, N'Initial Administrator',
+                 '2026-09-01T13:11:00', '2026-09-01T13:11:00', @superId, N'Initial Administrator',
+                 '2026-09-01T13:12:00');
+            SET IDENTITY_INSERT [asap].[AdditionalCopyRequest] OFF;
+
             SELECT @superId, @staffId, @primaryId, @blockedId, @resolutionId, @otherId,
                    @copySourceId, @invalidClosedCopyId, @invalidClaimantId, @legacyRuleId, @mobileCopyId,
                    @foreignStaffId, @invalidTenantStaffId, @unboundStaffId,
-                   @staleTitleAId, @staleTitleBId, @staleCopyAId, @staleCopyBId, @staleCreateSourceId;
+                   @staleTitleAId, @staleTitleBId, @staleCopyAId, @staleCopyBId, @staleCreateSourceId,
+                   @collidingRequestId;
             """;
         seed.Parameters.AddWithValue("@superObjectId", superObjectId);
         seed.Parameters.AddWithValue("@tenantId", tenantId);
@@ -8429,7 +8471,8 @@ public sealed partial class PatronJourneyTests
             result.GetInt64(15),
             result.GetInt64(16),
             result.GetInt64(17),
-            result.GetInt64(18));
+            result.GetInt64(18),
+            result.GetInt64(19));
     }
 
     private sealed record SeededStaffBrowserState(
@@ -8452,7 +8495,8 @@ public sealed partial class PatronJourneyTests
         long StaleTitleBId,
         long StaleCopyAId,
         long StaleCopyBId,
-        long StaleCreateSourceId);
+        long StaleCreateSourceId,
+        long CollidingRequestId);
 
     private static async Task SeedLibraryAsync()
     {

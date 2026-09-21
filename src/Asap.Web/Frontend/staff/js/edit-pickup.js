@@ -2,9 +2,10 @@ import { currentSuggestions, allSuggestions } from './state.js';
 import { authorizedJson } from './http.js';
 import { showToast, showAlert } from './dialogs.js';
 import { updateRecentSuggestion } from './recent-suggestions.js';
+import { editRequestIdentity, requestIdentity, sameRequestIdentity } from './request-identity.mjs';
 
 let editPickupContext = null;
-let editPickupRequestId = '';
+let editPickupRequestIdentity = requestIdentity({});
 
 function pickupEls() {
   return {
@@ -19,7 +20,7 @@ function pickupEls() {
 
 function resetEditPickupUi() {
   editPickupContext = null;
-  editPickupRequestId = '';
+  editPickupRequestIdentity = requestIdentity({});
   const els = pickupEls();
   if (!els.select) return;
   els.select.replaceChildren();
@@ -66,7 +67,10 @@ function renderEditPickupOptions(context) {
   if (!els.select) return;
 
   editPickupContext = context || {};
-  editPickupRequestId = String(context.requestId || editPickupRequestId || '').trim();
+  editPickupRequestIdentity = requestIdentity({
+    type: 'title_request',
+    id: context.requestId || editPickupRequestIdentity.id
+  });
 
   const branches = context.pickupBranches || [];
   const unavailable = !!context.pickupOptionsUnavailable || branches.length === 0;
@@ -129,7 +133,7 @@ function renderEditPickupOptions(context) {
 
 function updateRequestInMemory(updated) {
   [currentSuggestions, allSuggestions].forEach((list) => {
-    const idx = list.findIndex((row) => row.id === updated.id);
+    const idx = list.findIndex((row) => sameRequestIdentity(row, updated));
     if (idx >= 0) {
       list[idx] = Object.assign({}, list[idx], updated);
     }
@@ -163,8 +167,9 @@ function renderEditPickupLoadError(err) {
 export async function loadEditPickupForRequest(row, options = {}) {
   resetEditPickupUi();
   const els = pickupEls();
-  const requestedId = String((row && row.id) || '').trim();
-  editPickupRequestId = requestedId;
+  const requestedIdentity = requestIdentity(row || {});
+  const requestedId = requestedIdentity.id;
+  editPickupRequestIdentity = requestedIdentity;
 
   if (!row || row.type === 'additional_copy') {
     if (els.group) els.group.classList.add('hidden');
@@ -178,15 +183,15 @@ export async function loadEditPickupForRequest(row, options = {}) {
 
   try {
     const context = await fetchEditPickupOptions(requestedId, options);
-    if (editPickupRequestId !== requestedId) return;
-    if (String((document.getElementById('edit-id') || {}).value || '').trim() !== requestedId) return;
+    if (!sameRequestIdentity(editPickupRequestIdentity, requestedIdentity)) return;
+    if (!sameRequestIdentity(editRequestIdentity(document.getElementById('edit-id')), requestedIdentity)) return;
     renderEditPickupOptions(context || {});
   } catch (err) {
-    if (editPickupRequestId !== requestedId) return;
-    if (String((document.getElementById('edit-id') || {}).value || '').trim() !== requestedId) return;
+    if (!sameRequestIdentity(editPickupRequestIdentity, requestedIdentity)) return;
+    if (!sameRequestIdentity(editRequestIdentity(document.getElementById('edit-id')), requestedIdentity)) return;
     renderEditPickupLoadError(err);
   } finally {
-    if (editPickupRequestId === requestedId && els.refresh) {
+    if (sameRequestIdentity(editPickupRequestIdentity, requestedIdentity) && els.refresh) {
       els.refresh.disabled = !!(editPickupContext && editPickupContext.readOnly);
     }
   }
@@ -194,7 +199,8 @@ export async function loadEditPickupForRequest(row, options = {}) {
 
 async function handleEditPickupSave() {
   const els = pickupEls();
-  const activeId = String(editPickupRequestId || '').trim();
+  const activeIdentity = requestIdentity(editPickupRequestIdentity);
+  const activeId = activeIdentity.id;
   if (!activeId || !els.select || !els.select.value) return;
 
   if (els.save) {
@@ -214,13 +220,13 @@ async function handleEditPickupSave() {
       updateRecentSuggestion(updated);
     }
     showToast(result && result.pickupChanged ? 'Pickup preference updated.' : 'Pickup preference saved.', 'success');
-    if (String(editPickupRequestId || '').trim() === activeId) {
+    if (sameRequestIdentity(editPickupRequestIdentity, activeIdentity)) {
       await loadEditPickupForRequest(updated || { id: activeId });
     }
   } catch (err) {
     if (err.status === 409) {
       await showAlert(err.message || 'Pickup preference changed in Polaris. Reloading pickup options.');
-      if (String(editPickupRequestId || '').trim() === activeId) {
+      if (sameRequestIdentity(editPickupRequestIdentity, activeIdentity)) {
         await loadEditPickupForRequest({ id: activeId });
       }
       return;
@@ -235,7 +241,7 @@ async function handleEditPickupSave() {
 }
 
 async function handleEditPickupRefresh() {
-  if (!editPickupRequestId) return;
+  if (!editPickupRequestIdentity.id) return;
 
   const els = pickupEls();
   if (els.refresh) {
@@ -244,7 +250,7 @@ async function handleEditPickupRefresh() {
   }
 
   try {
-    await loadEditPickupForRequest({ id: editPickupRequestId }, { forceRefresh: true });
+    await loadEditPickupForRequest(editPickupRequestIdentity, { forceRefresh: true });
   } finally {
     if (els.refresh) {
       els.refresh.textContent = 'Refresh';

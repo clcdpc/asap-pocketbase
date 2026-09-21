@@ -18,11 +18,16 @@ for (const [alias, stage] of [
 assert.match(urls, /String\(params\.get\('request'\) \|\| ''\)\.trim\(\)/,
   'request IDs should remain browser strings');
 assert.match(urls, /searchParams\.set\('request', value\)/,
-  'resolved request IDs should replace only the request query value');
+  'resolved request IDs should replace the request query value');
+assert.match(urls, /params\.get\('requestType'\)/,
+  'deep links should retain the request entity type');
+assert.match(urls, /searchParams\.set\('requestType'/,
+  'resolved request identities should write the request entity type');
 assert.match(urls, /url\.pathname \+ url\.search \+ url\.hash/,
   'deep-link replacement should preserve supported navigation and the hash');
 assert.match(gridData, /title-requests/);
 assert.match(gridData, /additional-copies/);
+assert.match(gridData, /requestedRequestTypeFromUrl/);
 assert.match(gridData, /replaceResolvedRequestId\(row\.id/);
 assert.match(gridData, /linked request could not be resolved/);
 assert.doesNotMatch(gridData, /searchParams\.delete\('request'\)/,

@@ -1,5 +1,5 @@
 import { openEdit } from './modals.js';
-import { isSuperAdminStaff, isAdminStaff, getSettingsSectionFromHash, activateSettingsSection, requestedRequestIdFromUrl, replaceResolvedRequestId } from './api.js';
+import { isSuperAdminStaff, isAdminStaff, getSettingsSectionFromHash, activateSettingsSection, requestedRequestIdFromUrl, requestedRequestTypeFromUrl, replaceResolvedRequestId } from './api.js';
 import { authorizedJson, isAbortError } from './http.js';
 import { closeOpenDialogs } from './dialogs.js';
 import { showSettingsAccessDenied, hideSettingsAccessDenied, refreshSettingsView } from './settings.js';
@@ -7,6 +7,7 @@ import { refreshAnalyticsView } from './analytics.js';
 import { normalizeStatus } from './grid-policy.mjs';
 import { escapeAttr } from './grid-utils.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
+import { findWorkflowRow, requestIdentity, sameRequestIdentity } from './request-identity.mjs';
 
 const tabLoads = createLatestLoad();
 
@@ -386,17 +387,18 @@ export async function announceTabLoaded(status, ctx) {
 
   const requestId = requestedRequestIdFromUrl();
   if (requestId) {
-    const expectedType = status === 'additional_copies' ? 'additional_copy' : 'title_request';
-    let row = ctx.allSuggestions.find(r => r.id === requestId && (r.type || 'title_request') === expectedType);
+    const expectedType = requestedRequestTypeFromUrl(status);
+    const identity = requestIdentity({ id: requestId, type: expectedType });
+    let row = findWorkflowRow(identity, ctx.allSuggestions);
     if (!row) {
       try {
-        const collection = status === 'additional_copies' ? 'additional-copies' : 'title-requests';
+        const collection = expectedType === 'additional_copy' ? 'additional-copies' : 'title-requests';
         row = await authorizedJson(`/api/asap/staff/${collection}/${encodeURIComponent(requestId)}`, { cache: 'no-store' });
         if (row?.id) {
-          if (!ctx.allSuggestions.some(item => item.id === row.id)) {
+          if (!ctx.allSuggestions.some(item => sameRequestIdentity(item, row))) {
             ctx.setAllSuggestions([...ctx.allSuggestions, row]);
           }
-          replaceResolvedRequestId(row.id, row.type === 'additional_copy');
+          replaceResolvedRequestId(row.id, requestIdentity(row).type);
         }
       } catch (error) {
         if (!isAbortError(error)) {
@@ -414,7 +416,7 @@ export async function announceTabLoaded(status, ctx) {
       }
     }
     if (row) {
-      openEdit(row.id, row.status, 'Edit', '', 'Save');
+      openEdit(requestIdentity(row), row.status, 'Edit', '', 'Save');
     }
   }
 }

@@ -6,6 +6,7 @@ using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Security;
 using Asap.Web.Infrastructure.Testing;
+using Microsoft.Data.SqlClient;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
@@ -40,7 +41,7 @@ public sealed partial class PatronJourneyTests
         using var response = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", new
         {
             mode, query = mode == "identifier" ? "978-1-234567-89-0" : "Port title",
-            title = "Port title", author = "Port author", requestId = "legacy-id"
+            title = "Port title", author = "Port author", requestType = "title_request", requestId = "legacy-id"
         });
         Assert.AreEqual(HttpStatusCode.OK, response.StatusCode, await response.Content.ReadAsStringAsync());
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
@@ -280,11 +281,90 @@ public sealed partial class PatronJourneyTests
 
         using var response = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", new
         {
-            bibId = "123", requestId = requestId.ToString(), libraryOrgId = "91632"
+            bibId = "123", requestType = "title_request", requestId = requestId.ToString(), libraryOrgId = "91632"
         });
 
         Assert.AreEqual(HttpStatusCode.OK, response.StatusCode, await response.Content.ReadAsStringAsync());
         Assert.AreEqual(2, provider.HoldingsOrganizationIds.Single());
+    }
+
+    [TestMethod]
+    public async Task StaffPortExactBibLookupUsesTypeQualifiedScopeWhenRequestIdsCollide()
+    {
+        using var configurationClient = await StaffPortClientAsync(factory!);
+        await ConfigureStaffPortLibraryAsync(configurationClient, false);
+        await UpsertTestOrganizationAsync(91632, "Staff port collision tests", "SPC");
+        var requestId = await SeedCollidingBibLookupRequestsAsync();
+        var provider = new StaffPortPatronProvider();
+        await using var app = WithStaffPortProviders(provider, provider);
+        using var client = await StaffPortClientAsync(app);
+
+        using var titleResponse = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", new
+        {
+            bibId = "123", requestType = "title_request", requestId = requestId.ToString(), libraryOrgId = "91632"
+        });
+        Assert.AreEqual(HttpStatusCode.OK, titleResponse.StatusCode, await titleResponse.Content.ReadAsStringAsync());
+        Assert.AreEqual(2, provider.HoldingsOrganizationIds.Last());
+
+        using var copyResponse = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", new
+        {
+            bibId = "123", requestType = "additional_copy", requestId = requestId.ToString(), libraryOrgId = "2"
+        });
+        Assert.AreEqual(HttpStatusCode.OK, copyResponse.StatusCode, await copyResponse.Content.ReadAsStringAsync());
+        Assert.AreEqual(91632, provider.HoldingsOrganizationIds.Last());
+
+        using var mismatched = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", new
+        {
+            bibId = "123", requestType = "title_request", requestId = (requestId + 1).ToString()
+        });
+        Assert.AreEqual(HttpStatusCode.NotFound, mismatched.StatusCode, await mismatched.Content.ReadAsStringAsync());
+        Assert.HasCount(2, provider.HoldingsOrganizationIds);
+
+        using var additionalOnly = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", new
+        {
+            bibId = "123", requestType = "additional_copy", requestId = (requestId + 1).ToString()
+        });
+        Assert.AreEqual(HttpStatusCode.OK, additionalOnly.StatusCode, await additionalOnly.Content.ReadAsStringAsync());
+        Assert.AreEqual(91632, provider.HoldingsOrganizationIds.Last());
+
+        using var wrongEntityType = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", new
+        {
+            bibId = "123", requestType = "additional_copy", requestId = (requestId + 2).ToString()
+        });
+        Assert.AreEqual(HttpStatusCode.NotFound, wrongEntityType.StatusCode, await wrongEntityType.Content.ReadAsStringAsync());
+        Assert.HasCount(3, provider.HoldingsOrganizationIds);
+
+        using var missingType = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", new
+        {
+            bibId = "123", requestId = requestId.ToString()
+        });
+        Assert.AreEqual(HttpStatusCode.BadRequest, missingType.StatusCode, await missingType.Content.ReadAsStringAsync());
+        Assert.HasCount(3, provider.HoldingsOrganizationIds);
+
+        var superAdmin = await ReadConfiguredSuperAdminAsync();
+        var staffRow = await CreateCorrectiveStaffAsync(superAdmin, "staff", 91632);
+        try
+        {
+            var actor = await ReadCorrectiveStaffAsync(staffRow);
+            using var staffClient = await StaffPortClientAsync(app, actor);
+            using var ownCopy = await staffClient.PostAsJsonAsync("/api/asap/staff/bib-lookup", new
+            {
+                bibId = "123", requestType = "additional_copy", requestId = requestId.ToString()
+            });
+            Assert.AreEqual(HttpStatusCode.OK, ownCopy.StatusCode, await ownCopy.Content.ReadAsStringAsync());
+            Assert.AreEqual(91632, provider.HoldingsOrganizationIds.Last());
+
+            using var foreignTitle = await staffClient.PostAsJsonAsync("/api/asap/staff/bib-lookup", new
+            {
+                bibId = "123", requestType = "title_request", requestId = requestId.ToString()
+            });
+            Assert.AreEqual(HttpStatusCode.NotFound, foreignTitle.StatusCode, await foreignTitle.Content.ReadAsStringAsync());
+            Assert.HasCount(4, provider.HoldingsOrganizationIds);
+        }
+        finally
+        {
+            await DeactivateCorrectiveStaffAsync(staffRow.Id);
+        }
     }
 
     [TestMethod]
@@ -549,6 +629,49 @@ public sealed partial class PatronJourneyTests
             ["workflow"] = new { suggestionLimit = 1, allowAnyRegisteredCardLogin = crossLibrary,
                 patronCodeEligibilityEnabled = true, allowedPatronCodeIds = new[] { "1" } }
         });
+    }
+
+    private static async Task<long> SeedCollidingBibLookupRequestsAsync()
+    {
+        await using var connection = new SqlConnection(databaseConnectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            DECLARE @requestId bigint = (
+                SELECT ISNULL(MAX([Id]), 0) + 1000
+                FROM (
+                    SELECT [Id] FROM [asap].[TitleRequest]
+                    UNION ALL
+                    SELECT [Id] FROM [asap].[AdditionalCopyRequest]
+                ) ids);
+            DECLARE @formatId bigint = (
+                SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
+
+            SET IDENTITY_INSERT [asap].[TitleRequest] ON;
+            INSERT INTO [asap].[TitleRequest]
+                ([Id], [LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId],
+                 [Status], [BibId], [CreatedUtc], [UpdatedUtc])
+            VALUES
+                (@requestId, 2, N'20000000004901', N'Colliding title request', 0, @formatId,
+                 N'pending_hold', N'123', SYSUTCDATETIME(), SYSUTCDATETIME()),
+                (@requestId + 2, 2, N'20000000004902', N'Title request without additional-copy twin', 0, @formatId,
+                 N'pending_hold', N'123', SYSUTCDATETIME(), SYSUTCDATETIME());
+            SET IDENTITY_INSERT [asap].[TitleRequest] OFF;
+
+            SET IDENTITY_INSERT [asap].[AdditionalCopyRequest] ON;
+            INSERT INTO [asap].[AdditionalCopyRequest]
+                ([Id], [LibraryOrganizationId], [BibId], [Title], [Status], [CreatedUtc], [UpdatedUtc])
+            VALUES
+                (@requestId, 91632, N'123', N'Colliding additional-copy request', N'open',
+                 SYSUTCDATETIME(), SYSUTCDATETIME()),
+                (@requestId + 1, 91632, N'123', N'Additional-copy request without title twin', N'open',
+                 SYSUTCDATETIME(), SYSUTCDATETIME());
+            SET IDENTITY_INSERT [asap].[AdditionalCopyRequest] OFF;
+
+            SELECT @requestId;
+            """;
+        return Convert.ToInt64(await command.ExecuteScalarAsync());
     }
 
     private static StaffSuggestionInput StaffPortSuggestion(string barcode) => new(

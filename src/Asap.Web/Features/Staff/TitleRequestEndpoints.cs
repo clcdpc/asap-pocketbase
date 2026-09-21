@@ -6,7 +6,7 @@ namespace Asap.Web.Features.Staff;
 public static class TitleRequestEndpoints
 {
     public sealed record BibLookupInput(string? BibId, string? Mode, string? Query, string? Title, string? Author,
-        string? RequestId, string? Barcode, string? LibraryOrgId);
+        string? RequestType, string? RequestId, string? Barcode, string? LibraryOrgId);
 
     public static IEndpointRouteBuilder MapTitleRequestEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -47,6 +47,7 @@ public static class TitleRequestEndpoints
         IPatronProvider patrons,
         PatronConfigurationService configurations,
         TitleRequestViewService views,
+        AdditionalCopyService additionalCopies,
         StaffEligibilityService staffEligibility,
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
@@ -86,6 +87,7 @@ public static class TitleRequestEndpoints
                 actor,
                 input,
                 views,
+                additionalCopies,
                 staffEligibility,
                 cancellationToken);
             if (scope.Error is not null)
@@ -157,6 +159,7 @@ public static class TitleRequestEndpoints
         CurrentStaff actor,
         BibLookupInput input,
         TitleRequestViewService views,
+        AdditionalCopyService additionalCopies,
         StaffEligibilityService staffEligibility,
         CancellationToken cancellationToken)
     {
@@ -181,14 +184,27 @@ public static class TitleRequestEndpoints
 
         if (!string.IsNullOrWhiteSpace(input.RequestId))
         {
-            var request = await views.GetAsync(actor, input.RequestId.Trim(), cancellationToken);
-            if (request is null)
+            var requestId = input.RequestId.Trim();
+            var requestType = input.RequestType?.Trim().ToLowerInvariant();
+            if (requestType is null or "")
+            {
+                return BibLookupScopeResult.RequestTypeRequired();
+            }
+            if (requestType is not ("title_request" or "additional_copy"))
+            {
+                return BibLookupScopeResult.InvalidRequestType();
+            }
+
+            var requestOrganizationId = requestType == "title_request"
+                ? (await views.GetAsync(actor, requestId, cancellationToken))?.LibraryOrgId
+                : (await additionalCopies.GetAsync(actor, requestId, null, cancellationToken))?.LibraryOrgId;
+            if (!requestOrganizationId.HasValue)
             {
                 return new BibLookupScopeResult(
                     0,
                     Results.NotFound(new { code = "request_not_found" }));
             }
-            requestedOrganizationId = request.LibraryOrgId;
+            requestedOrganizationId = requestOrganizationId.Value;
         }
 
         var effectiveOrganizationId = actor.Role == "super_admin"
@@ -231,6 +247,14 @@ public static class TitleRequestEndpoints
         public static BibLookupScopeResult Forbidden() => new(
             0,
             Results.Json(new { code = "staff_scope_forbidden" }, statusCode: StatusCodes.Status403Forbidden));
+
+        public static BibLookupScopeResult RequestTypeRequired() => new(
+            0,
+            Results.BadRequest(new { code = "request_type_required" }));
+
+        public static BibLookupScopeResult InvalidRequestType() => new(
+            0,
+            Results.BadRequest(new { code = "invalid_request_type" }));
     }
 
     private static async Task<IResult> ListAsync(
