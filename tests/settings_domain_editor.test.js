@@ -59,7 +59,7 @@ const { JSDOM } = require('jsdom');
           allowedPatronCodeIds: { exists: false, values: [] }
         },
         customFields: [],
-        autoClaimRules: [],
+        autoClaimRules: [{ materialFormatId: '7', staffUserId: '5', active: true }],
         templates: []
       },
       effective: {
@@ -67,8 +67,16 @@ const { JSDOM } = require('jsdom');
         formats: systemFormats,
         customFields: []
       },
-      patronCodeChoices: [{ id: '1', description: 'Adult' }],
-      autoClaimStaff: []
+      patronCodeChoices: [
+        { id: '2', description: 'Zeta' },
+        { id: '1', description: 'Alpha' },
+        { id: '3', description: 'Beta' }
+      ],
+      autoClaimStaff: [
+        { id: '5', displayName: 'Zeta Staff' },
+        { id: '4', displayName: 'alpha staff' },
+        { id: '3', displayName: 'Alpha Staff' }
+      ]
     };
 
     const root = document.getElementById('settings-view');
@@ -125,6 +133,20 @@ const { JSDOM } = require('jsdom');
       assert.strictEqual(document.getElementById(addId).disabled, false);
       assert.ok([...document.querySelectorAll(`#${editorId} [data-domain-editable]`)].some(control => !control.disabled));
     }
+
+    assert.deepStrictEqual(
+      [...document.querySelector('#patron-codes-editor select').options].map(option => option.value),
+      ['', '1', '3', '2']
+    );
+    assert.deepStrictEqual(
+      [...document.querySelectorAll('#format-claim-rules-editor [data-domain-row] select')[1].options]
+        .map(option => option.value),
+      ['3', '4', '5']
+    );
+    assert.strictEqual(
+      document.querySelectorAll('#format-claim-rules-editor [data-domain-row] select')[1].value,
+      '5'
+    );
 
     assert.ok(changes.length >= 5);
     dom.window.close();

@@ -68,7 +68,7 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
         additionalCopyReminderDefault: false, defaultMineUnclaimedFilter: false, version: 'staff-version'
       }
     };
-    const organizations = [{ id: 2, name: 'Library Two' }, { id: 3, name: 'Library Three' }];
+    const organizations = [{ id: 3, name: 'Zeta Library' }, { id: 2, name: 'Alpha Library' }, { id: 4, name: null }];
     const queuePayload = scope => ({
       scope,
       scopeOrganizationId: scope === 'all' ? 1 : Number(scope),
@@ -119,6 +119,18 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
     assert.equal(operationsTab.hidden, false, 'admins should see Operations');
     assert.equal(document.getElementById('operations-view').hidden, false);
     assert.equal(document.getElementById('operations-scope').value, 'all');
+    assert.deepEqual(
+      [...document.getElementById('library-scope').options].map(option => [option.value, option.textContent]),
+      [['all', 'All libraries'], ['2', 'Alpha Library'], ['4', 'Library 4'], ['3', 'Zeta Library']]
+    );
+    assert.deepEqual(
+      [...document.getElementById('additional-copy-library-scope').options].map(option => [option.value, option.textContent]),
+      [['all', 'All libraries'], ['2', 'Alpha Library'], ['4', 'Library 4'], ['3', 'Zeta Library']]
+    );
+    assert.deepEqual(
+      [...document.getElementById('operations-scope').options].map(option => [option.value, option.textContent]),
+      [['all', 'All libraries'], ['2', 'Alpha Library'], ['4', 'Library 4'], ['3', 'Zeta Library']]
+    );
     assert.equal(document.querySelectorAll('#email-operations-table tbody tr').length, 2);
     assert.equal(document.querySelector('#email-operations-table').textContent.includes('<unsafe-error>'), true);
     assert.equal(document.querySelector('#email-operations-table').querySelector('script'), null, 'runtime text must not become markup');

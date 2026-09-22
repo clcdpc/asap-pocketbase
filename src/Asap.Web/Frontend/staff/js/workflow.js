@@ -14,6 +14,12 @@ import {
   replaceRequestParameter,
   replaceStageParameter
 } from './url-utils.js';
+import {
+  organizationDisplayName,
+  pickupBranchDisplayName,
+  sortByDisplayLabel,
+  staffDisplayName
+} from './display-order.js';
 
 const STATUS_LABELS = {
   open: 'Open',
@@ -336,11 +342,16 @@ export function createWorkflowApp() {
   }
 
   function populateScopes(organizations, selectedScope) {
+    const sortedOrganizations = sortByDisplayLabel(
+      organizations,
+      organizationDisplayName,
+      organization => organization.id
+    );
     for (const select of [dom.scope, dom.additionalCopyScope]) {
       if (!select) continue;
       select.replaceChildren(element('option', { value: 'all', text: 'All libraries' }));
-      for (const organization of organizations || []) {
-        select.append(element('option', { value: organization.id, text: organization.name }));
+      for (const organization of sortedOrganizations) {
+        select.append(element('option', { value: organization.id, text: organizationDisplayName(organization) }));
       }
       select.value = selectedScope;
     }
@@ -348,13 +359,13 @@ export function createWorkflowApp() {
       const operationScope = state.staff?.role === 'super_admin'
         ? state.operationsScope
         : String(state.staff?.organizationId || selectedScope);
-      const knownScopes = new Set(['all', ...(organizations || []).map(item => String(item.id))]);
+      const knownScopes = new Set(['all', ...sortedOrganizations.map(item => String(item.id))]);
       const reconciledScope = knownScopes.has(String(operationScope)) ? String(operationScope) : String(selectedScope);
       dom.operationsScope.replaceChildren(element('option', { value: 'all', text: 'All libraries' }));
-      for (const organization of organizations || []) {
+      for (const organization of sortedOrganizations) {
         dom.operationsScope.append(element('option', {
           value: organization.id,
-          text: organization.name || organization.displayName || String(organization.id)
+          text: organizationDisplayName(organization)
         }));
       }
       dom.operationsScope.value = reconciledScope;
@@ -878,11 +889,11 @@ export function createWorkflowApp() {
       });
       if (!load.isCurrent() || !isCurrentDialogRequest(request, 'additional_copy')) return;
       const select = element('select', { 'aria-label': 'Assign additional-copy task' });
-      const candidates = result.candidates || [];
+      const candidates = sortByDisplayLabel(result.candidates, staffDisplayName, candidate => candidate.id);
       for (const candidate of candidates) {
         select.append(element('option', {
           value: candidate.id,
-          text: candidate.displayName
+          text: staffDisplayName(candidate)
         }));
       }
       const form = element('form', { className: 'inline-form' }, [
@@ -1372,11 +1383,11 @@ export function createWorkflowApp() {
       });
       if (!load.isCurrent() || !isCurrentDialogRequest(request, 'title_request')) return;
       const select = element('select', { 'aria-label': 'Assign to staff member' });
-      const candidates = result.candidates || [];
+      const candidates = sortByDisplayLabel(result.candidates, staffDisplayName, candidate => candidate.id);
       for (const candidate of candidates) {
         select.append(element('option', {
           value: candidate.id,
-          text: candidate.displayName
+          text: staffDisplayName(candidate)
         }));
       }
       const form = element('form', { className: 'inline-form' }, [
@@ -1412,8 +1423,9 @@ export function createWorkflowApp() {
         body: { forceRefresh: false }
       });
       const select = element('select', { 'aria-label': 'Preferred pickup branch' });
-      for (const branch of options.pickupBranches || []) {
-        select.append(element('option', { value: branch.id, text: branch.name }));
+      const branches = sortByDisplayLabel(options.pickupBranches, pickupBranchDisplayName, branch => branch.id);
+      for (const branch of branches) {
+        select.append(element('option', { value: branch.id, text: pickupBranchDisplayName(branch) }));
       }
       if (options.selectedPickupBranchId) select.value = String(options.selectedPickupBranchId);
       const form = element('form', { className: 'inline-form' }, [

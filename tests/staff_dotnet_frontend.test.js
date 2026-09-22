@@ -8,6 +8,7 @@ const requiredFiles = [
   'styles.css',
   'app.js',
   path.join('js', 'http.js'),
+  path.join('js', 'display-order.js'),
   path.join('js', 'workflow.js'),
   path.join('js', 'url-utils.js'),
   path.join('js', 'analytics.js')
@@ -20,11 +21,12 @@ for (const file of requiredFiles) {
 const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
 const http = fs.readFileSync(path.join(root, 'js', 'http.js'), 'utf8');
+const displayOrder = fs.readFileSync(path.join(root, 'js', 'display-order.js'), 'utf8');
 const workflow = fs.readFileSync(path.join(root, 'js', 'workflow.js'), 'utf8');
 const urlUtils = fs.readFileSync(path.join(root, 'js', 'url-utils.js'), 'utf8');
 const analytics = fs.readFileSync(path.join(root, 'js', 'analytics.js'), 'utf8');
 const styles = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
-const all = `${index}\n${app}\n${http}\n${workflow}\n${urlUtils}\n${analytics}`;
+const all = `${index}\n${app}\n${http}\n${displayOrder}\n${workflow}\n${urlUtils}\n${analytics}`;
 
 assert.match(index, /Sign in with Microsoft/);
 assert.match(index, /gridjs\.umd\.js/);
@@ -48,6 +50,8 @@ assert.match(workflow, /resetAnalytics/);
 assert.match(analytics, /\/api\/asap\/staff\/analytics\?/);
 assert.match(analytics, /latestLoads\.begin\('analytics'\)/);
 assert.match(analytics, /analyticsRange = 'lastMonth'/);
+assert.match(displayOrder, /sortByDisplayLabel/);
+assert.match(displayOrder, /sensitivity: 'base'/);
 assert.match(index, /id="additional-copy-create-dialog"/);
 assert.match(index, /id="additional-copy-reminder"/);
 assert.match(urlUtils, /searchParams\.set\('stage', 'additional_copies'\)/);
