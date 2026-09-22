@@ -6,6 +6,7 @@ import { refreshCurrentStaffView, refreshStaffStatus } from './grid.js';
 import { collectSettingsPolaris, renderLibraryParticipationCheckboxes, collectEnabledLibraryIds } from './settings/polaris-fields.js';
 import { syncPolarisOrganizations } from './settings/polaris-sync.js';
 import { saveSettings } from './settings/save-controller.js';
+import { saveThenTestPolaris } from './settings/polaris-test.js';
 
 export { collectSettingsPolaris, renderLibraryParticipationCheckboxes, collectEnabledLibraryIds };
 
@@ -15,9 +16,23 @@ document.getElementById('btn-test-polaris').addEventListener('click', async (e) 
   const btn = e.currentTarget;
 
   btn.disabled = true;
-  setInlineResult(resSpan, 'Testing Polaris...', 'ml-2 text-muted');
+  setInlineResult(resSpan, 'Saving Polaris settings...', 'ml-2 text-muted');
   try {
-    const result = await authorizedJson('/api/asap/staff/polaris/test', { method: 'POST' });
+    const outcome = await saveThenTestPolaris(
+      () => saveSettings({
+        button: btn,
+        pendingText: 'Saving Polaris settings...',
+        successText: 'Polaris settings saved.',
+        clearDelay: 0
+      }),
+      () => {
+        btn.disabled = true;
+        setInlineResult(resSpan, 'Settings saved. Testing Polaris...', 'ml-2 text-muted');
+        return authorizedJson('/api/asap/staff/polaris/test', { method: 'POST' });
+      }
+    );
+    if (!outcome.saved) return;
+    const result = outcome.result;
     setInlineResult(
       resSpan,
       result.code === 'polaris_connected' ? 'Success! Polaris API is working.' : (result.message || 'Polaris is unavailable.'),
@@ -39,19 +54,6 @@ if (syncOrganizationsBtn) {
       await syncPolarisOrganizations({ button: syncOrganizationsBtn });
     } catch (err) {
     }
-  });
-}
-
-const syncMaterialTypesBtn = document.getElementById('btn-sync-material-types');
-if (syncMaterialTypesBtn) {
-  syncMaterialTypesBtn.addEventListener('click', async (e) => {
-    e.preventDefault();
-    const resultEl = document.getElementById('material-types-sync-result');
-    setInlineResult(
-      resultEl,
-      'Material formats are maintained in SQL-backed Format settings; no separate Polaris sync is required.',
-      'ml-2 text-muted'
-    );
   });
 }
 

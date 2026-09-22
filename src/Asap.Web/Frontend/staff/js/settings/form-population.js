@@ -6,7 +6,7 @@ import { renderDuplicateStatusLabelSettings } from './duplicate-labels.js';
 import { renderOptionListEditor, renderPatronFormatRulesEditor, updatePublicationOptionsUi } from '../settings-ui.js';
 import { populateEmailTemplateForms } from '../settings-templates.js';
 import { renderAdditionalFieldsEditor } from '../settings-additional-fields.js';
-import { renderLibraryParticipationCheckboxes } from './polaris-fields.js';
+import { populatePolarisSettingsForm, renderLibraryParticipationCheckboxes } from './polaris-fields.js';
 import { renderPatronCodeEligibilityOptions, setPatronCodeEligibilityMode, updatePatronCodesStatusUi } from './patron-codes.js';
 import { updateSaveButtonText } from './save-ui.js';
 
@@ -67,7 +67,7 @@ export function applyLibrarySettingsToForm(settings) {
   settings = settings || {};
   const isOverride = !!settings.isOverride;
   const emails = settings.emails || {};
-  const polaris = settings.polaris || {};
+  const polaris = (settings.stored && settings.stored.polaris) || settings.polaris || {};
   setCurrentFormatClaimRules(settings.formatClaimRules || []);
   setFormatClaimStaffOptions(settings.formatClaimStaffOptions || []);
   setLeapBibUrlPattern(settings.leapBibUrlPattern || '');
@@ -132,14 +132,7 @@ export function applyLibrarySettingsToForm(settings) {
   setFieldValue('smtp-from', emails.fromAddress || '');
   setFieldValue('smtp-from-name', emails.fromName || '');
   if (currentLibraryContextOrgId === 'system') {
-    setFieldValue('polaris-host', polaris.host || '');
-    setFieldValue('polaris-api-key', polaris.apiKey || '');
-    setFieldValue('polaris-access-id', polaris.accessId || '');
-    setFieldValue('polaris-domain', polaris.staffDomain || '');
-    setFieldValue('polaris-admin-user', polaris.adminUser || '');
-    setFieldValue('polaris-admin-pass', polaris.adminPassword || '');
-    setFieldValue('polaris-workstation-id', polaris.workstationId || '1');
-
+    populatePolarisSettingsForm(polaris);
   }
   const fileInput = document.getElementById('ui-logo-file');
   if (fileInput) fileInput.value = '';

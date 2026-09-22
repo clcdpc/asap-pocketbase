@@ -10,13 +10,13 @@ import { syncPolarisOrganizations } from './polaris-sync.js';
 import { loadStaffAccessSettings } from './staff-access.js';
 import { registerSettingsRefreshHandlers } from './refresh.js';
 import { createLatestLoad } from '../../../shared/latest-load.js';
+import { isPolarisConfigured, populatePolarisSettingsForm } from './polaris-fields.js';
 
 const adminSettingsSections = ['start', 'smtp', 'staff', 'templates', 'workflow', 'patron'];
 const settingsLoads = createLatestLoad();
 
 function maybeSyncPolarisOrganizations(polaris) {
-  const hasPolarisCredentials = !!(polaris.host && polaris.apiKey && polaris.accessId && polaris.staffDomain && polaris.adminUser && polaris.adminPassword);
-  if (hasPolarisCredentials && (organizationsStatus === 'not_loaded' || organizationsStatus === 'error')) {
+  if (isPolarisConfigured(polaris) && (organizationsStatus === 'not_loaded' || organizationsStatus === 'error')) {
     syncPolarisOrganizations().catch(() => {});
   }
 }
@@ -102,7 +102,7 @@ export function hideSettingsAccessDenied() {
 }
 
 function populateSystemSettingsForms(settings) {
-  const polaris = (settings && settings.polaris) || {};
+  const polaris = (settings && settings.stored && settings.stored.polaris) || (settings && settings.polaris) || {};
   const emails = (settings && settings.emails) || {};
 
   populatePostmarkSettingsForm(emails);
@@ -116,16 +116,6 @@ function populatePostmarkSettingsForm(emails) {
 
   setFieldValue('smtp-from', emails.fromAddress || '');
   setFieldValue('smtp-from-name', emails.fromName || '');
-}
-
-function populatePolarisSettingsForm(polaris) {
-  setFieldValue('polaris-host', polaris.host || '');
-  setFieldValue('polaris-api-key', polaris.apiKey || '');
-  setFieldValue('polaris-access-id', polaris.accessId || '');
-  setFieldValue('polaris-domain', polaris.staffDomain || '');
-  setFieldValue('polaris-admin-user', polaris.adminUser || '');
-  setFieldValue('polaris-admin-pass', polaris.adminPassword || '');
-  setFieldValue('polaris-workstation-id', polaris.workstationId || '1');
 }
 
 export async function loadSettings(options = {}) {
@@ -153,7 +143,8 @@ export async function loadSettings(options = {}) {
       return;
     }
 
-    const polaris = (loadedLibrarySettings && loadedLibrarySettings.polaris) || {};
+    const polaris = (loadedLibrarySettings && loadedLibrarySettings.stored && loadedLibrarySettings.stored.polaris) ||
+      (loadedLibrarySettings && loadedLibrarySettings.polaris) || {};
     maybeSyncPolarisOrganizations(polaris);
     updateWorkflowSettingsSummary(loadedLibrarySettings);
 

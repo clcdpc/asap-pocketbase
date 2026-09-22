@@ -169,7 +169,7 @@ function _serializeSettingsState(validate = false) {
   };
 
   if (isSystemContext) {
-    payload.polaris = collectSettingsPolaris();
+    payload.polaris = collectSettingsPolaris(validate);
     payload.staffUrl = staffUrl;
     payload.leapBibUrlPattern = nextLeapBibUrlPattern;
     payload.leapPatronUrlPattern = nextLeapPatronUrlPattern;

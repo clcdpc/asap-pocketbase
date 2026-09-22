@@ -307,20 +307,50 @@
                     <div class="form-group col-md-6"><label for="polaris-host">Host</label><input type="text"
                         id="polaris-host" class="form-control">
                     </div>
-                    <div class="form-group col-md-6"><label for="polaris-api-key">API key</label><input type="password"
-                        id="polaris-api-key" class="form-control"></div>
+                    <div class="form-group col-md-6">
+                      <label for="polaris-api-key">API key</label>
+                      <input type="password" id="polaris-api-key" class="form-control" autocomplete="new-password"
+                        aria-describedby="polaris-api-key-help polaris-api-key-status">
+                      <small id="polaris-api-key-help" class="form-text text-muted">Leave blank to keep the saved API key. A new value replaces it.</small>
+                      <div id="polaris-api-key-status" class="small text-dark hidden mt-1" role="status">An API key is configured.</div>
+                      <div class="custom-control custom-checkbox mt-2">
+                        <input type="checkbox" class="custom-control-input" id="polaris-clear-api-key">
+                        <label class="custom-control-label" for="polaris-clear-api-key">Clear saved API key</label>
+                      </div>
+                    </div>
                     <div class="form-group col-md-6"><label for="polaris-access-id">Access ID</label><input type="text"
                         id="polaris-access-id" class="form-control"></div>
                     <div class="form-group col-md-6"><label for="polaris-domain">Staff domain</label><input type="text"
                         id="polaris-domain" class="form-control"></div>
                     <div class="form-group col-md-6"><label for="polaris-admin-user">System staff username</label><input
                         type="text" id="polaris-admin-user" class="form-control"></div>
-                    <div class="form-group col-md-6"><label for="polaris-admin-pass">System staff password</label><input
-                        type="password" id="polaris-admin-pass" class="form-control"></div>
+                    <div class="form-group col-md-6">
+                      <label for="polaris-admin-pass">System staff password</label>
+                      <input type="password" id="polaris-admin-pass" class="form-control" autocomplete="new-password"
+                        aria-describedby="polaris-admin-pass-help polaris-admin-pass-status">
+                      <small id="polaris-admin-pass-help" class="form-text text-muted">Leave blank to keep the saved password. A new value replaces it.</small>
+                      <div id="polaris-admin-pass-status" class="small text-dark hidden mt-1" role="status">A system staff password is configured.</div>
+                      <div class="custom-control custom-checkbox mt-2">
+                        <input type="checkbox" class="custom-control-input" id="polaris-clear-admin-pass">
+                        <label class="custom-control-label" for="polaris-clear-admin-pass">Clear saved system staff password</label>
+                      </div>
+                    </div>
                     <div class="form-group col-md-6" id="polaris-workstation-id-group">
                       <label for="polaris-workstation-id">Polaris workstation ID</label>
-                      <input type="text" id="polaris-workstation-id" class="form-control">
+                      <input type="number" min="1" id="polaris-workstation-id" class="form-control">
                       <small class="form-text text-muted">System workstation ID used for Polaris patron and hold operations.</small>
+                    </div>
+                    <div class="form-group col-md-6">
+                      <label for="polaris-system-user-id">System Polaris user ID</label>
+                      <input type="number" min="1" id="polaris-system-user-id" class="form-control">
+                    </div>
+                    <div class="form-group col-md-6">
+                      <label for="polaris-requesting-org-id">Requesting organization ID</label>
+                      <input type="number" min="1" id="polaris-requesting-org-id" class="form-control">
+                    </div>
+                    <div class="form-group col-md-6">
+                      <label for="polaris-pickup-org-id">Pickup organization ID</label>
+                      <input type="number" min="1" id="polaris-pickup-org-id" class="form-control">
                     </div>
                   </div>
                   <div>
@@ -337,13 +367,6 @@
                     <div id="patron-codes-status-message" class="alert alert-info small mt-3 mb-0">
                       Polaris patron codes have not been loaded yet.
                     </div>
-                  </div>
-                  <div class="settings-maintenance mt-4 border-top pt-3">
-                    <div class="font-weight-bold mb-1">Material type cache</div>
-                    <p class="small text-muted mb-2">ASAP caches Polaris material types to show human-readable format labels in search results. Use this sync to refresh the cache if new material types are added to Polaris.</p>
-                    <button type="button" id="btn-sync-material-types" class="btn btn-outline-info btn-sm">Sync Polaris
-                      material types now</button>
-                    <span id="material-types-sync-result" class="ml-2"></span>
                   </div>
                 </div>
               </div>

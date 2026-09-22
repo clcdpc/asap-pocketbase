@@ -1,6 +1,26 @@
 import { organizationsStatus, lastWorkflowEnabledList } from '../state.js';
 import { authorizedJson } from '../http.js';
-import { getFieldValue, updateOrganizationsStatusUi } from '../api.js';
+import { getFieldValue, getFieldChecked, setFieldValue, setFieldChecked, setVisible } from '../app/dom.js';
+import { updateOrganizationsStatusUi } from '../app/misc.js';
+
+const polarisTextFields = [
+  ['host', 'polaris-host'],
+  ['accessId', 'polaris-access-id'],
+  ['staffDomain', 'polaris-domain'],
+  ['adminUser', 'polaris-admin-user']
+];
+
+const polarisIntegerFields = [
+  ['workstationId', 'polaris-workstation-id', 'Polaris workstation ID'],
+  ['systemPolarisUserId', 'polaris-system-user-id', 'System Polaris user ID'],
+  ['organizationIdForRequests', 'polaris-requesting-org-id', 'Requesting organization ID'],
+  ['pickupOrganizationId', 'polaris-pickup-org-id', 'Pickup organization ID']
+];
+
+const polarisSecretFields = [
+  ['polaris-api-key', 'polaris-clear-api-key'],
+  ['polaris-admin-pass', 'polaris-clear-admin-pass']
+];
 
 function renderMessage(container, className, text) {
   const div = document.createElement('div');
@@ -72,22 +92,72 @@ function renderLibraryParticipationTable(container, orgs) {
   container.replaceChildren(table);
 }
 
-export function collectSettingsPolaris() {
-  return {
-    host: getFieldValue('polaris-host'),
-    apiKey: getFieldValue('polaris-api-key'),
-    accessId: getFieldValue('polaris-access-id'),
-    staffDomain: getFieldValue('polaris-domain'),
-    adminUser: getFieldValue('polaris-admin-user'),
-    adminPassword: getFieldValue('polaris-admin-pass'),
-    langId: "1033",
-    appId: "100",
-    orgId: "1",
-    pickupOrgId: "0",
-    requestingOrgId: "3",
-    workstationId: getFieldValue('polaris-workstation-id') || "1",
-    userId: "1"
-  };
+export function collectSettingsPolaris(validate = false) {
+  const result = {};
+
+  polarisTextFields.forEach(([key, id]) => {
+    if (document.getElementById(id)) {
+      result[key] = getFieldValue(id).trim();
+    }
+  });
+
+  polarisIntegerFields.forEach(([key, id, label]) => {
+    if (!document.getElementById(id)) return;
+    const raw = getFieldValue(id).trim();
+    if (!raw) {
+      result[key] = null;
+      return;
+    }
+    const value = Number(raw);
+    if (validate && (!Number.isInteger(value) || value < 1)) {
+      throw new Error(`${label} must be a number greater than 0.`);
+    }
+    result[key] = Number.isInteger(value) ? value : raw;
+  });
+
+  const apiKey = getFieldValue('polaris-api-key').trim();
+  const adminPassword = getFieldValue('polaris-admin-pass').trim();
+  if (apiKey) result.apiKey = apiKey;
+  if (adminPassword) result.adminPassword = adminPassword;
+  if (document.getElementById('polaris-clear-api-key')) {
+    result.clearApiKey = getFieldChecked('polaris-clear-api-key');
+  }
+  if (document.getElementById('polaris-clear-admin-pass')) {
+    result.clearAdminPassword = getFieldChecked('polaris-clear-admin-pass');
+  }
+  return result;
+}
+
+export function populatePolarisSettingsForm(polaris) {
+  polaris = polaris || {};
+  polarisTextFields.concat(polarisIntegerFields).forEach(([key, id]) => {
+    setFieldValue(id, polaris[key] ?? '');
+  });
+  setFieldValue('polaris-api-key', '');
+  setFieldValue('polaris-admin-pass', '');
+  setFieldChecked('polaris-clear-api-key', false);
+  setFieldChecked('polaris-clear-admin-pass', false);
+  setVisible('polaris-api-key-status', !!polaris.hasApiKey);
+  setVisible('polaris-admin-pass-status', !!polaris.hasAdminPassword);
+}
+
+export function isPolarisConfigured(polaris) {
+  return !!(polaris && polaris.host && polaris.accessId && polaris.staffDomain && polaris.adminUser &&
+    polaris.hasApiKey && polaris.hasAdminPassword);
+}
+
+export function bindPolarisSecretControls() {
+  polarisSecretFields.forEach(([inputId, clearId]) => {
+    const input = document.getElementById(inputId);
+    const clear = document.getElementById(clearId);
+    if (!input || !clear) return;
+    clear.addEventListener('change', () => {
+      if (clear.checked) input.value = '';
+    });
+    input.addEventListener('input', () => {
+      if (input.value) clear.checked = false;
+    });
+  });
 }
 
 export async function renderLibraryParticipationCheckboxes() {

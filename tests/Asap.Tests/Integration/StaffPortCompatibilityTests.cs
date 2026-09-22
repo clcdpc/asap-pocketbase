@@ -593,6 +593,159 @@ public sealed partial class PatronJourneyTests
         }
     }
 
+    [TestMethod]
+    public async Task StaffPortPolarisSettingsRoundTripCanonicalValuesAndWriteOnlySecrets()
+    {
+        using var client = await StaffPortClientAsync(factory!);
+        var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var protector = factory.Services.GetRequiredService<IntegrationCredentialProtector>();
+        string? originalHost;
+        string? originalAccessId;
+        string? originalApiKey;
+        string? originalStaffDomain;
+        string? originalAdminUser;
+        string? originalAdminPassword;
+        int? originalWorkstationId;
+        int? originalSystemUserId;
+        int? originalRequestingOrganizationId;
+        int? originalPickupOrganizationId;
+        string? originalLoginPrompt;
+
+        await using (var seedContext = await contexts.CreateDbContextAsync())
+        {
+            var polaris = await seedContext.PolarisSettings.SingleAsync(row => row.OrganizationId == 1);
+            var patron = await seedContext.PatronSettings.SingleAsync(row => row.OrganizationId == 1);
+            originalHost = polaris.Host;
+            originalAccessId = polaris.AccessId;
+            originalApiKey = polaris.ProtectedApiKey;
+            originalStaffDomain = polaris.StaffDomain;
+            originalAdminUser = polaris.AdminUser;
+            originalAdminPassword = polaris.ProtectedAdminPassword;
+            originalWorkstationId = polaris.WorkstationId;
+            originalSystemUserId = polaris.SystemPolarisUserId;
+            originalRequestingOrganizationId = polaris.OrganizationIdForRequests;
+            originalPickupOrganizationId = polaris.PickupOrganizationId;
+            originalLoginPrompt = patron.LoginPrompt;
+
+            polaris.Host = "https://polaris-settings.invalid";
+            polaris.AccessId = "settings-access";
+            polaris.ProtectedApiKey = protector.Protect("settings-api-secret");
+            polaris.StaffDomain = "SETTINGS";
+            polaris.AdminUser = "settings-admin";
+            polaris.ProtectedAdminPassword = protector.Protect("settings-admin-secret");
+            polaris.WorkstationId = 73;
+            polaris.SystemPolarisUserId = 4201;
+            polaris.OrganizationIdForRequests = 731;
+            polaris.PickupOrganizationId = 910;
+            await seedContext.SaveChangesAsync();
+        }
+
+        try
+        {
+            using var loaded = await ReadSettingsDocumentAsync(client, "system");
+            var storedPolaris = loaded.RootElement.GetProperty("stored").GetProperty("polaris");
+            Assert.AreEqual(73, storedPolaris.GetProperty("workstationId").GetInt32());
+            Assert.AreEqual(4201, storedPolaris.GetProperty("systemPolarisUserId").GetInt32());
+            Assert.AreEqual(731, storedPolaris.GetProperty("organizationIdForRequests").GetInt32());
+            Assert.AreEqual(910, storedPolaris.GetProperty("pickupOrganizationId").GetInt32());
+            Assert.IsTrue(storedPolaris.GetProperty("hasApiKey").GetBoolean());
+            Assert.IsTrue(storedPolaris.GetProperty("hasAdminPassword").GetBoolean());
+            Assert.DoesNotContain("settings-api-secret", loaded.RootElement.GetRawText());
+            Assert.DoesNotContain("settings-admin-secret", loaded.RootElement.GetRawText());
+
+            using var unrelatedSave = await SaveSettingsDocumentAsync(client, loaded.RootElement, "system",
+                new Dictionary<string, object?>
+                {
+                    ["ui_text"] = new { loginPrompt = "Unrelated Polaris round-trip setting" }
+                });
+            await AssertPolarisValuesAsync(73, 4201, 731, 910, "settings-api-secret", "settings-admin-secret");
+
+            using var afterUnrelated = await ReadSettingsDocumentAsync(client, "system");
+            using var blankSecretSave = await SaveSettingsDocumentAsync(client, afterUnrelated.RootElement, "system",
+                new Dictionary<string, object?>
+                {
+                    ["polaris"] = new
+                    {
+                        host = "https://polaris-settings.invalid",
+                        accessId = "settings-access",
+                        staffDomain = "SETTINGS",
+                        adminUser = "settings-admin",
+                        workstationId = 73,
+                        systemPolarisUserId = 4201,
+                        organizationIdForRequests = 731,
+                        pickupOrganizationId = 910,
+                        apiKey = "",
+                        adminPassword = "",
+                        clearApiKey = false,
+                        clearAdminPassword = false
+                    }
+                });
+            await AssertPolarisValuesAsync(73, 4201, 731, 910, "settings-api-secret", "settings-admin-secret");
+
+            using var afterBlank = await ReadSettingsDocumentAsync(client, "system");
+            using var oneIdSave = await SaveSettingsDocumentAsync(client, afterBlank.RootElement, "system",
+                new Dictionary<string, object?>
+                {
+                    ["polaris"] = new { organizationIdForRequests = 732 }
+                });
+            await AssertPolarisValuesAsync(73, 4201, 732, 910, "settings-api-secret", "settings-admin-secret");
+
+            using var afterId = await ReadSettingsDocumentAsync(client, "system");
+            using var replaceApi = await SaveSettingsDocumentAsync(client, afterId.RootElement, "system",
+                new Dictionary<string, object?>
+                {
+                    ["polaris"] = new { apiKey = "replacement-api-secret", adminPassword = "" }
+                });
+            await AssertPolarisValuesAsync(73, 4201, 732, 910, "replacement-api-secret", "settings-admin-secret");
+
+            using var afterApi = await ReadSettingsDocumentAsync(client, "system");
+            using var clearAdmin = await SaveSettingsDocumentAsync(client, afterApi.RootElement, "system",
+                new Dictionary<string, object?>
+                {
+                    ["polaris"] = new { clearAdminPassword = true }
+                });
+            await AssertPolarisValuesAsync(73, 4201, 732, 910, "replacement-api-secret", null);
+
+            async Task AssertPolarisValuesAsync(
+                int workstationId,
+                int systemUserId,
+                int requestingOrganizationId,
+                int pickupOrganizationId,
+                string? apiKey,
+                string? adminPassword)
+            {
+                await using var assertionContext = await contexts.CreateDbContextAsync();
+                var row = await assertionContext.PolarisSettings.AsNoTracking()
+                    .SingleAsync(item => item.OrganizationId == 1);
+                Assert.AreEqual(workstationId, row.WorkstationId);
+                Assert.AreEqual(systemUserId, row.SystemPolarisUserId);
+                Assert.AreEqual(requestingOrganizationId, row.OrganizationIdForRequests);
+                Assert.AreEqual(pickupOrganizationId, row.PickupOrganizationId);
+                Assert.AreEqual(apiKey, row.ProtectedApiKey is null ? null : protector.Unprotect(row.ProtectedApiKey));
+                Assert.AreEqual(adminPassword,
+                    row.ProtectedAdminPassword is null ? null : protector.Unprotect(row.ProtectedAdminPassword));
+            }
+        }
+        finally
+        {
+            await using var restoreContext = await contexts.CreateDbContextAsync();
+            var polaris = await restoreContext.PolarisSettings.SingleAsync(row => row.OrganizationId == 1);
+            var patron = await restoreContext.PatronSettings.SingleAsync(row => row.OrganizationId == 1);
+            polaris.Host = originalHost;
+            polaris.AccessId = originalAccessId;
+            polaris.ProtectedApiKey = originalApiKey;
+            polaris.StaffDomain = originalStaffDomain;
+            polaris.AdminUser = originalAdminUser;
+            polaris.ProtectedAdminPassword = originalAdminPassword;
+            polaris.WorkstationId = originalWorkstationId;
+            polaris.SystemPolarisUserId = originalSystemUserId;
+            polaris.OrganizationIdForRequests = originalRequestingOrganizationId;
+            polaris.PickupOrganizationId = originalPickupOrganizationId;
+            patron.LoginPrompt = originalLoginPrompt;
+            await restoreContext.SaveChangesAsync();
+        }
+    }
+
     private WebApplicationFactory<Program> WithStaffPortProviders(IStaffPolarisProvider staff, IPatronProvider? patron = null) =>
         factory!.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
         {

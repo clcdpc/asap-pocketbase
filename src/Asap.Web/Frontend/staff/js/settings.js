@@ -20,8 +20,11 @@ import { handleOptionListClick, addOptionListRow } from './settings-ui.js';
 import { saveSettings, discardLibrarySettingsChanges } from './settings/save-controller.js';
 import { toggleTimeoutGroup, toggleHoldPickupTimeoutGroup, togglePendingHoldTimeoutGroup, toggleAdditionalCopyTimeoutGroup, toggleCommonAuthorsGroup } from './settings/toggles.js';
 import { refreshSettingsView, loadStaffConfig } from './settings/loader.js';
+import { bindPolarisSecretControls } from './settings/polaris-fields.js';
 import './settings-labels.js';
 import './settings-polaris.js';
+
+bindPolarisSecretControls();
 
 settingsForm.addEventListener('submit', async (e) => {
   e.preventDefault();

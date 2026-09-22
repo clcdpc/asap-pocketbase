@@ -1,7 +1,7 @@
 import { isRequestCanceledError, updateSaveBarState, markSettingsClean, getFieldValue, getFieldChecked } from '../api.js';
 import { authorizedJson } from '../http.js';
 import { showToast } from '../dialogs.js';
-import { settingsForm, currentLibraryContextOrgId, currentSettingsSection, initialSettingsSnapshot, settingsDirty, setSettingsSaving, setSettingsLoading, setInitialSettingsSnapshot, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId } from '../state.js';
+import { settingsForm, currentLibraryContextOrgId, currentSettingsSection, initialSettingsSnapshot, settingsDirty, setSettingsSaving, setSettingsLoading, setInitialSettingsSnapshot, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, libraryContextLoadSerial } from '../state.js';
 import { refreshSettingsView, loadStaffConfig } from './refresh.js';
 import { loadStaffUsers } from '../settings-users.js';
 import { cloneLibrarySettingsSnapshot, captureSettingsBaseline, serializeSettingsState, buildSettingsPayload } from './serialize-save.js';
@@ -14,6 +14,9 @@ export async function saveSettings(options = {}) {
   const msg = document.getElementById('settings-msg');
   let saveHadError = false;
   let saveSucceeded = false;
+  let saveSuperseded = false;
+  const saveContextOrgId = currentLibraryContextOrgId;
+  const saveContextSerial = libraryContextLoadSerial;
 
   setSettingsSaving(true);
   updateSaveBarState('saving');
@@ -96,6 +99,11 @@ export async function saveSettings(options = {}) {
     });
 
     await libraryPromise;
+    saveSucceeded = true;
+    if (saveContextOrgId !== currentLibraryContextOrgId || saveContextSerial !== libraryContextLoadSerial) {
+      saveSuperseded = true;
+      return false;
+    }
     captureSettingsBaseline();
     msg.textContent = options.successText || 'Settings saved.';
     msg.className = 'mt-2 font-weight-bold text-success';
@@ -105,10 +113,19 @@ export async function saveSettings(options = {}) {
     // Clear the data-loaded flag so library participation checkboxes re-render after save
     const libCheckboxContainer = document.getElementById('enabled-libraries-checkbox-container');
     if (libCheckboxContainer) libCheckboxContainer.removeAttribute('data-loaded');
-    await refreshSettingsView({ showErrors: false });
-    await loadStaffConfig();
-    loadStaffUsers();
-    saveSucceeded = true;
+    try {
+      await refreshSettingsView({ showErrors: false });
+      await loadStaffConfig();
+      loadStaffUsers();
+    } catch (refreshError) {
+      if (!isRequestCanceledError(refreshError)) {
+        console.error('Settings were saved, but the refreshed values could not be loaded.', refreshError);
+      }
+    }
+    if (saveContextOrgId !== currentLibraryContextOrgId) {
+      saveSuperseded = true;
+      return false;
+    }
     showToast('Settings saved.', 'success');
     return true;
   } catch (err) {
@@ -123,7 +140,9 @@ export async function saveSettings(options = {}) {
     buttons.forEach(button => {
       button.disabled = false;
     });
-    updateSaveBarState(saveHadError ? 'error' : (saveSucceeded ? 'saved' : (settingsDirty ? 'dirty' : 'clean')));
+    if (!saveSuperseded) {
+      updateSaveBarState(saveHadError ? 'error' : (saveSucceeded ? 'saved' : (settingsDirty ? 'dirty' : 'clean')));
+    }
   }
 }
 
