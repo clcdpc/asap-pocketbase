@@ -11,10 +11,10 @@ const polarisTextFields = [
 ];
 
 const polarisIntegerFields = [
-  ['workstationId', 'polaris-workstation-id', 'Polaris workstation ID'],
-  ['systemPolarisUserId', 'polaris-system-user-id', 'System Polaris user ID'],
-  ['organizationIdForRequests', 'polaris-requesting-org-id', 'Requesting organization ID'],
-  ['pickupOrganizationId', 'polaris-pickup-org-id', 'Pickup organization ID']
+  ['workstationId', 'polaris-workstation-id', 'Polaris workstation ID', 1],
+  ['systemPolarisUserId', 'polaris-system-user-id', 'System Polaris user ID', 1],
+  ['organizationIdForRequests', 'polaris-requesting-org-id', 'Requesting organization ID', 1],
+  ['pickupOrganizationId', 'polaris-pickup-org-id', 'Pickup organization ID', 0]
 ];
 
 const polarisSecretFields = [
@@ -101,7 +101,7 @@ export function collectSettingsPolaris(validate = false) {
     }
   });
 
-  polarisIntegerFields.forEach(([key, id, label]) => {
+  polarisIntegerFields.forEach(([key, id, label, minimum]) => {
     if (!document.getElementById(id)) return;
     const raw = getFieldValue(id).trim();
     if (!raw) {
@@ -109,8 +109,8 @@ export function collectSettingsPolaris(validate = false) {
       return;
     }
     const value = Number(raw);
-    if (validate && (!Number.isInteger(value) || value < 1)) {
-      throw new Error(`${label} must be a number greater than 0.`);
+    if (validate && (!Number.isInteger(value) || value < minimum)) {
+      throw new Error(`${label} must be a whole number ${minimum === 0 ? 'zero or greater' : 'greater than 0'}.`);
     }
     result[key] = Number.isInteger(value) ? value : raw;
   });

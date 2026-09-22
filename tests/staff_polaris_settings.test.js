@@ -47,6 +47,11 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(document.getElementById('polaris-requesting-org-id').value, '731');
     assert.strictEqual(document.getElementById('polaris-pickup-org-id').value, '910');
 
+    document.getElementById('polaris-pickup-org-id').value = '0';
+    assert.strictEqual(fields.collectSettingsPolaris(true).pickupOrganizationId, 0,
+      'the shipped pickup-organization fallback sentinel must round-trip');
+    document.getElementById('polaris-pickup-org-id').value = '910';
+
     const roundTrip = fields.collectSettingsPolaris(true);
     assert.deepStrictEqual(roundTrip, {
       host: persisted.host,
