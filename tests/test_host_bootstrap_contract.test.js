@@ -154,6 +154,7 @@ try {
       'Authentication',
       'ConnectionStrings',
       'EmailSafety',
+      'EmailTransport',
       'Environment',
       'Hangfire',
       'PatronLoginRateLimit'

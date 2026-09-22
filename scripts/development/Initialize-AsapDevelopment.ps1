@@ -76,6 +76,9 @@ $configuration = [ordered]@{
     EmailSafety = [ordered]@{
         AllowedRecipientDomains = @($AdminEmail.Split('@')[-1])
     }
+    EmailTransport = [ordered]@{
+        Mode = 'capture'
+    }
     Hangfire = [ordered]@{
         Schedules = [ordered]@{
             WorkflowProcessing = '0 * * * *'

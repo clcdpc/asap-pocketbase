@@ -9,6 +9,13 @@ import {
 import { createSettingsController } from './settings.js';
 import { loadAnalytics, resetAnalytics } from './analytics.js';
 import {
+  createEmailTestRequestId,
+  emailTestStatusMessage,
+  isEmailTestAbort,
+  queueEmailTest,
+  waitForEmailTest
+} from './email-test.js';
+import {
   requestedRequestIdFromUrl,
   requestedStatusFromUrl,
   replaceRequestParameter,
@@ -97,6 +104,7 @@ export function createWorkflowApp() {
     forceWeeklyNow: document.querySelector('#force-weekly-now'),
     sendTestEmail: document.querySelector('#send-test-email'),
     refreshOperations: document.querySelector('#refresh-operations'),
+    operationsEmailTestStatus: document.querySelector('#operations-email-test-status'),
     queueProgressTable: document.querySelector('#queue-progress-table'),
     emailOperationsTable: document.querySelector('#email-operations-table'),
     settingsView: document.querySelector('#settings-view'),
@@ -456,6 +464,7 @@ export function createWorkflowApp() {
         { label: 'Created', render: row => element('time', { text: dateTime(row.createdUtc), datetime: row.createdUtc }) },
         { label: 'Status', key: 'status' },
         { label: 'Type', key: 'deliveryClass' },
+        { label: 'Mode', render: row => element('span', { text: text(row.deliveryMode, 'Not recorded') }) },
         { label: 'Error', render: row => element('span', { text: row.lastErrorCode || row.suppressionReason || 'None' }) },
         { label: 'Action', render: row => {
           if (row.status !== 'failed') return element('span', { text: 'No action' });
@@ -517,6 +526,54 @@ export function createWorkflowApp() {
       }
     } finally {
       latestLoads.finish('operations-mutation', load.token);
+    }
+  }
+
+  function setOperationsEmailTestStatus(message, kind = '') {
+    if (!dom.operationsEmailTestStatus) return;
+    dom.operationsEmailTestStatus.textContent = message || '';
+    dom.operationsEmailTestStatus.className = `operations-test-status${kind ? ` ${kind}` : ''}`;
+  }
+
+  async function runEmailTestOperation() {
+    const load = latestLoads.begin('operations-email-test');
+    const requestedScope = state.operationsScope;
+    dom.sendTestEmail.disabled = true;
+    setOperationsEmailTestStatus('Requesting test email…');
+    try {
+      const scope = requestedScope === 'all' ? null : requestedScope;
+      const response = await queueEmailTest(scope, createEmailTestRequestId(), { signal: load.signal });
+      if (!load.isCurrent() || requestedScope !== state.operationsScope) return;
+      const data = response?.data ?? response;
+      if (!data?.id) {
+        setOperationsEmailTestStatus(response?.code === 'cooldown'
+          ? `A test email was requested recently. Try again in about ${data?.retryAfterSeconds || 60} seconds.`
+          : 'The test email request did not return an operation reference.', 'error');
+        return;
+      }
+      const observed = await waitForEmailTest({
+        id: data.id,
+        scope,
+        signal: load.signal,
+        onUpdate: item => {
+          if (load.isCurrent() && requestedScope === state.operationsScope) {
+            setOperationsEmailTestStatus(emailTestStatusMessage(item));
+          }
+        }
+      });
+      if (!load.isCurrent() || requestedScope !== state.operationsScope) return;
+      setOperationsEmailTestStatus(
+        emailTestStatusMessage(observed.item, observed.timedOut),
+        observed.timedOut || observed.item?.status === 'failed' ? 'error' : 'success');
+      await loadOperations({ silent: true });
+    } catch (error) {
+      if (load.isCurrent() && requestedScope === state.operationsScope &&
+          !isEmailTestAbort(error) && error.status !== 401) {
+        setOperationsEmailTestStatus(error.message || 'The test email could not be requested.', 'error');
+      }
+    } finally {
+      if (load.isCurrent() && requestedScope === state.operationsScope) dom.sendTestEmail.disabled = false;
+      latestLoads.finish('operations-email-test', load.token);
     }
   }
 
@@ -1761,8 +1818,7 @@ export function createWorkflowApp() {
       runOperation('/api/asap/staff/workflow/weekly-summary/run-now?force=false', 'Weekly summary'));
     dom.forceWeeklyNow.addEventListener('click', () =>
       runOperation('/api/asap/staff/workflow/weekly-summary/run-now?force=true', 'Forced weekly summary'));
-    dom.sendTestEmail.addEventListener('click', () =>
-      runOperation('/api/asap/staff/email-operations/test', 'Test email'));
+    dom.sendTestEmail.addEventListener('click', runEmailTestOperation);
     dom.refreshOperations.addEventListener('click', () => loadOperations());
     for (const tab of dom.statusTabs) {
       tab.addEventListener('click', () => {

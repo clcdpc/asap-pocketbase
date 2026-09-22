@@ -8,6 +8,8 @@ namespace Asap.Web.Features.Administration;
 
 public sealed record AdministrationVersionInput(string? Version);
 
+public sealed record EmailTestRequest(string? RequestId);
+
 public static class AdministrationEndpoints
 {
     public static IEndpointRouteBuilder MapAdministrationEndpoints(this IEndpointRouteBuilder endpoints)
@@ -62,9 +64,13 @@ public static class AdministrationEndpoints
         endpoints.MapPost("/api/asap/staff/email-operations/test", QueueTestEmailAsync)
             .RequireAuthorization()
             .AddEndpointFilter<StaffAntiforgeryFilter>();
+        endpoints.MapGet("/api/asap/staff/email-operations/test-context", GetEmailTestContextAsync)
+            .RequireAuthorization();
         endpoints.MapGet("/api/asap/staff/workflow/queues", ListQueueProgressAsync)
             .RequireAuthorization();
         endpoints.MapGet("/api/asap/staff/email-operations", ListEmailOperationsAsync)
+            .RequireAuthorization();
+        endpoints.MapGet("/api/asap/staff/email-operations/{id:long}", GetEmailOperationStatusAsync)
             .RequireAuthorization();
         endpoints.MapPost("/api/asap/staff/email-operations/{id:long}/retry", RetryEmailAsync)
             .RequireAuthorization()
@@ -398,16 +404,69 @@ public static class AdministrationEndpoints
         HttpContext context,
         int? organizationId,
         EmailOperationsService service,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        EmailTestRequest? input)
     {
         var result = await service.QueueTestAsync(
-            StaffAuthenticationEndpoints.RequireCurrentStaff(context), organizationId, cancellationToken);
+            StaffAuthenticationEndpoints.RequireCurrentStaff(context),
+            organizationId,
+            input?.RequestId,
+            cancellationToken);
         var status = result.Code switch
         {
-            "queued" => StatusCodes.Status202Accepted,
+            "queued" or "duplicate" => StatusCodes.Status202Accepted,
             "suppressed" => StatusCodes.Status200OK,
             "staff_scope_forbidden" => StatusCodes.Status403Forbidden,
             "organization_inactive" => StatusCodes.Status409Conflict,
+            "cooldown" => StatusCodes.Status429TooManyRequests,
+            "not_found" => StatusCodes.Status404NotFound,
+            _ => StatusCodes.Status400BadRequest
+        };
+        if (result.Code == "cooldown" && result.Data is not null)
+        {
+            var retryAfter = result.Data.GetType().GetProperty("retryAfterSeconds")?.GetValue(result.Data);
+            if (retryAfter is int seconds) context.Response.Headers.RetryAfter = seconds.ToString();
+        }
+        return Results.Json(new { code = result.Code, data = result.Data }, statusCode: status);
+    }
+
+    private static async Task<IResult> GetEmailTestContextAsync(
+        HttpContext context,
+        int? organizationId,
+        EmailOperationsService service,
+        CancellationToken cancellationToken)
+    {
+        var result = await service.GetTestContextAsync(
+            StaffAuthenticationEndpoints.RequireCurrentStaff(context),
+            organizationId,
+            cancellationToken);
+        var status = result.Code switch
+        {
+            "ok" => StatusCodes.Status200OK,
+            "staff_scope_forbidden" => StatusCodes.Status403Forbidden,
+            "organization_not_found" => StatusCodes.Status404NotFound,
+            _ => StatusCodes.Status400BadRequest
+        };
+        return Results.Json(new { code = result.Code, data = result.Data }, statusCode: status);
+    }
+
+    private static async Task<IResult> GetEmailOperationStatusAsync(
+        HttpContext context,
+        long id,
+        int? organizationId,
+        EmailOperationsService service,
+        CancellationToken cancellationToken)
+    {
+        var result = await service.GetStatusAsync(
+            StaffAuthenticationEndpoints.RequireCurrentStaff(context),
+            id,
+            organizationId,
+            cancellationToken);
+        var status = result.Code switch
+        {
+            "ok" => StatusCodes.Status200OK,
+            "not_found" => StatusCodes.Status404NotFound,
+            "staff_scope_forbidden" => StatusCodes.Status403Forbidden,
             _ => StatusCodes.Status400BadRequest
         };
         return Results.Json(new { code = result.Code, data = result.Data }, statusCode: status);

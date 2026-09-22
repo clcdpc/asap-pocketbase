@@ -144,6 +144,9 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .operations-table th, .operations-table td { padding: 8px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
 .operations-table th { color: var(--muted); font-size: .78rem; text-transform: uppercase; }
 .operations-empty { margin: 0; color: var(--muted); }
+.operations-test-status { min-height: 22px; margin: 0 0 10px; color: var(--muted); }
+.operations-test-status.error { color: var(--danger); font-weight: 700; }
+.operations-test-status.success { color: var(--success); font-weight: 700; }
 
 .analytics-status { min-height: 28px; margin: 0 0 14px; padding: 12px 14px; color: var(--muted); background: #fff; border: 1px solid var(--line); border-left: 4px solid var(--brand); }
 .analytics-status.error { color: var(--danger); border-left-color: var(--danger); font-weight: 700; }
@@ -206,6 +209,9 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-result { min-height: 22px; margin: 8px 0 0; color: var(--muted); }
 .settings-result.error { color: var(--danger); font-weight: 700; }
 .settings-result.success { color: var(--success); font-weight: 700; }
+.settings-email-test-context { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 14px 0; }
+.settings-email-test-context dt { color: var(--muted); font-weight: 700; }
+.settings-email-test-context dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
 .settings-inline-actions { flex-wrap: wrap; align-items: center; }
 .settings-row-editor { display: grid; gap: 10px; min-width: 0; }
 .settings-editor-row {
