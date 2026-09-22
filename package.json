@@ -3,7 +3,11 @@
     "jsdom": "^29.1.1"
   },
   "scripts": {
-    "test": "node tests/run_all.js"
-
+    "test": "node tests/run_all.js",
+    "test:browser": "node tests/browser/run.cjs"
+  },
+  "devDependencies": {
+    "axe-core": "4.10.3",
+    "playwright": "1.62.1"
   }
 }

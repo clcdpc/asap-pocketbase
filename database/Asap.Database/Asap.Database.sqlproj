@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.Build.Sql/2.2.0">
+  <PropertyGroup>
+    <Name>Asap.Database</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+    <ModelCollation>1033, CI</ModelCollation>
+    <DefaultCollation>SQL_Latin1_General_CP1_CI_AS</DefaultCollation>
+    <BlockOnPossibleDataLoss>true</BlockOnPossibleDataLoss>
+  </PropertyGroup>
+  <ItemGroup>
+    <Build Remove="Scripts\PostDeployment.sql" />
+    <PostDeploy Include="Scripts\PostDeployment.sql" />
+  </ItemGroup>
+</Project>

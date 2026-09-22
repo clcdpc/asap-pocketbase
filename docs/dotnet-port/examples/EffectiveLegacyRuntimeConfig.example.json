@@ -1,0 +1,17 @@
+{
+  "contract": "system/global SQL-bound values requiring pinned runtime fallback resolution only; library-scoped values are reconciled through domain exports",
+  "capturedFromPocketBaseSha": "150b30b776565194260cc327eeeffdfb46475e81",
+  "capturedAtUtc": "2026-09-11T00:00:00Z",
+  "settings": {
+    "StaffApplicationUrl": {
+      "value": "https://asap.example.org/staff/",
+      "provenance": "environment_fallback",
+      "source": "ASAP_PUBLIC_URL"
+    },
+    "MaterialTypeIconUrlPattern": {
+      "value": "https://catalog.example.org/themes/shared/formats/formatid{MARCTypeOfMaterialID2}.gif",
+      "provenance": "persisted_database",
+      "source": "system_settings.formatIconUrlPattern"
+    }
+  }
+}
