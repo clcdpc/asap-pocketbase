@@ -74,6 +74,7 @@ async function waitFor(predicate) {
     };
 
     let runtimeFailure = '';
+    let startupSession = null;
     let users = [
       {
         id: '9007199254740993',
@@ -100,6 +101,29 @@ async function waitFor(predicate) {
     global.fetch = async (url, options = {}) => {
       const requestUrl = String(url);
       const method = String(options.method || 'GET').toUpperCase();
+      if (requestUrl === '/api/asap/config') {
+        return response(200, {});
+      }
+      if (requestUrl === '/api/asap/staff/session') {
+        if (startupSession === 'invalid') {
+          return response(401, { code: 'staff_session_invalid' });
+        }
+        if (startupSession === 'unavailable') {
+          return response(200, {
+            authenticated: true,
+            accessAllowed: false,
+            code: 'staff_library_inactive',
+            antiforgeryToken: 'access-unavailable-token'
+          });
+        }
+        if (startupSession === 'forbidden') {
+          return response(403, { code: 'staff_scope_forbidden', accessAllowed: false });
+        }
+        if (startupSession === 'error') {
+          return response(500, { message: 'Session service unavailable' });
+        }
+        throw new Error('Unexpected session request');
+      }
       if (requestUrl === '/runtime-probe') {
         if (runtimeFailure === 'invalid') {
           return response(401, { code: 'staff_session_invalid' });
@@ -162,6 +186,7 @@ async function waitFor(predicate) {
     const auth = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'app', 'auth.js')).href);
     const http = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'http.js')).href);
     await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'app', 'events.js')).href);
+    const loader = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'loader.js')).href);
     const staffAccess = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings-users.js')).href);
 
     state.setStaffSession({ authenticated: false, antiforgeryToken: 'anonymous-token' });
@@ -207,6 +232,36 @@ async function waitFor(predicate) {
     assert.match(document.getElementById('login-status').textContent, /signed in.*access is not currently available/i);
     assert.notStrictEqual(document.getElementById('login-status').textContent, sessionEndedMessage);
     assert.strictEqual(document.getElementById('login-sign-out-btn').classList.contains('hidden'), false);
+
+    state.setStaffSession(activeSession);
+    auth.checkAuth();
+    startupSession = 'invalid';
+    await loader.initStaffApp();
+    assert.strictEqual(document.getElementById('app-container').classList.contains('hidden'), true,
+      'A startup session rejection must not leave a blank or stale workspace');
+    assert.strictEqual(document.getElementById('login-container').classList.contains('hidden'), false);
+    assert.match(document.getElementById('login-status').textContent, /session ended/i);
+
+    startupSession = 'unavailable';
+    await loader.initStaffApp();
+    assert.strictEqual(document.getElementById('app-container').classList.contains('hidden'), true);
+    assert.strictEqual(document.getElementById('login-container').classList.contains('hidden'), false);
+    assert.match(document.getElementById('login-status').textContent, /signed in.*access is not currently available/i);
+    assert.strictEqual(document.getElementById('login-sign-out-btn').classList.contains('hidden'), false);
+
+    state.setStaffSession(activeSession);
+    auth.checkAuth();
+    startupSession = 'forbidden';
+    await loader.initStaffApp();
+    assert.strictEqual(document.getElementById('app-container').classList.contains('hidden'), true);
+    assert.match(document.getElementById('login-status').textContent, /signed in.*access is not currently available/i);
+
+    state.setStaffSession(activeSession);
+    auth.checkAuth();
+    startupSession = 'error';
+    await assert.rejects(loader.initStaffApp(), error =>
+      error.status === 500 && error.message === 'Session service unavailable');
+    startupSession = null;
 
     state.setStaffSession(activeSession);
     auth.checkAuth();

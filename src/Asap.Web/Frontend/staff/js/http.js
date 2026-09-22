@@ -94,10 +94,40 @@ function bodyWithVersion(path, body, method) {
   return body;
 }
 
+function applyStaffAccessFailure(error) {
+  if (error?.status === 401) {
+    setStaffSession({
+      authenticated: false,
+      code: error.response?.code || 'staff_session_invalid',
+      antiforgeryToken: staffSession.antiforgeryToken
+    });
+    window.dispatchEvent(new CustomEvent('asap:session-invalid'));
+    return true;
+  }
+
+  if (error?.status === 403 && error.response?.accessAllowed === false) {
+    setStaffSession({
+      authenticated: true,
+      accessAllowed: false,
+      code: error.response?.code || 'staff_scope_forbidden',
+      antiforgeryToken: staffSession.antiforgeryToken
+    });
+    window.dispatchEvent(new CustomEvent('asap:access-forbidden', { detail: error.response }));
+    return true;
+  }
+
+  return false;
+}
+
 export async function loadStaffSession(options = {}) {
-  const session = await requestJson('/api/asap/staff/session', { cache: 'no-store', signal: options.signal });
-  setStaffSession(session);
-  return session;
+  try {
+    const session = await requestJson('/api/asap/staff/session', { cache: 'no-store', signal: options.signal });
+    setStaffSession(session);
+    return session;
+  } catch (error) {
+    applyStaffAccessFailure(error);
+    throw error;
+  }
 }
 
 export async function authorizedJson(path, options = {}) {
@@ -122,22 +152,7 @@ export async function authorizedJson(path, options = {}) {
     });
     return adaptResponse(path, result);
   } catch (error) {
-    if (error?.status === 401) {
-      setStaffSession({
-        authenticated: false,
-        code: error.response?.code || 'staff_session_invalid',
-        antiforgeryToken: staffSession.antiforgeryToken
-      });
-      window.dispatchEvent(new CustomEvent('asap:session-invalid'));
-    } else if (error?.status === 403 && error.response?.accessAllowed === false) {
-      setStaffSession({
-        authenticated: true,
-        accessAllowed: false,
-        code: error.response?.code || 'staff_scope_forbidden',
-        antiforgeryToken: staffSession.antiforgeryToken
-      });
-      window.dispatchEvent(new CustomEvent('asap:access-forbidden', { detail: error.response }));
-    } else if (error?.status === 409) {
+    if (!applyStaffAccessFailure(error) && error?.status === 409) {
       window.dispatchEvent(new CustomEvent('asap:stale-write', { detail: error.response }));
     }
     throw error;

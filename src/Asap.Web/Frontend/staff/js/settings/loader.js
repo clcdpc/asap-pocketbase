@@ -200,7 +200,15 @@ export async function initStaffApp() {
   closeActionMenu?.();
   initSettingsNavigation();
   await loadStaffConfig();
-  await loadStaffSession();
+  try {
+    await loadStaffSession();
+  } catch (error) {
+    const expectedSessionFailure = error?.status === 401 ||
+      (error?.status === 403 && error.response?.accessAllowed === false);
+    if (!expectedSessionFailure) {
+      throw error;
+    }
+  }
   checkAuth();
 }
 
