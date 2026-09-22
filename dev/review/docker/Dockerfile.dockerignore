@@ -1,0 +1,13 @@
+.git
+.review
+.review-harness/.tls
+.worktrees
+node_modules
+TestResults
+**/bin
+**/obj
+**/.artifacts
+src/Asap.Web/wwwroot
+src/Asap.Web/Development.local.json
+*.user
+*.suo

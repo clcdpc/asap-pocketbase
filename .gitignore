@@ -20,3 +20,7 @@ TestResults/
 .DS_Store
 stat_log.txt
 .py
+
+.review/
+dev/review/review.local.json
+dev/review/.tls/
