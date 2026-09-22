@@ -83,7 +83,8 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
     const emailPayload = {
       items: [
         { id: 41, status: 'failed', deliveryClass: 'operational_test', lastErrorCode: '<unsafe-error>', suppressionReason: null, createdUtc: '2026-09-14T12:00:00Z', version: 'email-version' },
-        { id: 42, status: 'sent', deliveryClass: 'business_event', lastErrorCode: null, suppressionReason: null, createdUtc: '2026-09-14T11:00:00Z', version: 'sent-version' }
+        { id: 42, status: 'sent', deliveryClass: 'business_event', lastErrorCode: null, suppressionReason: null, createdUtc: null, version: 'sent-version' },
+        { id: 43, status: 'sent', deliveryClass: 'business_event', lastErrorCode: null, suppressionReason: null, createdUtc: 'not-a-timestamp', version: 'invalid-version' }
       ]
     };
 
@@ -119,12 +120,26 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
     assert.equal(operationsTab.hidden, false, 'admins should see Operations');
     assert.equal(document.getElementById('operations-view').hidden, false);
     assert.equal(document.getElementById('operations-scope').value, 'all');
-    assert.equal(document.querySelectorAll('#email-operations-table tbody tr').length, 2);
+    assert.equal(document.querySelectorAll('#email-operations-table tbody tr').length, 3);
     assert.equal(document.querySelector('#email-operations-table').textContent.includes('<unsafe-error>'), true);
     assert.equal(document.querySelector('#email-operations-table').querySelector('script'), null, 'runtime text must not become markup');
+    const createdTime = document.querySelector('#email-operations-table tbody tr:first-child time');
+    assert.equal(createdTime.textContent, new Date(emailPayload.items[0].createdUtc).toLocaleString(), 'UTC operation timestamps should display in the browser locale');
+    assert.equal(createdTime.getAttribute('datetime'), emailPayload.items[0].createdUtc, 'the time element should retain the canonical UTC value');
+    assert.equal(document.querySelector('#email-operations-table tbody tr:nth-child(2) time').textContent, 'Not recorded', 'missing timestamps should remain readable');
+    assert.equal(document.querySelector('#email-operations-table tbody tr:nth-child(3) time').textContent, 'not-a-timestamp', 'invalid timestamps should retain a safe text fallback');
     assert.match(document.getElementById('queue-progress-table').textContent, /12/);
     assert.match(document.getElementById('queue-progress-table').textContent, /11/);
     assert.match(document.getElementById('queue-progress-table').textContent, /processed/);
+    assert.ok(
+      document.querySelector('#queue-progress-table tbody tr td:nth-child(4)').textContent.includes(
+        new Date(queuePayload('all').items[0].lastCreatedUtc).toLocaleString()
+      ),
+      'queue cursors should display in the browser locale'
+    );
+    const updatedTime = document.querySelector('#queue-progress-table tbody tr time');
+    assert.equal(updatedTime.textContent, new Date(queuePayload('all').items[0].updatedUtc).toLocaleString(), 'queue updates should display in the browser locale');
+    assert.equal(updatedTime.getAttribute('datetime'), queuePayload('all').items[0].updatedUtc, 'queue time elements should retain the canonical UTC value');
 
     const scope = document.getElementById('operations-scope');
     scope.value = '2';
