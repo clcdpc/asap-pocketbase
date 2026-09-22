@@ -1,4 +1,4 @@
-import { staffSession, canAssignSuperAdmin, setCanAssignSuperAdmin, currentLibraryContextOrgId } from './state.js';
+import { staffSession, setStaffSession, canAssignSuperAdmin, setCanAssignSuperAdmin, currentLibraryContextOrgId } from './state.js';
 import { checkAuth, isSuperAdminStaff } from './api.js';
 import { authorizedJson, isAbortError, loadStaffSession } from './http.js';
 import { showAlert, showConfirm } from './dialogs.js';
@@ -292,17 +292,44 @@ function mutationTargetsCurrentStaff(targetStaffId) {
   return clean(targetStaffId) && clean(targetStaffId) === clean(staffSession.staff?.id);
 }
 
+function requireCurrentSessionRevalidation() {
+  setStaffSession({
+    authenticated: false,
+    code: 'staff_session_revalidation_required',
+    antiforgeryToken: staffSession.antiforgeryToken
+  });
+  checkAuth();
+}
+
 async function refreshCurrentSessionAfterMutation(targetStaffId) {
   if (!mutationTargetsCurrentStaff(targetStaffId)) return true;
 
+  requireCurrentSessionRevalidation();
   try {
-    await loadStaffSession();
+    const session = await loadStaffSession();
+    const validActiveSession = session?.authenticated === true &&
+      session.accessAllowed !== false &&
+      session.staff &&
+      typeof session.staff === 'object' &&
+      !Array.isArray(session.staff) &&
+      !!clean(session.staff.id) &&
+      !!clean(session.staff.role);
+    const validAccessUnavailableSession = session?.authenticated === true &&
+      session.accessAllowed === false;
+    const validEndedSession = session?.authenticated === false &&
+      session.code === 'staff_session_invalid';
+    if (!validActiveSession && !validAccessUnavailableSession && !validEndedSession) {
+      requireCurrentSessionRevalidation();
+      return false;
+    }
   } catch (error) {
     const accessChanged = error?.status === 401 ||
       (error?.status === 403 && error.response?.accessAllowed === false);
     checkAuth();
     if (accessChanged) return false;
-    throw error;
+    console.error('The Staff Access change was saved, but the current session could not be revalidated.');
+    requireCurrentSessionRevalidation();
+    return false;
   }
 
   checkAuth();
@@ -452,6 +479,9 @@ export async function populateStaffLibraryOptions(options = {}) {
 
   const role = document.getElementById('staff-add-role')?.value || 'staff';
   const previousContextOrgId = clean(select.dataset.staffContextOrgId);
+  if (contextOrgId === 'system' && previousContextOrgId !== 'system') {
+    delete select.dataset.normalOrganizationId;
+  }
   const selectedOrganizationId = contextOrgId !== 'system'
     ? contextOrgId
     : !isSuper

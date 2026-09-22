@@ -99,14 +99,17 @@ export function checkAuth() {
     appContainer.classList.add('hidden');
     const accessUnavailable = staffSession.authenticated && !staffSession.accessAllowed;
     const sessionEnded = staffSession.code === 'staff_session_invalid';
-    const status = accessUnavailable
+    const revalidationRequired = staffSession.code === 'staff_session_revalidation_required';
+    const status = revalidationRequired
+      ? 'The Staff Access change was saved, but this browser session could not be safely refreshed. Sign in again to revalidate your session before continuing.'
+      : accessUnavailable
       ? 'Your Microsoft account is signed in, but staff access is not currently available. Your account or library access may have changed. Contact an administrator or sign out and try another account.'
       : sessionEnded
         ? 'Your staff session ended because the account is no longer valid for this application. Sign in again to continue.'
         : '';
     setText('login-status', status);
     setVisible('login-status', !!status);
-    setVisible('login-sign-out-btn', accessUnavailable);
+    setVisible('login-sign-out-btn', accessUnavailable || revalidationRequired);
   }
 }
 

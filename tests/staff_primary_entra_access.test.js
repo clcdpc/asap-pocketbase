@@ -154,6 +154,9 @@ async function waitFor(predicate) {
           return response(500, { message: 'Session service unavailable' });
         }
         if (mutationSessionResult) {
+          if (mutationSessionResult.networkError) {
+            throw new Error('Simulated session request failure');
+          }
           return response(mutationSessionResult.status, mutationSessionResult.body);
         }
         throw new Error('Unexpected session request');
@@ -425,6 +428,17 @@ async function waitFor(predicate) {
     assert.strictEqual(rows[0].querySelector('.staff-library-select').value, '2',
       'An existing staff user must retain a valid persisted library');
 
+    state.setCurrentLibraryContextOrgId('2');
+    await staffAccess.populateStaffLibraryOptions();
+    assert.strictEqual(document.getElementById('staff-add-library').value, '2',
+      'A library-specific Settings context must select that library for Add Staff');
+
+    state.setCurrentLibraryContextOrgId('system');
+    await staffAccess.populateStaffLibraryOptions();
+    assert.strictEqual(document.getElementById('staff-add-library').value, '',
+      'Returning to System context must not retain the previous library-specific selection');
+    assert.strictEqual(document.getElementById('staff-add-library').options[0].textContent, 'Select library');
+
     const postsBeforeMissingLibrary = writes.filter(write => write.method === 'POST').length;
     document.getElementById('staff-add-identity').value = 'missing-library@example.org';
     document.getElementById('btn-add-staff-user').click();
@@ -434,6 +448,11 @@ async function waitFor(predicate) {
       'Add must not POST when no library was explicitly selected');
     document.getElementById('alert-dialog-ok').click();
     await flush();
+
+    document.getElementById('staff-add-library').value = '2';
+    await staffAccess.populateStaffLibraryOptions();
+    assert.strictEqual(document.getElementById('staff-add-library').value, '2',
+      'A deliberate Add Staff library draft must survive a refresh that remains in System context');
 
     staffAccess.renderStaffUsers([{
       id: '9007199254740997',
@@ -621,8 +640,13 @@ async function waitFor(predicate) {
     activeRow.querySelector('.staff-authentication-email').value = 'updated@example.org';
     activeRow.querySelector('.staff-display-name').value = 'Updated Staff';
     activeRow.querySelector('.staff-notification-email').value = 'separate-notify@example.org';
-    activeRow.querySelector('.staff-metadata-save').click();
+    const otherUserMetadataButton = activeRow.querySelector('.staff-metadata-save');
+    const sessionRequestsBeforeOtherUserMetadata = sessionRequestCount;
+    otherUserMetadataButton.click();
     await waitFor(() => writes.some(write => write.method === 'PATCH' && write.body.email === 'updated@example.org'));
+    await waitFor(() => otherUserMetadataButton.disabled === false);
+    assert.strictEqual(sessionRequestCount, sessionRequestsBeforeOtherUserMetadata,
+      'Mutating a different StaffUser must not revalidate the current session');
     assert.deepStrictEqual(writes.find(write =>
       write.method === 'PATCH' && write.body.email === 'updated@example.org').body, {
       version: 'version-active',
@@ -709,6 +733,20 @@ async function waitFor(predicate) {
       version: 'version-self'
     };
     users = [...users, selfUser];
+    function restoreSelfWorkspace() {
+      users = users.map(user => user.id === selfId ? { ...selfUser } : user);
+      state.setStaffSession({
+        authenticated: true,
+        accessAllowed: true,
+        antiforgeryToken: 'self-token-restored',
+        staff: selfUser
+      });
+      state.setCurrentLibraryContextOrgId('system');
+      state.setCurrentStatus('settings');
+      auth.checkAuth();
+      staffAccess.renderStaffUsers(users);
+    }
+
     state.setStaffSession({
       authenticated: true,
       accessAllowed: true,
@@ -778,17 +816,7 @@ async function waitFor(predicate) {
       'Contracted self-access must immediately remove stale settings controls');
     assert.strictEqual(document.getElementById('settings-error').classList.contains('hidden'), false);
 
-    users = users.map(user => user.id === selfId ? { ...selfUser } : user);
-    state.setStaffSession({
-      authenticated: true,
-      accessAllowed: true,
-      antiforgeryToken: 'self-token-restored',
-      staff: selfUser
-    });
-    state.setCurrentLibraryContextOrgId('system');
-    state.setCurrentStatus('settings');
-    auth.checkAuth();
-    staffAccess.renderStaffUsers(users);
+    restoreSelfWorkspace();
     mutationSessionResult = {
       status: 401,
       body: { code: 'staff_session_invalid' }
@@ -802,6 +830,73 @@ async function waitFor(predicate) {
     assert.strictEqual(document.getElementById('app-container').classList.contains('hidden'), true,
       'Self-deactivation session invalidation must remove the stale workspace');
     assert.match(document.getElementById('login-status').textContent, /session ended/i);
+
+    restoreSelfWorkspace();
+    mutationSessionResult = {
+      status: 403,
+      body: { code: 'staff_scope_forbidden', accessAllowed: false }
+    };
+    const sessionRequestsBeforeSelfAccessLoss = sessionRequestCount;
+    selfRow = document.querySelector(`tr[data-staff-id="${selfId}"]`);
+    selfRow.querySelector('.staff-display-name').value = 'Saved Before Access Loss';
+    selfRow.querySelector('.staff-metadata-save').click();
+    await waitFor(() => sessionRequestCount > sessionRequestsBeforeSelfAccessLoss);
+    assert.strictEqual(document.getElementById('app-container').classList.contains('hidden'), true);
+    assert.match(document.getElementById('login-status').textContent, /signed in.*access is not currently available/i,
+      'Self-mutation access loss must retain the existing access-unavailable UI');
+
+    restoreSelfWorkspace();
+    mutationSessionResult = {
+      status: 500,
+      body: { message: 'Session service unavailable' }
+    };
+    const selfPatchesBeforeServerFailure = writes.filter(write =>
+      write.method === 'PATCH' && write.url.endsWith(`/${selfId}`)).length;
+    const sessionRequestsBeforeServerFailure = sessionRequestCount;
+    selfRow = document.querySelector(`tr[data-staff-id="${selfId}"]`);
+    selfRow.querySelector('.staff-display-name').value = 'Saved Before Server Failure';
+    selfRow.querySelector('.staff-metadata-save').click();
+    await waitFor(() => /safely refreshed/i.test(document.getElementById('login-status').textContent));
+    assert.strictEqual(sessionRequestCount, sessionRequestsBeforeServerFailure + 1,
+      'A failed session refresh must not be retried implicitly');
+    assert.strictEqual(writes.filter(write =>
+      write.method === 'PATCH' && write.url.endsWith(`/${selfId}`)).length, selfPatchesBeforeServerFailure + 1,
+      'A failed session refresh must not repeat the successful Staff Access mutation');
+    assert.strictEqual(document.getElementById('app-container').classList.contains('hidden'), true,
+      'Unexpected session refresh failures must hide the stale privileged workspace');
+    assert.match(document.getElementById('login-status').textContent,
+      /change was saved.*could not be safely refreshed.*sign in again.*revalidate/i);
+    assert.doesNotMatch(document.getElementById('staff-users-msg').textContent, /could not be saved|failed to/i,
+      'A post-mutation session failure must not describe the saved mutation as failed');
+
+    restoreSelfWorkspace();
+    mutationSessionResult = { networkError: true };
+    const selfPatchesBeforeNetworkFailure = writes.filter(write =>
+      write.method === 'PATCH' && write.url.endsWith(`/${selfId}`)).length;
+    const sessionRequestsBeforeNetworkFailure = sessionRequestCount;
+    selfRow = document.querySelector(`tr[data-staff-id="${selfId}"]`);
+    selfRow.querySelector('.staff-display-name').value = 'Saved Before Network Failure';
+    selfRow.querySelector('.staff-metadata-save').click();
+    await waitFor(() => /safely refreshed/i.test(document.getElementById('login-status').textContent));
+    assert.strictEqual(sessionRequestCount, sessionRequestsBeforeNetworkFailure + 1);
+    assert.strictEqual(writes.filter(write =>
+      write.method === 'PATCH' && write.url.endsWith(`/${selfId}`)).length, selfPatchesBeforeNetworkFailure + 1);
+    assert.strictEqual(document.getElementById('app-container').classList.contains('hidden'), true);
+    assert.match(document.getElementById('login-status').textContent,
+      /change was saved.*could not be safely refreshed.*sign in again.*revalidate/i);
+
+    restoreSelfWorkspace();
+    mutationSessionResult = {
+      status: 200,
+      body: { authenticated: true, accessAllowed: true, staff: null }
+    };
+    selfRow = document.querySelector(`tr[data-staff-id="${selfId}"]`);
+    selfRow.querySelector('.staff-display-name').value = 'Saved Before Malformed Session';
+    selfRow.querySelector('.staff-metadata-save').click();
+    await waitFor(() => /safely refreshed/i.test(document.getElementById('login-status').textContent));
+    assert.strictEqual(document.getElementById('app-container').classList.contains('hidden'), true);
+    assert.match(document.getElementById('login-status').textContent,
+      /change was saved.*could not be safely refreshed.*sign in again.*revalidate/i);
 
     console.log('Primary staff Entra session, metadata, concurrency, and lifecycle UI checks passed');
   } finally {
