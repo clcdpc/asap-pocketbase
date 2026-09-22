@@ -1,6 +1,6 @@
 import { staffSession, canAssignSuperAdmin, setCanAssignSuperAdmin, currentLibraryContextOrgId } from './state.js';
-import { isSuperAdminStaff } from './api.js';
-import { authorizedJson, isAbortError } from './http.js';
+import { checkAuth, isSuperAdminStaff } from './api.js';
+import { authorizedJson, isAbortError, loadStaffSession } from './http.js';
 import { showAlert, showConfirm } from './dialogs.js';
 
 let staffOrganizations = [];
@@ -26,29 +26,54 @@ function roleOptions(selectedRole) {
   return roles.map(role => new Option(roleLabel(role), role, false, role === selectedRole));
 }
 
+function availableStaffOrganizations() {
+  const currentStaffOrganizationId = clean(staffSession.staff?.organizationId);
+  return isSuperAdminStaff()
+    ? staffOrganizations.filter(item => Number(item.id) > 1)
+    : staffOrganizations.filter(item => String(item.id) === currentStaffOrganizationId);
+}
+
 function organizationOptions(role, selectedOrganizationId) {
   if (role === 'super_admin') {
     return [new Option('System', '1', false, String(selectedOrganizationId) === '1')];
   }
 
-  const currentStaffOrganizationId = clean(staffSession.staff?.organizationId);
-  const organizations = isSuperAdminStaff()
-    ? staffOrganizations.filter(item => Number(item.id) > 1)
-    : staffOrganizations.filter(item => String(item.id) === currentStaffOrganizationId);
-  return organizations.map(item => new Option(
+  const selected = clean(selectedOrganizationId);
+  const organizations = availableStaffOrganizations();
+  const hasSelectedOrganization = organizations.some(item => String(item.id) === selected);
+  const options = organizations.map(item => new Option(
     `${item.displayName || item.name || `Library ${item.id}`} (ID ${item.id})`,
     String(item.id),
     false,
-    String(item.id) === String(selectedOrganizationId)
+    String(item.id) === selected
   ));
+  if (!hasSelectedOrganization) {
+    options.unshift(new Option('Select library', '', false, true));
+  }
+  return options;
 }
 
 function replaceOrganizationOptions(select, role, selectedOrganizationId) {
-  select.replaceChildren(...organizationOptions(role, selectedOrganizationId));
+  const requestedOrganizationId = clean(selectedOrganizationId);
+  const validNormalOrganizationIds = new Set(availableStaffOrganizations().map(item => String(item.id)));
+  if (requestedOrganizationId !== '1' && validNormalOrganizationIds.has(requestedOrganizationId)) {
+    select.dataset.normalOrganizationId = requestedOrganizationId;
+  }
+
+  const normalOrganizationId = validNormalOrganizationIds.has(requestedOrganizationId)
+    ? requestedOrganizationId
+    : validNormalOrganizationIds.has(clean(select.dataset.normalOrganizationId))
+      ? clean(select.dataset.normalOrganizationId)
+      : '';
+  const nextOrganizationId = role === 'super_admin' ? '1' : normalOrganizationId;
+  select.replaceChildren(...organizationOptions(role, nextOrganizationId));
   if (role === 'super_admin') {
     select.value = '1';
-  } else if ([...select.options].some(option => option.value === String(selectedOrganizationId))) {
-    select.value = String(selectedOrganizationId);
+  } else {
+    select.value = normalOrganizationId;
+    if (normalOrganizationId) {
+      select.dataset.normalOrganizationId = normalOrganizationId;
+    }
   }
   select.disabled = role === 'super_admin' || !isSuperAdminStaff();
 }
@@ -190,6 +215,7 @@ export function renderStaffUsers(users) {
     row.setAttribute('data-staff-id', id);
     row.setAttribute('data-staff-version', version);
     row.setAttribute('data-staff-active', String(active));
+    row.setAttribute('data-staff-authentication-email', clean(user.userPrincipalName));
     if (!active) row.classList.add('staff-user-inactive');
 
     row.appendChild(inputCell('email', user.userPrincipalName, 'staff-authentication-email', `Authentication email for ${display}`));
@@ -262,7 +288,28 @@ async function refreshStaffAccess() {
   return loadedUsers ? loadOptions.staffAccessLoadGeneration : false;
 }
 
-async function runStaffMutation(button, message, operation) {
+function mutationTargetsCurrentStaff(targetStaffId) {
+  return clean(targetStaffId) && clean(targetStaffId) === clean(staffSession.staff?.id);
+}
+
+async function refreshCurrentSessionAfterMutation(targetStaffId) {
+  if (!mutationTargetsCurrentStaff(targetStaffId)) return true;
+
+  try {
+    await loadStaffSession();
+  } catch (error) {
+    const accessChanged = error?.status === 401 ||
+      (error?.status === 403 && error.response?.accessAllowed === false);
+    checkAuth();
+    if (accessChanged) return false;
+    throw error;
+  }
+
+  checkAuth();
+  return staffSession.authenticated && staffSession.accessAllowed && !!staffSession.staff;
+}
+
+async function runStaffMutation(button, message, operation, targetStaffId) {
   const contextOrgId = clean(currentLibraryContextOrgId) || 'system';
   const startingGeneration = staffAccessLoadGeneration;
   const completionIsCurrent = () => contextOrgId === (clean(currentLibraryContextOrgId) || 'system') &&
@@ -271,6 +318,7 @@ async function runStaffMutation(button, message, operation) {
   setStaffMessage(`${message}...`, 'mb-2 text-muted');
   try {
     const result = await operation();
+    if (!await refreshCurrentSessionAfterMutation(targetStaffId)) return;
     if (!completionIsCurrent()) return;
     const refreshGeneration = await refreshStaffAccess();
     if (!refreshGeneration ||
@@ -306,7 +354,7 @@ staffUsersTableBody?.addEventListener('click', async event => {
           notificationEmail: clean(row.querySelector('.staff-notification-email')?.value)
         }
       }
-    ));
+    ), id);
     return;
   }
 
@@ -316,10 +364,14 @@ staffUsersTableBody?.addEventListener('click', async event => {
     const organizationId = role === 'super_admin'
       ? 1
       : Number(row.querySelector('.staff-library-select')?.value);
+    if (role !== 'super_admin' && !organizationId) {
+      await showAlert('Select a library for this staff member.');
+      return;
+    }
     await runStaffMutation(accessButton, 'Staff access updated', () => authorizedJson(
       `/api/asap/staff/users/${encodeURIComponent(id)}/role`,
       { method: 'POST', body: { version, role, organizationId } }
-    ));
+    ), id);
     return;
   }
 
@@ -334,27 +386,37 @@ staffUsersTableBody?.addEventListener('click', async event => {
     await runStaffMutation(deactivateButton, 'Staff user deactivated', () => authorizedJson(
       `/api/asap/staff/users/${encodeURIComponent(id)}`,
       { method: 'DELETE', body: { version } }
-    ));
+    ), id);
     return;
   }
 
   const reactivateButton = event.target.closest('.staff-user-reactivate');
   if (reactivateButton) {
+    const persistedEmail = clean(row.getAttribute('data-staff-authentication-email'));
+    const editedEmail = clean(row.querySelector('.staff-authentication-email')?.value);
+    if (editedEmail.toLowerCase() !== persistedEmail.toLowerCase()) {
+      await showAlert('Save profile changes first, then wait for the staff row to reload before reactivating this account.');
+      return;
+    }
     const role = row.querySelector('.staff-role-select')?.value || 'staff';
     const organizationId = role === 'super_admin'
       ? 1
       : Number(row.querySelector('.staff-library-select')?.value);
+    if (role !== 'super_admin' && !organizationId) {
+      await showAlert('Select a library for this staff member.');
+      return;
+    }
     await runStaffMutation(reactivateButton, 'Staff user reactivated', () => authorizedJson(
       '/api/asap/staff/users',
       {
         method: 'POST',
         body: {
-          email: clean(row.querySelector('.staff-authentication-email')?.value),
+          email: persistedEmail,
           role,
           organizationId
         }
       }
-    ));
+    ), id);
   }
 });
 
@@ -389,9 +451,15 @@ export async function populateStaffLibraryOptions(options = {}) {
   }
 
   const role = document.getElementById('staff-add-role')?.value || 'staff';
+  const previousContextOrgId = clean(select.dataset.staffContextOrgId);
   const selectedOrganizationId = contextOrgId !== 'system'
     ? contextOrgId
-    : clean(me.organizationId || me.libraryOrgId);
+    : !isSuper
+      ? clean(me.organizationId || me.libraryOrgId)
+      : previousContextOrgId === 'system'
+        ? clean(select.value)
+        : '';
+  select.dataset.staffContextOrgId = contextOrgId;
   replaceOrganizationOptions(select, role, selectedOrganizationId);
   if (isSuper && role !== 'super_admin') select.disabled = false;
   return true;

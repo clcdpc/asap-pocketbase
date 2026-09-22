@@ -103,6 +103,8 @@ async function waitFor(predicate) {
     let resolveAddStaff;
     let delayMetadataPatch = false;
     let resolveMetadataPatch;
+    let mutationSessionResult = null;
+    let sessionRequestCount = 0;
     let users = [
       {
         id: '9007199254740993',
@@ -133,6 +135,7 @@ async function waitFor(predicate) {
         return response(200, {});
       }
       if (requestUrl === '/api/asap/staff/session') {
+        sessionRequestCount += 1;
         if (startupSession === 'invalid') {
           return response(401, { code: 'staff_session_invalid' });
         }
@@ -149,6 +152,9 @@ async function waitFor(predicate) {
         }
         if (startupSession === 'error') {
           return response(500, { message: 'Session service unavailable' });
+        }
+        if (mutationSessionResult) {
+          return response(mutationSessionResult.status, mutationSessionResult.body);
         }
         throw new Error('Unexpected session request');
       }
@@ -261,21 +267,48 @@ async function waitFor(predicate) {
             }));
           });
         }
+        let savedUser;
         if (method === 'PATCH') {
-          users = users.map(user => user.id === '9007199254740993'
+          const targetId = decodeURIComponent(requestUrl.match(/\/users\/([^/]+)$/)?.[1] || '');
+          users = users.map(user => user.id === targetId
             ? { ...user, userPrincipalName: body.email, displayName: body.displayName, notificationEmail: body.notificationEmail }
             : user);
+          savedUser = users.find(user => user.id === targetId);
         } else if (method === 'DELETE') {
-          users = users.map(user => user.id === '9007199254740993'
+          const targetId = decodeURIComponent(requestUrl.match(/\/users\/([^/]+)$/)?.[1] || '');
+          users = users.map(user => user.id === targetId
             ? { ...user, active: false, version: 'version-deactivated' }
             : user);
-        } else if (method === 'POST' && body.email === 'inactive@example.org') {
-          users = users.map(user => user.id === '9007199254740995'
-            ? { ...user, active: true, version: 'version-reactivated' }
+          savedUser = users.find(user => user.id === targetId);
+        } else if (method === 'POST' && /\/role$/.test(requestUrl)) {
+          const targetId = decodeURIComponent(requestUrl.match(/\/users\/([^/]+)\/role$/)?.[1] || '');
+          users = users.map(user => user.id === targetId
+            ? { ...user, role: body.role, organizationId: body.organizationId, version: 'version-role-updated' }
             : user);
+          savedUser = users.find(user => user.id === targetId);
+        } else if (method === 'POST' && requestUrl === '/api/asap/staff/users') {
+          const existing = users.find(user => user.userPrincipalName.toLowerCase() === String(body.email).toLowerCase());
+          if (existing) {
+            users = users.map(user => user.id === existing.id
+              ? { ...user, active: true, role: body.role, organizationId: body.organizationId, version: 'version-reactivated' }
+              : user);
+            savedUser = users.find(user => user.id === existing.id);
+          } else {
+            savedUser = {
+              id: (9007199254741000n + BigInt(users.length)).toString(),
+              userPrincipalName: body.email,
+              displayName: body.email,
+              notificationEmail: body.email,
+              role: body.role,
+              organizationId: body.organizationId,
+              active: true,
+              version: 'version-created'
+            };
+            users = [...users, savedUser];
+          }
         }
         return response(method === 'POST' && requestUrl === '/api/asap/staff/users' ? 201 : 200, {
-          user: users[0],
+          user: savedUser || users[0],
           cleanup: { rulesDeactivated: 1, openTitleClaimsCleared: 2, openAdditionalCopyClaimsCleared: 3 }
         });
       }
@@ -386,6 +419,45 @@ async function waitFor(predicate) {
     assert.strictEqual(rows[0].getAttribute('data-staff-id'), '9007199254740993',
       'Bigint staff IDs must remain strings in the browser');
     assert.ok(rows[0].textContent.includes('version-active'));
+    assert.strictEqual(document.getElementById('staff-add-library').value, '',
+      'Creating normal staff from System context must begin without an implicitly selected library');
+    assert.strictEqual(document.getElementById('staff-add-library').options[0].textContent, 'Select library');
+    assert.strictEqual(rows[0].querySelector('.staff-library-select').value, '2',
+      'An existing staff user must retain a valid persisted library');
+
+    const postsBeforeMissingLibrary = writes.filter(write => write.method === 'POST').length;
+    document.getElementById('staff-add-identity').value = 'missing-library@example.org';
+    document.getElementById('btn-add-staff-user').click();
+    await waitFor(() => document.getElementById('alert-dialog').hasAttribute('open'));
+    assert.match(document.getElementById('alert-dialog-message').textContent, /select a library/i);
+    assert.strictEqual(writes.filter(write => write.method === 'POST').length, postsBeforeMissingLibrary,
+      'Add must not POST when no library was explicitly selected');
+    document.getElementById('alert-dialog-ok').click();
+    await flush();
+
+    staffAccess.renderStaffUsers([{
+      id: '9007199254740997',
+      userPrincipalName: 'super@example.org',
+      displayName: 'Existing Super Admin',
+      notificationEmail: 'super@example.org',
+      role: 'super_admin',
+      organizationId: 1,
+      active: true,
+      version: 'version-super'
+    }]);
+    const superAdminRow = document.querySelector('tr[data-staff-id="9007199254740997"]');
+    const superAdminRole = superAdminRow.querySelector('.staff-role-select');
+    superAdminRole.value = 'staff';
+    superAdminRole.dispatchEvent(new Event('change'));
+    assert.strictEqual(superAdminRow.querySelector('.staff-library-select').value, '',
+      'Changing a super-admin to a normal role must not select the first library');
+    superAdminRow.querySelector('.staff-role-save').click();
+    await waitFor(() => document.getElementById('alert-dialog').hasAttribute('open'));
+    assert.match(document.getElementById('alert-dialog-message').textContent, /select a library/i);
+    assert.strictEqual(writes.filter(write => write.method === 'POST').length, postsBeforeMissingLibrary,
+      'Changing a super-admin without choosing a library must not POST');
+    document.getElementById('alert-dialog-ok').click();
+    await staffAccess.loadStaffUsers();
 
     state.setCurrentLibraryContextOrgId('2');
     delayLibraryTwoStaffUsers = true;
@@ -569,6 +641,7 @@ async function waitFor(predicate) {
     assert.deepStrictEqual(writes.find(write => write.method === 'DELETE').body, { version: 'version-active' });
     await waitFor(() => document.querySelector('tr[data-staff-id="9007199254740993"]')?.textContent.includes('Inactive'));
 
+    const usersBeforeUnchangedReactivation = users.length;
     const inactiveRow = document.querySelector('tr[data-staff-id="9007199254740995"]');
     inactiveRow.querySelector('.staff-user-reactivate').click();
     await waitFor(() => writes.some(write => write.method === 'POST' && write.body.email === 'inactive@example.org'));
@@ -576,6 +649,159 @@ async function waitFor(predicate) {
       writes.find(write => write.method === 'POST' && write.body.email === 'inactive@example.org').body,
       { email: 'inactive@example.org', role: 'staff', organizationId: 2 }
     );
+    assert.strictEqual(users.length, usersBeforeUnchangedReactivation,
+      'Unchanged-email reactivation must reactivate the existing StaffUser rather than create another');
+    assert.strictEqual(users.find(user => user.id === '9007199254740995').active, true);
+
+    users = [...users, {
+      id: '9007199254740996',
+      userPrincipalName: 'persisted-inactive@example.org',
+      displayName: 'Persisted Inactive',
+      notificationEmail: 'persisted-inactive@example.org',
+      role: 'staff',
+      organizationId: 2,
+      active: false,
+      version: 'version-persisted-inactive'
+    }];
+    const usersBeforeIdentitySequence = users.length;
+    await staffAccess.loadStaffUsers();
+    let identitySequenceRow = document.querySelector('tr[data-staff-id="9007199254740996"]');
+    identitySequenceRow.querySelector('.staff-authentication-email').value = 'saved-inactive@example.org';
+    const postsBeforeEditedReactivation = writes.filter(write => write.method === 'POST').length;
+    identitySequenceRow.querySelector('.staff-user-reactivate').click();
+    await waitFor(() => document.getElementById('alert-dialog').hasAttribute('open'));
+    assert.match(document.getElementById('alert-dialog-message').textContent, /save profile changes first/i,
+      'The UI must explain that identity edits have to be saved before reactivation');
+    assert.strictEqual(writes.filter(write => write.method === 'POST').length, postsBeforeEditedReactivation,
+      'Reactivate must not POST an unsaved edited identity');
+    assert.strictEqual(writes.some(write => write.method === 'POST' && write.body.email === 'saved-inactive@example.org'), false);
+    document.getElementById('alert-dialog-ok').click();
+    await flush();
+
+    identitySequenceRow.querySelector('.staff-metadata-save').click();
+    await waitFor(() => writes.some(write =>
+      write.method === 'PATCH' &&
+      write.url.endsWith('/9007199254740996') &&
+      write.body.email === 'saved-inactive@example.org'));
+    await waitFor(() => document.querySelector('tr[data-staff-id="9007199254740996"]')?.
+      querySelector('.staff-authentication-email')?.value === 'saved-inactive@example.org');
+    identitySequenceRow = document.querySelector('tr[data-staff-id="9007199254740996"]');
+    identitySequenceRow.querySelector('.staff-user-reactivate').click();
+    await waitFor(() => writes.some(write =>
+      write.method === 'POST' && write.body.email === 'saved-inactive@example.org'));
+    assert.deepStrictEqual(
+      writes.find(write => write.method === 'POST' && write.body.email === 'saved-inactive@example.org').body,
+      { email: 'saved-inactive@example.org', role: 'staff', organizationId: 2 }
+    );
+    assert.strictEqual(users.length, usersBeforeIdentitySequence,
+      'Saving and then reactivating the persisted identity must not create a duplicate StaffUser');
+    assert.strictEqual(users.find(user => user.id === '9007199254740996').active, true);
+
+    const selfId = '9007199254740998';
+    const selfUser = {
+      id: selfId,
+      userPrincipalName: 'self@example.org',
+      displayName: 'Original Self',
+      notificationEmail: 'self-notify@example.org',
+      role: 'super_admin',
+      organizationId: 1,
+      active: true,
+      version: 'version-self'
+    };
+    users = [...users, selfUser];
+    state.setStaffSession({
+      authenticated: true,
+      accessAllowed: true,
+      antiforgeryToken: 'self-token',
+      staff: selfUser
+    });
+    state.setCurrentLibraryContextOrgId('system');
+    await staffAccess.populateStaffLibraryOptions();
+    await staffAccess.loadStaffUsers();
+
+    mutationSessionResult = {
+      status: 200,
+      body: {
+        authenticated: true,
+        accessAllowed: true,
+        antiforgeryToken: 'self-token-refreshed',
+        staff: {
+          ...selfUser,
+          displayName: 'Updated Current User',
+          notificationEmail: 'updated-self-notify@example.org',
+          version: 'version-self-profile'
+        }
+      }
+    };
+    const sessionRequestsBeforeSelfProfile = sessionRequestCount;
+    let selfRow = document.querySelector(`tr[data-staff-id="${selfId}"]`);
+    selfRow.querySelector('.staff-display-name').value = 'Updated Current User';
+    selfRow.querySelector('.staff-notification-email').value = 'updated-self-notify@example.org';
+    selfRow.querySelector('.staff-metadata-save').click();
+    await waitFor(() => sessionRequestCount > sessionRequestsBeforeSelfProfile);
+    assert.strictEqual(state.staffSession.staff.displayName, 'Updated Current User',
+      'A successful mutation of the signed-in user must refresh authoritative session profile data');
+    assert.match(document.getElementById('display-user').textContent, /Updated Current User/);
+
+    await waitFor(() => document.querySelector(`tr[data-staff-id="${selfId}"]`));
+    state.setCurrentStatus('settings');
+    mutationSessionResult = {
+      status: 200,
+      body: {
+        authenticated: true,
+        accessAllowed: true,
+        antiforgeryToken: 'self-token-demoted',
+        staff: {
+          ...selfUser,
+          displayName: 'Updated Current User',
+          role: 'staff',
+          organizationId: 2,
+          organizationName: 'Library Two',
+          version: 'version-self-demoted'
+        }
+      }
+    };
+    const sessionRequestsBeforeSelfDemotion = sessionRequestCount;
+    selfRow = document.querySelector(`tr[data-staff-id="${selfId}"]`);
+    const selfRoleSelect = selfRow.querySelector('.staff-role-select');
+    selfRoleSelect.value = 'staff';
+    selfRoleSelect.dispatchEvent(new Event('change'));
+    assert.strictEqual(selfRow.querySelector('.staff-library-select').value, '',
+      'A self-demotion from super-admin must also require an explicit library');
+    selfRow.querySelector('.staff-library-select').value = '2';
+    selfRow.querySelector('.staff-role-save').click();
+    await waitFor(() => sessionRequestCount > sessionRequestsBeforeSelfDemotion);
+    assert.strictEqual(state.staffSession.staff.role, 'staff');
+    assert.strictEqual(document.getElementById('nav-settings').classList.contains('hidden'), true,
+      'Contracted self-access must immediately hide the Settings navigation');
+    assert.strictEqual(document.getElementById('settings-form').classList.contains('hidden'), true,
+      'Contracted self-access must immediately remove stale settings controls');
+    assert.strictEqual(document.getElementById('settings-error').classList.contains('hidden'), false);
+
+    users = users.map(user => user.id === selfId ? { ...selfUser } : user);
+    state.setStaffSession({
+      authenticated: true,
+      accessAllowed: true,
+      antiforgeryToken: 'self-token-restored',
+      staff: selfUser
+    });
+    state.setCurrentLibraryContextOrgId('system');
+    state.setCurrentStatus('settings');
+    auth.checkAuth();
+    staffAccess.renderStaffUsers(users);
+    mutationSessionResult = {
+      status: 401,
+      body: { code: 'staff_session_invalid' }
+    };
+    const sessionRequestsBeforeSelfDeactivation = sessionRequestCount;
+    selfRow = document.querySelector(`tr[data-staff-id="${selfId}"]`);
+    selfRow.querySelector('.staff-user-deactivate').click();
+    await waitFor(() => document.getElementById('confirm-dialog').hasAttribute('open'));
+    document.getElementById('confirm-dialog-ok').click();
+    await waitFor(() => sessionRequestCount > sessionRequestsBeforeSelfDeactivation);
+    assert.strictEqual(document.getElementById('app-container').classList.contains('hidden'), true,
+      'Self-deactivation session invalidation must remove the stale workspace');
+    assert.match(document.getElementById('login-status').textContent, /session ended/i);
 
     console.log('Primary staff Entra session, metadata, concurrency, and lifecycle UI checks passed');
   } finally {
