@@ -82,6 +82,11 @@ public sealed class DatabaseBaselineTests
         Assert.AreEqual(160, Convert.ToInt32(await Scalar(connection, "SELECT compatibility_level FROM sys.databases WHERE name = DB_NAME();")));
         Assert.AreEqual(6, Convert.ToInt32(await Scalar(connection, "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
         Assert.AreEqual(1, Convert.ToInt32(await Scalar(connection, "SELECT COUNT(*) FROM [asap].[DeploymentState] WHERE [Id] = 1;")));
+        Assert.AreEqual(
+            0,
+            Convert.ToInt32(await Scalar(
+                connection,
+                "SELECT COUNT(*) FROM sys.columns WHERE object_id = OBJECT_ID(N'[asap].[PolarisSettings]') AND name IN (N'OrganizationIdForRequests', N'PickupOrganizationId');")));
         var expectedHash = Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(_dacpacPath))).ToLowerInvariant();
         Assert.AreEqual(

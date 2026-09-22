@@ -166,6 +166,14 @@ RowVersion rowversion
 
 Do not reproduce legacy per-staff Polaris authentication fields. Protected credential columns contain Data Protection ciphertext, never plaintext.
 
+Hold routing is deliberately not a setting. The requesting organization comes
+from the live patron registration, and the pickup organization is resolved from
+the live patron default immediately before a new hold is dispatched (falling
+back to the registered organization only when that organization is an eligible
+pickup location). The exact resolved values are then stored on the hold
+operation. Legacy `OrganizationIdForRequests` and `PickupOrganizationId`
+configuration fields are not part of the target schema or runtime DTOs.
+
 ### `[asap].[WorkflowSettings]`
 
 One row per configured scope. Organization `1` is the complete system/default row; library rows are sparse nullable overrides. Representative fields:

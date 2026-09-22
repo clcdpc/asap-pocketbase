@@ -75,7 +75,7 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
     }
 
     public Task UpdatePreferredPickupBranchAsync(
-        string barcode,
+        PatronSnapshot patron,
         int pickupBranchId,
         CancellationToken cancellationToken)
     {
