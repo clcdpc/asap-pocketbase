@@ -54,8 +54,8 @@ button, a, input, select, textarea { outline-offset: 3px; }
 .brand span { display: grid; line-height: 1.05; }
 .brand strong { font-size: 1.28rem; }
 .brand small { margin-top: 3px; color: #e7f4fa; font-size: .76rem; }
-.session-actions { display: flex; align-items: center; gap: 12px; min-width: 0; }
-#staff-identity { max-width: 34vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-actions { display: flex; align-items: center; gap: 12px; min-width: 0; max-width: 100%; }
+#staff-identity { min-width: 0; max-width: 34vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 main { width: min(1500px, 100%); margin: 0 auto; padding: 0 clamp(14px, 3vw, 38px) 44px; }
 .status-message { min-height: 28px; margin: 12px 0; color: var(--muted); }
@@ -67,7 +67,7 @@ main { width: min(1500px, 100%); margin: 0 auto; padding: 0 clamp(14px, 3vw, 38p
 .signed-out h1 { margin: 18px 0 4px; font-size: 2rem; }
 .signed-out p { margin: 0 0 24px; color: var(--muted); }
 
-.primary-button, .secondary-button, .danger-button, .icon-button, .view-tab, .status-tabs button {
+.primary-button, .secondary-button, .danger-button, .icon-button, .profile-trigger, .view-tab, .status-tabs button {
   border: 1px solid transparent;
   border-radius: 4px;
   cursor: pointer;
@@ -87,6 +87,19 @@ main { width: min(1500px, 100%); margin: 0 auto; padding: 0 clamp(14px, 3vw, 38p
 .danger-button { color: #fff; background: var(--danger); }
 .icon-button { width: 40px; height: 40px; padding: 0; color: inherit; background: transparent; border-color: currentColor; }
 .icon-button:hover { background: rgba(255,255,255,.15); }
+.profile-trigger {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 7px 10px;
+  color: inherit;
+  background: transparent;
+}
+.profile-trigger:hover, .profile-trigger.active { background: rgba(255,255,255,.15); }
+.profile-trigger.active { border-color: rgba(255,255,255,.7); font-weight: 700; }
 .queue-filters .icon-button, .dialog-shell .icon-button { color: var(--brand-dark); background: #fff; }
 button:disabled { cursor: not-allowed; opacity: .55; }
 
@@ -311,7 +324,8 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 
 @media (max-width: 760px) {
   .app-header { padding-inline: 14px; }
-  #staff-identity { max-width: 46vw; font-size: .83rem; }
+  .session-actions { gap: 8px; }
+  #staff-identity { max-width: 32vw; font-size: .83rem; }
   main { padding-inline: 10px; }
   .section-heading { align-items: stretch; flex-direction: column; gap: 12px; }
   .queue-filters { align-items: stretch; flex-wrap: wrap; }
@@ -348,6 +362,9 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 
 @media (max-width: 440px) {
   .brand small { display: none; }
+  .session-actions { gap: 6px; }
+  #staff-identity { max-width: 27vw; }
+  .profile-trigger { padding-inline: 8px; }
   .view-tab { flex: 0 0 auto; }
   .detail-grid { grid-template-columns: 1fr; }
   .action-bar > button { flex: 1 1 44%; }

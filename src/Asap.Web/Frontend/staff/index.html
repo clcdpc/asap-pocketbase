@@ -19,6 +19,10 @@
     </a>
     <div id="session-actions" class="session-actions" hidden>
       <span id="staff-identity"></span>
+      <button id="profile-trigger" class="profile-trigger" type="button" aria-controls="profile-view">
+        <i class="fa fa-user" aria-hidden="true"></i>
+        <span>Profile</span>
+      </button>
       <button id="sign-out" class="icon-button" type="button" title="Sign out" aria-label="Sign out">
         <i class="fa fa-sign-out" aria-hidden="true"></i>
       </button>
@@ -48,9 +52,6 @@
         </button>
         <button class="view-tab" type="button" data-view="analytics">
           <i class="fa fa-bar-chart" aria-hidden="true"></i> Analytics
-        </button>
-        <button class="view-tab" type="button" data-view="profile">
-          <i class="fa fa-user" aria-hidden="true"></i> Profile
         </button>
         <button id="operations-view-tab" class="view-tab" type="button" data-view="operations" hidden>
           <i class="fa fa-cogs" aria-hidden="true"></i> Operations

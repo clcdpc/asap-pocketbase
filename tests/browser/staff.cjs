@@ -358,8 +358,16 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'edited-claimed-actioned');
 
     await page.getByRole('button', { name: 'Close request details' }).click();
-    await page.getByRole('button', { name: 'Profile' }).click();
+    assert.equal(
+      await page.locator('nav[aria-label="Staff views"] [data-view="profile"]').count(),
+      0,
+      'Profile should not be a primary staff view tab'
+    );
+    const profileTrigger = page.getByRole('button', { name: 'Profile', exact: true });
+    await profileTrigger.focus();
+    await page.keyboard.press('Enter');
     assert.equal(await page.evaluate(() => document.activeElement.id), 'profile-title');
+    assert.equal(await profileTrigger.getAttribute('aria-current'), 'page');
     await page.locator('#weekly-email').fill('browser-weekly@example.org');
     await page.locator('#weekly-enabled').check();
     await page.locator('#mine-default').check();
@@ -369,6 +377,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
 
     await page.getByRole('button', { name: 'Requests' }).click();
     assert.equal(await page.evaluate(() => document.activeElement.id), 'queue-title');
+    assert.equal(await profileTrigger.getAttribute('aria-current'), null);
     const suggestionTab = page.locator('[data-status="suggestion"]');
     await suggestionTab.focus();
     await page.keyboard.press('ArrowRight');
@@ -1213,6 +1222,21 @@ async function runScopedBlocked(browser, args, axeSource, report) {
     await page.locator('#request-dialog').waitFor({ state: 'hidden' });
     await assertReadableMobileQueue(page);
     await scan(page, axeSource, args.artifactRoot, report, 'mobile', 'scoped-queue');
+
+    assert.equal(
+      await page.locator('nav[aria-label="Staff views"] [data-view="profile"]').count(),
+      0,
+      'Profile should not be a primary staff view tab on mobile'
+    );
+    const profileTrigger = page.getByRole('button', { name: 'Profile', exact: true });
+    await profileTrigger.focus();
+    await page.keyboard.press('Enter');
+    await page.locator('#profile-view').waitFor({ state: 'visible' });
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'profile-title');
+    assert.equal(await profileTrigger.getAttribute('aria-current'), 'page');
+    await scan(page, axeSource, args.artifactRoot, report, 'mobile', 'profile-view');
+    await page.getByRole('button', { name: 'Requests', exact: true }).click();
+    assert.equal(await profileTrigger.getAttribute('aria-current'), null);
 
     await page.getByRole('button', { name: 'Additional copies' }).click();
     assert.equal(await page.evaluate(() => document.activeElement.id), 'additional-copy-title');
