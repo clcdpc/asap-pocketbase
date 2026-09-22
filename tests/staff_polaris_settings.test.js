@@ -254,7 +254,7 @@ const { JSDOM } = require('jsdom');
       assert.strictEqual(workflowPayload[field], expected, `${field} must serialize from stored.workflow`);
     }
     assert.strictEqual(workflowPayload.commonAuthorsList, persistedCommonCreators.join('\n'));
-    assert.strictEqual(workflowPayload.allowedPatronCodeIds, persistedAllowedPatronCodeIds.join(','));
+    assert.deepStrictEqual(workflowPayload.allowedPatronCodeIds, persistedAllowedPatronCodeIds);
     assert.strictEqual(workflowPayload.formatIconUrlPattern, currentSystemSettings.formatIconUrlPattern);
     assert.deepStrictEqual(workflowPayload.enabledLibraryOrgIds, ['2', '4']);
     persistedProviders.forEach((provider, index) => {
@@ -276,8 +276,7 @@ const { JSDOM } = require('jsdom');
         systemSettingsResponse.stored.workflow = { ...body.workflow };
         systemSettingsResponse.stored.commonCreators = body.workflow.commonAuthorsList
           .split('\n').filter(Boolean);
-        systemSettingsResponse.stored.allowedPatronCodeIds = body.workflow.allowedPatronCodeIds
-          .split(',').filter(Boolean);
+        systemSettingsResponse.stored.allowedPatronCodeIds = [...body.workflow.allowedPatronCodeIds];
         systemSettingsResponse.stored.providers = persistedProviders.map((provider, index) => ({
           ...provider,
           isEnabled: body.workflow[`externalSearch${index + 1}Enabled`],
@@ -341,7 +340,7 @@ const { JSDOM } = require('jsdom');
         `Save & test must preserve workflow.${field}`);
     }
     assert.strictEqual(saveAndTestPayload.workflow.commonAuthorsList, persistedCommonCreators.join('\n'));
-    assert.strictEqual(saveAndTestPayload.workflow.allowedPatronCodeIds, '31,47');
+    assert.deepStrictEqual(saveAndTestPayload.workflow.allowedPatronCodeIds, ['31', '47']);
     assert.strictEqual(saveAndTestPayload.formatIconUrlPattern, currentSystemSettings.formatIconUrlPattern);
     assert.deepStrictEqual(saveAndTestPayload.enabledLibraryOrgIds, ['2', '4']);
     assert.strictEqual(Object.hasOwn(saveAndTestPayload.workflow, 'enabledLibraryOrgIds'), false);
@@ -363,7 +362,7 @@ const { JSDOM } = require('jsdom');
         `ordinary save must preserve workflow.${field}`);
     }
     assert.strictEqual(ordinarySavePayload.workflow.commonAuthorsList, persistedCommonCreators.join('\n'));
-    assert.strictEqual(ordinarySavePayload.workflow.allowedPatronCodeIds, '31,47');
+    assert.deepStrictEqual(ordinarySavePayload.workflow.allowedPatronCodeIds, ['31', '47']);
     assert.strictEqual(ordinarySavePayload.formatIconUrlPattern, currentSystemSettings.formatIconUrlPattern);
     assert.deepStrictEqual(ordinarySavePayload.enabledLibraryOrgIds, ['2', '4']);
 
@@ -392,7 +391,7 @@ const { JSDOM } = require('jsdom');
     document.getElementById('lib-p-4').checked = false;
     const targetedEdit = serializer.buildSettingsPayload();
     assert.strictEqual(targetedEdit.commonAuthorsList, 'Ursula K. Le Guin\nJames Baldwin');
-    assert.strictEqual(targetedEdit.allowedPatronCodeIds, '47');
+    assert.deepStrictEqual(targetedEdit.allowedPatronCodeIds, ['47']);
     assert.strictEqual(targetedEdit.externalSearch2Label, 'Edited Research Index');
     assert.strictEqual(targetedEdit.formatIconUrlPattern, 'https://new.example.org/icons/{format}.png');
     assert.deepStrictEqual(targetedEdit.enabledLibraryOrgIds, ['2', '3']);
@@ -402,14 +401,14 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), true);
     const targetedPost = sentSettingsPayloads[3];
     assert.strictEqual(targetedPost.workflow.commonAuthorsList, targetedEdit.commonAuthorsList);
-    assert.strictEqual(targetedPost.workflow.allowedPatronCodeIds, targetedEdit.allowedPatronCodeIds);
+    assert.deepStrictEqual(targetedPost.workflow.allowedPatronCodeIds, targetedEdit.allowedPatronCodeIds);
     assert.strictEqual(targetedPost.workflow.externalSearch2Label, targetedEdit.externalSearch2Label);
     assert.strictEqual(targetedPost.formatIconUrlPattern, targetedEdit.formatIconUrlPattern);
     assert.deepStrictEqual(targetedPost.enabledLibraryOrgIds, targetedEdit.enabledLibraryOrgIds);
     assert.strictEqual(Object.hasOwn(targetedPost.workflow, 'enabledLibraryOrgIds'), false);
     await settleAsyncRendering();
     assert.strictEqual(document.getElementById('wf-common-authors-list').value, targetedEdit.commonAuthorsList);
-    assert.strictEqual(document.getElementById('allowed-patron-code-ids').value, targetedEdit.allowedPatronCodeIds);
+    assert.strictEqual(document.getElementById('allowed-patron-code-ids').value, targetedEdit.allowedPatronCodeIds.join(','));
     assert.strictEqual(document.getElementById('wf-external-search-2-label').value, targetedEdit.externalSearch2Label);
     assert.strictEqual(document.getElementById('format-icon-url-pattern').value, targetedEdit.formatIconUrlPattern);
     assert.deepStrictEqual(
@@ -425,7 +424,7 @@ const { JSDOM } = require('jsdom');
     const partialLoadPayload = serializer.buildSettingsPayload();
     assert.strictEqual(Object.hasOwn(partialLoadPayload, 'enabledLibraryOrgIds'), false,
       'an unavailable organization list must omit participation instead of disabling every library');
-    assert.strictEqual(partialLoadPayload.allowedPatronCodeIds, '47',
+    assert.deepStrictEqual(partialLoadPayload.allowedPatronCodeIds, ['47'],
       'an unavailable patron-code list must retain the authoritative selection');
     ordered.length = 0;
     saveCompleted = false;
@@ -433,7 +432,7 @@ const { JSDOM } = require('jsdom');
     const partialLoadPost = sentSettingsPayloads[4];
     assert.strictEqual(Object.hasOwn(partialLoadPost, 'enabledLibraryOrgIds'), false);
     assert.strictEqual(Object.hasOwn(partialLoadPost.workflow, 'enabledLibraryOrgIds'), false);
-    assert.strictEqual(partialLoadPost.workflow.allowedPatronCodeIds, '47');
+    assert.deepStrictEqual(partialLoadPost.workflow.allowedPatronCodeIds, ['47']);
     assert.deepStrictEqual(organizations.filter(item => item.id !== 1 && item.active).map(item => item.id), [2, 3]);
     state.setOrganizationsStatus('loaded');
     patronCodes.updatePatronCodesStatusUi('loaded', 'Patron codes loaded.');

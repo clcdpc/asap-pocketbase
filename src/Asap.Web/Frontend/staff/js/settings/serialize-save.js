@@ -127,10 +127,13 @@ function _serializeSettingsState(validate = false) {
   const externalSearch3UrlTemplate = normalizeExternalSearchUrlTemplate(getFieldValue('wf-external-search-3-url-template').trim() || 'https://www.worldcat.org/search?q={{title}}');
   const externalSearch4UrlTemplate = normalizeExternalSearchUrlTemplate(getFieldValue('wf-external-search-4-url-template'));
   const patronCodeEligibilityEnabled = getPatronCodeEligibilityEnabled();
-  const allowedPatronCodeIds = collectAllowedPatronCodeIds();
+  const allowedPatronCodeIds = collectAllowedPatronCodeIds()
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
 
   if (validate) {
-    if (patronCodeEligibilityEnabled && !allowedPatronCodeIds) {
+    if (patronCodeEligibilityEnabled && allowedPatronCodeIds.length === 0) {
       throw new Error('Select at least one allowed patron code when patron code access is limited.');
     }
     setFieldValue('wf-external-search-1-url-template', externalSearch1UrlTemplate);
