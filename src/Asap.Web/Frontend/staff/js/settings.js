@@ -950,7 +950,7 @@ export function createSettingsController({
       data.patronCodeChoices = Array.isArray(patronCodeChoices) ? patronCodeChoices : [];
       populate(data || {});
       if (state.activePanel === 'staff') void loadStaffAccess({ silent: true });
-      if (!options.silent && loadState.isCurrent() && isSettingsContextCurrent(context)) notify('Settings loaded.');
+      if (!options.silent && loadState.isCurrent() && isSettingsContextCurrent(context)) notify('');
     } catch (error) {
       if (loadState.isCurrent() && isSettingsContextCurrent(context) && !isAbortError(error) && error.status !== 401) {
         notify(error.message || 'Settings could not be loaded.', 'error');
@@ -996,7 +996,7 @@ export function createSettingsController({
       state.staffAccessLoaded = true;
       renderStaffUsers();
       renderStaffAudit();
-      if (!options.silent) setStaffStatus(`Staff access loaded for ${scopedStaffLabel()}.`, 'success');
+      if (!options.silent) setStaffStatus('');
     } catch (error) {
       if (isSettingsOperationCurrent(loadState) && !isAbortError(error) && error.status !== 401) {
         setStaffStatus(error.message || 'Staff access could not be loaded.', 'error');

@@ -387,7 +387,7 @@ export function createWorkflowApp() {
       if (state.staff.role === 'super_admin') populateScopes(result.organizations, result.scope);
       populateTags();
       renderGrid();
-      if (!options.silent) announce(`${state.requests.length} authorized requests loaded.`);
+      if (!options.silent) announce('');
       if (!state.deepLinkHandled && !options.skipDeepLink) {
         state.deepLinkHandled = true;
         const deepLink = currentRequestParameter();
@@ -488,7 +488,7 @@ export function createWorkflowApp() {
       }
       renderOperations({ queue, email });
       state.operationsLoaded = true;
-      if (!options.silent) announce('Workflow operations loaded.');
+      if (!options.silent) announce('');
     } catch (error) {
       if (load.isCurrent() && requestedScope === state.operationsScope &&
           !options.silent && !isAbortError(error) && error.status !== 401) {
@@ -632,7 +632,7 @@ export function createWorkflowApp() {
       state.additionalCopyLoaded = true;
       if (state.staff.role === 'super_admin') populateScopes(result.availableLibraries, result.scope);
       renderAdditionalCopyGrid();
-      if (!options.silent) announce(`${state.additionalCopies.length} authorized additional-copy tasks loaded.`);
+      if (!options.silent) announce('');
       if (!state.additionalCopyDeepLinkHandled && !options.skipDeepLink) {
         state.additionalCopyDeepLinkHandled = true;
         const deepLink = currentRequestParameter();
@@ -1431,7 +1431,7 @@ export function createWorkflowApp() {
       });
       dom.dialogBody.prepend(form);
       select.focus();
-      announce('Current pickup preference loaded.');
+      announce('');
     } catch (error) {
       if (error.status !== 401) announce(error.message || 'Pickup choices could not be loaded.', 'error');
     }

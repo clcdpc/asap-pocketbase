@@ -61,6 +61,7 @@ main { width: min(1500px, 100%); margin: 0 auto; padding: 0 clamp(14px, 3vw, 38p
 .status-message { min-height: 28px; margin: 12px 0; color: var(--muted); }
 .status-message.error { color: var(--danger); font-weight: 600; }
 .status-message.success { color: var(--success); font-weight: 600; }
+.status-message:empty, .settings-message:empty, .settings-result:empty { min-height: 0; margin: 0; }
 
 .signed-out { min-height: calc(100vh - 150px); display: grid; place-content: center; justify-items: center; text-align: center; }
 .signed-out img { width: 88px; height: 88px; }
