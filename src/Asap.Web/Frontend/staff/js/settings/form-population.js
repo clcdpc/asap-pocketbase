@@ -63,14 +63,56 @@ function updatePatronEmbedSnippet(settings) {
   }
 }
 
+function providerFieldName(index, suffix) {
+  return `externalSearch${index}${suffix}`;
+}
+
+export function buildWorkflowFormState(settings) {
+  const effectiveWorkflow = settings.workflow || {};
+  if (currentLibraryContextOrgId !== 'system') {
+    return effectiveWorkflow;
+  }
+
+  const stored = settings.stored || {};
+  const workflow = { ...(stored.workflow || effectiveWorkflow) };
+
+  if (Array.isArray(stored.commonCreators)) {
+    workflow.commonAuthorsList = stored.commonCreators
+      .map(item => typeof item === 'string' ? item : item?.value)
+      .filter(value => value !== undefined && value !== null)
+      .join('\n');
+  }
+  if (Array.isArray(stored.allowedPatronCodeIds)) {
+    workflow.allowedPatronCodeIds = stored.allowedPatronCodeIds
+      .map(value => String(value))
+      .join(',');
+  }
+
+  const providersByKey = new Map(
+    (Array.isArray(stored.providers) ? stored.providers : [])
+      .filter(provider => provider && provider.key)
+      .map(provider => [provider.key, provider])
+  );
+  for (let index = 1; index <= 4; index++) {
+    const provider = providersByKey.get(`external_search_${index}`);
+    if (!provider) {
+      continue;
+    }
+    workflow[providerFieldName(index, 'Enabled')] = !!provider.isEnabled;
+    workflow[providerFieldName(index, 'Label')] = provider.label ?? '';
+    workflow[providerFieldName(index, 'UrlTemplate')] = provider.urlTemplate ?? '';
+  }
+
+  return workflow;
+}
+
 export function applyLibrarySettingsToForm(settings) {
   settings = settings || {};
   const isOverride = !!settings.isOverride;
   const emails = settings.emails || {};
   const systemSettings = (settings.stored && settings.stored.systemSettings) || settings.systemSettings || settings;
   const polaris = (settings.stored && settings.stored.polaris) || settings.polaris || {};
-  const workflow = (currentLibraryContextOrgId === 'system' && settings.stored && settings.stored.workflow) ||
-    settings.workflow || {};
+  const workflow = buildWorkflowFormState(settings);
   setCurrentFormatClaimRules(settings.formatClaimRules || []);
   setFormatClaimStaffOptions(settings.formatClaimStaffOptions || []);
   setLeapBibUrlPattern(systemSettings.leapBibUrlPattern || '');

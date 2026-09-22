@@ -1,4 +1,4 @@
-import { organizationsStatus, lastWorkflowEnabledList } from '../state.js';
+import { organizationsStatus } from '../state.js';
 import { authorizedJson } from '../http.js';
 import { getFieldValue, getFieldChecked, setFieldValue, setFieldChecked, setVisible } from '../app/dom.js';
 import { updateOrganizationsStatusUi } from '../app/misc.js';
@@ -176,7 +176,14 @@ export async function renderLibraryParticipationCheckboxes() {
 
   try {
     const values = await authorizedJson('/api/asap/staff/organizations');
-    const orgs = values.map(item => ({ organizationId: item.id, displayName: item.displayName, name: item.displayName }));
+    const orgs = values
+      .filter(item => String(item.id) !== '1')
+      .map(item => ({
+        organizationId: String(item.id),
+        displayName: item.displayName,
+        name: item.displayName,
+        active: item.active === true
+      }));
 
     if (!orgs.length) {
       if (organizationsStatus === 'not_loaded') {
@@ -187,17 +194,15 @@ export async function renderLibraryParticipationCheckboxes() {
       return;
     }
 
-    updateOrganizationsStatusUi('loaded', `Polaris organizations loaded. ${orgs.length} library organization${orgs.length === 1 ? '' : 's'} available. Leave all libraries unchecked to enable all organizations.`);
+    updateOrganizationsStatusUi('loaded', `Polaris organizations loaded. ${orgs.length} library organization${orgs.length === 1 ? '' : 's'} available.`);
     renderLibraryParticipationTable(container, orgs);
 
     container.setAttribute('data-loaded', 'true');
-
-    if (lastWorkflowEnabledList) {
-      const checkboxes = container.querySelectorAll('.lib-participation-cb');
-      checkboxes.forEach(cb => {
-        cb.checked = lastWorkflowEnabledList.indexOf(cb.value) >= 0;
-      });
-    }
+    const checkboxes = container.querySelectorAll('.lib-participation-cb');
+    checkboxes.forEach(cb => {
+      const organization = orgs.find(org => org.organizationId === cb.value);
+      cb.checked = organization?.active === true;
+    });
   } catch (err) {
     console.error('Failed to load libraries for participation list', err);
     updateOrganizationsStatusUi('error', 'Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.');
@@ -207,7 +212,6 @@ export async function renderLibraryParticipationCheckboxes() {
 
 export function collectEnabledLibraryIds() {
   const container = document.getElementById('enabled-libraries-checkbox-container');
-  if (!container) return '';
-  const checked = Array.from(container.querySelectorAll('.lib-participation-cb:checked')).map(cb => cb.value);
-  return checked.join(',');
+  if (!container || container.getAttribute('data-loaded') !== 'true') return undefined;
+  return Array.from(container.querySelectorAll('.lib-participation-cb:checked')).map(cb => cb.value);
 }

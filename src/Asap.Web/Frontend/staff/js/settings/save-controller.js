@@ -57,7 +57,6 @@ export async function saveSettings(options = {}) {
         pendingHoldTimeoutDays: payload.pendingHoldTimeoutDays,
         additionalCopyTimeoutEnabled: payload.additionalCopyTimeoutEnabled,
         additionalCopyTimeoutDays: payload.additionalCopyTimeoutDays,
-        enabledLibraryOrgIds: payload.enabledLibraryOrgIds,
         commonAuthorsEnabled: payload.commonAuthorsEnabled,
         commonAuthorsLabel: payload.commonAuthorsLabel,
         commonAuthorsHelp: payload.commonAuthorsHelp,
@@ -89,8 +88,12 @@ export async function saveSettings(options = {}) {
       libraryPayload.staffUrl = payload.staffUrl;
       libraryPayload.leapBibUrlPattern = payload.leapBibUrlPattern;
       libraryPayload.leapPatronUrlPattern = payload.leapPatronUrlPattern;
+      libraryPayload.formatIconUrlPattern = payload.formatIconUrlPattern;
       libraryPayload.polaris = payload.polaris;
       libraryPayload.patronEmbedAllowedOrigins = payload.patronEmbedAllowedOrigins;
+      if (Object.hasOwn(payload, 'enabledLibraryOrgIds')) {
+        libraryPayload.enabledLibraryOrgIds = payload.enabledLibraryOrgIds;
+      }
     }
 
     const libraryPromise = authorizedJson('/api/asap/staff/settings/library', {

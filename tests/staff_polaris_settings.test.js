@@ -37,6 +37,7 @@ const { JSDOM } = require('jsdom');
     const formPopulation = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'form-population.js')).href);
     const serializer = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'serialize-save.js')).href);
     const saveController = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'save-controller.js')).href);
+    const patronCodes = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'patron-codes.js')).href);
     const http = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'http.js')).href);
     state.setStaffSession({
       authenticated: true,
@@ -87,6 +88,32 @@ const { JSDOM } = require('jsdom');
       patronCodeEligibilityEnabled: true,
       patronCodeEligibilityMessage: 'Stored patron-code message'
     };
+    const persistedCommonCreators = ['Octavia E. Butler', 'N. K. Jemisin'];
+    const persistedAllowedPatronCodeIds = ['31', '47'];
+    const persistedProviders = [
+      {
+        key: 'external_search_1', isEnabled: true, label: 'Search Local Discovery',
+        urlTemplate: 'https://discovery.example.org/search?title={{title}}'
+      },
+      {
+        key: 'external_search_2', isEnabled: false, label: 'Disabled Research Index',
+        urlTemplate: 'https://research.example.org/find/{{isbn}}'
+      },
+      {
+        key: 'external_search_3', isEnabled: true, label: 'Search Regional Catalog',
+        urlTemplate: 'https://regional.example.org/?q={{title}}+{{author}}'
+      },
+      {
+        key: 'external_search_4', isEnabled: true, label: 'Search Archive',
+        urlTemplate: 'https://archive.example.org/items?isbn={{isbn}}'
+      }
+    ];
+    const organizations = [
+      { id: 1, displayName: 'System', active: true },
+      { id: 2, displayName: 'Central', active: true },
+      { id: 3, displayName: 'North', active: false },
+      { id: 4, displayName: 'South', active: true }
+    ];
     const compatibilityWorkflow = {
       suggestionLimit: 2,
       suggestionLimitMessage: 'Incomplete compatibility workflow',
@@ -103,7 +130,10 @@ const { JSDOM } = require('jsdom');
       stored: {
         systemSettings: currentSystemSettings,
         polaris: persisted,
-        workflow: persistedWorkflow
+        workflow: persistedWorkflow,
+        commonCreators: persistedCommonCreators,
+        allowedPatronCodeIds: persistedAllowedPatronCodeIds,
+        providers: persistedProviders
       },
       emails: {
         rejection_templates: [{ id: '917', name: 'Stored timeout rejection' }]
@@ -111,18 +141,37 @@ const { JSDOM } = require('jsdom');
       ui_text: {},
       workflow: compatibilityWorkflow
     };
-    formPopulation.applyLibrarySettingsToForm(systemSettingsResponse);
-    function restoreAllowedPatronCodes() {
-      let allowedPatronCodeIds = document.getElementById('allowed-patron-code-ids');
-      if (!allowedPatronCodeIds) {
-        allowedPatronCodeIds = document.createElement('input');
-        allowedPatronCodeIds.type = 'hidden';
-        allowedPatronCodeIds.id = 'allowed-patron-code-ids';
-        document.getElementById('allowed-patron-code-container').appendChild(allowedPatronCodeIds);
+    global.fetch = async (request, options = {}) => {
+      const url = String(request);
+      if (url.startsWith('/api/asap/staff/polaris/patron-codes')) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => [
+            { id: '31', description: 'Adult' },
+            { id: '47', description: 'Young adult' },
+            { id: '62', description: 'Educator' }
+          ]
+        };
       }
-      allowedPatronCodeIds.value = '31,47';
+      if (url.startsWith('/api/asap/staff/organizations')) {
+        return { ok: true, status: 200, statusText: 'OK', json: async () => organizations };
+      }
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => url.includes('/email-status') ? { enabled: false } : {}
+      };
+    };
+    formPopulation.applyLibrarySettingsToForm(systemSettingsResponse);
+    async function settleAsyncRendering() {
+      for (let index = 0; index < 4; index++) {
+        await new Promise(resolve => setImmediate(resolve));
+      }
     }
-    restoreAllowedPatronCodes();
+    await settleAsyncRendering();
     assert.strictEqual(document.getElementById('system-staff-url').value, currentSystemSettings.staffUrl);
     assert.strictEqual(document.getElementById('leap-bib-url-pattern').value, currentSystemSettings.leapBibUrlPattern);
     assert.strictEqual(document.getElementById('leap-patron-url-pattern').value, currentSystemSettings.leapPatronUrlPattern);
@@ -150,6 +199,24 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(document.getElementById('allow-any-registered-card-login').checked, true);
     assert.strictEqual(document.getElementById('patron-code-eligibility-message').value,
       persistedWorkflow.patronCodeEligibilityMessage);
+    assert.strictEqual(document.getElementById('wf-common-authors-list').value,
+      persistedCommonCreators.join('\n'));
+    assert.strictEqual(document.getElementById('allowed-patron-code-ids').value,
+      persistedAllowedPatronCodeIds.join(','));
+    persistedProviders.forEach((provider, index) => {
+      const number = index + 1;
+      assert.strictEqual(document.getElementById(`wf-external-search-${number}-enabled`).checked,
+        provider.isEnabled);
+      assert.strictEqual(document.getElementById(`wf-external-search-${number}-label`).value,
+        provider.label);
+      assert.strictEqual(document.getElementById(`wf-external-search-${number}-url-template`).value,
+        provider.urlTemplate);
+    });
+    assert.deepStrictEqual(
+      Array.from(document.querySelectorAll('.lib-participation-cb:checked')).map(item => item.value),
+      ['2', '4']);
+    assert.strictEqual(document.getElementById('lib-p-1'), null,
+      'the system organization is not a selectable participating library');
 
     fields.populatePolarisSettingsForm(persisted);
     assert.strictEqual(document.getElementById('polaris-api-key').value, '');
@@ -186,6 +253,16 @@ const { JSDOM } = require('jsdom');
     for (const [field, expected] of Object.entries(persistedWorkflow)) {
       assert.strictEqual(workflowPayload[field], expected, `${field} must serialize from stored.workflow`);
     }
+    assert.strictEqual(workflowPayload.commonAuthorsList, persistedCommonCreators.join('\n'));
+    assert.strictEqual(workflowPayload.allowedPatronCodeIds, persistedAllowedPatronCodeIds.join(','));
+    assert.strictEqual(workflowPayload.formatIconUrlPattern, currentSystemSettings.formatIconUrlPattern);
+    assert.deepStrictEqual(workflowPayload.enabledLibraryOrgIds, ['2', '4']);
+    persistedProviders.forEach((provider, index) => {
+      const number = index + 1;
+      assert.strictEqual(workflowPayload[`externalSearch${number}Enabled`], provider.isEnabled);
+      assert.strictEqual(workflowPayload[`externalSearch${number}Label`], provider.label);
+      assert.strictEqual(workflowPayload[`externalSearch${number}UrlTemplate`], provider.urlTemplate);
+    });
 
     const ordered = [];
     const sentSettingsPayloads = [];
@@ -197,6 +274,23 @@ const { JSDOM } = require('jsdom');
         const body = JSON.parse(options.body);
         sentSettingsPayloads.push(body);
         systemSettingsResponse.stored.workflow = { ...body.workflow };
+        systemSettingsResponse.stored.commonCreators = body.workflow.commonAuthorsList
+          .split('\n').filter(Boolean);
+        systemSettingsResponse.stored.allowedPatronCodeIds = body.workflow.allowedPatronCodeIds
+          .split(',').filter(Boolean);
+        systemSettingsResponse.stored.providers = persistedProviders.map((provider, index) => ({
+          ...provider,
+          isEnabled: body.workflow[`externalSearch${index + 1}Enabled`],
+          label: body.workflow[`externalSearch${index + 1}Label`],
+          urlTemplate: body.workflow[`externalSearch${index + 1}UrlTemplate`]
+        }));
+        systemSettingsResponse.stored.systemSettings.formatIconUrlPattern = body.formatIconUrlPattern;
+        if (Object.hasOwn(body, 'enabledLibraryOrgIds')) {
+          const enabled = new Set(body.enabledLibraryOrgIds.map(String));
+          organizations.filter(organization => organization.id !== 1).forEach(organization => {
+            organization.active = enabled.has(String(organization.id));
+          });
+        }
         saveCompleted = true;
         ordered.push('save');
         return { ok: true, status: 200, statusText: 'OK', json: async () => ({ code: 'saved' }) };
@@ -214,17 +308,18 @@ const { JSDOM } = require('jsdom');
           ok: true,
           status: 200,
           statusText: 'OK',
-          json: async () => ({ data: [
+          json: async () => [
             { id: '31', description: 'Adult' },
-            { id: '47', description: 'Young adult' }
-          ] })
+            { id: '47', description: 'Young adult' },
+            { id: '62', description: 'Educator' }
+          ]
         };
       }
       if (url.startsWith('/api/asap/staff/users')) {
         return { ok: true, status: 200, statusText: 'OK', json: async () => ({ users: [] }) };
       }
       if (url.startsWith('/api/asap/staff/organizations')) {
-        return { ok: true, status: 200, statusText: 'OK', json: async () => ({ data: [] }) };
+        return { ok: true, status: 200, statusText: 'OK', json: async () => organizations };
       }
       return { ok: true, status: 200, statusText: 'OK', json: async () => ({}) };
     };
@@ -245,8 +340,19 @@ const { JSDOM } = require('jsdom');
       assert.strictEqual(saveAndTestPayload.workflow[field], expected,
         `Save & test must preserve workflow.${field}`);
     }
+    assert.strictEqual(saveAndTestPayload.workflow.commonAuthorsList, persistedCommonCreators.join('\n'));
+    assert.strictEqual(saveAndTestPayload.workflow.allowedPatronCodeIds, '31,47');
+    assert.strictEqual(saveAndTestPayload.formatIconUrlPattern, currentSystemSettings.formatIconUrlPattern);
+    assert.deepStrictEqual(saveAndTestPayload.enabledLibraryOrgIds, ['2', '4']);
+    assert.strictEqual(Object.hasOwn(saveAndTestPayload.workflow, 'enabledLibraryOrgIds'), false);
+    persistedProviders.forEach((provider, index) => {
+      const number = index + 1;
+      assert.strictEqual(saveAndTestPayload.workflow[`externalSearch${number}Enabled`], provider.isEnabled);
+      assert.strictEqual(saveAndTestPayload.workflow[`externalSearch${number}Label`], provider.label);
+      assert.strictEqual(saveAndTestPayload.workflow[`externalSearch${number}UrlTemplate`], provider.urlTemplate);
+    });
 
-    restoreAllowedPatronCodes();
+    await settleAsyncRendering();
     ordered.length = 0;
     saveCompleted = false;
     assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), true);
@@ -256,8 +362,12 @@ const { JSDOM } = require('jsdom');
       assert.strictEqual(ordinarySavePayload.workflow[field], expected,
         `ordinary save must preserve workflow.${field}`);
     }
+    assert.strictEqual(ordinarySavePayload.workflow.commonAuthorsList, persistedCommonCreators.join('\n'));
+    assert.strictEqual(ordinarySavePayload.workflow.allowedPatronCodeIds, '31,47');
+    assert.strictEqual(ordinarySavePayload.formatIconUrlPattern, currentSystemSettings.formatIconUrlPattern);
+    assert.deepStrictEqual(ordinarySavePayload.enabledLibraryOrgIds, ['2', '4']);
 
-    restoreAllowedPatronCodes();
+    await settleAsyncRendering();
     document.getElementById('pending-hold-timeout-days').value = '46';
     const intentionalEdit = serializer.buildSettingsPayload();
     assert.strictEqual(intentionalEdit.pendingHoldTimeoutDays, 46,
@@ -272,6 +382,62 @@ const { JSDOM } = require('jsdom');
       'the intended workflow edit must survive save and reload');
     assert.strictEqual(document.getElementById('outstanding-timeout-days').value, '61');
 
+    await settleAsyncRendering();
+    document.getElementById('wf-common-authors-list').value = 'Ursula K. Le Guin\nJames Baldwin';
+    document.getElementById('patron-code-choice-0').checked = false;
+    document.getElementById('patron-code-choice-0').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    document.getElementById('wf-external-search-2-label').value = 'Edited Research Index';
+    document.getElementById('format-icon-url-pattern').value = 'https://new.example.org/icons/{format}.png';
+    document.getElementById('lib-p-3').checked = true;
+    document.getElementById('lib-p-4').checked = false;
+    const targetedEdit = serializer.buildSettingsPayload();
+    assert.strictEqual(targetedEdit.commonAuthorsList, 'Ursula K. Le Guin\nJames Baldwin');
+    assert.strictEqual(targetedEdit.allowedPatronCodeIds, '47');
+    assert.strictEqual(targetedEdit.externalSearch2Label, 'Edited Research Index');
+    assert.strictEqual(targetedEdit.formatIconUrlPattern, 'https://new.example.org/icons/{format}.png');
+    assert.deepStrictEqual(targetedEdit.enabledLibraryOrgIds, ['2', '3']);
+    assert.strictEqual(targetedEdit.externalSearch1Label, persistedProviders[0].label);
+    ordered.length = 0;
+    saveCompleted = false;
+    assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), true);
+    const targetedPost = sentSettingsPayloads[3];
+    assert.strictEqual(targetedPost.workflow.commonAuthorsList, targetedEdit.commonAuthorsList);
+    assert.strictEqual(targetedPost.workflow.allowedPatronCodeIds, targetedEdit.allowedPatronCodeIds);
+    assert.strictEqual(targetedPost.workflow.externalSearch2Label, targetedEdit.externalSearch2Label);
+    assert.strictEqual(targetedPost.formatIconUrlPattern, targetedEdit.formatIconUrlPattern);
+    assert.deepStrictEqual(targetedPost.enabledLibraryOrgIds, targetedEdit.enabledLibraryOrgIds);
+    assert.strictEqual(Object.hasOwn(targetedPost.workflow, 'enabledLibraryOrgIds'), false);
+    await settleAsyncRendering();
+    assert.strictEqual(document.getElementById('wf-common-authors-list').value, targetedEdit.commonAuthorsList);
+    assert.strictEqual(document.getElementById('allowed-patron-code-ids').value, targetedEdit.allowedPatronCodeIds);
+    assert.strictEqual(document.getElementById('wf-external-search-2-label').value, targetedEdit.externalSearch2Label);
+    assert.strictEqual(document.getElementById('format-icon-url-pattern').value, targetedEdit.formatIconUrlPattern);
+    assert.deepStrictEqual(
+      Array.from(document.querySelectorAll('.lib-participation-cb:checked')).map(item => item.value),
+      ['2', '3']);
+
+    state.setOrganizationsStatus('error');
+    const participationContainer = document.getElementById('enabled-libraries-checkbox-container');
+    participationContainer.removeAttribute('data-loaded');
+    await fields.renderLibraryParticipationCheckboxes();
+    assert.strictEqual(fields.collectEnabledLibraryIds(), undefined);
+    patronCodes.updatePatronCodesStatusUi('error', 'Simulated patron-code load failure');
+    const partialLoadPayload = serializer.buildSettingsPayload();
+    assert.strictEqual(Object.hasOwn(partialLoadPayload, 'enabledLibraryOrgIds'), false,
+      'an unavailable organization list must omit participation instead of disabling every library');
+    assert.strictEqual(partialLoadPayload.allowedPatronCodeIds, '47',
+      'an unavailable patron-code list must retain the authoritative selection');
+    ordered.length = 0;
+    saveCompleted = false;
+    assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), true);
+    const partialLoadPost = sentSettingsPayloads[4];
+    assert.strictEqual(Object.hasOwn(partialLoadPost, 'enabledLibraryOrgIds'), false);
+    assert.strictEqual(Object.hasOwn(partialLoadPost.workflow, 'enabledLibraryOrgIds'), false);
+    assert.strictEqual(partialLoadPost.workflow.allowedPatronCodeIds, '47');
+    assert.deepStrictEqual(organizations.filter(item => item.id !== 1 && item.active).map(item => item.id), [2, 3]);
+    state.setOrganizationsStatus('loaded');
+    patronCodes.updatePatronCodesStatusUi('loaded', 'Patron codes loaded.');
+
     state.setCurrentLibraryContextOrgId('2');
     const effectiveLibraryWorkflow = {
       ...persistedWorkflow,
@@ -283,12 +449,19 @@ const { JSDOM } = require('jsdom');
       stored: { workflow: persistedWorkflow },
       emails: {},
       ui_text: {},
-      workflow: effectiveLibraryWorkflow
+      workflow: {
+        ...effectiveLibraryWorkflow,
+        commonAuthorsList: 'Inherited creator',
+        allowedPatronCodeIds: '88',
+        externalSearch1Label: 'Inherited provider'
+      }
     });
     assert.strictEqual(document.getElementById('outstanding-timeout-days').value, '72',
       'library context must continue to populate effective/inherited workflow values');
     assert.strictEqual(document.getElementById('pending-hold-timeout-days').value, '19');
     assert.strictEqual(document.getElementById('polaris-auto-promote').checked, false);
+    assert.strictEqual(document.getElementById('wf-common-authors-list').value, 'Inherited creator');
+    assert.strictEqual(document.getElementById('wf-external-search-1-label').value, 'Inherited provider');
     state.setCurrentLibraryContextOrgId('system');
 
     document.getElementById('polaris-requesting-org-id').value = '732';

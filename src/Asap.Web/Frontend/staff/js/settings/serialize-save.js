@@ -20,6 +20,17 @@ export function rememberLastSavedLibrarySettings(settings) {
 function _serializeSettingsState(validate = false) {
   const isSystemContext = isSuperAdminStaff() && currentLibraryContextOrgId === 'system';
 
+  function serializeCommonCreators(value) {
+    if (!isSystemContext) {
+      return sortAuthorsByLastName(value);
+    }
+    return String(value || '')
+      .split('\n')
+      .map(item => item.trim())
+      .filter(Boolean)
+      .join('\n');
+  }
+
   function positiveInt(id, fallback, label) {
     const raw = getFieldValue(id, String(fallback)).trim();
     if (!raw) return fallback;
@@ -146,7 +157,7 @@ function _serializeSettingsState(validate = false) {
     commonAuthorsEnabled: getFieldChecked('wf-common-authors-enabled'),
     commonAuthorsLabel: getFieldValue('wf-common-authors-label').trim() || 'Popular Creators',
     commonAuthorsHelp: getFieldValue('wf-common-authors-help').trim() || 'See if this is a creator we already collect.',
-    commonAuthorsList: sortAuthorsByLastName(getFieldValue('wf-common-authors-list')),
+    commonAuthorsList: serializeCommonCreators(getFieldValue('wf-common-authors-list')),
     commonAuthorsMessage: getFieldValue('wf-common-authors-message'),
     autoPromote: getFieldChecked('polaris-auto-promote'),
     allowPatronAutoholdOptOut: getFieldChecked('allow-patron-autohold-opt-out'),
@@ -173,7 +184,10 @@ function _serializeSettingsState(validate = false) {
     payload.staffUrl = staffUrl;
     payload.leapBibUrlPattern = nextLeapBibUrlPattern;
     payload.leapPatronUrlPattern = nextLeapPatronUrlPattern;
-    payload.enabledLibraryOrgIds = collectEnabledLibraryIds();
+    const enabledLibraryOrgIds = collectEnabledLibraryIds();
+    if (enabledLibraryOrgIds !== undefined) {
+      payload.enabledLibraryOrgIds = enabledLibraryOrgIds;
+    }
     payload.formatIconUrlPattern = getFieldValue('format-icon-url-pattern').trim();
     payload.patronEmbedAllowedOrigins = getFieldValue('patron-embed-allowed-origins').trim();
   }

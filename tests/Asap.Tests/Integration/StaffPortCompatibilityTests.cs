@@ -746,6 +746,284 @@ public sealed partial class PatronJourneyTests
         }
     }
 
+    [TestMethod]
+    public async Task StaffPortSystemSettingsRoundTripCollectionsIconAndParticipation()
+    {
+        const int enabledLibraryId = 91641;
+        const int disabledLibraryId = 91642;
+        await UpsertTestOrganizationAsync(enabledLibraryId, "Settings enabled library", "SEL");
+        await UpsertTestOrganizationAsync(disabledLibraryId, "Settings disabled library", "SDL");
+
+        using var client = await StaffPortClientAsync(factory!);
+        var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        string? originalIconPattern;
+        bool originalCreatorSetExists;
+        bool originalPatronCodeSetExists;
+        (string Value, int SortOrder)[] originalCreators;
+        string[] originalPatronCodes;
+        (long Id, bool IsEnabled, string Label, string UrlTemplate, int SortOrder)[] originalProviders;
+        Dictionary<int, bool> originalParticipation;
+
+        await using (var seedContext = await contexts.CreateDbContextAsync())
+        {
+            var systemSettings = await seedContext.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+            originalIconPattern = systemSettings.MaterialTypeIconUrlPattern;
+            originalCreatorSetExists = await seedContext.CommonCreatorSets.AnyAsync(item => item.OrganizationId == 1);
+            originalPatronCodeSetExists = await seedContext.PatronCodeEligibilitySets.AnyAsync(item => item.OrganizationId == 1);
+            originalCreators = await seedContext.CommonCreatorTerms.AsNoTracking()
+                .Where(item => item.OrganizationId == 1)
+                .OrderBy(item => item.SortOrder).ThenBy(item => item.Id)
+                .Select(item => new ValueTuple<string, int>(item.Value, item.SortOrder))
+                .ToArrayAsync();
+            originalPatronCodes = await seedContext.PatronCodeEligibilityMembers.AsNoTracking()
+                .Where(item => item.OrganizationId == 1)
+                .OrderBy(item => item.PatronCodeId)
+                .Select(item => item.PatronCodeId)
+                .ToArrayAsync();
+            var providers = await seedContext.ExternalSearchProviders
+                .Where(item => item.OrganizationId == 1 &&
+                    (item.ProviderKey == "external_search_1" ||
+                     item.ProviderKey == "external_search_2" ||
+                     item.ProviderKey == "external_search_3"))
+                .OrderBy(item => item.SortOrder)
+                .ToArrayAsync();
+            Assert.HasCount(3, providers);
+            originalProviders = providers
+                .Select(item => (item.Id, item.IsEnabled, item.Label, item.UrlTemplate, item.SortOrder))
+                .ToArray();
+            originalParticipation = await seedContext.Organizations.AsNoTracking()
+                .ToDictionaryAsync(item => item.Id, item => item.IsActive);
+
+            systemSettings.MaterialTypeIconUrlPattern = "https://icons.settings.example/{format}.svg";
+            seedContext.CommonCreatorTerms.RemoveRange(
+                await seedContext.CommonCreatorTerms.Where(item => item.OrganizationId == 1).ToListAsync());
+            if (!originalCreatorSetExists)
+            {
+                seedContext.CommonCreatorSets.Add(new CommonCreatorSet { OrganizationId = 1 });
+            }
+            seedContext.CommonCreatorTerms.AddRange(
+                new CommonCreatorTerm { OrganizationId = 1, Value = "Octavia E. Butler", SortOrder = 10 },
+                new CommonCreatorTerm { OrganizationId = 1, Value = "N. K. Jemisin", SortOrder = 20 });
+            seedContext.PatronCodeEligibilityMembers.RemoveRange(
+                await seedContext.PatronCodeEligibilityMembers.Where(item => item.OrganizationId == 1).ToListAsync());
+            if (!originalPatronCodeSetExists)
+            {
+                seedContext.PatronCodeEligibilitySets.Add(new PatronCodeEligibilitySet { OrganizationId = 1 });
+            }
+            seedContext.PatronCodeEligibilityMembers.AddRange(
+                new PatronCodeEligibilityMember { OrganizationId = 1, PatronCodeId = "14" },
+                new PatronCodeEligibilityMember { OrganizationId = 1, PatronCodeId = "28" });
+
+            providers[0].IsEnabled = true;
+            providers[0].Label = "Local Discovery";
+            providers[0].UrlTemplate = "https://discovery.settings.example/?title={{title}}";
+            providers[1].IsEnabled = false;
+            providers[1].Label = "Disabled Research Index";
+            providers[1].UrlTemplate = "https://research.settings.example/?isbn={{isbn}}";
+            providers[2].IsEnabled = true;
+            providers[2].Label = "Regional Catalog";
+            providers[2].UrlTemplate = "https://regional.settings.example/?q={{title}}";
+
+            var enabledLibrary = await seedContext.Organizations.SingleAsync(item => item.Id == enabledLibraryId);
+            var disabledLibrary = await seedContext.Organizations.SingleAsync(item => item.Id == disabledLibraryId);
+            enabledLibrary.IsActive = true;
+            disabledLibrary.IsActive = false;
+            await seedContext.SaveChangesAsync();
+        }
+
+        try
+        {
+            using var loaded = await ReadSettingsDocumentAsync(client, "system");
+            var stored = loaded.RootElement.GetProperty("stored");
+            CollectionAssert.AreEqual(
+                new[] { "Octavia E. Butler", "N. K. Jemisin" },
+                stored.GetProperty("commonCreators").EnumerateArray().Select(item => item.GetString()).ToArray());
+            CollectionAssert.AreEqual(
+                new[] { "14", "28" },
+                stored.GetProperty("allowedPatronCodeIds").EnumerateArray().Select(item => item.GetString()).ToArray());
+            Assert.AreEqual("https://icons.settings.example/{format}.svg",
+                stored.GetProperty("systemSettings").GetProperty("formatIconUrlPattern").GetString());
+            var loadedProviders = stored.GetProperty("providers").EnumerateArray().ToDictionary(
+                item => item.GetProperty("key").GetString()!, item => item);
+            Assert.AreEqual("Local Discovery", loadedProviders["external_search_1"].GetProperty("label").GetString());
+            Assert.IsFalse(loadedProviders["external_search_2"].GetProperty("isEnabled").GetBoolean());
+            Assert.AreEqual("https://regional.settings.example/?q={{title}}",
+                loadedProviders["external_search_3"].GetProperty("urlTemplate").GetString());
+
+            var enabledAtLoad = originalParticipation
+                .Where(item => item.Key > 1 && item.Value)
+                .Select(item => item.Key)
+                .Append(enabledLibraryId)
+                .Where(item => item != disabledLibraryId)
+                .Distinct()
+                .Order()
+                .ToArray();
+            using var unchanged = await SaveSettingsDocumentAsync(client, loaded.RootElement, "system",
+                new Dictionary<string, object?>
+                {
+                    ["workflow"] = new
+                    {
+                        commonAuthorsList = "Octavia E. Butler\nN. K. Jemisin",
+                        allowedPatronCodeIds = new[] { "14", "28" },
+                        externalSearch1Enabled = true,
+                        externalSearch1Label = "Local Discovery",
+                        externalSearch1UrlTemplate = "https://discovery.settings.example/?title={{title}}",
+                        externalSearch2Enabled = false,
+                        externalSearch2Label = "Disabled Research Index",
+                        externalSearch2UrlTemplate = "https://research.settings.example/?isbn={{isbn}}",
+                        externalSearch3Enabled = true,
+                        externalSearch3Label = "Regional Catalog",
+                        externalSearch3UrlTemplate = "https://regional.settings.example/?q={{title}}"
+                    },
+                    ["formatIconUrlPattern"] = "https://icons.settings.example/{format}.svg",
+                    ["enabledLibraryOrgIds"] = enabledAtLoad.Select(item => item.ToString()).ToArray()
+                });
+            await AssertSystemStateAsync(
+                new[] { "Octavia E. Butler", "N. K. Jemisin" },
+                new[] { "14", "28" },
+                "Disabled Research Index",
+                "https://icons.settings.example/{format}.svg",
+                enabledAtLoad);
+
+            using var afterUnchanged = await ReadSettingsDocumentAsync(client, "system");
+            var currentPolaris = afterUnchanged.RootElement.GetProperty("stored").GetProperty("polaris");
+            var currentRequestOrganizationId = currentPolaris.GetProperty("organizationIdForRequests").ValueKind == JsonValueKind.Null
+                ? (int?)null
+                : currentPolaris.GetProperty("organizationIdForRequests").GetInt32();
+            using var polarisOnly = await SaveSettingsDocumentAsync(client, afterUnchanged.RootElement, "system",
+                new Dictionary<string, object?>
+                {
+                    ["polaris"] = new { organizationIdForRequests = currentRequestOrganizationId }
+                });
+            await AssertParticipationAsync(enabledAtLoad);
+
+            var editedParticipation = enabledAtLoad
+                .Where(item => item != enabledLibraryId)
+                .Append(disabledLibraryId)
+                .Order()
+                .ToArray();
+            using var afterPolaris = await ReadSettingsDocumentAsync(client, "system");
+            using var edited = await SaveSettingsDocumentAsync(client, afterPolaris.RootElement, "system",
+                new Dictionary<string, object?>
+                {
+                    ["workflow"] = new
+                    {
+                        commonAuthorsList = "James Baldwin\nUrsula K. Le Guin",
+                        allowedPatronCodeIds = new[] { "14" },
+                        externalSearch2Enabled = false,
+                        externalSearch2Label = "Edited Research Index",
+                        externalSearch2UrlTemplate = "https://research.settings.example/?isbn={{isbn}}"
+                    },
+                    ["formatIconUrlPattern"] = "https://new-icons.settings.example/{format}.png",
+                    ["enabledLibraryOrgIds"] = editedParticipation.Select(item => item.ToString()).ToArray()
+                });
+            await AssertSystemStateAsync(
+                new[] { "James Baldwin", "Ursula K. Le Guin" },
+                new[] { "14" },
+                "Edited Research Index",
+                "https://new-icons.settings.example/{format}.png",
+                editedParticipation);
+
+            using var reloaded = await ReadSettingsDocumentAsync(client, "system");
+            Assert.AreEqual("https://new-icons.settings.example/{format}.png",
+                reloaded.RootElement.GetProperty("stored").GetProperty("systemSettings")
+                    .GetProperty("formatIconUrlPattern").GetString());
+
+            async Task AssertSystemStateAsync(
+                string[] creators,
+                string[] patronCodes,
+                string provider2Label,
+                string iconPattern,
+                int[] enabledLibraries)
+            {
+                await using var assertionContext = await contexts.CreateDbContextAsync();
+                CollectionAssert.AreEqual(creators, await assertionContext.CommonCreatorTerms.AsNoTracking()
+                    .Where(item => item.OrganizationId == 1)
+                    .OrderBy(item => item.SortOrder).ThenBy(item => item.Id)
+                    .Select(item => item.Value)
+                    .ToArrayAsync());
+                CollectionAssert.AreEqual(patronCodes, await assertionContext.PatronCodeEligibilityMembers.AsNoTracking()
+                    .Where(item => item.OrganizationId == 1)
+                    .OrderBy(item => item.PatronCodeId)
+                    .Select(item => item.PatronCodeId)
+                    .ToArrayAsync());
+                Assert.AreEqual(provider2Label, (await assertionContext.ExternalSearchProviders.AsNoTracking()
+                    .SingleAsync(item => item.ProviderKey == "external_search_2")).Label);
+                Assert.AreEqual(iconPattern, (await assertionContext.SystemSettings.AsNoTracking()
+                    .SingleAsync(item => item.OrganizationId == 1)).MaterialTypeIconUrlPattern);
+                await AssertParticipationAsync(enabledLibraries);
+            }
+
+            async Task AssertParticipationAsync(int[] enabledLibraries)
+            {
+                await using var assertionContext = await contexts.CreateDbContextAsync();
+                var actual = await assertionContext.Organizations.AsNoTracking()
+                    .Where(item => item.Id > 1 && item.IsActive)
+                    .OrderBy(item => item.Id)
+                    .Select(item => item.Id)
+                    .ToArrayAsync();
+                var expected = enabledLibraries.Order().ToArray();
+                CollectionAssert.AreEqual(expected, actual,
+                    $"Expected active libraries {string.Join(',', expected)}; actual {string.Join(',', actual)}.");
+            }
+        }
+        finally
+        {
+            await using var restoreContext = await contexts.CreateDbContextAsync();
+            var systemSettings = await restoreContext.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+            systemSettings.MaterialTypeIconUrlPattern = originalIconPattern;
+
+            restoreContext.CommonCreatorTerms.RemoveRange(
+                await restoreContext.CommonCreatorTerms.Where(item => item.OrganizationId == 1).ToListAsync());
+            var creatorSet = await restoreContext.CommonCreatorSets.SingleOrDefaultAsync(item => item.OrganizationId == 1);
+            if (!originalCreatorSetExists && creatorSet is not null)
+            {
+                restoreContext.CommonCreatorSets.Remove(creatorSet);
+            }
+            else if (originalCreatorSetExists && creatorSet is null)
+            {
+                restoreContext.CommonCreatorSets.Add(new CommonCreatorSet { OrganizationId = 1 });
+            }
+            restoreContext.CommonCreatorTerms.AddRange(originalCreators.Select(item => new CommonCreatorTerm
+            {
+                OrganizationId = 1,
+                Value = item.Value,
+                SortOrder = item.SortOrder
+            }));
+
+            restoreContext.PatronCodeEligibilityMembers.RemoveRange(
+                await restoreContext.PatronCodeEligibilityMembers.Where(item => item.OrganizationId == 1).ToListAsync());
+            var patronCodeSet = await restoreContext.PatronCodeEligibilitySets.SingleOrDefaultAsync(item => item.OrganizationId == 1);
+            if (!originalPatronCodeSetExists && patronCodeSet is not null)
+            {
+                restoreContext.PatronCodeEligibilitySets.Remove(patronCodeSet);
+            }
+            else if (originalPatronCodeSetExists && patronCodeSet is null)
+            {
+                restoreContext.PatronCodeEligibilitySets.Add(new PatronCodeEligibilitySet { OrganizationId = 1 });
+            }
+            restoreContext.PatronCodeEligibilityMembers.AddRange(originalPatronCodes.Select(item =>
+                new PatronCodeEligibilityMember { OrganizationId = 1, PatronCodeId = item }));
+
+            foreach (var backup in originalProviders)
+            {
+                var provider = await restoreContext.ExternalSearchProviders.SingleAsync(item => item.Id == backup.Id);
+                provider.IsEnabled = backup.IsEnabled;
+                provider.Label = backup.Label;
+                provider.UrlTemplate = backup.UrlTemplate;
+                provider.SortOrder = backup.SortOrder;
+            }
+            foreach (var organization in await restoreContext.Organizations.ToListAsync())
+            {
+                if (originalParticipation.TryGetValue(organization.Id, out var active))
+                {
+                    organization.IsActive = active;
+                }
+            }
+            await restoreContext.SaveChangesAsync();
+        }
+    }
+
     private WebApplicationFactory<Program> WithStaffPortProviders(IStaffPolarisProvider staff, IPatronProvider? patron = null) =>
         factory!.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
         {
