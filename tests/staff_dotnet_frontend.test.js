@@ -58,6 +58,16 @@ for (const operation of ['claim', 'unclaim', 'assign', 'close', 'reopen', 'delet
     `${operation} should be wired through the AdditionalCopy UI`);
 }
 assert.match(workflow, /claimClearedReason/);
+assert.match(urlUtils, /LEAP_BIB_PLACEHOLDER/);
+assert.match(urlUtils, /leapBibUrl/);
+assert.match(urlUtils, /leapPatronUrl/);
+assert.match(workflow, /noopener noreferrer/);
+assert.match(workflow, /leapPatronUrl/);
+assert.match(workflow, /leapBibUrl/);
+assert.match(index, /aria-describedby="leap-bib-url-pattern-help"/);
+assert.match(index, /aria-describedby="leap-patron-url-pattern-help"/);
+assert.match(index, /\{\{bibid\}\}/);
+assert.match(index, /\{\{patron-id\}\}/);
 assert.match(workflow, /createElement/);
 assert.match(workflow, /window\.requestAnimationFrame/);
 assert.equal(

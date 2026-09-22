@@ -44,6 +44,14 @@ public sealed class SystemSettings
     public byte[] RowVersion { get; set; } = [];
 }
 
+public sealed class PatronIdentity
+{
+    public required string Barcode { get; set; }
+    public required string PolarisPatronId { get; set; }
+    public DateTime UpdatedUtc { get; set; }
+    public byte[] RowVersion { get; set; } = [];
+}
+
 public sealed class PatronEmbedAllowedOrigin
 {
     public long Id { get; set; }

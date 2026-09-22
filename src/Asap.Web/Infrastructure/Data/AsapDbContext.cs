@@ -9,6 +9,7 @@ public sealed class AsapDbContext(DbContextOptions<AsapDbContext> options) : DbC
     public DbSet<Organization> Organizations => Set<Organization>();
     public DbSet<StaffUser> StaffUsers => Set<StaffUser>();
     public DbSet<SystemSettings> SystemSettings => Set<SystemSettings>();
+    public DbSet<PatronIdentity> PatronIdentities => Set<PatronIdentity>();
     public DbSet<PatronEmbedAllowedOrigin> PatronEmbedAllowedOrigins => Set<PatronEmbedAllowedOrigin>();
     public DbSet<PolarisSettings> PolarisSettings => Set<PolarisSettings>();
     public DbSet<WorkflowSettings> WorkflowSettings => Set<WorkflowSettings>();
@@ -59,6 +60,7 @@ public sealed class AsapDbContext(DbContextOptions<AsapDbContext> options) : DbC
         modelBuilder.Entity<QueueProgress>().HasKey(value => new { value.QueueName, value.ScopeOrganizationId });
         modelBuilder.Entity<QueueProgress>().Property(value => value.UpdatedUtc).HasColumnType("datetime2(7)");
         modelBuilder.Entity<SystemSettings>().HasKey(value => value.OrganizationId);
+        modelBuilder.Entity<PatronIdentity>().HasKey(value => value.Barcode);
         modelBuilder.Entity<PolarisSettings>().HasKey(value => value.OrganizationId);
         modelBuilder.Entity<WorkflowSettings>().HasKey(value => value.OrganizationId);
         modelBuilder.Entity<PatronSettings>().HasKey(value => value.OrganizationId);

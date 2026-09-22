@@ -47,7 +47,8 @@ public sealed record AdditionalCopyDto(
     string? ClaimRuleId,
     string Version,
     string? ClaimClearedReason,
-    AdditionalCopyCapabilities Capabilities);
+    AdditionalCopyCapabilities Capabilities,
+    string? LeapBibUrlPattern);
 
 public sealed record AdditionalCopyScopeResult(
     IReadOnlyList<AdditionalCopyDto> Items,
@@ -848,6 +849,10 @@ public sealed class AdditionalCopyService(
         var formats = await context.MaterialFormats.AsNoTracking()
             .Where(item => formatIds.Contains(item.Id))
             .ToDictionaryAsync(item => item.Id, cancellationToken);
+        var systemLinks = await context.SystemSettings.AsNoTracking()
+            .Where(item => item.OrganizationId == 1)
+            .Select(item => item.LeapBibUrlPattern)
+            .SingleOrDefaultAsync(cancellationToken);
         return requests.Select(request =>
         {
             sources.TryGetValue(request.SourceTitleRequestId ?? 0, out var source);
@@ -892,7 +897,8 @@ public sealed class AdditionalCopyService(
                     isOpen,
                     isOpen,
                     !isOpen,
-                    !isOpen && actor.Role is "admin" or "super_admin"));
+                    !isOpen && actor.Role is "admin" or "super_admin"),
+                systemLinks);
         }).ToList();
     }
 

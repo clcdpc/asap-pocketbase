@@ -24,6 +24,17 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(panels.filter(panel => !panel.hidden).map(panel => panel.id).join(','), 'settings-start');
     assert.strictEqual(document.getElementById('settings-organizations-list').tagName, 'UL');
 
+    for (const [inputId, helpId, placeholder] of [
+      ['leap-bib-url-pattern', 'leap-bib-url-pattern-help', '{{bibid}}'],
+      ['leap-patron-url-pattern', 'leap-patron-url-pattern-help', '{{patron-id}}']
+    ]) {
+      const input = document.getElementById(inputId);
+      const help = document.getElementById(helpId);
+      assert.ok(input && help, `${inputId} should have associated help text`);
+      assert.equal(input.getAttribute('aria-describedby'), helpId);
+      assert.match(help.textContent, new RegExp(placeholder.replace(/[{}]/g, '\\$&')));
+    }
+
     const formats = Array.from({ length: 6 }, (_, index) => ({
       id: String(index + 10),
       code: `format_${index + 1}`,

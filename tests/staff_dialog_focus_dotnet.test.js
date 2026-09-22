@@ -62,6 +62,10 @@ async function runJourney(scenario) {
     let task = {
       id: '91', version: 'first-version', title: 'Delayed grid focus journey',
       libraryOrgId: '2', libraryOrgName: 'Library two', status: titleRequest ? 'suggestion' : 'open',
+      barcode: 'A20000000000001', nameFirst: 'Ada', nameLast: 'Reader', bibid: 'BIB/42 7',
+      polarisPatronId: '9123',
+      leapBibUrlPattern: 'https://leap.example/bib/{{bibid}}',
+      leapPatronUrlPattern: 'https://leap.example/patron/{{patron-id}}',
       claimedByStaffUserId: null, claimedByDisplayName: null,
       capabilities: { canClaim: true }
     };
@@ -108,6 +112,16 @@ async function runJourney(scenario) {
     opener().click();
     const dialog = document.getElementById('request-dialog');
     await until(() => dialog.open, 'The task dialog must open');
+    const externalLinks = [...dialog.querySelectorAll('a[target="_blank"]')];
+    const bibLink = externalLinks.find(link => link.textContent === task.bibid);
+    assert.ok(bibLink, 'A configured BIB should render as an external Leap link');
+    assert.equal(bibLink.rel, 'noopener noreferrer');
+    assert.equal(bibLink.href, 'https://leap.example/bib/BIB%2F42%207');
+    if (titleRequest) {
+      const patronLink = externalLinks.find(link => link.textContent === task.barcode);
+      assert.ok(patronLink, 'A cached Polaris patron ID should render as an external Leap link');
+      assert.equal(patronLink.href, 'https://leap.example/patron/9123');
+    }
     const unclaimedOpener = opener();
     const unchangedTaskOpener = opener('92');
     [...dialog.querySelectorAll('button')].find(button => button.textContent === 'Claim').click();
