@@ -161,6 +161,28 @@ function normalizeRule(value, fallback = {}) {
   return result;
 }
 
+const MESSAGE_TEXT_BEHAVIORS = new Set(['message', 'ebookMessage', 'eaudiobookMessage']);
+
+function messageBehaviorUsesText(value) {
+  return MESSAGE_TEXT_BEHAVIORS.has(clean(value) || 'none');
+}
+
+function updateRuleMessageUi(row) {
+  const messageField = row.querySelector('[data-rule-message-field]');
+  if (!messageField) return;
+
+  const behavior = row.querySelector('[data-rule-property="messageBehavior"]')?.value;
+  const visible = messageBehaviorUsesText(behavior);
+  messageField.hidden = !visible;
+  messageField.setAttribute('aria-hidden', String(!visible));
+
+  const textarea = messageField.querySelector('[data-rule-property="message"]');
+  if (textarea) {
+    textarea.disabled = !visible;
+    if (!visible) textarea.required = false;
+  }
+}
+
 function normalizeCustomFields(values) {
   return array(values).map((value, index) => ({
     id: stringId(property(value, 'id')),
@@ -640,15 +662,19 @@ export function createSettingsDomainEditors({ root, onChange = () => {} }) {
     if (values.length === 0) dom.rules.append(element('p', { className: 'settings-empty', text: 'No format rules configured.' }));
     const customFields = readFields();
     for (const [index, value] of values.entries()) {
+      const messageBehavior = select([
+        { value: 'none', label: 'No message' },
+        { value: 'message', label: 'Use message' },
+        { value: 'ebookMessage', label: 'eBook message' },
+        { value: 'eaudiobookMessage', label: 'eAudiobook message' }
+      ], value.messageBehavior, { 'data-rule-property': 'messageBehavior', 'data-domain-editable': 'true' });
+      const message = element('textarea', { rows: '3', 'data-rule-property': 'message', 'data-domain-editable': 'true' }, [value.message || '']);
+      const messageField = field('Message', message);
+      messageField.setAttribute('data-rule-message-field', 'true');
       const row = element('div', { className: 'settings-editor-row settings-rule-row', 'data-domain-row': 'true', 'data-rule-code': value.code }, [
         element('div', { className: 'settings-rule-heading' }, [element('strong', { text: value.code }), actions(index, values.length, (from, offset) => reorder('rules', from, offset), from => remove('rules', from))]),
-        field('Message behavior', select([
-          { value: 'none', label: 'No message' },
-          { value: 'message', label: 'Use message' },
-          { value: 'ebookMessage', label: 'eBook message' },
-          { value: 'eaudiobookMessage', label: 'eAudiobook message' }
-        ], value.messageBehavior, { 'data-rule-property': 'messageBehavior', 'data-domain-editable': 'true' })),
-        field('Message', element('textarea', { rows: '3', 'data-rule-property': 'message', 'data-domain-editable': 'true' }, [value.message || ''])),
+        field('Message behavior', messageBehavior),
+        messageField,
         element('div', { className: 'settings-rule-fields' }, ['title', 'author', 'identifier', 'publication'].map(name => fieldPair(name, value[name]))),
         element('div', { className: 'settings-rule-custom-fields' }, [
           element('strong', { text: 'Custom field rules' }),
@@ -666,6 +692,11 @@ export function createSettingsDomainEditors({ root, onChange = () => {} }) {
           })
         ])
       ]);
+      messageBehavior.addEventListener('change', () => {
+        updateRuleMessageUi(row);
+        onChange();
+      });
+      updateRuleMessageUi(row);
       dom.rules.append(row);
     }
   }

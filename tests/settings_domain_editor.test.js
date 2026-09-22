@@ -79,6 +79,45 @@ const { JSDOM } = require('jsdom');
     });
     editors.populate(data, false);
 
+    const existingRule = document.querySelector('#format-rules-editor [data-domain-row]');
+    const existingMessageBehavior = existingRule.querySelector('[data-rule-property="messageBehavior"]');
+    const existingMessageField = existingRule.querySelector('[data-rule-message-field]');
+    const existingMessage = existingMessageField.querySelector('[data-rule-property="message"]');
+    assert.strictEqual(existingMessageField.hidden, true);
+    assert.strictEqual(existingMessageField.getAttribute('aria-hidden'), 'true');
+    assert.strictEqual(existingMessage.disabled, true);
+    assert.strictEqual(existingMessage.required, false);
+
+    existingMessageBehavior.value = 'message';
+    existingMessageBehavior.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    existingMessage.value = 'Draft message preserved while editing';
+    assert.strictEqual(existingMessageField.hidden, false);
+    assert.strictEqual(existingMessage.disabled, false);
+
+    existingMessageBehavior.value = 'none';
+    existingMessageBehavior.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    assert.strictEqual(existingMessageField.hidden, true);
+    assert.strictEqual(existingMessage.disabled, true);
+    assert.strictEqual(existingMessage.value, 'Draft message preserved while editing');
+
+    existingMessageBehavior.value = 'ebookMessage';
+    existingMessageBehavior.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    assert.strictEqual(existingMessageField.hidden, false);
+    assert.strictEqual(existingMessage.disabled, false);
+    assert.strictEqual(existingMessage.value, 'Draft message preserved while editing');
+
+    document.getElementById('add-format-rule').click();
+    const addedRule = document.querySelector('#format-rules-editor [data-domain-row]:last-child');
+    const addedMessageBehavior = addedRule.querySelector('[data-rule-property="messageBehavior"]');
+    const addedMessageField = addedRule.querySelector('[data-rule-message-field]');
+    assert.strictEqual(addedMessageField.hidden, true);
+    assert.strictEqual(addedMessageField.querySelector('[data-rule-property="message"]').disabled, true);
+    addedMessageBehavior.value = 'eaudiobookMessage';
+    addedMessageBehavior.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    assert.strictEqual(addedMessageField.hidden, false);
+    assert.strictEqual(addedMessageField.querySelector('[data-rule-property="message"]').disabled, false);
+    assert.doesNotThrow(() => editors.collect());
+
     assert.strictEqual(root.querySelectorAll('textarea[data-settings-json]').length, 0);
     assert.strictEqual(root.querySelector('[data-setting-key="postmarkToken"]').dataset.systemOnly, undefined);
     assert.strictEqual(document.getElementById('publication-options-use-system').checked, false);
