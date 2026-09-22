@@ -14,6 +14,23 @@ function response(status, body) {
   };
 }
 
+function librarySettings(orgId, marker) {
+  return {
+    orgId,
+    isOverride: true,
+    ui_text: { loginNote: marker },
+    emails: {},
+    polaris: {},
+    workflow: { suggestionLimit: orgId },
+    formats: [],
+    formatClaimRules: [],
+    formatClaimStaffOptions: [],
+    publicationOptions: [],
+    customFields: [],
+    templates: []
+  };
+}
+
 async function flush() {
   await new Promise(resolve => setImmediate(resolve));
   await Promise.resolve();
@@ -80,6 +97,10 @@ async function waitFor(predicate) {
     let delayLibraryTwoOrganizations = false;
     let resolveLibraryTwoOrganizations;
     let useLibraryThreeOrganizations = false;
+    let delayLibraryTwoSettings = false;
+    let resolveLibraryTwoSettings;
+    let delayAddStaff = false;
+    let resolveAddStaff;
     let users = [
       {
         id: '9007199254740993',
@@ -129,6 +150,17 @@ async function waitFor(predicate) {
         }
         throw new Error('Unexpected session request');
       }
+      if (requestUrl.startsWith('/api/asap/staff/settings/library?')) {
+        if (requestUrl.includes('orgId=2') && delayLibraryTwoSettings) {
+          return new Promise(resolve => {
+            resolveLibraryTwoSettings = () => resolve(response(200, librarySettings(2, 'stale-library-two-baseline')));
+          });
+        }
+        if (requestUrl.includes('orgId=3')) {
+          return response(200, librarySettings(3, 'current-library-three-baseline'));
+        }
+        return response(200, librarySettings(1, 'system-baseline'));
+      }
       if (requestUrl === '/runtime-probe') {
         if (runtimeFailure === 'invalid') {
           return response(401, { code: 'staff_session_invalid' });
@@ -149,6 +181,9 @@ async function waitFor(predicate) {
       }
       if (requestUrl.includes('/api/asap/staff/additional-copies')) {
         return response(200, { items: [], scope: '2', availableLibraries: [] });
+      }
+      if (requestUrl === '/api/asap/staff/polaris/patron-codes') {
+        return response(200, { code: 'ok', data: [] });
       }
       if (requestUrl === '/api/asap/staff/organizations') {
         if (delayLibraryTwoOrganizations) {
@@ -212,6 +247,11 @@ async function waitFor(predicate) {
       if (requestUrl.startsWith('/api/asap/staff/users') && method !== 'GET') {
         const body = JSON.parse(options.body || '{}');
         writes.push({ url: requestUrl, method, body });
+        if (delayAddStaff && requestUrl === '/api/asap/staff/users' && method === 'POST') {
+          return new Promise(resolve => {
+            resolveAddStaff = () => resolve(response(201, { user: { id: '9007199254740404' } }));
+          });
+        }
         if (method === 'PATCH') {
           users = users.map(user => user.id === '9007199254740993'
             ? { ...user, userPrincipalName: body.email, displayName: body.displayName, notificationEmail: body.notificationEmail }
@@ -238,6 +278,7 @@ async function waitFor(predicate) {
     const http = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'http.js')).href);
     await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'app', 'events.js')).href);
     const loader = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'loader.js')).href);
+    const libraryContext = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'library-context.js')).href);
     const staffAccess = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings-users.js')).href);
 
     state.setStaffSession({ authenticated: false, antiforgeryToken: 'anonymous-token' });
@@ -361,6 +402,35 @@ async function waitFor(predicate) {
       'The delayed response must not overwrite the current authorization baseline');
 
     state.setCurrentLibraryContextOrgId('2');
+    delayLibraryTwoStaffUsers = true;
+    resolveLibraryTwoStaffUsers = undefined;
+    const oldestLibraryTwoLoad = staffAccess.loadStaffUsers();
+    await waitFor(() => typeof resolveLibraryTwoStaffUsers === 'function');
+    state.setCurrentLibraryContextOrgId('3');
+    await staffAccess.loadStaffUsers();
+    state.setCurrentLibraryContextOrgId('2');
+    delayLibraryTwoStaffUsers = false;
+    await staffAccess.loadStaffUsers();
+    assert.strictEqual(document.querySelectorAll('#staff-users-table-body tr[data-staff-id]').length, 2);
+    resolveLibraryTwoStaffUsers();
+    await oldestLibraryTwoLoad;
+    assert.strictEqual(document.querySelectorAll('#staff-users-table-body tr[data-staff-id]').length, 2,
+      'An older A response must not win after an A to B to A sequence');
+    assert.doesNotMatch(document.getElementById('staff-users-table-body').textContent, /Stale Library Two/);
+
+    delayLibraryTwoStaffUsers = true;
+    resolveLibraryTwoStaffUsers = undefined;
+    const olderSameContextLoad = staffAccess.loadStaffUsers();
+    await waitFor(() => typeof resolveLibraryTwoStaffUsers === 'function');
+    delayLibraryTwoStaffUsers = false;
+    await staffAccess.loadStaffUsers();
+    resolveLibraryTwoStaffUsers();
+    await olderSameContextLoad;
+    assert.strictEqual(document.querySelectorAll('#staff-users-table-body tr[data-staff-id]').length, 2,
+      'An older same-context refresh must not replace the newer response');
+    assert.match(document.getElementById('staff-users-msg').textContent, /Loaded 2 staff users/);
+
+    state.setCurrentLibraryContextOrgId('2');
     delayLibraryTwoOrganizations = true;
     const staleLibraryTwoOrganizations = staffAccess.populateStaffLibraryOptions();
     await waitFor(() => typeof resolveLibraryTwoOrganizations === 'function');
@@ -372,16 +442,59 @@ async function waitFor(predicate) {
       [...document.getElementById('staff-add-library').options].map(option => option.value),
       ['3']
     );
+    state.setCurrentLibraryContextOrgId('2');
+    await staffAccess.populateStaffLibraryOptions();
     resolveLibraryTwoOrganizations();
     await staleLibraryTwoOrganizations;
     assert.deepStrictEqual(
       [...document.getElementById('staff-add-library').options].map(option => option.value),
       ['3'],
-      'The delayed library-two organization response must not overwrite library three options'
+      'An older organization response must not win after an A to B to A sequence'
     );
+
+    delayLibraryTwoSettings = true;
+    state.setCurrentLibraryContextOrgId('2');
+    const staleLibrarySettingsLoad = libraryContext.loadLibrarySettings('2');
+    await waitFor(() => typeof resolveLibraryTwoSettings === 'function');
+    const currentLibrarySettingsLoad = libraryContext.loadLibrarySettings('3');
+    await currentLibrarySettingsLoad;
+    const currentBaseline = state.initialSettingsSnapshot;
+    assert.strictEqual(state.lastSavedLibrarySettingsOrgId, '3');
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.ui_text.loginNote, 'current-library-three-baseline');
+    assert.ok(currentBaseline, 'The current library settings load must capture its baseline');
+    resolveLibraryTwoSettings();
+    await staleLibrarySettingsLoad;
+    assert.strictEqual(state.lastSavedLibrarySettingsOrgId, '3',
+      'A delayed loadLibrarySettings response must not replace the current saved scope');
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.ui_text.loginNote, 'current-library-three-baseline');
+    assert.strictEqual(state.initialSettingsSnapshot, currentBaseline,
+      'A delayed loadLibrarySettings response must not overwrite the current settings baseline');
+    delayLibraryTwoSettings = false;
 
     delayLibraryTwoStaffUsers = false;
     useLibraryThreeOrganizations = false;
+    state.setCurrentLibraryContextOrgId('system');
+    await staffAccess.populateStaffLibraryOptions();
+    await staffAccess.loadStaffUsers();
+
+    document.getElementById('staff-add-identity').value = 'delayed-add@example.org';
+    document.getElementById('staff-add-role').value = 'staff';
+    document.getElementById('staff-add-library').value = '2';
+    delayAddStaff = true;
+    document.getElementById('btn-add-staff-user').click();
+    await waitFor(() => typeof resolveAddStaff === 'function');
+    state.setCurrentLibraryContextOrgId('3');
+    await staffAccess.loadStaffUsers();
+    document.getElementById('staff-add-identity').value = 'current-context-draft@example.org';
+    resolveAddStaff();
+    await waitFor(() => document.getElementById('btn-add-staff-user').disabled === false);
+    assert.strictEqual(document.getElementById('staff-add-identity').value, 'current-context-draft@example.org',
+      'A stale add-user completion must not clear the current context draft');
+    assert.strictEqual(document.querySelector('#staff-users-table-body tr[data-staff-id]')?.getAttribute('data-staff-id'),
+      '9007199254740303', 'A stale add-user completion must not refresh over the current context');
+    assert.doesNotMatch(document.getElementById('staff-users-msg').textContent, /Staff user saved/);
+    delayAddStaff = false;
+
     state.setCurrentLibraryContextOrgId('system');
     await staffAccess.populateStaffLibraryOptions();
     await staffAccess.loadStaffUsers();

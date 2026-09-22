@@ -4,6 +4,7 @@ import { authorizedJson, isAbortError } from './http.js';
 import { showAlert, showConfirm } from './dialogs.js';
 
 let staffOrganizations = [];
+let staffAccessLoadGeneration = 0;
 
 function clean(value) {
   return String(value ?? '').trim();
@@ -74,14 +75,28 @@ function staffLoadContext(options = {}) {
   return clean(options.contextOrgId ?? currentLibraryContextOrgId) || 'system';
 }
 
+export function beginStaffAccessLoad(options = {}) {
+  if (options.staffAccessLoadGeneration !== undefined) return options;
+
+  const generation = ++staffAccessLoadGeneration;
+  const parentIsCurrent = options.isCurrent;
+  return {
+    ...options,
+    staffAccessLoadGeneration: generation,
+    isCurrent: () => generation === staffAccessLoadGeneration &&
+      (!parentIsCurrent || parentIsCurrent())
+  };
+}
+
 function isCurrentStaffLoad(options, contextOrgId) {
   return (!options.isCurrent || options.isCurrent()) &&
     contextOrgId === (clean(currentLibraryContextOrgId) || 'system');
 }
 
 export function showStaffAccessLoading(options = {}) {
-  const contextOrgId = staffLoadContext(options);
-  if (!isCurrentStaffLoad(options, contextOrgId)) return false;
+  const loadOptions = beginStaffAccessLoad(options);
+  const contextOrgId = staffLoadContext(loadOptions);
+  if (!isCurrentStaffLoad(loadOptions, contextOrgId)) return false;
 
   const body = document.getElementById('staff-users-table-body');
   const refresh = document.getElementById('btn-refresh-staff-users');
@@ -110,16 +125,17 @@ function staffUsersUrl(contextOrgId = currentLibraryContextOrgId) {
 }
 
 export async function loadStaffUsers(options = {}) {
-  const contextOrgId = staffLoadContext(options);
+  const loadOptions = beginStaffAccessLoad(options);
+  const contextOrgId = staffLoadContext(loadOptions);
   const body = document.getElementById('staff-users-table-body');
   const refresh = document.getElementById('btn-refresh-staff-users');
   if (!body) return;
 
-  if (!options.loadingShown && !showStaffAccessLoading({ ...options, contextOrgId })) return false;
+  if (!loadOptions.loadingShown && !showStaffAccessLoading({ ...loadOptions, contextOrgId })) return false;
 
   try {
-    const result = await authorizedJson(staffUsersUrl(contextOrgId), { signal: options.signal });
-    if (!isCurrentStaffLoad(options, contextOrgId)) return false;
+    const result = await authorizedJson(staffUsersUrl(contextOrgId), { signal: loadOptions.signal });
+    if (!isCurrentStaffLoad(loadOptions, contextOrgId)) return false;
     const users = Array.isArray(result.users) ? result.users : [];
     setCanAssignSuperAdmin(!!result.canAssignSuperAdmin);
     renderStaffUsers(users);
@@ -129,7 +145,7 @@ export async function loadStaffUsers(options = {}) {
     );
     return true;
   } catch (error) {
-    if (isAbortError(error) || !isCurrentStaffLoad(options, contextOrgId)) return false;
+    if (isAbortError(error) || !isCurrentStaffLoad(loadOptions, contextOrgId)) return false;
     console.error('Failed to load staff users', error);
     setStaffMessage(error.message || 'Failed to load staff users.', 'mb-2 text-danger font-weight-bold');
     body.replaceChildren();
@@ -142,7 +158,7 @@ export async function loadStaffUsers(options = {}) {
     body.appendChild(row);
     return false;
   } finally {
-    if (refresh && isCurrentStaffLoad(options, contextOrgId)) refresh.disabled = false;
+    if (refresh && isCurrentStaffLoad(loadOptions, contextOrgId)) refresh.disabled = false;
   }
 }
 
@@ -238,23 +254,31 @@ export function renderStaffUsers(users) {
 
 async function refreshStaffAccess() {
   const contextOrgId = clean(currentLibraryContextOrgId) || 'system';
-  const loadedOrganizations = await populateStaffLibraryOptions({ contextOrgId });
+  const loadOptions = beginStaffAccessLoad({ contextOrgId });
+  showStaffAccessLoading(loadOptions);
+  const loadedOrganizations = await populateStaffLibraryOptions(loadOptions);
   if (!loadedOrganizations || contextOrgId !== (clean(currentLibraryContextOrgId) || 'system')) return false;
-  return loadStaffUsers({ contextOrgId });
+  const loadedUsers = await loadStaffUsers({ ...loadOptions, loadingShown: true });
+  return loadedUsers ? loadOptions.staffAccessLoadGeneration : false;
 }
 
 async function runStaffMutation(button, message, operation) {
   const contextOrgId = clean(currentLibraryContextOrgId) || 'system';
+  const startingGeneration = staffAccessLoadGeneration;
+  const completionIsCurrent = () => contextOrgId === (clean(currentLibraryContextOrgId) || 'system') &&
+    startingGeneration === staffAccessLoadGeneration;
   button.disabled = true;
   setStaffMessage(`${message}...`, 'mb-2 text-muted');
   try {
     const result = await operation();
-    if (contextOrgId !== (clean(currentLibraryContextOrgId) || 'system')) return;
-    await refreshStaffAccess();
-    if (contextOrgId !== (clean(currentLibraryContextOrgId) || 'system')) return;
+    if (!completionIsCurrent()) return;
+    const refreshGeneration = await refreshStaffAccess();
+    if (!refreshGeneration ||
+        refreshGeneration !== staffAccessLoadGeneration ||
+        contextOrgId !== (clean(currentLibraryContextOrgId) || 'system')) return;
     setStaffMessage(`${message}.${cleanupSummary(result?.cleanup)}`, 'mb-2 text-success font-weight-bold');
   } catch (error) {
-    if (isAbortError(error) || contextOrgId !== (clean(currentLibraryContextOrgId) || 'system')) return;
+    if (isAbortError(error) || !completionIsCurrent()) return;
     console.error(message, error);
     setStaffMessage(error.message || 'The staff access change could not be saved.', 'mb-2 text-danger font-weight-bold');
   } finally {
@@ -340,21 +364,22 @@ document.getElementById('btn-refresh-staff-users')?.addEventListener('click', ev
 });
 
 export async function populateStaffLibraryOptions(options = {}) {
-  const contextOrgId = staffLoadContext(options);
+  const loadOptions = beginStaffAccessLoad(options);
+  const contextOrgId = staffLoadContext(loadOptions);
   const select = document.getElementById('staff-add-library');
   const context = document.getElementById('staff-add-library-context');
-  if (!select || !context || !isCurrentStaffLoad(options, contextOrgId)) return false;
+  if (!select || !context || !isCurrentStaffLoad(loadOptions, contextOrgId)) return false;
 
   const me = staffSession.staff || {};
   const isSuper = isSuperAdminStaff();
   if (isSuper) {
-    const organizations = await authorizedJson('/api/asap/staff/organizations', { signal: options.signal });
-    if (!isCurrentStaffLoad(options, contextOrgId)) return false;
+    const organizations = await authorizedJson('/api/asap/staff/organizations', { signal: loadOptions.signal });
+    if (!isCurrentStaffLoad(loadOptions, contextOrgId)) return false;
     staffOrganizations = organizations;
     select.classList.remove('hidden');
     context.classList.add('hidden');
   } else {
-    if (!isCurrentStaffLoad(options, contextOrgId)) return false;
+    if (!isCurrentStaffLoad(loadOptions, contextOrgId)) return false;
     const libraryId = clean(me.organizationId || me.libraryOrgId);
     const libraryName = me.organizationName || me.libraryOrgName || `Library ${libraryId || '?'}`;
     staffOrganizations = [{ id: libraryId, displayName: libraryName }];
@@ -388,6 +413,10 @@ addStaffButton?.addEventListener('click', async () => {
   const email = clean(emailInput?.value);
   const role = clean(roleSelect?.value) || 'staff';
   const organizationId = role === 'super_admin' ? 1 : Number(librarySelect?.value);
+  const contextOrgId = clean(currentLibraryContextOrgId) || 'system';
+  const startingGeneration = staffAccessLoadGeneration;
+  const completionIsCurrent = () => contextOrgId === (clean(currentLibraryContextOrgId) || 'system') &&
+    startingGeneration === staffAccessLoadGeneration;
 
   if (!email) {
     await showAlert('Enter the staff authentication email / UPN.');
@@ -404,10 +433,15 @@ addStaffButton?.addEventListener('click', async () => {
       method: 'POST',
       body: { email, role, organizationId }
     });
-    emailInput.value = '';
-    await refreshStaffAccess();
+    if (!completionIsCurrent()) return;
+    const refreshGeneration = await refreshStaffAccess();
+    if (!refreshGeneration ||
+        refreshGeneration !== staffAccessLoadGeneration ||
+        contextOrgId !== (clean(currentLibraryContextOrgId) || 'system')) return;
+    if (emailInput.value === email) emailInput.value = '';
     setStaffMessage('Staff user saved. They can sign in with the matching Microsoft account.', 'mb-2 text-success font-weight-bold');
   } catch (error) {
+    if (!completionIsCurrent()) return;
     setStaffMessage(error.message || 'Failed to add staff member.', 'mb-2 text-danger font-weight-bold');
   } finally {
     addStaffButton.disabled = false;
