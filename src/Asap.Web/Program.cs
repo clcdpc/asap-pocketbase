@@ -109,6 +109,7 @@ if (externalConfiguration is not null)
     builder.Services.AddSingleton<PatronConfigurationService>();
     builder.Services.AddSingleton<PatronSessionService>();
     builder.Services.AddSingleton<PatronSuggestionService>();
+    builder.Services.AddSingleton<StaffSuggestionService>();
     builder.Services.AddTransient<IdentifierLookupJobs>();
     builder.Services.AddSingleton<IIdentifierLookupDispatcher, IdentifierLookupDispatcher>();
     builder.Services.AddSingleton<StaffEligibilityService>();
@@ -135,6 +136,10 @@ if (externalConfiguration is not null)
             services.GetRequiredService<Asap.Web.Infrastructure.Testing.DeterministicTestingPatronProvider>());
         builder.Services.AddSingleton<IStaffPolarisProvider>(services =>
             services.GetRequiredService<Asap.Web.Infrastructure.Testing.DeterministicTestingPatronProvider>());
+        builder.Services.AddSingleton<IStaffPatronLookupProvider>(services =>
+            services.GetRequiredService<Asap.Web.Infrastructure.Testing.DeterministicTestingPatronProvider>());
+        builder.Services.AddSingleton<IStaffCatalogSearchProvider>(services =>
+            services.GetRequiredService<Asap.Web.Infrastructure.Testing.DeterministicTestingPatronProvider>());
         builder.Services.AddSingleton<IPolarisReferenceProvider>(services =>
             services.GetRequiredService<Asap.Web.Infrastructure.Testing.DeterministicTestingPatronProvider>());
     }
@@ -143,6 +148,8 @@ if (externalConfiguration is not null)
         builder.Services.AddSingleton<PolarisPatronProvider>();
         builder.Services.AddSingleton<IPatronProvider>(services => services.GetRequiredService<PolarisPatronProvider>());
         builder.Services.AddSingleton<IStaffPolarisProvider>(services => services.GetRequiredService<PolarisPatronProvider>());
+        builder.Services.AddSingleton<IStaffPatronLookupProvider>(services => services.GetRequiredService<PolarisPatronProvider>());
+        builder.Services.AddSingleton<IStaffCatalogSearchProvider>(services => services.GetRequiredService<PolarisPatronProvider>());
         builder.Services.AddSingleton<IPolarisReferenceProvider>(services => services.GetRequiredService<PolarisPatronProvider>());
     }
     builder.Services.AddHostedService<DataProtectionInitializer>();

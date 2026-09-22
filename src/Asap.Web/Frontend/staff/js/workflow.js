@@ -109,6 +109,7 @@ export function createWorkflowApp() {
     claim: document.querySelector('#claim-filter'),
     tag: document.querySelector('#tag-filter'),
     refresh: document.querySelector('#refresh-queue'),
+    newSuggestion: document.querySelector('#new-suggestion'),
     summary: document.querySelector('#queue-summary'),
     grid: document.querySelector('#request-grid'),
     empty: document.querySelector('#queue-empty'),
@@ -137,7 +138,13 @@ export function createWorkflowApp() {
     createCopyForm: document.querySelector('#additional-copy-create-form'),
     createCopySummary: document.querySelector('#additional-copy-create-summary'),
     createCopyReminder: document.querySelector('#additional-copy-reminder'),
-    cancelCreateCopy: document.querySelector('#cancel-additional-copy')
+    cancelCreateCopy: document.querySelector('#cancel-additional-copy'),
+    staffSuggestionDialog: document.querySelector('#staff-suggestion-dialog'),
+    staffSuggestionForm: document.querySelector('#staff-suggestion-form'),
+    staffSuggestionStatus: document.querySelector('#staff-suggestion-status'),
+    staffSuggestionBody: document.querySelector('#staff-suggestion-body'),
+    staffSuggestionActions: document.querySelector('#staff-suggestion-actions'),
+    closeStaffSuggestion: document.querySelector('#close-staff-suggestion')
   };
 
   const state = {
@@ -162,6 +169,8 @@ export function createWorkflowApp() {
     operationsLoaded: false,
     createCopyRequest: null,
     createCopyReturnFocus: null,
+    staffSuggestion: null,
+    staffSuggestionReturnFocus: null,
     configurations: new Map()
   };
 
@@ -191,6 +200,14 @@ export function createWorkflowApp() {
 
   function cancelAdditionalCopyPreviewLoad() {
     latestLoads.begin('additional-copy-preview').abort();
+  }
+
+  function cancelStaffSuggestionLoad() {
+    latestLoads.begin('staff-suggestion').abort();
+  }
+
+  function cancelStaffCatalogLoad() {
+    latestLoads.begin('staff-catalog').abort();
   }
 
   function cancelDialogFocusReturn() {
@@ -227,8 +244,11 @@ export function createWorkflowApp() {
     cancelAssignmentCandidateLoad();
     cancelDialogMutationCompletion();
     cancelAdditionalCopyCreationCompletion();
+    cancelStaffSuggestionLoad();
+    cancelStaffCatalogLoad();
     if (dom.dialog.open) dom.dialog.close();
     if (dom.createCopyDialog.open) dom.createCopyDialog.close();
+    if (dom.staffSuggestionDialog.open) dom.staffSuggestionDialog.close();
     state.staff = null;
     state.selectedRequestId = null;
     state.selectedRequestType = null;
@@ -236,6 +256,8 @@ export function createWorkflowApp() {
     state.returnFocus = null;
     state.createCopyRequest = null;
     state.createCopyReturnFocus = null;
+    state.staffSuggestion = null;
+    state.staffSuggestionReturnFocus = null;
     latestLoads.begin('queue').abort();
     latestLoads.begin('additional-copies').abort();
     latestLoads.begin('operations').abort();
@@ -579,7 +601,23 @@ export function createWorkflowApp() {
       state.grid = new window.gridjs.Grid({
         columns: [
           { name: 'Title', width: '25%' },
-          { name: 'Patron', width: '17%' },
+          {
+            name: 'Patron',
+            width: '20%',
+            formatter: (cell, row) => {
+              const request = state.requests.find(item => item.id === row.cells[6].data);
+              const content = [window.gridjs.h('span', { className: 'grid-patron-name' }, cell)];
+              if (request?.barcode) {
+                content.push(window.gridjs.h('button', {
+                  type: 'button',
+                  className: 'grid-quick-suggest',
+                  'aria-label': `New suggestion for patron ${request.barcode}`,
+                  onClick: event => openStaffSuggestion(request.barcode, event.currentTarget)
+                }, [window.gridjs.h('i', { className: 'fa fa-plus', 'aria-hidden': 'true' }), 'Suggest']));
+              }
+              return window.gridjs.h('div', { className: 'grid-patron-cell' }, content);
+            }
+          },
           { name: 'Library', width: '14%' },
           { name: 'Tags', width: '16%' },
           {
@@ -953,6 +991,486 @@ export function createWorkflowApp() {
     );
     state.configurations.set(key, configuration);
     return configuration;
+  }
+
+  function staffSuggestionScopeOptions() {
+    if (state.staff?.role !== 'super_admin') {
+      return [{ value: String(state.staff?.organizationId || ''), text: state.staff?.organizationName || 'My library' }];
+    }
+    const options = [...(dom.scope?.options || [])]
+      .filter(option => option.value && option.value !== 'all')
+      .map(option => ({ value: option.value, text: option.textContent || option.value }));
+    if (!options.length && state.scope && state.scope !== 'all') {
+      options.push({ value: String(state.scope), text: state.staff.organizationName || state.scope });
+    }
+    return options;
+  }
+
+  function setStaffSuggestionStatus(message, kind = '') {
+    dom.staffSuggestionStatus.textContent = message || '';
+    dom.staffSuggestionStatus.className = `dialog-status${kind ? ` ${kind}` : ''}`;
+  }
+
+  function renderStaffSuggestionSearch({ query = '', message = '', kind = '' } = {}) {
+    const current = state.staffSuggestion || {};
+    const scopeOptions = staffSuggestionScopeOptions();
+    const scope = element('select', { required: 'required', 'aria-label': 'Servicing library' });
+    const selectedScope = current.scopeId || (state.scope !== 'all' ? String(state.scope) : '');
+    if (state.staff?.role === 'super_admin' && !selectedScope) {
+      scope.append(element('option', { value: '', text: 'Choose a servicing library' }));
+    }
+    for (const option of scopeOptions) {
+      scope.append(element('option', { value: option.value, text: option.text }));
+    }
+    if (selectedScope && scopeOptions.some(option => String(option.value) === String(selectedScope))) {
+      scope.value = String(selectedScope);
+    }
+    const queryInput = element('input', {
+      type: 'search',
+      autocomplete: 'off',
+      spellcheck: 'false',
+      maxlength: '200',
+      value: query,
+      placeholder: 'Barcode or patron name',
+      'aria-label': 'Patron barcode or name'
+    });
+    const help = element('small', {
+      text: state.staff?.role === 'super_admin'
+        ? 'Choose the library that will service this request. Patron search is scoped to that library when configured.'
+        : 'Search by barcode or name. Name results are verified against current Polaris data before they can be selected.'
+    });
+    const fields = element('div', { className: 'staff-suggestion-search-fields' }, [
+      labeledInput('Servicing library', scope),
+      labeledInput('Patron barcode or name', queryInput),
+      help
+    ]);
+    dom.staffSuggestionBody.replaceChildren(fields);
+    dom.staffSuggestionActions.replaceChildren(
+      element('button', { type: 'button', className: 'secondary-button', onclick: closeStaffSuggestion }, 'Cancel'),
+      element('button', { type: 'submit', className: 'primary-button' }, [icon('search'), 'Look up patron'])
+    );
+    state.staffSuggestion = {
+      ...current,
+      stage: 'lookup',
+      scopeId: scope.value || selectedScope || null,
+      controls: { scope, queryInput }
+    };
+    scope.addEventListener('change', () => {
+      state.staffSuggestion.scopeId = scope.value;
+    });
+    setStaffSuggestionStatus(message, kind);
+    queryInput.focus();
+  }
+
+  function renderStaffSuggestionMatches(result, query) {
+    renderStaffSuggestionSearch({
+      query,
+      message: 'More than one patron matched. Choose a candidate to refresh authoritative patron details.',
+      kind: ''
+    });
+    const list = element('div', { className: 'staff-suggestion-matches' });
+    list.append(element('h3', { text: 'Choose a patron' }));
+    const candidates = element('div', { className: 'staff-suggestion-candidate-list' });
+    for (const match of result.matches || []) {
+      candidates.append(element('button', {
+        type: 'button',
+        className: 'staff-suggestion-candidate',
+        onclick: () => lookupStaffPatron(null, match.barcode)
+      }, [
+        element('strong', { text: match.name || 'Patron' }),
+        element('span', { text: `${match.barcode} · Home library ${match.homeLibraryOrganizationName || match.homeLibraryOrganizationId}` })
+      ]));
+    }
+    list.append(candidates);
+    dom.staffSuggestionBody.append(list);
+  }
+
+  async function lookupStaffPatron(queryOverride = null, barcodeOverride = null) {
+    if (!state.staff || !state.staffSuggestion) return;
+    const controls = state.staffSuggestion.controls;
+    const scopeId = Number(controls?.scope?.value || state.staffSuggestion.scopeId);
+    const query = queryOverride === null
+      ? controls?.queryInput?.value.trim() || ''
+      : String(queryOverride).trim();
+    const barcode = barcodeOverride === null ? null : String(barcodeOverride).trim();
+    if (!Number.isInteger(scopeId) || scopeId <= 1) {
+      setStaffSuggestionStatus('Choose a participating servicing library first.', 'error');
+      controls?.scope?.focus();
+      return;
+    }
+    if (!barcode && !query) {
+      setStaffSuggestionStatus('Enter a patron barcode or name.', 'error');
+      controls?.queryInput?.focus();
+      return;
+    }
+
+    const load = latestLoads.begin('staff-suggestion');
+    state.staffSuggestion.scopeId = String(scopeId);
+    setStaffSuggestionStatus(barcode ? 'Refreshing the selected patron...' : 'Looking up the patron...');
+    const submit = dom.staffSuggestionActions.querySelector('button[type="submit"]');
+    if (submit) submit.disabled = true;
+    try {
+      const result = await authorizedJson('/api/asap/staff/patron-lookup', {
+        method: 'POST',
+        body: {
+          query: barcode ? null : query,
+          barcode,
+          libraryOrgId: scopeId
+        },
+        signal: load.signal
+      });
+      if (!load.isCurrent() || !state.staffSuggestion || state.staffSuggestion.scopeId !== String(scopeId)) return;
+      if (result.status === 'multiple_matches') {
+        renderStaffSuggestionMatches(result, query);
+        return;
+      }
+      if (result.status !== 'verified' || !result.patron) {
+        renderStaffSuggestionSearch({
+          query,
+          message: 'No eligible patron matched that search. Try a full barcode or a more specific name.',
+          kind: 'error'
+        });
+        return;
+      }
+      const configuration = await loadRequestConfiguration(result.libraryOrgId, load.signal);
+      if (!load.isCurrent() || !state.staffSuggestion || state.staffSuggestion.scopeId !== String(scopeId)) return;
+      renderStaffSuggestionForm(result, configuration);
+    } catch (error) {
+      if (load.isCurrent() && !isAbortError(error) && error.status !== 401) {
+        renderStaffSuggestionSearch({ query, message: error.message || 'Patron lookup could not be completed.', kind: 'error' });
+      }
+    } finally {
+      latestLoads.finish('staff-suggestion', load.token);
+    }
+  }
+
+  function renderStaffSuggestionForm(result, configuration) {
+    const context = result.patron;
+    const patron = context.patron;
+    const fakeRequest = { customFields: {} };
+    const format = selectWithHistorical(configuration.availableFormats, null, configuration.formatLabels || {});
+    format.setAttribute('aria-label', 'Material format');
+    format.required = true;
+    format.setAttribute('aria-required', 'true');
+    const title = element('input', { maxlength: '500', autocomplete: 'off' });
+    const author = element('input', { maxlength: '500', autocomplete: 'off' });
+    const identifier = element('input', { maxlength: '100', autocomplete: 'off' });
+    const publication = selectWithHistorical(configuration.publicationOptions, null);
+    publication.prepend(element('option', { value: '', text: 'Not specified' }));
+    publication.value = '';
+    publication.setAttribute('aria-label', 'Publication timing');
+    const exactDate = element('input', { type: 'date' });
+    const notes = element('textarea', { maxlength: '10000' });
+    const autohold = element('input', { type: 'checkbox', checked: true });
+    const emailConfirmation = element('input', { type: 'checkbox' });
+    const pickup = element('select', { required: 'required', 'aria-label': 'Preferred pickup location' });
+    const branches = Array.isArray(context.pickupBranches) ? context.pickupBranches : [];
+    for (const branch of branches) {
+      pickup.append(element('option', { value: branch.id, text: branch.label }));
+    }
+    if (context.currentPreferredPickupBranchId && branches.some(branch => branch.id === context.currentPreferredPickupBranchId)) {
+      pickup.value = String(context.currentPreferredPickupBranchId);
+    } else {
+      pickup.value = '';
+      pickup.prepend(element('option', { value: '', text: 'Choose a pickup location' }));
+    }
+    const customFields = element('div', { className: 'custom-fields wide' });
+    const formatNotice = element('p', { className: 'staff-format-notice field-help wide', hidden: true });
+    const titleField = labeledInput('Title', title);
+    const authorField = labeledInput('Author', author);
+    const identifierField = labeledInput('Identifier / ISBN', identifier);
+    const publicationField = labeledInput('Publication timing', publication);
+    const exactDateField = labeledInput('Exact publication date', exactDate);
+    const pickupField = labeledInput('Preferred pickup location', pickup);
+    const pickupHelp = element('small', {
+      id: 'staff-suggestion-pickup-help',
+      className: 'field-help',
+      text: "Changing this updates the patron's preferred pickup location in Polaris."
+    });
+    pickup.setAttribute('aria-describedby', pickupHelp.id);
+    pickupField.append(pickupHelp);
+    const warning = context.pickupWarning
+      ? element('small', { id: 'staff-suggestion-pickup-warning', className: 'dialog-status warning', text: context.pickupWarning })
+      : null;
+    if (warning) {
+      pickupField.append(warning);
+      pickup.setAttribute('aria-describedby', `${pickupHelp.id} ${warning.id}`);
+    }
+
+    const controls = {
+      format,
+      title,
+      author,
+      identifier,
+      publication,
+      exactDate,
+      notes,
+      autohold,
+      emailConfirmation,
+      pickup,
+      customFieldControls: new Map(),
+      fields: { titleField, authorField, identifierField, publicationField }
+    };
+    const catalogMode = element('select', { 'aria-label': 'Catalog search field' }, [
+      element('option', { value: 'title', text: 'Title' }),
+      element('option', { value: 'author', text: 'Author' }),
+      element('option', { value: 'identifier', text: 'Identifier / ISBN' })
+    ]);
+    const catalogQuery = element('input', {
+      id: 'staff-catalog-query',
+      type: 'search',
+      maxlength: '200',
+      autocomplete: 'off',
+      placeholder: 'Search Polaris catalog'
+    });
+    const catalogButton = element('button', {
+      id: 'staff-catalog-search-button',
+      type: 'button',
+      className: 'secondary-button',
+      onclick: () => searchCatalog()
+    }, [icon('search'), 'Search catalog']);
+    const catalogStatus = element('p', { className: 'field-help', role: 'status', 'aria-live': 'polite' });
+    const catalogResults = element('div', { className: 'staff-catalog-results' });
+    const catalogPanel = element('section', {
+      className: 'staff-catalog-search wide',
+      'aria-labelledby': 'staff-catalog-search-title'
+    }, [
+      element('h3', { id: 'staff-catalog-search-title', text: 'Find this title in Polaris' }),
+      element('p', { className: 'field-help', text: 'Search the catalog and choose a result to fill the title, author, and identifier.' }),
+      element('div', { className: 'staff-catalog-controls' }, [
+        labeledInput('Search by', catalogMode),
+        labeledInput('Catalog query', catalogQuery),
+        catalogButton
+      ]),
+      catalogStatus,
+      catalogResults
+    ]);
+    controls.catalog = { mode: catalogMode, query: catalogQuery, button: catalogButton, status: catalogStatus, results: catalogResults };
+    const applyFieldRule = (field, input, key, fallbackLabel, forceRequired = false) => {
+      const rule = configuration.formatRules?.[format.value]?.fields?.[key] || {};
+      const hidden = !forceRequired && rule.mode === 'hidden';
+      field.hidden = hidden;
+      input.disabled = hidden;
+      input.required = forceRequired || rule.mode === 'required';
+      input.setAttribute('aria-required', String(input.required));
+      const label = rule.label || fallbackLabel;
+      field.firstElementChild.textContent = `${label}${input.required ? ' *' : ''}`;
+    };
+    const updateFormat = () => {
+      applyFieldRule(titleField, title, 'title', 'Title', true);
+      applyFieldRule(authorField, author, 'author', 'Author');
+      applyFieldRule(identifierField, identifier, 'identifier', 'Identifier / ISBN');
+      applyFieldRule(publicationField, publication, 'publication', 'Publication timing');
+      controls.customFieldControls = renderCustomFieldEditor(customFields, fakeRequest, configuration, format.value);
+      const formatRule = configuration.formatRules?.[format.value];
+      const behavior = formatRule?.messageBehavior;
+      const message = behavior === 'ebookMessage'
+        ? configuration.ebookMessage
+        : behavior === 'eaudiobookMessage'
+          ? configuration.eaudiobookMessage
+          : formatRule?.message;
+      formatNotice.textContent = message || '';
+      formatNotice.hidden = !message;
+    };
+    format.addEventListener('change', updateFormat);
+
+    const renderCatalogResults = results => {
+      catalogResults.replaceChildren();
+      if (!Array.isArray(results) || results.length === 0) {
+        catalogStatus.textContent = 'No matching catalog records were found.';
+        return;
+      }
+      catalogStatus.textContent = `${results.length} catalog result${results.length === 1 ? '' : 's'} found.`;
+      for (const candidate of results) {
+        const label = element('strong', { text: candidate.title || `BIB ${candidate.bibId}` });
+        const detail = element('span', {
+          text: [candidate.author, candidate.identifier, candidate.publicationDate, `BIB ${candidate.bibId}`]
+            .filter(Boolean)
+            .join(' · ')
+        });
+        catalogResults.append(element('button', {
+          type: 'button',
+          className: 'staff-catalog-result',
+          onclick: () => {
+            title.value = candidate.title || title.value;
+            author.value = candidate.author || author.value;
+            identifier.value = candidate.identifier || identifier.value;
+            catalogStatus.textContent = `Catalog result BIB ${candidate.bibId} selected.`;
+            catalogResults.replaceChildren();
+            title.focus();
+          }
+        }, [label, detail]));
+      }
+    };
+    const searchCatalog = async () => {
+      const query = catalogQuery.value.trim();
+      if (!query) {
+        catalogStatus.textContent = 'Enter a title, author, or identifier to search the catalog.';
+        catalogQuery.focus();
+        return;
+      }
+      const load = latestLoads.begin('staff-catalog');
+      catalogButton.disabled = true;
+      catalogStatus.textContent = 'Searching Polaris catalog...';
+      try {
+        const response = await authorizedJson('/api/asap/staff/catalog-search', {
+          method: 'POST',
+          body: {
+            libraryOrgId: Number(state.staffSuggestion?.scopeId),
+            query,
+            mode: catalogMode.value
+          },
+          signal: load.signal
+        });
+        if (!load.isCurrent() || state.staffSuggestion?.controls?.catalog !== controls.catalog) return;
+        renderCatalogResults(response.results);
+      } catch (error) {
+        if (load.isCurrent() && !isAbortError(error) && error.status !== 401) {
+          catalogStatus.textContent = error.message || 'The Polaris catalog could not be searched.';
+        }
+      } finally {
+        catalogButton.disabled = false;
+        latestLoads.finish('staff-catalog', load.token);
+      }
+    };
+    catalogQuery.addEventListener('keydown', event => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      searchCatalog();
+    });
+
+    const patronCard = element('section', { className: 'staff-patron-card', 'aria-labelledby': 'staff-patron-card-title' }, [
+      element('h3', { id: 'staff-patron-card-title', text: patron.name || 'Verified patron' }),
+      element('p', { text: `${patron.barcode} · Home library: ${patron.homeLibraryOrganizationName}` }),
+      element('p', { text: context.email || 'No patron email is recorded.' })
+    ]);
+    const scopeNote = result.searchLibraryLimited
+      ? element('p', { className: 'field-help wide', text: `Patron is being serviced by ${result.libraryOrgName}.` })
+      : null;
+    const fields = element('div', { className: 'edit-form staff-suggestion-fields' }, [
+      patronCard,
+      scopeNote,
+      labeledInput('Format', format),
+      formatNotice,
+      catalogPanel,
+      titleField,
+      authorField,
+      identifierField,
+      publicationField,
+      exactDateField,
+      pickupField,
+      customFields,
+      element('label', { className: 'check-field' }, [autohold, element('span', { text: 'Automatically place hold' })]),
+      element('label', { className: 'check-field' }, [emailConfirmation, element('span', { text: 'Send a confirmation email to the patron (optional)' })]),
+      labeledInput('Staff notes', notes, 'wide')
+    ]);
+    dom.staffSuggestionBody.replaceChildren(fields);
+    dom.staffSuggestionActions.replaceChildren(
+      element('button', { type: 'button', className: 'secondary-button', onclick: () => renderStaffSuggestionSearch({ query: patron.barcode }) }, 'Change patron'),
+      element('button', { type: 'submit', className: 'primary-button', disabled: branches.length === 0 }, [icon('send'), 'Create suggestion'])
+    );
+    updateFormat();
+    state.staffSuggestion = {
+      ...state.staffSuggestion,
+      stage: 'create',
+      result,
+      configuration,
+      controls
+    };
+    setStaffSuggestionStatus(
+      branches.length ? 'Verify the details, then create the suggestion.' : 'Pickup locations are unavailable; the suggestion cannot be created until Polaris responds.',
+      branches.length ? '' : 'error');
+    if (format.options.length === 0) {
+      setStaffSuggestionStatus('No enabled material formats are available for this library.', 'error');
+    }
+    title.focus();
+  }
+
+  async function createStaffSuggestion() {
+    const current = state.staffSuggestion;
+    if (!current || current.stage !== 'create') return;
+    if (!dom.staffSuggestionForm.reportValidity()) return;
+    const controls = current.controls;
+    const result = current.result;
+    const fieldValue = input => input.disabled ? '' : input.value;
+    const body = {
+      libraryOrgId: Number(current.scopeId),
+      barcode: result.patron.patron.barcode,
+      format: controls.format.value || null,
+      title: fieldValue(controls.title),
+      author: fieldValue(controls.author),
+      identifier: fieldValue(controls.identifier),
+      publication: fieldValue(controls.publication) || null,
+      exactPublicationDate: controls.exactDate.value || null,
+      notes: controls.notes.value,
+      preferredPickupBranchId: Number(controls.pickup.value) || null,
+      currentPreferredPickupBranchIdAtLoad: result.patron.currentPreferredPickupBranchId,
+      autohold: controls.autohold.checked,
+      emailPatronConfirmation: controls.emailConfirmation.checked,
+      customFields: collectCustomFields({ customFields: {} }, controls.customFieldControls)
+    };
+    const load = latestLoads.begin('staff-suggestion');
+    const submit = dom.staffSuggestionActions.querySelector('button[type="submit"]');
+    if (submit) submit.disabled = true;
+    setStaffSuggestionStatus('Creating the suggestion...');
+    try {
+      await authorizedJson('/api/asap/staff/title-requests', {
+        method: 'POST',
+        body,
+        signal: load.signal
+      });
+      if (!load.isCurrent()) return;
+      closeStaffSuggestion();
+      await loadQueue({ skipDeepLink: true, silent: true });
+      announce('Suggestion created on behalf of the patron.', 'success');
+    } catch (error) {
+      if (!load.isCurrent() || isAbortError(error) || error.status === 401) return;
+      const code = error.response?.code;
+      if (code === 'pickup_changed_since_load' || code === 'request_not_created_pickup_changed') {
+        setStaffSuggestionStatus(error.message || 'The patron preference changed. Refreshing patron details...', 'error');
+        await lookupStaffPatron(null, result.patron.patron.barcode);
+      } else {
+        setStaffSuggestionStatus(error.message || 'The suggestion could not be created.', 'error');
+      }
+    } finally {
+      latestLoads.finish('staff-suggestion', load.token);
+    }
+  }
+
+  async function submitStaffSuggestion(event) {
+    event.preventDefault();
+    if (state.staffSuggestion?.stage === 'create') {
+      await createStaffSuggestion();
+      return;
+    }
+    await lookupStaffPatron();
+  }
+
+  function openStaffSuggestion(seedBarcode = null, returnFocus = null) {
+    if (!state.staff) return;
+    cancelStaffSuggestionLoad();
+    state.staffSuggestionReturnFocus = returnFocus || document.activeElement;
+    state.staffSuggestion = { scopeId: state.scope !== 'all' ? String(state.scope) : null, stage: 'lookup' };
+    renderStaffSuggestionSearch({ query: seedBarcode || '' });
+    if (!dom.staffSuggestionDialog.open) dom.staffSuggestionDialog.showModal();
+    window.requestAnimationFrame(() => {
+      if (dom.staffSuggestionDialog.open && state.staffSuggestion?.stage === 'lookup') {
+        state.staffSuggestion.controls.queryInput.focus();
+      }
+    });
+    if (seedBarcode) lookupStaffPatron(seedBarcode, seedBarcode);
+    announce('Look up a patron to start a new suggestion.');
+  }
+
+  function closeStaffSuggestion() {
+    cancelStaffSuggestionLoad();
+    cancelStaffCatalogLoad();
+    if (dom.staffSuggestionDialog.open) dom.staffSuggestionDialog.close();
+    const returnFocus = state.staffSuggestionReturnFocus;
+    state.staffSuggestion = null;
+    state.staffSuggestionReturnFocus = null;
+    if (returnFocus?.isConnected) returnFocus.focus();
+    else if (dom.newSuggestion?.isConnected) dom.newSuggestion.focus();
   }
 
   function addDetail(list, label, value) {
@@ -1728,6 +2246,7 @@ export function createWorkflowApp() {
     onSessionInvalid(() => showSignedOut('Your staff session ended or no longer has access. Sign in again.'));
     onAccessUnavailable(showAccessUnavailable);
     settingsController.bind();
+    dom.newSuggestion.addEventListener('click', event => openStaffSuggestion(null, event.currentTarget));
     dom.signOut.addEventListener('click', async () => {
       try {
         await authorizedJson('/api/asap/staff/sign-out', { method: 'POST' });
@@ -1812,6 +2331,12 @@ export function createWorkflowApp() {
     dom.createCopyDialog.addEventListener('cancel', event => {
       event.preventDefault();
       closeAdditionalCopyCreateDialog();
+    });
+    dom.staffSuggestionForm.addEventListener('submit', submitStaffSuggestion);
+    dom.closeStaffSuggestion.addEventListener('click', closeStaffSuggestion);
+    dom.staffSuggestionDialog.addEventListener('cancel', event => {
+      event.preventDefault();
+      closeStaffSuggestion();
     });
   }
 

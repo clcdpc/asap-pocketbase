@@ -21,6 +21,109 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
+    public async Task StaffSuggestionLookupAndCreatePreserveProvenanceWithoutPatronLimitOrEmailOutbox()
+    {
+        using var startup = factory!.CreateClient();
+        await startup.GetAsync("/api/asap/staff/session");
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var suggestions = factory.Services.GetRequiredService<StaffSuggestionService>();
+        var lookup = await suggestions.LookupAsync(
+            actor,
+            new StaffPatronLookupInput("multiple", null, 2),
+            CancellationToken.None);
+
+        Assert.AreEqual("multiple_matches", lookup.Status);
+        Assert.AreEqual(2, lookup.Matches.Count);
+
+        var title = $"Staff-assisted suggestion {Guid.NewGuid():N}";
+        var created = await suggestions.CreateAsync(
+            actor,
+            new StaffSuggestionInput(
+                2,
+                "29001234567890",
+                "book",
+                title,
+                "Staff Author",
+                null,
+                "Already published",
+                new DateOnly(2026, 9, 20),
+                "Requested during a staff desk interaction.",
+                101,
+                101,
+                true,
+                false,
+                new Dictionary<string, string?>()),
+            CancellationToken.None);
+
+        var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var context = await contextFactory.CreateDbContextAsync();
+        try
+        {
+            var request = await context.TitleRequests.SingleAsync(item => item.Id == created.Id);
+            Assert.AreEqual(2, request.LibraryOrganizationId);
+            Assert.AreEqual(2, request.StaffLibraryOrganizationIdCreatedBy);
+            Assert.AreEqual("29001234567890", request.Barcode);
+            Assert.AreEqual(title, request.Title);
+            Assert.AreEqual("Already published", request.Publication);
+            Assert.AreEqual(new DateOnly(2026, 9, 20), request.ExactPublicationDate);
+            Assert.AreEqual("Requested during a staff desk interaction.", request.Notes);
+            Assert.IsFalse(await context.EmailOutbox.AnyAsync(item => item.BusinessKey == $"patron-submission:{created.Id}"));
+
+            var creation = await context.TitleRequestEvents.SingleAsync(item =>
+                item.TitleRequestId == created.Id && item.EventType == "created");
+            Assert.AreEqual("staff", creation.ActorType);
+            Assert.AreEqual(actor.Id, creation.StaffUserId);
+            StringAssert.Contains("created on behalf of patron", creation.Message);
+            using var metadata = JsonDocument.Parse(creation.MetadataJson!);
+            Assert.AreEqual(2, metadata.RootElement.GetProperty("servicingLibraryOrganizationId").GetInt32());
+            Assert.IsFalse(metadata.RootElement.GetProperty("emailPatronConfirmation").GetBoolean());
+        }
+        finally
+        {
+            await context.TitleRequests
+                .Where(item => item.Id == created.Id)
+                .ExecuteDeleteAsync();
+        }
+    }
+
+    [TestMethod]
+    public async Task StaffSuggestionRequiresPublicationTimingEvenWhenExactPublicationDateIsProvided()
+    {
+        using var startup = factory!.CreateClient();
+        await startup.GetAsync("/api/asap/staff/session");
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var suggestions = factory.Services.GetRequiredService<StaffSuggestionService>();
+        var title = $"Staff publication validation {Guid.NewGuid():N}";
+
+        var exception = await Assert.ThrowsAsync<PatronFlowException>(() =>
+            suggestions.CreateAsync(
+                actor,
+                new StaffSuggestionInput(
+                    2,
+                    "29001234567890",
+                    "book",
+                    title,
+                    "Staff Author",
+                    null,
+                    null,
+                    new DateOnly(2026, 9, 20),
+                    "This request should fail before persistence.",
+                    101,
+                    101,
+                    true,
+                    false,
+                    new Dictionary<string, string?>()),
+                CancellationToken.None));
+
+        Assert.AreEqual(400, exception.StatusCode);
+        StringAssert.Contains("Publication Timing is required.", exception.Message);
+
+        var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var context = await contextFactory.CreateDbContextAsync();
+        Assert.IsFalse(await context.TitleRequests.AnyAsync(item => item.Title == title));
+    }
+
+    [TestMethod]
     public async Task SuccessfulSignInUpdatesOidMetadataWithoutChangingAuthenticationOrNotificationEmail()
     {
         using var startup = factory!.CreateClient();
