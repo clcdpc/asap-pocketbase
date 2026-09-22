@@ -69,6 +69,8 @@ export function applyLibrarySettingsToForm(settings) {
   const emails = settings.emails || {};
   const systemSettings = (settings.stored && settings.stored.systemSettings) || settings.systemSettings || settings;
   const polaris = (settings.stored && settings.stored.polaris) || settings.polaris || {};
+  const workflow = (currentLibraryContextOrgId === 'system' && settings.stored && settings.stored.workflow) ||
+    settings.workflow || {};
   setCurrentFormatClaimRules(settings.formatClaimRules || []);
   setFormatClaimStaffOptions(settings.formatClaimStaffOptions || []);
   setLeapBibUrlPattern(systemSettings.leapBibUrlPattern || '');
@@ -141,14 +143,14 @@ export function applyLibrarySettingsToForm(settings) {
 
   populateEmailTemplateForms(emails);
   populatePatronUiForms(settings.ui_text || {});
-  populateWorkflowForms(settings.workflow || {});
+  populateWorkflowForms(workflow);
   workflowSettings.isOverride = isOverride;
-  workflowSettings.outstandingTimeoutEnabled = !!((settings.workflow || {}).outstandingTimeoutEnabled);
-  workflowSettings.outstandingTimeoutDays = parseInt(((settings.workflow || {}).outstandingTimeoutDays) || '30', 10) || 30;
-  workflowSettings.additionalCopyTimeoutEnabled = !!((settings.workflow || {}).additionalCopyTimeoutEnabled);
-  workflowSettings.additionalCopyTimeoutDays = parseInt(((settings.workflow || {}).additionalCopyTimeoutDays) || '14', 10) || 14;
-  workflowSettings.autoPromote = !!(settings.workflow || {}).autoPromote;
-  workflowSettings.allowAnyRegisteredCardLogin = !!(settings.workflow || {}).allowAnyRegisteredCardLogin;
+  workflowSettings.outstandingTimeoutEnabled = !!workflow.outstandingTimeoutEnabled;
+  workflowSettings.outstandingTimeoutDays = parseInt(workflow.outstandingTimeoutDays || '30', 10) || 30;
+  workflowSettings.additionalCopyTimeoutEnabled = !!workflow.additionalCopyTimeoutEnabled;
+  workflowSettings.additionalCopyTimeoutDays = parseInt(workflow.additionalCopyTimeoutDays || '14', 10) || 14;
+  workflowSettings.autoPromote = !!workflow.autoPromote;
+  workflowSettings.allowAnyRegisteredCardLogin = !!workflow.allowAnyRegisteredCardLogin;
     loadEmailStatus(currentLibraryContextOrgId);
     if (settings.organizationSync) {
       const state = settings.organizationSync.status || 'not_loaded';

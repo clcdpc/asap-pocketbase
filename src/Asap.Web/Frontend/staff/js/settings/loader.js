@@ -22,7 +22,8 @@ function maybeSyncPolarisOrganizations(polaris) {
 }
 
 function updateWorkflowSettingsSummary(settings) {
-  const workflow = (settings && settings.workflow) || {};
+  const workflow = (currentLibraryContextOrgId === 'system' && settings && settings.stored && settings.stored.workflow) ||
+    (settings && settings.workflow) || {};
   workflowSettings.outstandingTimeoutEnabled = !!workflow.outstandingTimeoutEnabled;
   workflowSettings.outstandingTimeoutDays = parseInt(workflow.outstandingTimeoutDays || '30', 10) || 30;
   workflowSettings.additionalCopyTimeoutEnabled = !!workflow.additionalCopyTimeoutEnabled;

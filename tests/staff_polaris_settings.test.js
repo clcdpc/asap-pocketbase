@@ -22,6 +22,8 @@ const { JSDOM } = require('jsdom');
     global.document = dom.window.document;
     global.Event = dom.window.Event;
     global.CustomEvent = dom.window.CustomEvent;
+    global.Option = dom.window.Option;
+    global.requestAnimationFrame = callback => callback();
     global.fetch = async request => ({
       ok: true,
       status: 200,
@@ -34,9 +36,12 @@ const { JSDOM } = require('jsdom');
     const state = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'state.js')).href);
     const formPopulation = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'form-population.js')).href);
     const serializer = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'serialize-save.js')).href);
+    const saveController = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'save-controller.js')).href);
+    const http = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'http.js')).href);
     state.setStaffSession({
       authenticated: true,
       accessAllowed: true,
+      antiforgeryToken: 'test-antiforgery-token',
       staff: { role: 'super_admin', userPrincipalName: 'admin@example.org' }
     });
     const persisted = {
@@ -59,18 +64,92 @@ const { JSDOM } = require('jsdom');
       formatIconUrlPattern: 'https://cdn.example.org/formats/{format}.svg',
       patronEmbedAllowedOrigins: ['https://library.example.org', 'https://branch.example.org']
     };
-    formPopulation.applyLibrarySettingsToForm({
-      stored: { systemSettings: currentSystemSettings, polaris: persisted },
-      emails: {},
+    const persistedWorkflow = {
+      suggestionLimit: 11,
+      suggestionLimitMessage: 'Deliberately non-default suggestion limit',
+      outstandingTimeoutEnabled: true,
+      outstandingTimeoutDays: 61,
+      outstandingTimeoutSendEmail: true,
+      outstandingTimeoutRejectionTemplateId: '917',
+      holdPickupTimeoutEnabled: true,
+      holdPickupTimeoutDays: 27,
+      pendingHoldTimeoutEnabled: true,
+      pendingHoldTimeoutDays: 45,
+      additionalCopyTimeoutEnabled: true,
+      additionalCopyTimeoutDays: 33,
+      autoPromote: true,
+      commonAuthorsEnabled: true,
+      commonAuthorsLabel: 'Stored popular creators',
+      commonAuthorsHelp: 'Stored creator help',
+      commonAuthorsMessage: 'Stored creator message',
+      allowPatronAutoholdOptOut: true,
+      allowAnyRegisteredCardLogin: true,
+      patronCodeEligibilityEnabled: true,
+      patronCodeEligibilityMessage: 'Stored patron-code message'
+    };
+    const compatibilityWorkflow = {
+      suggestionLimit: 2,
+      suggestionLimitMessage: 'Incomplete compatibility workflow',
+      commonAuthorsEnabled: false,
+      commonAuthorsLabel: 'Compatibility creator label',
+      commonAuthorsHelp: 'Compatibility creator help',
+      commonAuthorsMessage: 'Compatibility creator message',
+      allowPatronAutoholdOptOut: false,
+      allowAnyRegisteredCardLogin: false,
+      patronCodeEligibilityEnabled: false,
+      patronCodeEligibilityMessage: 'Compatibility patron-code message'
+    };
+    const systemSettingsResponse = {
+      stored: {
+        systemSettings: currentSystemSettings,
+        polaris: persisted,
+        workflow: persistedWorkflow
+      },
+      emails: {
+        rejection_templates: [{ id: '917', name: 'Stored timeout rejection' }]
+      },
       ui_text: {},
-      workflow: {}
-    });
+      workflow: compatibilityWorkflow
+    };
+    formPopulation.applyLibrarySettingsToForm(systemSettingsResponse);
+    function restoreAllowedPatronCodes() {
+      let allowedPatronCodeIds = document.getElementById('allowed-patron-code-ids');
+      if (!allowedPatronCodeIds) {
+        allowedPatronCodeIds = document.createElement('input');
+        allowedPatronCodeIds.type = 'hidden';
+        allowedPatronCodeIds.id = 'allowed-patron-code-ids';
+        document.getElementById('allowed-patron-code-container').appendChild(allowedPatronCodeIds);
+      }
+      allowedPatronCodeIds.value = '31,47';
+    }
+    restoreAllowedPatronCodes();
     assert.strictEqual(document.getElementById('system-staff-url').value, currentSystemSettings.staffUrl);
     assert.strictEqual(document.getElementById('leap-bib-url-pattern').value, currentSystemSettings.leapBibUrlPattern);
     assert.strictEqual(document.getElementById('leap-patron-url-pattern').value, currentSystemSettings.leapPatronUrlPattern);
     assert.strictEqual(document.getElementById('format-icon-url-pattern').value, currentSystemSettings.formatIconUrlPattern);
     assert.strictEqual(document.getElementById('patron-embed-allowed-origins').value,
       currentSystemSettings.patronEmbedAllowedOrigins.join('\n'));
+    assert.strictEqual(document.getElementById('suggestion-limit').value, '11');
+    assert.strictEqual(document.getElementById('suggestion-limit-msg').value, persistedWorkflow.suggestionLimitMessage);
+    assert.strictEqual(document.getElementById('outstanding-timeout-enabled').checked, true);
+    assert.strictEqual(document.getElementById('outstanding-timeout-days').value, '61');
+    assert.strictEqual(document.getElementById('outstanding-timeout-send-email').checked, true);
+    assert.strictEqual(document.getElementById('outstanding-timeout-rejection-template-id').value, '917');
+    assert.strictEqual(document.getElementById('hold-pickup-timeout-enabled').checked, true);
+    assert.strictEqual(document.getElementById('hold-pickup-timeout-days').value, '27');
+    assert.strictEqual(document.getElementById('pending-hold-timeout-enabled').checked, true);
+    assert.strictEqual(document.getElementById('pending-hold-timeout-days').value, '45');
+    assert.strictEqual(document.getElementById('additional-copy-timeout-enabled').checked, true);
+    assert.strictEqual(document.getElementById('additional-copy-timeout-days').value, '33');
+    assert.strictEqual(document.getElementById('polaris-auto-promote').checked, true);
+    assert.strictEqual(document.getElementById('wf-common-authors-enabled').checked, true);
+    assert.strictEqual(document.getElementById('wf-common-authors-label').value, persistedWorkflow.commonAuthorsLabel);
+    assert.strictEqual(document.getElementById('wf-common-authors-help').value, persistedWorkflow.commonAuthorsHelp);
+    assert.strictEqual(document.getElementById('wf-common-authors-message').value, persistedWorkflow.commonAuthorsMessage);
+    assert.strictEqual(document.getElementById('allow-patron-autohold-opt-out').checked, true);
+    assert.strictEqual(document.getElementById('allow-any-registered-card-login').checked, true);
+    assert.strictEqual(document.getElementById('patron-code-eligibility-message').value,
+      persistedWorkflow.patronCodeEligibilityMessage);
 
     fields.populatePolarisSettingsForm(persisted);
     assert.strictEqual(document.getElementById('polaris-api-key').value, '');
@@ -103,24 +182,114 @@ const { JSDOM } = require('jsdom');
       assert.strictEqual(Object.hasOwn(roundTrip, obsolete), false, `${obsolete} must not be serialized`);
     }
 
+    const workflowPayload = serializer.buildSettingsPayload();
+    for (const [field, expected] of Object.entries(persistedWorkflow)) {
+      assert.strictEqual(workflowPayload[field], expected, `${field} must serialize from stored.workflow`);
+    }
+
     const ordered = [];
-    let savedPayload;
-    const success = await sequencing.saveThenTestPolaris(
-      async () => {
-        savedPayload = serializer.buildSettingsPayload();
+    const sentSettingsPayloads = [];
+    let saveCompleted = false;
+    global.fetch = async (request, options = {}) => {
+      const url = String(request);
+      const method = String(options.method || 'GET').toUpperCase();
+      if (url === '/api/asap/staff/settings/library' && method === 'POST') {
+        const body = JSON.parse(options.body);
+        sentSettingsPayloads.push(body);
+        systemSettingsResponse.stored.workflow = { ...body.workflow };
+        saveCompleted = true;
         ordered.push('save');
-        return true;
-      },
-      async () => { ordered.push('test'); return { code: 'polaris_connected' }; }
+        return { ok: true, status: 200, statusText: 'OK', json: async () => ({ code: 'saved' }) };
+      }
+      if (url === '/api/asap/staff/polaris/test' && method === 'POST') {
+        assert.strictEqual(saveCompleted, true, 'Polaris test must not run before the settings save completes');
+        ordered.push('test');
+        return { ok: true, status: 200, statusText: 'OK', json: async () => ({ code: 'polaris_connected' }) };
+      }
+      if (url.startsWith('/api/asap/staff/settings/library') && method === 'GET') {
+        return { ok: true, status: 200, statusText: 'OK', json: async () => systemSettingsResponse };
+      }
+      if (url.startsWith('/api/asap/staff/polaris/patron-codes')) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({ data: [
+            { id: '31', description: 'Adult' },
+            { id: '47', description: 'Young adult' }
+          ] })
+        };
+      }
+      if (url.startsWith('/api/asap/staff/users')) {
+        return { ok: true, status: 200, statusText: 'OK', json: async () => ({ users: [] }) };
+      }
+      if (url.startsWith('/api/asap/staff/organizations')) {
+        return { ok: true, status: 200, statusText: 'OK', json: async () => ({ data: [] }) };
+      }
+      return { ok: true, status: 200, statusText: 'OK', json: async () => ({}) };
+    };
+    const success = await sequencing.saveThenTestPolaris(
+      () => saveController.saveSettings({ clearDelay: 0 }),
+      () => http.authorizedJson('/api/asap/staff/polaris/test', { method: 'POST' })
     );
     assert.deepStrictEqual(ordered, ['save', 'test']);
     assert.strictEqual(success.saved, true);
     assert.strictEqual(success.tested, true);
-    assert.strictEqual(savedPayload.staffUrl, `${currentSystemSettings.staffUrl}/`,
+    const saveAndTestPayload = sentSettingsPayloads[0];
+    assert.strictEqual(saveAndTestPayload.staffUrl, `${currentSystemSettings.staffUrl}/`,
       'Save & test must retain the loaded current system settings contract');
-    assert.strictEqual(savedPayload.polaris.systemPolarisUserId, persisted.systemPolarisUserId);
-    assert.strictEqual(savedPayload.polaris.organizationIdForRequests, persisted.organizationIdForRequests);
-    assert.strictEqual(savedPayload.polaris.pickupOrganizationId, persisted.pickupOrganizationId);
+    assert.strictEqual(saveAndTestPayload.polaris.systemPolarisUserId, persisted.systemPolarisUserId);
+    assert.strictEqual(saveAndTestPayload.polaris.organizationIdForRequests, persisted.organizationIdForRequests);
+    assert.strictEqual(saveAndTestPayload.polaris.pickupOrganizationId, persisted.pickupOrganizationId);
+    for (const [field, expected] of Object.entries(persistedWorkflow)) {
+      assert.strictEqual(saveAndTestPayload.workflow[field], expected,
+        `Save & test must preserve workflow.${field}`);
+    }
+
+    restoreAllowedPatronCodes();
+    ordered.length = 0;
+    saveCompleted = false;
+    assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), true);
+    assert.deepStrictEqual(ordered, ['save']);
+    const ordinarySavePayload = sentSettingsPayloads[1];
+    for (const [field, expected] of Object.entries(persistedWorkflow)) {
+      assert.strictEqual(ordinarySavePayload.workflow[field], expected,
+        `ordinary save must preserve workflow.${field}`);
+    }
+
+    restoreAllowedPatronCodes();
+    document.getElementById('pending-hold-timeout-days').value = '46';
+    const intentionalEdit = serializer.buildSettingsPayload();
+    assert.strictEqual(intentionalEdit.pendingHoldTimeoutDays, 46,
+      'an intentional workflow edit must override the loaded stored value');
+    assert.strictEqual(intentionalEdit.outstandingTimeoutDays, persistedWorkflow.outstandingTimeoutDays);
+    ordered.length = 0;
+    saveCompleted = false;
+    assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), true);
+    assert.deepStrictEqual(ordered, ['save']);
+    assert.strictEqual(sentSettingsPayloads[2].workflow.pendingHoldTimeoutDays, 46);
+    assert.strictEqual(document.getElementById('pending-hold-timeout-days').value, '46',
+      'the intended workflow edit must survive save and reload');
+    assert.strictEqual(document.getElementById('outstanding-timeout-days').value, '61');
+
+    state.setCurrentLibraryContextOrgId('2');
+    const effectiveLibraryWorkflow = {
+      ...persistedWorkflow,
+      outstandingTimeoutDays: 72,
+      pendingHoldTimeoutDays: 19,
+      autoPromote: false
+    };
+    formPopulation.applyLibrarySettingsToForm({
+      stored: { workflow: persistedWorkflow },
+      emails: {},
+      ui_text: {},
+      workflow: effectiveLibraryWorkflow
+    });
+    assert.strictEqual(document.getElementById('outstanding-timeout-days').value, '72',
+      'library context must continue to populate effective/inherited workflow values');
+    assert.strictEqual(document.getElementById('pending-hold-timeout-days').value, '19');
+    assert.strictEqual(document.getElementById('polaris-auto-promote').checked, false);
+    state.setCurrentLibraryContextOrgId('system');
 
     document.getElementById('polaris-requesting-org-id').value = '732';
     const oneChange = fields.collectSettingsPolaris(true);
