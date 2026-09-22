@@ -22,9 +22,23 @@ const { JSDOM } = require('jsdom');
     global.document = dom.window.document;
     global.Event = dom.window.Event;
     global.CustomEvent = dom.window.CustomEvent;
+    global.fetch = async request => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => String(request).includes('/email-status') ? { enabled: false } : []
+    });
 
     const fields = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'polaris-fields.js')).href);
     const sequencing = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'polaris-test.js')).href);
+    const state = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'state.js')).href);
+    const formPopulation = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'form-population.js')).href);
+    const serializer = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'serialize-save.js')).href);
+    state.setStaffSession({
+      authenticated: true,
+      accessAllowed: true,
+      staff: { role: 'super_admin', userPrincipalName: 'admin@example.org' }
+    });
     const persisted = {
       host: 'https://polaris.example.org',
       accessId: 'access-42',
@@ -37,6 +51,26 @@ const { JSDOM } = require('jsdom');
       hasApiKey: true,
       hasAdminPassword: true
     };
+
+    const currentSystemSettings = {
+      staffUrl: 'https://staff.example.org',
+      leapBibUrlPattern: 'https://catalog.example.org/bib/{{bibid}}',
+      leapPatronUrlPattern: 'https://catalog.example.org/patron/{{patron-id}}',
+      formatIconUrlPattern: 'https://cdn.example.org/formats/{format}.svg',
+      patronEmbedAllowedOrigins: ['https://library.example.org', 'https://branch.example.org']
+    };
+    formPopulation.applyLibrarySettingsToForm({
+      stored: { systemSettings: currentSystemSettings, polaris: persisted },
+      emails: {},
+      ui_text: {},
+      workflow: {}
+    });
+    assert.strictEqual(document.getElementById('system-staff-url').value, currentSystemSettings.staffUrl);
+    assert.strictEqual(document.getElementById('leap-bib-url-pattern').value, currentSystemSettings.leapBibUrlPattern);
+    assert.strictEqual(document.getElementById('leap-patron-url-pattern').value, currentSystemSettings.leapPatronUrlPattern);
+    assert.strictEqual(document.getElementById('format-icon-url-pattern').value, currentSystemSettings.formatIconUrlPattern);
+    assert.strictEqual(document.getElementById('patron-embed-allowed-origins').value,
+      currentSystemSettings.patronEmbedAllowedOrigins.join('\n'));
 
     fields.populatePolarisSettingsForm(persisted);
     assert.strictEqual(document.getElementById('polaris-api-key').value, '');
@@ -68,6 +102,25 @@ const { JSDOM } = require('jsdom');
     for (const obsolete of ['userId', 'requestingOrgId', 'pickupOrgId', 'langId', 'appId', 'orgId']) {
       assert.strictEqual(Object.hasOwn(roundTrip, obsolete), false, `${obsolete} must not be serialized`);
     }
+
+    const ordered = [];
+    let savedPayload;
+    const success = await sequencing.saveThenTestPolaris(
+      async () => {
+        savedPayload = serializer.buildSettingsPayload();
+        ordered.push('save');
+        return true;
+      },
+      async () => { ordered.push('test'); return { code: 'polaris_connected' }; }
+    );
+    assert.deepStrictEqual(ordered, ['save', 'test']);
+    assert.strictEqual(success.saved, true);
+    assert.strictEqual(success.tested, true);
+    assert.strictEqual(savedPayload.staffUrl, `${currentSystemSettings.staffUrl}/`,
+      'Save & test must retain the loaded current system settings contract');
+    assert.strictEqual(savedPayload.polaris.systemPolarisUserId, persisted.systemPolarisUserId);
+    assert.strictEqual(savedPayload.polaris.organizationIdForRequests, persisted.organizationIdForRequests);
+    assert.strictEqual(savedPayload.polaris.pickupOrganizationId, persisted.pickupOrganizationId);
 
     document.getElementById('polaris-requesting-org-id').value = '732';
     const oneChange = fields.collectSettingsPolaris(true);
@@ -106,15 +159,6 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(fields.isPolarisConfigured({ ...persisted, adminUser: '' }), false);
     assert.strictEqual(fields.isPolarisConfigured({ ...persisted, apiKey: '', adminPassword: '' }), true,
       'configured detection must not require disclosed secrets');
-
-    const ordered = [];
-    const success = await sequencing.saveThenTestPolaris(
-      async () => { ordered.push('save'); return true; },
-      async () => { ordered.push('test'); return { code: 'polaris_connected' }; }
-    );
-    assert.deepStrictEqual(ordered, ['save', 'test']);
-    assert.strictEqual(success.saved, true);
-    assert.strictEqual(success.tested, true);
 
     let testsAfterFailure = 0;
     const failedSave = await sequencing.saveThenTestPolaris(

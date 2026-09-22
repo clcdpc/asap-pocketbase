@@ -67,11 +67,12 @@ export function applyLibrarySettingsToForm(settings) {
   settings = settings || {};
   const isOverride = !!settings.isOverride;
   const emails = settings.emails || {};
+  const systemSettings = (settings.stored && settings.stored.systemSettings) || settings.systemSettings || settings;
   const polaris = (settings.stored && settings.stored.polaris) || settings.polaris || {};
   setCurrentFormatClaimRules(settings.formatClaimRules || []);
   setFormatClaimStaffOptions(settings.formatClaimStaffOptions || []);
-  setLeapBibUrlPattern(settings.leapBibUrlPattern || '');
-  setLeapPatronUrlPattern(settings.leapPatronUrlPattern || '');
+  setLeapBibUrlPattern(systemSettings.leapBibUrlPattern || '');
+  setLeapPatronUrlPattern(systemSettings.leapPatronUrlPattern || '');
 
   const resetBtn = document.getElementById('btn-reset-library-settings');
   const statusAlert = document.getElementById('library-override-status');
@@ -83,11 +84,12 @@ export function applyLibrarySettingsToForm(settings) {
     if (document.getElementById('system-staff-url-group')) {
       document.getElementById('system-staff-url-group').classList.remove('hidden');
     }
-    setFieldValue('system-staff-url', settings.staffUrl || '');
+    setFieldValue('system-staff-url', systemSettings.staffUrl || '');
     setFieldValue('leap-bib-url-pattern', leapBibUrlPattern);
     setFieldValue('leap-patron-url-pattern', leapPatronUrlPattern);
-    setFieldValue('format-icon-url-pattern', settings.formatIconUrlPattern || '');
-    setFieldValue('patron-embed-allowed-origins', settings.patronEmbedAllowedOrigins || '');
+    setFieldValue('format-icon-url-pattern', systemSettings.formatIconUrlPattern || '');
+    const allowedOrigins = systemSettings.patronEmbedAllowedOrigins;
+    setFieldValue('patron-embed-allowed-origins', Array.isArray(allowedOrigins) ? allowedOrigins.join('\n') : (allowedOrigins || ''));
     if (document.getElementById('system-enabled-libraries-group')) {
       document.getElementById('system-enabled-libraries-group').classList.remove('hidden');
       renderLibraryParticipationCheckboxes();
