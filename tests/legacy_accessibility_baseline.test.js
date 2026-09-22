@@ -21,7 +21,8 @@ assert.deepEqual(
   unexpectedLegacyAccessibilityFindings(state('polaris-search', 'color-contrast', [
     '#polaris-search-status',
     '.polaris-warning',
-    '.btn-outline-success'
+    '.btn-outline-success',
+    '.polaris-search-result-actions > .btn-outline-success.btn-sm.btn'
   ])),
   []
 );

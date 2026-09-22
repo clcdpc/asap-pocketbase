@@ -18,12 +18,20 @@ function targetSelector(target) {
   return (Array.isArray(target) ? target : [target]).map(String).join(' > ');
 }
 
+function matchesTarget(entry, selector) {
+  if (entry.target === selector) return true;
+  if (entry.targetEndsWith && selector.endsWith(entry.targetEndsWith)) return true;
+  if (!entry.target || !/^\.[a-zA-Z0-9_-]+$/.test(entry.target)) return false;
+  const leaf = selector.split(' > ').at(-1);
+  return leaf.split(/(?=\.)/).includes(entry.target);
+}
+
 function isBaselined(state, ruleId, target) {
   const selector = targetSelector(target);
   return LEGACY_ACCESSIBILITY_BASELINE.some(entry =>
     entry.state === state &&
     entry.ruleId === ruleId &&
-    (entry.target === selector || (entry.targetEndsWith && selector.endsWith(entry.targetEndsWith))));
+    matchesTarget(entry, selector));
 }
 
 function unexpectedLegacyAccessibilityFindings(states) {

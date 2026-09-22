@@ -53,6 +53,11 @@ export function renderAdditionalFieldsEditor(definitions = additionalFieldDefini
     const tr = document.createElement('tr');
     tr.className = 'additional-field-row';
     tr.setAttribute('data-index', index);
+    tr.setAttribute('data-original-index', String(index));
+    tr.setAttribute('data-field-id', def.id || '');
+    tr.setAttribute('data-field-key', def.key || '');
+    tr.setAttribute('data-help-text', def.helpText || '');
+    tr.setAttribute('data-sort-order', String(def.sortOrder ?? ((index + 1) * 10)));
     tr.draggable = true;
 
     const dragTd = document.createElement('td');
@@ -148,6 +153,10 @@ export function renderAdditionalFieldsEditor(definitions = additionalFieldDefini
 function renderOptionRow(opt, optIndex) {
   const row = document.createElement('span');
   row.className = 'additional-field-option-row d-inline-flex align-items-center mr-2 mb-1';
+  row.setAttribute('data-option-id', opt.id || opt.key || '');
+  row.setAttribute('data-original-index', String(optIndex));
+  row.setAttribute('data-sort-order', String(opt.sortOrder ?? ((optIndex + 1) * 10)));
+  row.setAttribute('data-enabled', opt.enabled === false ? 'false' : 'true');
 
   const input = document.createElement('input');
   input.className = 'form-control form-control-sm additional-field-option-label-input';
@@ -177,19 +186,31 @@ function normalizeKey(value) {
 }
 
 export function collectAdditionalFieldDefinitions() {
-  return Array.from(document.querySelectorAll('#additional-fields-body > tr.additional-field-row')).map((row, index) => ({
-    key: normalizeKey(row.querySelector('.additional-field-label-input')?.value),
-    label: row.querySelector('.additional-field-label-input')?.value.trim() || '',
-    type: row.querySelector('.additional-field-type-select')?.value || 'text',
-    enabled: !!row.querySelector('.additional-field-enabled-check')?.checked,
-    sortOrder: (index + 1) * 10,
-    options: Array.from(row.parentElement.querySelectorAll(`.additional-field-options-row[data-parent-index="${row.getAttribute('data-index')}"] .additional-field-option-row`)).map((optRow, optIndex) => ({
-      id: normalizeKey(optRow.querySelector('.additional-field-option-label-input')?.value),
-      label: optRow.querySelector('.additional-field-option-label-input')?.value.trim() || '',
-      enabled: true,
-      sortOrder: (optIndex + 1) * 10
-    }))
-  }));
+  const rows = Array.from(document.querySelectorAll('#additional-fields-body > tr.additional-field-row'));
+  const orderChanged = rows.some((row, index) => Number(row.getAttribute('data-original-index')) !== index);
+  return rows.map((row, index) => {
+    const label = row.querySelector('.additional-field-label-input')?.value.trim() || '';
+    const optionRows = Array.from(row.parentElement.querySelectorAll(`.additional-field-options-row[data-parent-index="${row.getAttribute('data-index')}"] .additional-field-option-row`));
+    const optionOrderChanged = optionRows.some((optionRow, optionIndex) => Number(optionRow.getAttribute('data-original-index')) !== optionIndex);
+    return {
+      ...(row.getAttribute('data-field-id') ? { id: row.getAttribute('data-field-id') } : {}),
+      key: row.getAttribute('data-field-key') || normalizeKey(label),
+      label,
+      type: row.querySelector('.additional-field-type-select')?.value || 'text',
+      helpText: row.getAttribute('data-help-text') || null,
+      enabled: !!row.querySelector('.additional-field-enabled-check')?.checked,
+      sortOrder: orderChanged ? (index + 1) * 10 : Number(row.getAttribute('data-sort-order') || ((index + 1) * 10)),
+      options: optionRows.map((optRow, optIndex) => {
+        const optionLabel = optRow.querySelector('.additional-field-option-label-input')?.value.trim() || '';
+        return {
+          id: optRow.getAttribute('data-option-id') || normalizeKey(optionLabel),
+          label: optionLabel,
+          enabled: optRow.getAttribute('data-enabled') !== 'false',
+          sortOrder: optionOrderChanged ? (optIndex + 1) * 10 : Number(optRow.getAttribute('data-sort-order') || ((optIndex + 1) * 10))
+        };
+      })
+    };
+  });
 }
 
 document.addEventListener('input', event => {

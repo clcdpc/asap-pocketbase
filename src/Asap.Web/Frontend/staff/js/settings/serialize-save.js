@@ -1,6 +1,6 @@
 import { setFieldValue, setFieldChecked, getFieldValue, getFieldChecked, validateStaffUrl, normalizeStaffUrl, normalizeLeapBibUrlPattern, normalizeLeapPatronUrlPattern, setVisible, isSuperAdminStaff } from '../api.js';
-import { currentLibraryContextOrgId, currentRejectionTemplates, leapBibUrlPattern, leapPatronUrlPattern, initialSettingsSnapshot, defaultPublicationOptions, setInitialSettingsSnapshot, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId } from '../state.js';
-import { normalizeExternalSearchUrlTemplate, sortAuthorsByLastName } from './utils.js';
+import { currentLibraryContextOrgId, currentRejectionTemplates, leapBibUrlPattern, leapPatronUrlPattern, initialSettingsSnapshot, defaultPublicationOptions, setInitialSettingsSnapshot, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId, currentLegacySettingsFormModel } from '../state.js';
+import { normalizeExternalSearchUrlTemplate } from './utils.js';
 import { collectFormatLabels, collectAvailableFormats, collectFormatOrder, collectFormatClaimRules } from '../settings-formats.js';
 import { collectDuplicateStatusLabels } from './duplicate-labels.js';
 import { collectSettingsPolaris, collectEnabledLibraryIds } from './polaris-fields.js';
@@ -17,13 +17,89 @@ export function rememberLastSavedLibrarySettings(settings) {
   setLastSavedLibrarySettingsOrgId(currentLibraryContextOrgId || 'system');
 }
 
+function sameArray(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+export function collectExternalSearchProviders(validate = false) {
+  const model = currentLegacySettingsFormModel;
+  if (!model?.providerStateTrusted) return undefined;
+
+  return model.providers.map(provider => {
+    const match = /^external_search_([1-4])$/.exec(provider.key || '');
+    if (!match) return null;
+    const index = match[1];
+    const label = getFieldValue(`wf-external-search-${index}-label`).trim();
+    const urlTemplate = normalizeExternalSearchUrlTemplate(getFieldValue(`wf-external-search-${index}-url-template`).trim());
+    const isEnabled = getFieldChecked(`wf-external-search-${index}-enabled`);
+    if (validate) {
+      if (!label) throw new Error(`External search provider ${index} requires a label.`);
+      if (!urlTemplate) throw new Error(`External search provider ${index} requires a URL template.`);
+      setFieldValue(`wf-external-search-${index}-url-template`, urlTemplate);
+    }
+    const changed = isEnabled !== !!provider.isEnabled || label !== String(provider.label || '') ||
+      urlTemplate !== String(provider.urlTemplate || '');
+    return {
+      id: provider.id,
+      key: provider.key,
+      isEnabled,
+      label,
+      urlTemplate,
+      sortOrder: provider.sortOrder,
+      ...(!changed && provider.overridden !== undefined ? { overridden: !!provider.overridden } : {})
+    };
+  }).filter(Boolean);
+}
+
+export function collectMaterialFormats() {
+  const model = currentLegacySettingsFormModel;
+  if (!model?.formatStateTrusted) return undefined;
+  const labels = collectFormatLabels();
+  const order = collectFormatOrder();
+  const available = new Set(collectAvailableFormats());
+  const rules = collectPatronFormatRules();
+  const existingByCode = new Map(model.formats.map(format => [format.code, format]));
+  const baselineOrder = model.formats.map(format => format.code);
+  const orderChanged = !sameArray(order, baselineOrder);
+
+  const current = order.map((code, index) => {
+    const existing = existingByCode.get(code) || {};
+    const rule = rules[code] || {};
+    return {
+      ...(existing.id ? { id: existing.id } : {}),
+      code,
+      ownerOrganizationId: existing.ownerOrganizationId || (model.isSystem ? '1' : model.contextOrgId),
+      label: labels[code] || existing.label || code,
+      sortOrder: orderChanged ? (index + 1) * 10 : (existing.sortOrder ?? ((index + 1) * 10)),
+      isEnabled: available.has(code),
+      messageBehavior: rule.messageBehavior || 'none',
+      message: rule.message || '',
+      title: rule.fields?.title,
+      author: rule.fields?.author,
+      identifier: rule.fields?.identifier,
+      publication: rule.fields?.publication,
+      customFields: rule.customFields || {}
+    };
+  });
+
+  model.formats.forEach(existing => {
+    if (order.includes(existing.code)) return;
+    current.push({
+      id: existing.id,
+      code: existing.code,
+      ownerOrganizationId: existing.ownerOrganizationId || (model.isSystem ? '1' : model.contextOrgId),
+      label: existing.label || existing.code,
+      sortOrder: existing.sortOrder,
+      isEnabled: false
+    });
+  });
+  return current;
+}
+
 function _serializeSettingsState(validate = false) {
   const isSystemContext = isSuperAdminStaff() && currentLibraryContextOrgId === 'system';
 
   function serializeCommonCreators(value) {
-    if (!isSystemContext) {
-      return sortAuthorsByLastName(value);
-    }
     return String(value || '')
       .split('\n')
       .map(item => item.trim())
@@ -69,6 +145,9 @@ function _serializeSettingsState(validate = false) {
     }
   }
 
+  const publicationOptions = currentLegacySettingsFormModel?.publicationOptionStateTrusted
+    ? collectOptionList('ui-publication-options-editor', defaultPublicationOptions)
+    : undefined;
   const uiText = {
     logoAlt: getFieldValue('ui-logo-alt'),
     pageTitle: getFieldValue('ui-patron-page-title'),
@@ -84,12 +163,7 @@ function _serializeSettingsState(validate = false) {
     successMessage: getFieldValue('ui-success-msg'),
     alreadySubmittedMessage: getFieldValue('ui-already-submitted-msg'),
     duplicateStatusLabels: collectDuplicateStatusLabels(),
-    formatLabels: collectFormatLabels(),
-    formatOrder: collectFormatOrder(),
-    availableFormats: collectAvailableFormats(),
-    publicationOptions: collectOptionList('ui-publication-options-editor', defaultPublicationOptions),
-    formatRules: collectPatronFormatRules(),
-    ...(isSystemContext ? {} : { additionalFieldDefinitions: collectAdditionalFieldDefinitions() })
+    ...(publicationOptions === undefined ? {} : { publicationOptions })
   };
 
   const emails = {
@@ -122,10 +196,6 @@ function _serializeSettingsState(validate = false) {
 
   const sendAutoRejectEmail = getFieldChecked('outstanding-timeout-send-email');
   const nextAutoRejectTemplateId = getFieldValue('outstanding-timeout-rejection-template-id');
-  const externalSearch1UrlTemplate = normalizeExternalSearchUrlTemplate(getFieldValue('wf-external-search-1-url-template').trim() || 'https://www.amazon.com/s?k={{title}}');
-  const externalSearch2UrlTemplate = normalizeExternalSearchUrlTemplate(getFieldValue('wf-external-search-2-url-template').trim() || 'https://www.goodreads.com/search?q={{title}}');
-  const externalSearch3UrlTemplate = normalizeExternalSearchUrlTemplate(getFieldValue('wf-external-search-3-url-template').trim() || 'https://www.worldcat.org/search?q={{title}}');
-  const externalSearch4UrlTemplate = normalizeExternalSearchUrlTemplate(getFieldValue('wf-external-search-4-url-template'));
   const patronCodeEligibilityEnabled = getPatronCodeEligibilityEnabled();
   const allowedPatronCodeIds = collectAllowedPatronCodeIds()
     .split(',')
@@ -133,18 +203,25 @@ function _serializeSettingsState(validate = false) {
     .filter(Boolean);
 
   if (validate) {
-    if (patronCodeEligibilityEnabled && allowedPatronCodeIds.length === 0) {
+    if (currentLegacySettingsFormModel?.patronCodeStateTrusted &&
+        patronCodeEligibilityEnabled && allowedPatronCodeIds.length === 0) {
       throw new Error('Select at least one allowed patron code when patron code access is limited.');
     }
-    setFieldValue('wf-external-search-1-url-template', externalSearch1UrlTemplate);
-    setFieldValue('wf-external-search-2-url-template', externalSearch2UrlTemplate);
-    setFieldValue('wf-external-search-3-url-template', externalSearch3UrlTemplate);
-    setFieldValue('wf-external-search-4-url-template', externalSearch4UrlTemplate);
   }
+
+  const providers = collectExternalSearchProviders(validate);
+  const formats = collectMaterialFormats();
+  const customFields = !isSystemContext && currentLegacySettingsFormModel?.customFieldStateTrusted
+    ? collectAdditionalFieldDefinitions()
+    : undefined;
+  const formatClaimRules = collectFormatClaimRules();
 
   const payload = {
     ui_text: uiText, emails,
-    formatClaimRules: collectFormatClaimRules(),
+    ...(formatClaimRules === undefined ? {} : { formatClaimRules }),
+    ...(providers === undefined ? {} : { providers }),
+    ...(formats === undefined ? {} : { formats }),
+    ...(customFields === undefined ? {} : { customFields }),
     suggestionLimit: positiveInt('suggestion-limit', 5, 'Suggestion limit'),
     suggestionLimitMessage: getFieldValue('suggestion-limit-msg'),
     outstandingTimeoutEnabled: getFieldChecked('outstanding-timeout-enabled'),
@@ -160,26 +237,16 @@ function _serializeSettingsState(validate = false) {
     commonAuthorsEnabled: getFieldChecked('wf-common-authors-enabled'),
     commonAuthorsLabel: getFieldValue('wf-common-authors-label').trim() || 'Popular Creators',
     commonAuthorsHelp: getFieldValue('wf-common-authors-help').trim() || 'See if this is a creator we already collect.',
-    commonAuthorsList: serializeCommonCreators(getFieldValue('wf-common-authors-list')),
+    ...(currentLegacySettingsFormModel?.commonCreatorStateTrusted
+      ? { commonAuthorsList: serializeCommonCreators(getFieldValue('wf-common-authors-list')) }
+      : {}),
     commonAuthorsMessage: getFieldValue('wf-common-authors-message'),
     autoPromote: getFieldChecked('polaris-auto-promote'),
     allowPatronAutoholdOptOut: getFieldChecked('allow-patron-autohold-opt-out'),
     allowAnyRegisteredCardLogin: getFieldChecked('allow-any-registered-card-login'),
     patronCodeEligibilityEnabled: patronCodeEligibilityEnabled,
-    allowedPatronCodeIds: allowedPatronCodeIds,
-    patronCodeEligibilityMessage: getFieldValue('patron-code-eligibility-message').trim() || 'Your library card is not eligible to use this suggestion service.',
-    externalSearch1Enabled: getFieldChecked('wf-external-search-1-enabled'),
-    externalSearch1Label: getFieldValue('wf-external-search-1-label').trim() || 'Search Amazon',
-    externalSearch1UrlTemplate: externalSearch1UrlTemplate,
-    externalSearch2Enabled: getFieldChecked('wf-external-search-2-enabled'),
-    externalSearch2Label: getFieldValue('wf-external-search-2-label').trim() || 'Search Goodreads',
-    externalSearch2UrlTemplate: externalSearch2UrlTemplate,
-    externalSearch3Enabled: getFieldChecked('wf-external-search-3-enabled'),
-    externalSearch3Label: getFieldValue('wf-external-search-3-label').trim() || 'Search WorldCat',
-    externalSearch3UrlTemplate: externalSearch3UrlTemplate,
-    externalSearch4Enabled: getFieldChecked('wf-external-search-4-enabled'),
-    externalSearch4Label: getFieldValue('wf-external-search-4-label').trim(),
-    externalSearch4UrlTemplate: externalSearch4UrlTemplate
+    ...(currentLegacySettingsFormModel?.patronCodeStateTrusted ? { allowedPatronCodeIds } : {}),
+    patronCodeEligibilityMessage: getFieldValue('patron-code-eligibility-message').trim() || 'Your library card is not eligible to use this suggestion service.'
   };
 
   if (isSystemContext) {

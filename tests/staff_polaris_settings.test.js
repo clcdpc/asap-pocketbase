@@ -92,20 +92,33 @@ const { JSDOM } = require('jsdom');
     const persistedAllowedPatronCodeIds = ['31', '47'];
     const persistedProviders = [
       {
+        id: '201', sortOrder: 13,
         key: 'external_search_1', isEnabled: true, label: 'Search Local Discovery',
         urlTemplate: 'https://discovery.example.org/search?title={{title}}'
       },
       {
+        id: '202', sortOrder: 29,
         key: 'external_search_2', isEnabled: false, label: 'Disabled Research Index',
         urlTemplate: 'https://research.example.org/find/{{isbn}}'
       },
       {
+        id: '203', sortOrder: 44,
         key: 'external_search_3', isEnabled: true, label: 'Search Regional Catalog',
         urlTemplate: 'https://regional.example.org/?q={{title}}+{{author}}'
+      }
+    ];
+    const persistedFormats = [
+      {
+        id: '102', code: 'dvd', ownerOrganizationId: '1', label: 'Disc and Video', sortOrder: 17,
+        isEnabled: false, messageBehavior: 'message', message: 'Ask staff about video purchases.',
+        titleMode: 'required', titleLabel: 'Video title', authorMode: 'hidden', authorLabel: 'Director',
+        identifierMode: 'optional', identifierLabel: 'UPC', publicationMode: 'required', publicationLabel: 'Release timing'
       },
       {
-        key: 'external_search_4', isEnabled: true, label: 'Search Archive',
-        urlTemplate: 'https://archive.example.org/items?isbn={{isbn}}'
+        id: '101', code: 'book', ownerOrganizationId: '1', label: 'Printed Books', sortOrder: 43,
+        isEnabled: true, messageBehavior: 'none', message: '',
+        titleMode: 'required', titleLabel: 'Book title', authorMode: 'optional', authorLabel: 'Creator',
+        identifierMode: 'required', identifierLabel: 'ISBN', publicationMode: 'hidden', publicationLabel: 'Publication timing'
       }
     ];
     const organizations = [
@@ -133,12 +146,41 @@ const { JSDOM } = require('jsdom');
         workflow: persistedWorkflow,
         commonCreators: persistedCommonCreators,
         allowedPatronCodeIds: persistedAllowedPatronCodeIds,
-        providers: persistedProviders
+        providers: persistedProviders,
+        formats: persistedFormats,
+        customFields: [],
+        autoClaimRules: []
       },
       emails: {
         rejection_templates: [{ id: '917', name: 'Stored timeout rejection' }]
       },
-      ui_text: {},
+      ui_text: {
+        publicationOptions: [
+          { id: 'forthcoming', label: 'Forthcoming', enabled: true, sortOrder: 17 },
+          { id: 'backlist', label: 'Backlist', enabled: false, sortOrder: 41 }
+        ]
+      },
+      effective: {
+        workflow: persistedWorkflow,
+        commonCreators: persistedCommonCreators,
+        allowedPatronCodeIds: persistedAllowedPatronCodeIds,
+        externalSearchProviders: persistedProviders,
+        publicationOptions: [
+          { id: 'forthcoming', label: 'Forthcoming', enabled: true, sortOrder: 17 },
+          { id: 'backlist', label: 'Backlist', enabled: false, sortOrder: 41 }
+        ],
+        formats: persistedFormats.map(format => ({
+          id: format.id, code: format.code, label: format.label, sortOrder: format.sortOrder,
+          isEnabled: format.isEnabled, messageBehavior: format.messageBehavior, message: format.message,
+          title: { mode: format.titleMode, label: format.titleLabel },
+          author: { mode: format.authorMode, label: format.authorLabel },
+          identifier: { mode: format.identifierMode, label: format.identifierLabel },
+          publication: { mode: format.publicationMode, label: format.publicationLabel },
+          customFields: {}
+        })),
+        customFields: []
+      },
+      autoClaimStaff: [],
       workflow: compatibilityWorkflow
     };
     global.fetch = async (request, options = {}) => {
@@ -212,6 +254,11 @@ const { JSDOM } = require('jsdom');
       assert.strictEqual(document.getElementById(`wf-external-search-${number}-url-template`).value,
         provider.urlTemplate);
     });
+    assert.strictEqual(document.getElementById('wf-external-search-4-enabled').closest('.form-row').classList.contains('hidden'), true,
+      'a legacy provider slot without an authoritative provider must be hidden');
+    assert.deepStrictEqual(Array.from(document.querySelectorAll('.format-setting-row')).map(row => row.getAttribute('data-key')), ['dvd', 'book']);
+    assert.strictEqual(document.querySelector('.format-setting-row[data-key="dvd"] .format-enabled-check').checked, false);
+    assert.strictEqual(document.querySelector('.format-setting-row[data-key="book"] .format-label-input').value, 'Printed Books');
     assert.deepStrictEqual(
       Array.from(document.querySelectorAll('.lib-participation-cb:checked')).map(item => item.value),
       ['2', '4']);
@@ -257,12 +304,15 @@ const { JSDOM } = require('jsdom');
     assert.deepStrictEqual(workflowPayload.allowedPatronCodeIds, persistedAllowedPatronCodeIds);
     assert.strictEqual(workflowPayload.formatIconUrlPattern, currentSystemSettings.formatIconUrlPattern);
     assert.deepStrictEqual(workflowPayload.enabledLibraryOrgIds, ['2', '4']);
-    persistedProviders.forEach((provider, index) => {
-      const number = index + 1;
-      assert.strictEqual(workflowPayload[`externalSearch${number}Enabled`], provider.isEnabled);
-      assert.strictEqual(workflowPayload[`externalSearch${number}Label`], provider.label);
-      assert.strictEqual(workflowPayload[`externalSearch${number}UrlTemplate`], provider.urlTemplate);
-    });
+    assert.deepStrictEqual(workflowPayload.providers, persistedProviders.map(provider => ({ ...provider })));
+    assert.strictEqual(Object.keys(workflowPayload).some(key => key.startsWith('externalSearch4')), false);
+    assert.deepStrictEqual(workflowPayload.formats.map(format => ({
+      id: format.id, code: format.code, label: format.label, sortOrder: format.sortOrder, isEnabled: format.isEnabled
+    })), persistedFormats.map(format => ({
+      id: format.id, code: format.code, label: format.label, sortOrder: format.sortOrder, isEnabled: format.isEnabled
+    })));
+    assert.deepStrictEqual(workflowPayload.ui_text.publicationOptions.map(option => [option.id, option.enabled, option.sortOrder]),
+      [['forthcoming', true, 17], ['backlist', false, 41]]);
 
     const ordered = [];
     const sentSettingsPayloads = [];
@@ -277,12 +327,10 @@ const { JSDOM } = require('jsdom');
         systemSettingsResponse.stored.commonCreators = body.workflow.commonAuthorsList
           .split('\n').filter(Boolean);
         systemSettingsResponse.stored.allowedPatronCodeIds = [...body.workflow.allowedPatronCodeIds];
-        systemSettingsResponse.stored.providers = persistedProviders.map((provider, index) => ({
-          ...provider,
-          isEnabled: body.workflow[`externalSearch${index + 1}Enabled`],
-          label: body.workflow[`externalSearch${index + 1}Label`],
-          urlTemplate: body.workflow[`externalSearch${index + 1}UrlTemplate`]
-        }));
+        systemSettingsResponse.stored.providers = body.providers.map(provider => ({ ...provider }));
+        systemSettingsResponse.effective.externalSearchProviders = body.providers.map(provider => ({ ...provider }));
+        systemSettingsResponse.stored.formats = body.formats.map(format => ({ ...format }));
+        systemSettingsResponse.effective.formats = body.formats.map(format => ({ ...format }));
         systemSettingsResponse.stored.systemSettings.formatIconUrlPattern = body.formatIconUrlPattern;
         if (Object.hasOwn(body, 'enabledLibraryOrgIds')) {
           const enabled = new Set(body.enabledLibraryOrgIds.map(String));
@@ -344,12 +392,11 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(saveAndTestPayload.formatIconUrlPattern, currentSystemSettings.formatIconUrlPattern);
     assert.deepStrictEqual(saveAndTestPayload.enabledLibraryOrgIds, ['2', '4']);
     assert.strictEqual(Object.hasOwn(saveAndTestPayload.workflow, 'enabledLibraryOrgIds'), false);
-    persistedProviders.forEach((provider, index) => {
-      const number = index + 1;
-      assert.strictEqual(saveAndTestPayload.workflow[`externalSearch${number}Enabled`], provider.isEnabled);
-      assert.strictEqual(saveAndTestPayload.workflow[`externalSearch${number}Label`], provider.label);
-      assert.strictEqual(saveAndTestPayload.workflow[`externalSearch${number}UrlTemplate`], provider.urlTemplate);
-    });
+    assert.deepStrictEqual(saveAndTestPayload.providers, persistedProviders);
+    assert.strictEqual(Object.keys(saveAndTestPayload.workflow).some(key => key.startsWith('externalSearch')), false);
+    assert.deepStrictEqual(saveAndTestPayload.formats.map(format => format.code), ['dvd', 'book']);
+    assert.strictEqual(saveAndTestPayload.formats.find(format => format.code === 'dvd').isEnabled, false);
+    assert.strictEqual(saveAndTestPayload.formats.find(format => format.code === 'book').sortOrder, 43);
 
     await settleAsyncRendering();
     ordered.length = 0;
@@ -392,24 +439,26 @@ const { JSDOM } = require('jsdom');
     const targetedEdit = serializer.buildSettingsPayload();
     assert.strictEqual(targetedEdit.commonAuthorsList, 'Ursula K. Le Guin\nJames Baldwin');
     assert.deepStrictEqual(targetedEdit.allowedPatronCodeIds, ['47']);
-    assert.strictEqual(targetedEdit.externalSearch2Label, 'Edited Research Index');
+    assert.strictEqual(targetedEdit.providers.find(provider => provider.key === 'external_search_2').label, 'Edited Research Index');
     assert.strictEqual(targetedEdit.formatIconUrlPattern, 'https://new.example.org/icons/{format}.png');
     assert.deepStrictEqual(targetedEdit.enabledLibraryOrgIds, ['2', '3']);
-    assert.strictEqual(targetedEdit.externalSearch1Label, persistedProviders[0].label);
+    assert.strictEqual(targetedEdit.providers.find(provider => provider.key === 'external_search_1').label, persistedProviders[0].label);
     ordered.length = 0;
     saveCompleted = false;
     assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), true);
     const targetedPost = sentSettingsPayloads[3];
     assert.strictEqual(targetedPost.workflow.commonAuthorsList, targetedEdit.commonAuthorsList);
     assert.deepStrictEqual(targetedPost.workflow.allowedPatronCodeIds, targetedEdit.allowedPatronCodeIds);
-    assert.strictEqual(targetedPost.workflow.externalSearch2Label, targetedEdit.externalSearch2Label);
+    assert.strictEqual(targetedPost.providers.find(provider => provider.key === 'external_search_2').label,
+      targetedEdit.providers.find(provider => provider.key === 'external_search_2').label);
     assert.strictEqual(targetedPost.formatIconUrlPattern, targetedEdit.formatIconUrlPattern);
     assert.deepStrictEqual(targetedPost.enabledLibraryOrgIds, targetedEdit.enabledLibraryOrgIds);
     assert.strictEqual(Object.hasOwn(targetedPost.workflow, 'enabledLibraryOrgIds'), false);
     await settleAsyncRendering();
     assert.strictEqual(document.getElementById('wf-common-authors-list').value, targetedEdit.commonAuthorsList);
     assert.strictEqual(document.getElementById('allowed-patron-code-ids').value, targetedEdit.allowedPatronCodeIds.join(','));
-    assert.strictEqual(document.getElementById('wf-external-search-2-label').value, targetedEdit.externalSearch2Label);
+    assert.strictEqual(document.getElementById('wf-external-search-2-label').value,
+      targetedEdit.providers.find(provider => provider.key === 'external_search_2').label);
     assert.strictEqual(document.getElementById('format-icon-url-pattern').value, targetedEdit.formatIconUrlPattern);
     assert.deepStrictEqual(
       Array.from(document.querySelectorAll('.lib-participation-cb:checked')).map(item => item.value),
@@ -444,23 +493,127 @@ const { JSDOM } = require('jsdom');
       pendingHoldTimeoutDays: 19,
       autoPromote: false
     };
-    formPopulation.applyLibrarySettingsToForm({
-      stored: { workflow: persistedWorkflow },
-      emails: {},
-      ui_text: {},
-      workflow: {
-        ...effectiveLibraryWorkflow,
-        commonAuthorsList: 'Inherited creator',
-        allowedPatronCodeIds: '88',
-        externalSearch1Label: 'Inherited provider'
+    const libraryFormats = [
+      {
+        ...persistedFormats.find(format => format.code === 'book'),
+        label: 'Library Books', sortOrder: 23, identifierMode: 'hidden', identifierLabel: 'Local ISBN', overridden: true
+      },
+      {
+        id: '301', code: 'zine', ownerOrganizationId: '2', label: 'Community Zine', sortOrder: 57,
+        isEnabled: true, messageBehavior: 'message', message: 'Bring local zines to the desk.',
+        titleMode: 'required', titleLabel: 'Zine title', authorMode: 'optional', authorLabel: 'Maker',
+        identifierMode: 'hidden', identifierLabel: 'Identifier', publicationMode: 'optional', publicationLabel: 'Issue date'
       }
-    });
+    ];
+    const libraryCustomFields = [{
+      id: '401', key: 'audience_note', type: 'select', label: 'Audience note', helpText: 'Choose the intended audience.',
+      enabled: true, sortOrder: 37,
+      options: [
+        { id: 'general', label: 'General readers', enabled: true, sortOrder: 13 },
+        { id: 'specialist', label: 'Specialists', enabled: false, sortOrder: 31 }
+      ]
+    }];
+    const libraryProviders = persistedProviders.map(provider => provider.key === 'external_search_2'
+      ? { ...provider, label: 'Library Research Index', overridden: true }
+      : { ...provider, overridden: false });
+    const librarySettingsResponse = {
+      version: 'library-version-1',
+      isOverride: true,
+      stored: {
+        workflow: effectiveLibraryWorkflow,
+        commonCreators: ['Library Creator B', 'Library Creator A'],
+        allowedPatronCodeIds: ['47'],
+        providers: libraryProviders,
+        formats: libraryFormats,
+        customFields: libraryCustomFields,
+        autoClaimRules: [{ id: '501', materialFormatId: '301', staffUserId: '9007199254740993', active: true }],
+        libraryOverride: {
+          commonCreators: { exists: true, values: [{ value: 'Library Creator B' }, { value: 'Library Creator A' }] },
+          allowedPatronCodeIds: { exists: true, values: ['47'] },
+          providers: [{ id: '202', label: 'Library Research Index' }],
+          formats: [{ kind: 'systemOverride', materialFormatId: '101', label: 'Library Books' }]
+        }
+      },
+      emails: {},
+      ui_text: { publicationOptions: [{ id: 'local', label: 'Local publication', enabled: true, sortOrder: 19 }] },
+      effective: {
+        workflow: effectiveLibraryWorkflow,
+        commonCreators: ['Library Creator B', 'Library Creator A'],
+        allowedPatronCodeIds: ['47'],
+        externalSearchProviders: libraryProviders,
+        publicationOptions: [{ id: 'local', label: 'Local publication', enabled: true, sortOrder: 19 }],
+        formats: libraryFormats.map(format => ({
+          id: format.id, code: format.code, label: format.label, sortOrder: format.sortOrder,
+          isEnabled: format.isEnabled, messageBehavior: format.messageBehavior, message: format.message,
+          title: { mode: format.titleMode, label: format.titleLabel },
+          author: { mode: format.authorMode, label: format.authorLabel },
+          identifier: { mode: format.identifierMode, label: format.identifierLabel },
+          publication: { mode: format.publicationMode, label: format.publicationLabel },
+          customFields: format.code === 'zine' ? { audience_note: { mode: 'required', labelOverride: 'Zine audience' } } : {}
+        })),
+        customFields: libraryCustomFields
+      },
+      autoClaimStaff: [{ id: '9007199254740993', label: 'Large-ID Librarian' }]
+    };
+    formPopulation.applyLibrarySettingsToForm(librarySettingsResponse);
+    serializer.rememberLastSavedLibrarySettings(librarySettingsResponse);
+    await settleAsyncRendering();
     assert.strictEqual(document.getElementById('outstanding-timeout-days').value, '72',
       'library context must continue to populate effective/inherited workflow values');
     assert.strictEqual(document.getElementById('pending-hold-timeout-days').value, '19');
     assert.strictEqual(document.getElementById('polaris-auto-promote').checked, false);
-    assert.strictEqual(document.getElementById('wf-common-authors-list').value, 'Inherited creator');
-    assert.strictEqual(document.getElementById('wf-external-search-1-label').value, 'Inherited provider');
+    assert.strictEqual(document.getElementById('wf-common-authors-list').value, 'Library Creator B\nLibrary Creator A');
+    assert.strictEqual(document.getElementById('wf-external-search-2-label').value, 'Library Research Index');
+    assert.strictEqual(document.querySelector('.format-setting-row[data-key="zine"] .format-label-input').value, 'Community Zine');
+    assert.strictEqual(document.querySelector('.format-setting-row[data-key="zine"] .format-claim-staff-select').value,
+      '9007199254740993');
+    assert.strictEqual(document.querySelector('.additional-field-row').getAttribute('data-field-key'), 'audience_note');
+
+    const libraryRoundTrip = serializer.buildSettingsPayload();
+    assert.strictEqual(libraryRoundTrip.commonAuthorsList, 'Library Creator B\nLibrary Creator A',
+      'library creator order must not be rewritten by a no-edit save');
+    assert.deepStrictEqual(libraryRoundTrip.allowedPatronCodeIds, ['47']);
+    assert.strictEqual(libraryRoundTrip.providers.length, 3);
+    assert.strictEqual(libraryRoundTrip.providers.find(provider => provider.key === 'external_search_2').label,
+      'Library Research Index');
+    assert.strictEqual(Object.keys(libraryRoundTrip).some(key => key.startsWith('externalSearch4')), false);
+    assert.deepStrictEqual(libraryRoundTrip.formats.map(format => [format.code, format.sortOrder, format.isEnabled]),
+      [['book', 23, true], ['zine', 57, true]]);
+    assert.deepStrictEqual(libraryRoundTrip.ui_text.publicationOptions,
+      [{ id: 'local', label: 'Local publication', enabled: true, sortOrder: 19 }]);
+    assert.strictEqual(libraryRoundTrip.formats.find(format => format.code === 'book').identifier.mode, 'hidden');
+    assert.strictEqual(libraryRoundTrip.formats.find(format => format.code === 'zine').message, 'Bring local zines to the desk.');
+    assert.strictEqual(libraryRoundTrip.customFields[0].id, '401');
+    assert.strictEqual(libraryRoundTrip.customFields[0].key, 'audience_note');
+    assert.strictEqual(libraryRoundTrip.customFields[0].helpText, 'Choose the intended audience.');
+    assert.deepStrictEqual(libraryRoundTrip.customFields[0].options.map(option => [option.id, option.enabled, option.sortOrder]),
+      [['general', true, 13], ['specialist', false, 31]]);
+    assert.deepStrictEqual(libraryRoundTrip.formatClaimRules, [{
+      materialFormatId: '301', staffUserId: '9007199254740993', active: true
+    }]);
+
+    state.setStaffSession({
+      authenticated: true,
+      accessAllowed: true,
+      antiforgeryToken: 'test-antiforgery-token',
+      staff: { role: 'admin', userPrincipalName: 'library-admin@example.org', organizationId: '2', organizationName: 'Central' }
+    });
+    ordered.length = 0;
+    saveCompleted = false;
+    assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), true);
+    const libraryPost = sentSettingsPayloads[5];
+    assert.strictEqual(libraryPost.orgId, '2');
+    assert.strictEqual(Object.keys(libraryPost.workflow).some(key => key.startsWith('externalSearch')), false);
+    assert.strictEqual(libraryPost.providers.length, 3);
+    assert.strictEqual(libraryPost.formats.find(format => format.code === 'zine').ownerOrganizationId, '2');
+    assert.strictEqual(libraryPost.customFields[0].key, 'audience_note');
+    assert.strictEqual(libraryPost.formatClaimRules[0].staffUserId, '9007199254740993');
+
+    formPopulation.applyLibrarySettingsToForm({ ...librarySettingsResponse, autoClaimStaff: undefined });
+    await settleAsyncRendering();
+    const missingStaffChoices = serializer.buildSettingsPayload();
+    assert.strictEqual(Object.hasOwn(missingStaffChoices, 'formatClaimRules'), false,
+      'unavailable auto-claim staff choices must not clear the stored assignment set');
     state.setCurrentLibraryContextOrgId('system');
 
     document.getElementById('polaris-requesting-org-id').value = '732';

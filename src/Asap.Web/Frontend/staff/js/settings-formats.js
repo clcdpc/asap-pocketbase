@@ -1,4 +1,4 @@
-import { formatMap, availableFormats, setAvailableFormats, currentFormatClaimRules, setCurrentFormatClaimRules, formatClaimStaffOptions, currentLibraryContextOrgId } from './state.js';
+import { formatMap, availableFormats, setAvailableFormats, currentFormatClaimRules, setCurrentFormatClaimRules, formatClaimStaffOptions, currentLibraryContextOrgId, currentLegacySettingsFormModel } from './state.js';
 
 import { setInlineStatus, markSettingsDirty } from './api.js';
 import { showConfirm, showToast } from './dialogs.js';
@@ -278,11 +278,14 @@ export function updateFormatClaimRuleState(format, staffUserId) {
 }
 
 export function collectFormatClaimRules() {
+  if (currentLegacySettingsFormModel && !currentLegacySettingsFormModel.autoClaimStateTrusted) {
+    return undefined;
+  }
   const byFormat = {};
 
   // Start with in-memory state so assignments made in the Staff tab are preserved.
   (currentFormatClaimRules || []).forEach(rule => {
-    if (rule && rule.format) byFormat[rule.format] = rule.staffUserId || '';
+    if (rule && rule.format) byFormat[rule.format] = { ...rule, staffUserId: rule.staffUserId || '' };
   });
 
   // Overlay with current DOM values when the Formats tab has been rendered.
@@ -294,18 +297,26 @@ export function collectFormatClaimRules() {
     const select = row.querySelector('.format-claim-staff-select');
     if (!select) return;
     const domValue = select.value || '';
-    const stateValue = byFormat[format] || '';
+    const stateValue = byFormat[format]?.staffUserId || '';
     const stateOptionExists = !stateValue || Array.from(select.options).some(opt => opt.value === stateValue);
     if (domValue === '' && stateValue && !stateOptionExists) {
       return;
     }
     const optionExists = domValue === '' || Array.from(select.options).some(opt => opt.value === domValue);
     if (optionExists) {
-      byFormat[format] = domValue;
+      byFormat[format] = { ...(byFormat[format] || {}), format, staffUserId: domValue };
     }
   });
 
-  return Object.keys(byFormat).map(format => ({ format, staffUserId: byFormat[format] || '' }));
+  const formatIds = new Map((currentLegacySettingsFormModel?.formats || []).map(format => [format.code, String(format.id || '')]));
+  return Object.keys(byFormat)
+    .filter(format => byFormat[format].staffUserId)
+    .map(format => ({
+      materialFormatId: String(byFormat[format].materialFormatId || formatIds.get(format) || ''),
+      staffUserId: String(byFormat[format].staffUserId),
+      active: true
+    }))
+    .filter(rule => rule.materialFormatId);
 }
 
 export function updateModalFormatDropdowns() {

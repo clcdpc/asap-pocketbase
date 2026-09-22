@@ -125,10 +125,12 @@ export function renderOptionListEditor(editorId, options, fallbackLabels) {
   const editor = document.getElementById(editorId);
   if (!editor) return;
   const list = normalizeOptionList(options, fallbackLabels);
-  const rows = list.map(option => {
+  const rows = list.map((option, index) => {
     const row = document.createElement('div');
     row.className = 'option-list-row';
     row.setAttribute('data-option-id', option.id);
+    row.setAttribute('data-original-index', String(index));
+    row.setAttribute('data-sort-order', String(option.sortOrder ?? ((index + 1) * 10)));
     row.draggable = true;
 
     const dragHandle = document.createElement('div');
@@ -178,6 +180,7 @@ export function collectOptionList(editorId, fallbackLabels) {
   if (!editor) return normalizeOptionList([], fallbackLabels);
   const seen = new Set();
   const rows = Array.from(editor.querySelectorAll('.option-list-row'));
+  const orderChanged = rows.some((row, index) => Number(row.getAttribute('data-original-index')) !== index);
   const options = rows.map((row, index) => {
     const input = row.querySelector('.option-list-label');
     const label = input ? input.value.trim() : '';
@@ -190,7 +193,7 @@ export function collectOptionList(editorId, fallbackLabels) {
       id: existingId || optionIdFromLabel(label, `option_${index + 1}`),
       label,
       enabled: !!row.querySelector('.option-list-enabled')?.checked,
-      sortOrder: (index + 1) * 10
+      sortOrder: orderChanged ? (index + 1) * 10 : Number(row.getAttribute('data-sort-order') || ((index + 1) * 10))
     };
   }).filter(Boolean);
   if (!options.length) throw new Error('Each option list must include at least one label.');

@@ -43,7 +43,10 @@ export async function saveSettings(options = {}) {
       emails: payload.emails,
       ...(isEmailSave ? {} : {
         ui_text: payload.ui_text,
-        formatClaimRules: isSystemSave ? [] : payload.formatClaimRules,
+        ...(!isSystemSave && Object.hasOwn(payload, 'formatClaimRules') ? { formatClaimRules: payload.formatClaimRules } : {}),
+        ...(Object.hasOwn(payload, 'providers') ? { providers: payload.providers } : {}),
+        ...(Object.hasOwn(payload, 'formats') ? { formats: payload.formats } : {}),
+        ...(Object.hasOwn(payload, 'customFields') ? { customFields: payload.customFields } : {}),
         workflow: {
         suggestionLimit: payload.suggestionLimit,
         suggestionLimitMessage: payload.suggestionLimitMessage,
@@ -67,19 +70,7 @@ export async function saveSettings(options = {}) {
         allowAnyRegisteredCardLogin: payload.allowAnyRegisteredCardLogin,
         patronCodeEligibilityEnabled: payload.patronCodeEligibilityEnabled,
         allowedPatronCodeIds: payload.allowedPatronCodeIds,
-        patronCodeEligibilityMessage: payload.patronCodeEligibilityMessage,
-        externalSearch1Enabled: payload.externalSearch1Enabled,
-        externalSearch1Label: payload.externalSearch1Label,
-        externalSearch1UrlTemplate: payload.externalSearch1UrlTemplate,
-        externalSearch2Enabled: payload.externalSearch2Enabled,
-        externalSearch2Label: payload.externalSearch2Label,
-        externalSearch2UrlTemplate: payload.externalSearch2UrlTemplate,
-        externalSearch3Enabled: payload.externalSearch3Enabled,
-        externalSearch3Label: payload.externalSearch3Label,
-        externalSearch3UrlTemplate: payload.externalSearch3UrlTemplate,
-        externalSearch4Enabled: payload.externalSearch4Enabled,
-        externalSearch4Label: payload.externalSearch4Label,
-        externalSearch4UrlTemplate: payload.externalSearch4UrlTemplate
+        patronCodeEligibilityMessage: payload.patronCodeEligibilityMessage
         }
       })
     };
