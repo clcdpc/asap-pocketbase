@@ -101,6 +101,8 @@ async function waitFor(predicate) {
     let resolveLibraryTwoSettings;
     let delayAddStaff = false;
     let resolveAddStaff;
+    let delayMetadataPatch = false;
+    let resolveMetadataPatch;
     let users = [
       {
         id: '9007199254740993',
@@ -250,6 +252,13 @@ async function waitFor(predicate) {
         if (delayAddStaff && requestUrl === '/api/asap/staff/users' && method === 'POST') {
           return new Promise(resolve => {
             resolveAddStaff = () => resolve(response(201, { user: { id: '9007199254740404' } }));
+          });
+        }
+        if (delayMetadataPatch && method === 'PATCH') {
+          return new Promise(resolve => {
+            resolveMetadataPatch = () => resolve(response(200, {
+              user: { id: '9007199254740993', version: 'stale-metadata-result' }
+            }));
           });
         }
         if (method === 'PATCH') {
@@ -499,6 +508,33 @@ async function waitFor(predicate) {
     await staffAccess.populateStaffLibraryOptions();
     await staffAccess.loadStaffUsers();
 
+    let activeRow = document.querySelector('tr[data-staff-id="9007199254740993"]');
+    activeRow.querySelector('.staff-authentication-email').value = 'delayed-metadata@example.org';
+    activeRow.querySelector('.staff-display-name').value = 'Delayed Metadata';
+    activeRow.querySelector('.staff-notification-email').value = 'delayed-notify@example.org';
+    const delayedMetadataButton = activeRow.querySelector('.staff-metadata-save');
+    delayMetadataPatch = true;
+    delayedMetadataButton.click();
+    await waitFor(() => typeof resolveMetadataPatch === 'function');
+    state.setCurrentLibraryContextOrgId('3');
+    await staffAccess.loadStaffUsers();
+    assert.strictEqual(state.canAssignSuperAdmin, false);
+    assert.match(document.getElementById('staff-users-msg').textContent, /Loaded 1 staff user/);
+    resolveMetadataPatch();
+    await waitFor(() => delayedMetadataButton.disabled === false);
+    assert.strictEqual(document.querySelector('#staff-users-table-body tr[data-staff-id]')?.getAttribute('data-staff-id'),
+      '9007199254740303', 'A stale metadata completion must not replace current-context rows');
+    assert.match(document.getElementById('staff-users-msg').textContent, /Loaded 1 staff user/,
+      'A stale metadata completion must not replace the current load message');
+    assert.doesNotMatch(document.getElementById('staff-users-msg').textContent, /Staff profile saved/);
+    assert.strictEqual(state.canAssignSuperAdmin, false,
+      'A stale metadata completion must not replace the current authorization baseline');
+    delayMetadataPatch = false;
+
+    state.setCurrentLibraryContextOrgId('system');
+    await staffAccess.populateStaffLibraryOptions();
+    await staffAccess.loadStaffUsers();
+
     document.getElementById('staff-add-identity').value = 'created@example.org';
     document.getElementById('staff-add-role').value = 'staff';
     document.getElementById('staff-add-library').value = '2';
@@ -509,13 +545,14 @@ async function waitFor(predicate) {
       { email: 'created@example.org', role: 'staff', organizationId: 2 }
     );
 
-    let activeRow = document.querySelector('tr[data-staff-id="9007199254740993"]');
+    activeRow = document.querySelector('tr[data-staff-id="9007199254740993"]');
     activeRow.querySelector('.staff-authentication-email').value = 'updated@example.org';
     activeRow.querySelector('.staff-display-name').value = 'Updated Staff';
     activeRow.querySelector('.staff-notification-email').value = 'separate-notify@example.org';
     activeRow.querySelector('.staff-metadata-save').click();
-    await waitFor(() => writes.some(write => write.method === 'PATCH'));
-    assert.deepStrictEqual(writes.find(write => write.method === 'PATCH').body, {
+    await waitFor(() => writes.some(write => write.method === 'PATCH' && write.body.email === 'updated@example.org'));
+    assert.deepStrictEqual(writes.find(write =>
+      write.method === 'PATCH' && write.body.email === 'updated@example.org').body, {
       version: 'version-active',
       email: 'updated@example.org',
       displayName: 'Updated Staff',
