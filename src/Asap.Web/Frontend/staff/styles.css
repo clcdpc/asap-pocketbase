@@ -275,6 +275,48 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-template legend { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
 .settings-template label + label { margin-top: 12px; }
 .settings-template-list { min-width: 0; }
+.email-template-placeholder-helper {
+  margin: 0 0 16px;
+  padding: 16px;
+  color: var(--ink);
+  background: #eaf6fb;
+  border: 1px solid #9bc9dd;
+  border-left: 4px solid var(--brand);
+}
+.email-template-placeholder-helper h3 { margin: 0; font-size: 1rem; }
+.email-template-placeholder-helper > p { margin: 5px 0 0; color: var(--muted); }
+.email-template-placeholder-target { font-weight: 800; }
+.email-template-placeholder-button-group { margin-top: 12px; }
+.email-template-placeholder-buttons { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.email-template-placeholder-token {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 8px 12px;
+  color: var(--brand-dark);
+  background: #fff;
+  border: 1px solid #6da9c2;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .9rem;
+  overflow-wrap: anywhere;
+}
+.email-template-placeholder-token:hover { background: #f3fbfe; }
+.email-template-placeholder-token:disabled { color: #657781; background: #e2eaed; border-color: #aab8bf; cursor: not-allowed; opacity: .9; }
+.email-template-placeholder-status { min-height: 22px; margin-top: 8px !important; font-size: .86rem; }
+.email-template-placeholder-details { margin-top: 12px; }
+.email-template-placeholder-details summary { color: var(--brand-dark); cursor: pointer; font-weight: 800; }
+.email-template-placeholder-details > div { margin-top: 10px; }
+.email-template-placeholder-details > div > p { margin: 0 0 8px; color: var(--muted); font-size: .86rem; }
+.email-template-placeholder-reference-list { display: grid; grid-template-columns: minmax(88px, auto) minmax(0, 1fr); gap: 6px 12px; margin: 0; font-size: .86rem; }
+.email-template-placeholder-reference-list dt { color: var(--ink); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 800; }
+.email-template-placeholder-reference-list dd { margin: 0; color: var(--muted); overflow-wrap: anywhere; }
+
+@media (forced-colors: active) {
+  .email-template-placeholder-helper { border: 2px solid CanvasText; }
+  .email-template-placeholder-token { color: ButtonText; background: ButtonFace; border-color: ButtonText; }
+  .email-template-placeholder-token:disabled { color: GrayText; border-color: GrayText; }
+}
 
 dialog { width: min(900px, calc(100vw - 28px)); max-height: calc(100vh - 28px); padding: 0; border: 0; border-radius: 6px; box-shadow: 0 18px 60px rgba(0,0,0,.28); }
 dialog::backdrop { background: rgba(20, 31, 39, .58); }
