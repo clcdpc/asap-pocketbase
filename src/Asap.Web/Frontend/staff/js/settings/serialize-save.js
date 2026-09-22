@@ -1,5 +1,5 @@
 import { setFieldValue, setFieldChecked, getFieldValue, getFieldChecked, validateStaffUrl, normalizeStaffUrl, normalizeLeapBibUrlPattern, normalizeLeapPatronUrlPattern, setVisible, isSuperAdminStaff } from '../api.js';
-import { currentLibraryContextOrgId, currentRejectionTemplates, leapBibUrlPattern, leapPatronUrlPattern, initialSettingsSnapshot, defaultPublicationOptions, setInitialSettingsSnapshot, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId, currentLegacySettingsFormModel } from '../state.js';
+import { currentLibraryContextOrgId, currentRejectionTemplates, deletedSettingsFormats, deletedSettingsTemplates, leapBibUrlPattern, leapPatronUrlPattern, initialSettingsSnapshot, defaultPublicationOptions, setInitialSettingsSnapshot, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId, currentLegacySettingsFormModel } from '../state.js';
 import { normalizeExternalSearchUrlTemplate } from './utils.js';
 import { collectFormatLabels, collectAvailableFormats, collectFormatOrder, collectFormatClaimRules } from '../settings-formats.js';
 import { collectDuplicateStatusLabels } from './duplicate-labels.js';
@@ -19,6 +19,214 @@ export function rememberLastSavedLibrarySettings(settings) {
 
 function sameArray(left, right) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function hasOwn(value, key) {
+  return !!value && Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function comparable(value) {
+  if (value === undefined) return '__missing__';
+  if (value === null) return '__null__';
+  if (Array.isArray(value) || (value && typeof value === 'object')) return JSON.stringify(value);
+  return String(value);
+}
+
+function sameValue(left, right) {
+  return comparable(left) === comparable(right);
+}
+
+function explicitOverride(override, key) {
+  return hasOwn(override, key) && override[key] !== null && override[key] !== undefined;
+}
+
+function scopedFieldShouldSave(model, section, key, value, baselineFallback) {
+  if (model?.isSystem) return true;
+  if (model?.provenance?.authoritative === false) return true;
+  const provenance = model?.provenance || {};
+  const override = provenance[`${section}Override`] || {};
+  const baselineSection = provenance[`system${section.charAt(0).toUpperCase()}${section.slice(1)}`] || {};
+  const baseline = hasOwn(baselineSection, key) ? baselineSection[key] : baselineFallback;
+  return explicitOverride(override, key) || (baseline !== undefined && !sameValue(value, baseline));
+}
+
+function scopedSetShouldSave(model, key, value) {
+  if (model?.isSystem) return true;
+  if (model?.provenance?.authoritative === false) return true;
+  const provenance = model?.provenance || {};
+  const raw = provenance.librarySets?.[key];
+  const baseline = provenance.systemSets?.[key];
+  const hasOverride = raw?.exists === true && Array.isArray(raw.values) && raw.values.length > 0;
+  const fallback = model?.uiText?.publicationOptions;
+  const baselineValue = Array.isArray(baseline) ? baseline : (key === 'publicationOptions' ? fallback : undefined);
+  const comparableSet = setValue => {
+    if (key === 'commonCreators') {
+      return (Array.isArray(setValue) ? setValue : [])
+        .map(item => typeof item === 'string' ? item : item?.value)
+        .filter(valueItem => valueItem !== undefined && valueItem !== null)
+        .map(String)
+        .join('\n');
+    }
+    if (key === 'allowedPatronCodeIds') {
+      return (Array.isArray(setValue) ? setValue : []).map(String);
+    }
+    return setValue;
+  };
+  return hasOverride || (baselineValue !== undefined && !sameValue(comparableSet(value), comparableSet(baselineValue)));
+}
+
+function templateChanged(template, subject, body) {
+  const baselineSubject = template?.subjectBaseline ?? template?.subject;
+  const baselineBody = template?.bodyBaseline ?? template?.body;
+  return !sameValue(subject, baselineSubject) || !sameValue(body, baselineBody);
+}
+
+function templatePayload(template, subject, body, isSystem) {
+  const key = template?.templateKey;
+  if (!key) return null;
+  if (isSystem) {
+    return {
+      templateKey: key,
+      subject,
+      body,
+      ...((template.displayName || template.name) ? { displayName: template.displayName || template.name } : {}),
+      ...(template.enabled !== undefined ? { enabled: template.enabled } : {})
+    };
+  }
+
+  const lineage = template.isCustom !== true;
+  const overridden = template.overridden === true || template.hadOverride === true;
+  if (lineage && !overridden && !templateChanged(template, subject, body)) return null;
+
+  const result = {
+    templateKey: key,
+    ...(lineage && template.sourceTemplateId ? { sourceTemplateId: String(template.sourceTemplateId) } : {}),
+    ...(template.isCustom === true ? { isCustom: true } : {})
+  };
+  if (template.isNew || template.isCustom === true) {
+    result.displayName = template.displayName || template.name || 'Rejection template';
+    result.subject = subject;
+    result.body = body;
+    if (template.enabled !== undefined) result.enabled = template.enabled;
+    return result;
+  }
+  if (templateChanged(template, subject, body)) {
+    if (!sameValue(subject, template.subjectBaseline ?? template.subject)) result.subject = subject;
+    if (!sameValue(body, template.bodyBaseline ?? template.body)) result.body = body;
+  }
+  return result;
+}
+
+const PATRON_TEXT_FIELDS = [
+  ['pageTitle', 'ui-patron-page-title'],
+  ['barcodeLabel', 'ui-barcode-label'],
+  ['pinLabel', 'ui-pin-label'],
+  ['loginPrompt', 'ui-login-prompt'],
+  ['loginNote', 'ui-login-note'],
+  ['suggestionFormNote', 'ui-suggestion-note'],
+  ['noEmailMessage', 'ui-no-email-msg'],
+  ['successTitle', 'ui-success-title'],
+  ['successMessage', 'ui-success-msg'],
+  ['alreadySubmittedMessage', 'ui-already-submitted-msg']
+];
+
+const DUPLICATE_LABEL_FIELDS = {
+  suggestion: 'suggestionStatusLabel',
+  outstanding_purchase: 'outstandingPurchaseStatusLabel',
+  pending_hold: 'pendingHoldStatusLabel',
+  hold_placed: 'holdPlacedStatusLabel',
+  closed: 'closedStatusLabel',
+  rejected: 'rejectedStatusLabel',
+  hold_completed: 'holdCompletedStatusLabel',
+  hold_not_picked_up: 'holdNotPickedUpStatusLabel',
+  manual: 'manualStatusLabel',
+  silent: 'silentStatusLabel'
+};
+
+const WORKFLOW_TEXT_FIELDS = [
+  ['suggestionLimitMessage', 'suggestion-limit-msg'],
+  ['commonAuthorsLabel', 'wf-common-authors-label'],
+  ['commonAuthorsHelp', 'wf-common-authors-help'],
+  ['commonAuthorsMessage', 'wf-common-authors-message'],
+  ['patronCodeEligibilityMessage', 'patron-code-eligibility-message']
+];
+
+const WORKFLOW_BOOL_FIELDS = [
+  ['outstandingTimeoutEnabled', 'outstanding-timeout-enabled'],
+  ['outstandingTimeoutSendEmail', 'outstanding-timeout-send-email'],
+  ['holdPickupTimeoutEnabled', 'hold-pickup-timeout-enabled'],
+  ['pendingHoldTimeoutEnabled', 'pending-hold-timeout-enabled'],
+  ['additionalCopyTimeoutEnabled', 'additional-copy-timeout-enabled'],
+  ['commonAuthorsEnabled', 'wf-common-authors-enabled'],
+  ['autoPromote', 'polaris-auto-promote'],
+  ['allowPatronAutoholdOptOut', 'allow-patron-autohold-opt-out'],
+  ['allowAnyRegisteredCardLogin', 'allow-any-registered-card-login'],
+  ['patronCodeEligibilityEnabled', null]
+];
+
+const WORKFLOW_INT_FIELDS = [
+  ['suggestionLimit', 'suggestion-limit'],
+  ['outstandingTimeoutDays', 'outstanding-timeout-days'],
+  ['holdPickupTimeoutDays', 'hold-pickup-timeout-days'],
+  ['pendingHoldTimeoutDays', 'pending-hold-timeout-days'],
+  ['additionalCopyTimeoutDays', 'additional-copy-timeout-days']
+];
+
+function collectTemplatePayload(model, isSystem) {
+  const fields = [
+    ['suggestion_submitted', 'email-submit-subject', 'email-submit-body'],
+    ['purchase_approved', 'email-purchase-approved-subject', 'email-purchase-approved-body'],
+    ['already_owned', 'email-owned-subject', 'email-owned-body'],
+    ['rejected', 'email-rejected-subject', 'email-rejected-body'],
+    ['hold_placed', 'email-hold-subject', 'email-hold-body']
+  ];
+  const records = Array.isArray(model?.templates) ? model.templates : [];
+  const templates = [];
+  fields.forEach(([key, subjectId, bodyId]) => {
+    const record = records.find(item => item.templateKey === key && item.isCustom !== true);
+    const subject = getFieldValue(subjectId);
+    const body = getFieldValue(bodyId);
+    const value = templatePayload(record || { templateKey: key, subjectBaseline: subject, bodyBaseline: body }, subject, body, isSystem);
+    if (value) templates.push([key, value]);
+  });
+
+  const rejectionTemplates = [];
+  currentRejectionTemplates.forEach(template => {
+    const value = templatePayload(template, String(template.subject ?? ''), String(template.body ?? ''), isSystem);
+    if (value) rejectionTemplates.push(value);
+  });
+  deletedSettingsTemplates.forEach(template => rejectionTemplates.push({
+    templateKey: template.templateKey,
+    ...(template.sourceTemplateId ? { sourceTemplateId: String(template.sourceTemplateId) } : {}),
+    ...(template.isCustom ? { isCustom: true } : {}),
+    reset: true
+  }));
+
+  const result = {};
+  templates.forEach(([key, value]) => { result[key] = value; });
+  if (rejectionTemplates.length > 0) result.rejection_templates = rejectionTemplates;
+  return result;
+}
+
+export function buildEmailSettingsPayload({ includeTemplates = true, useSmtpFields = false } = {}) {
+  const model = currentLegacySettingsFormModel;
+  const isSystem = model?.isSystem || (isSuperAdminStaff() && currentLibraryContextOrgId === 'system');
+  const fromAddress = getFieldValue(useSmtpFields ? 'smtp-from' : 'email-from-address');
+  const fromName = getFieldValue(useSmtpFields ? 'smtp-from-name' : 'email-from-name');
+  const result = {
+    postmarkToken: getFieldValue('postmark-token').trim(),
+    clearPostmarkToken: getFieldChecked('postmark-clear-token')
+  };
+  if (scopedFieldShouldSave(model, 'email', 'fromAddress', fromAddress, model?.provenance?.systemEmail?.fromAddress)) {
+    result.fromAddress = fromAddress;
+  }
+  if (scopedFieldShouldSave(model, 'email', 'fromName', fromName, model?.provenance?.systemEmail?.fromName)) {
+    result.fromName = fromName;
+  }
+  if (includeTemplates) {
+    Object.assign(result, collectTemplatePayload(model, isSystem));
+  }
+  return result;
 }
 
 export function collectExternalSearchProviders(validate = false) {
@@ -59,13 +267,39 @@ export function collectMaterialFormats() {
   const available = new Set(collectAvailableFormats());
   const rules = collectPatronFormatRules();
   const existingByCode = new Map(model.formats.map(format => [format.code, format]));
+  const pendingDeleteIds = new Set(deletedSettingsFormats.map(format => String(format.id)));
   const baselineOrder = model.formats.map(format => format.code);
   const orderChanged = !sameArray(order, baselineOrder);
+
+  function fieldSignature(format, name) {
+    const nested = format?.[name] || {};
+    return [nested.mode ?? format?.[`${name}Mode`], nested.label ?? format?.[`${name}Label`]];
+  }
+
+  function customFieldSignature(format) {
+    return Object.fromEntries(Object.entries(format?.customFields || {}).map(([key, value]) => [key, {
+      mode: value?.mode || 'hidden',
+      labelOverride: value?.labelOverride ?? value?.label ?? null
+    }]));
+  }
+
+  function formatChanged(existing, next, rule) {
+    if (!existing) return true;
+    if (orderChanged || !sameValue(existing.label, next.label) ||
+        !sameValue(existing.sortOrder, next.sortOrder) ||
+        !sameValue(existing.isEnabled, next.isEnabled) ||
+        !sameValue(existing.messageBehavior || 'none', next.messageBehavior) ||
+        !sameValue(existing.message || '', next.message || '')) return true;
+    for (const name of ['title', 'author', 'identifier', 'publication']) {
+      if (!sameValue(fieldSignature(existing, name), fieldSignature(rule, name))) return true;
+    }
+    return !sameValue(customFieldSignature(existing), customFieldSignature(rule));
+  }
 
   const current = order.map((code, index) => {
     const existing = existingByCode.get(code) || {};
     const rule = rules[code] || {};
-    return {
+    const result = {
       ...(existing.id ? { id: existing.id } : {}),
       code,
       ownerOrganizationId: existing.ownerOrganizationId || (model.isSystem ? '1' : model.contextOrgId),
@@ -80,18 +314,29 @@ export function collectMaterialFormats() {
       publication: rule.fields?.publication,
       customFields: rule.customFields || {}
     };
+    if (!model.isSystem && String(existing.ownerOrganizationId || '') === String(model.contextOrgId)) {
+      result.ownerOrganizationId = model.contextOrgId;
+    } else if (!model.isSystem) {
+      result.overridden = existing.overridden === true || formatChanged(existing, result, rule);
+    }
+    return result;
   });
 
   model.formats.forEach(existing => {
     if (order.includes(existing.code)) return;
-    current.push({
+    if (pendingDeleteIds.has(String(existing.id))) return;
+    const removed = {
       id: existing.id,
       code: existing.code,
       ownerOrganizationId: existing.ownerOrganizationId || (model.isSystem ? '1' : model.contextOrgId),
       label: existing.label || existing.code,
       sortOrder: existing.sortOrder,
       isEnabled: false
-    });
+    };
+    if (!model.isSystem && String(existing.ownerOrganizationId || '') !== String(model.contextOrgId)) {
+      removed.overridden = true;
+    }
+    current.push(removed);
   });
   return current;
 }
@@ -145,56 +390,50 @@ function _serializeSettingsState(validate = false) {
     }
   }
 
-  const publicationOptions = currentLegacySettingsFormModel?.publicationOptionStateTrusted
+  const model = currentLegacySettingsFormModel;
+  const publicationOptions = model?.publicationOptionStateTrusted
     ? collectOptionList('ui-publication-options-editor', defaultPublicationOptions)
     : undefined;
-  const uiText = {
-    logoAlt: getFieldValue('ui-logo-alt'),
-    pageTitle: getFieldValue('ui-patron-page-title'),
-    barcodeLabel: getFieldValue('ui-barcode-label'),
-    pinLabel: getFieldValue('ui-pin-label'),
-    loginPrompt: getFieldValue('ui-login-prompt'),
-    loginNote: getFieldValue('ui-login-note'),
-    suggestionFormNote: getFieldValue('ui-suggestion-note'),
-    noEmailMessage: getFieldValue('ui-no-email-msg'),
-    systemNotEnabledMessage: isSystemContext ? getFieldValue('ui-system-not-enabled-msg') : undefined,
-    misconfiguredMessage: isSystemContext ? getFieldValue('ui-misconfigured-msg') : undefined,
-    successTitle: getFieldValue('ui-success-title'),
-    successMessage: getFieldValue('ui-success-msg'),
-    alreadySubmittedMessage: getFieldValue('ui-already-submitted-msg'),
-    duplicateStatusLabels: collectDuplicateStatusLabels(),
-    ...(publicationOptions === undefined ? {} : { publicationOptions })
-  };
-
-  const emails = {
-    postmarkToken: getFieldValue('postmark-token').trim(),
-    clearPostmarkToken: getFieldChecked('postmark-clear-token'),
-    fromAddress: getFieldValue('email-from-address'),
-    fromName: getFieldValue('email-from-name'),
-    suggestion_submitted: {
-      subject: getFieldValue('email-submit-subject'),
-      body: getFieldValue('email-submit-body')
-    },
-    purchase_approved: {
-      subject: getFieldValue('email-purchase-approved-subject'),
-      body: getFieldValue('email-purchase-approved-body')
-    },
-    already_owned: {
-      subject: getFieldValue('email-owned-subject'),
-      body: getFieldValue('email-owned-body')
-    },
-    rejected: {
-      subject: getFieldValue('email-rejected-subject'),
-      body: getFieldValue('email-rejected-body')
-    },
-    rejection_templates: JSON.parse(JSON.stringify(currentRejectionTemplates || [])),
-    hold_placed: {
-      subject: getFieldValue('email-hold-subject'),
-      body: getFieldValue('email-hold-body')
+  const uiText = {};
+  PATRON_TEXT_FIELDS.forEach(([key, id]) => {
+    const value = getFieldValue(id);
+    if (scopedFieldShouldSave(model, 'patron', key, value, model?.provenance?.systemPatron?.[key])) {
+      uiText[key] = value;
     }
-  };
+  });
 
-  const sendAutoRejectEmail = getFieldChecked('outstanding-timeout-send-email');
+  const duplicateLabels = collectDuplicateStatusLabels();
+  const scopedDuplicateLabels = {};
+  Object.entries(DUPLICATE_LABEL_FIELDS).forEach(([key, patronKey]) => {
+    const value = duplicateLabels[key];
+    const baseline = model?.provenance?.systemPatron?.[patronKey] ?? model?.uiText?.duplicateStatusLabels?.[key];
+    if (scopedFieldShouldSave(model, 'patron', patronKey, value, baseline)) {
+      scopedDuplicateLabels[key] = value;
+    }
+  });
+  if (Object.keys(scopedDuplicateLabels).length > 0) {
+    uiText.duplicateStatusLabels = scopedDuplicateLabels;
+  }
+
+  const logoAlt = getFieldValue('ui-logo-alt');
+  const localBranding = model?.provenance?.libraryBranding;
+  const hasLocalBrandingAlt = !isSystemContext && localBranding &&
+    localBranding.altText !== null && localBranding.altText !== undefined;
+  if (isSystemContext || hasLocalBrandingAlt ||
+      scopedFieldShouldSave(model, 'patron', 'logoAlt', logoAlt,
+        model?.provenance?.systemBranding?.altText ?? model?.uiText?.logoAlt)) {
+    uiText.logoAlt = logoAlt;
+  }
+  if (isSystemContext) {
+    uiText.systemNotEnabledMessage = getFieldValue('ui-system-not-enabled-msg');
+    uiText.misconfiguredMessage = getFieldValue('ui-misconfigured-msg');
+  }
+  if (publicationOptions !== undefined && scopedSetShouldSave(model, 'publicationOptions', publicationOptions)) {
+    uiText.publicationOptions = publicationOptions;
+  }
+
+  const emails = buildEmailSettingsPayload();
+
   const nextAutoRejectTemplateId = getFieldValue('outstanding-timeout-rejection-template-id');
   const patronCodeEligibilityEnabled = getPatronCodeEligibilityEnabled();
   const allowedPatronCodeIds = collectAllowedPatronCodeIds()
@@ -216,37 +455,54 @@ function _serializeSettingsState(validate = false) {
     : undefined;
   const formatClaimRules = collectFormatClaimRules();
 
+  const workflow = {};
+  WORKFLOW_TEXT_FIELDS.forEach(([key, id]) => {
+    let value = getFieldValue(id);
+    if (key === 'commonAuthorsLabel') value = value.trim() || 'Popular Creators';
+    if (key === 'commonAuthorsHelp') value = value.trim() || 'See if this is a creator we already collect.';
+    if (key === 'patronCodeEligibilityMessage') {
+      value = value.trim() || 'Your library card is not eligible to use this suggestion service.';
+    }
+    if (scopedFieldShouldSave(model, 'workflow', key, value, model?.provenance?.systemWorkflow?.[key])) {
+      workflow[key] = value;
+    }
+  });
+  WORKFLOW_BOOL_FIELDS.forEach(([key, id]) => {
+    const value = key === 'patronCodeEligibilityEnabled'
+      ? patronCodeEligibilityEnabled
+      : getFieldChecked(id);
+    if (scopedFieldShouldSave(model, 'workflow', key, value, model?.provenance?.systemWorkflow?.[key])) {
+      workflow[key] = value;
+    }
+  });
+  WORKFLOW_INT_FIELDS.forEach(([key, id]) => {
+    const fallback = key === 'suggestionLimit' ? 5 : (key === 'outstandingTimeoutDays' ? 30 : 14);
+    const value = positiveInt(id, fallback, key);
+    if (scopedFieldShouldSave(model, 'workflow', key, value, model?.provenance?.systemWorkflow?.[key])) {
+      workflow[key] = value;
+    }
+  });
+  if (scopedFieldShouldSave(model, 'workflow', 'outstandingTimeoutRejectionTemplateId', nextAutoRejectTemplateId,
+      model?.provenance?.systemWorkflow?.outstandingTimeoutRejectionTemplateId)) {
+    workflow.outstandingTimeoutRejectionTemplateId = nextAutoRejectTemplateId;
+  }
+  if (model?.commonCreatorStateTrusted) {
+    const commonAuthorsList = serializeCommonCreators(getFieldValue('wf-common-authors-list'));
+    if (scopedSetShouldSave(model, 'commonCreators', commonAuthorsList)) {
+      workflow.commonAuthorsList = commonAuthorsList;
+    }
+  }
+  if (model?.patronCodeStateTrusted && scopedSetShouldSave(model, 'allowedPatronCodeIds', allowedPatronCodeIds)) {
+    workflow.allowedPatronCodeIds = allowedPatronCodeIds;
+  }
+
   const payload = {
     ui_text: uiText, emails,
     ...(formatClaimRules === undefined ? {} : { formatClaimRules }),
     ...(providers === undefined ? {} : { providers }),
     ...(formats === undefined ? {} : { formats }),
     ...(customFields === undefined ? {} : { customFields }),
-    suggestionLimit: positiveInt('suggestion-limit', 5, 'Suggestion limit'),
-    suggestionLimitMessage: getFieldValue('suggestion-limit-msg'),
-    outstandingTimeoutEnabled: getFieldChecked('outstanding-timeout-enabled'),
-    outstandingTimeoutDays: positiveInt('outstanding-timeout-days', 30, 'Auto-reject stalled suggestions days'),
-    outstandingTimeoutSendEmail: sendAutoRejectEmail,
-    outstandingTimeoutRejectionTemplateId: nextAutoRejectTemplateId,
-    holdPickupTimeoutEnabled: getFieldChecked('hold-pickup-timeout-enabled'),
-    holdPickupTimeoutDays: positiveInt('hold-pickup-timeout-days', 14, 'Auto-close unpicked-up holds days'),
-    pendingHoldTimeoutEnabled: getFieldChecked('pending-hold-timeout-enabled'),
-    pendingHoldTimeoutDays: positiveInt('pending-hold-timeout-days', 14, 'Auto-close pending holds days'),
-    additionalCopyTimeoutEnabled: getFieldChecked('additional-copy-timeout-enabled'),
-    additionalCopyTimeoutDays: positiveInt('additional-copy-timeout-days', 14, 'Auto-close additional copies days'),
-    commonAuthorsEnabled: getFieldChecked('wf-common-authors-enabled'),
-    commonAuthorsLabel: getFieldValue('wf-common-authors-label').trim() || 'Popular Creators',
-    commonAuthorsHelp: getFieldValue('wf-common-authors-help').trim() || 'See if this is a creator we already collect.',
-    ...(currentLegacySettingsFormModel?.commonCreatorStateTrusted
-      ? { commonAuthorsList: serializeCommonCreators(getFieldValue('wf-common-authors-list')) }
-      : {}),
-    commonAuthorsMessage: getFieldValue('wf-common-authors-message'),
-    autoPromote: getFieldChecked('polaris-auto-promote'),
-    allowPatronAutoholdOptOut: getFieldChecked('allow-patron-autohold-opt-out'),
-    allowAnyRegisteredCardLogin: getFieldChecked('allow-any-registered-card-login'),
-    patronCodeEligibilityEnabled: patronCodeEligibilityEnabled,
-    ...(currentLegacySettingsFormModel?.patronCodeStateTrusted ? { allowedPatronCodeIds } : {}),
-    patronCodeEligibilityMessage: getFieldValue('patron-code-eligibility-message').trim() || 'Your library card is not eligible to use this suggestion service.'
+    ...workflow
   };
 
   if (isSystemContext) {

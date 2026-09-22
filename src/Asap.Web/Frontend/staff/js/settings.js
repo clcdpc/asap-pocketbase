@@ -11,7 +11,7 @@ export * from './settings/save-controller.js';
 export * from './settings/save-ui.js';
 export * from './settings/polaris-sync.js';
 
-import { settingsForm, defaultPublicationOptions, verifiedBibId, setVerifiedBibId, currentLibraryContextOrgId } from './state.js';
+import { settingsForm, defaultPublicationOptions, verifiedBibId, setVerifiedBibId, currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId } from './state.js';
 import { markSettingsDirty, updateAutoRejectEmailControls } from './api.js';
 import { authorizedJson } from './http.js';
 import { showToast, showConfirm } from './dialogs.js';
@@ -23,6 +23,12 @@ import { refreshSettingsView, loadStaffConfig } from './settings/loader.js';
 import { bindPolarisSecretControls } from './settings/polaris-fields.js';
 import './settings-labels.js';
 import './settings-polaris.js';
+
+function currentSettingsVersion() {
+  return lastSavedLibrarySettingsOrgId === currentLibraryContextOrgId
+    ? String(lastSavedLibrarySettingsSnapshot?.version || '')
+    : '';
+}
 
 bindPolarisSecretControls();
 
@@ -107,6 +113,7 @@ document.getElementById('btn-upload-logo').addEventListener('click', async () =>
     formData.append('logo', fileInput.files[0]);
   }
   formData.append('logoAlt', altInput.value.trim());
+  formData.append('version', currentSettingsVersion());
 
   btn.disabled = true;
   const originalNodes = Array.from(btn.childNodes);
@@ -140,7 +147,7 @@ document.getElementById('btn-reset-logo').addEventListener('click', async () => 
   btn.disabled = true;
 
   try {
-    await authorizedJson(`/api/asap/staff/settings/logo?orgId=${encodeURIComponent(currentLibraryContextOrgId)}`, {
+    await authorizedJson(`/api/asap/staff/settings/logo?orgId=${encodeURIComponent(currentLibraryContextOrgId)}&version=${encodeURIComponent(currentSettingsVersion())}`, {
       method: 'DELETE'
     });
 

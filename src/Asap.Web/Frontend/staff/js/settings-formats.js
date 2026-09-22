@@ -1,4 +1,4 @@
-import { formatMap, availableFormats, setAvailableFormats, currentFormatClaimRules, setCurrentFormatClaimRules, formatClaimStaffOptions, currentLibraryContextOrgId, currentLegacySettingsFormModel } from './state.js';
+import { formatMap, availableFormats, setAvailableFormats, currentFormatClaimRules, setCurrentFormatClaimRules, formatClaimStaffOptions, currentLibraryContextOrgId, currentLegacySettingsFormModel, addDeletedSettingsFormat } from './state.js';
 
 import { setInlineStatus, markSettingsDirty } from './api.js';
 import { showConfirm, showToast } from './dialogs.js';
@@ -116,7 +116,9 @@ export function renderFormatSettings() {
     input.className = 'form-control form-control-sm format-label-input w-100';
     input.value = formatMap[key] || key;
     labelWrap.appendChild(input);
-    if (!['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'].includes(key)) {
+    const existing = currentLegacySettingsFormModel?.formats?.find(format => format.code === key);
+    const canRemove = !isSystem && (!existing || String(existing.ownerOrganizationId || '') === String(currentLibraryContextOrgId));
+    if (canRemove && !['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'].includes(key)) {
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.className = 'btn btn-sm btn-outline-danger btn-remove-format text-nowrap ml-2';
@@ -425,7 +427,14 @@ if (formatSettingsContainer) {
     if (e.target.classList.contains('btn-remove-format')) {
       const row = e.target.closest('tr');
       const key = row.getAttribute('data-key');
-      if (await showConfirm('Remove format', `Remove format "${key}"? This will only remove it from the settings list. Existing suggestions with this format will remain in the database.`)) {
+      const existing = currentLegacySettingsFormModel?.formats?.find(format => format.code === key);
+      const isLibraryCustom = currentLibraryContextOrgId !== 'system' && existing &&
+        String(existing.ownerOrganizationId || '') === String(currentLibraryContextOrgId);
+      if (!isLibraryCustom && existing) return;
+      if (await showConfirm('Delete custom format', `Delete format "${key}"? Existing suggestions with this format will remain, but the custom format will be removed after you save.`)) {
+        if (isLibraryCustom && existing.id) {
+          addDeletedSettingsFormat({ id: String(existing.id), version: String(existing.version || '') });
+        }
         delete formatMap[key];
         setAvailableFormats(availableFormats.filter(k => k !== key));
         renderFormatSettings();

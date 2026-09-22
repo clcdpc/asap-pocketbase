@@ -1,4 +1,4 @@
-import { currentLibraryContextOrgId } from './state.js';
+import { currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId } from './state.js';
 import { markSettingsClean } from './api.js';
 import { authorizedJson } from './http.js';
 import { showToast, showConfirm } from './dialogs.js';
@@ -11,12 +11,20 @@ document.getElementById('btn-reset-library-settings').addEventListener('click', 
   if (currentLibraryContextOrgId === 'system') return;
   const confirmed = await showConfirm('Reset library settings', 'Are you sure you want to delete this library\'s overrides and revert to system defaults?');
   if (confirmed) {
-    await authorizedJson('/api/asap/staff/settings/library', {
-      method: 'POST',
-      body: { orgId: currentLibraryContextOrgId, action: 'reset' }
-    });
-    showToast('Library settings reset to system defaults', 'success');
-    await loadLibrarySettings(currentLibraryContextOrgId);
-    markSettingsClean('clean');
+    const version = lastSavedLibrarySettingsOrgId === currentLibraryContextOrgId
+      ? lastSavedLibrarySettingsSnapshot?.version
+      : null;
+    try {
+      await authorizedJson('/api/asap/staff/settings/library', {
+        method: 'POST',
+        body: { orgId: currentLibraryContextOrgId, action: 'reset', version }
+      });
+      showToast('Library settings reset to system defaults', 'success');
+      await loadLibrarySettings(currentLibraryContextOrgId);
+      markSettingsClean('clean');
+    } catch (error) {
+      showToast(error.message || 'The library settings could not be reset. Reloaded the current values.', 'error');
+      await loadLibrarySettings(currentLibraryContextOrgId);
+    }
   }
 });

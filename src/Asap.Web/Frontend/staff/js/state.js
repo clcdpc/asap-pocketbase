@@ -63,6 +63,12 @@ export function setCurrentLegacySettingsFormModel(model) { currentLegacySettings
 export const ageMap = { adult: 'Adult', teen: 'Teen', children: 'Children' };
 export let currentRejectionTemplates = [];
 export function setCurrentRejectionTemplates(templates) { currentRejectionTemplates = templates; }
+export let deletedSettingsTemplates = [];
+export function setDeletedSettingsTemplates(templates) { deletedSettingsTemplates = Array.isArray(templates) ? templates : []; }
+export function addDeletedSettingsTemplate(template) { deletedSettingsTemplates.push(template); }
+export let deletedSettingsFormats = [];
+export function setDeletedSettingsFormats(formats) { deletedSettingsFormats = Array.isArray(formats) ? formats : []; }
+export function addDeletedSettingsFormat(format) { deletedSettingsFormats.push(format); }
 
 export const closeReasonMap = { rejected: 'Rejected by staff', hold_completed: 'Hold placed / completed', duplicate_hold: 'Duplicate hold / request', manual: 'Manually closed' };
 export const duplicateStatusLabelDefaults = { suggestion: 'Received', outstanding_purchase: 'Under review', pending_hold: 'Being prepared', hold_placed: 'Hold placed', closed: 'Completed', rejected: 'Not selected for purchase', hold_completed: 'Completed', hold_not_picked_up: 'Closed', duplicate_hold: 'Duplicate hold / request', manual: 'Closed', silent: 'Closed', 'Silently Closed': 'Closed' };

@@ -5,7 +5,7 @@
 const LEGACY_ACCESSIBILITY_BASELINE = Object.freeze([
   { state: 'polaris-search', ruleId: 'color-contrast', target: '#polaris-search-status' },
   { state: 'polaris-search', ruleId: 'color-contrast', target: '.polaris-warning' },
-  { state: 'polaris-search', ruleId: 'color-contrast', target: '.btn-outline-success' },
+  { state: 'polaris-search', ruleId: 'color-contrast', target: '.polaris-search-result-actions > .btn-outline-success.btn-sm.btn' },
   { state: 'settings-staff-access', ruleId: 'color-contrast', targetEndsWith: '.staff-user-delete.btn-outline-danger.btn-sm' },
   { state: 'settings-staff-access', ruleId: 'select-name', targetEndsWith: '.staff-role-select' },
   { state: 'postmark-settings', ruleId: 'color-contrast', target: '#btn-reset-library-settings' },
@@ -21,9 +21,7 @@ function targetSelector(target) {
 function matchesTarget(entry, selector) {
   if (entry.target === selector) return true;
   if (entry.targetEndsWith && selector.endsWith(entry.targetEndsWith)) return true;
-  if (!entry.target || !/^\.[a-zA-Z0-9_-]+$/.test(entry.target)) return false;
-  const leaf = selector.split(' > ').at(-1);
-  return leaf.split(/(?=\.)/).includes(entry.target);
+  return false;
 }
 
 function isBaselined(state, ruleId, target) {

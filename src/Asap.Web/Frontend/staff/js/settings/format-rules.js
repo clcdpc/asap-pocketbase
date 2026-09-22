@@ -51,7 +51,10 @@ export function normalizePatronFormatRules(rules) {
       let mode = String(incomingRule.mode || 'hidden').trim();
       if (!['required', 'optional', 'hidden'].includes(mode)) mode = 'hidden';
       if (def.enabled === false) mode = 'hidden';
-      normalized[format].customFields[def.key] = { mode };
+      normalized[format].customFields[def.key] = {
+        mode,
+        labelOverride: incomingRule.labelOverride ?? incomingRule.label ?? null
+      };
     });
   });
 
@@ -291,7 +294,11 @@ export function renderPatronFormatRulesEditor(rules) {
       labelInput.className = 'form-control form-control-sm format-rule-custom-field-label';
       labelInput.setAttribute('data-format', format);
       labelInput.setAttribute('data-field', def.key);
-      labelInput.value = (customFieldRules[def.key] && customFieldRules[def.key].label) || def.label || '';
+      const customRule = customFieldRules[def.key] || {};
+      const labelOverride = customRule.labelOverride ?? customRule.label ?? null;
+      labelInput.value = labelOverride ?? def.label ?? '';
+      labelInput.dataset.baseLabel = def.label || '';
+      labelInput.dataset.initialLabelOverride = labelOverride ?? '';
       labelTd.appendChild(labelInput);
       tr.append(nameTd, modeTd, labelTd);
       tbody.appendChild(tr);
@@ -354,10 +361,12 @@ export function collectPatronFormatRules() {
     if (!rules[format].customFields) rules[format].customFields = {};
     const labelInput = editor.querySelector(`.format-rule-custom-field-label[data-format="${format}"][data-field="${field}"]`);
     const label = labelInput ? labelInput.value.trim() : '';
-    rules[format].customFields[field] = { mode: select.value || 'hidden' };
-    if (label) {
-      rules[format].customFields[field].label = label;
-    }
+    const baseLabel = labelInput?.dataset.baseLabel || '';
+    const labelOverride = label && label !== baseLabel ? label : null;
+    rules[format].customFields[field] = {
+      mode: select.value || 'hidden',
+      labelOverride
+    };
   });
 
   return rules;

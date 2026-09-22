@@ -15,7 +15,19 @@ function fieldRule(format, name, defaultMode, defaultLabel) {
   };
 }
 
+function customFieldRule(value) {
+  const rule = value && typeof value === 'object' ? value : {};
+  return {
+    mode: rule.mode || 'hidden',
+    labelOverride: rule.labelOverride ?? rule.label ?? null
+  };
+}
+
 function buildFormatRule(format) {
+  const customFields = {};
+  Object.entries(format.customFields || {}).forEach(([key, value]) => {
+    customFields[key] = customFieldRule(value);
+  });
   return {
     messageBehavior: format.messageBehavior || 'none',
     message: format.message || '',
@@ -25,7 +37,7 @@ function buildFormatRule(format) {
       identifier: fieldRule(format, 'identifier', 'optional', 'Identifier number'),
       publication: fieldRule(format, 'publication', 'optional', 'Publication Timing')
     },
-    customFields: format.customFields || {}
+    customFields
   };
 }
 
@@ -81,12 +93,137 @@ function scopedSnapshot(systemSnapshot, librarySnapshot, isSystem, fallback) {
 
 function mapAutoClaimRules(rules, formats) {
   const codeById = new Map(formats.map(format => [stringId(format.id), format.code]));
-  return array(rules).map(rule => ({
+  return array(rules).filter(rule => rule && rule.active !== false && rule.isActive !== false).map(rule => ({
     ...rule,
     materialFormatId: stringId(rule.materialFormatId || rule.formatId),
     staffUserId: stringId(rule.staffUserId || rule.staffId),
     format: rule.format || codeById.get(stringId(rule.materialFormatId || rule.formatId)) || ''
   })).filter(rule => rule.format && rule.materialFormatId);
+}
+
+const STANDARD_TEMPLATE_KEYS = [
+  'suggestion_submitted',
+  'purchase_approved',
+  'already_owned',
+  'rejected',
+  'hold_placed'
+];
+
+function templateRows(settings) {
+  const stored = settings?.stored || {};
+  if (Array.isArray(stored.templates)) return stored.templates;
+  if (Array.isArray(settings?.emails?.templates)) return settings.emails.templates;
+  return [
+    ...(Array.isArray(stored.configuredSystem?.templates) ? stored.configuredSystem.templates : []),
+    ...(Array.isArray(stored.libraryOverride?.templates) ? stored.libraryOverride.templates : [])
+  ];
+}
+
+function normalizeTemplate(item, index) {
+  const value = item && typeof item === 'object' ? item : {};
+  return {
+    ...value,
+    id: stringId(value.id),
+    version: stringId(value.version),
+    organizationId: stringId(value.organizationId),
+    sourceTemplateId: stringId(value.sourceTemplateId),
+    templateKey: String(value.templateKey ?? value.key ?? `rejection:template_${index + 1}`),
+    displayName: value.displayName ?? null,
+    subject: value.subject ?? value.subjectTemplate ?? null,
+    body: value.body ?? value.bodyTemplate ?? null,
+    enabled: value.enabled !== false && value.isHidden !== true,
+    isCustom: value.isCustom === true || value.custom === true,
+    sortOrder: value.sortOrder ?? (index + 1) * 10
+  };
+}
+
+function mapTemplates(settings, isSystem, contextOrgId) {
+  const stored = settings?.stored || {};
+  const rows = templateRows(settings).map(normalizeTemplate);
+  const configuredSystem = Array.isArray(stored.configuredSystem?.templates)
+    ? stored.configuredSystem.templates.map(normalizeTemplate)
+    : [];
+  const systemRows = (configuredSystem.length ? configuredSystem : rows)
+    .filter(item => item.organizationId === '1');
+  const libraryId = stringId(settings?.orgId || contextOrgId);
+  const libraryRows = rows.filter(item => item.organizationId === libraryId && libraryId && libraryId !== 'system');
+  const sourceRows = isSystem ? systemRows : systemRows.map((system, index) => {
+    const override = libraryRows.find(item => !item.isCustom && item.sourceTemplateId === system.id);
+    const current = override || system;
+    return {
+      ...system,
+      ...current,
+      id: current.id || system.id,
+      version: current.version || system.version,
+      organizationId: current.organizationId || system.organizationId,
+      sourceTemplateId: system.id,
+      templateKey: system.templateKey,
+      displayName: current.displayName ?? system.displayName,
+      subject: current.subject ?? system.subject,
+      body: current.body ?? system.body,
+      enabled: system.enabled && (!override || override.enabled),
+      isCustom: false,
+      overridden: !!override,
+      hadOverride: !!override,
+      subjectBaseline: system.subject,
+      bodyBaseline: system.body,
+      displayNameBaseline: system.displayName,
+      enabledBaseline: system.enabled,
+      rawSubject: override?.subject ?? null,
+      rawBody: override?.body ?? null,
+      rawDisplayName: override?.displayName ?? null,
+      rawEnabled: override ? override.enabled : null,
+      sourceIndex: index
+    };
+  });
+
+  if (!isSystem) {
+    sourceRows.push(...libraryRows.filter(item => item.isCustom).map(item => ({
+      ...item,
+      overridden: true,
+      hadOverride: true,
+      subjectBaseline: null,
+      bodyBaseline: null,
+      displayNameBaseline: null,
+      enabledBaseline: item.enabled,
+      rawSubject: item.subject,
+      rawBody: item.body,
+      rawDisplayName: item.displayName,
+      rawEnabled: item.enabled
+    })));
+  }
+
+  const byKey = new Map(sourceRows.map(item => [item.templateKey, item]));
+  const legacy = {};
+  STANDARD_TEMPLATE_KEYS.forEach(key => {
+    const template = byKey.get(key);
+    if (template) {
+      legacy[key] = {
+        ...template,
+        subject: template.subject ?? '',
+        body: template.body ?? ''
+      };
+    }
+  });
+  if (sourceRows.length > 0) {
+    legacy.rejection_templates = sourceRows
+      .filter(item => item.templateKey.startsWith('rejection:') && item.templateKey !== 'rejection:rejected')
+      .map(item => ({ ...item, name: item.displayName || item.name || '' }));
+  }
+
+  return { rows: sourceRows, emails: legacy, trusted: rows.length > 0 || configuredSystem.length > 0 };
+}
+
+function mergeObjects(...values) {
+  return values
+    .filter(value => value && typeof value === 'object' && !Array.isArray(value))
+    .reverse()
+    .reduce((result, value) => Object.assign(result, value), {});
+}
+
+function baselineFormats(configuredSystem, effectiveFormats) {
+  const configured = array(configuredSystem?.formats);
+  return configured.length ? configured : array(effectiveFormats);
 }
 
 function mapAutoClaimStaff(staff, contextOrgId) {
@@ -146,6 +283,7 @@ export function buildLegacySettingsFormModel(settings, contextOrgId = 'system') 
   const storedFormats = array(stored.formats);
   const effectiveFormats = array(effective.formats);
   const formats = mergeFormats(storedFormats, effectiveFormats);
+  const systemFormatValues = baselineFormats(configuredSystem, effectiveFormats);
   const formatLabels = {};
   const formatRules = {};
   formats.forEach(format => {
@@ -177,6 +315,16 @@ export function buildLegacySettingsFormModel(settings, contextOrgId = 'system') 
 
   const autoClaimRules = mapAutoClaimRules(stored.autoClaimRules ?? settings.formatClaimRules, formats);
   const autoClaimStaff = mapAutoClaimStaff(settings.autoClaimStaff, contextOrgId);
+  const templateState = mapTemplates(settings, isSystem, contextOrgId);
+  const systemWorkflow = mergeObjects(configuredSystem.workflow, stored.workflow, effective.workflow, settings.workflow);
+  const systemPatron = mergeObjects(configuredSystem.patron, stored.patron, settings.ui_text, effective);
+  const systemEmail = mergeObjects(configuredSystem.email, stored.email, settings.emails, effective.email);
+  const systemSets = {
+    commonCreators: scopedSnapshot(configuredSystem.commonCreators, null, true, stored.commonCreators ?? effective.commonCreators),
+    allowedPatronCodeIds: scopedSnapshot(configuredSystem.allowedPatronCodeIds, null, true, stored.allowedPatronCodeIds ?? effective.allowedPatronCodeIds),
+    publicationOptions: scopedSnapshot(configuredSystem.publicationOptions, null, true,
+      settings.ui_text?.publicationOptions ?? effective.publicationOptions ?? stored.publicationOptions)
+  };
 
   return {
     contextOrgId,
@@ -184,7 +332,8 @@ export function buildLegacySettingsFormModel(settings, contextOrgId = 'system') 
     isOverride: !!settings.isOverride,
     systemSettings: stored.systemSettings || settings.systemSettings || settings,
     polaris: stored.polaris || settings.polaris || {},
-    emails: settings.emails || {},
+    emails: { ...(settings.emails || {}), ...templateState.emails },
+    templates: templateState.rows,
     workflow,
     uiText,
     providers,
@@ -199,6 +348,25 @@ export function buildLegacySettingsFormModel(settings, contextOrgId = 'system') 
     formatStateTrusted: Array.isArray(stored.formats) || Array.isArray(effective.formats),
     customFieldStateTrusted: isSystem || authoritativeCustomFields !== null,
     autoClaimStateTrusted: isSystem || (Array.isArray(stored.autoClaimRules ?? settings.formatClaimRules) && Array.isArray(settings.autoClaimStaff)),
+    templateStateTrusted: templateState.trusted,
+    provenance: {
+      authoritative: isSystem || Object.prototype.hasOwnProperty.call(stored, 'configuredSystem'),
+      workflowOverride: isSystem ? {} : mergeObjects(libraryOverride.workflow),
+      patronOverride: isSystem ? {} : mergeObjects(libraryOverride.patron),
+      emailOverride: isSystem ? {} : mergeObjects(libraryOverride.email),
+      systemWorkflow,
+      systemPatron,
+      systemEmail,
+      systemSets,
+      librarySets: isSystem ? {} : {
+        commonCreators: libraryOverride.commonCreators,
+        allowedPatronCodeIds: libraryOverride.allowedPatronCodeIds,
+        publicationOptions: libraryOverride.publicationOptions
+      },
+      systemFormats: systemFormatValues,
+      libraryBranding: isSystem ? null : libraryOverride.branding,
+      systemBranding: configuredSystem.branding || settings.effective?.branding || {}
+    },
     source: settings
   };
 }

@@ -1,5 +1,5 @@
 import { setFieldValue, setFieldChecked, setVisible, updateLibraryOverrideStatusVisibility, loadEmailStatus, updateOrganizationsStatusUi, activateSettingsSection, updateAutoRejectEmailControls } from '../api.js';
-import { currentLibraryContextOrgId, currentSettingsSection, settingsLoading, formatMap, availableFormats, setAvailableFormats, workflowSettings, lastWorkflowEnabledList, setLastWorkflowEnabledList, defaultPublicationOptions, setCurrentFormatClaimRules, setFormatClaimStaffOptions, setLeapBibUrlPattern, setLeapPatronUrlPattern, leapBibUrlPattern, leapPatronUrlPattern, setAdditionalFieldDefinitions, setCurrentPatronFieldConfig, setCurrentLegacySettingsFormModel } from '../state.js';
+import { currentLibraryContextOrgId, currentSettingsSection, settingsLoading, formatMap, availableFormats, setAvailableFormats, workflowSettings, lastWorkflowEnabledList, setLastWorkflowEnabledList, defaultPublicationOptions, setCurrentFormatClaimRules, setFormatClaimStaffOptions, setLeapBibUrlPattern, setLeapPatronUrlPattern, leapBibUrlPattern, leapPatronUrlPattern, setAdditionalFieldDefinitions, setCurrentPatronFieldConfig, setCurrentLegacySettingsFormModel, setDeletedSettingsFormats } from '../state.js';
 import { toggleTimeoutGroup, toggleHoldPickupTimeoutGroup, togglePendingHoldTimeoutGroup, toggleAdditionalCopyTimeoutGroup, toggleCommonAuthorsGroup } from './toggles.js';
 import { renderFormatSettings, updateModalFormatDropdowns } from '../settings-formats.js';
 import { renderDuplicateStatusLabelSettings } from './duplicate-labels.js';
@@ -72,6 +72,7 @@ export function applyLibrarySettingsToForm(settings) {
   settings = settings || {};
   const model = buildLegacySettingsFormModel(settings, currentLibraryContextOrgId);
   setCurrentLegacySettingsFormModel(model);
+  setDeletedSettingsFormats([]);
   const isOverride = model.isOverride;
   const emails = model.emails;
   const systemSettings = model.systemSettings;
@@ -147,7 +148,7 @@ export function applyLibrarySettingsToForm(settings) {
   const fileInput = document.getElementById('ui-logo-file');
   if (fileInput) fileInput.value = '';
 
-  populateEmailTemplateForms(emails);
+  populateEmailTemplateForms(emails, model.templates);
   populatePatronUiForms(model.uiText);
   populateWorkflowForms(workflow, model.providers);
   workflowSettings.isOverride = isOverride;

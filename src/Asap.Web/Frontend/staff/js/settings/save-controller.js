@@ -1,10 +1,10 @@
 import { isRequestCanceledError, updateSaveBarState, markSettingsClean, getFieldValue, getFieldChecked } from '../api.js';
 import { authorizedJson } from '../http.js';
 import { showToast } from '../dialogs.js';
-import { settingsForm, currentLibraryContextOrgId, currentSettingsSection, initialSettingsSnapshot, settingsDirty, setSettingsSaving, setSettingsLoading, setInitialSettingsSnapshot, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, libraryContextLoadSerial } from '../state.js';
+import { settingsForm, currentLibraryContextOrgId, currentSettingsSection, initialSettingsSnapshot, settingsDirty, setSettingsSaving, setSettingsLoading, setInitialSettingsSnapshot, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, libraryContextLoadSerial, deletedSettingsFormats, setDeletedSettingsFormats } from '../state.js';
 import { refreshSettingsView, loadStaffConfig } from './refresh.js';
 import { loadStaffUsers } from '../settings-users.js';
-import { cloneLibrarySettingsSnapshot, captureSettingsBaseline, serializeSettingsState, buildSettingsPayload } from './serialize-save.js';
+import { cloneLibrarySettingsSnapshot, captureSettingsBaseline, serializeSettingsState, buildSettingsPayload, buildEmailSettingsPayload } from './serialize-save.js';
 import { applyLibrarySettingsToForm } from './form-population.js';
 
 export async function saveSettings(options = {}) {
@@ -26,14 +26,24 @@ export async function saveSettings(options = {}) {
   msg.textContent = options.pendingText || 'Saving...';
   msg.className = 'mt-2 font-weight-bold text-info';
 
+  async function deletePendingFormats() {
+    const pending = [...deletedSettingsFormats];
+    for (const format of pending) {
+      if (!format.id || !format.version) {
+        throw new Error('The custom format version is unavailable. Reload settings before deleting it.');
+      }
+      await authorizedJson(`/api/asap/staff/settings/formats/${encodeURIComponent(String(format.id))}?version=${encodeURIComponent(String(format.version))}`, {
+        method: 'DELETE'
+      });
+    }
+    setDeletedSettingsFormats([]);
+  }
+
   try {
     const isEmailSave = currentSettingsSection === 'smtp';
-    const payload = isEmailSave ? { emails: {
-      fromAddress: getFieldValue('smtp-from'),
-      fromName: getFieldValue('smtp-from-name'),
-      postmarkToken: getFieldValue('postmark-token').trim(),
-      clearPostmarkToken: getFieldChecked('postmark-clear-token')
-    } } : buildSettingsPayload();
+    const payload = isEmailSave
+      ? { emails: buildEmailSettingsPayload({ includeTemplates: false, useSmtpFields: true }) }
+      : buildSettingsPayload();
 
     const isSystemSave = currentLibraryContextOrgId === 'system';
     const libraryPayload = {
@@ -47,31 +57,15 @@ export async function saveSettings(options = {}) {
         ...(Object.hasOwn(payload, 'providers') ? { providers: payload.providers } : {}),
         ...(Object.hasOwn(payload, 'formats') ? { formats: payload.formats } : {}),
         ...(Object.hasOwn(payload, 'customFields') ? { customFields: payload.customFields } : {}),
-        workflow: {
-        suggestionLimit: payload.suggestionLimit,
-        suggestionLimitMessage: payload.suggestionLimitMessage,
-        outstandingTimeoutEnabled: payload.outstandingTimeoutEnabled,
-        outstandingTimeoutDays: payload.outstandingTimeoutDays,
-        outstandingTimeoutSendEmail: payload.outstandingTimeoutSendEmail,
-        outstandingTimeoutRejectionTemplateId: payload.outstandingTimeoutRejectionTemplateId,
-        holdPickupTimeoutEnabled: payload.holdPickupTimeoutEnabled,
-        holdPickupTimeoutDays: payload.holdPickupTimeoutDays,
-        pendingHoldTimeoutEnabled: payload.pendingHoldTimeoutEnabled,
-        pendingHoldTimeoutDays: payload.pendingHoldTimeoutDays,
-        additionalCopyTimeoutEnabled: payload.additionalCopyTimeoutEnabled,
-        additionalCopyTimeoutDays: payload.additionalCopyTimeoutDays,
-        commonAuthorsEnabled: payload.commonAuthorsEnabled,
-        commonAuthorsLabel: payload.commonAuthorsLabel,
-        commonAuthorsHelp: payload.commonAuthorsHelp,
-        commonAuthorsList: payload.commonAuthorsList,
-        commonAuthorsMessage: payload.commonAuthorsMessage,
-        autoPromote: payload.autoPromote,
-        allowPatronAutoholdOptOut: payload.allowPatronAutoholdOptOut,
-        allowAnyRegisteredCardLogin: payload.allowAnyRegisteredCardLogin,
-        patronCodeEligibilityEnabled: payload.patronCodeEligibilityEnabled,
-        allowedPatronCodeIds: payload.allowedPatronCodeIds,
-        patronCodeEligibilityMessage: payload.patronCodeEligibilityMessage
-        }
+        workflow: Object.fromEntries([
+          'suggestionLimit', 'suggestionLimitMessage', 'outstandingTimeoutEnabled', 'outstandingTimeoutDays',
+          'outstandingTimeoutSendEmail', 'outstandingTimeoutRejectionTemplateId', 'holdPickupTimeoutEnabled',
+          'holdPickupTimeoutDays', 'pendingHoldTimeoutEnabled', 'pendingHoldTimeoutDays',
+          'additionalCopyTimeoutEnabled', 'additionalCopyTimeoutDays', 'commonAuthorsEnabled',
+          'commonAuthorsLabel', 'commonAuthorsHelp', 'commonAuthorsList', 'commonAuthorsMessage',
+          'autoPromote', 'allowPatronAutoholdOptOut', 'allowAnyRegisteredCardLogin',
+          'patronCodeEligibilityEnabled', 'allowedPatronCodeIds', 'patronCodeEligibilityMessage'
+        ].filter(key => Object.hasOwn(payload, key)).map(key => [key, payload[key]]))
       })
     };
 
@@ -97,6 +91,9 @@ export async function saveSettings(options = {}) {
     if (saveContextOrgId !== currentLibraryContextOrgId || saveContextSerial !== libraryContextLoadSerial) {
       saveSuperseded = true;
       return false;
+    }
+    if (deletedSettingsFormats.length > 0) {
+      await deletePendingFormats();
     }
     captureSettingsBaseline();
     msg.textContent = options.successText || 'Settings saved.';

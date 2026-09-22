@@ -21,7 +21,6 @@ assert.deepEqual(
   unexpectedLegacyAccessibilityFindings(state('polaris-search', 'color-contrast', [
     '#polaris-search-status',
     '.polaris-warning',
-    '.btn-outline-success',
     '.polaris-search-result-actions > .btn-outline-success.btn-sm.btn'
   ])),
   []
@@ -47,6 +46,11 @@ assert.equal(
   unexpectedLegacyAccessibilityFindings(state('polaris-search', 'select-name', ['#polaris-search-status'])).length,
   1,
   'A different rule on a baselined target must fail.'
+);
+assert.equal(
+  unexpectedLegacyAccessibilityFindings(state('polaris-search', 'color-contrast', ['.other-actions > .btn-outline-success.btn-sm.btn'])).length,
+  1,
+  'A second element sharing the inherited class must not be baselined.'
 );
 
 console.log('legacy accessibility baseline tests passed');

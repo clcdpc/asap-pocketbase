@@ -1,4 +1,4 @@
-import { staffSession, currentRejectionTemplates, setCurrentRejectionTemplates, currentLibraryContextOrgId, setCurrentLibraryContextOrgId, emailTemplateDefaults, templateFieldIds } from './state.js';
+import { staffSession, currentRejectionTemplates, setCurrentRejectionTemplates, currentLibraryContextOrgId, emailTemplateDefaults, templateFieldIds, setDeletedSettingsTemplates, addDeletedSettingsTemplate } from './state.js';
 import { markSettingsDirty, updateAutoRejectEmailControls, getFieldChecked, getFieldValue } from './api.js';
 import { showAlert, showConfirm } from './dialogs.js';
 import { escapeAttr } from './grid.js';
@@ -55,8 +55,14 @@ function insertPlaceholderIntoField(field, placeholder) {
   field.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
-export function populateEmailTemplateForms(emails) {
+function templateValue(template, field, fallback) {
+  const value = template?.[field];
+  return value === undefined || value === null ? fallback : String(value);
+}
+
+export function populateEmailTemplateForms(emails, templateRecords = []) {
   emails = emails || {};
+  setDeletedSettingsTemplates([]);
 
   if (document.getElementById('email-from-address')) document.getElementById('email-from-address').value = emails.fromAddress || '';
   if (document.getElementById('email-from-name')) document.getElementById('email-from-name').value = emails.fromName || '';
@@ -68,27 +74,30 @@ export function populateEmailTemplateForms(emails) {
   }
 
   const emailSubmit = emails.suggestion_submitted || {};
-  if (document.getElementById('email-submit-subject')) document.getElementById('email-submit-subject').value = emailSubmit.subject || emailTemplateDefaults.suggestion_submitted.subject;
-  if (document.getElementById('email-submit-body')) document.getElementById('email-submit-body').value = emailSubmit.body || emailTemplateDefaults.suggestion_submitted.body;
+  if (document.getElementById('email-submit-subject')) document.getElementById('email-submit-subject').value = templateValue(emailSubmit, 'subject', emailTemplateDefaults.suggestion_submitted.subject);
+  if (document.getElementById('email-submit-body')) document.getElementById('email-submit-body').value = templateValue(emailSubmit, 'body', emailTemplateDefaults.suggestion_submitted.body);
 
   const emailPurchaseApproved = emails.purchase_approved || {};
-  if (document.getElementById('email-purchase-approved-subject')) document.getElementById('email-purchase-approved-subject').value = emailPurchaseApproved.subject || emailTemplateDefaults.purchase_approved.subject;
-  if (document.getElementById('email-purchase-approved-body')) document.getElementById('email-purchase-approved-body').value = emailPurchaseApproved.body || emailTemplateDefaults.purchase_approved.body;
+  if (document.getElementById('email-purchase-approved-subject')) document.getElementById('email-purchase-approved-subject').value = templateValue(emailPurchaseApproved, 'subject', emailTemplateDefaults.purchase_approved.subject);
+  if (document.getElementById('email-purchase-approved-body')) document.getElementById('email-purchase-approved-body').value = templateValue(emailPurchaseApproved, 'body', emailTemplateDefaults.purchase_approved.body);
 
   const emailOwned = emails.already_owned || {};
-  if (document.getElementById('email-owned-subject')) document.getElementById('email-owned-subject').value = emailOwned.subject || emailTemplateDefaults.already_owned.subject;
-  if (document.getElementById('email-owned-body')) document.getElementById('email-owned-body').value = emailOwned.body || emailTemplateDefaults.already_owned.body;
+  if (document.getElementById('email-owned-subject')) document.getElementById('email-owned-subject').value = templateValue(emailOwned, 'subject', emailTemplateDefaults.already_owned.subject);
+  if (document.getElementById('email-owned-body')) document.getElementById('email-owned-body').value = templateValue(emailOwned, 'body', emailTemplateDefaults.already_owned.body);
 
   const emailRejected = emails.rejected || {};
-  if (document.getElementById('email-rejected-subject')) document.getElementById('email-rejected-subject').value = emailRejected.subject || emailTemplateDefaults.rejected.subject;
-  if (document.getElementById('email-rejected-body')) document.getElementById('email-rejected-body').value = emailRejected.body || emailTemplateDefaults.rejected.body;
+  if (document.getElementById('email-rejected-subject')) document.getElementById('email-rejected-subject').value = templateValue(emailRejected, 'subject', emailTemplateDefaults.rejected.subject);
+  if (document.getElementById('email-rejected-body')) document.getElementById('email-rejected-body').value = templateValue(emailRejected, 'body', emailTemplateDefaults.rejected.body);
 
-  setCurrentRejectionTemplates(Array.isArray(emails.rejection_templates) ? JSON.parse(JSON.stringify(emails.rejection_templates)) : []);
+  const rejectionTemplates = Array.isArray(templateRecords) && templateRecords.length > 0
+    ? templateRecords.filter(template => template.templateKey?.startsWith('rejection:') && template.templateKey !== 'rejection:rejected')
+    : (Array.isArray(emails.rejection_templates) ? emails.rejection_templates : []);
+  setCurrentRejectionTemplates(JSON.parse(JSON.stringify(rejectionTemplates)));
   renderRejectionTemplates();
 
   const emailHold = emails.hold_placed || {};
-  if (document.getElementById('email-hold-subject')) document.getElementById('email-hold-subject').value = emailHold.subject || emailTemplateDefaults.hold_placed.subject;
-  if (document.getElementById('email-hold-body')) document.getElementById('email-hold-body').value = emailHold.body || emailTemplateDefaults.hold_placed.body;
+  if (document.getElementById('email-hold-subject')) document.getElementById('email-hold-subject').value = templateValue(emailHold, 'subject', emailTemplateDefaults.hold_placed.subject);
+  if (document.getElementById('email-hold-body')) document.getElementById('email-hold-body').value = templateValue(emailHold, 'body', emailTemplateDefaults.hold_placed.body);
 
   // Initialize summaries
   updateAllSummaries();
@@ -234,6 +243,13 @@ export async function removeRejectionTemplate(index) {
   if (!template) return;
   const templateName = template.name || template.subject || 'this rejection template';
 
+  const isLibrary = currentLibraryContextOrgId !== 'system';
+  const canReset = isLibrary && (template.isCustom === true || template.overridden === true || template.hadOverride === true);
+  if (!canReset) {
+    await showAlert('System rejection templates cannot be deleted here. Edit the template or disable the workflow that uses it.');
+    return;
+  }
+
   const autoRejectEnabled = getFieldChecked('outstanding-timeout-enabled');
   const sendEmail = getFieldChecked('outstanding-timeout-send-email');
   const selectedTemplateId = getFieldValue('outstanding-timeout-rejection-template-id');
@@ -246,6 +262,15 @@ export async function removeRejectionTemplate(index) {
   const confirmed = await showConfirm('Delete template?', `Delete "${templateName}"? This cannot be undone after you save these settings.`);
   if (!confirmed) return;
 
+  if (template.id || template.sourceTemplateId || template.templateKey) {
+    addDeletedSettingsTemplate({
+      templateKey: template.templateKey,
+      sourceTemplateId: template.sourceTemplateId || undefined,
+      isCustom: template.isCustom === true,
+      reset: true,
+      id: template.id || undefined
+    });
+  }
   currentRejectionTemplates.splice(index, 1);
   renderRejectionTemplates();
   updateAutoRejectEmailControls();
@@ -329,8 +354,13 @@ document.addEventListener('input', (e) => {
 const btnAddRejectionTemplate = document.getElementById('btn-add-rejection-template');
 if (btnAddRejectionTemplate) {
   btnAddRejectionTemplate.addEventListener('click', () => {
+    const suffix = `${Date.now()}_${currentRejectionTemplates.length + 1}`;
+    const isLibrary = currentLibraryContextOrgId !== 'system';
     currentRejectionTemplates.push({
-      id: staffSession.staff ? staffSession.staff.id + '_' + Date.now() : 'tpl_' + Date.now(),
+      id: '',
+      templateKey: isLibrary ? `rejection:custom_${suffix}` : `rejection:template_${suffix}`,
+      isCustom: isLibrary,
+      isNew: true,
       name: 'New Rejection Reason',
       subject: emailTemplateDefaults.rejected.subject,
       body: emailTemplateDefaults.rejected.body
