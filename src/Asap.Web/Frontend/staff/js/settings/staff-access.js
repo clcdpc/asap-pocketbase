@@ -1,6 +1,7 @@
-import { loadStaffUsers, populateStaffLibraryOptions } from '../settings-users.js';
+import { loadStaffUsers, populateStaffLibraryOptions, showStaffAccessLoading } from '../settings-users.js';
 
-export async function loadStaffAccessSettings() {
-  await populateStaffLibraryOptions();
-  await loadStaffUsers();
+export async function loadStaffAccessSettings(options = {}) {
+  if (!showStaffAccessLoading(options)) return false;
+  if (!await populateStaffLibraryOptions(options)) return false;
+  return loadStaffUsers({ ...options, loadingShown: true });
 }

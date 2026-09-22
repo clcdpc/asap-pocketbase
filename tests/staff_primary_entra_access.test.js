@@ -75,6 +75,11 @@ async function waitFor(predicate) {
 
     let runtimeFailure = '';
     let startupSession = null;
+    let delayLibraryTwoStaffUsers = false;
+    let resolveLibraryTwoStaffUsers;
+    let delayLibraryTwoOrganizations = false;
+    let resolveLibraryTwoOrganizations;
+    let useLibraryThreeOrganizations = false;
     let users = [
       {
         id: '9007199254740993',
@@ -146,6 +151,20 @@ async function waitFor(predicate) {
         return response(200, { items: [], scope: '2', availableLibraries: [] });
       }
       if (requestUrl === '/api/asap/staff/organizations') {
+        if (delayLibraryTwoOrganizations) {
+          return new Promise(resolve => {
+            resolveLibraryTwoOrganizations = () => resolve(response(200, {
+              code: 'ok',
+              data: [{ id: 2, displayName: 'Stale Library Two', active: true }]
+            }));
+          });
+        }
+        if (useLibraryThreeOrganizations) {
+          return response(200, {
+            code: 'ok',
+            data: [{ id: 3, displayName: 'Current Library Three', active: true }]
+          });
+        }
         return response(200, {
           code: 'ok',
           data: [
@@ -155,7 +174,39 @@ async function waitFor(predicate) {
           ]
         });
       }
-      if (requestUrl === '/api/asap/staff/users' && method === 'GET') {
+      if (requestUrl.startsWith('/api/asap/staff/users') && method === 'GET') {
+        if (requestUrl.includes('orgId=2') && delayLibraryTwoStaffUsers) {
+          return new Promise(resolve => {
+            resolveLibraryTwoStaffUsers = () => resolve(response(200, {
+              canAssignSuperAdmin: true,
+              users: [{
+                id: '9007199254740202',
+                userPrincipalName: 'stale-library-two@example.org',
+                displayName: 'Stale Library Two',
+                notificationEmail: 'stale-library-two@example.org',
+                role: 'staff',
+                organizationId: 2,
+                active: true,
+                version: 'stale-library-two-version'
+              }]
+            }));
+          });
+        }
+        if (requestUrl.includes('orgId=3')) {
+          return response(200, {
+            canAssignSuperAdmin: false,
+            users: [{
+              id: '9007199254740303',
+              userPrincipalName: 'current-library-three@example.org',
+              displayName: 'Current Library Three',
+              notificationEmail: 'current-library-three@example.org',
+              role: 'staff',
+              organizationId: 3,
+              active: true,
+              version: 'current-library-three-version'
+            }]
+          });
+        }
         return response(200, { canAssignSuperAdmin: true, users });
       }
       if (requestUrl.startsWith('/api/asap/staff/users') && method !== 'GET') {
@@ -285,6 +336,55 @@ async function waitFor(predicate) {
     assert.strictEqual(rows[0].getAttribute('data-staff-id'), '9007199254740993',
       'Bigint staff IDs must remain strings in the browser');
     assert.ok(rows[0].textContent.includes('version-active'));
+
+    state.setCurrentLibraryContextOrgId('2');
+    delayLibraryTwoStaffUsers = true;
+    const staleLibraryTwoLoad = staffAccess.loadStaffUsers();
+    await waitFor(() => typeof resolveLibraryTwoStaffUsers === 'function');
+    state.setCurrentLibraryContextOrgId('3');
+    const currentLibraryThreeLoad = staffAccess.loadStaffUsers();
+    assert.strictEqual(document.querySelectorAll('#staff-users-table-body tr[data-staff-id]').length, 0,
+      'Switching context must immediately remove mutation controls for the previous library');
+    await currentLibraryThreeLoad;
+    assert.strictEqual(document.querySelector('#staff-users-table-body tr[data-staff-id]')?.getAttribute('data-staff-id'),
+      '9007199254740303');
+    assert.match(document.getElementById('staff-users-msg').textContent, /Loaded 1 staff user/);
+    assert.strictEqual(state.canAssignSuperAdmin, false);
+
+    resolveLibraryTwoStaffUsers();
+    await staleLibraryTwoLoad;
+    assert.strictEqual(document.querySelector('#staff-users-table-body tr[data-staff-id]')?.getAttribute('data-staff-id'),
+      '9007199254740303', 'The delayed library-two response must not replace library three');
+    assert.match(document.getElementById('staff-users-msg').textContent, /Loaded 1 staff user/,
+      'The delayed response must not overwrite the current load message');
+    assert.strictEqual(state.canAssignSuperAdmin, false,
+      'The delayed response must not overwrite the current authorization baseline');
+
+    state.setCurrentLibraryContextOrgId('2');
+    delayLibraryTwoOrganizations = true;
+    const staleLibraryTwoOrganizations = staffAccess.populateStaffLibraryOptions();
+    await waitFor(() => typeof resolveLibraryTwoOrganizations === 'function');
+    delayLibraryTwoOrganizations = false;
+    useLibraryThreeOrganizations = true;
+    state.setCurrentLibraryContextOrgId('3');
+    await staffAccess.populateStaffLibraryOptions();
+    assert.deepStrictEqual(
+      [...document.getElementById('staff-add-library').options].map(option => option.value),
+      ['3']
+    );
+    resolveLibraryTwoOrganizations();
+    await staleLibraryTwoOrganizations;
+    assert.deepStrictEqual(
+      [...document.getElementById('staff-add-library').options].map(option => option.value),
+      ['3'],
+      'The delayed library-two organization response must not overwrite library three options'
+    );
+
+    delayLibraryTwoStaffUsers = false;
+    useLibraryThreeOrganizations = false;
+    state.setCurrentLibraryContextOrgId('system');
+    await staffAccess.populateStaffLibraryOptions();
+    await staffAccess.loadStaffUsers();
 
     document.getElementById('staff-add-identity').value = 'created@example.org';
     document.getElementById('staff-add-role').value = 'staff';

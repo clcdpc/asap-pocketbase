@@ -5,6 +5,7 @@ import { showConfirm, showToast } from '../dialogs.js';
 import { applyLibrarySettingsToForm } from './form-population.js';
 import { rememberLastSavedLibrarySettings, captureSettingsBaseline } from './serialize-save.js';
 import { loadStaffAccessSettings } from './staff-access.js';
+import { showStaffAccessLoading } from '../settings-users.js';
 import { createLatestLoad } from '../../../shared/latest-load.js';
 
 const SUPER_ADMIN_LIBRARY_CONTEXT_STORAGE_KEY = 'asap.superAdmin.settings.libraryContextOrgId';
@@ -147,6 +148,7 @@ export async function loadLibrarySettings(orgId) {
   incrementLibraryContextLoadSerial();
   const requestId = libraryContextLoadSerial;
   setCurrentLibraryContextOrgId(requestedOrgId);
+  showStaffAccessLoading({ contextOrgId: requestedOrgId, isCurrent: guard.isCurrent });
 
   try {
     let settings = {};
@@ -162,7 +164,14 @@ export async function loadLibrarySettings(orgId) {
     settings = result;
     rememberLastSavedLibrarySettings(settings);
     applyLibrarySettingsToForm(settings);
-    await loadStaffAccessSettings();
+    await loadStaffAccessSettings({
+      contextOrgId: requestedOrgId,
+      signal: guard.signal,
+      isCurrent: guard.isCurrent
+    });
+    if (!guard.isCurrent() || requestId !== libraryContextLoadSerial || requestedOrgId !== currentLibraryContextOrgId) {
+      return;
+    }
     captureSettingsBaseline();
     return settings;
 

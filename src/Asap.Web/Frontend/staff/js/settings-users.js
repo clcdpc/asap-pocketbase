@@ -1,6 +1,6 @@
 import { staffSession, canAssignSuperAdmin, setCanAssignSuperAdmin, currentLibraryContextOrgId } from './state.js';
 import { isSuperAdminStaff } from './api.js';
-import { authorizedJson } from './http.js';
+import { authorizedJson, isAbortError } from './http.js';
 import { showAlert, showConfirm } from './dialogs.js';
 
 let staffOrganizations = [];
@@ -70,6 +70,29 @@ function setStaffMessage(message, className) {
   element.className = className;
 }
 
+function staffLoadContext(options = {}) {
+  return clean(options.contextOrgId ?? currentLibraryContextOrgId) || 'system';
+}
+
+function isCurrentStaffLoad(options, contextOrgId) {
+  return (!options.isCurrent || options.isCurrent()) &&
+    contextOrgId === (clean(currentLibraryContextOrgId) || 'system');
+}
+
+export function showStaffAccessLoading(options = {}) {
+  const contextOrgId = staffLoadContext(options);
+  if (!isCurrentStaffLoad(options, contextOrgId)) return false;
+
+  const body = document.getElementById('staff-users-table-body');
+  const refresh = document.getElementById('btn-refresh-staff-users');
+  if (!body) return false;
+
+  if (refresh) refresh.disabled = true;
+  setStaffMessage('Loading staff users...', 'mb-2 text-muted');
+  body.replaceChildren();
+  return true;
+}
+
 function cleanupSummary(cleanup) {
   if (!cleanup) return '';
   return ` Cleanup: ${Number(cleanup.rulesDeactivated || 0)} auto-claim rules deactivated; ` +
@@ -77,33 +100,26 @@ function cleanupSummary(cleanup) {
     `${Number(cleanup.openAdditionalCopyClaimsCleared || 0)} open additional-copy claims cleared.`;
 }
 
-function staffUsersUrl() {
+function staffUsersUrl(contextOrgId = currentLibraryContextOrgId) {
   const requestedOrganizationId = isSuperAdminStaff()
-    ? (currentLibraryContextOrgId !== 'system' ? currentLibraryContextOrgId : '')
+    ? (contextOrgId !== 'system' ? contextOrgId : '')
     : clean(staffSession.staff?.organizationId);
   return requestedOrganizationId
     ? `/api/asap/staff/users?orgId=${encodeURIComponent(requestedOrganizationId)}`
     : '/api/asap/staff/users';
 }
 
-export async function loadStaffUsers() {
+export async function loadStaffUsers(options = {}) {
+  const contextOrgId = staffLoadContext(options);
   const body = document.getElementById('staff-users-table-body');
   const refresh = document.getElementById('btn-refresh-staff-users');
   if (!body) return;
 
-  if (refresh) refresh.disabled = true;
-  setStaffMessage('Loading staff users...', 'mb-2 text-muted');
-  body.replaceChildren();
-  const loadingRow = document.createElement('tr');
-  const loadingCell = document.createElement('td');
-  loadingCell.colSpan = 8;
-  loadingCell.className = 'text-muted';
-  loadingCell.textContent = 'Loading staff users...';
-  loadingRow.appendChild(loadingCell);
-  body.appendChild(loadingRow);
+  if (!options.loadingShown && !showStaffAccessLoading({ ...options, contextOrgId })) return false;
 
   try {
-    const result = await authorizedJson(staffUsersUrl());
+    const result = await authorizedJson(staffUsersUrl(contextOrgId), { signal: options.signal });
+    if (!isCurrentStaffLoad(options, contextOrgId)) return false;
     const users = Array.isArray(result.users) ? result.users : [];
     setCanAssignSuperAdmin(!!result.canAssignSuperAdmin);
     renderStaffUsers(users);
@@ -111,7 +127,9 @@ export async function loadStaffUsers() {
       users.length ? `Loaded ${users.length} staff user${users.length === 1 ? '' : 's'}.` : 'No staff users found.',
       'mb-2 text-muted'
     );
+    return true;
   } catch (error) {
+    if (isAbortError(error) || !isCurrentStaffLoad(options, contextOrgId)) return false;
     console.error('Failed to load staff users', error);
     setStaffMessage(error.message || 'Failed to load staff users.', 'mb-2 text-danger font-weight-bold');
     body.replaceChildren();
@@ -122,8 +140,9 @@ export async function loadStaffUsers() {
     cell.textContent = 'Unable to load staff users.';
     row.appendChild(cell);
     body.appendChild(row);
+    return false;
   } finally {
-    if (refresh) refresh.disabled = false;
+    if (refresh && isCurrentStaffLoad(options, contextOrgId)) refresh.disabled = false;
   }
 }
 
@@ -218,18 +237,24 @@ export function renderStaffUsers(users) {
 }
 
 async function refreshStaffAccess() {
-  await populateStaffLibraryOptions();
-  await loadStaffUsers();
+  const contextOrgId = clean(currentLibraryContextOrgId) || 'system';
+  const loadedOrganizations = await populateStaffLibraryOptions({ contextOrgId });
+  if (!loadedOrganizations || contextOrgId !== (clean(currentLibraryContextOrgId) || 'system')) return false;
+  return loadStaffUsers({ contextOrgId });
 }
 
 async function runStaffMutation(button, message, operation) {
+  const contextOrgId = clean(currentLibraryContextOrgId) || 'system';
   button.disabled = true;
   setStaffMessage(`${message}...`, 'mb-2 text-muted');
   try {
     const result = await operation();
+    if (contextOrgId !== (clean(currentLibraryContextOrgId) || 'system')) return;
     await refreshStaffAccess();
+    if (contextOrgId !== (clean(currentLibraryContextOrgId) || 'system')) return;
     setStaffMessage(`${message}.${cleanupSummary(result?.cleanup)}`, 'mb-2 text-success font-weight-bold');
   } catch (error) {
+    if (isAbortError(error) || contextOrgId !== (clean(currentLibraryContextOrgId) || 'system')) return;
     console.error(message, error);
     setStaffMessage(error.message || 'The staff access change could not be saved.', 'mb-2 text-danger font-weight-bold');
   } finally {
@@ -314,18 +339,22 @@ document.getElementById('btn-refresh-staff-users')?.addEventListener('click', ev
   loadStaffUsers();
 });
 
-export async function populateStaffLibraryOptions() {
+export async function populateStaffLibraryOptions(options = {}) {
+  const contextOrgId = staffLoadContext(options);
   const select = document.getElementById('staff-add-library');
   const context = document.getElementById('staff-add-library-context');
-  if (!select || !context) return;
+  if (!select || !context || !isCurrentStaffLoad(options, contextOrgId)) return false;
 
   const me = staffSession.staff || {};
   const isSuper = isSuperAdminStaff();
   if (isSuper) {
+    const organizations = await authorizedJson('/api/asap/staff/organizations', { signal: options.signal });
+    if (!isCurrentStaffLoad(options, contextOrgId)) return false;
+    staffOrganizations = organizations;
     select.classList.remove('hidden');
     context.classList.add('hidden');
-    staffOrganizations = await authorizedJson('/api/asap/staff/organizations');
   } else {
+    if (!isCurrentStaffLoad(options, contextOrgId)) return false;
     const libraryId = clean(me.organizationId || me.libraryOrgId);
     const libraryName = me.organizationName || me.libraryOrgName || `Library ${libraryId || '?'}`;
     staffOrganizations = [{ id: libraryId, displayName: libraryName }];
@@ -335,11 +364,12 @@ export async function populateStaffLibraryOptions() {
   }
 
   const role = document.getElementById('staff-add-role')?.value || 'staff';
-  const selectedOrganizationId = currentLibraryContextOrgId !== 'system'
-    ? currentLibraryContextOrgId
+  const selectedOrganizationId = contextOrgId !== 'system'
+    ? contextOrgId
     : clean(me.organizationId || me.libraryOrgId);
   replaceOrganizationOptions(select, role, selectedOrganizationId);
   if (isSuper && role !== 'super_admin') select.disabled = false;
+  return true;
 }
 
 const addStaffRole = document.getElementById('staff-add-role');

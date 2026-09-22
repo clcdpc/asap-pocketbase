@@ -65,10 +65,13 @@ async function loadLibraryContext(isSuper) {
     : `${libraryName} (ID ${currentLibraryContextOrgId})`;
 }
 
-async function loadLibraryAdminSettings() {
+async function loadLibraryAdminSettings(options = {}) {
   showSettingsForm();
-  await loadStaffAccessSettings();
-  updateSaveButtonText();
+  const loaded = await loadStaffAccessSettings(options);
+  if (loaded && (!options.isCurrent || options.isCurrent())) {
+    updateSaveButtonText();
+  }
+  return loaded;
 }
 
 function showSettingsForm() {
@@ -137,11 +140,16 @@ export async function loadSettings(options = {}) {
     await loadLibraryContext(isSuper);
     if (!guard.isCurrent()) return;
 
-    const loadedLibrarySettings = await loadLibrarySettings(currentLibraryContextOrgId);
-    if (!guard.isCurrent()) return;
+    const requestedContextOrgId = currentLibraryContextOrgId;
+    const loadedLibrarySettings = await loadLibrarySettings(requestedContextOrgId);
+    if (!guard.isCurrent() || loadedLibrarySettings === undefined || requestedContextOrgId !== currentLibraryContextOrgId) return;
 
     if (!isSuper) {
-      await loadLibraryAdminSettings();
+      await loadLibraryAdminSettings({
+        contextOrgId: requestedContextOrgId,
+        signal: guard.signal,
+        isCurrent: guard.isCurrent
+      });
       return;
     }
 
@@ -150,8 +158,12 @@ export async function loadSettings(options = {}) {
     updateWorkflowSettingsSummary(loadedLibrarySettings);
 
     populateSystemSettingsForms(loadedLibrarySettings);
-    await loadStaffAccessSettings();
-    if (!guard.isCurrent()) return;
+    await loadStaffAccessSettings({
+      contextOrgId: requestedContextOrgId,
+      signal: guard.signal,
+      isCurrent: guard.isCurrent
+    });
+    if (!guard.isCurrent() || requestedContextOrgId !== currentLibraryContextOrgId) return;
     showSettingsForm();
 
   } catch (err) {
