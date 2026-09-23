@@ -292,15 +292,15 @@ jobs:
           whoami /priv
 
           Write-Host "`n=== IIS probe ==="
-          Import-Module WebAdministration -ErrorAction Stop
-
           try {
-            Get-Website -ErrorAction Stop | Select-Object Name, State, PhysicalPath, ApplicationPool
+            $deployment = Get-Content -LiteralPath 'C:\ProgramData\clc-asap\Config\deployment.json' -Raw | ConvertFrom-Json
+            Import-Module WebAdministration -ErrorAction Stop
+            Get-Website -Name ([string] $deployment.IisSiteName) -ErrorAction Stop |
+              Select-Object Name, State, PhysicalPath, ApplicationPool
           }
           catch {
-            Write-Host "Get-Website failed:"
+            Write-Host "Configured-site Get-Website failed:"
             Write-Host $_.Exception.ToString()
-            throw
           }
 
       - name: Download exact tested deployment artifact
