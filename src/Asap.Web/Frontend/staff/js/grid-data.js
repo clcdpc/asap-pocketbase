@@ -189,12 +189,22 @@ export function clearJobMessage() {
 export function updateAdminActions(status, ctx) {
   const adminBar = document.getElementById('admin-actions-bar');
   const workflowBtn = document.getElementById('btn-run-workflow-now');
+  const scopeWrapper = document.getElementById('workflow-library-scope-label');
+  const scopeSelect = document.getElementById('workflow-library-scope');
 
   adminBar.classList.add('hidden');
   workflowBtn.classList.add('hidden');
-  if (isAdminStaff() && status !== 'settings' && status !== 'analytics') {
+  const scopeReady = !isSuperAdminStaff() ||
+    (scopeWrapper && !scopeWrapper.classList.contains('hidden') &&
+      scopeSelect && scopeSelect.value === String(ctx.currentWorkflowOrgScopeId));
+  if (isAdminStaff() && scopeReady && status !== 'settings' && status !== 'analytics') {
     adminBar.classList.remove('hidden');
     workflowBtn.classList.remove('hidden');
+    if (workflowBtn.dataset.reloadMessage) {
+      const msg = document.getElementById('job-msg');
+      msg.textContent = workflowBtn.dataset.reloadMessage;
+      msg.className = 'mb-3 font-weight-bold text-warning';
+    }
   }
 }
 
@@ -302,6 +312,7 @@ export function updateWorkflowScopeControl(data, ctx) {
   if (ctx.staffGridFilterBar) {
     ctx.staffGridFilterBar.classList.remove('hidden');
   }
+  updateAdminActions(ctx.currentStatus, ctx);
 }
 
 export function hideWorkflowScopeControl() {

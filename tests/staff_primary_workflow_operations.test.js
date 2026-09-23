@@ -62,17 +62,26 @@ async function settle() {
       antiforgeryToken: 'workflow-test-token',
       staff: { role: 'super_admin', organizationId: 1 }
     });
+    const gridContext = {
+      currentStatus: 'pending_hold',
+      get currentWorkflowOrgScopeId() { return state.currentWorkflowOrgScopeId; },
+      setCurrentWorkflowOrgScopeId: state.setCurrentWorkflowOrgScopeId,
+      staffGridFilterBar: document.getElementById('staff-grid-filter-bar'),
+      workflowSettings: {}
+    };
+    gridData.updateAdminActions('pending_hold', gridContext);
+    assert.equal(document.getElementById('btn-run-workflow-now').classList.contains('hidden'), true,
+      'super-admin action must wait until the visible workflow scope has loaded');
     gridData.updateWorkflowScopeControl({
       scope: { superAdmin: true, mode: 'library', libraryOrgId: '2', label: 'Library Two' },
       availableLibraries: [{ orgId: '2', name: 'Library Two' }, { orgId: '3', name: 'Library Three' }]
-    }, {
-      setCurrentWorkflowOrgScopeId: state.setCurrentWorkflowOrgScopeId,
-      staffGridFilterBar: document.getElementById('staff-grid-filter-bar')
-    });
+    }, gridContext);
     assert.equal(document.getElementById('workflow-library-scope').value, '2');
     assert.equal(state.currentWorkflowOrgScopeId, '2');
+    assert.equal(document.getElementById('btn-run-workflow-now').classList.contains('hidden'), false,
+      'rendering the authoritative scope should reveal the workflow action');
     state.setCurrentLibraryContextOrgId('3');
-    gridData.updateAdminActions('pending_hold', { workflowSettings: { autoPromote: true } });
+    gridData.updateAdminActions('pending_hold', gridContext);
     assert.equal(document.querySelectorAll('#admin-actions-bar button:not(.hidden)').length, 1,
       'one truthful unified workflow control should be available');
     assert.ok(document.getElementById('btn-run-workflow-now'));
@@ -95,17 +104,24 @@ async function settle() {
     assert.equal(calls[0].options.headers['X-ASAP-Antiforgery'], 'workflow-test-token');
     state.setCurrentLibraryContextOrgId('system');
     state.setCurrentWorkflowOrgScopeId('all');
+    document.getElementById('workflow-library-scope').value = 'all';
     completeRun(response(202, { code: 'queued', jobId: 'job-2', organizationId: 2 }));
     await settle();
     assert.match(document.getElementById('job-msg').textContent, /queued.*Library 2/i,
       'late feedback must describe the submitted scope and queue acceptance');
     assert.equal(button.disabled, false);
 
-    gridData.updateAdminActions('closed', { workflowSettings: {} });
+    gridData.updateAdminActions('closed', gridContext);
     assert.equal(button.classList.contains('hidden'), false);
     assert.equal(document.querySelectorAll('#admin-actions-bar button:not(.hidden)').length, 1);
     assert.equal(document.getElementById('bulk-delete-closed-dialog'), null);
 
+    state.setCurrentWorkflowOrgScopeId('3');
+    button.click();
+    await settle();
+    assert.equal(calls.length, 1,
+      'a super-admin run must not use browser state that disagrees with the visible scope selector');
+    state.setCurrentWorkflowOrgScopeId('all');
     button.click();
     await settle();
     assert.equal(calls.length, 2);
@@ -130,8 +146,8 @@ async function settle() {
     button.click();
     await settle();
     assert.equal(calls.length, 3);
-    assert.equal(new URL(calls[2].url, 'https://localhost').searchParams.has('organizationId'), false,
-      'ordinary admin requests must leave scope enforcement to the backend');
+    assert.equal(new URL(calls[2].url, 'https://localhost').searchParams.get('organizationId'), '2',
+      'ordinary admin requests must pin the visible own library if the server role changes');
     completeRun(response(202, { code: 'queued', organizationId: 2 }));
     await settle();
     assert.match(document.getElementById('job-msg').textContent, /queued/i);
@@ -161,6 +177,7 @@ async function settle() {
       staff: { id: '7', role: 'super_admin', organizationId: 1 }
     });
     state.setCurrentWorkflowOrgScopeId('2');
+    document.getElementById('workflow-library-scope').value = '2';
     button.click();
     await settle();
     assert.equal(calls.length, 6);
@@ -169,6 +186,29 @@ async function settle() {
     await settle();
     assert.equal(document.getElementById('job-msg').textContent, '',
       'a response after sign-out must not leave pending privileged feedback behind');
+
+    state.setStaffSession({
+      authenticated: true,
+      accessAllowed: true,
+      antiforgeryToken: 'workflow-test-token',
+      staff: { id: '7', role: 'super_admin', organizationId: 1 }
+    });
+    state.setCurrentWorkflowOrgScopeId('all');
+    document.getElementById('workflow-library-scope').value = 'all';
+    button.click();
+    await settle();
+    assert.equal(calls.length, 7);
+    completeRun(response(202, { code: 'queued', jobId: 'downgraded-job', organizationId: 2 }));
+    await settle();
+    assert.match(document.getElementById('job-msg').textContent, /queued for Library 2/i,
+      'a changed server role must report the effective queued library');
+    assert.match(document.getElementById('job-msg').textContent, /reload/i);
+    assert.equal(button.disabled, true,
+      'stale access must require a reload before another manual run');
+    gridData.clearJobMessage();
+    gridData.updateAdminActions('closed', gridContext);
+    assert.match(document.getElementById('job-msg').textContent, /reload/i,
+      'tab navigation must preserve the reason the workflow action is disabled');
   } finally {
     dom?.window.close();
     fs.rmSync(temporary, { recursive: true, force: true });

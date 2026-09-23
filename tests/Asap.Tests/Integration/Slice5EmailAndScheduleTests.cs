@@ -26,6 +26,12 @@ public sealed partial class PatronJourneyTests
         using var omittedBody = System.Text.Json.JsonDocument.Parse(await omitted.Content.ReadAsStringAsync());
         Assert.AreEqual(2, omittedBody.RootElement.GetProperty("organizationId").GetInt32());
 
+        using var explicitOwn = await client.PostAsync(
+            "/api/asap/staff/workflow/run-now?organizationId=2", content: null);
+        Assert.AreEqual(System.Net.HttpStatusCode.Accepted, explicitOwn.StatusCode);
+        using var explicitOwnBody = System.Text.Json.JsonDocument.Parse(await explicitOwn.Content.ReadAsStringAsync());
+        Assert.AreEqual(2, explicitOwnBody.RootElement.GetProperty("organizationId").GetInt32());
+
         using var forged = await client.PostAsync(
             "/api/asap/staff/workflow/run-now?organizationId=3", content: null);
         Assert.AreEqual(System.Net.HttpStatusCode.Forbidden, forged.StatusCode);

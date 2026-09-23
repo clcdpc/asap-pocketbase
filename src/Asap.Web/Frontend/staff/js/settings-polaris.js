@@ -62,18 +62,35 @@ document.getElementById('btn-run-workflow-now').addEventListener('click', async 
   const msg = document.getElementById('job-msg');
   const actionStaff = staffSession.staff;
   const scope = actionStaff.role === 'super_admin' ? currentWorkflowOrgScopeId : String(actionStaff.organizationId);
+  if (actionStaff.role === 'super_admin') {
+    const scopeWrapper = document.getElementById('workflow-library-scope-label');
+    const scopeSelect = document.getElementById('workflow-library-scope');
+    if (scopeWrapper.classList.contains('hidden') || scopeSelect.value !== scope) return;
+  }
   const scopeLabel = scope === 'all' ? 'all libraries' : `Library ${scope}`;
-  const url = scope === 'all' || actionStaff.role !== 'super_admin'
+  const url = scope === 'all'
     ? '/api/asap/staff/workflow/run-now'
     : `/api/asap/staff/workflow/run-now?organizationId=${encodeURIComponent(scope)}`;
   btn.disabled = true;
   msg.textContent = `Queueing workflow run for ${scopeLabel}...`;
   msg.className = 'mb-3 font-weight-bold text-info';
+  let reloadRequired = false;
 
   try {
     const data = await authorizedJson(url, { method: 'POST' });
     if (staffSession.staff !== actionStaff || !staffSession.authenticated || !staffSession.accessAllowed) {
       msg.textContent = '';
+      return;
+    }
+    const effectiveScope = data.organizationId == null ? '' : String(data.organizationId);
+    const expectedScope = scope === 'all' ? '1' : scope;
+    if (effectiveScope !== expectedScope) {
+      reloadRequired = true;
+      const effectiveLabel = effectiveScope === '1' ? 'all libraries'
+        : effectiveScope ? `Library ${effectiveScope}` : 'an unconfirmed scope';
+      msg.textContent = `Workflow run queued for ${effectiveLabel}${data.jobId ? ` (job ${data.jobId})` : ''}. Your staff scope changed. Reload this page before another run.`;
+      msg.className = 'mb-3 font-weight-bold text-warning';
+      btn.dataset.reloadMessage = msg.textContent;
       return;
     }
     msg.textContent = `Workflow run queued for ${scopeLabel}${data.jobId ? ` (job ${data.jobId})` : ''}.`;
@@ -86,7 +103,7 @@ document.getElementById('btn-run-workflow-now').addEventListener('click', async 
     msg.textContent = 'Error: ' + err.message;
     msg.className = 'mb-3 font-weight-bold text-danger';
   } finally {
-    btn.disabled = false;
+    if (!reloadRequired) btn.disabled = false;
   }
 });
 
