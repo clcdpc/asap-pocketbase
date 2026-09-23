@@ -490,7 +490,17 @@ public sealed class AdministrationService(
             return new AdministrationResult("staff_scope_forbidden");
         }
 
-        var snapshots = await polarisProvider.GetOrganizationsAsync(cancellationToken);
+        IReadOnlyList<PolarisOrganizationSnapshot> snapshots;
+        try
+        {
+            snapshots = await polarisProvider.GetOrganizationsAsync(cancellationToken);
+        }
+        catch (PolarisOperationalException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            // The local sync transaction has not started, so this response proves no local write occurred.
+            return new AdministrationResult("polaris_unavailable", Message: "Polaris organizations could not be loaded.");
+        }
         if (snapshots.Count == 0)
         {
             return new AdministrationResult("polaris_organizations_empty");

@@ -1,4 +1,4 @@
-import { organizationsStatus } from '../state.js';
+import { organizationsStatus, organizationsStatusMessage, organizationsStatusSerial, currentLibraryContextOrgId, libraryContextLoadSerial } from '../state.js';
 import { authorizedJson } from '../http.js';
 import { getFieldValue, getFieldChecked, setFieldValue, setFieldChecked, setVisible } from '../app/dom.js';
 import { updateOrganizationsStatusUi } from '../app/misc.js';
@@ -164,6 +164,9 @@ let participationRenderSerial = 0;
 
 export async function renderLibraryParticipationCheckboxes() {
   const renderSerial = ++participationRenderSerial;
+  const statusSerial = organizationsStatusSerial;
+  const contextOrgId = currentLibraryContextOrgId;
+  const contextSerial = libraryContextLoadSerial;
   const container = document.getElementById('enabled-libraries-checkbox-container');
   if (!container || container.getAttribute('data-loaded') === 'true') return;
 
@@ -173,13 +176,14 @@ export async function renderLibraryParticipationCheckboxes() {
   }
 
   if (organizationsStatus === 'error') {
-    renderMessage(container, 'p-3 text-warning', 'Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.');
+    renderMessage(container, 'p-3 text-warning', organizationsStatusMessage || 'Organization choices could not be loaded.');
     return;
   }
 
   try {
     const values = await authorizedJson('/api/asap/staff/organizations');
-    if (renderSerial !== participationRenderSerial) return;
+    if (renderSerial !== participationRenderSerial || statusSerial !== organizationsStatusSerial ||
+        contextOrgId !== currentLibraryContextOrgId || contextSerial !== libraryContextLoadSerial) return;
     const activeOrganizationIds = new Set(values
       .filter(item => item.isActive === true || item.active === true)
       .map(item => String(item.id)));
@@ -209,10 +213,10 @@ export async function renderLibraryParticipationCheckboxes() {
       cb.checked = activeOrganizationIds.has(cb.value);
     });
   } catch (err) {
-    if (renderSerial !== participationRenderSerial) return;
+    if (renderSerial !== participationRenderSerial || statusSerial !== organizationsStatusSerial ||
+        contextOrgId !== currentLibraryContextOrgId || contextSerial !== libraryContextLoadSerial) return;
     console.error('Failed to load libraries for participation list', err);
-    updateOrganizationsStatusUi('error', 'Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.');
-    renderMessage(container, 'p-3 text-warning', 'Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.');
+    updateOrganizationsStatusUi('error', 'Organization choices could not be loaded from ASAP. Reload Settings to try again.');
   }
 }
 

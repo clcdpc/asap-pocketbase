@@ -26,10 +26,18 @@ const flush = async () => { await new Promise(resolve => setImmediate(resolve));
     dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
     const state = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'state.js')).href);
     const settings = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings.js')).href);
+    const patronCodes = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'patron-codes.js')).href);
     const outcome = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'mutation-outcome.js')).href);
-    assert.strictEqual(outcome.isAmbiguousMutationError({ status: 422 }), false);
+    assert.strictEqual(outcome.classifyMutationOutcome({ status: 400, response: { code: 'logo_invalid' } }), 'definite_failure');
     assert.strictEqual(outcome.isAmbiguousMutationError({ status: 409, response: { code: 'stale_version' } }), false);
-    assert.strictEqual(outcome.isAmbiguousMutationError({ status: 400, message: 'Cannot abort operation' }), false);
+    assert.strictEqual(outcome.isAmbiguousMutationError({ status: 403, response: { code: 'staff_scope_forbidden' } }), false);
+    assert.strictEqual(outcome.isAmbiguousMutationError({ status: 502, response: { code: 'polaris_unavailable' } }), false);
+    assert.strictEqual(outcome.isAmbiguousMutationError({ status: 502, response: { code: 'patron_codes_unavailable' } }), false);
+    assert.strictEqual(outcome.isAmbiguousMutationError({ status: 400, response: { code: 'patron_code_unknown' } }), false);
+    for (const status of [400, 408, 422, 500, 502, 503, 504]) {
+      assert.strictEqual(outcome.isAmbiguousMutationError({ status }), true, `unrecognized HTTP ${status}`);
+    }
+    assert.strictEqual(outcome.isAmbiguousMutationError({ status: 502, response: { code: 'unknown' } }), true);
     assert.strictEqual(outcome.isAmbiguousMutationError({ status: 0 }), true);
     assert.strictEqual(outcome.isAmbiguousMutationError(new dom.window.DOMException('Aborted', 'AbortError')), true);
     state.setStaffSession({ authenticated: true, accessAllowed: true, antiforgeryToken: 'test-token',
@@ -40,10 +48,20 @@ const flush = async () => { await new Promise(resolve => setImmediate(resolve));
     let loginNote = 'Original note';
     let libraryAlt = 'Library alt';
     let libraryImage = false;
+    let organizationName = 'Library Two';
+    let patronCodeName = 'Adult';
+    let organizationGets = 0;
+    let patronCodeGets = 0;
     let failure = null;
     let releaseDeferredFailure = null;
     let deferNextConfig = false;
     let releaseDeferredConfig = null;
+    let failNextSettingsGet = false;
+    let deferNextOrganizationGet = false;
+    let deferNextPatronCodeGet = false;
+    let failNextOrganizationGet = false;
+    let releaseDeferredOrganizationGet = null;
+    let releaseDeferredPatronCodeGet = null;
     const mutations = [];
     const version = () => `version-${versionNumber}`;
     const data = () => {
@@ -65,7 +83,13 @@ const flush = async () => { await new Promise(resolve => setImmediate(resolve));
     global.fetch = async (url, options = {}) => {
       const requestUrl = String(url);
       const method = String(options.method || 'GET').toUpperCase();
-      if (requestUrl.includes('/api/asap/staff/settings/library?orgId=2')) return response(200, data());
+      if (requestUrl.includes('/api/asap/staff/settings/library?orgId=2')) {
+        if (failNextSettingsGet) {
+          failNextSettingsGet = false;
+          return response(503, {});
+        }
+        return response(200, data());
+      }
       if (requestUrl === '/api/asap/config') {
         if (deferNextConfig) {
           deferNextConfig = false;
@@ -75,7 +99,28 @@ const flush = async () => { await new Promise(resolve => setImmediate(resolve));
         }
         return response(200, { publicationOptions: [] });
       }
-      if (requestUrl.includes('/api/asap/staff/polaris/patron-codes')) return response(200, { code: 'ok', data: [] });
+      if (requestUrl.includes('/api/asap/staff/polaris/patron-codes')) {
+        patronCodeGets++;
+        if (deferNextPatronCodeGet) {
+          deferNextPatronCodeGet = false;
+          const body = { code: 'ok', data: [{ id: '7', description: patronCodeName }] };
+          return new Promise(resolve => { releaseDeferredPatronCodeGet = () => resolve(response(200, body)); });
+        }
+        return response(200, { code: 'ok', data: [{ id: '7', description: patronCodeName }] });
+      }
+      if (requestUrl === '/api/asap/staff/organizations') {
+        organizationGets++;
+        if (failNextOrganizationGet) {
+          failNextOrganizationGet = false;
+          return response(503, {});
+        }
+        if (deferNextOrganizationGet) {
+          deferNextOrganizationGet = false;
+          const body = { code: 'ok', data: [{ id: 2, displayName: organizationName, isActive: true }] };
+          return new Promise(resolve => { releaseDeferredOrganizationGet = () => resolve(response(200, body)); });
+        }
+        return response(200, { code: 'ok', data: [{ id: 2, displayName: organizationName, isActive: true }] });
+      }
       if (requestUrl.startsWith('/api/asap/staff/users')) return response(200, { users: [] });
       let family;
       if (requestUrl === '/api/asap/staff/settings/library' && method === 'POST') {
@@ -103,7 +148,11 @@ const flush = async () => { await new Promise(resolve => setImmediate(resolve));
       } else if (requestUrl === '/api/asap/staff/organizations/sync' && method === 'POST') {
         family = 'sync';
         mutations.push({ family });
-        if (failure?.family !== family || failure.commit) versionNumber++;
+        if (failure?.family !== family || failure.commit) {
+          versionNumber++;
+          organizationName = `Synced library ${versionNumber}`;
+          patronCodeName = `Synced code ${versionNumber}`;
+        }
       } else {
         throw new Error(`Unexpected request: ${requestUrl}`);
       }
@@ -114,6 +163,9 @@ const flush = async () => { await new Promise(resolve => setImmediate(resolve));
           return new Promise((_, reject) => {
             releaseDeferredFailure = () => reject(new TypeError('Connection lost'));
           });
+        }
+        if (failedRequest.status) {
+          return response(failedRequest.status, failedRequest.code ? { code: failedRequest.code } : {});
         }
         throw new TypeError('Connection lost');
       }
@@ -148,7 +200,7 @@ const flush = async () => { await new Promise(resolve => setImmediate(resolve));
       const oldVersion = version();
       note.value = commit ? 'Committed draft' : 'Uncommitted draft';
       note.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
-      failure = { family: 'settings-save', commit };
+      failure = { family: 'settings-save', commit, status: commit ? 502 : 500 };
       assert.strictEqual(await settings.saveSettings(), false);
       await assertUncertain('settings-save', oldVersion, { element: note, value: note.value });
       await recover(version());
@@ -159,7 +211,7 @@ const flush = async () => { await new Promise(resolve => setImmediate(resolve));
     const oldBrandingVersion = version();
     alt.value = 'Unconfirmed branding alt';
     alt.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
-    failure = { family: 'logo-post', commit: true };
+    failure = { family: 'logo-post', commit: true, status: 504 };
     document.getElementById('btn-upload-logo').click();
     await flush(); await flush();
     await assertUncertain('logo-post', oldBrandingVersion, { element: alt, value: 'Unconfirmed branding alt' });
@@ -220,11 +272,91 @@ const flush = async () => { await new Promise(resolve => setImmediate(resolve));
     await assertUncertain('library-reset', oldLibraryResetVersion);
     await recover(version());
 
-    const oldSyncVersion = version();
-    failure = { family: 'sync', commit: true };
-    await assert.rejects(settings.syncPolarisOrganizations(), /Connection lost/);
-    await assertUncertain('sync', oldSyncVersion);
+    for (const commit of [true, false]) {
+      const oldSyncVersion = version();
+      const oldOrganizationName = organizationName;
+      const oldPatronCodeName = patronCodeName;
+      failure = { family: 'sync', commit, status: 502 };
+      await assert.rejects(settings.syncPolarisOrganizations(), /Response/);
+      assert.strictEqual(state.settingsSyncInProgress, false);
+      assert.strictEqual(document.getElementById('btn-sync-organizations').disabled, true);
+      assert.strictEqual(state.organizationsStatus, 'not_loaded');
+      assert.doesNotMatch(document.getElementById('enabled-libraries-checkbox-container').textContent, /Organizations loading/);
+      assert.doesNotMatch(document.getElementById('allowed-patron-code-container').textContent, /Patron codes loading/);
+      await assertUncertain('sync', oldSyncVersion);
+      const syncCount = mutations.filter(item => item.family === 'sync').length;
+      const oldOrganizationGets = organizationGets;
+      const oldPatronCodeGets = patronCodeGets;
+      await recover(version());
+      await settings.renderLibraryParticipationCheckboxes();
+      await flush();
+      assert.strictEqual(mutations.filter(item => item.family === 'sync').length, syncCount, 'reload must not repeat Polaris sync');
+      assert.ok(organizationGets > oldOrganizationGets);
+      assert.ok(patronCodeGets > oldPatronCodeGets);
+      assert.match(document.getElementById('enabled-libraries-checkbox-container').textContent, new RegExp(organizationName));
+      assert.match(document.getElementById('allowed-patron-code-container').textContent, new RegExp(patronCodeName));
+      assert.strictEqual(organizationName === oldOrganizationName, !commit);
+      assert.strictEqual(patronCodeName === oldPatronCodeName, !commit);
+      assert.strictEqual(state.organizationsStatus, 'loaded');
+      assert.strictEqual(state.settingsReloadRequired, false);
+      assert.strictEqual(document.getElementById('btn-sync-organizations').disabled, false);
+    }
+
+    failure = { family: 'sync', commit: false, status: 502, code: 'polaris_unavailable' };
+    await assert.rejects(settings.syncPolarisOrganizations(), /Response/);
+    assert.strictEqual(state.settingsReloadRequired, false);
+    assert.strictEqual(state.organizationsStatus, 'error');
+    assert.doesNotMatch(document.getElementById('allowed-patron-code-container').textContent, /loading/i);
+    assert.strictEqual(document.getElementById('btn-sync-organizations').disabled, false);
+    assert.ok(await settings.syncPolarisOrganizations(), 'definite pre-commit rejection must permit retry');
+    assert.strictEqual(state.settingsReloadRequired, false);
+
+    // A reference GET started before sync must not overwrite the sync outcome when it finishes late.
+    document.getElementById('enabled-libraries-checkbox-container').removeAttribute('data-loaded');
+    deferNextOrganizationGet = true;
+    deferNextPatronCodeGet = true;
+    const pendingOrganizationGet = settings.renderLibraryParticipationCheckboxes();
+    patronCodes.updatePatronCodesStatusUi('not_loaded', 'Refreshing choices.');
+    const pendingPatronCodeGet = patronCodes.renderPatronCodeEligibilityOptions('7');
+    assert.strictEqual(typeof releaseDeferredOrganizationGet, 'function');
+    assert.strictEqual(typeof releaseDeferredPatronCodeGet, 'function');
+    failure = { family: 'sync', commit: false, status: 503 };
+    await assert.rejects(settings.syncPolarisOrganizations(), /Response/);
+    releaseDeferredOrganizationGet();
+    releaseDeferredPatronCodeGet();
+    await Promise.all([pendingOrganizationGet, pendingPatronCodeGet]);
+    assert.strictEqual(state.organizationsStatus, 'not_loaded');
+    assert.strictEqual(document.getElementById('enabled-libraries-checkbox-container').getAttribute('data-loaded'), null);
+    assert.strictEqual(document.getElementById('allowed-patron-code-container').getAttribute('data-loaded'), null);
+    failNextSettingsGet = true;
+    document.getElementById('settings-reload-btn').click();
+    await flush(); await flush();
+    assert.strictEqual(state.settingsReloadRequired, true, 'failed recovery must retain the mutation guard');
+    assert.strictEqual(state.settingsForm.inert, true);
     await recover(version());
+    await settings.renderLibraryParticipationCheckboxes();
+    assert.strictEqual(state.organizationsStatus, 'loaded');
+
+    // A local organization-list failure after a confirmed sync does not make the Settings version uncertain.
+    failNextOrganizationGet = true;
+    assert.ok(await settings.syncPolarisOrganizations());
+    assert.strictEqual(state.settingsReloadRequired, false);
+    assert.strictEqual(state.organizationsStatus, 'error');
+    assert.match(document.getElementById('organizations-sync-result').textContent, /local organization choices could not be loaded/i);
+    assert.doesNotMatch(document.getElementById('allowed-patron-code-container').textContent, /loading/i);
+
+    // An old sync failure after the context is superseded must not guard the new context or leave old loading labels.
+    failure = { family: 'sync', commit: false, defer: true };
+    const supersededSync = settings.syncPolarisOrganizations();
+    assert.strictEqual(state.organizationsStatus, 'loading');
+    state.setCurrentLibraryContextOrgId('3');
+    state.incrementLibraryContextLoadSerial();
+    releaseDeferredFailure();
+    await assert.rejects(supersededSync, /Connection lost/);
+    assert.strictEqual(state.settingsReloadRequired, false);
+    assert.notStrictEqual(state.organizationsStatus, 'loading');
+    assert.notStrictEqual(patronCodes.getPatronCodesStatus(), 'loading');
+    await settings.loadSettings({ skipAutoSync: true });
 
     state.setSettingsReloadRequired(true);
     deferNextConfig = true;

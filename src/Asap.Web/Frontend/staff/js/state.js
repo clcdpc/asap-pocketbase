@@ -172,7 +172,8 @@ export let currentEmailStatus = { enabled: false };
 export function setCurrentEmailStatus(status) { currentEmailStatus = status; }
 
 export let organizationsStatus = 'not_loaded';
-export function setOrganizationsStatus(status) { organizationsStatus = status; }
+export let organizationsStatusSerial = 0;
+export function setOrganizationsStatus(status) { organizationsStatus = status; organizationsStatusSerial++; }
 
 export let organizationsStatusMessage = 'Polaris organizations have not been loaded yet. Organization selection will be available after the Polaris organization sync completes.';
 export function setOrganizationsStatusMessage(msg) { organizationsStatusMessage = msg; }
@@ -197,6 +198,10 @@ function updateSettingsInteractionState() {
   if (reloadButton) {
     reloadButton.classList.toggle('hidden', !settingsReloadRequired);
     reloadButton.disabled = settingsSaving || settingsSyncInProgress || settingsActionInProgress || settingsLoading;
+  }
+  const syncButton = document.getElementById('btn-sync-organizations');
+  if (syncButton) {
+    syncButton.disabled = settingsReloadRequired || settingsSaving || settingsSyncInProgress || settingsActionInProgress || settingsLoading;
   }
 }
 export function setSettingsReloadRequired(required) { settingsReloadRequired = required; updateSettingsInteractionState(); }

@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Asap.Web.Features.Administration;
 using Asap.Web.Features.Email;
 using Asap.Web.Features.Patron;
+using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Data;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.SqlClient;
@@ -13,6 +14,41 @@ namespace Asap.Tests.Integration;
 
 public sealed partial class PatronJourneyTests
 {
+    [TestMethod]
+    public async Task FailedPolarisOrganizationFetchReturnsPreCommitRejectionWithoutChangingSettingsVersion()
+    {
+        var actor = await ReadConfiguredSuperAdminAsync();
+        await using var failingFactory = CreateApplicationFactory(
+            configurationPath, new FailingOrganizationReferenceProvider());
+        using var client = failingFactory.CreateClient();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+        var service = failingFactory.Services.GetRequiredService<AdministrationService>();
+
+        async Task<string?> CurrentVersionAsync() => JsonSerializer.SerializeToElement(
+            (await service.GetSettingsAsync(actor, "system", CancellationToken.None)).Data)
+            .GetProperty("version").GetString();
+
+        var beforeVersion = await CurrentVersionAsync();
+        using var response = await client.PostAsync("/api/asap/staff/organizations/sync", null);
+        Assert.AreEqual(System.Net.HttpStatusCode.BadGateway, response.StatusCode);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.AreEqual("polaris_unavailable", body.RootElement.GetProperty("code").GetString());
+        Assert.AreEqual(beforeVersion, await CurrentVersionAsync());
+    }
+
+    private sealed class FailingOrganizationReferenceProvider : IPolarisReferenceProvider
+    {
+        public Task<PolarisConnectionTestResult> TestConnectionAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new PolarisConnectionTestResult(false, 0));
+
+        public Task<IReadOnlyList<PolarisOrganizationSnapshot>> GetOrganizationsAsync(CancellationToken cancellationToken) =>
+            throw new PolarisOperationalException("testing_organization_failure", "Organization fetch failed.");
+
+        public Task<IReadOnlyList<PolarisPatronCodeSnapshot>> GetPatronCodesAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<PolarisPatronCodeSnapshot>>([]);
+    }
+
     [TestMethod]
     public async Task DirectLibraryBrandingMutationsRemoveOnlyEmptyOverridesAndResetBothValues()
     {

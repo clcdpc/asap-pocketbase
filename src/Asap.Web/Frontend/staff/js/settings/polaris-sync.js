@@ -1,10 +1,10 @@
 import { isSuperAdminStaff, updateOrganizationsStatusUi, setInlineResult, updateSaveBarState } from '../api.js';
 import { authorizedJson } from '../http.js';
-import { settingsDirty, settingsReloadRequired, settingsSyncInProgress, settingsSaving, settingsLoading, settingsActionInProgress, currentLibraryContextOrgId, libraryContextLoadSerial, setSettingsReloadRequired, setSettingsSyncInProgress } from '../state.js';
+import { settingsDirty, settingsReloadRequired, settingsSyncInProgress, settingsSaving, settingsLoading, settingsActionInProgress, currentLibraryContextOrgId, libraryContextLoadSerial, organizationsStatus, setSettingsReloadRequired, setSettingsSyncInProgress } from '../state.js';
 import { showToast } from '../dialogs.js';
 import { populateLibrarySelector } from './library-context.js';
 import { renderLibraryParticipationCheckboxes } from './polaris-fields.js';
-import { collectAllowedPatronCodeIds, renderPatronCodeEligibilityOptions, updatePatronCodesStatusUi } from './patron-codes.js';
+import { collectAllowedPatronCodeIds, getPatronCodesStatus, renderPatronCodeEligibilityOptions, updatePatronCodesStatusUi } from './patron-codes.js';
 import { refreshSettingsView } from './refresh.js';
 import { markAmbiguousSettingsMutation, uncertainMutationMessage } from './mutation-outcome.js';
 
@@ -65,7 +65,7 @@ export async function syncPolarisOrganizations(options = {}) {
     }
     const patronCodeContainer = document.getElementById('allowed-patron-code-container');
     if (patronCodeContainer) patronCodeContainer.removeAttribute('data-loaded');
-    updatePatronCodesStatusUi('loaded', 'Refreshing patron code choices from Polaris.');
+    updatePatronCodesStatusUi('not_loaded', 'Refreshing patron code choices.');
     await renderPatronCodeEligibilityOptions(settingsRefreshError
       ? selectedPatronCodeIds : collectAllowedPatronCodeIds());
     if (!contextIsCurrent()) return null;
@@ -80,10 +80,13 @@ export async function syncPolarisOrganizations(options = {}) {
     }
     await renderLibraryParticipationCheckboxes();
     if (!contextIsCurrent()) return null;
+    const organizationsLoaded = organizationsStatus === 'loaded' && container?.getAttribute('data-loaded') === 'true';
     if (settingsRefreshError) {
       const message = 'Organizations were synchronized, but current Settings could not be reloaded. Reload Settings before saving.';
       setInlineResult(resultEl, message, 'ml-2 text-warning font-weight-bold');
       showToast(message, 'error', 'settings-save-toast');
+    } else if (!organizationsLoaded) {
+      setInlineResult(resultEl, `Synced ${count} organization records. Local organization choices could not be loaded.`, 'ml-2 text-warning font-weight-bold');
     } else if (!patronCodesLoaded) {
       setInlineResult(resultEl, `Synced ${count} organization records. Patron code choices could not be loaded.`, 'ml-2 text-warning font-weight-bold');
     } else {
@@ -93,6 +96,8 @@ export async function syncPolarisOrganizations(options = {}) {
   } catch (err) {
     if (!contextIsCurrent()) throw err;
     if (syncSucceeded) {
+      updateOrganizationsStatusUi('not_loaded', 'Organizations were synchronized, but local reference data could not be refreshed.');
+      updatePatronCodesStatusUi('not_loaded', 'Patron code choices could not be refreshed.');
       if (!settingsReadBackSucceeded) {
         setSettingsReloadRequired(true);
       }
@@ -103,16 +108,25 @@ export async function syncPolarisOrganizations(options = {}) {
       showToast(message, 'error', 'settings-save-toast');
     } else {
       if (syncMutationPending && markAmbiguousSettingsMutation(err, contextIsCurrent)) {
-        setInlineResult(resultEl, uncertainMutationMessage, 'ml-2 text-warning font-weight-bold');
+        updateOrganizationsStatusUi('not_loaded', 'The organization sync result could not be confirmed. Reload Settings to refresh locally persisted organizations.');
+        updatePatronCodesStatusUi('not_loaded', 'The sync result could not be confirmed. Reload Settings to refresh patron code choices.');
+        setInlineResult(resultEl, `Organization sync result could not be confirmed. ${uncertainMutationMessage}`, 'ml-2 text-warning font-weight-bold');
         throw err;
       }
-      updateOrganizationsStatusUi('error', 'Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.');
+      updateOrganizationsStatusUi('error', 'Organization sync failed before local changes. Check the error and retry Sync.');
+      updatePatronCodesStatusUi('error', 'Patron codes were not refreshed because organization sync failed.');
       setInlineResult(resultEl, 'Warning: ' + (err.message || 'Organization sync failed.'), 'ml-2 text-warning font-weight-bold');
     }
     throw err;
   } finally {
+    if (organizationsStatus === 'loading') {
+      updateOrganizationsStatusUi('not_loaded', 'Organization synchronization ended. Reload Settings to refresh organization choices.');
+    }
+    if (getPatronCodesStatus() === 'loading') {
+      updatePatronCodesStatusUi('not_loaded', 'Organization synchronization ended. Reload Settings to refresh patron code choices.');
+    }
     setSettingsSyncInProgress(false);
     updateSaveBarState(settingsReloadRequired ? 'reload' : undefined);
-    if (btn) btn.disabled = false;
+    if (btn) btn.disabled = settingsReloadRequired || settingsSaving || settingsSyncInProgress || settingsActionInProgress || settingsLoading;
   }
 }
