@@ -88,7 +88,7 @@ export function checkAuth() {
     }
 
     if (isAdmin && currentStatus !== 'settings') {
-      loadSettings({ showErrors: false });
+      loadSettings({ showErrors: false, preserveDraft: true });
     }
 
     loadTab(currentStatus);

@@ -185,16 +185,33 @@ export let settingsDirty = false;
 export function setSettingsDirty(dirty) { settingsDirty = dirty; }
 
 export let settingsReloadRequired = false;
-export function setSettingsReloadRequired(required) { settingsReloadRequired = required; }
+function updateSettingsInteractionState() {
+  if (settingsForm) {
+    settingsForm.inert = settingsReloadRequired || settingsSaving || settingsSyncInProgress || settingsActionInProgress || settingsLoading;
+  }
+  const librarySelector = document.getElementById('select-library-context');
+  if (librarySelector) {
+    librarySelector.disabled = settingsSaving || settingsSyncInProgress || settingsActionInProgress || settingsLoading;
+  }
+  const reloadButton = document.getElementById('settings-reload-btn');
+  if (reloadButton) {
+    reloadButton.classList.toggle('hidden', !settingsReloadRequired);
+    reloadButton.disabled = settingsSaving || settingsSyncInProgress || settingsActionInProgress || settingsLoading;
+  }
+}
+export function setSettingsReloadRequired(required) { settingsReloadRequired = required; updateSettingsInteractionState(); }
 
 export let settingsSyncInProgress = false;
-export function setSettingsSyncInProgress(inProgress) { settingsSyncInProgress = inProgress; }
+export function setSettingsSyncInProgress(inProgress) { settingsSyncInProgress = inProgress; updateSettingsInteractionState(); }
 
 export let settingsSaving = false;
-export function setSettingsSaving(saving) { settingsSaving = saving; }
+export function setSettingsSaving(saving) { settingsSaving = saving; updateSettingsInteractionState(); }
+
+export let settingsActionInProgress = false;
+export function setSettingsActionInProgress(inProgress) { settingsActionInProgress = inProgress; updateSettingsInteractionState(); }
 
 export let settingsLoading = false;
-export function setSettingsLoading(loading) { settingsLoading = loading; }
+export function setSettingsLoading(loading) { settingsLoading = loading; updateSettingsInteractionState(); }
 
 export let activeActionMenu = null;
 export function setActiveActionMenu(menu) { activeActionMenu = menu; }

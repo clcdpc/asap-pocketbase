@@ -160,7 +160,10 @@ export function bindPolarisSecretControls() {
   });
 }
 
+let participationRenderSerial = 0;
+
 export async function renderLibraryParticipationCheckboxes() {
+  const renderSerial = ++participationRenderSerial;
   const container = document.getElementById('enabled-libraries-checkbox-container');
   if (!container || container.getAttribute('data-loaded') === 'true') return;
 
@@ -176,6 +179,7 @@ export async function renderLibraryParticipationCheckboxes() {
 
   try {
     const values = await authorizedJson('/api/asap/staff/organizations');
+    if (renderSerial !== participationRenderSerial) return;
     const activeOrganizationIds = new Set(values
       .filter(item => item.isActive === true || item.active === true)
       .map(item => String(item.id)));
@@ -205,6 +209,7 @@ export async function renderLibraryParticipationCheckboxes() {
       cb.checked = activeOrganizationIds.has(cb.value);
     });
   } catch (err) {
+    if (renderSerial !== participationRenderSerial) return;
     console.error('Failed to load libraries for participation list', err);
     updateOrganizationsStatusUi('error', 'Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.');
     renderMessage(container, 'p-3 text-warning', 'Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.');

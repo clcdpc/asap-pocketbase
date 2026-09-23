@@ -70,6 +70,7 @@ export function buildWorkflowFormState(settings) {
 
 export function applyLibrarySettingsToForm(settings) {
   settings = settings || {};
+  let participationLoad = Promise.resolve();
   const model = buildLegacySettingsFormModel(settings, currentLibraryContextOrgId);
   setCurrentLegacySettingsFormModel(model);
   setDeletedSettingsFormats([]);
@@ -101,7 +102,8 @@ export function applyLibrarySettingsToForm(settings) {
     setFieldValue('patron-embed-allowed-origins', Array.isArray(allowedOrigins) ? allowedOrigins.join('\n') : (allowedOrigins || ''));
     if (document.getElementById('system-enabled-libraries-group')) {
       document.getElementById('system-enabled-libraries-group').classList.remove('hidden');
-      renderLibraryParticipationCheckboxes();
+      document.getElementById('enabled-libraries-checkbox-container')?.removeAttribute('data-loaded');
+      participationLoad = renderLibraryParticipationCheckboxes();
     }
   } else {
     if (document.getElementById('system-staff-url-group')) {
@@ -173,6 +175,7 @@ export function applyLibrarySettingsToForm(settings) {
     if (!settingsLoading) {
       activateSettingsSection(currentSettingsSection, { updateHash: false });
     }
+    return participationLoad;
   }
 
 export function populateWorkflowForms(wf, providers = []) {

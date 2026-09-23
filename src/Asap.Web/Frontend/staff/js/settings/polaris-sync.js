@@ -1,6 +1,6 @@
 import { isSuperAdminStaff, updateOrganizationsStatusUi, setInlineResult, updateSaveBarState } from '../api.js';
 import { authorizedJson } from '../http.js';
-import { settingsDirty, settingsReloadRequired, settingsSyncInProgress, setSettingsReloadRequired, setSettingsSyncInProgress } from '../state.js';
+import { settingsDirty, settingsReloadRequired, settingsSyncInProgress, settingsSaving, settingsLoading, settingsActionInProgress, setSettingsReloadRequired, setSettingsSyncInProgress } from '../state.js';
 import { showToast } from '../dialogs.js';
 import { populateLibrarySelector } from './library-context.js';
 import { renderLibraryParticipationCheckboxes } from './polaris-fields.js';
@@ -11,22 +11,20 @@ export async function syncPolarisOrganizations(options = {}) {
   const resultEl = document.getElementById('organizations-sync-result');
   const syncOrganizationsBtn = document.getElementById('btn-sync-organizations');
   const btn = options.button || syncOrganizationsBtn;
-  if (settingsSyncInProgress) return null;
+  if (settingsSyncInProgress || settingsSaving || settingsLoading || settingsActionInProgress || settingsReloadRequired) return null;
   if (settingsDirty) {
     setInlineResult(resultEl, 'Save or discard unsaved Settings changes before synchronizing organizations.', 'ml-2 text-warning font-weight-bold');
     return null;
   }
   setSettingsSyncInProgress(true);
   updateSaveBarState();
-  const settingsForm = document.getElementById('settings-form');
-  const wasInert = settingsForm?.inert || false;
-  if (settingsForm) settingsForm.inert = true;
   if (btn) btn.disabled = true;
   updateOrganizationsStatusUi('loading', 'Organizations loading from Polaris. Organization selection will be available after this sync completes.');
   updatePatronCodesStatusUi('loading', 'Patron codes loading from Polaris.');
   setInlineResult(resultEl, 'Synchronizing organizations and loading patron code choices...', 'ml-2 text-muted');
 
   let syncSucceeded = false;
+  let settingsReadBackSucceeded = false;
   try {
     const selectedPatronCodeIds = collectAllowedPatronCodeIds();
     const result = await authorizedJson('/api/asap/staff/organizations/sync', { method: 'POST' });
@@ -44,6 +42,7 @@ export async function syncPolarisOrganizations(options = {}) {
         throw new Error('The current Settings version was not returned.');
       }
       setSettingsReloadRequired(false);
+      settingsReadBackSucceeded = true;
     } catch (error) {
       settingsRefreshError = error;
       setSettingsReloadRequired(true);
@@ -75,8 +74,12 @@ export async function syncPolarisOrganizations(options = {}) {
     return result;
   } catch (err) {
     if (syncSucceeded) {
-      setSettingsReloadRequired(true);
-      const message = 'Organizations were synchronized, but Settings or reference data could not be reloaded. Reload Settings before saving.';
+      if (!settingsReadBackSucceeded) {
+        setSettingsReloadRequired(true);
+      }
+      const message = settingsReadBackSucceeded
+        ? 'Organizations were synchronized and Settings reloaded, but reference data could not be refreshed.'
+        : 'Organizations were synchronized, but Settings could not be reloaded. Reload Settings before saving.';
       setInlineResult(resultEl, message, 'ml-2 text-warning font-weight-bold');
       showToast(message, 'error', 'settings-save-toast');
     } else {
@@ -85,7 +88,6 @@ export async function syncPolarisOrganizations(options = {}) {
     }
     throw err;
   } finally {
-    if (settingsForm) settingsForm.inert = wasInert;
     setSettingsSyncInProgress(false);
     updateSaveBarState(settingsReloadRequired ? 'reload' : undefined);
     if (btn) btn.disabled = false;

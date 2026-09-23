@@ -3,6 +3,7 @@ import { authorizedJson } from '../http.js';
 let patronCodesStatus = 'not_loaded';
 let patronCodesMessage = '';
 let lastAllowedPatronCodeIds = [];
+let patronCodeRenderSerial = 0;
 
 function selectedIdList(value) {
   return String(value || '')
@@ -184,9 +185,12 @@ export function updatePatronCodesStatusUi(status, message) {
 }
 
 export async function renderPatronCodeEligibilityOptions(allowedIds) {
+  const renderSerial = ++patronCodeRenderSerial;
   const container = document.getElementById('allowed-patron-code-container');
   if (!container) return;
   lastAllowedPatronCodeIds = selectedIdList(allowedIds);
+  const currentSelection = document.getElementById('allowed-patron-code-ids');
+  if (currentSelection) currentSelection.value = lastAllowedPatronCodeIds.join(',');
   if (container.getAttribute('data-loaded') === 'true') {
     setVisibleChecklistSelection(lastAllowedPatronCodeIds);
     updateRestrictionSummary();
@@ -205,6 +209,7 @@ export async function renderPatronCodeEligibilityOptions(allowedIds) {
 
   try {
     const values = await authorizedJson('/api/asap/staff/polaris/patron-codes');
+    if (renderSerial !== patronCodeRenderSerial) return;
     const rows = values.map(item => ({ patronCodeId: item.id, description: item.description }));
     if (!rows.length) {
       renderMessage(container, 'p-3 text-muted', 'Patron codes have not been synced yet.');
@@ -213,6 +218,7 @@ export async function renderPatronCodeEligibilityOptions(allowedIds) {
     updatePatronCodesStatusUi('loaded', `Polaris patron codes loaded. ${rows.length} code${rows.length === 1 ? '' : 's'} available.`);
     renderPatronCodeChecklist(container, rows);
   } catch (err) {
+    if (renderSerial !== patronCodeRenderSerial) return;
     console.error('Failed to load patron codes', err);
     updatePatronCodesStatusUi('error', 'Patron codes could not be loaded from Polaris. Eligibility options may be unavailable until Polaris responds.');
     renderMessage(container, 'p-3 text-warning', 'Patron codes could not be loaded from Polaris. Eligibility options may be unavailable until Polaris responds.');
