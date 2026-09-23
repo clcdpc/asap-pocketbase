@@ -214,7 +214,7 @@
                       <div class="card h-100">
                         <div class="card-body">
                           <h5 class="card-title">First-time setup path</h5>
-                          <p class="card-text text-muted">Confirm Polaris credentials, sync organizations and patron codes,
+                          <p class="card-text text-muted">Confirm Polaris credentials, sync organizations and load patron code choices,
                             then review staff access so users are scoped to the correct parent library.</p>
                         </div>
                       </div>
@@ -270,8 +270,8 @@
                   <div id="system-enabled-libraries-group" class="hidden mt-4">
                     <hr>
                     <h3 class="h5">Library participation</h3>
-                    <p class="small text-muted mb-3">Select the libraries that are allowed to use this service. If none
-                      are selected, all libraries are enabled by default.</p>
+                    <p class="small text-muted mb-3">Select the libraries that are allowed to use this service. Unchecked
+                      libraries do not participate; if none are selected, no libraries participate.</p>
                     <div id="organizations-status-message" class="alert alert-info small mb-3">
                       Polaris organizations have not been loaded yet. Organization selection will be available after
                       the Polaris organization sync completes.
@@ -359,10 +359,9 @@
                   </div>
                   <div class="settings-maintenance mt-4">
                     <div class="font-weight-bold mb-1">Polaris reference data</div>
-                    <p class="small text-muted mb-2">Polaris organizations and patron codes sync automatically once a day
-                      at 2 AM server time. Use this manual sync after changing either list or updating these credentials.</p>
-                    <button type="button" id="btn-sync-organizations" class="btn btn-outline-info btn-sm">Sync organizations
-                      and patron codes now</button>
+                    <p class="small text-muted mb-2">Use this action to synchronize Polaris organizations after they change.
+                      Patron code choices load from Polaris when Settings opens and after this action.</p>
+                    <button type="button" id="btn-sync-organizations" class="btn btn-outline-info btn-sm">Sync organizations now</button>
                     <span id="organizations-sync-result" class="ml-2"></span>
                     <div id="patron-codes-status-message" class="alert alert-info small mt-3 mb-0">
                       Polaris patron codes have not been loaded yet.
@@ -743,10 +742,10 @@
                             <label for="ui-logo-file" class="font-weight-bold">Update Logo</label>
                             <div class="custom-file">
                               <input type="file" class="custom-file-input" id="ui-logo-file"
-                                accept="image/png, image/jpeg, image/svg+xml, image/gif">
+                                accept="image/png, image/jpeg, image/gif">
                               <label class="custom-file-label" for="ui-logo-file">Choose image...</label>
                             </div>
-                            <small class="form-text text-muted">Recommended: PNG or SVG with transparent background, height
+                            <small class="form-text text-muted">Recommended: PNG with transparent background, height
                               around 60-100px.</small>
                           </div>
                           <div class="form-group mb-0">

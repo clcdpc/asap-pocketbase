@@ -970,6 +970,23 @@ public sealed partial class PatronJourneyTests
                 "https://new-icons.settings.example/{format}.png",
                 editedParticipation);
 
+            using var afterEdited = await ReadSettingsDocumentAsync(client, "system");
+            using var noParticipatingLibraries = await SaveSettingsDocumentAsync(
+                client,
+                afterEdited.RootElement,
+                "system",
+                new Dictionary<string, object?>
+                {
+                    ["enabledLibraryOrgIds"] = Array.Empty<string>()
+                });
+            await AssertParticipationAsync([]);
+            await using (var systemOrganizationCheck = await contexts.CreateDbContextAsync())
+            {
+                Assert.AreEqual(originalParticipation[1],
+                    (await systemOrganizationCheck.Organizations.AsNoTracking().SingleAsync(item => item.Id == 1)).IsActive,
+                    "an explicit empty library set must not change system organization 1");
+            }
+
             using var reloaded = await ReadSettingsDocumentAsync(client, "system");
             Assert.AreEqual("https://new-icons.settings.example/{format}.png",
                 reloaded.RootElement.GetProperty("stored").GetProperty("systemSettings")

@@ -1,4 +1,4 @@
-import { currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, libraryContextLoadSerial } from './state.js';
+import { currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, libraryContextLoadSerial, settingsReloadRequired, settingsSyncInProgress } from './state.js';
 import { markSettingsClean } from './api.js';
 import { authorizedJson } from './http.js';
 import { showToast, showConfirm } from './dialogs.js';
@@ -8,6 +8,10 @@ import { normalizeDuplicateStatusLabels, renderDuplicateStatusLabelSettings, col
 export { normalizeDuplicateStatusLabels, renderDuplicateStatusLabelSettings, collectDuplicateStatusLabels };
 
 document.getElementById('btn-reset-library-settings').addEventListener('click', async () => {
+  if (settingsReloadRequired || settingsSyncInProgress) {
+    showToast('Reload Settings before resetting library settings.', 'error');
+    return;
+  }
   const actionOrganizationId = currentLibraryContextOrgId;
   const actionContextSerial = libraryContextLoadSerial;
   if (actionOrganizationId === 'system') return;

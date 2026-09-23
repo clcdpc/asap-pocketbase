@@ -184,6 +184,12 @@ export function setCurrentSettingsSection(section) { currentSettingsSection = se
 export let settingsDirty = false;
 export function setSettingsDirty(dirty) { settingsDirty = dirty; }
 
+export let settingsReloadRequired = false;
+export function setSettingsReloadRequired(required) { settingsReloadRequired = required; }
+
+export let settingsSyncInProgress = false;
+export function setSettingsSyncInProgress(inProgress) { settingsSyncInProgress = inProgress; }
+
 export let settingsSaving = false;
 export function setSettingsSaving(saving) { settingsSaving = saving; }
 

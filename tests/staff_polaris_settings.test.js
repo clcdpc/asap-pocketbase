@@ -66,6 +66,7 @@ function assertBackendShape(expected, actual, path = '$') {
     const settingsLoader = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'loader.js')).href);
     const patronCodes = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'patron-codes.js')).href);
     const libraryContext = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'library-context.js')).href);
+    const polarisSync = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'polaris-sync.js')).href);
     const http = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'http.js')).href);
     state.setStaffSession({
       authenticated: true,
@@ -376,6 +377,16 @@ function assertBackendShape(expected, actual, path = '$') {
     assert.deepStrictEqual(
       Array.from(document.querySelectorAll('.lib-participation-cb:checked')).map(item => item.value),
       ['2', '4']);
+    window.localStorage.setItem('asap.superAdmin.settings.libraryContextOrgId', '1');
+    await libraryContext.populateLibrarySelector();
+    const scopeSelector = document.getElementById('select-library-context');
+    assert.deepStrictEqual(Array.from(scopeSelector.options, option => option.value), ['system', '2', '3', '4']);
+    assert.strictEqual(scopeSelector.value, 'system', 'a persisted numeric system ID must fall back to system scope');
+    window.localStorage.setItem('asap.superAdmin.settings.libraryContextOrgId', '3');
+    await libraryContext.populateLibrarySelector();
+    assert.strictEqual(scopeSelector.value, '3', 'a valid persisted library scope must remain selectable');
+    window.localStorage.setItem('asap.superAdmin.settings.libraryContextOrgId', 'system');
+    await libraryContext.populateLibrarySelector();
     assert.strictEqual(document.getElementById('lib-p-1'), null,
       'the system organization is not a selectable participating library');
     assert.strictEqual(document.querySelectorAll('#format-settings-container .btn-remove-format').length, 0,
@@ -460,6 +471,8 @@ function assertBackendShape(expected, actual, path = '$') {
     let settingsSaveAttempts = 0;
     let librarySettingsLoadCount = 0;
     let failNextSettingsRead = false;
+    let syncRequests = 0;
+    let enforceSyncVersion = false;
     const customFormatDeleteRequests = [];
     let deferredFormatDeleteId = null;
     let releaseDeferredFormatDelete = null;
@@ -475,6 +488,11 @@ function assertBackendShape(expected, actual, path = '$') {
           }) };
         }
         const body = JSON.parse(options.body);
+        if (enforceSyncVersion && body.version !== systemSettingsResponse.version) {
+          return { ok: false, status: 409, statusText: 'Conflict', json: async () => ({
+            code: 'stale_version', message: 'The Settings version is stale.'
+          }) };
+        }
         sentSettingsPayloads.push(body);
         if (deferNextSettingsSave) {
           deferNextSettingsSave = false;
@@ -525,6 +543,13 @@ function assertBackendShape(expected, actual, path = '$') {
         assert.strictEqual(saveCompleted, true, 'Polaris test must not run before the settings save completes');
         ordered.push('test');
         return { ok: true, status: 200, statusText: 'OK', json: async () => ({ code: 'polaris_connected' }) };
+      }
+      if (url === '/api/asap/staff/organizations/sync' && method === 'POST') {
+        syncRequests++;
+        systemSettingsResponse.version = `sync-version-${syncRequests + 1}`;
+        return { ok: true, status: 200, statusText: 'OK', json: async () => ({
+          code: 'synced', data: { received: 4, changed: 4 }
+        }) };
       }
       if (url.startsWith('/api/asap/staff/settings/library') && method === 'GET') {
         if (failNextSettingsRead) {
@@ -630,6 +655,8 @@ function assertBackendShape(expected, actual, path = '$') {
       'an ordinary no-edit save must not replace the system publication-option set');
     assert.strictEqual(ordinarySavePayload.formatIconUrlPattern, currentSystemSettings.formatIconUrlPattern);
     assert.deepStrictEqual(ordinarySavePayload.enabledLibraryOrgIds, ['2', '4']);
+    assert.deepStrictEqual(organizations.filter(item => item.id > 1 && item.active).map(item => item.id), [2, 4],
+      'a fully loaded unchanged participation set must round-trip through the save endpoint');
 
     await settleAsyncRendering();
     document.getElementById('pending-hold-timeout-days').value = '46';
@@ -704,6 +731,18 @@ function assertBackendShape(expected, actual, path = '$') {
     assert.deepStrictEqual(organizations.filter(item => item.id !== 1 && item.active).map(item => item.id), [2, 3]);
     state.setOrganizationsStatus('loaded');
     patronCodes.updatePatronCodesStatusUi('loaded', 'Patron codes loaded.');
+    await fields.renderLibraryParticipationCheckboxes();
+    assert.strictEqual(participationContainer.getAttribute('data-loaded'), 'true');
+    participationContainer.querySelectorAll('.lib-participation-cb').forEach(checkbox => {
+      checkbox.checked = false;
+    });
+    assert.deepStrictEqual(serializer.buildSettingsPayload().enabledLibraryOrgIds, []);
+    assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), true);
+    assert.deepStrictEqual(sentSettingsPayloads[5].enabledLibraryOrgIds, [],
+      'a fully loaded empty selection must submit an explicit empty set');
+    assert.deepStrictEqual(organizations.filter(item => item.id > 1 && item.active).map(item => item.id), [],
+      'the backend-shaped save applies the empty set as zero participating libraries');
+    assert.strictEqual(organizations[0].active, true, 'system organization participation is never edited');
 
     state.setCurrentLibraryContextOrgId('2');
     const librarySettingsResponse = JSON.parse(fs.readFileSync(
@@ -831,7 +870,7 @@ function assertBackendShape(expected, actual, path = '$') {
     ordered.length = 0;
     saveCompleted = false;
     assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), true);
-    const libraryPost = sentSettingsPayloads[5];
+    const libraryPost = sentSettingsPayloads[6];
     assert.strictEqual(libraryPost.orgId, '2');
     assert.strictEqual(Object.keys(libraryPost.workflow).some(key => key.startsWith('externalSearch')), false);
     assert.strictEqual(libraryPost.providers.length, 3);
@@ -1238,6 +1277,53 @@ function assertBackendShape(expected, actual, path = '$') {
     intentionalSystemMessage.value += ' Updated';
     assert.strictEqual(serializer.buildSettingsPayload().ui_text.systemNotEnabledMessage, intentionalSystemMessage.value,
       'An intentional system-only message edit must still be submitted.');
+
+    systemSettingsResponse.version = 'sync-version-1';
+    enforceSyncVersion = true;
+    settingsRefresh.registerSettingsRefreshHandlers({
+      refreshSettingsView: settingsLoader.loadSettings,
+      loadStaffConfig: async () => {}
+    });
+    await settingsLoader.loadSettings({ skipAutoSync: true });
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, 'sync-version-1');
+    const savesBeforeSync = settingsSaveAttempts;
+    await polarisSync.syncPolarisOrganizations();
+    assert.strictEqual(syncRequests, 1);
+    assert.match(document.getElementById('organizations-sync-result').textContent,
+      /synced 4 organization records and refreshed patron code choices/i);
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, 'sync-version-2',
+      'organization sync must reload the authoritative Settings version');
+    assert.strictEqual(state.settingsReloadRequired, false);
+    assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), true);
+    assert.strictEqual(settingsSaveAttempts, savesBeforeSync + 1,
+      'the next ordinary save must succeed once using the post-sync version');
+    assert.strictEqual(sentSettingsPayloads.at(-1).version, 'sync-version-2');
+
+    const draftInput = document.getElementById('ui-login-note');
+    draftInput.value = 'Unsaved draft before synchronization';
+    draftInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    assert.strictEqual(state.settingsDirty, true);
+    await polarisSync.syncPolarisOrganizations();
+    assert.strictEqual(syncRequests, 1, 'synchronization must be blocked while Settings has unsaved edits');
+    assert.strictEqual(draftInput.value, 'Unsaved draft before synchronization');
+    await settingsLoader.loadSettings({ skipAutoSync: true });
+
+    failNextSettingsRead = true;
+    const savesBeforeFailedRefresh = settingsSaveAttempts;
+    await polarisSync.syncPolarisOrganizations();
+    assert.strictEqual(syncRequests, 2);
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, 'sync-version-2',
+      'a failed read must not replace the loaded version with a guessed value');
+    assert.strictEqual(state.settingsReloadRequired, true);
+    assert.strictEqual(document.getElementById('settings-save-title').textContent, 'Reload required');
+    assert.match(document.getElementById('organizations-sync-result').textContent,
+      /organizations were synchronized, but current settings could not be reloaded.*reload settings before saving/i);
+    assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), false);
+    assert.strictEqual(settingsSaveAttempts, savesBeforeFailedRefresh,
+      'Settings saves must be blocked until the committed sync has been reloaded');
+    await settingsLoader.loadSettings({ skipAutoSync: true });
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, 'sync-version-3');
+    assert.strictEqual(state.settingsReloadRequired, false);
 
     const index = fs.readFileSync(path.join(staffRoot, 'index.html'), 'utf8');
     const polarisSource = fs.readFileSync(path.join(staffRoot, 'js', 'settings-polaris.js'), 'utf8');

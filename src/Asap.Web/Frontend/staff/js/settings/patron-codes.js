@@ -175,7 +175,7 @@ export function updatePatronCodesStatusUi(status, message) {
   if (container && patronCodesStatus !== 'loaded') {
     const messages = {
       loading: ['p-3 text-muted', 'Patron codes loading...'],
-      error: ['p-3 text-warning', 'Polaris connected, but patron codes could not be loaded. Eligibility options may be unavailable until this sync succeeds.'],
+      error: ['p-3 text-warning', 'Patron codes could not be loaded from Polaris. Eligibility options may be unavailable until Polaris responds.'],
       not_loaded: ['p-3 text-muted', 'Patron codes not loaded yet.']
     };
     const entry = messages[patronCodesStatus] || messages.not_loaded;
@@ -199,7 +199,7 @@ export async function renderPatronCodeEligibilityOptions(allowedIds) {
   }
 
   if (patronCodesStatus === 'error') {
-    renderMessage(container, 'p-3 text-warning', 'Polaris connected, but patron codes could not be loaded. Eligibility options may be unavailable until this sync succeeds.');
+    renderMessage(container, 'p-3 text-warning', 'Patron codes could not be loaded from Polaris. Eligibility options may be unavailable until Polaris responds.');
     return;
   }
 
@@ -214,8 +214,8 @@ export async function renderPatronCodeEligibilityOptions(allowedIds) {
     renderPatronCodeChecklist(container, rows);
   } catch (err) {
     console.error('Failed to load patron codes', err);
-    updatePatronCodesStatusUi('error', 'Polaris connected, but patron codes could not be loaded. Eligibility options may be unavailable until this sync succeeds.');
-    renderMessage(container, 'p-3 text-warning', 'Polaris connected, but patron codes could not be loaded. Eligibility options may be unavailable until this sync succeeds.');
+    updatePatronCodesStatusUi('error', 'Patron codes could not be loaded from Polaris. Eligibility options may be unavailable until Polaris responds.');
+    renderMessage(container, 'p-3 text-warning', 'Patron codes could not be loaded from Polaris. Eligibility options may be unavailable until Polaris responds.');
   }
 }
 

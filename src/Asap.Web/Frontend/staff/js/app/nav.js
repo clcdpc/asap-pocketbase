@@ -1,4 +1,4 @@
-import { staffSession, settingsSectionIds, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, currentLibraryContextOrgId, currentStatus, setCurrentStatus, setCurrentSettingsSection, setSettingsDirty } from '../state.js';
+import { staffSession, settingsSectionIds, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, settingsReloadRequired, settingsSyncInProgress, currentLibraryContextOrgId, currentStatus, setCurrentStatus, setCurrentSettingsSection, setSettingsDirty } from '../state.js';
 import { checkSettingsDirty, handleLibraryContextSwitch, refreshLibrarySelectorIndicators } from '../settings.js';
 import { loadTab } from '../grid.js';
 import { setDisabled } from './dom.js';
@@ -49,6 +49,7 @@ export function updateSaveBarState(state) {
     dirty: ['Unsaved changes', isSystem ? 'Save system defaults or discard.' : 'Save library settings or discard.', 'text-warning'],
     saving: ['Saving...', 'Please wait while ASAP applies these settings.', 'text-info'],
     saved: ['Saved', isSystem ? 'System defaults saved successfully.' : 'Library settings saved successfully.', 'text-success'],
+    reload: ['Reload required', 'Current Settings could not be loaded. Reload before changing them.', 'text-warning'],
     error: ['Error saving', 'Review the message below and try again.', 'text-danger']
   };
   const next = states[effectiveState] || states.clean;
@@ -64,7 +65,7 @@ export function updateSaveBarState(state) {
     discardBtn.classList.toggle('hidden', effectiveState !== 'dirty' && effectiveState !== 'error');
     discardBtn.disabled = settingsSaving;
   }
-  setDisabled('settings-save-btn', settingsSaving || effectiveState === 'clean');
+  setDisabled('settings-save-btn', settingsSaving || settingsReloadRequired || settingsSyncInProgress || effectiveState === 'clean');
   if (msg && effectiveState === 'clean') {
     msg.textContent = '';
     msg.className = 'mt-2 font-weight-bold';

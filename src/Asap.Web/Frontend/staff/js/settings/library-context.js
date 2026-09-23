@@ -1,4 +1,4 @@
-import { currentLibraryContextOrgId, libraryContextLoadSerial, librarySelectorBound, organizationsStatus, organizationsStatusMessage, currentSettingsSection, settingsDirty, workflowSettings, libraryOverridesSummary, setCurrentLibraryContextOrgId, setLibrarySelectorBound, setLibraryOverridesSummary, incrementLibraryContextLoadSerial, setOrganizationsStatus } from '../state.js';
+import { currentLibraryContextOrgId, libraryContextLoadSerial, librarySelectorBound, organizationsStatus, organizationsStatusMessage, currentSettingsSection, settingsDirty, settingsSyncInProgress, workflowSettings, libraryOverridesSummary, setCurrentLibraryContextOrgId, setLibrarySelectorBound, setLibraryOverridesSummary, incrementLibraryContextLoadSerial, setOrganizationsStatus, setSettingsReloadRequired } from '../state.js';
 import { isSuperAdminStaff, isRequestCanceledError, setVisible, activateSettingsSection, markSettingsClean } from '../api.js';
 import { authorizedJson, isAbortError } from '../http.js';
 import { showConfirm, showToast } from '../dialogs.js';
@@ -72,7 +72,7 @@ export async function populateLibrarySelector() {
 
     const orgs = await authorizedJson('/api/asap/staff/organizations');
 
-    orgs.forEach(org => {
+    orgs.filter(org => Number(org.id) > 1).forEach(org => {
       const opt = document.createElement('option');
       opt.value = org.id;
       opt.textContent = `${org.displayName || org.name} (ID ${org.id})`;
@@ -202,6 +202,9 @@ export async function loadLibrarySettings(orgId, options = {}) {
       return;
     }
     captureSettingsBaseline();
+    if (!settingsSyncInProgress && !options.preserveReloadRequired) {
+      setSettingsReloadRequired(false);
+    }
     return settings;
 
   } catch (err) {

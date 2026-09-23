@@ -134,7 +134,8 @@ export async function loadSettings(options = {}) {
 
     const requestedContextOrgId = currentLibraryContextOrgId;
     const loadedLibrarySettings = await loadLibrarySettings(requestedContextOrgId, {
-      throwOnError: options.throwOnError === true
+      throwOnError: options.throwOnError === true,
+      preserveReloadRequired: options.preserveReloadRequired === true
     });
     if (!guard.isCurrent() || loadedLibrarySettings === undefined || requestedContextOrgId !== currentLibraryContextOrgId) return;
 
@@ -144,12 +145,14 @@ export async function loadSettings(options = {}) {
         signal: guard.signal,
         isCurrent: guard.isCurrent
       });
-      return;
+      return loadedLibrarySettings;
     }
 
     const polaris = (loadedLibrarySettings && loadedLibrarySettings.stored && loadedLibrarySettings.stored.polaris) ||
       (loadedLibrarySettings && loadedLibrarySettings.polaris) || {};
-    maybeSyncPolarisOrganizations(polaris);
+    if (!options.skipAutoSync) {
+      maybeSyncPolarisOrganizations(polaris);
+    }
     updateWorkflowSettingsSummary(loadedLibrarySettings);
 
     populateSystemSettingsForms(loadedLibrarySettings);
@@ -160,6 +163,7 @@ export async function loadSettings(options = {}) {
     });
     if (!guard.isCurrent() || requestedContextOrgId !== currentLibraryContextOrgId) return;
     showSettingsForm();
+    return loadedLibrarySettings;
 
   } catch (err) {
     loadFailed = true;

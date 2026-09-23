@@ -1,7 +1,7 @@
 import { isRequestCanceledError, updateSaveBarState, markSettingsClean, getFieldValue, getFieldChecked } from '../api.js';
 import { authorizedJson } from '../http.js';
 import { showToast } from '../dialogs.js';
-import { settingsForm, currentLibraryContextOrgId, currentSettingsSection, initialSettingsSnapshot, settingsDirty, setSettingsSaving, setSettingsLoading, setInitialSettingsSnapshot, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, libraryContextLoadSerial, deletedSettingsFormats, setDeletedSettingsFormats } from '../state.js';
+import { settingsForm, currentLibraryContextOrgId, currentSettingsSection, initialSettingsSnapshot, settingsDirty, settingsReloadRequired, settingsSyncInProgress, setSettingsSaving, setSettingsLoading, setInitialSettingsSnapshot, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, libraryContextLoadSerial, deletedSettingsFormats, setDeletedSettingsFormats } from '../state.js';
 import { refreshSettingsView, loadStaffConfig } from './refresh.js';
 import { loadStaffUsers } from '../settings-users.js';
 import { cloneLibrarySettingsSnapshot, captureSettingsBaseline, serializeSettingsState, buildSettingsPayload, buildEmailSettingsPayload } from './serialize-save.js';
@@ -9,6 +9,16 @@ import { applyLibrarySettingsToForm } from './form-population.js';
 import { deleteSettingsFormatsSequentially } from './delete-formats.js';
 
 export async function saveSettings(options = {}) {
+  if (settingsReloadRequired || settingsSyncInProgress) {
+    const message = settingsSyncInProgress
+      ? 'Wait for organization synchronization and the Settings reload before saving.'
+      : 'Current Settings could not be reloaded. Reload Settings before saving.';
+    const msg = document.getElementById('settings-msg');
+    msg.textContent = message;
+    msg.className = 'mt-2 font-weight-bold text-warning';
+    showToast(message, 'error', 'settings-save-toast');
+    return false;
+  }
   const submitBtn = settingsForm.querySelector('button[type="submit"]');
   const triggerBtn = options.button || null;
   const buttons = Array.from(new Set([submitBtn, triggerBtn].filter(Boolean)));
@@ -115,7 +125,7 @@ export async function saveSettings(options = {}) {
     if (libCheckboxContainer) libCheckboxContainer.removeAttribute('data-loaded');
     const refreshStartSerial = libraryContextLoadSerial;
     try {
-      await refreshSettingsView({ showErrors: false, throwOnError: true });
+      await refreshSettingsView({ showErrors: false, throwOnError: true, skipAutoSync: true });
       await loadStaffConfig();
       loadStaffUsers();
     } catch (error) {
@@ -163,7 +173,7 @@ export async function saveSettings(options = {}) {
     if (err?.response?.code === 'stale_version') {
       const refreshStartSerial = libraryContextLoadSerial;
       try {
-        await refreshSettingsView({ showErrors: false, throwOnError: true });
+        await refreshSettingsView({ showErrors: false, throwOnError: true, skipAutoSync: true });
         await loadStaffConfig();
         await loadStaffUsers();
       } catch (refreshErr) {

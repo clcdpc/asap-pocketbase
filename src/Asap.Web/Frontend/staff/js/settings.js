@@ -11,8 +11,8 @@ export * from './settings/save-controller.js';
 export * from './settings/save-ui.js';
 export * from './settings/polaris-sync.js';
 
-import { settingsForm, defaultPublicationOptions, verifiedBibId, setVerifiedBibId, currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, libraryContextLoadSerial } from './state.js';
-import { markSettingsDirty, updateAutoRejectEmailControls } from './api.js';
+import { settingsForm, defaultPublicationOptions, verifiedBibId, setVerifiedBibId, currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, libraryContextLoadSerial, settingsReloadRequired, settingsSyncInProgress, setSettingsReloadRequired } from './state.js';
+import { markSettingsDirty, updateAutoRejectEmailControls, updateSaveBarState } from './api.js';
 import { authorizedJson } from './http.js';
 import { showToast, showConfirm } from './dialogs.js';
 import { renderEditLeapBibLink } from './modals.js';
@@ -55,6 +55,39 @@ async function reportSettingsActionError(error, submittedVersion, actionOrganiza
   showToast(reloaded
     ? 'Settings changed in another session. Current values were reloaded; review them before trying again.'
     : 'Settings changed in another session. Reload settings before trying again.', 'error');
+}
+
+async function refreshAfterBrandingMutation(successMessage, actionOrganizationId) {
+  setSettingsReloadRequired(true);
+  updateSaveBarState('saving');
+  try {
+    const settings = await refreshSettingsView({ showErrors: false, throwOnError: true, skipAutoSync: true, preserveReloadRequired: true });
+    if (actionOrganizationId !== currentLibraryContextOrgId) {
+      setSettingsReloadRequired(false);
+      return;
+    }
+    if (!settings?.version) {
+      throw new Error('The current Settings version was not returned.');
+    }
+    setSettingsReloadRequired(false);
+    await loadStaffConfig();
+    showToast(successMessage, 'success');
+  } catch (error) {
+    if (actionOrganizationId !== currentLibraryContextOrgId) {
+      setSettingsReloadRequired(false);
+      return;
+    }
+    console.error('Branding was changed, but current Settings could not be reloaded.', error);
+    setSettingsReloadRequired(true);
+    updateSaveBarState('reload');
+    const message = 'Branding was changed, but current Settings could not be reloaded. Reload Settings before further changes.';
+    const settingsMessage = document.getElementById('settings-msg');
+    if (settingsMessage) {
+      settingsMessage.textContent = message;
+      settingsMessage.className = 'mt-2 font-weight-bold text-warning';
+    }
+    showToast(message, 'error');
+  }
 }
 
 bindPolarisSecretControls();
@@ -131,6 +164,10 @@ document.getElementById('ui-logo-file').addEventListener('change', (e) => {
 });
 
 document.getElementById('btn-upload-logo').addEventListener('click', async () => {
+  if (settingsReloadRequired || settingsSyncInProgress) {
+    showToast('Reload Settings before changing branding.', 'error');
+    return;
+  }
   const actionOrganizationId = currentLibraryContextOrgId;
   const actionContextSerial = libraryContextLoadSerial;
   const submittedVersion = currentSettingsVersion();
@@ -158,9 +195,7 @@ document.getElementById('btn-upload-logo').addEventListener('click', async () =>
     });
 
     if (!settingsActionContextIsCurrent(actionOrganizationId, actionContextSerial)) return;
-    showToast('Branding updated successfully.');
-    await refreshSettingsView({ showErrors: true });
-    await loadStaffConfig();
+    await refreshAfterBrandingMutation('Branding updated successfully.', actionOrganizationId);
   } catch (err) {
     if (settingsActionContextIsCurrent(actionOrganizationId, actionContextSerial)) {
       await reportSettingsActionError(err, submittedVersion, actionOrganizationId, actionContextSerial);
@@ -172,6 +207,10 @@ document.getElementById('btn-upload-logo').addEventListener('click', async () =>
 });
 
 document.getElementById('btn-reset-logo').addEventListener('click', async () => {
+  if (settingsReloadRequired || settingsSyncInProgress) {
+    showToast('Reload Settings before changing branding.', 'error');
+    return;
+  }
   const actionOrganizationId = currentLibraryContextOrgId;
   const actionContextSerial = libraryContextLoadSerial;
   const submittedVersion = currentSettingsVersion();
@@ -189,9 +228,7 @@ document.getElementById('btn-reset-logo').addEventListener('click', async () => 
     });
 
     if (!settingsActionContextIsCurrent(actionOrganizationId, actionContextSerial)) return;
-    showToast('Branding reset to system defaults.');
-    await refreshSettingsView({ showErrors: true });
-    await loadStaffConfig();
+    await refreshAfterBrandingMutation('Branding reset to system defaults.', actionOrganizationId);
   } catch (err) {
     if (settingsActionContextIsCurrent(actionOrganizationId, actionContextSerial)) {
       await reportSettingsActionError(err, submittedVersion, actionOrganizationId, actionContextSerial);

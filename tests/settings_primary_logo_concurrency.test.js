@@ -42,6 +42,9 @@ async function flush() {
     const dom = new JSDOM(fs.readFileSync(path.join(frontendRoot, 'staff', 'index.html'), 'utf8'), {
       url: 'http://localhost/staff/'
     });
+    assert.strictEqual(dom.window.document.getElementById('ui-logo-file').getAttribute('accept'),
+      'image/png, image/jpeg, image/gif', 'the primary upload contract must match the .NET logo validator');
+    assert.doesNotMatch(dom.window.document.getElementById('ui-logo-file').parentElement.nextElementSibling.textContent, /svg/i);
     global.window = dom.window;
     global.document = dom.window.document;
     global.FormData = dom.window.FormData;
@@ -127,6 +130,18 @@ async function flush() {
           serverAltText = 'Latest logo alt after the stale upload';
           return response(409, { code: 'stale_version', message: 'These settings changed in another session.' });
         }
+        if (method === 'POST' && logoMutations.length === 4) {
+          serverVersion = 'version-8';
+          serverAltText = 'Committed upload with unavailable reload';
+          nextLibrarySettingsReadFails = true;
+          return response(200, { code: 'branding_saved', data: { version: serverVersion } });
+        }
+        if (method === 'DELETE' && logoMutations.length === 5) {
+          serverVersion = 'version-9';
+          serverAltText = 'Committed inherited alt with unavailable reload';
+          nextLibrarySettingsReadFails = true;
+          return response(200, { code: 'branding_reset', data: { version: serverVersion } });
+        }
         throw new Error(`Unexpected logo mutation ${method} ${requestUrl}`);
       }
       throw new Error(`Unexpected request: ${requestUrl}`);
@@ -207,6 +222,46 @@ async function flush() {
       'the UI must report reset success separately from a failed follow-up read');
     assert.strictEqual(document.getElementById('ui-logo-alt').value, 'Latest Settings after stale reset',
       'a failed reload must not render an assumed inherited value');
+
+    await settings.loadSettings();
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, 'version-7');
+    const readsBeforeUploadRefreshFailure = settingsReads;
+    document.getElementById('ui-logo-alt').value = 'Committed upload with unavailable reload';
+    document.getElementById('btn-upload-logo').click();
+    await flush();
+    await flush();
+    assert.strictEqual(logoMutations.length, 4, 'successful upload must be sent exactly once');
+    assert.strictEqual(logoMutations[3].submittedVersion, 'version-7');
+    assert.strictEqual(settingsReads, readsBeforeUploadRefreshFailure + 1);
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, 'version-7');
+    assert.strictEqual(state.settingsReloadRequired, true);
+    assert.strictEqual(document.getElementById('settings-save-title').textContent, 'Reload required');
+    assert.match(document.getElementById('settings-msg').textContent, /branding was changed, but current settings could not be reloaded/i);
+    assert.match(Array.from(document.querySelectorAll('#toast-container .asap-toast')).at(-1).textContent,
+      /branding was changed, but current settings could not be reloaded.*reload settings/i);
+    assert.strictEqual(await settings.saveSettings(), false, 'a failed branding reload must block Settings save');
+    assert.strictEqual(document.getElementById('ui-logo-alt').value, 'Committed upload with unavailable reload');
+
+    await settings.loadSettings();
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, 'version-8');
+    assert.strictEqual(state.settingsReloadRequired, false);
+    const readsBeforeResetLogoRefreshFailure = settingsReads;
+    document.getElementById('btn-reset-logo').click();
+    await flush();
+    document.getElementById('confirm-dialog-ok').click();
+    await flush();
+    await flush();
+    assert.strictEqual(logoMutations.length, 5, 'successful logo reset must be sent exactly once');
+    assert.strictEqual(logoMutations[4].submittedVersion, 'version-8');
+    assert.strictEqual(settingsReads, readsBeforeResetLogoRefreshFailure + 1);
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, 'version-8');
+    assert.strictEqual(state.settingsReloadRequired, true);
+    assert.strictEqual(document.getElementById('settings-save-title').textContent, 'Reload required');
+    assert.match(document.getElementById('settings-msg').textContent, /branding was changed, but current settings could not be reloaded/i);
+    assert.match(Array.from(document.querySelectorAll('#toast-container .asap-toast')).at(-1).textContent,
+      /branding was changed, but current settings could not be reloaded.*reload settings/i);
+    assert.strictEqual(document.getElementById('ui-logo-alt').value, 'Committed upload with unavailable reload',
+      'failed reload must not render guessed inherited branding');
 
     dom.window.close();
     console.log('Primary Settings direct actions send current scope versions and reload stale state without retry');
