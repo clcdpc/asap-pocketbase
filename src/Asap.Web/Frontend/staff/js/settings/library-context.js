@@ -131,10 +131,39 @@ export async function switchLibraryContext(orgId, select = document.getElementBy
     contextDisplay.textContent = selectedOption.text;
   }
 
-  await loadLibrarySettings(currentLibraryContextOrgId);
+  const settingsLoad = loadLibrarySettings(currentLibraryContextOrgId, { throwOnError: true });
+  const settingsLoadSerial = libraryContextLoadSerial;
+  try {
+    const settings = await settingsLoad;
+    if (!settings) {
+      if (currentLibraryContextOrgId === nextOrgId && libraryContextLoadSerial === settingsLoadSerial) {
+        restoreLibraryContextSelection(previousOrgId, select, contextDisplay);
+      }
+      return false;
+    }
+    if (currentLibraryContextOrgId !== nextOrgId) {
+      return false;
+    }
+  } catch {
+    if (currentLibraryContextOrgId !== nextOrgId || libraryContextLoadSerial !== settingsLoadSerial) {
+      return false;
+    }
+    restoreLibraryContextSelection(previousOrgId, select, contextDisplay);
+    return false;
+  }
   markSettingsClean('clean');
   activateSettingsSection(currentSettingsSection, { updateHash: false });
   return true;
+}
+
+function restoreLibraryContextSelection(orgId, select, contextDisplay) {
+  setCurrentLibraryContextOrgId(orgId);
+  saveSuperAdminLibraryContext(orgId);
+  select.value = orgId;
+  const selectedOption = select.options && select.options[select.selectedIndex];
+  if (selectedOption && contextDisplay) {
+    contextDisplay.textContent = selectedOption.text;
+  }
 }
 
 export async function handleLibraryContextSwitch(orgId) {
@@ -183,7 +212,7 @@ export async function loadLibrarySettings(orgId, options = {}) {
       return;
     }
     console.error('Error loading library settings:', err);
-    showToast('Failed to load library settings', 'error');
+    showToast('Failed to load library settings', 'error', 'settings-save-toast');
     if (options.throwOnError) throw err;
   } finally {
     librarySettingsLoads.finish('library-settings', guard.token);

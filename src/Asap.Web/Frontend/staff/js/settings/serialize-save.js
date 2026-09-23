@@ -170,7 +170,9 @@ const PATRON_TEXT_FIELDS = [
   ['noEmailMessage', 'ui-no-email-msg'],
   ['successTitle', 'ui-success-title'],
   ['successMessage', 'ui-success-msg'],
-  ['alreadySubmittedMessage', 'ui-already-submitted-msg']
+  ['alreadySubmittedMessage', 'ui-already-submitted-msg'],
+  ['ebookMessage', 'ui-ebook-msg'],
+  ['eaudiobookMessage', 'ui-eaudiobook-msg']
 ];
 
 const DUPLICATE_LABEL_FIELDS = {
@@ -518,12 +520,7 @@ function _serializeSettingsState(validate = false) {
 
   const workflow = {};
   WORKFLOW_TEXT_FIELDS.forEach(([key, id]) => {
-    let value = getFieldValue(id);
-    if (key === 'commonAuthorsLabel') value = value.trim() || 'Popular Creators';
-    if (key === 'commonAuthorsHelp') value = value.trim() || 'See if this is a creator we already collect.';
-    if (key === 'patronCodeEligibilityMessage') {
-      value = value.trim() || 'Your library card is not eligible to use this suggestion service.';
-    }
+    const value = getFieldValue(id);
     if (scopedFieldShouldSave(model, 'workflow', key, value, model?.provenance?.systemWorkflow?.[key])) {
       workflow[key] = value;
     }

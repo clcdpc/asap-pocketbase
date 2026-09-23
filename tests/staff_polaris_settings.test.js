@@ -65,6 +65,7 @@ function assertBackendShape(expected, actual, path = '$') {
     const settingsRefresh = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'refresh.js')).href);
     const settingsLoader = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'loader.js')).href);
     const patronCodes = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'patron-codes.js')).href);
+    const libraryContext = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'library-context.js')).href);
     const http = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'http.js')).href);
     state.setStaffSession({
       authenticated: true,
@@ -1064,10 +1065,40 @@ function assertBackendShape(expected, actual, path = '$') {
         'A no-edit library save must leave nullable system workflow.' + key + ' inherited.');
     }
 
+    const clearedWorkflowResponse = structuredClone(canonicalLibraryResponse);
+    const clearedWorkflowValues = {
+      commonAuthorsLabel: 'Library-only creators label',
+      commonAuthorsHelp: 'Library-only creators help',
+      patronCodeEligibilityMessage: 'Library-only patron-code message'
+    };
+    for (const [key, value] of Object.entries(clearedWorkflowValues)) {
+      clearedWorkflowResponse.stored.libraryOverride.workflow[key] = value;
+      clearedWorkflowResponse.workflow[key] = value;
+      clearedWorkflowResponse.effective.workflow[key] = value;
+    }
+    formPopulation.applyLibrarySettingsToForm(clearedWorkflowResponse);
+    await settleAsyncRendering();
+    const clearedWorkflowControlIds = {
+      commonAuthorsLabel: 'wf-common-authors-label',
+      commonAuthorsHelp: 'wf-common-authors-help',
+      patronCodeEligibilityMessage: 'patron-code-eligibility-message'
+    };
+    for (const [key, id] of Object.entries(clearedWorkflowControlIds)) {
+      const control = document.getElementById(id);
+      assert.strictEqual(control.value, clearedWorkflowValues[key],
+        'An explicit library workflow override must populate ' + key + ' from the backend response.');
+      control.value = '';
+    }
+    const clearedWorkflowPayload = serializer.buildSettingsPayload();
+    for (const key of Object.keys(clearedWorkflowValues)) {
+      assert.strictEqual(clearedWorkflowPayload[key], '',
+        'Clearing a library workflow override must serialize empty text so the backend can restore inheritance for ' + key + '.');
+    }
+
     const nullPatronLibraryResponse = structuredClone(canonicalLibraryResponse);
     const nullSystemPatronFields = [
       'pageTitle', 'barcodeLabel', 'pinLabel', 'loginPrompt', 'loginNote', 'suggestionFormNote',
-      'noEmailMessage', 'successTitle', 'successMessage', 'alreadySubmittedMessage'
+      'noEmailMessage', 'successTitle', 'successMessage', 'alreadySubmittedMessage', 'ebookMessage', 'eaudiobookMessage'
     ];
     const nullSystemStatusFields = [
       'suggestionStatusLabel', 'outstandingPurchaseStatusLabel', 'pendingHoldStatusLabel',
@@ -1096,7 +1127,9 @@ function assertBackendShape(expected, actual, path = '$') {
       noEmailMessage: 'ui-no-email-msg',
       successTitle: 'ui-success-title',
       successMessage: 'ui-success-msg',
-      alreadySubmittedMessage: 'ui-already-submitted-msg'
+      alreadySubmittedMessage: 'ui-already-submitted-msg',
+      ebookMessage: 'ui-ebook-msg',
+      eaudiobookMessage: 'ui-eaudiobook-msg'
     };
     for (const key of nullSystemPatronFields) {
       const expected = nullPatronLibraryResponse.ui_text[key] ||
@@ -1140,6 +1173,13 @@ function assertBackendShape(expected, actual, path = '$') {
     }
     assert.strictEqual(Object.hasOwn(nullPatronNoEditPayload.ui_text, 'duplicateStatusLabels'), false,
       'A no-edit library save must not materialize null system status-label defaults.');
+    document.getElementById('ui-ebook-msg').value = 'Library eBook override edit';
+    document.getElementById('ui-eaudiobook-msg').value = 'Library eAudiobook override edit';
+    const editedDigitalMessages = serializer.buildSettingsPayload().ui_text;
+    assert.strictEqual(editedDigitalMessages.ebookMessage, 'Library eBook override edit',
+      'An intentional eBook message edit must reach the library Settings payload.');
+    assert.strictEqual(editedDigitalMessages.eaudiobookMessage, 'Library eAudiobook override edit',
+      'An intentional eAudiobook message edit must reach the library Settings payload.');
 
     const whitespacePatronResponse = structuredClone(nullPatronLibraryResponse);
     whitespacePatronResponse.stored.configuredSystem.patron.pageTitle = '   ';
@@ -1151,6 +1191,31 @@ function assertBackendShape(expected, actual, path = '$') {
       'Whitespace is a configured value because the current form displays it rather than applying a fallback.');
     assert.strictEqual(Object.hasOwn(serializer.buildSettingsPayload().ui_text, 'pageTitle'), false,
       'A no-edit save must retain the configured whitespace value without treating it as a form default.');
+
+    state.setCurrentLibraryContextOrgId('2');
+    formPopulation.applyLibrarySettingsToForm(librarySettingsResponse);
+    await settleAsyncRendering();
+    state.setSettingsDirty(false);
+    dom.window.localStorage.removeItem('asap.superAdmin.settings.libraryContextOrgId');
+    await libraryContext.populateLibrarySelector();
+    const librarySelect = document.getElementById('select-library-context');
+    assert.strictEqual(librarySelect.value, '2');
+    assert.strictEqual(await libraryContext.switchLibraryContext('system', librarySelect), true,
+      'the system context must load before checking failed library context recovery');
+    const systemPageTitleBeforeFailedSwitch = document.getElementById('ui-patron-page-title').value;
+    assert.strictEqual(state.currentLegacySettingsFormModel?.contextOrgId, 'system');
+    failNextSettingsRead = true;
+    assert.strictEqual(await libraryContext.switchLibraryContext('2', librarySelect), false,
+      'a failed library Settings read must reject the context switch');
+    assert.strictEqual(state.currentLibraryContextOrgId, 'system',
+      'a failed context read must restore the authoritative prior context');
+    assert.strictEqual(librarySelect.value, 'system',
+      'a failed context read must restore the selector to the prior context');
+    assert.strictEqual(document.getElementById('library-context-display').textContent, 'System Defaults',
+      'the context label must not advertise the failed library selection');
+    assert.strictEqual(state.currentLegacySettingsFormModel?.contextOrgId, 'system');
+    assert.strictEqual(document.getElementById('ui-patron-page-title').value, systemPageTitleBeforeFailedSwitch,
+      'the previously loaded form must remain visibly paired with the restored system context');
 
     const nullSystemMessagesResponse = structuredClone(systemSettingsResponse);
     nullSystemMessagesResponse.stored.systemSettings.systemNotEnabledMessage = null;

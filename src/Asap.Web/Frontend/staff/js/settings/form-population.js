@@ -304,6 +304,8 @@ export function populatePatronUiForms(uiText) {
   setFieldValue('ui-success-title', uiText.successTitle || patronFormDefaults.successTitle);
   setFieldValue('ui-success-msg', uiText.successMessage || patronFormDefaults.successMessage);
   setFieldValue('ui-already-submitted-msg', uiText.alreadySubmittedMessage || patronFormDefaults.alreadySubmittedMessage);
+  setFieldValue('ui-ebook-msg', uiText.ebookMessage || patronFormDefaults.ebookMessage);
+  setFieldValue('ui-eaudiobook-msg', uiText.eaudiobookMessage || patronFormDefaults.eaudiobookMessage);
   renderDuplicateStatusLabelSettings(uiText.duplicateStatusLabels || {}, uiText.duplicateStatusLabelsSource || '', !!uiText.duplicateStatusLabelsInherited);
 
   const labels = uiText.formatLabels || {};

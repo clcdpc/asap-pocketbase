@@ -36,7 +36,9 @@ export const patronFormDefaults = Object.freeze({
   noEmailMessage: 'No email is specified on your library account, which means we won\'t be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.',
   successTitle: 'Suggestion Submitted',
   successMessage: 'You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>',
-  alreadySubmittedMessage: 'This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.<div>Thank you for using this library\'s suggestion service.</div>'
+  alreadySubmittedMessage: 'This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.<div>Thank you for using this library\'s suggestion service.</div>',
+  ebookMessage: '',
+  eaudiobookMessage: ''
 });
 
 export const systemMessageFormDefaults = Object.freeze({

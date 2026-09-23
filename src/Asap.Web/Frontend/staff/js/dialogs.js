@@ -1,9 +1,13 @@
-export function showToast(message, type = 'success') {
+export function showToast(message, type = 'success', id = '') {
   const container = document.getElementById('toast-container');
   if (!container) return;
 
   const toast = document.createElement('div');
   toast.className = `asap-toast asap-toast-${type}`;
+  if (id) {
+    document.getElementById(id)?.remove();
+    toast.id = id;
+  }
   toast.textContent = message;
   container.appendChild(toast);
 

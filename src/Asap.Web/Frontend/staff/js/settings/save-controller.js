@@ -134,7 +134,7 @@ export async function saveSettings(options = {}) {
       const refreshNote = refreshError ? ' Current settings could not be reloaded; reload before continuing.' : ' The format list has been reloaded.';
       msg.textContent = `Settings were saved, but custom format removal did not complete: ${detail}.${refreshNote}`;
       msg.className = 'mt-2 font-weight-bold text-warning';
-      showToast('Settings were saved, but custom format removal did not complete.', 'error');
+      showToast('Settings were saved, but custom format removal did not complete.', 'error', 'settings-save-toast');
       return false;
     }
     captureSettingsBaseline();
@@ -142,7 +142,7 @@ export async function saveSettings(options = {}) {
       const detail = refreshError.message || 'The current values could not be reloaded.';
       msg.textContent = `Settings were saved, but the current values could not be reloaded: ${detail}`;
       msg.className = 'mt-2 font-weight-bold text-warning';
-      showToast('Settings were saved, but the current values could not be reloaded.', 'error');
+      showToast('Settings were saved, but the current values could not be reloaded.', 'error', 'settings-save-toast');
       return true;
     }
     msg.textContent = options.successText || 'Settings saved.';
@@ -150,7 +150,7 @@ export async function saveSettings(options = {}) {
     if (options.clearDelay !== 0) {
       setTimeout(() => msg.textContent = '', options.clearDelay || 3000);
     }
-    showToast('Settings saved.', 'success');
+    showToast('Settings saved.', 'success', 'settings-save-toast');
     return true;
   } catch (err) {
     saveHadError = true;
@@ -181,7 +181,7 @@ export async function saveSettings(options = {}) {
       message = refreshed
         ? 'Settings changed in another session. Current values were reloaded; review them before saving again.'
         : 'Settings changed in another session. Reload settings before trying again.';
-      showToast(message, 'error');
+      showToast(message, 'error', 'settings-save-toast');
     }
     msg.textContent = message;
     msg.className = 'mb-3 font-weight-bold text-danger';

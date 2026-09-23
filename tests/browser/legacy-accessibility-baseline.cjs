@@ -4,14 +4,11 @@
 // report. Keep the match at state/rule/target level so new .NET-port regressions fail.
 const LEGACY_ACCESSIBILITY_BASELINE = Object.freeze([
   { state: 'polaris-search', ruleId: 'color-contrast', target: '#polaris-search-status' },
-  { state: 'polaris-search', ruleId: 'color-contrast', target: '.polaris-warning' },
   { state: 'polaris-search', ruleId: 'color-contrast', target: '#polaris-additional-copy-action' },
-  { state: 'settings-staff-access', ruleId: 'color-contrast', targetEndsWith: '.staff-user-delete.btn-outline-danger.btn-sm' },
-  { state: 'settings-staff-access', ruleId: 'select-name', targetEndsWith: '.staff-role-select' },
   { state: 'postmark-settings', ruleId: 'color-contrast', target: '#btn-reset-library-settings' },
   { state: 'postmark-settings', ruleId: 'color-contrast', target: '#btn-test-smtp' },
   { state: 'postmark-settings', ruleId: 'color-contrast', target: '#settings-save-detail' },
-  { state: 'postmark-settings', ruleId: 'color-contrast', target: '.asap-toast' }
+  { state: 'postmark-settings', ruleId: 'color-contrast', target: '#settings-save-toast' }
 ]);
 
 function targetSelector(target) {
@@ -20,7 +17,6 @@ function targetSelector(target) {
 
 function matchesTarget(entry, selector) {
   if (entry.target === selector) return true;
-  if (entry.targetEndsWith && selector.endsWith(entry.targetEndsWith)) return true;
   return false;
 }
 
