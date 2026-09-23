@@ -1,4 +1,4 @@
-import { staffSession, settingsSectionIds, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, currentLibraryContextOrgId, currentStatus, setCurrentStatus, setCurrentSettingsSection, setSettingsDirty } from '../state.js';
+import { staffSession, settingsSectionIds, currentSettingsSection, settingsDirty, settingsSaving, settingsLoading, settingsReloadRequired, settingsSyncInProgress, settingsActionInProgress, currentLibraryContextOrgId, currentStatus, setCurrentStatus, setCurrentSettingsSection, setSettingsDirty } from '../state.js';
 import { checkSettingsDirty, handleLibraryContextSwitch, refreshLibrarySelectorIndicators } from '../settings.js';
 import { loadTab } from '../grid.js';
 import { setDisabled } from './dom.js';
@@ -42,13 +42,16 @@ export function updateSaveBarState(state) {
   const warningBadge = document.getElementById('settings-save-warning-badge');
   const discardBtn = document.getElementById('settings-discard-btn');
   const msg = document.getElementById('settings-msg');
-  const effectiveState = state || (settingsDirty ? 'dirty' : 'clean');
+  const logoFileSelected = !!document.getElementById('ui-logo-file')?.files?.length;
+  const effectiveState = settingsReloadRequired && state !== 'saving'
+    ? 'reload' : (state || (settingsDirty ? 'dirty' : 'clean'));
   const isSystem = currentLibraryContextOrgId === 'system';
   const states = {
     clean: ['No changes', isSystem ? 'System defaults are saved.' : 'Library settings are saved.', 'text-muted'],
     dirty: ['Unsaved changes', isSystem ? 'Save system defaults or discard.' : 'Save library settings or discard.', 'text-warning'],
     saving: ['Saving...', 'Please wait while ASAP applies these settings.', 'text-info'],
     saved: ['Saved', isSystem ? 'System defaults saved successfully.' : 'Library settings saved successfully.', 'text-success'],
+    reload: ['Reload required', 'Current Settings could not be loaded. Reload before changing them.', 'text-warning'],
     error: ['Error saving', 'Review the message below and try again.', 'text-danger']
   };
   const next = states[effectiveState] || states.clean;
@@ -57,14 +60,15 @@ export function updateSaveBarState(state) {
     warningBadge.classList.toggle('hidden', effectiveState !== 'dirty');
   }
   if (detail) {
-    detail.textContent = next[1];
+    detail.textContent = effectiveState === 'dirty' && logoFileSelected
+      ? 'Save branding or clear the selected logo file before saving Settings.' : next[1];
     detail.className = 'small ' + next[2];
   }
   if (discardBtn) {
     discardBtn.classList.toggle('hidden', effectiveState !== 'dirty' && effectiveState !== 'error');
-    discardBtn.disabled = settingsSaving;
+    discardBtn.disabled = settingsSaving || settingsSyncInProgress || settingsActionInProgress;
   }
-  setDisabled('settings-save-btn', settingsSaving || effectiveState === 'clean');
+  setDisabled('settings-save-btn', settingsSaving || settingsReloadRequired || settingsSyncInProgress || settingsActionInProgress || logoFileSelected || effectiveState === 'clean');
   if (msg && effectiveState === 'clean') {
     msg.textContent = '';
     msg.className = 'mt-2 font-weight-bold';
@@ -72,8 +76,8 @@ export function updateSaveBarState(state) {
 }
 
 export function markSettingsDirty() {
-  if (settingsLoading || settingsSaving) return;
-  const isDirty = checkSettingsDirty();
+  if (settingsLoading || settingsSaving || settingsReloadRequired || settingsSyncInProgress || settingsActionInProgress) return;
+  const isDirty = checkSettingsDirty() || !!document.getElementById('ui-logo-file')?.files?.length;
   setSettingsDirty(isDirty);
   updateSaveBarState(isDirty ? 'dirty' : 'clean');
 }

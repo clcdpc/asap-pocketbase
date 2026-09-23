@@ -227,7 +227,7 @@ export function loadSettingsTab(ctx) {
     showSettingsAccessDenied();
     return;
   }
-  refreshSettingsView({ showErrors: true });
+  refreshSettingsView({ showErrors: true, preserveDraft: true });
 }
 
 export function prepareGridView(ctx) {
