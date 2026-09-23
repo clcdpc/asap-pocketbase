@@ -82,6 +82,8 @@ async function flush() {
     let deferNextLibrarySettingsRead = false;
     let releaseDeferredLibrarySettingsRead = null;
     let settingsReads = 0;
+    let configReads = 0;
+    let nextConfigReadFails = false;
     global.fetch = async (url, options = {}) => {
       const requestUrl = String(url);
       if (requestUrl.includes('/api/asap/staff/settings/library?orgId=2')) {
@@ -100,7 +102,14 @@ async function flush() {
       }
       if (requestUrl.includes('/api/asap/staff/polaris/patron-codes')) return response(200, { code: 'ok', data: [] });
       if (requestUrl.startsWith('/api/asap/staff/users')) return response(200, { users: [] });
-      if (requestUrl === '/api/asap/config') return response(200, { publicationOptions: [] });
+      if (requestUrl === '/api/asap/config') {
+        configReads++;
+        if (nextConfigReadFails) {
+          nextConfigReadFails = false;
+          return response(503, { code: 'config_unavailable', message: 'Config refresh temporarily unavailable.' });
+        }
+        return response(200, { publicationOptions: [] });
+      }
       if (requestUrl === '/api/asap/staff/settings/library' && String(options.method || 'GET').toUpperCase() === 'POST') {
         const payload = JSON.parse(options.body);
         libraryResets.push(payload);
@@ -197,9 +206,16 @@ async function flush() {
 
     const loginNote = document.getElementById('ui-login-note');
     const logoFileInput = document.getElementById('ui-logo-file');
+    let selectedLogoFile = new dom.window.File(['logo'], 'logo.png', { type: 'image/png' });
+    const nativeFileValue = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value');
     Object.defineProperty(logoFileInput, 'files', {
       configurable: true,
-      value: [new dom.window.File(['logo'], 'logo.png', { type: 'image/png' })]
+      get: () => selectedLogoFile ? [selectedLogoFile] : []
+    });
+    Object.defineProperty(logoFileInput, 'value', {
+      configurable: true,
+      get() { return selectedLogoFile ? 'C:\\fakepath\\logo.png' : nativeFileValue.get.call(this); },
+      set(value) { if (value === '') selectedLogoFile = null; nativeFileValue.set.call(this, value); }
     });
     logoFileInput.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
     const originalLoginNote = loginNote.value;
@@ -230,8 +246,8 @@ async function flush() {
     await settings.loadSettings({ preserveDraft: true });
     assert.strictEqual(settingsReads, readsBeforeFileOnlyReopen);
     assert.strictEqual(logoFileInput.files.length, 1, 'reopening Settings must preserve a selected logo');
-    Object.defineProperty(logoFileInput, 'files', { configurable: true, value: [] });
-    logoFileInput.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    document.getElementById('btn-clear-selected-logo').click();
+    assert.strictEqual(logoFileInput.files.length, 0);
     assert.strictEqual(state.settingsDirty, false);
 
     document.getElementById('ui-logo-alt').value = 'Uploaded logo description';
@@ -269,6 +285,8 @@ async function flush() {
     assert.strictEqual(settingsReads, readsBeforeStaleUpload + 1, 'stale logo upload must reload authoritative Settings');
     assert.strictEqual(document.getElementById('ui-logo-alt').value, 'Latest logo alt after the stale upload');
 
+    const configReadsBeforeLibraryReset = configReads;
+    nextConfigReadFails = true;
     document.getElementById('btn-reset-library-settings').click();
     await flush();
     document.getElementById('confirm-dialog-ok').click();
@@ -277,6 +295,12 @@ async function flush() {
     assert.deepStrictEqual(libraryResets[0], { orgId: '2', action: 'reset', version: 'version-4' },
       'Reset Library Settings must send its current Settings version and exact selected scope');
     assert.strictEqual(serverVersion, 'version-5');
+    assert.strictEqual(configReads, configReadsBeforeLibraryReset + 1,
+      'a successful library reset must refresh derived app configuration');
+    assert.strictEqual(state.settingsReloadRequired, false,
+      'an auxiliary config failure must not invalidate the authoritative Settings version');
+    assert.match(Array.from(document.querySelectorAll('#toast-container .asap-toast')).at(-1).textContent,
+      /settings were reset and reloaded, but app configuration could not be refreshed/i);
     assert.strictEqual(document.getElementById('ui-logo-alt').value, 'System inherited alt',
       'a successful library reset must reload inherited branding values');
 

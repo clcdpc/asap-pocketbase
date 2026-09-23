@@ -149,6 +149,7 @@ export function applyLibrarySettingsToForm(settings) {
   }
   const fileInput = document.getElementById('ui-logo-file');
   if (fileInput) fileInput.value = '';
+  document.getElementById('btn-clear-selected-logo')?.classList.add('hidden');
 
   populateEmailTemplateForms(emails, model.templates);
   populatePatronUiForms(model.uiText);
@@ -269,6 +270,7 @@ export function populatePatronUiForms(uiText) {
   const preview = document.getElementById('ui-logo-preview');
   if (preview) {
     preview.src = (uiText.logoUrl || '/jpl.png') + (uiText.logoUrl && uiText.logoUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
+    preview.dataset.authoritativeSrc = preview.src;
   }
 
   const statusBadge = document.getElementById('ui-branding-status');

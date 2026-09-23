@@ -11,7 +11,7 @@ export * from './settings/save-controller.js';
 export * from './settings/save-ui.js';
 export * from './settings/polaris-sync.js';
 
-import { settingsForm, defaultPublicationOptions, verifiedBibId, setVerifiedBibId, currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, libraryContextLoadSerial, settingsReloadRequired, settingsSyncInProgress, settingsSaving, settingsLoading, settingsActionInProgress, setSettingsActionInProgress, setSettingsReloadRequired } from './state.js';
+import { settingsForm, defaultPublicationOptions, verifiedBibId, setVerifiedBibId, currentLibraryContextOrgId, currentLegacySettingsFormModel, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, libraryContextLoadSerial, settingsReloadRequired, settingsSyncInProgress, settingsSaving, settingsLoading, settingsActionInProgress, setSettingsActionInProgress, setSettingsReloadRequired } from './state.js';
 import { markSettingsDirty, updateAutoRejectEmailControls, updateSaveBarState } from './api.js';
 import { authorizedJson } from './http.js';
 import { showToast, showConfirm } from './dialogs.js';
@@ -107,18 +107,28 @@ bindPolarisSecretControls();
 document.getElementById('settings-reload-btn')?.addEventListener('click', async () => {
   if (!settingsReloadRequired || settingsSaving || settingsSyncInProgress || settingsActionInProgress || settingsLoading) return;
   const button = document.getElementById('settings-reload-btn');
+  const actionOrganizationId = currentLibraryContextOrgId;
+  setSettingsActionInProgress(true);
   button.disabled = true;
   try {
     const settings = await refreshSettingsView({ showErrors: false, throwOnError: true, skipAutoSync: true, preserveReloadRequired: true });
+    if (actionOrganizationId !== currentLibraryContextOrgId || settings?.orgId !== actionOrganizationId) return;
     if (!settings?.version) {
       throw new Error('The current Settings version was not returned.');
     }
+    const configRefreshed = await loadStaffConfig();
+    if (actionOrganizationId !== currentLibraryContextOrgId) return;
     setSettingsReloadRequired(false);
     updateSaveBarState('clean');
+    if (!configRefreshed) {
+      showToast('Settings reloaded, but app configuration could not be refreshed.', 'error');
+    }
   } catch (error) {
+    if (actionOrganizationId !== currentLibraryContextOrgId) return;
     showToast('Current Settings could not be reloaded. Try again.', 'error');
     updateSaveBarState('reload');
   } finally {
+    setSettingsActionInProgress(false);
     button.disabled = settingsSaving || settingsSyncInProgress || settingsActionInProgress || settingsLoading;
   }
 });
@@ -201,6 +211,7 @@ document.getElementById('ui-logo-file').addEventListener('change', (e) => {
   if (label) {
     label.textContent = file ? file.name : 'Choose image...';
   }
+  document.getElementById('btn-clear-selected-logo').classList.toggle('hidden', !file);
   if (file) {
     const reader = new FileReader();
     reader.onload = (ev) => {
@@ -209,7 +220,20 @@ document.getElementById('ui-logo-file').addEventListener('change', (e) => {
       if (preview) preview.src = ev.target.result;
     };
     reader.readAsDataURL(file);
+  } else {
+    const preview = document.getElementById('ui-logo-preview');
+    if (preview?.dataset.authoritativeSrc) preview.src = preview.dataset.authoritativeSrc;
   }
+});
+
+document.getElementById('btn-clear-selected-logo').addEventListener('click', () => {
+  const fileInput = document.getElementById('ui-logo-file');
+  fileInput.value = '';
+  document.querySelector('.custom-file-label[for="ui-logo-file"]').textContent = 'Choose image...';
+  const preview = document.getElementById('ui-logo-preview');
+  if (preview?.dataset.authoritativeSrc) preview.src = preview.dataset.authoritativeSrc;
+  document.getElementById('btn-clear-selected-logo').classList.add('hidden');
+  markSettingsDirty();
 });
 
 document.getElementById('btn-upload-logo').addEventListener('click', async () => {
@@ -220,12 +244,22 @@ document.getElementById('btn-upload-logo').addEventListener('click', async () =>
   const fileInput = document.getElementById('ui-logo-file');
   const altInput = document.getElementById('ui-logo-alt');
   const btn = document.getElementById('btn-upload-logo');
+  const model = currentLegacySettingsFormModel;
+  const storedAlt = model?.isSystem
+    ? model.provenance?.systemBranding?.altText
+    : model?.provenance?.libraryBranding?.altText;
+  const baselineAlt = String(storedAlt ?? model?.uiText?.logoAlt ?? '').trim();
+  const altEdited = altInput.value.trim() !== baselineAlt;
+  if (!fileInput.files.length && !altEdited) {
+    showToast('No branding changes to save.', 'info');
+    return;
+  }
 
   const formData = new FormData();
   if (fileInput.files.length > 0) {
     formData.append('logo', fileInput.files[0]);
   }
-  formData.append('logoAlt', altInput.value.trim());
+  if (altEdited) formData.append('logoAlt', altInput.value.trim());
   formData.append('version', submittedVersion);
 
   setSettingsActionInProgress(true);
@@ -258,6 +292,10 @@ document.getElementById('btn-upload-logo').addEventListener('click', async () =>
 
 document.getElementById('btn-reset-logo').addEventListener('click', async () => {
   if (brandingActionBlocked()) return;
+  if (document.getElementById('ui-logo-file').files.length) {
+    showToast('Clear the selected logo file before resetting branding.', 'error');
+    return;
+  }
   const actionOrganizationId = currentLibraryContextOrgId;
   const actionContextSerial = libraryContextLoadSerial;
   const submittedVersion = currentSettingsVersion();

@@ -182,8 +182,11 @@ export function refreshSettingsView(options = {}) {
 }
 
 export async function loadStaffConfig() {
+  const contextOrgId = currentLibraryContextOrgId;
+  const contextSerial = libraryContextLoadSerial;
   try {
     const config = await authorizedJson('/api/asap/config');
+    if (contextOrgId !== currentLibraryContextOrgId || contextSerial !== libraryContextLoadSerial) return false;
     if (config) {
       if (config.logoUrl) {
         document.getElementById('app-icon').href = config.logoUrl;
@@ -199,10 +202,12 @@ export async function loadStaffConfig() {
         setAdditionalFieldDefinitions(config.additionalFieldDefinitions || []);
         setCurrentPatronFieldConfig(config.additionalFieldDefinitions || [], config.formatRules || {});
       }
+      return true;
     }
   } catch (err) {
     console.error('Failed to load global config');
   }
+  return false;
 }
 
 export async function initStaffApp() {

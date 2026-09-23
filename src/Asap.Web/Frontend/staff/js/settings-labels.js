@@ -4,6 +4,7 @@ import { checkSettingsDirty } from './settings/serialize-save.js';
 import { authorizedJson } from './http.js';
 import { showToast, showConfirm } from './dialogs.js';
 import { loadLibrarySettings } from './settings/library-context.js';
+import { loadStaffConfig } from './settings/refresh.js';
 import { normalizeDuplicateStatusLabels, renderDuplicateStatusLabelSettings, collectDuplicateStatusLabels } from './settings/duplicate-labels.js';
 
 export { normalizeDuplicateStatusLabels, renderDuplicateStatusLabelSettings, collectDuplicateStatusLabels };
@@ -61,8 +62,12 @@ document.getElementById('btn-reset-library-settings').addEventListener('click', 
         const reload = await reloadCurrentLibrarySettings();
         if (reload.current) {
           if (reload.loaded) {
+            const configRefreshed = await loadStaffConfig();
             setSettingsReloadRequired(false);
             markSettingsClean('clean');
+            if (!configRefreshed) {
+              showToast('Settings reloaded, but app configuration could not be refreshed.', 'error');
+            }
           } else {
             updateSaveBarState('reload');
           }
@@ -82,9 +87,13 @@ document.getElementById('btn-reset-library-settings').addEventListener('click', 
     const reload = await reloadCurrentLibrarySettings();
     if (reload.current) {
       if (reload.loaded) {
+        const configRefreshed = await loadStaffConfig();
         setSettingsReloadRequired(false);
         markSettingsClean('clean');
-        showToast('Library settings reset to system defaults', 'success');
+        showToast(configRefreshed
+          ? 'Library settings reset to system defaults'
+          : 'Library settings were reset and reloaded, but app configuration could not be refreshed.',
+        configRefreshed ? 'success' : 'error');
       } else {
         updateSaveBarState('reload');
         const message = `Library settings were reset, but current values could not be reloaded: ${reload.error?.message || 'reload failed.'} Reload Settings before further changes.`;
