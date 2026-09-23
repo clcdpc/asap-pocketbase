@@ -454,6 +454,14 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(collision.GetProperty("additionalCopyBibLookup").GetBoolean());
         }
 
+        await settingsPoisoningJourney.SetSystemSuggestionLimitAsync(23);
+        var inheritedAfterSystemEdit = await factory!.Services
+            .GetRequiredService<PatronConfigurationService>()
+            .GetAsync(92327, CancellationToken.None);
+        Assert.AreEqual(23, inheritedAfterSystemEdit?.SuggestionLimit ?? -1,
+            "A library with no local workflow row must inherit later system changes after a no-edit save.");
+        await settingsPoisoningJourney.AssertLibraryOverrideRowsAsync();
+
         await settingsPoisoningJourney.RestoreForFollowingBrowserJourneyAsync();
         var nextStartInfo = new ProcessStartInfo
         {
@@ -8296,6 +8304,18 @@ public sealed partial class PatronJourneyTests
 
         public Task RestoreForFollowingBrowserJourneyAsync() => RestoreAsync(connection);
 
+        public async Task SetSystemSuggestionLimitAsync(int suggestionLimit)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE [asap].[WorkflowSettings]
+                SET [SuggestionLimit] = @suggestionLimit, [UpdatedUtc] = SYSUTCDATETIME()
+                WHERE [OrganizationId] = 1;
+                """;
+            command.Parameters.AddWithValue("@suggestionLimit", suggestionLimit);
+            await command.ExecuteNonQueryAsync();
+        }
+
         public async ValueTask DisposeAsync()
         {
             await RestoreAsync(connection);
@@ -8357,6 +8377,31 @@ public sealed partial class PatronJourneyTests
                     [AllowPatronAutoholdOptOut] = 0, [AllowAnyRegisteredCardLogin] = 1,
                     [PatronCodeEligibilityEnabled] = 0,
                     [PatronCodeEligibilityMessage] = N'Closure poison eligibility message',
+                    [UpdatedUtc] = '2026-09-20T12:34:56'
+                WHERE [OrganizationId] = 1;
+
+                UPDATE [asap].[WorkflowSettings]
+                SET [SuggestionLimit] = NULL,
+                    [SuggestionLimitMessage] = NULL,
+                    [OutstandingTimeoutEnabled] = NULL,
+                    [OutstandingTimeoutDays] = NULL,
+                    [OutstandingTimeoutSendEmail] = NULL,
+                    [OutstandingTimeoutRejectionTemplateId] = NULL,
+                    [HoldPickupTimeoutEnabled] = NULL,
+                    [HoldPickupTimeoutDays] = NULL,
+                    [PendingHoldTimeoutEnabled] = NULL,
+                    [PendingHoldTimeoutDays] = NULL,
+                    [AdditionalCopyTimeoutEnabled] = NULL,
+                    [AdditionalCopyTimeoutDays] = NULL,
+                    [AutoPromote] = NULL,
+                    [CommonAuthorsEnabled] = NULL,
+                    [CommonAuthorsLabel] = NULL,
+                    [CommonAuthorsHelp] = NULL,
+                    [CommonAuthorsMessage] = NULL,
+                    [AllowPatronAutoholdOptOut] = NULL,
+                    [AllowAnyRegisteredCardLogin] = NULL,
+                    [PatronCodeEligibilityEnabled] = NULL,
+                    [PatronCodeEligibilityMessage] = NULL,
                     [UpdatedUtc] = '2026-09-20T12:34:56'
                 WHERE [OrganizationId] = 1;
 

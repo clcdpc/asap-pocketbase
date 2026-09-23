@@ -99,18 +99,25 @@ async function post(context, baseOrigin, route, data) {
   });
 }
 
-async function runLegacySettingsNoEditRoundTrip(page, context, baseOrigin, orgId, expectedSuggestionLimit) {
+async function runLegacySettingsNoEditRoundTrip(
+  page,
+  context,
+  baseOrigin,
+  orgId,
+  expectedSuggestionLimit,
+  expectedSuggestionLimitInput = String(expectedSuggestionLimit)
+) {
   const select = page.locator('#select-library-context');
   if (await select.inputValue() !== orgId) {
     await select.selectOption(orgId, { force: true });
   }
-  await page.waitForFunction(async ({ expectedOrgId, expectedSuggestionLimit: expected }) => {
+  await page.waitForFunction(async ({ expectedOrgId, expectedInput }) => {
     const { currentLibraryContextOrgId } = await import('/staff/js/state.js');
     const { currentLegacySettingsFormModel } = await import('/staff/js/state.js');
     return currentLibraryContextOrgId === expectedOrgId &&
       currentLegacySettingsFormModel?.contextOrgId === expectedOrgId &&
-      document.getElementById('suggestion-limit')?.value === expected;
-  }, { expectedOrgId: orgId, expectedSuggestionLimit: String(expectedSuggestionLimit) });
+      document.getElementById('suggestion-limit')?.value === expectedInput;
+  }, { expectedOrgId: orgId, expectedInput: expectedSuggestionLimitInput });
 
   const beforeResponse = await context.request.get(
     `${baseOrigin}/api/asap/staff/settings/library?orgId=${encodeURIComponent(orgId)}`
@@ -194,6 +201,15 @@ async function runLegacySettingsNoEditRoundTrip(page, context, baseOrigin, orgId
     orgId,
     version: before.version
   };
+  if (orgId === 'system' || orgId === '92327') {
+    const nullSystemWorkflowFields = Object.entries(before.stored.configuredSystem.workflow || {})
+      .filter(([key, value]) => key !== 'version' && value === null)
+      .map(([key]) => key);
+    for (const key of nullSystemWorkflowFields) {
+      assert.equal(Object.hasOwn(posted.workflow || {}, key), false,
+        orgId + ' no-edit save must not materialize the form or serializer fallback for null system workflow.' + key);
+    }
+  }
   const saveResponse = await post(context, baseOrigin, '/api/asap/staff/settings/library', posted);
   assert.equal(saveResponse.status(), 200, `${orgId} no-edit Settings save failed: ${await saveResponse.text()}`);
   assert.equal(posted.orgId, orgId);
@@ -354,13 +370,13 @@ async function runSuperAdmin(browser, args, axeSource, report) {
       return select && !select.disabled && select.options.length > 1;
     });
     report.settingsNoEditRoundTrips = [];
-    for (const [orgId, suggestionLimit] of [
-      ['system', 17],
-      ['92327', 17],
-      ['92328', 73]
+    for (const [orgId, suggestionLimit, suggestionLimitInput] of [
+      ['system', 5, ''],
+      ['92327', 5, ''],
+      ['92328', 73, '73']
     ]) {
       report.settingsNoEditRoundTrips.push(
-        await runLegacySettingsNoEditRoundTrip(page, context, args.baseOrigin, orgId, suggestionLimit)
+        await runLegacySettingsNoEditRoundTrip(page, context, args.baseOrigin, orgId, suggestionLimit, suggestionLimitInput)
       );
     }
     await page.locator('#select-library-context').selectOption('2', { force: true });

@@ -2,6 +2,46 @@ function array(value) {
   return Array.isArray(value) ? value : [];
 }
 
+const workflowFormDefaults = {
+  suggestionLimit: 5,
+  suggestionLimitMessage: 'Weekly suggestion limit reached',
+  outstandingTimeoutEnabled: false,
+  outstandingTimeoutDays: 30,
+  outstandingTimeoutSendEmail: false,
+  outstandingTimeoutRejectionTemplateId: '',
+  holdPickupTimeoutEnabled: false,
+  holdPickupTimeoutDays: 14,
+  pendingHoldTimeoutEnabled: false,
+  pendingHoldTimeoutDays: 14,
+  additionalCopyTimeoutEnabled: false,
+  additionalCopyTimeoutDays: 14,
+  autoPromote: false,
+  commonAuthorsEnabled: false,
+  commonAuthorsLabel: 'Popular Creators',
+  commonAuthorsHelp: 'See if this is a creator we already collect.',
+  commonAuthorsMessage: '',
+  allowPatronAutoholdOptOut: false,
+  allowAnyRegisteredCardLogin: false,
+  patronCodeEligibilityEnabled: false,
+  patronCodeEligibilityMessage: 'Your library card is not eligible to use this suggestion service.'
+};
+
+function workflowFormBaseline(values) {
+  return Object.fromEntries(Object.entries(workflowFormDefaults).map(([key, fallback]) => {
+    const value = values?.[key];
+    if (value === null || value === undefined || value === '') {
+      return [key, fallback];
+    }
+    if (typeof fallback === 'boolean') {
+      return [key, value === true];
+    }
+    if (typeof fallback === 'number') {
+      return [key, Number.parseInt(value, 10) || fallback];
+    }
+    return [key, String(value)];
+  }));
+}
+
 function stringId(value) {
   return value === undefined || value === null ? '' : String(value);
 }
@@ -330,7 +370,13 @@ export function buildLegacySettingsFormModel(settings, contextOrgId = 'system') 
   const autoClaimRules = mapAutoClaimRules(stored.autoClaimRules ?? settings.formatClaimRules, formats);
   const autoClaimStaff = mapAutoClaimStaff(settings.autoClaimStaff, contextOrgId);
   const templateState = mapTemplates(settings, isSystem, contextOrgId);
-  const systemWorkflow = mergeObjects(effective.workflow, settings.workflow, stored.workflow, configuredSystem.workflow);
+  // Compare against what the legacy controls actually display. Nullable DTO fields use
+  // form defaults, and treating those defaults as edits would materialize library overrides.
+  const systemWorkflow = workflowFormBaseline(mergeObjects(
+    configuredSystem.workflow,
+    settings.orgId === 'system' ? stored.workflow : null,
+    settings.workflow,
+    effective.workflow));
   const systemPatron = mergeObjects(settings.ui_text, effective, stored.patron, configuredSystem.patron);
   const systemEmail = mergeObjects(settings.emails, effective.email, stored.email, configuredSystem.email);
   const systemSets = {

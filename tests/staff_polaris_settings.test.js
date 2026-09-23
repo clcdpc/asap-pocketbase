@@ -1039,6 +1039,31 @@ function assertBackendShape(expected, actual, path = '$') {
     assert.ok(missingTemplateEdit.body,
       'an intentional system edit to a missing standard template must include content required by the backend create contract');
 
+    const nullWorkflowLibraryResponse = structuredClone(canonicalLibraryResponse);
+    const nullSystemWorkflowFields = Object.keys(nullWorkflowLibraryResponse.stored.configuredSystem.workflow)
+      .filter(key => key !== 'version');
+    for (const key of nullSystemWorkflowFields) {
+      nullWorkflowLibraryResponse.stored.configuredSystem.workflow[key] = null;
+      nullWorkflowLibraryResponse.stored.workflow[key] = null;
+      nullWorkflowLibraryResponse.effective.workflow[key] = null;
+    }
+    nullWorkflowLibraryResponse.stored.libraryOverride.workflow = null;
+    state.setCurrentLibraryContextOrgId('2');
+    formPopulation.applyLibrarySettingsToForm(nullWorkflowLibraryResponse);
+    await settleAsyncRendering();
+    assert.strictEqual(document.getElementById('suggestion-limit').value, '',
+      'the null API value remains visually empty; the serializer applies its legacy numeric fallback');
+    assert.strictEqual(document.getElementById('outstanding-timeout-days').value, '',
+      'the null API value remains visually empty; the serializer applies its legacy integer fallback');
+    assert.strictEqual(document.getElementById('wf-common-authors-label').value, 'Popular Creators');
+    assert.strictEqual(document.getElementById('wf-common-authors-help').value,
+      'See if this is a creator we already collect.');
+    const nullWorkflowNoEditPayload = serializer.buildSettingsPayload();
+    for (const key of nullSystemWorkflowFields) {
+      assert.strictEqual(Object.hasOwn(nullWorkflowNoEditPayload.workflow || {}, key), false,
+        'A no-edit library save must leave nullable system workflow.' + key + ' inherited.');
+    }
+
     const index = fs.readFileSync(path.join(staffRoot, 'index.html'), 'utf8');
     const polarisSource = fs.readFileSync(path.join(staffRoot, 'js', 'settings-polaris.js'), 'utf8');
     const collectorSource = fs.readFileSync(path.join(staffRoot, 'js', 'settings', 'polaris-fields.js'), 'utf8');
