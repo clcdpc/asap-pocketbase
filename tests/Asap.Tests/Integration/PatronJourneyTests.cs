@@ -375,6 +375,8 @@ public sealed partial class PatronJourneyTests
             Guid.Parse(identity.TenantId!),
             Guid.Parse(identity.ObjectId!),
             staffObjectId);
+        await using var settingsPoisoningJourney = await LegacySettingsPoisoningJourney.CreateAsync(
+            databaseConnectionString);
 
         var repositoryRoot = Path.GetDirectoryName(TestArtifactPaths.FindRepositoryFile("Asap.sln"))!;
         var artifactDirectory = Path.Combine(
@@ -391,7 +393,7 @@ public sealed partial class PatronJourneyTests
             RedirectStandardError = true,
             UseShellExecute = false
         };
-        startInfo.ArgumentList.Add(Path.Combine(repositoryRoot, "tests", "browser", "staff.cjs"));
+        startInfo.ArgumentList.Add(Path.Combine(repositoryRoot, "tests", "browser", "staff-legacy.cjs"));
         startInfo.ArgumentList.Add(baseAddress.GetLeftPart(UriPartial.Authority));
         startInfo.ArgumentList.Add(artifactDirectory);
         startInfo.ArgumentList.Add(seeded.SuperId.ToString());
@@ -427,6 +429,56 @@ public sealed partial class PatronJourneyTests
         var stdout = await stdoutTask;
         var stderr = await stderrTask;
         Assert.AreEqual(0, process.ExitCode, $"{stdout}{Environment.NewLine}{stderr}");
+        var settingsSqlAfterBrowser = await settingsPoisoningJourney.CaptureSqlStateAsync();
+        foreach (var (table, before) in settingsPoisoningJourney.SqlStateBeforeBrowser)
+        {
+            Assert.IsTrue(settingsSqlAfterBrowser.TryGetValue(table, out var after), $"Missing SQL snapshot for {table}.");
+            Assert.AreEqual(before, after, $"A legacy no-edit Settings journey changed SQL rows in {table}.");
+        }
+        await settingsPoisoningJourney.AssertLibraryOverrideRowsAsync();
+
+        using (var legacyReport = JsonDocument.Parse(
+                   await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "staff-legacy-browser-results.json"))))
+        {
+            var noEdit = legacyReport.RootElement.GetProperty("settingsNoEditRoundTrips").EnumerateArray().ToArray();
+            Assert.HasCount(3, noEdit);
+            CollectionAssert.AreEqual(
+                new[] { "system", "92327", "92328" },
+                noEdit.Select(item => item.GetProperty("orgId").GetString()).ToArray());
+            Assert.IsTrue(noEdit.All(item => item.GetProperty("persistedSnapshotUnchanged").GetBoolean()));
+            var collision = legacyReport.RootElement.GetProperty("requestIdentityCollision");
+            Assert.IsTrue(collision.GetProperty("rowClicks").GetBoolean());
+            Assert.IsTrue(collision.GetProperty("deepLinks").GetBoolean());
+            Assert.IsTrue(collision.GetProperty("notes").GetBoolean());
+            Assert.IsTrue(collision.GetProperty("polarisSearches").GetBoolean());
+            Assert.IsTrue(collision.GetProperty("additionalCopyBibLookup").GetBoolean());
+        }
+
+        await settingsPoisoningJourney.RestoreForFollowingBrowserJourneyAsync();
+        var nextStartInfo = new ProcessStartInfo
+        {
+            FileName = "node",
+            WorkingDirectory = repositoryRoot,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        };
+        nextStartInfo.ArgumentList.Add(Path.Combine(repositoryRoot, "tests", "browser", "staff-next.cjs"));
+        foreach (var argument in startInfo.ArgumentList.Skip(1))
+        {
+            nextStartInfo.ArgumentList.Add(argument);
+        }
+
+        using (var nextProcess = Process.Start(nextStartInfo)
+               ?? throw new InvalidOperationException("Could not start the staff-next browser runner."))
+        {
+            var nextStdoutTask = nextProcess.StandardOutput.ReadToEndAsync();
+            var nextStderrTask = nextProcess.StandardError.ReadToEndAsync();
+            await nextProcess.WaitForExitAsync();
+            var nextStdout = await nextStdoutTask;
+            var nextStderr = await nextStderrTask;
+            Assert.AreEqual(0, nextProcess.ExitCode, $"{nextStdout}{Environment.NewLine}{nextStderr}");
+        }
 
         using (var report = JsonDocument.Parse(
                    await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "staff-browser-results.json"))))
@@ -466,17 +518,6 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(report.RootElement.GetProperty("staleMutationCompletions").GetProperty("sameIdRerender").GetBoolean());
             Assert.IsTrue(report.RootElement.GetProperty("staleMutationCompletions").GetProperty("signedOutContext").GetBoolean());
             Assert.IsTrue(report.RootElement.GetProperty("staleMutationCompletions").GetProperty("holdOperationError").GetBoolean());
-        }
-
-        using (var legacyReport = JsonDocument.Parse(
-                   await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "staff-legacy-browser-results.json"))))
-        {
-            var collision = legacyReport.RootElement.GetProperty("requestIdentityCollision");
-            Assert.IsTrue(collision.GetProperty("rowClicks").GetBoolean());
-            Assert.IsTrue(collision.GetProperty("deepLinks").GetBoolean());
-            Assert.IsTrue(collision.GetProperty("notes").GetBoolean());
-            Assert.IsTrue(collision.GetProperty("polarisSearches").GetBoolean());
-            Assert.IsTrue(collision.GetProperty("additionalCopyBibLookup").GetBoolean());
         }
 
         await using var verify = new SqlConnection(databaseConnectionString);
@@ -8164,6 +8205,413 @@ public sealed partial class PatronJourneyTests
             StringAssert.Contains(notes, expectedNoteFragment);
         }
         Assert.AreEqual(expectLifecycleAudit ? 1 : 0, reader.GetInt32(7));
+    }
+
+    private sealed class LegacySettingsPoisoningJourney : IAsyncDisposable
+    {
+        private readonly SqlConnection connection;
+
+        private LegacySettingsPoisoningJourney(
+            SqlConnection connection,
+            IReadOnlyDictionary<string, string> sqlStateBeforeBrowser)
+        {
+            this.connection = connection;
+            SqlStateBeforeBrowser = sqlStateBeforeBrowser;
+        }
+
+        public IReadOnlyDictionary<string, string> SqlStateBeforeBrowser { get; }
+
+        public static async Task<LegacySettingsPoisoningJourney> CreateAsync(string connectionString)
+        {
+            var connection = new SqlConnection(connectionString);
+            await connection.OpenAsync();
+            try
+            {
+                await SeedAsync(connection);
+                return new LegacySettingsPoisoningJourney(
+                    connection,
+                    await CaptureSqlStateAsync(connection));
+            }
+            catch
+            {
+                await RestoreAsync(connection);
+                await connection.DisposeAsync();
+                throw;
+            }
+        }
+
+        public Task<Dictionary<string, string>> CaptureSqlStateAsync() => CaptureSqlStateAsync(connection);
+
+        public async Task AssertLibraryOverrideRowsAsync()
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = 92327) +
+                    (SELECT COUNT(*) FROM [asap].[PatronSettings] WHERE [OrganizationId] = 92327) +
+                    (SELECT COUNT(*) FROM [asap].[EmailSettings] WHERE [OrganizationId] = 92327) +
+                    (SELECT COUNT(*) FROM [asap].[PublicationOptionSet] WHERE [OrganizationId] = 92327) +
+                    (SELECT COUNT(*) FROM [asap].[CommonCreatorSet] WHERE [OrganizationId] = 92327) +
+                    (SELECT COUNT(*) FROM [asap].[PatronCodeEligibilitySet] WHERE [OrganizationId] = 92327) +
+                    (SELECT COUNT(*) FROM [asap].[ExternalSearchProviderOverride] WHERE [LibraryOrganizationId] = 92327) +
+                    (SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] WHERE [LibraryOrganizationId] = 92327) +
+                    (SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 92327) +
+                    (SELECT COUNT(*) FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 92327) +
+                    (SELECT COUNT(*) FROM [asap].[FormatAutoClaimRule] WHERE [LibraryOrganizationId] = 92327) +
+                    (SELECT COUNT(*) FROM [asap].[Branding] WHERE [OrganizationId] = 92327),
+                    (SELECT COUNT(*) FROM [asap].[WorkflowSettings]
+                     WHERE [OrganizationId] = 92328 AND [SuggestionLimit] = 73),
+                    (SELECT COUNT(*) FROM [asap].[WorkflowSettings]
+                     WHERE [OrganizationId] = 92328 AND
+                       ([SuggestionLimitMessage] IS NOT NULL OR [OutstandingTimeoutEnabled] IS NOT NULL OR
+                        [OutstandingTimeoutDays] IS NOT NULL OR [OutstandingTimeoutSendEmail] IS NOT NULL OR
+                        [OutstandingTimeoutRejectionTemplateId] IS NOT NULL OR [HoldPickupTimeoutEnabled] IS NOT NULL OR
+                        [HoldPickupTimeoutDays] IS NOT NULL OR [PendingHoldTimeoutEnabled] IS NOT NULL OR
+                        [PendingHoldTimeoutDays] IS NOT NULL OR [AdditionalCopyTimeoutEnabled] IS NOT NULL OR
+                        [AdditionalCopyTimeoutDays] IS NOT NULL OR [AutoPromote] IS NOT NULL OR
+                        [CommonAuthorsEnabled] IS NOT NULL OR [CommonAuthorsLabel] IS NOT NULL OR
+                        [CommonAuthorsHelp] IS NOT NULL OR [CommonAuthorsMessage] IS NOT NULL OR
+                        [AllowPatronAutoholdOptOut] IS NOT NULL OR [AllowAnyRegisteredCardLogin] IS NOT NULL OR
+                        [PatronCodeEligibilityEnabled] IS NOT NULL OR [PatronCodeEligibilityMessage] IS NOT NULL)),
+                    (SELECT COUNT(*) FROM [asap].[PatronSettings] WHERE [OrganizationId] = 92328) +
+                    (SELECT COUNT(*) FROM [asap].[EmailSettings] WHERE [OrganizationId] = 92328) +
+                    (SELECT COUNT(*) FROM [asap].[PublicationOptionSet] WHERE [OrganizationId] = 92328) +
+                    (SELECT COUNT(*) FROM [asap].[CommonCreatorSet] WHERE [OrganizationId] = 92328) +
+                    (SELECT COUNT(*) FROM [asap].[PatronCodeEligibilitySet] WHERE [OrganizationId] = 92328) +
+                    (SELECT COUNT(*) FROM [asap].[ExternalSearchProviderOverride] WHERE [LibraryOrganizationId] = 92328) +
+                    (SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] WHERE [LibraryOrganizationId] = 92328) +
+                    (SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 92328) +
+                    (SELECT COUNT(*) FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 92328) +
+                    (SELECT COUNT(*) FROM [asap].[FormatAutoClaimRule] WHERE [LibraryOrganizationId] = 92328) +
+                    (SELECT COUNT(*) FROM [asap].[Branding] WHERE [OrganizationId] = 92328);
+                """;
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.IsTrue(await reader.ReadAsync());
+            Assert.AreEqual(0, reader.GetInt32(0), "The zero-override library acquired local Settings rows.");
+            Assert.AreEqual(1, reader.GetInt32(1), "The sparse library's one workflow override disappeared.");
+            Assert.AreEqual(0, reader.GetInt32(2), "The sparse library acquired another workflow scalar override.");
+            Assert.AreEqual(0, reader.GetInt32(3), "The sparse library acquired additional Settings override rows.");
+        }
+
+        public Task RestoreForFollowingBrowserJourneyAsync() => RestoreAsync(connection);
+
+        public async ValueTask DisposeAsync()
+        {
+            await RestoreAsync(connection);
+            await connection.DisposeAsync();
+        }
+
+        private static async Task SeedAsync(SqlConnection connection)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT * INTO #Issue323OriginalOrganizations FROM [asap].[Organization];
+                SELECT * INTO #Issue323OriginalSystemSettings FROM [asap].[SystemSettings] WHERE [OrganizationId] = 1;
+                SELECT * INTO #Issue323OriginalPolarisSettings FROM [asap].[PolarisSettings] WHERE [OrganizationId] = 1;
+                SELECT * INTO #Issue323OriginalWorkflowSettings FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = 1;
+                SELECT * INTO #Issue323OriginalPatronSettings FROM [asap].[PatronSettings] WHERE [OrganizationId] = 1;
+                SELECT * INTO #Issue323OriginalEmailSettings FROM [asap].[EmailSettings] WHERE [OrganizationId] = 1;
+                SELECT * INTO #Issue323OriginalProviders FROM [asap].[ExternalSearchProvider] WHERE [OrganizationId] = 1;
+                SELECT * INTO #Issue323OriginalPublicationOptions FROM [asap].[PublicationOption] WHERE [OrganizationId] = 1;
+                SELECT * INTO #Issue323OriginalMaterialFormats FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1;
+                SELECT * INTO #Issue323OriginalEmailTemplates FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1;
+                SELECT * INTO #Issue323OriginalBranding FROM [asap].[Branding] WHERE [OrganizationId] = 1;
+
+                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
+                VALUES (92327, N'Closure Zero Override Library', N'CZO', 1),
+                       (92328, N'Closure Sparse Override Library', N'CSO', 1);
+                INSERT INTO [asap].[WorkflowSettings] ([OrganizationId], [SuggestionLimit], [UpdatedUtc])
+                VALUES (92328, 73, SYSUTCDATETIME());
+
+                UPDATE [asap].[SystemSettings]
+                SET [StaffApplicationUrl] = N'https://settings-poison.example.org/staff/',
+                    [LeapBibUrlPattern] = N'https://settings-poison.example.org/item/{{bibid}}',
+                    [LeapPatronUrlPattern] = N'https://settings-poison.example.org/patron/{{patron-id}}',
+                    [MaterialTypeIconUrlPattern] = N'https://settings-poison.example.org/icons/{{code}}.svg',
+                    [SystemNotEnabledMessage] = N'Closure poison participation message {{library}}',
+                    [MisconfiguredMessage] = N'Closure poison unavailable message {{library}}',
+                    [UpdatedUtc] = '2026-09-20T12:34:56'
+                WHERE [OrganizationId] = 1;
+
+                UPDATE [asap].[PolarisSettings]
+                SET [Host] = N'polaris-poison.example.org', [AccessId] = N'closure-poison-access',
+                    [StaffDomain] = N'closure.example.org', [AdminUser] = N'closure-poison-user',
+                    [WorkstationId] = 137, [SystemPolarisUserId] = 731,
+                    [OrganizationIdForRequests] = 910, [PickupOrganizationId] = 4201,
+                    [UpdatedUtc] = '2026-09-20T12:34:56'
+                WHERE [OrganizationId] = 1;
+
+                UPDATE [asap].[WorkflowSettings]
+                SET [SuggestionLimit] = 17,
+                    [SuggestionLimitMessage] = N'Closure poison suggestion limit {{next_available_date}}',
+                    [OutstandingTimeoutEnabled] = 1, [OutstandingTimeoutDays] = 61,
+                    [OutstandingTimeoutSendEmail] = 1, [HoldPickupTimeoutEnabled] = 1,
+                    [HoldPickupTimeoutDays] = 47, [PendingHoldTimeoutEnabled] = 1,
+                    [PendingHoldTimeoutDays] = 31, [AdditionalCopyTimeoutEnabled] = 1,
+                    [AdditionalCopyTimeoutDays] = 41, [AutoPromote] = 1,
+                    [CommonAuthorsEnabled] = 1, [CommonAuthorsLabel] = N'Closure poison creators',
+                    [CommonAuthorsHelp] = N'Closure poison creator help',
+                    [CommonAuthorsMessage] = N'Closure poison creator message',
+                    [AllowPatronAutoholdOptOut] = 0, [AllowAnyRegisteredCardLogin] = 1,
+                    [PatronCodeEligibilityEnabled] = 0,
+                    [PatronCodeEligibilityMessage] = N'Closure poison eligibility message',
+                    [UpdatedUtc] = '2026-09-20T12:34:56'
+                WHERE [OrganizationId] = 1;
+
+                UPDATE [asap].[PatronSettings]
+                SET [PageTitle] = N'Closure poison patron title', [BarcodeLabel] = N'Closure card label',
+                    [PinLabel] = N'Closure PIN label', [LoginPrompt] = N'Closure login prompt',
+                    [LoginNote] = N'Closure login note', [SuggestionFormNote] = N'Closure suggestion note',
+                    [NoEmailMessage] = N'Closure no-email message', [SuccessTitle] = N'Closure success title',
+                    [SuccessMessage] = N'Closure success message', [AlreadySubmittedMessage] = N'Closure duplicate message',
+                    [EbookMessage] = N'Closure ebook message', [EaudiobookMessage] = N'Closure audiobook message',
+                    [SuggestionStatusLabel] = N'Closure received',
+                    [OutstandingPurchaseStatusLabel] = N'Closure reviewing',
+                    [PendingHoldStatusLabel] = N'Closure preparing', [HoldPlacedStatusLabel] = N'Closure hold placed',
+                    [ClosedStatusLabel] = N'Closure completed', [RejectedStatusLabel] = N'Closure not selected',
+                    [HoldCompletedStatusLabel] = N'Closure hold completed',
+                    [HoldNotPickedUpStatusLabel] = N'Closure hold expired',
+                    [ManualStatusLabel] = N'Closure manual', [SilentStatusLabel] = N'Closure silent',
+                    [UpdatedUtc] = '2026-09-20T12:34:56'
+                WHERE [OrganizationId] = 1;
+
+                UPDATE [asap].[EmailSettings]
+                SET [FromAddress] = N'closure-system@example.org', [FromName] = N'Closure System Sender',
+                    [UpdatedUtc] = '2026-09-20T12:34:56'
+                WHERE [OrganizationId] = 1;
+
+                UPDATE [asap].[ExternalSearchProvider]
+                SET [Label] = CASE [ProviderKey]
+                        WHEN N'external_search_1' THEN N'Closure Catalog One'
+                        WHEN N'external_search_2' THEN N'Closure Catalog Two'
+                        WHEN N'external_search_3' THEN N'Closure Catalog Three'
+                        ELSE [Label] END,
+                    [UrlTemplate] = CASE [ProviderKey]
+                        WHEN N'external_search_1' THEN N'https://closure-one.example.org/?q={{title}}'
+                        WHEN N'external_search_2' THEN N'https://closure-two.example.org/?q={{title}}'
+                        WHEN N'external_search_3' THEN N'https://closure-three.example.org/?q={{title}}'
+                        ELSE [UrlTemplate] END
+                WHERE [OrganizationId] = 1 AND [ProviderKey] IN
+                    (N'external_search_1', N'external_search_2', N'external_search_3');
+
+                UPDATE [asap].[PublicationOption]
+                SET [Label] = N'Closure before publication'
+                WHERE [OrganizationId] = 1 AND [OptionKey] = N'already_published';
+                UPDATE [asap].[MaterialFormat]
+                SET [Label] = N'Closure system book format', [UpdatedUtc] = '2026-09-20T12:34:56'
+                WHERE [OwnerOrganizationId] = 1 AND [Code] = N'book';
+                UPDATE [asap].[EmailTemplate]
+                SET [DisplayName] = N'Closure customized submission',
+                    [SubjectTemplate] = N'Closure request received: {{title}}',
+                    [BodyTemplate] = N'Closure template body for {{name}} and {{title}}'
+                WHERE [OrganizationId] = 1 AND [TemplateKey] = N'suggestion_submitted';
+
+                IF EXISTS (SELECT 1 FROM [asap].[Branding] WHERE [OrganizationId] = 1)
+                BEGIN
+                    UPDATE [asap].[Branding]
+                    SET [LogoAltText] = N'Closure system logo alt text', [UpdatedUtc] = '2026-09-20T12:34:56'
+                    WHERE [OrganizationId] = 1;
+                END;
+                ELSE
+                BEGIN
+                    INSERT INTO [asap].[Branding] ([OrganizationId], [LogoAltText], [UpdatedUtc])
+                    VALUES (1, N'Closure system logo alt text', '2026-09-20T12:34:56');
+                END;
+                """;
+            await command.ExecuteNonQueryAsync();
+        }
+
+        private static async Task<Dictionary<string, string>> CaptureSqlStateAsync(SqlConnection connection)
+        {
+            var queries = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Organization"] = "SELECT * FROM [asap].[Organization] ORDER BY [Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["SystemSettings"] = "SELECT * FROM [asap].[SystemSettings] WHERE [OrganizationId] = 1 FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["PolarisSettings"] = "SELECT [OrganizationId], [Host], [AccessId], CASE WHEN [ProtectedApiKey] IS NULL THEN 0 ELSE 1 END AS [HasApiKey], [StaffDomain], [AdminUser], CASE WHEN [ProtectedAdminPassword] IS NULL THEN 0 ELSE 1 END AS [HasAdminPassword], [WorkstationId], [SystemPolarisUserId], [OrganizationIdForRequests], [PickupOrganizationId], [UpdatedUtc], [RowVersion] FROM [asap].[PolarisSettings] WHERE [OrganizationId] = 1 FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["WorkflowSettings"] = "SELECT * FROM [asap].[WorkflowSettings] WHERE [OrganizationId] IN (1, 92327, 92328) ORDER BY [OrganizationId] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["PatronSettings"] = "SELECT * FROM [asap].[PatronSettings] WHERE [OrganizationId] IN (1, 92327, 92328) ORDER BY [OrganizationId] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["EmailSettings"] = "SELECT [OrganizationId], CASE WHEN [ProtectedServerToken] IS NULL THEN 0 ELSE 1 END AS [HasPostmarkToken], [FromAddress], [FromName], [UpdatedUtc], [RowVersion] FROM [asap].[EmailSettings] WHERE [OrganizationId] IN (1, 92327, 92328) ORDER BY [OrganizationId] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["PatronEmbedAllowedOrigin"] = "SELECT * FROM [asap].[PatronEmbedAllowedOrigin] WHERE [OrganizationId] = 1 ORDER BY [Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["PublicationOptionSet"] = "SELECT * FROM [asap].[PublicationOptionSet] WHERE [OrganizationId] IN (1, 92327, 92328) ORDER BY [OrganizationId] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["PublicationOption"] = "SELECT * FROM [asap].[PublicationOption] WHERE [OrganizationId] IN (1, 92327, 92328) ORDER BY [Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["CommonCreatorSet"] = "SELECT * FROM [asap].[CommonCreatorSet] WHERE [OrganizationId] IN (1, 92327, 92328) ORDER BY [OrganizationId] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["CommonCreatorTerm"] = "SELECT * FROM [asap].[CommonCreatorTerm] WHERE [OrganizationId] IN (1, 92327, 92328) ORDER BY [Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["PatronCodeEligibilitySet"] = "SELECT * FROM [asap].[PatronCodeEligibilitySet] WHERE [OrganizationId] IN (1, 92327, 92328) ORDER BY [OrganizationId] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["PatronCodeEligibilityMember"] = "SELECT * FROM [asap].[PatronCodeEligibilityMember] WHERE [OrganizationId] IN (1, 92327, 92328) ORDER BY [OrganizationId], [PatronCodeId] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["ExternalSearchProvider"] = "SELECT * FROM [asap].[ExternalSearchProvider] WHERE [OrganizationId] = 1 ORDER BY [Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["ExternalSearchProviderOverride"] = "SELECT * FROM [asap].[ExternalSearchProviderOverride] WHERE [LibraryOrganizationId] IN (92327, 92328) ORDER BY [LibraryOrganizationId], [ExternalSearchProviderId] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["MaterialFormat"] = "SELECT * FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] IN (1, 92327, 92328) ORDER BY [Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["MaterialFormatOverride"] = "SELECT * FROM [asap].[MaterialFormatOverride] WHERE [LibraryOrganizationId] IN (92327, 92328) ORDER BY [Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["MaterialFormatCustomFieldRule"] = "SELECT * FROM [asap].[MaterialFormatCustomFieldRule] WHERE [LibraryOrganizationId] IN (92327, 92328) ORDER BY [Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["PatronCustomField"] = "SELECT * FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] IN (92327, 92328) ORDER BY [Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["PatronCustomFieldOption"] = "SELECT optionRow.* FROM [asap].[PatronCustomFieldOption] optionRow JOIN [asap].[PatronCustomField] fieldRow ON fieldRow.[Id] = optionRow.[PatronCustomFieldId] WHERE fieldRow.[LibraryOrganizationId] IN (92327, 92328) ORDER BY optionRow.[Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["EmailTemplate"] = "SELECT * FROM [asap].[EmailTemplate] WHERE [OrganizationId] IN (1, 92327, 92328) ORDER BY [OrganizationId], [SortOrder], [Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["FormatAutoClaimRule"] = "SELECT * FROM [asap].[FormatAutoClaimRule] WHERE [LibraryOrganizationId] IN (92327, 92328) ORDER BY [Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["Branding"] = "SELECT [OrganizationId], CASE WHEN [LogoData] IS NULL THEN NULL ELSE CONVERT(varchar(64), HASHBYTES('SHA2_256', [LogoData]), 2) END AS [LogoSha256], [LogoContentType], [LogoFileName], [LogoAltText], [UpdatedUtc], [RowVersion] FROM [asap].[Branding] WHERE [OrganizationId] IN (1, 92327, 92328) ORDER BY [OrganizationId] FOR JSON PATH, INCLUDE_NULL_VALUES;"
+            };
+            var snapshots = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var (name, query) in queries)
+            {
+                await using var command = connection.CreateCommand();
+                command.CommandText = query;
+                await using var reader = await command.ExecuteReaderAsync();
+                var chunks = new List<string>();
+                while (await reader.ReadAsync())
+                {
+                    chunks.Add(reader.GetString(0));
+                }
+
+                snapshots.Add(name, string.Concat(chunks));
+            }
+
+            return snapshots;
+        }
+
+        private static async Task RestoreAsync(SqlConnection connection)
+        {
+            if (connection.State != System.Data.ConnectionState.Open)
+            {
+                return;
+            }
+
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                DELETE FROM [asap].[MaterialFormatCustomFieldRule] WHERE [LibraryOrganizationId] IN (92327, 92328);
+                DELETE FROM [asap].[FormatAutoClaimRule] WHERE [LibraryOrganizationId] IN (92327, 92328);
+                DELETE FROM [asap].[MaterialFormatOverride] WHERE [LibraryOrganizationId] IN (92327, 92328);
+                DELETE optionRow FROM [asap].[PatronCustomFieldOption] optionRow
+                JOIN [asap].[PatronCustomField] fieldRow ON fieldRow.[Id] = optionRow.[PatronCustomFieldId]
+                WHERE fieldRow.[LibraryOrganizationId] IN (92327, 92328);
+                DELETE FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] IN (92327, 92328);
+                DELETE FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] IN (92327, 92328);
+                DELETE FROM [asap].[ExternalSearchProviderOverride] WHERE [LibraryOrganizationId] IN (92327, 92328);
+                DELETE FROM [asap].[EmailTemplate] WHERE [OrganizationId] IN (92327, 92328);
+                DELETE FROM [asap].[Branding] WHERE [OrganizationId] IN (92327, 92328);
+                DELETE FROM [asap].[EmailSettings] WHERE [OrganizationId] IN (92327, 92328);
+                DELETE FROM [asap].[WorkflowSettings] WHERE [OrganizationId] IN (92327, 92328);
+                DELETE FROM [asap].[PatronSettings] WHERE [OrganizationId] IN (92327, 92328);
+                DELETE FROM [asap].[PublicationOptionSet] WHERE [OrganizationId] IN (92327, 92328);
+                DELETE FROM [asap].[CommonCreatorSet] WHERE [OrganizationId] IN (92327, 92328);
+                DELETE FROM [asap].[PatronCodeEligibilitySet] WHERE [OrganizationId] IN (92327, 92328);
+                DELETE FROM [asap].[AdministrativeAudit] WHERE [OrganizationId] IN (92327, 92328);
+                DELETE FROM [asap].[Organization] WHERE [Id] IN (92327, 92328);
+
+                UPDATE target
+                SET [StaffApplicationUrl] = originalRow.[StaffApplicationUrl],
+                    [LeapBibUrlPattern] = originalRow.[LeapBibUrlPattern],
+                    [LeapPatronUrlPattern] = originalRow.[LeapPatronUrlPattern],
+                    [MaterialTypeIconUrlPattern] = originalRow.[MaterialTypeIconUrlPattern],
+                    [SystemNotEnabledMessage] = originalRow.[SystemNotEnabledMessage],
+                    [MisconfiguredMessage] = originalRow.[MisconfiguredMessage],
+                    [UpdatedUtc] = originalRow.[UpdatedUtc]
+                FROM [asap].[SystemSettings] target CROSS JOIN #Issue323OriginalSystemSettings originalRow;
+                UPDATE target
+                SET [Host] = originalRow.[Host], [AccessId] = originalRow.[AccessId],
+                    [ProtectedApiKey] = originalRow.[ProtectedApiKey], [StaffDomain] = originalRow.[StaffDomain],
+                    [AdminUser] = originalRow.[AdminUser], [ProtectedAdminPassword] = originalRow.[ProtectedAdminPassword],
+                    [WorkstationId] = originalRow.[WorkstationId],
+                    [SystemPolarisUserId] = originalRow.[SystemPolarisUserId],
+                    [OrganizationIdForRequests] = originalRow.[OrganizationIdForRequests],
+                    [PickupOrganizationId] = originalRow.[PickupOrganizationId], [UpdatedUtc] = originalRow.[UpdatedUtc]
+                FROM [asap].[PolarisSettings] target CROSS JOIN #Issue323OriginalPolarisSettings originalRow;
+                UPDATE target
+                SET [SuggestionLimit] = originalRow.[SuggestionLimit],
+                    [SuggestionLimitMessage] = originalRow.[SuggestionLimitMessage],
+                    [OutstandingTimeoutEnabled] = originalRow.[OutstandingTimeoutEnabled],
+                    [OutstandingTimeoutDays] = originalRow.[OutstandingTimeoutDays],
+                    [OutstandingTimeoutSendEmail] = originalRow.[OutstandingTimeoutSendEmail],
+                    [OutstandingTimeoutRejectionTemplateId] = originalRow.[OutstandingTimeoutRejectionTemplateId],
+                    [HoldPickupTimeoutEnabled] = originalRow.[HoldPickupTimeoutEnabled],
+                    [HoldPickupTimeoutDays] = originalRow.[HoldPickupTimeoutDays],
+                    [PendingHoldTimeoutEnabled] = originalRow.[PendingHoldTimeoutEnabled],
+                    [PendingHoldTimeoutDays] = originalRow.[PendingHoldTimeoutDays],
+                    [AdditionalCopyTimeoutEnabled] = originalRow.[AdditionalCopyTimeoutEnabled],
+                    [AdditionalCopyTimeoutDays] = originalRow.[AdditionalCopyTimeoutDays],
+                    [AutoPromote] = originalRow.[AutoPromote], [CommonAuthorsEnabled] = originalRow.[CommonAuthorsEnabled],
+                    [CommonAuthorsLabel] = originalRow.[CommonAuthorsLabel], [CommonAuthorsHelp] = originalRow.[CommonAuthorsHelp],
+                    [CommonAuthorsMessage] = originalRow.[CommonAuthorsMessage],
+                    [AllowPatronAutoholdOptOut] = originalRow.[AllowPatronAutoholdOptOut],
+                    [AllowAnyRegisteredCardLogin] = originalRow.[AllowAnyRegisteredCardLogin],
+                    [PatronCodeEligibilityEnabled] = originalRow.[PatronCodeEligibilityEnabled],
+                    [PatronCodeEligibilityMessage] = originalRow.[PatronCodeEligibilityMessage],
+                    [UpdatedUtc] = originalRow.[UpdatedUtc]
+                FROM [asap].[WorkflowSettings] target CROSS JOIN #Issue323OriginalWorkflowSettings originalRow;
+                UPDATE target
+                SET [PageTitle] = originalRow.[PageTitle], [BarcodeLabel] = originalRow.[BarcodeLabel],
+                    [PinLabel] = originalRow.[PinLabel], [LoginPrompt] = originalRow.[LoginPrompt],
+                    [LoginNote] = originalRow.[LoginNote], [SuggestionFormNote] = originalRow.[SuggestionFormNote],
+                    [NoEmailMessage] = originalRow.[NoEmailMessage], [SuccessTitle] = originalRow.[SuccessTitle],
+                    [SuccessMessage] = originalRow.[SuccessMessage], [AlreadySubmittedMessage] = originalRow.[AlreadySubmittedMessage],
+                    [EbookMessage] = originalRow.[EbookMessage], [EaudiobookMessage] = originalRow.[EaudiobookMessage],
+                    [SuggestionStatusLabel] = originalRow.[SuggestionStatusLabel],
+                    [OutstandingPurchaseStatusLabel] = originalRow.[OutstandingPurchaseStatusLabel],
+                    [PendingHoldStatusLabel] = originalRow.[PendingHoldStatusLabel],
+                    [HoldPlacedStatusLabel] = originalRow.[HoldPlacedStatusLabel],
+                    [ClosedStatusLabel] = originalRow.[ClosedStatusLabel], [RejectedStatusLabel] = originalRow.[RejectedStatusLabel],
+                    [HoldCompletedStatusLabel] = originalRow.[HoldCompletedStatusLabel],
+                    [HoldNotPickedUpStatusLabel] = originalRow.[HoldNotPickedUpStatusLabel],
+                    [ManualStatusLabel] = originalRow.[ManualStatusLabel], [SilentStatusLabel] = originalRow.[SilentStatusLabel],
+                    [UpdatedUtc] = originalRow.[UpdatedUtc]
+                FROM [asap].[PatronSettings] target CROSS JOIN #Issue323OriginalPatronSettings originalRow;
+                UPDATE target
+                SET [ProtectedServerToken] = originalRow.[ProtectedServerToken],
+                    [FromAddress] = originalRow.[FromAddress], [FromName] = originalRow.[FromName],
+                    [UpdatedUtc] = originalRow.[UpdatedUtc]
+                FROM [asap].[EmailSettings] target CROSS JOIN #Issue323OriginalEmailSettings originalRow;
+                UPDATE target
+                SET [ProviderKey] = originalRow.[ProviderKey], [IsEnabled] = originalRow.[IsEnabled],
+                    [Label] = originalRow.[Label], [UrlTemplate] = originalRow.[UrlTemplate],
+                    [SortOrder] = originalRow.[SortOrder]
+                FROM [asap].[ExternalSearchProvider] target
+                JOIN #Issue323OriginalProviders originalRow ON originalRow.[Id] = target.[Id];
+                UPDATE target
+                SET [OptionKey] = originalRow.[OptionKey], [Label] = originalRow.[Label],
+                    [IsEnabled] = originalRow.[IsEnabled], [SortOrder] = originalRow.[SortOrder]
+                FROM [asap].[PublicationOption] target
+                JOIN #Issue323OriginalPublicationOptions originalRow ON originalRow.[Id] = target.[Id];
+                UPDATE target
+                SET [Label] = originalRow.[Label], [SortOrder] = originalRow.[SortOrder],
+                    [IsEnabled] = originalRow.[IsEnabled], [MessageBehavior] = originalRow.[MessageBehavior],
+                    [Message] = originalRow.[Message], [TitleMode] = originalRow.[TitleMode],
+                    [TitleLabel] = originalRow.[TitleLabel], [AuthorMode] = originalRow.[AuthorMode],
+                    [AuthorLabel] = originalRow.[AuthorLabel], [IdentifierMode] = originalRow.[IdentifierMode],
+                    [IdentifierLabel] = originalRow.[IdentifierLabel], [PublicationMode] = originalRow.[PublicationMode],
+                    [PublicationLabel] = originalRow.[PublicationLabel], [CreatedUtc] = originalRow.[CreatedUtc],
+                    [UpdatedUtc] = originalRow.[UpdatedUtc]
+                FROM [asap].[MaterialFormat] target
+                JOIN #Issue323OriginalMaterialFormats originalRow ON originalRow.[Id] = target.[Id];
+                UPDATE target
+                SET [TemplateKey] = originalRow.[TemplateKey], [SourceTemplateId] = originalRow.[SourceTemplateId],
+                    [DisplayName] = originalRow.[DisplayName], [SubjectTemplate] = originalRow.[SubjectTemplate],
+                    [BodyTemplate] = originalRow.[BodyTemplate], [IsHidden] = originalRow.[IsHidden],
+                    [IsCustom] = originalRow.[IsCustom], [SortOrder] = originalRow.[SortOrder]
+                FROM [asap].[EmailTemplate] target
+                JOIN #Issue323OriginalEmailTemplates originalRow ON originalRow.[Id] = target.[Id];
+
+                IF EXISTS (SELECT 1 FROM #Issue323OriginalBranding)
+                BEGIN
+                    UPDATE target
+                    SET [LogoData] = originalRow.[LogoData], [LogoContentType] = originalRow.[LogoContentType],
+                        [LogoFileName] = originalRow.[LogoFileName], [LogoAltText] = originalRow.[LogoAltText],
+                        [UpdatedUtc] = originalRow.[UpdatedUtc]
+                    FROM [asap].[Branding] target CROSS JOIN #Issue323OriginalBranding originalRow;
+                END;
+                ELSE
+                BEGIN
+                    DELETE FROM [asap].[Branding] WHERE [OrganizationId] = 1;
+                END;
+
+                UPDATE target
+                SET [DisplayName] = originalRow.[DisplayName], [Abbreviation] = originalRow.[Abbreviation],
+                    [IsActive] = originalRow.[IsActive], [LastSyncedUtc] = originalRow.[LastSyncedUtc]
+                FROM [asap].[Organization] target JOIN #Issue323OriginalOrganizations originalRow
+                    ON originalRow.[Id] = target.[Id];
+                """;
+            await command.ExecuteNonQueryAsync();
+        }
     }
 
     private static async Task<SeededStaffBrowserState> SeedStaffBrowserStateAsync(

@@ -131,6 +131,11 @@ function normalizeTemplate(item, index) {
     displayName: value.displayName ?? null,
     subject: value.subject ?? value.subjectTemplate ?? null,
     body: value.body ?? value.bodyTemplate ?? null,
+    name: value.name ?? value.displayName ?? '',
+    nameBaseline: value.nameBaseline ?? value.displayName ?? value.name ?? '',
+    loadedSubject: value.loadedSubject ?? value.subject ?? value.subjectTemplate ?? null,
+    loadedBody: value.loadedBody ?? value.body ?? value.bodyTemplate ?? null,
+    loadedName: value.loadedName ?? value.displayName ?? value.name ?? '',
     enabled: value.enabled !== false && value.isHidden !== true,
     isCustom: value.isCustom === true || value.custom === true,
     sortOrder: value.sortOrder ?? (index + 1) * 10
@@ -159,6 +164,11 @@ function mapTemplates(settings, isSystem, contextOrgId) {
       sourceTemplateId: system.id,
       templateKey: system.templateKey,
       displayName: current.displayName ?? system.displayName,
+      name: current.displayName ?? system.displayName ?? '',
+      nameBaseline: current.displayName ?? system.displayName ?? '',
+      loadedSubject: current.subject ?? system.subject,
+      loadedBody: current.body ?? system.body,
+      loadedName: current.displayName ?? system.displayName ?? '',
       subject: current.subject ?? system.subject,
       body: current.body ?? system.body,
       enabled: system.enabled && (!override || override.enabled),
@@ -245,7 +255,7 @@ export function buildLegacySettingsFormModel(settings, contextOrgId = 'system') 
 
   const workflow = {
     ...(isSystem
-      ? (stored.workflow || configuredSystem.workflow || settings.workflow || {})
+      ? { ...(settings.workflow || {}), ...(stored.workflow || {}), ...(configuredSystem.workflow || {}), ...(effective.workflow || {}) }
       : (effective.workflow || settings.workflow || stored.workflow || {}))
   };
 
@@ -312,13 +322,17 @@ export function buildLegacySettingsFormModel(settings, contextOrgId = 'system') 
     formatRules,
     additionalFieldDefinitions: authoritativeCustomFields || []
   };
+  if (isSystem) {
+    uiText.systemNotEnabledMessage = stored.systemSettings?.systemNotEnabledMessage ?? uiText.systemNotEnabledMessage;
+    uiText.misconfiguredMessage = stored.systemSettings?.misconfiguredMessage ?? uiText.misconfiguredMessage;
+  }
 
   const autoClaimRules = mapAutoClaimRules(stored.autoClaimRules ?? settings.formatClaimRules, formats);
   const autoClaimStaff = mapAutoClaimStaff(settings.autoClaimStaff, contextOrgId);
   const templateState = mapTemplates(settings, isSystem, contextOrgId);
-  const systemWorkflow = mergeObjects(configuredSystem.workflow, stored.workflow, effective.workflow, settings.workflow);
-  const systemPatron = mergeObjects(configuredSystem.patron, stored.patron, settings.ui_text, effective);
-  const systemEmail = mergeObjects(configuredSystem.email, stored.email, settings.emails, effective.email);
+  const systemWorkflow = mergeObjects(effective.workflow, settings.workflow, stored.workflow, configuredSystem.workflow);
+  const systemPatron = mergeObjects(settings.ui_text, effective, stored.patron, configuredSystem.patron);
+  const systemEmail = mergeObjects(settings.emails, effective.email, stored.email, configuredSystem.email);
   const systemSets = {
     commonCreators: scopedSnapshot(configuredSystem.commonCreators, null, true, stored.commonCreators ?? effective.commonCreators),
     allowedPatronCodeIds: scopedSnapshot(configuredSystem.allowedPatronCodeIds, null, true, stored.allowedPatronCodeIds ?? effective.allowedPatronCodeIds),

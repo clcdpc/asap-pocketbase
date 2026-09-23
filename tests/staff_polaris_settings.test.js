@@ -5,6 +5,29 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const { JSDOM } = require('jsdom');
 
+function assertBackendShape(expected, actual, path = '$') {
+  if (Array.isArray(expected)) {
+    assert.ok(Array.isArray(actual), `${path} must be an array`);
+    if (expected.length > 0 && actual.length > 0 && expected[0] && typeof expected[0] === 'object') {
+      assertBackendShape(expected[0], actual[0], `${path}[0]`);
+    }
+    return;
+  }
+  if (expected && typeof expected === 'object') {
+    assert.ok(actual && typeof actual === 'object' && !Array.isArray(actual), `${path} must be an object`);
+    assert.deepStrictEqual(Object.keys(actual).sort(), Object.keys(expected).sort(),
+      `${path} must contain exactly the current .NET Settings DTO properties`);
+    for (const [key, value] of Object.entries(expected)) {
+      assert.ok(Object.hasOwn(actual, key), `${path}.${key} must be returned by the current .NET Settings DTO`);
+      assertBackendShape(value, actual[key], `${path}.${key}`);
+    }
+    return;
+  }
+  if (expected !== null && actual !== null) {
+    assert.strictEqual(typeof actual, typeof expected, `${path} must retain the current .NET Settings DTO value kind`);
+  }
+}
+
 (async () => {
   const repositoryRoot = path.join(__dirname, '..');
   const frontendRoot = path.join(repositoryRoot, 'src', 'Asap.Web', 'Frontend');
@@ -34,9 +57,13 @@ const { JSDOM } = require('jsdom');
     const fields = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'polaris-fields.js')).href);
     const sequencing = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'polaris-test.js')).href);
     const state = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'state.js')).href);
+    const formatRules = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'format-rules.js')).href);
     const formPopulation = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'form-population.js')).href);
+    const settingsTemplates = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings-templates.js')).href);
     const serializer = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'serialize-save.js')).href);
     const saveController = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'save-controller.js')).href);
+    const settingsRefresh = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'refresh.js')).href);
+    const settingsLoader = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'loader.js')).href);
     const patronCodes = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'patron-codes.js')).href);
     const http = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'http.js')).href);
     state.setStaffSession({
@@ -45,6 +72,14 @@ const { JSDOM } = require('jsdom');
       antiforgeryToken: 'test-antiforgery-token',
       staff: { role: 'super_admin', userPrincipalName: 'admin@example.org' }
     });
+    const explicitEmptyEcontentMessages = formatRules.normalizePatronFormatRules({
+      ebook: { messageBehavior: 'ebookMessage', message: '' },
+      eaudiobook: { messageBehavior: 'eaudiobookMessage', message: null }
+    });
+    assert.strictEqual(explicitEmptyEcontentMessages.ebook.message, '',
+      'an explicit empty backend message must not be replaced by a shipped eBook default');
+    assert.strictEqual(explicitEmptyEcontentMessages.eaudiobook.message, '',
+      'an explicit null backend message must not be replaced by a shipped eAudiobook default');
     const persisted = {
       host: 'https://polaris.example.org',
       accessId: 'access-42',
@@ -71,7 +106,7 @@ const { JSDOM } = require('jsdom');
       outstandingTimeoutEnabled: true,
       outstandingTimeoutDays: 61,
       outstandingTimeoutSendEmail: true,
-      outstandingTimeoutRejectionTemplateId: '917',
+      outstandingTimeoutRejectionTemplateId: '906',
       holdPickupTimeoutEnabled: true,
       holdPickupTimeoutDays: 27,
       pendingHoldTimeoutEnabled: true,
@@ -139,50 +174,126 @@ const { JSDOM } = require('jsdom');
       patronCodeEligibilityEnabled: false,
       patronCodeEligibilityMessage: 'Compatibility patron-code message'
     };
+    const canonicalLibraryResponse = JSON.parse(fs.readFileSync(
+      path.join(repositoryRoot, 'tests', 'fixtures', 'settings', 'canonical-library-settings-response.json'), 'utf8'));
+    const canonicalSystemResponse = JSON.parse(fs.readFileSync(
+      path.join(repositoryRoot, 'tests', 'fixtures', 'settings', 'canonical-system-settings-response.json'), 'utf8'));
+    const systemTemplateRows = canonicalLibraryResponse.stored.configuredSystem.templates;
+    const systemPatron = canonicalLibraryResponse.stored.configuredSystem.patron;
+    const systemEmail = { fromAddress: 'suggestions@example.org', fromName: 'System Suggestions', hasPostmarkToken: true, version: 'AQIDBAUGBg0=' };
+    const systemBranding = canonicalLibraryResponse.stored.configuredSystem.branding;
+    const systemPublicationOptions = [
+      { id: 'forthcoming', label: 'Forthcoming', enabled: true, sortOrder: 17 },
+      { id: 'backlist', label: 'Backlist', enabled: false, sortOrder: 41 }
+    ];
+    const systemPublicationOptionKeys = systemPublicationOptions.map(option => option.id);
+    const systemEffectiveFormats = persistedFormats.map(format => ({
+      id: format.id, code: format.code, label: format.label, sortOrder: format.sortOrder,
+      isEnabled: format.isEnabled, messageBehavior: format.messageBehavior, message: format.message,
+      title: { mode: format.titleMode, label: format.titleLabel },
+      author: { mode: format.authorMode, label: format.authorLabel },
+      identifier: { mode: format.identifierMode, label: format.identifierLabel },
+      publication: { mode: format.publicationMode, label: format.publicationLabel },
+      customFields: {}
+    }));
     const systemSettingsResponse = {
+      orgId: 'system',
+      organization: { id: 1, name: 'System Defaults', abbreviation: 'SYS', active: true, version: 'AQIDBAUGBgE=' },
+      isOverride: false,
+      hasOverrides: false,
+      version: 'system-settings-version',
       stored: {
-        systemSettings: currentSystemSettings,
-        polaris: persisted,
-        workflow: persistedWorkflow,
+        systemSettings: { ...currentSystemSettings,
+          systemNotEnabledMessage: 'Service not enabled for this system.',
+          misconfiguredMessage: 'System configuration needs attention.', version: 'AQIDBAUGBgI=' },
+        polaris: { ...persisted, version: 'AQIDBAUGBgM=' },
+        configuredSystem: {
+          workflow: { ...persistedWorkflow, version: 'AQIDBAUGBgQ=' },
+          patron: systemPatron,
+          email: systemEmail,
+          publicationOptions: { exists: true, values: systemPublicationOptions },
+          commonCreators: { exists: true, values: persistedCommonCreators.map((value, index) => ({ value, sortOrder: (index + 1) * 10 })) },
+          allowedPatronCodeIds: { exists: true, values: persistedAllowedPatronCodeIds },
+          providers: persistedProviders.map(({ sortOrder, ...provider }) => ({ kind: 'system', ...provider, version: 'AQIDBAUGBgU=' })),
+          formats: persistedFormats.map(format => ({ kind: 'system', materialFormatId: null, ...format, version: 'AQIDBAUGBgY=' })),
+          templates: systemTemplateRows,
+          branding: systemBranding
+        },
+        libraryOverride: null,
+        workflow: { ...persistedWorkflow, version: 'AQIDBAUGBgQ=' },
+        patron: systemPatron,
+        email: systemEmail,
+        origins: currentSystemSettings.patronEmbedAllowedOrigins,
+        publicationOptions: systemPublicationOptions.map(option => ({ organizationId: 1, ...option })),
         commonCreators: persistedCommonCreators,
         allowedPatronCodeIds: persistedAllowedPatronCodeIds,
-        providers: persistedProviders,
-        formats: persistedFormats,
+        providers: persistedProviders.map(provider => ({
+          key: provider.key, id: provider.id, isEnabled: provider.isEnabled, label: provider.label,
+          urlTemplate: provider.urlTemplate,
+          system: { isEnabled: provider.isEnabled, label: provider.label, urlTemplate: provider.urlTemplate },
+          overridden: false
+        })),
+        formats: persistedFormats.map(format => ({ ...format, overridden: false, version: 'AQIDBAUGBgc=' })),
         customFields: [],
-        autoClaimRules: []
+        templates: systemTemplateRows,
+        autoClaimRules: [],
+        branding: systemBranding
       },
-      emails: {
-        rejection_templates: [{ id: '917', name: 'Stored timeout rejection' }]
-      },
+      emails: { fromAddress: systemEmail.fromAddress, fromName: systemEmail.fromName,
+        hasPostmarkToken: systemEmail.hasPostmarkToken, templates: systemTemplateRows,
+        submissionTemplate: {
+          templateKey: 'suggestion_submitted',
+          subjectTemplate: systemTemplateRows.find(template => template.templateKey === 'suggestion_submitted').subject,
+          bodyTemplate: systemTemplateRows.find(template => template.templateKey === 'suggestion_submitted').body
+        } },
       ui_text: {
-        publicationOptions: [
-          { id: 'forthcoming', label: 'Forthcoming', enabled: true, sortOrder: 17 },
-          { id: 'backlist', label: 'Backlist', enabled: false, sortOrder: 41 }
-        ]
+        ...canonicalSystemResponse.ui_text,
+        pageTitle: 'System patron portal custom title',
+        barcodeLabel: systemPatron.barcodeLabel,
+        pinLabel: systemPatron.pinLabel,
+        loginPrompt: systemPatron.loginPrompt,
+        loginNote: systemPatron.loginNote,
+        suggestionFormNote: systemPatron.suggestionFormNote,
+        noEmailMessage: systemPatron.noEmailMessage,
+        successTitle: systemPatron.successTitle,
+        successMessage: systemPatron.successMessage,
+        alreadySubmittedMessage: systemPatron.alreadySubmittedMessage,
+        duplicateStatusLabels: {
+          ...canonicalSystemResponse.ui_text.duplicateStatusLabels,
+          suggestion: 'Received at the system desk',
+          'Silently Closed': 'System staff reviewed this request'
+        },
+        ebookMessage: systemPatron.ebookMessage,
+        eaudiobookMessage: systemPatron.eaudiobookMessage,
+        systemNotEnabledMessage: 'Service not enabled for this system.',
+        misconfiguredMessage: 'System configuration needs attention.',
+        publicationOptions: systemPublicationOptionKeys
       },
       effective: {
+        ...canonicalLibraryResponse.effective,
+        organizationId: 1,
+        organizationName: 'System Defaults',
+        isActive: true,
+        duplicateStatusLabels: canonicalSystemResponse.effective.duplicateStatusLabels,
         workflow: persistedWorkflow,
         commonCreators: persistedCommonCreators,
         allowedPatronCodeIds: persistedAllowedPatronCodeIds,
         externalSearchProviders: persistedProviders,
-        publicationOptions: [
-          { id: 'forthcoming', label: 'Forthcoming', enabled: true, sortOrder: 17 },
-          { id: 'backlist', label: 'Backlist', enabled: false, sortOrder: 41 }
-        ],
-        formats: persistedFormats.map(format => ({
-          id: format.id, code: format.code, label: format.label, sortOrder: format.sortOrder,
-          isEnabled: format.isEnabled, messageBehavior: format.messageBehavior, message: format.message,
-          title: { mode: format.titleMode, label: format.titleLabel },
-          author: { mode: format.authorMode, label: format.authorLabel },
-          identifier: { mode: format.identifierMode, label: format.identifierLabel },
-          publication: { mode: format.publicationMode, label: format.publicationLabel },
-          customFields: {}
-        })),
-        customFields: []
+        publicationOptions: systemPublicationOptionKeys,
+        formats: systemEffectiveFormats,
+        customFields: [],
+        email: { fromAddress: systemEmail.fromAddress, fromName: systemEmail.fromName, hasServerToken: true },
+        submissionTemplate: { templateKey: 'suggestion_submitted', subjectTemplate: systemTemplateRows[0].subject,
+          bodyTemplate: systemTemplateRows[0].body },
+        hasLogo: systemBranding.hasLogo,
+        logoAltText: systemBranding.altText
       },
       autoClaimStaff: [],
-      workflow: compatibilityWorkflow
+      workflow: { ...compatibilityWorkflow, system: true },
+      formatClaimRules: [],
+      originsForEditor: currentSystemSettings.patronEmbedAllowedOrigins
     };
+    assertBackendShape(canonicalSystemResponse, systemSettingsResponse, '$systemSettings');
     global.fetch = async (request, options = {}) => {
       const url = String(request);
       if (url.startsWith('/api/asap/staff/polaris/patron-codes')) {
@@ -225,7 +336,9 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(document.getElementById('outstanding-timeout-enabled').checked, true);
     assert.strictEqual(document.getElementById('outstanding-timeout-days').value, '61');
     assert.strictEqual(document.getElementById('outstanding-timeout-send-email').checked, true);
-    assert.strictEqual(document.getElementById('outstanding-timeout-rejection-template-id').value, '917');
+    assert.strictEqual(document.getElementById('outstanding-timeout-rejection-template-id').value, '906');
+    assert.strictEqual(document.getElementById('email-submit-subject').value, systemTemplateRows[0].subject,
+      'the system form must display the customized current .NET standard-template DTO value');
     assert.strictEqual(document.getElementById('hold-pickup-timeout-enabled').checked, true);
     assert.strictEqual(document.getElementById('hold-pickup-timeout-days').value, '27');
     assert.strictEqual(document.getElementById('pending-hold-timeout-enabled').checked, true);
@@ -264,6 +377,8 @@ const { JSDOM } = require('jsdom');
       ['2', '4']);
     assert.strictEqual(document.getElementById('lib-p-1'), null,
       'the system organization is not a selectable participating library');
+    assert.strictEqual(document.querySelectorAll('#format-settings-container .btn-remove-format').length, 0,
+      'system-owned formats must not expose the destructive custom-format removal control');
 
     fields.populatePolarisSettingsForm(persisted);
     assert.strictEqual(document.getElementById('polaris-api-key').value, '');
@@ -297,36 +412,99 @@ const { JSDOM } = require('jsdom');
     }
 
     const workflowPayload = serializer.buildSettingsPayload();
-    for (const [field, expected] of Object.entries(persistedWorkflow)) {
-      assert.strictEqual(workflowPayload[field], expected, `${field} must serialize from stored.workflow`);
+    assert.strictEqual(Object.hasOwn(workflowPayload.emails, 'suggestion_submitted'), false,
+      'an unchanged customized backend template must be omitted from a system no-edit save');
+    for (const field of Object.keys(persistedWorkflow)) {
+      assert.strictEqual(Object.hasOwn(workflowPayload, field), false,
+        `unchanged ${field} must be omitted from a system no-edit save`);
     }
-    assert.strictEqual(workflowPayload.commonAuthorsList, persistedCommonCreators.join('\n'));
-    assert.deepStrictEqual(workflowPayload.allowedPatronCodeIds, persistedAllowedPatronCodeIds);
+    assert.strictEqual(Object.hasOwn(workflowPayload, 'commonAuthorsList'), false,
+      'an unchanged system whole-set must not be submitted');
+    assert.strictEqual(Object.hasOwn(workflowPayload, 'allowedPatronCodeIds'), false,
+      'an unchanged system patron-code set must not be submitted');
     assert.strictEqual(workflowPayload.formatIconUrlPattern, currentSystemSettings.formatIconUrlPattern);
     assert.deepStrictEqual(workflowPayload.enabledLibraryOrgIds, ['2', '4']);
-    assert.deepStrictEqual(workflowPayload.providers, persistedProviders.map(provider => ({ ...provider })));
+    assert.deepStrictEqual(workflowPayload.providers, persistedProviders.map(provider => ({ ...provider, overridden: false })));
     assert.strictEqual(Object.keys(workflowPayload).some(key => key.startsWith('externalSearch4')), false);
     assert.deepStrictEqual(workflowPayload.formats.map(format => ({
       id: format.id, code: format.code, label: format.label, sortOrder: format.sortOrder, isEnabled: format.isEnabled
     })), persistedFormats.map(format => ({
       id: format.id, code: format.code, label: format.label, sortOrder: format.sortOrder, isEnabled: format.isEnabled
     })));
-    assert.deepStrictEqual(workflowPayload.ui_text.publicationOptions.map(option => [option.id, option.enabled, option.sortOrder]),
-      [['forthcoming', true, 17], ['backlist', false, 41]]);
+    assert.strictEqual(Object.hasOwn(workflowPayload.ui_text, 'publicationOptions'), false,
+      'an unchanged system publication-option set must not be submitted');
+
+    const systemSubmitSubject = document.getElementById('email-submit-subject');
+    const loadedSystemSubmitSubject = systemSubmitSubject.value;
+    systemSubmitSubject.value = 'System approved this request: {{title}}';
+    systemSubmitSubject.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    const systemTemplateEditPayload = serializer.buildSettingsPayload().emails;
+    assert.deepStrictEqual(Object.keys(systemTemplateEditPayload).filter(key =>
+      key !== 'postmarkToken' && key !== 'clearPostmarkToken'), ['suggestion_submitted'],
+      'an intentional system template edit must submit only the changed template');
+    assert.strictEqual(systemTemplateEditPayload.postmarkToken, '');
+    assert.strictEqual(systemTemplateEditPayload.clearPostmarkToken, false);
+    assert.deepStrictEqual(systemTemplateEditPayload.suggestion_submitted, {
+      templateKey: 'suggestion_submitted', subject: 'System approved this request: {{title}}', enabled: true
+    }, 'an unchanged body must remain omitted from the sparse system template edit');
+    systemSubmitSubject.value = loadedSystemSubmitSubject;
+    systemSubmitSubject.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
 
     const ordered = [];
     const sentSettingsPayloads = [];
     let saveCompleted = false;
+    let nextSettingsSaveIsStale = false;
+    let deferNextSettingsSave = false;
+    let releaseDeferredSettingsSave = null;
+    let settingsSaveAttempts = 0;
+    let librarySettingsLoadCount = 0;
+    let failNextSettingsRead = false;
+    const customFormatDeleteRequests = [];
+    let deferredFormatDeleteId = null;
+    let releaseDeferredFormatDelete = null;
     global.fetch = async (request, options = {}) => {
       const url = String(request);
       const method = String(options.method || 'GET').toUpperCase();
       if (url === '/api/asap/staff/settings/library' && method === 'POST') {
+        settingsSaveAttempts++;
+        if (nextSettingsSaveIsStale) {
+          nextSettingsSaveIsStale = false;
+          return { ok: false, status: 409, statusText: 'Conflict', json: async () => ({
+            code: 'stale_version', message: 'The library settings are stale.'
+          }) };
+        }
         const body = JSON.parse(options.body);
         sentSettingsPayloads.push(body);
-        systemSettingsResponse.stored.workflow = { ...body.workflow };
-        systemSettingsResponse.stored.commonCreators = body.workflow.commonAuthorsList
-          .split('\n').filter(Boolean);
-        systemSettingsResponse.stored.allowedPatronCodeIds = [...body.workflow.allowedPatronCodeIds];
+        if (deferNextSettingsSave) {
+          deferNextSettingsSave = false;
+          return new Promise(resolve => {
+            releaseDeferredSettingsSave = () => resolve({
+              ok: true, status: 200, statusText: 'OK', json: async () => ({ code: 'saved' })
+            });
+          });
+        }
+        systemSettingsResponse.stored.workflow = { ...systemSettingsResponse.stored.workflow, ...body.workflow };
+        systemSettingsResponse.effective.workflow = { ...systemSettingsResponse.effective.workflow, ...body.workflow };
+        if (Object.hasOwn(body.workflow, 'commonAuthorsList')) {
+          const values = body.workflow.commonAuthorsList.split('\n').filter(Boolean);
+          systemSettingsResponse.stored.commonCreators = values;
+          systemSettingsResponse.stored.configuredSystem.commonCreators = {
+            exists: true,
+            values: values.map((value, index) => ({ value, sortOrder: (index + 1) * 10 }))
+          };
+          systemSettingsResponse.effective.commonCreators = values;
+        }
+        if (Object.hasOwn(body.workflow, 'allowedPatronCodeIds')) {
+          systemSettingsResponse.stored.allowedPatronCodeIds = [...body.workflow.allowedPatronCodeIds];
+          systemSettingsResponse.stored.configuredSystem.allowedPatronCodeIds = {
+            exists: true, values: [...body.workflow.allowedPatronCodeIds]
+          };
+          systemSettingsResponse.effective.allowedPatronCodeIds = [...body.workflow.allowedPatronCodeIds];
+        }
+        if (Object.hasOwn(body.ui_text, 'publicationOptions')) {
+          systemSettingsResponse.ui_text.publicationOptions = body.ui_text.publicationOptions;
+          systemSettingsResponse.effective.publicationOptions = body.ui_text.publicationOptions;
+        }
         systemSettingsResponse.stored.providers = body.providers.map(provider => ({ ...provider }));
         systemSettingsResponse.effective.externalSearchProviders = body.providers.map(provider => ({ ...provider }));
         systemSettingsResponse.stored.formats = body.formats.map(format => ({ ...format }));
@@ -348,7 +526,37 @@ const { JSDOM } = require('jsdom');
         return { ok: true, status: 200, statusText: 'OK', json: async () => ({ code: 'polaris_connected' }) };
       }
       if (url.startsWith('/api/asap/staff/settings/library') && method === 'GET') {
-        return { ok: true, status: 200, statusText: 'OK', json: async () => systemSettingsResponse };
+        if (failNextSettingsRead) {
+          failNextSettingsRead = false;
+          return { ok: false, status: 503, statusText: 'Service Unavailable', json: async () => ({
+            code: 'settings_unavailable', message: 'Settings temporarily unavailable.'
+          }) };
+        }
+        if (state.currentLibraryContextOrgId === '2') librarySettingsLoadCount++;
+        const currentResponse = state.currentLibraryContextOrgId === '2'
+          ? librarySettingsResponse
+          : systemSettingsResponse;
+        return { ok: true, status: 200, statusText: 'OK', json: async () => currentResponse };
+      }
+      if (url.startsWith('/api/asap/staff/settings/formats/') && method === 'DELETE') {
+        const parsed = new URL(url, 'http://localhost');
+        const formatId = decodeURIComponent(parsed.pathname.split('/').at(-1));
+        const version = parsed.searchParams.get('version');
+        customFormatDeleteRequests.push({ formatId, version });
+        if (formatId === deferredFormatDeleteId) {
+          deferredFormatDeleteId = null;
+          return new Promise(resolve => {
+            releaseDeferredFormatDelete = () => resolve({
+              ok: true, status: 200, statusText: 'OK', json: async () => ({ code: 'format_deleted' })
+            });
+          });
+        }
+        if (formatId === '9007199254740994') {
+          return { ok: false, status: 409, statusText: 'Conflict', json: async () => ({
+            code: 'format_referenced', message: 'This custom format is still referenced by workflow data.'
+          }) };
+        }
+        return { ok: true, status: 200, statusText: 'OK', json: async () => ({ code: 'format_deleted' }) };
       }
       if (url.startsWith('/api/asap/staff/polaris/patron-codes')) {
         return {
@@ -383,16 +591,21 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(saveAndTestPayload.polaris.systemPolarisUserId, persisted.systemPolarisUserId);
     assert.strictEqual(saveAndTestPayload.polaris.organizationIdForRequests, persisted.organizationIdForRequests);
     assert.strictEqual(saveAndTestPayload.polaris.pickupOrganizationId, persisted.pickupOrganizationId);
-    for (const [field, expected] of Object.entries(persistedWorkflow)) {
-      assert.strictEqual(saveAndTestPayload.workflow[field], expected,
-        `Save & test must preserve workflow.${field}`);
+    for (const field of Object.keys(persistedWorkflow)) {
+      assert.strictEqual(Object.hasOwn(saveAndTestPayload.workflow, field), false,
+        `Save & test must omit unchanged workflow.${field}`);
     }
-    assert.strictEqual(saveAndTestPayload.workflow.commonAuthorsList, persistedCommonCreators.join('\n'));
-    assert.deepStrictEqual(saveAndTestPayload.workflow.allowedPatronCodeIds, ['31', '47']);
+    assert.strictEqual(Object.hasOwn(saveAndTestPayload.workflow, 'commonAuthorsList'), false,
+      'Polaris-only Save & test must not replace an unchanged creator set');
+    assert.strictEqual(Object.hasOwn(saveAndTestPayload.workflow, 'allowedPatronCodeIds'), false,
+      'Polaris-only Save & test must not replace an unchanged patron-code set');
+    assert.strictEqual(Object.hasOwn(saveAndTestPayload.ui_text, 'publicationOptions'), false,
+      'Polaris-only Save & test must not replace unchanged publication options');
     assert.strictEqual(saveAndTestPayload.formatIconUrlPattern, currentSystemSettings.formatIconUrlPattern);
     assert.deepStrictEqual(saveAndTestPayload.enabledLibraryOrgIds, ['2', '4']);
     assert.strictEqual(Object.hasOwn(saveAndTestPayload.workflow, 'enabledLibraryOrgIds'), false);
-    assert.deepStrictEqual(saveAndTestPayload.providers, persistedProviders);
+    assert.deepStrictEqual(saveAndTestPayload.providers,
+      persistedProviders.map(provider => ({ ...provider, overridden: false })));
     assert.strictEqual(Object.keys(saveAndTestPayload.workflow).some(key => key.startsWith('externalSearch')), false);
     assert.deepStrictEqual(saveAndTestPayload.formats.map(format => format.code), ['dvd', 'book']);
     assert.strictEqual(saveAndTestPayload.formats.find(format => format.code === 'dvd').isEnabled, false);
@@ -404,12 +617,16 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), true);
     assert.deepStrictEqual(ordered, ['save']);
     const ordinarySavePayload = sentSettingsPayloads[1];
-    for (const [field, expected] of Object.entries(persistedWorkflow)) {
-      assert.strictEqual(ordinarySavePayload.workflow[field], expected,
-        `ordinary save must preserve workflow.${field}`);
+    for (const field of Object.keys(persistedWorkflow)) {
+      assert.strictEqual(Object.hasOwn(ordinarySavePayload.workflow, field), false,
+        `ordinary no-edit save must omit unchanged workflow.${field}`);
     }
-    assert.strictEqual(ordinarySavePayload.workflow.commonAuthorsList, persistedCommonCreators.join('\n'));
-    assert.deepStrictEqual(ordinarySavePayload.workflow.allowedPatronCodeIds, ['31', '47']);
+    assert.strictEqual(Object.hasOwn(ordinarySavePayload.workflow, 'commonAuthorsList'), false,
+      'an ordinary no-edit save must not replace the system creator set');
+    assert.strictEqual(Object.hasOwn(ordinarySavePayload.workflow, 'allowedPatronCodeIds'), false,
+      'an ordinary no-edit save must not replace the system patron-code set');
+    assert.strictEqual(Object.hasOwn(ordinarySavePayload.ui_text, 'publicationOptions'), false,
+      'an ordinary no-edit save must not replace the system publication-option set');
     assert.strictEqual(ordinarySavePayload.formatIconUrlPattern, currentSystemSettings.formatIconUrlPattern);
     assert.deepStrictEqual(ordinarySavePayload.enabledLibraryOrgIds, ['2', '4']);
 
@@ -418,7 +635,8 @@ const { JSDOM } = require('jsdom');
     const intentionalEdit = serializer.buildSettingsPayload();
     assert.strictEqual(intentionalEdit.pendingHoldTimeoutDays, 46,
       'an intentional workflow edit must override the loaded stored value');
-    assert.strictEqual(intentionalEdit.outstandingTimeoutDays, persistedWorkflow.outstandingTimeoutDays);
+    assert.strictEqual(Object.hasOwn(intentionalEdit, 'outstandingTimeoutDays'), false,
+      'an unchanged workflow scalar must not be submitted alongside an intentional edit');
     ordered.length = 0;
     saveCompleted = false;
     assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), true);
@@ -473,88 +691,32 @@ const { JSDOM } = require('jsdom');
     const partialLoadPayload = serializer.buildSettingsPayload();
     assert.strictEqual(Object.hasOwn(partialLoadPayload, 'enabledLibraryOrgIds'), false,
       'an unavailable organization list must omit participation instead of disabling every library');
-    assert.deepStrictEqual(partialLoadPayload.allowedPatronCodeIds, ['47'],
-      'an unavailable patron-code list must retain the authoritative selection');
+    assert.strictEqual(Object.hasOwn(partialLoadPayload, 'allowedPatronCodeIds'), false,
+      'an unavailable patron-code list must omit the whole-set replacement');
     ordered.length = 0;
     saveCompleted = false;
     assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), true);
     const partialLoadPost = sentSettingsPayloads[4];
     assert.strictEqual(Object.hasOwn(partialLoadPost, 'enabledLibraryOrgIds'), false);
     assert.strictEqual(Object.hasOwn(partialLoadPost.workflow, 'enabledLibraryOrgIds'), false);
-    assert.deepStrictEqual(partialLoadPost.workflow.allowedPatronCodeIds, ['47']);
+    assert.strictEqual(Object.hasOwn(partialLoadPost.workflow, 'allowedPatronCodeIds'), false);
     assert.deepStrictEqual(organizations.filter(item => item.id !== 1 && item.active).map(item => item.id), [2, 3]);
     state.setOrganizationsStatus('loaded');
     patronCodes.updatePatronCodesStatusUi('loaded', 'Patron codes loaded.');
 
     state.setCurrentLibraryContextOrgId('2');
-    const effectiveLibraryWorkflow = {
-      ...persistedWorkflow,
-      outstandingTimeoutDays: 72,
-      pendingHoldTimeoutDays: 19,
-      autoPromote: false
-    };
-    const libraryFormats = [
-      {
-        ...persistedFormats.find(format => format.code === 'book'),
-        label: 'Library Books', sortOrder: 23, identifierMode: 'hidden', identifierLabel: 'Local ISBN', overridden: true
-      },
-      {
-        id: '301', code: 'zine', ownerOrganizationId: '2', label: 'Community Zine', sortOrder: 57,
-        isEnabled: true, messageBehavior: 'message', message: 'Bring local zines to the desk.',
-        titleMode: 'required', titleLabel: 'Zine title', authorMode: 'optional', authorLabel: 'Maker',
-        identifierMode: 'hidden', identifierLabel: 'Identifier', publicationMode: 'optional', publicationLabel: 'Issue date'
-      }
-    ];
-    const libraryCustomFields = [{
-      id: '401', key: 'audience_note', type: 'select', label: 'Audience note', helpText: 'Choose the intended audience.',
-      enabled: true, sortOrder: 37,
-      options: [
-        { id: 'general', label: 'General readers', enabled: true, sortOrder: 13 },
-        { id: 'specialist', label: 'Specialists', enabled: false, sortOrder: 31 }
-      ]
-    }];
-    const libraryProviders = persistedProviders.map(provider => provider.key === 'external_search_2'
-      ? { ...provider, label: 'Library Research Index', overridden: true }
-      : { ...provider, overridden: false });
-    const librarySettingsResponse = {
-      version: 'library-version-1',
-      isOverride: true,
-      stored: {
-        workflow: effectiveLibraryWorkflow,
-        commonCreators: ['Library Creator B', 'Library Creator A'],
-        allowedPatronCodeIds: ['47'],
-        providers: libraryProviders,
-        formats: libraryFormats,
-        customFields: libraryCustomFields,
-        autoClaimRules: [{ id: '501', materialFormatId: '301', staffUserId: '9007199254740993', active: true }],
-        libraryOverride: {
-          commonCreators: { exists: true, values: [{ value: 'Library Creator B' }, { value: 'Library Creator A' }] },
-          allowedPatronCodeIds: { exists: true, values: ['47'] },
-          providers: [{ id: '202', label: 'Library Research Index' }],
-          formats: [{ kind: 'systemOverride', materialFormatId: '101', label: 'Library Books' }]
-        }
-      },
-      emails: {},
-      ui_text: { publicationOptions: [{ id: 'local', label: 'Local publication', enabled: true, sortOrder: 19 }] },
-      effective: {
-        workflow: effectiveLibraryWorkflow,
-        commonCreators: ['Library Creator B', 'Library Creator A'],
-        allowedPatronCodeIds: ['47'],
-        externalSearchProviders: libraryProviders,
-        publicationOptions: [{ id: 'local', label: 'Local publication', enabled: true, sortOrder: 19 }],
-        formats: libraryFormats.map(format => ({
-          id: format.id, code: format.code, label: format.label, sortOrder: format.sortOrder,
-          isEnabled: format.isEnabled, messageBehavior: format.messageBehavior, message: format.message,
-          title: { mode: format.titleMode, label: format.titleLabel },
-          author: { mode: format.authorMode, label: format.authorLabel },
-          identifier: { mode: format.identifierMode, label: format.identifierLabel },
-          publication: { mode: format.publicationMode, label: format.publicationLabel },
-          customFields: format.code === 'zine' ? { audience_note: { mode: 'required', labelOverride: 'Zine audience' } } : {}
-        })),
-        customFields: libraryCustomFields
-      },
-      autoClaimStaff: [{ id: '9007199254740993', label: 'Large-ID Librarian' }]
-    };
+    const librarySettingsResponse = JSON.parse(fs.readFileSync(
+      path.join(repositoryRoot, 'tests', 'fixtures', 'settings', 'canonical-library-settings-response.json'), 'utf8'));
+    async function refreshLibrarySettingsForm() {
+      const response = state.currentLibraryContextOrgId === '2' ? librarySettingsResponse : systemSettingsResponse;
+      if (state.currentLibraryContextOrgId === '2') librarySettingsLoadCount++;
+      formPopulation.applyLibrarySettingsToForm(response);
+      serializer.rememberLastSavedLibrarySettings(response);
+    }
+    settingsRefresh.registerSettingsRefreshHandlers({
+      refreshSettingsView: refreshLibrarySettingsForm,
+      loadStaffConfig: async () => {}
+    });
     formPopulation.applyLibrarySettingsToForm(librarySettingsResponse);
     serializer.rememberLastSavedLibrarySettings(librarySettingsResponse);
     await settleAsyncRendering();
@@ -562,41 +724,108 @@ const { JSDOM } = require('jsdom');
       'library context must continue to populate effective/inherited workflow values');
     assert.strictEqual(document.getElementById('pending-hold-timeout-days').value, '19');
     assert.strictEqual(document.getElementById('polaris-auto-promote').checked, false);
-    assert.strictEqual(document.getElementById('wf-common-authors-list').value, 'Library Creator B\nLibrary Creator A');
-    assert.strictEqual(document.getElementById('wf-external-search-2-label').value, 'Library Research Index');
-    assert.strictEqual(document.querySelector('.format-setting-row[data-key="zine"] .format-label-input').value, 'Community Zine');
+    assert.strictEqual(document.getElementById('outstanding-timeout-rejection-template-id').value, '906',
+      'the workflow-selected rejection template ID must remain selected as a string');
+    assert.strictEqual(document.getElementById('email-submit-subject').value, 'Harbor request received: {{title}}');
+    assert.strictEqual(document.getElementById('email-purchase-approved-subject').value, 'Harbor will order {{title}}');
+    assert.strictEqual(document.getElementById('email-owned-subject').value, 'Harbor already has {{title}}');
+    assert.strictEqual(document.getElementById('email-rejected-subject').value, 'Harbor cannot order {{title}}');
+    assert.strictEqual(document.getElementById('email-hold-subject').value, 'A Harbor hold is ready');
+    assert.strictEqual(document.getElementById('postmark-token').value, '', 'Postmark tokens remain write-only');
+    assert.strictEqual(document.getElementById('postmark-token-status').classList.contains('hidden'), false,
+      'the non-secret Postmark configured indicator must remain visible');
+    assert.strictEqual(document.getElementById('wf-common-authors-list').value, 'N. K. Jemisin\nOctavia E. Butler');
+    assert.strictEqual(document.getElementById('wf-external-search-2-label').value, 'Harbor Research Index');
+    assert.strictEqual(document.querySelector('.format-setting-row[data-key="zine"] .format-label-input').value, 'Community zine');
     assert.strictEqual(document.querySelector('.format-setting-row[data-key="zine"] .format-claim-staff-select').value,
       '9007199254740993');
     assert.strictEqual(document.querySelector('.additional-field-row').getAttribute('data-field-key'), 'audience_note');
+    let customFieldLabel = document.querySelector('.format-rule-custom-field-label[data-format="zine"][data-field="audience_note"]');
+    assert.strictEqual(customFieldLabel.value, 'Zine audience',
+      'the backend label override must populate the actual format-rule input');
+    assert.ok(document.querySelector('.format-setting-row[data-key="zine"] .btn-remove-format'),
+      'a library-owned custom format must expose the explicit remove action');
 
     const libraryRoundTrip = serializer.buildSettingsPayload();
-    assert.strictEqual(libraryRoundTrip.commonAuthorsList, 'Library Creator B\nLibrary Creator A',
-      'library creator order must not be rewritten by a no-edit save');
-    assert.deepStrictEqual(libraryRoundTrip.allowedPatronCodeIds, ['47']);
+    assert.strictEqual(Object.hasOwn(libraryRoundTrip, 'commonAuthorsList'), false,
+      'inherited common creators must stay absent on an unrelated library save');
+    assert.strictEqual(Object.hasOwn(libraryRoundTrip, 'allowedPatronCodeIds'), false,
+      'an absent local patron-code set must stay absent on an unrelated library save');
     assert.strictEqual(libraryRoundTrip.providers.length, 3);
     assert.strictEqual(libraryRoundTrip.providers.find(provider => provider.key === 'external_search_2').label,
-      'Library Research Index');
+      'Harbor Research Index');
     assert.strictEqual(Object.keys(libraryRoundTrip).some(key => key.startsWith('externalSearch4')), false);
     assert.deepStrictEqual(libraryRoundTrip.formats.map(format => [format.code, format.sortOrder, format.isEnabled]),
-      [['book', 23, true], ['zine', 57, true]]);
-    assert.deepStrictEqual(libraryRoundTrip.ui_text.publicationOptions,
-      [{ id: 'local', label: 'Local publication', enabled: true, sortOrder: 19 }]);
+      [['book', 11, true], ['dvd', 28, false], ['zine', 57, true]]);
+    assert.strictEqual(Object.hasOwn(libraryRoundTrip.ui_text, 'publicationOptions'), false,
+      'the absent local publication set must not be materialized by an unrelated save');
     assert.strictEqual(libraryRoundTrip.formats.find(format => format.code === 'book').identifier.mode, 'hidden');
-    assert.strictEqual(libraryRoundTrip.formats.find(format => format.code === 'zine').message, 'Bring local zines to the desk.');
-    assert.strictEqual(libraryRoundTrip.customFields[0].id, '401');
+    assert.strictEqual(libraryRoundTrip.formats.find(format => format.code === 'zine').message,
+      'Bring a local zine to the Harbor desk.');
+    assert.strictEqual(libraryRoundTrip.customFields[0].id, '9007199254741009');
     assert.strictEqual(libraryRoundTrip.customFields[0].key, 'audience_note');
     assert.strictEqual(libraryRoundTrip.customFields[0].helpText, 'Choose the intended audience.');
     assert.deepStrictEqual(libraryRoundTrip.customFields[0].options.map(option => [option.id, option.enabled, option.sortOrder]),
       [['general', true, 13], ['specialist', false, 31]]);
     assert.deepStrictEqual(libraryRoundTrip.formatClaimRules, [{
-      materialFormatId: '301', staffUserId: '9007199254740993', active: true
+      materialFormatId: '9007199254741003', staffUserId: '9007199254740993', active: true
     }]);
+    assert.strictEqual(libraryRoundTrip.formats.find(format => format.code === 'zine')
+      .customFields.audience_note.labelOverride, 'Zine audience',
+    'a no-edit save must retain the backend labelOverride through the actual DOM serializer');
+    assert.strictEqual(libraryRoundTrip.formatClaimRules.length, 1,
+      'inactive historical assignments must not be presented as current assignments');
+    assert.strictEqual(Object.hasOwn(libraryRoundTrip.emails, 'suggestion_submitted'), false,
+      'an unchanged sparse standard-template override must remain untouched');
+    assert.strictEqual(Object.hasOwn(libraryRoundTrip.emails, 'purchase_approved'), false,
+      'an inherited standard template with no override must remain absent');
+    assert.strictEqual(Object.hasOwn(libraryRoundTrip.emails, 'rejection_templates'), false,
+      'an unrelated save must not rewrite or recreate existing rejection templates');
+    const libraryCustomName = [...document.querySelectorAll('#rejection-templates-accordion-container input[data-field="name"]')]
+      .find(input => input.value === 'Local budget review');
+    assert.ok(libraryCustomName, 'the current backend custom-template display name must populate the actual editor');
+    libraryCustomName.value = 'Harbor local budget decision';
+    libraryCustomName.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    const renamedCustom = serializer.buildSettingsPayload().emails.rejection_templates.find(template =>
+      template.templateKey === 'rejection:local-budget');
+    assert.strictEqual(renamedCustom.displayName, 'Harbor local budget decision',
+      'an intentional custom-template name edit must use the current DTO display name');
+    libraryCustomName.value = 'Local budget review';
+    libraryCustomName.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+
+    document.getElementById('btn-add-rejection-template').click();
+    await settleAsyncRendering();
+    const createdTemplate = serializer.buildSettingsPayload().emails.rejection_templates.find(template =>
+      template.isCustom === true && template.templateKey.startsWith('rejection:custom_'));
+    assert.ok(createdTemplate, 'an explicitly added library rejection template must serialize for creation');
+    state.setCurrentRejectionTemplates(state.currentRejectionTemplates.filter(template => template.isNew !== true));
+    state.setDeletedSettingsTemplates([]);
+    formPopulation.applyLibrarySettingsToForm(librarySettingsResponse);
+    serializer.rememberLastSavedLibrarySettings(librarySettingsResponse);
+    await settleAsyncRendering();
+    customFieldLabel = document.querySelector('.format-rule-custom-field-label[data-format="zine"][data-field="audience_note"]');
+
+    customFieldLabel.value = 'Community audience';
+    customFieldLabel.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    const changedFormatRule = serializer.buildSettingsPayload().formats.find(format => format.code === 'zine');
+    assert.strictEqual(changedFormatRule.customFields.audience_note.labelOverride, 'Community audience',
+      'an intentional custom-field label edit must be serialized');
+    customFieldLabel.value = 'Zine audience';
+    customFieldLabel.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    const submitSubject = document.getElementById('email-submit-subject');
+    submitSubject.value = 'Harbor approved this request: {{title}}';
+    submitSubject.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    const editedTemplate = serializer.buildSettingsPayload().emails.suggestion_submitted;
+    assert.strictEqual(editedTemplate.sourceTemplateId, '9007199254740999');
+    assert.strictEqual(editedTemplate.subject, 'Harbor approved this request: {{title}}');
+    submitSubject.value = 'Harbor request received: {{title}}';
+    submitSubject.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
 
     state.setStaffSession({
       authenticated: true,
       accessAllowed: true,
       antiforgeryToken: 'test-antiforgery-token',
-      staff: { role: 'admin', userPrincipalName: 'library-admin@example.org', organizationId: '2', organizationName: 'Central' }
+      staff: { role: 'admin', userPrincipalName: 'library-admin@example.org', organizationId: '2', organizationName: 'Harbor City Library' }
     });
     ordered.length = 0;
     saveCompleted = false;
@@ -606,8 +835,121 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(Object.keys(libraryPost.workflow).some(key => key.startsWith('externalSearch')), false);
     assert.strictEqual(libraryPost.providers.length, 3);
     assert.strictEqual(libraryPost.formats.find(format => format.code === 'zine').ownerOrganizationId, '2');
+    assert.strictEqual(libraryPost.formats.find(format => format.code === 'zine')
+      .customFields.audience_note.labelOverride, 'Zine audience',
+    'the actual Settings POST must preserve the format custom-field label override');
     assert.strictEqual(libraryPost.customFields[0].key, 'audience_note');
     assert.strictEqual(libraryPost.formatClaimRules[0].staffUserId, '9007199254740993');
+    assert.strictEqual(Object.hasOwn(libraryPost.emails, 'suggestion_submitted'), false,
+      'the actual no-edit Settings POST must leave the sparse template override untouched');
+    assert.strictEqual(Object.hasOwn(libraryPost.emails, 'rejection_templates'), false);
+
+    state.setDeletedSettingsFormats([
+      { id: '9007199254740993', version: 'rowversion-A' },
+      { id: '9007199254740994', version: 'rowversion-B' }
+    ]);
+    assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), false,
+      'a secondary format deletion failure must report partial success');
+    assert.deepStrictEqual(customFormatDeleteRequests.map(item => [item.formatId, item.version]), [
+      ['9007199254740993', 'rowversion-A'],
+      ['9007199254740994', 'rowversion-B']
+    ], 'custom-format deletions must preserve bigint IDs as strings and submit each rowversion');
+    assert.match(document.getElementById('settings-msg').textContent,
+      /settings were saved, but custom format removal did not complete/i,
+      'a failed secondary deletion must not be described as a failed primary Settings save');
+    assert.strictEqual(document.getElementById('settings-msg').classList.contains('text-warning'), true);
+
+    const refreshesBeforeMainSaveScopeSwitch = librarySettingsLoadCount;
+    const deleteAttemptsBeforeMainSaveScopeSwitch = customFormatDeleteRequests.length;
+    state.setDeletedSettingsFormats([{ id: '9007199254740993', version: 'rowversion-old-scope' }]);
+    deferNextSettingsSave = true;
+    const pendingOldScopeSave = saveController.saveSettings({ clearDelay: 0 });
+    assert.strictEqual(typeof releaseDeferredSettingsSave, 'function', 'the old-scope primary Settings save must be pending');
+    state.setCurrentLibraryContextOrgId('3');
+    state.incrementLibraryContextLoadSerial();
+    document.getElementById('ui-login-note').value = 'Library three current draft';
+    releaseDeferredSettingsSave();
+    assert.strictEqual(await pendingOldScopeSave, false,
+      'a save response for a superseded library context must be ignored');
+    assert.strictEqual(customFormatDeleteRequests.length, deleteAttemptsBeforeMainSaveScopeSwitch,
+      'a superseded primary save must not start queued custom-format deletes');
+    assert.strictEqual(librarySettingsLoadCount, refreshesBeforeMainSaveScopeSwitch,
+      'a superseded primary save must not refresh over the newly selected library');
+    assert.strictEqual(document.getElementById('ui-login-note').value, 'Library three current draft',
+      'a superseded primary save must not overwrite the current library form');
+
+    state.setCurrentLibraryContextOrgId('2');
+    state.incrementLibraryContextLoadSerial();
+    formPopulation.applyLibrarySettingsToForm(librarySettingsResponse);
+    serializer.rememberLastSavedLibrarySettings(librarySettingsResponse);
+    await settleAsyncRendering();
+
+    const deleteAttemptsBeforeSecondaryScopeSwitch = customFormatDeleteRequests.length;
+    const refreshesBeforeSecondaryScopeSwitch = librarySettingsLoadCount;
+    state.setDeletedSettingsFormats([
+      { id: '9007199254740993', version: 'rowversion-A' },
+      { id: '9007199254740994', version: 'rowversion-B' }
+    ]);
+    deferredFormatDeleteId = '9007199254740993';
+    const pendingOldScopeDelete = saveController.saveSettings({ clearDelay: 0 });
+    await settleAsyncRendering();
+    assert.strictEqual(typeof releaseDeferredFormatDelete, 'function', 'the first custom-format delete must be pending');
+    state.setCurrentLibraryContextOrgId('3');
+    state.incrementLibraryContextLoadSerial();
+    document.getElementById('ui-login-note').value = 'Library three stays visible';
+    releaseDeferredFormatDelete();
+    assert.strictEqual(await pendingOldScopeDelete, false,
+      'a custom-format delete sequence must stop after its library context is superseded');
+    assert.deepStrictEqual(customFormatDeleteRequests.slice(deleteAttemptsBeforeSecondaryScopeSwitch).map(item => item.formatId),
+      ['9007199254740993'], 'queued deletes must not continue in the old context after a scope change');
+    assert.deepStrictEqual(state.deletedSettingsFormats.map(item => item.id), ['9007199254740994'],
+      'the successful delete leaves only the unattempted format queued for explicit review');
+    assert.strictEqual(librarySettingsLoadCount, refreshesBeforeSecondaryScopeSwitch,
+      'the old save must not reload settings after a scope change during a direct delete');
+    assert.strictEqual(document.getElementById('ui-login-note').value, 'Library three stays visible');
+    state.setDeletedSettingsFormats([]);
+
+    state.setDeletedSettingsFormats([]);
+    state.setCurrentLibraryContextOrgId('2');
+    state.incrementLibraryContextLoadSerial();
+    formPopulation.applyLibrarySettingsToForm(librarySettingsResponse);
+    serializer.rememberLastSavedLibrarySettings(librarySettingsResponse);
+    await settleAsyncRendering();
+    failNextSettingsRead = true;
+    settingsRefresh.registerSettingsRefreshHandlers({
+      refreshSettingsView: settingsLoader.loadSettings,
+      loadStaffConfig: async () => {}
+    });
+    assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), true,
+      'a successful settings save remains successful when its follow-up read fails');
+    assert.strictEqual(failNextSettingsRead, false, 'the refresh failure must come from the settings read');
+    assert.match(document.getElementById('settings-msg').textContent,
+      /settings were saved, but the current values could not be reloaded/i,
+      'a failed follow-up read must be reported as a successful save with an incomplete refresh');
+    assert.strictEqual(document.getElementById('settings-msg').classList.contains('text-warning'), true,
+      'the refresh warning must not be presented as a failed settings save');
+    settingsRefresh.registerSettingsRefreshHandlers({
+      refreshSettingsView: refreshLibrarySettingsForm,
+      loadStaffConfig: async () => {}
+    });
+
+    const refreshesBeforeConflict = librarySettingsLoadCount;
+    const attemptsBeforeConflict = settingsSaveAttempts;
+    librarySettingsResponse.version = 'library-version-2';
+    librarySettingsResponse.effective.loginNote = 'Authoritative value after another session changed settings';
+    librarySettingsResponse.ui_text.loginNote = 'Authoritative value after another session changed settings';
+    nextSettingsSaveIsStale = true;
+    assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), false,
+      'a stale Settings version must not be automatically retried');
+    assert.strictEqual(settingsSaveAttempts, attemptsBeforeConflict + 1,
+      'stale Settings handling must send only the original mutation');
+    assert.strictEqual(librarySettingsLoadCount, refreshesBeforeConflict + 1,
+      'a stale Settings result must reload the current library response');
+    assert.strictEqual(document.getElementById('ui-login-note').value,
+      'Authoritative value after another session changed settings',
+      'the stale conflict must replace the form with authoritative current values');
+    assert.match(document.getElementById('settings-msg').textContent, /changed in another session.*reloaded/i,
+      'the UI must explain that the stale Settings values were reloaded');
 
     formPopulation.applyLibrarySettingsToForm({ ...librarySettingsResponse, autoClaimStaff: undefined });
     await settleAsyncRendering();
@@ -654,6 +996,13 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(fields.isPolarisConfigured({ ...persisted, apiKey: '', adminPassword: '' }), true,
       'configured detection must not require disclosed secrets');
 
+    state.setCurrentLibraryContextOrgId('2');
+    formPopulation.applyLibrarySettingsToForm({ stored: {}, effective: {} });
+    assert.throws(() => serializer.buildSettingsPayload(), /could not be loaded completely/,
+      'an incomplete library response must not serialize fallback values into a save');
+    assert.throws(() => serializer.buildEmailSettingsPayload({ includeTemplates: false }), /could not be loaded completely/,
+      'an incomplete library response must not submit an email save either');
+
     let testsAfterFailure = 0;
     const failedSave = await sequencing.saveThenTestPolaris(
       async () => false,
@@ -668,6 +1017,27 @@ const { JSDOM } = require('jsdom');
       async () => { throw new Error('Polaris unavailable'); }
     ), /Polaris unavailable/);
     assert.strictEqual(savedBeforeTestFailure, true, 'a test failure occurs after persistence succeeds');
+
+    state.setCurrentLibraryContextOrgId('system');
+    const partialTemplateResponse = structuredClone(systemSettingsResponse);
+    const onlyPersistedTemplate = row => row.templateKey === 'suggestion_submitted';
+    partialTemplateResponse.stored.templates = partialTemplateResponse.stored.templates.filter(onlyPersistedTemplate);
+    partialTemplateResponse.stored.configuredSystem.templates =
+      partialTemplateResponse.stored.configuredSystem.templates.filter(onlyPersistedTemplate);
+    partialTemplateResponse.emails.templates = partialTemplateResponse.emails.templates.filter(onlyPersistedTemplate);
+    formPopulation.applyLibrarySettingsToForm(partialTemplateResponse);
+    await settleAsyncRendering();
+    const partialTemplateNoEdit = serializer.buildSettingsPayload().emails;
+    for (const key of ['purchase_approved', 'already_owned', 'rejected', 'hold_placed']) {
+      assert.strictEqual(Object.hasOwn(partialTemplateNoEdit, key), false,
+        `an absent backend ${key} template must not be created from its JavaScript form default`);
+    }
+    const purchaseSubject = document.getElementById('email-purchase-approved-subject');
+    purchaseSubject.value = `${purchaseSubject.value} (edited)`;
+    const missingTemplateEdit = serializer.buildSettingsPayload().emails.purchase_approved;
+    assert.strictEqual(missingTemplateEdit.subject, purchaseSubject.value);
+    assert.ok(missingTemplateEdit.body,
+      'an intentional system edit to a missing standard template must include content required by the backend create contract');
 
     const index = fs.readFileSync(path.join(staffRoot, 'index.html'), 'utf8');
     const polarisSource = fs.readFileSync(path.join(staffRoot, 'js', 'settings-polaris.js'), 'utf8');

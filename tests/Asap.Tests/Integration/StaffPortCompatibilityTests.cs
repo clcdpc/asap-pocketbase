@@ -761,6 +761,8 @@ public sealed partial class PatronJourneyTests
         bool originalPatronCodeSetExists;
         (string Value, int SortOrder)[] originalCreators;
         string[] originalPatronCodes;
+        (string Origin, string NormalizedOrigin)[] originalOrigins;
+        long[] seededOriginIds;
         (long Id, bool IsEnabled, string Label, string UrlTemplate, int SortOrder)[] originalProviders;
         Dictionary<int, bool> originalParticipation;
 
@@ -779,6 +781,11 @@ public sealed partial class PatronJourneyTests
                 .Where(item => item.OrganizationId == 1)
                 .OrderBy(item => item.PatronCodeId)
                 .Select(item => item.PatronCodeId)
+                .ToArrayAsync();
+            originalOrigins = await seedContext.PatronEmbedAllowedOrigins.AsNoTracking()
+                .Where(item => item.OrganizationId == 1)
+                .OrderBy(item => item.NormalizedOrigin)
+                .Select(item => new ValueTuple<string, string>(item.Origin, item.NormalizedOrigin))
                 .ToArrayAsync();
             var providers = await seedContext.ExternalSearchProviders
                 .Where(item => item.OrganizationId == 1 &&
@@ -813,6 +820,23 @@ public sealed partial class PatronJourneyTests
             seedContext.PatronCodeEligibilityMembers.AddRange(
                 new PatronCodeEligibilityMember { OrganizationId = 1, PatronCodeId = "14" },
                 new PatronCodeEligibilityMember { OrganizationId = 1, PatronCodeId = "28" });
+            seedContext.PatronEmbedAllowedOrigins.RemoveRange(
+                await seedContext.PatronEmbedAllowedOrigins.Where(item => item.OrganizationId == 1).ToListAsync());
+            seedContext.PatronEmbedAllowedOrigins.AddRange(
+                new PatronEmbedAllowedOrigin
+                {
+                    OrganizationId = 1,
+                    Origin = "https://library-one.settings.example",
+                    NormalizedOrigin = "https://library-one.settings.example",
+                    CreatedUtc = DateTime.UtcNow
+                },
+                new PatronEmbedAllowedOrigin
+                {
+                    OrganizationId = 1,
+                    Origin = "https://library-two.settings.example",
+                    NormalizedOrigin = "https://library-two.settings.example",
+                    CreatedUtc = DateTime.UtcNow
+                });
 
             providers[0].IsEnabled = true;
             providers[0].Label = "Local Discovery";
@@ -829,6 +853,11 @@ public sealed partial class PatronJourneyTests
             enabledLibrary.IsActive = true;
             disabledLibrary.IsActive = false;
             await seedContext.SaveChangesAsync();
+            seededOriginIds = await seedContext.PatronEmbedAllowedOrigins.AsNoTracking()
+                .Where(item => item.OrganizationId == 1)
+                .OrderBy(item => item.NormalizedOrigin)
+                .Select(item => item.Id)
+                .ToArrayAsync();
         }
 
         try
@@ -843,6 +872,10 @@ public sealed partial class PatronJourneyTests
                 stored.GetProperty("allowedPatronCodeIds").EnumerateArray().Select(item => item.GetString()).ToArray());
             Assert.AreEqual("https://icons.settings.example/{format}.svg",
                 stored.GetProperty("systemSettings").GetProperty("formatIconUrlPattern").GetString());
+            CollectionAssert.AreEqual(
+                new[] { "https://library-one.settings.example", "https://library-two.settings.example" },
+                stored.GetProperty("systemSettings").GetProperty("patronEmbedAllowedOrigins")
+                    .EnumerateArray().Select(item => item.GetString()).ToArray());
             var loadedProviders = stored.GetProperty("providers").EnumerateArray().ToDictionary(
                 item => item.GetProperty("key").GetString()!, item => item);
             Assert.AreEqual("Local Discovery", loadedProviders["external_search_1"].GetProperty("label").GetString());
@@ -876,8 +909,21 @@ public sealed partial class PatronJourneyTests
                         externalSearch3UrlTemplate = "https://regional.settings.example/?q={{title}}"
                     },
                     ["formatIconUrlPattern"] = "https://icons.settings.example/{format}.svg",
+                    ["patronEmbedAllowedOrigins"] = new[]
+                    {
+                        "https://library-one.settings.example",
+                        "https://library-two.settings.example"
+                    },
                     ["enabledLibraryOrgIds"] = enabledAtLoad.Select(item => item.ToString()).ToArray()
                 });
+            await using (var noEditVerify = await contexts.CreateDbContextAsync())
+            {
+                CollectionAssert.AreEqual(seededOriginIds, await noEditVerify.PatronEmbedAllowedOrigins.AsNoTracking()
+                    .Where(item => item.OrganizationId == 1)
+                    .OrderBy(item => item.NormalizedOrigin)
+                    .Select(item => item.Id)
+                    .ToArrayAsync(), "an unchanged system-origin list must not delete and recreate rows");
+            }
             await AssertSystemStateAsync(
                 new[] { "Octavia E. Butler", "N. K. Jemisin" },
                 new[] { "14", "28" },
@@ -1004,6 +1050,15 @@ public sealed partial class PatronJourneyTests
             }
             restoreContext.PatronCodeEligibilityMembers.AddRange(originalPatronCodes.Select(item =>
                 new PatronCodeEligibilityMember { OrganizationId = 1, PatronCodeId = item }));
+            restoreContext.PatronEmbedAllowedOrigins.RemoveRange(
+                await restoreContext.PatronEmbedAllowedOrigins.Where(item => item.OrganizationId == 1).ToListAsync());
+            restoreContext.PatronEmbedAllowedOrigins.AddRange(originalOrigins.Select(item => new PatronEmbedAllowedOrigin
+            {
+                OrganizationId = 1,
+                Origin = item.Origin,
+                NormalizedOrigin = item.NormalizedOrigin,
+                CreatedUtc = DateTime.UtcNow
+            }));
 
             foreach (var backup in originalProviders)
             {

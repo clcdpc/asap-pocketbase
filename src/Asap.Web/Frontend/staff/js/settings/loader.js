@@ -123,6 +123,7 @@ export async function loadSettings(options = {}) {
   const isSuper = isSuperAdminStaff();
   const showErrors = options.showErrors !== false;
   const guard = settingsLoads.begin('settings');
+  let loadFailed = false;
   setSettingsLoading(true);
 
   try {
@@ -132,7 +133,9 @@ export async function loadSettings(options = {}) {
     if (!guard.isCurrent()) return;
 
     const requestedContextOrgId = currentLibraryContextOrgId;
-    const loadedLibrarySettings = await loadLibrarySettings(requestedContextOrgId);
+    const loadedLibrarySettings = await loadLibrarySettings(requestedContextOrgId, {
+      throwOnError: options.throwOnError === true
+    });
     if (!guard.isCurrent() || loadedLibrarySettings === undefined || requestedContextOrgId !== currentLibraryContextOrgId) return;
 
     if (!isSuper) {
@@ -159,13 +162,15 @@ export async function loadSettings(options = {}) {
     showSettingsForm();
 
   } catch (err) {
+    loadFailed = true;
     if (guard.isCurrent()) {
       handleLoadSettingsError(err, showErrors);
     }
+    if (options.throwOnError === true) throw err;
   } finally {
     if (guard.isCurrent()) {
       setSettingsLoading(false);
-      markSettingsClean('clean');
+      if (!loadFailed) markSettingsClean('clean');
     }
     settingsLoads.finish('settings', guard.token);
   }

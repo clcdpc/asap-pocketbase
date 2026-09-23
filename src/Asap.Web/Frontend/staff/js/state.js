@@ -204,8 +204,6 @@ export function setLeapBibUrlPattern(pattern) { leapBibUrlPattern = pattern; }
 export let leapPatronUrlPattern = '';
 export function setLeapPatronUrlPattern(pattern) { leapPatronUrlPattern = pattern; }
 
-export let lastWorkflowEnabledList = [];
-export function setLastWorkflowEnabledList(list) { lastWorkflowEnabledList = list; }
 
 export const templateFieldIds = [
   'email-submit-subject',

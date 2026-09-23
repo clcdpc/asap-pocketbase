@@ -1,4 +1,4 @@
-import { currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId } from './state.js';
+import { currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, libraryContextLoadSerial } from './state.js';
 import { markSettingsClean } from './api.js';
 import { authorizedJson } from './http.js';
 import { showToast, showConfirm } from './dialogs.js';
@@ -8,23 +8,58 @@ import { normalizeDuplicateStatusLabels, renderDuplicateStatusLabelSettings, col
 export { normalizeDuplicateStatusLabels, renderDuplicateStatusLabelSettings, collectDuplicateStatusLabels };
 
 document.getElementById('btn-reset-library-settings').addEventListener('click', async () => {
-  if (currentLibraryContextOrgId === 'system') return;
+  const actionOrganizationId = currentLibraryContextOrgId;
+  const actionContextSerial = libraryContextLoadSerial;
+  if (actionOrganizationId === 'system') return;
+  const version = lastSavedLibrarySettingsOrgId === actionOrganizationId
+    ? lastSavedLibrarySettingsSnapshot?.version
+    : null;
   const confirmed = await showConfirm('Reset library settings', 'Are you sure you want to delete this library\'s overrides and revert to system defaults?');
-  if (confirmed) {
-    const version = lastSavedLibrarySettingsOrgId === currentLibraryContextOrgId
-      ? lastSavedLibrarySettingsSnapshot?.version
-      : null;
+  if (!confirmed || actionOrganizationId !== currentLibraryContextOrgId || actionContextSerial !== libraryContextLoadSerial) return;
+
+  const contextIsCurrent = () => actionOrganizationId === currentLibraryContextOrgId &&
+    actionContextSerial === libraryContextLoadSerial;
+  async function reloadCurrentLibrarySettings() {
+    const loadSerial = libraryContextLoadSerial;
     try {
-      await authorizedJson('/api/asap/staff/settings/library', {
-        method: 'POST',
-        body: { orgId: currentLibraryContextOrgId, action: 'reset', version }
-      });
-      showToast('Library settings reset to system defaults', 'success');
-      await loadLibrarySettings(currentLibraryContextOrgId);
-      markSettingsClean('clean');
+      const settings = await loadLibrarySettings(actionOrganizationId, { throwOnError: true });
+      const current = actionOrganizationId === currentLibraryContextOrgId && libraryContextLoadSerial === loadSerial + 1;
+      return { current, loaded: current && settings !== undefined };
     } catch (error) {
-      showToast(error.message || 'The library settings could not be reset. Reloaded the current values.', 'error');
-      await loadLibrarySettings(currentLibraryContextOrgId);
+      const current = actionOrganizationId === currentLibraryContextOrgId && libraryContextLoadSerial === loadSerial + 1;
+      return { current, loaded: false, error };
+    }
+  }
+
+  try {
+    await authorizedJson('/api/asap/staff/settings/library', {
+      method: 'POST',
+      body: { orgId: actionOrganizationId, action: 'reset', version }
+    });
+  } catch (error) {
+    if (!contextIsCurrent()) return;
+    if (error?.response?.code === 'stale_version') {
+      const reload = await reloadCurrentLibrarySettings();
+      if (reload.current) {
+        const message = reload.loaded
+          ? 'Library settings changed in another session. Current values were reloaded.'
+          : `Library settings changed in another session, but current values could not be reloaded: ${reload.error?.message || 'reload failed.'}`;
+        showToast(message, 'error');
+      }
+      return;
+    }
+    showToast(error.message || 'The library settings could not be reset.', 'error');
+    return;
+  }
+
+  if (!contextIsCurrent()) return;
+  const reload = await reloadCurrentLibrarySettings();
+  if (reload.current) {
+    if (reload.loaded) {
+      markSettingsClean('clean');
+      showToast('Library settings reset to system defaults', 'success');
+    } else {
+      showToast(`Library settings were reset, but current values could not be reloaded: ${reload.error?.message || 'reload failed.'}`, 'error');
     }
   }
 });

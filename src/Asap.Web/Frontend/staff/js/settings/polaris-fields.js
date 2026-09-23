@@ -176,13 +176,15 @@ export async function renderLibraryParticipationCheckboxes() {
 
   try {
     const values = await authorizedJson('/api/asap/staff/organizations');
+    const activeOrganizationIds = new Set(values
+      .filter(item => item.isActive === true || item.active === true)
+      .map(item => String(item.id)));
     const orgs = values
       .filter(item => String(item.id) !== '1')
       .map(item => ({
         organizationId: String(item.id),
         displayName: item.displayName,
-        name: item.displayName,
-        active: item.active === true
+        name: item.displayName
       }));
 
     if (!orgs.length) {
@@ -200,8 +202,7 @@ export async function renderLibraryParticipationCheckboxes() {
     container.setAttribute('data-loaded', 'true');
     const checkboxes = container.querySelectorAll('.lib-participation-cb');
     checkboxes.forEach(cb => {
-      const organization = orgs.find(org => org.organizationId === cb.value);
-      cb.checked = organization?.active === true;
+      cb.checked = activeOrganizationIds.has(cb.value);
     });
   } catch (err) {
     console.error('Failed to load libraries for participation list', err);

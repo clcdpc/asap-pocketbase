@@ -100,6 +100,48 @@ const { pathToFileURL } = require('url');
     assert.strictEqual(library.autoClaimStaff[0].displayName, 'Large-ID Librarian');
     assert.strictEqual(library.autoClaimStaff[0].libraryOrgId, '2');
 
+    const canonicalResponse = JSON.parse(fs.readFileSync(path.join(
+      __dirname, 'fixtures', 'settings', 'canonical-library-settings-response.json'), 'utf8'));
+    const canonical = buildLegacySettingsFormModel(canonicalResponse, '2');
+    assert.strictEqual(canonical.provenance.authoritative, true);
+    assert.strictEqual(canonical.commonCreatorStateTrusted, true);
+    assert.deepStrictEqual(canonical.provenance.librarySets.commonCreators, { exists: false, values: [] });
+    assert.strictEqual(canonical.workflow.commonAuthorsList, 'N. K. Jemisin\nOctavia E. Butler',
+      'an absent library set must display the current system-owned values');
+    assert.deepStrictEqual(canonical.provenance.librarySets.allowedPatronCodeIds, { exists: false, values: [] });
+    assert.deepStrictEqual(canonical.uiText.publicationOptions.map(option => option.id), ['current_year', 'older']);
+    assert.strictEqual(canonical.providers.length, 3);
+    assert.strictEqual(canonical.providers[1].id, '202');
+    assert.strictEqual(canonical.formats.find(format => format.code === 'dvd').isEnabled, false);
+    assert.strictEqual(canonical.formats.find(format => format.code === 'zine').id, '9007199254741003');
+    assert.strictEqual(canonical.uiText.formatRules.zine.customFields.audience_note.labelOverride, 'Zine audience');
+    assert.strictEqual(canonical.customFields[0].id, '9007199254741009');
+    assert.strictEqual(canonical.autoClaimRules.length, 1,
+      'inactive historical auto-claim records must not become current editor assignments');
+    assert.strictEqual(canonical.autoClaimRules[0].staffUserId, '9007199254740993');
+    assert.strictEqual(canonical.autoClaimRules[0].materialFormatId, '9007199254741003');
+    assert.strictEqual(canonical.autoClaimStaff[0].id, '9007199254740993');
+    assert.strictEqual(canonical.templates.find(item => item.templateKey === 'suggestion_submitted').id,
+      '9007199254741005');
+    assert.strictEqual(canonical.emails.suggestion_submitted.subject, 'Harbor request received: {{title}}');
+    assert.strictEqual(canonical.templates.find(item => item.templateKey === 'purchase_approved').overridden, false);
+    assert.strictEqual(canonical.templates.find(item => item.templateKey === 'rejection:local-budget').id,
+      '9007199254741007');
+    assert.strictEqual(canonical.uiText.logoAlt, 'Harbor City Library');
+    assert.strictEqual(canonical.uiText.brandingInherited, true);
+
+    const canonicalSystemResponse = JSON.parse(fs.readFileSync(path.join(
+      __dirname, 'fixtures', 'settings', 'canonical-system-settings-response.json'), 'utf8'));
+    const canonicalSystem = buildLegacySettingsFormModel(canonicalSystemResponse, 'system');
+    assert.strictEqual(canonicalSystem.providers.length, 3,
+      'an empty disabled backend provider placeholder must not appear as a fourth configured provider');
+    assert.strictEqual(canonicalSystem.uiText.systemNotEnabledMessage,
+      canonicalSystemResponse.stored.systemSettings.systemNotEnabledMessage,
+      'system editor must retain the unexpanded placeholder template from stored settings');
+    assert.strictEqual(canonicalSystem.uiText.misconfiguredMessage,
+      canonicalSystemResponse.stored.systemSettings.misconfiguredMessage,
+      'system editor must retain the unexpanded misconfigured-message template from stored settings');
+
     const unavailable = buildLegacySettingsFormModel({ stored: {}, effective: {} }, '2');
     assert.strictEqual(unavailable.commonCreatorStateTrusted, false);
     assert.strictEqual(unavailable.patronCodeStateTrusted, false);

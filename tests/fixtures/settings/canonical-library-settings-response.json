@@ -1,0 +1,393 @@
+{
+  "orgId": "2",
+  "organization": {
+    "id": 2,
+    "name": "Harbor City Library",
+    "abbreviation": "HCL",
+    "active": true,
+    "version": "AQIDBAUGBwg="
+  },
+  "isOverride": true,
+  "hasOverrides": true,
+  "version": "AQIDBAUGBwk=",
+  "stored": {
+    "systemSettings": {
+      "staffUrl": "https://staff.harbor.example.org",
+      "leapBibUrlPattern": "https://catalog.harbor.example.org/bib/{{bibid}}",
+      "leapPatronUrlPattern": "https://catalog.harbor.example.org/patron/{{patron-id}}",
+      "formatIconUrlPattern": "https://assets.harbor.example.org/formats/{format}.svg",
+      "systemNotEnabledMessage": "{{library}} has not joined Harbor Suggestions.",
+      "misconfiguredMessage": "Harbor Suggestions needs staff attention at {{library}}.",
+      "patronEmbedAllowedOrigins": ["https://harbor.example.org", "https://branch.harbor.example.org"],
+      "version": "AQIDBAUGBwo="
+    },
+    "polaris": {
+      "host": "https://polaris.harbor.example.org",
+      "accessId": "harbor-staff-client",
+      "staffDomain": "HARBOR",
+      "adminUser": "suggestions-service",
+      "workstationId": 83,
+      "systemPolarisUserId": 49017,
+      "organizationIdForRequests": 731,
+      "pickupOrganizationId": 914,
+      "hasApiKey": true,
+      "hasAdminPassword": true,
+      "version": "AQIDBAUGBAs="
+    },
+    "configuredSystem": {
+      "workflow": {
+        "suggestionLimit": 13,
+        "suggestionLimitMessage": "System limit is thirteen this week.",
+        "outstandingTimeoutEnabled": true,
+        "outstandingTimeoutDays": 62,
+        "outstandingTimeoutSendEmail": true,
+        "outstandingTimeoutRejectionTemplateId": "906",
+        "holdPickupTimeoutEnabled": true,
+        "holdPickupTimeoutDays": 25,
+        "pendingHoldTimeoutEnabled": false,
+        "pendingHoldTimeoutDays": 46,
+        "additionalCopyTimeoutEnabled": true,
+        "additionalCopyTimeoutDays": 35,
+        "autoPromote": true,
+        "commonAuthorsEnabled": true,
+        "commonAuthorsLabel": "System creators",
+        "commonAuthorsHelp": "Choose an established creator.",
+        "commonAuthorsMessage": "A creator suggestion is optional.",
+        "allowPatronAutoholdOptOut": true,
+        "allowAnyRegisteredCardLogin": false,
+        "patronCodeEligibilityEnabled": true,
+        "patronCodeEligibilityMessage": "This card cannot submit requests.",
+        "version": "AQIDBAUGBgw="
+      },
+      "patron": {
+        "pageTitle": "Harbor Suggestions",
+        "barcodeLabel": "Library card number",
+        "pinLabel": "Library PIN",
+        "loginPrompt": "Sign in with your Harbor card.",
+        "loginNote": "Use the PIN assigned by Harbor City Library.",
+        "suggestionFormNote": "Staff review each request before ordering.",
+        "noEmailMessage": "Add an email to your library account for updates.",
+        "successTitle": "Request received",
+        "successMessage": "Your request is in the Harbor review queue.",
+        "alreadySubmittedMessage": "This title already has a request.",
+        "ebookMessage": "Digital editions are reviewed separately.",
+        "eaudiobookMessage": "Audio editions are reviewed separately.",
+        "suggestionStatusLabel": "Submitted to Harbor",
+        "outstandingPurchaseStatusLabel": "Waiting for Harbor purchase",
+        "pendingHoldStatusLabel": "Waiting for Harbor cataloging",
+        "holdPlacedStatusLabel": "Harbor hold placed",
+        "closedStatusLabel": "Completed at Harbor",
+        "rejectedStatusLabel": "Declined by Harbor",
+        "holdCompletedStatusLabel": "Picked up at Harbor",
+        "holdNotPickedUpStatusLabel": "Harbor hold expired",
+        "manualStatusLabel": "Staff handled at Harbor",
+        "silentStatusLabel": "Harbor staff review"
+      },
+      "email": {
+        "fromAddress": "suggestions@harbor.example.org",
+        "fromName": "Harbor City Library",
+        "hasPostmarkToken": true,
+        "version": "AQIDBAUGBg0="
+      },
+      "publicationOptions": {
+        "exists": true,
+        "values": [
+          { "id": "current_year", "label": "Published this year", "enabled": true, "sortOrder": 12 },
+          { "id": "older", "label": "Published earlier", "enabled": false, "sortOrder": 38 }
+        ]
+      },
+      "commonCreators": {
+        "exists": true,
+        "values": [
+          { "value": "N. K. Jemisin", "sortOrder": 17 },
+          { "value": "Octavia E. Butler", "sortOrder": 41 }
+        ]
+      },
+      "allowedPatronCodeIds": { "exists": true, "values": ["31", "47", "9007199254740993"] },
+      "providers": [
+        { "kind": "system", "id": "9007199254740995", "key": "external_search_1", "isEnabled": true, "label": "Harbor Catalog", "urlTemplate": "https://catalog.harbor.example.org/search?q={{title}}", "version": "AQIDBAUGBg4=" },
+        { "kind": "system", "id": "202", "key": "external_search_2", "isEnabled": false, "label": "Research Index", "urlTemplate": "https://research.harbor.example.org/?isbn={{isbn}}", "version": "AQIDBAUGBg8=" },
+        { "kind": "system", "id": "203", "key": "external_search_3", "isEnabled": true, "label": "Regional Catalog", "urlTemplate": "https://regional.example.org/search?author={{author}}", "version": "AQIDBAUGBBA=" }
+      ],
+      "formats": [
+        { "kind": "system", "id": "9007199254740997", "materialFormatId": null, "ownerOrganizationId": "1", "code": "book", "label": "Printed books", "sortOrder": 11, "isEnabled": true, "messageBehavior": "none", "message": "", "titleMode": "required", "titleLabel": "Book title", "authorMode": "optional", "authorLabel": "Creator", "identifierMode": "required", "identifierLabel": "ISBN", "publicationMode": "hidden", "publicationLabel": "Publication date", "version": "AQIDBAUGBBE=" },
+        { "kind": "system", "id": "102", "materialFormatId": null, "ownerOrganizationId": "1", "code": "dvd", "label": "Video disc", "sortOrder": 28, "isEnabled": false, "messageBehavior": "message", "message": "Ask staff about video formats.", "titleMode": "required", "titleLabel": "Film title", "authorMode": "hidden", "authorLabel": "Director", "identifierMode": "optional", "identifierLabel": "UPC", "publicationMode": "optional", "publicationLabel": "Release year", "version": "AQIDBAUGBBI=" }
+      ],
+      "templates": [
+        { "id": "9007199254740999", "organizationId": "1", "templateKey": "suggestion_submitted", "sourceTemplateId": null, "displayName": "Request submitted", "subject": "Harbor received: {{title}}", "body": "Hello {{patron_name}}, Harbor received your request for {{title}}.", "enabled": true, "isCustom": false, "sortOrder": 10, "version": "AQIDBAUGBBM=" },
+        { "id": "901", "organizationId": "1", "templateKey": "purchase_approved", "sourceTemplateId": null, "displayName": "Purchase approved", "subject": "Harbor will order {{title}}", "body": "Harbor approved your request for {{title}}.", "enabled": true, "isCustom": false, "sortOrder": 20, "version": "AQIDBAUGBBQ=" },
+        { "id": "902", "organizationId": "1", "templateKey": "already_owned", "sourceTemplateId": null, "displayName": "Already owned", "subject": "Harbor already has {{title}}", "body": "Check the Harbor catalog for {{title}}.", "enabled": true, "isCustom": false, "sortOrder": 30, "version": "AQIDBAUGBBU=" },
+        { "id": "903", "organizationId": "1", "templateKey": "rejected", "sourceTemplateId": null, "displayName": "Request declined", "subject": "Harbor cannot order {{title}}", "body": "Harbor declined your request for {{title}}.", "enabled": true, "isCustom": false, "sortOrder": 40, "version": "AQIDBAUGBBY=" },
+        { "id": "904", "organizationId": "1", "templateKey": "hold_placed", "sourceTemplateId": null, "displayName": "Hold placed", "subject": "A Harbor hold is ready", "body": "Harbor placed a hold for {{title}}.", "enabled": true, "isCustom": false, "sortOrder": 50, "version": "AQIDBAUGBBc=" },
+        { "id": "905", "organizationId": "1", "templateKey": "rejection:rejected", "sourceTemplateId": null, "displayName": "General rejection", "subject": "Harbor declined {{title}}", "body": "Harbor cannot order this item.", "enabled": true, "isCustom": false, "sortOrder": 60, "version": "AQIDBAUGBBg=" },
+        { "id": "906", "organizationId": "1", "templateKey": "rejection:system-budget", "sourceTemplateId": null, "displayName": "Budget limit", "subject": "Harbor budget limit", "body": "Harbor cannot order this item due to budget.", "enabled": true, "isCustom": false, "sortOrder": 70, "version": "AQIDBAUGBBk=" }
+      ],
+      "branding": { "hasLogo": true, "contentType": "image/png", "fileName": "harbor-logo.png", "altText": "Harbor City Library", "version": "AQIDBAUGBBo=" }
+    },
+    "libraryOverride": {
+      "workflow": {
+        "suggestionLimit": null,
+        "suggestionLimitMessage": null,
+        "outstandingTimeoutEnabled": null,
+        "outstandingTimeoutDays": 72,
+        "outstandingTimeoutSendEmail": null,
+        "outstandingTimeoutRejectionTemplateId": null,
+        "holdPickupTimeoutEnabled": null,
+        "holdPickupTimeoutDays": null,
+        "pendingHoldTimeoutEnabled": null,
+        "pendingHoldTimeoutDays": 19,
+        "additionalCopyTimeoutEnabled": null,
+        "additionalCopyTimeoutDays": null,
+        "autoPromote": false,
+        "commonAuthorsEnabled": null,
+        "commonAuthorsLabel": null,
+        "commonAuthorsHelp": null,
+        "commonAuthorsMessage": null,
+        "allowPatronAutoholdOptOut": null,
+        "allowAnyRegisteredCardLogin": null,
+        "patronCodeEligibilityEnabled": null,
+        "patronCodeEligibilityMessage": null,
+        "version": "AQIDBAUGBBs="
+      },
+      "patron": null,
+      "email": null,
+      "publicationOptions": { "exists": false, "values": [] },
+      "commonCreators": { "exists": false, "values": [] },
+      "allowedPatronCodeIds": { "exists": false, "values": [] },
+      "providers": [
+        { "kind": "libraryOverride", "id": "202", "key": null, "isEnabled": null, "label": "Harbor Research Index", "urlTemplate": "https://archive.harbor.example.org/search?q={{isbn}}", "version": "AQIDBAUGBBw=" }
+      ],
+      "formats": [
+        { "kind": "systemOverride", "id": "9007199254741001", "materialFormatId": "9007199254740997", "ownerOrganizationId": "1", "code": null, "label": "Harbor books", "sortOrder": null, "isEnabled": null, "messageBehavior": null, "message": null, "titleMode": null, "titleLabel": null, "authorMode": null, "authorLabel": null, "identifierMode": "hidden", "identifierLabel": "Harbor catalog number", "publicationMode": null, "publicationLabel": null, "version": "AQIDBAUGBB0=" },
+        { "kind": "custom", "id": "9007199254741003", "materialFormatId": null, "ownerOrganizationId": "2", "code": "zine", "label": "Community zine", "sortOrder": 57, "isEnabled": true, "messageBehavior": "message", "message": "Bring a local zine to the Harbor desk.", "titleMode": "required", "titleLabel": "Zine title", "authorMode": "optional", "authorLabel": "Maker", "identifierMode": "hidden", "identifierLabel": "Identifier", "publicationMode": "optional", "publicationLabel": "Issue date", "version": "AQIDBAUGBB4=" }
+      ],
+      "templates": [
+        { "id": "9007199254741005", "organizationId": "2", "templateKey": "suggestion_submitted", "sourceTemplateId": "9007199254740999", "displayName": null, "subject": "Harbor request received: {{title}}", "body": null, "enabled": true, "isCustom": false, "sortOrder": 10, "version": "AQIDBAUGBB8=" },
+        { "id": "9007199254741007", "organizationId": "2", "templateKey": "rejection:local-budget", "sourceTemplateId": null, "displayName": "Local budget review", "subject": "Harbor budget decision", "body": "Harbor deferred this request because of local budget.", "enabled": true, "isCustom": true, "sortOrder": 80, "version": "AQIDBAUGBCA=" }
+      ],
+      "branding": { "hasLogo": false, "contentType": null, "fileName": null, "altText": null, "version": null }
+    },
+    "workflow": {
+      "suggestionLimit": null,
+      "suggestionLimitMessage": null,
+      "outstandingTimeoutEnabled": null,
+      "outstandingTimeoutDays": 72,
+      "outstandingTimeoutSendEmail": null,
+      "outstandingTimeoutRejectionTemplateId": null,
+      "holdPickupTimeoutEnabled": null,
+      "holdPickupTimeoutDays": null,
+      "pendingHoldTimeoutEnabled": null,
+      "pendingHoldTimeoutDays": 19,
+      "additionalCopyTimeoutEnabled": null,
+      "additionalCopyTimeoutDays": null,
+      "autoPromote": false,
+      "commonAuthorsEnabled": null,
+      "commonAuthorsLabel": null,
+      "commonAuthorsHelp": null,
+      "commonAuthorsMessage": null,
+      "allowPatronAutoholdOptOut": null,
+      "allowAnyRegisteredCardLogin": null,
+      "patronCodeEligibilityEnabled": null,
+      "patronCodeEligibilityMessage": null,
+      "version": "AQIDBAUGBBs="
+    },
+    "patron": {
+      "pageTitle": "Harbor Suggestions",
+      "barcodeLabel": "Library card number",
+      "pinLabel": "Library PIN",
+      "loginPrompt": "Sign in with your Harbor card.",
+      "loginNote": "Use the PIN assigned by Harbor City Library.",
+      "suggestionFormNote": "Staff review each request before ordering.",
+      "noEmailMessage": "Add an email to your library account for updates.",
+      "successTitle": "Request received",
+      "successMessage": "Your request is in the Harbor review queue.",
+      "alreadySubmittedMessage": "This title already has a request.",
+      "ebookMessage": "Digital editions are reviewed separately.",
+      "eaudiobookMessage": "Audio editions are reviewed separately.",
+      "suggestionStatusLabel": "Submitted to Harbor",
+      "outstandingPurchaseStatusLabel": "Waiting for Harbor purchase",
+      "pendingHoldStatusLabel": "Waiting for Harbor cataloging",
+      "holdPlacedStatusLabel": "Harbor hold placed",
+      "closedStatusLabel": "Completed at Harbor",
+      "rejectedStatusLabel": "Declined by Harbor",
+      "holdCompletedStatusLabel": "Picked up at Harbor",
+      "holdNotPickedUpStatusLabel": "Harbor hold expired",
+      "manualStatusLabel": "Staff handled at Harbor",
+      "silentStatusLabel": "Harbor staff review"
+    },
+    "email": { "fromAddress": "suggestions@harbor.example.org", "fromName": "Harbor City Library", "hasPostmarkToken": true, "version": "AQIDBAUGBg0=" },
+    "origins": ["https://harbor.example.org", "https://branch.harbor.example.org"],
+    "publicationOptions": ["current_year", "older"],
+    "commonCreators": ["N. K. Jemisin", "Octavia E. Butler"],
+    "allowedPatronCodeIds": ["31", "47", "9007199254740993"],
+    "providers": [
+      { "key": "external_search_1", "id": "9007199254740995", "isEnabled": true, "label": "Harbor Catalog", "urlTemplate": "https://catalog.harbor.example.org/search?q={{title}}", "system": { "isEnabled": true, "label": "Harbor Catalog", "urlTemplate": "https://catalog.harbor.example.org/search?q={{title}}" }, "overridden": false },
+      { "key": "external_search_2", "id": "202", "isEnabled": false, "label": "Harbor Research Index", "urlTemplate": "https://archive.harbor.example.org/search?q={{isbn}}", "system": { "isEnabled": false, "label": "Research Index", "urlTemplate": "https://research.harbor.example.org/?isbn={{isbn}}" }, "overridden": true },
+      { "key": "external_search_3", "id": "203", "isEnabled": true, "label": "Regional Catalog", "urlTemplate": "https://regional.example.org/search?author={{author}}", "system": { "isEnabled": true, "label": "Regional Catalog", "urlTemplate": "https://regional.example.org/search?author={{author}}" }, "overridden": false }
+    ],
+    "formats": [
+      { "id": "9007199254740997", "code": "book", "ownerOrganizationId": "1", "label": "Harbor books", "sortOrder": 11, "isEnabled": true, "messageBehavior": "none", "message": "", "titleMode": "required", "titleLabel": "Book title", "authorMode": "optional", "authorLabel": "Creator", "identifierMode": "hidden", "identifierLabel": "Harbor catalog number", "publicationMode": "hidden", "publicationLabel": "Publication date", "overridden": true, "version": "AQIDBAUGBB0=" },
+      { "id": "102", "code": "dvd", "ownerOrganizationId": "1", "label": "Video disc", "sortOrder": 28, "isEnabled": false, "messageBehavior": "message", "message": "Ask staff about video formats.", "titleMode": "required", "titleLabel": "Film title", "authorMode": "hidden", "authorLabel": "Director", "identifierMode": "optional", "identifierLabel": "UPC", "publicationMode": "optional", "publicationLabel": "Release year", "overridden": false, "version": "AQIDBAUGBBI=" },
+      { "id": "9007199254741003", "code": "zine", "ownerOrganizationId": "2", "label": "Community zine", "sortOrder": 57, "isEnabled": true, "messageBehavior": "message", "message": "Bring a local zine to the Harbor desk.", "titleMode": "required", "titleLabel": "Zine title", "authorMode": "optional", "authorLabel": "Maker", "identifierMode": "hidden", "identifierLabel": "Identifier", "publicationMode": "optional", "publicationLabel": "Issue date", "overridden": false, "version": "AQIDBAUGBB4=" }
+    ],
+    "customFields": [
+      { "id": "9007199254741009", "key": "audience_note", "type": "select", "label": "Audience note", "helpText": "Choose the intended audience.", "enabled": true, "sortOrder": 37, "options": [ { "id": "general", "label": "General readers", "enabled": true, "sortOrder": 13 }, { "id": "specialist", "label": "Specialists", "enabled": false, "sortOrder": 31 } ], "version": "AQIDBAUGBCI=" }
+    ],
+    "templates": [
+      { "id": "9007199254740999", "organizationId": "1", "templateKey": "suggestion_submitted", "sourceTemplateId": null, "displayName": "Request submitted", "subject": "Harbor received: {{title}}", "body": "Hello {{patron_name}}, Harbor received your request for {{title}}.", "enabled": true, "isCustom": false, "sortOrder": 10, "version": "AQIDBAUGBBM=" },
+      { "id": "901", "organizationId": "1", "templateKey": "purchase_approved", "sourceTemplateId": null, "displayName": "Purchase approved", "subject": "Harbor will order {{title}}", "body": "Harbor approved your request for {{title}}.", "enabled": true, "isCustom": false, "sortOrder": 20, "version": "AQIDBAUGBBQ=" },
+      { "id": "902", "organizationId": "1", "templateKey": "already_owned", "sourceTemplateId": null, "displayName": "Already owned", "subject": "Harbor already has {{title}}", "body": "Check the Harbor catalog for {{title}}.", "enabled": true, "isCustom": false, "sortOrder": 30, "version": "AQIDBAUGBBU=" },
+      { "id": "903", "organizationId": "1", "templateKey": "rejected", "sourceTemplateId": null, "displayName": "Request declined", "subject": "Harbor cannot order {{title}}", "body": "Harbor declined your request for {{title}}.", "enabled": true, "isCustom": false, "sortOrder": 40, "version": "AQIDBAUGBBY=" },
+      { "id": "904", "organizationId": "1", "templateKey": "hold_placed", "sourceTemplateId": null, "displayName": "Hold placed", "subject": "A Harbor hold is ready", "body": "Harbor placed a hold for {{title}}.", "enabled": true, "isCustom": false, "sortOrder": 50, "version": "AQIDBAUGBBc=" },
+      { "id": "905", "organizationId": "1", "templateKey": "rejection:rejected", "sourceTemplateId": null, "displayName": "General rejection", "subject": "Harbor declined {{title}}", "body": "Harbor cannot order this item.", "enabled": true, "isCustom": false, "sortOrder": 60, "version": "AQIDBAUGBBg=" },
+      { "id": "906", "organizationId": "1", "templateKey": "rejection:system-budget", "sourceTemplateId": null, "displayName": "Budget limit", "subject": "Harbor budget limit", "body": "Harbor cannot order this item due to budget.", "enabled": true, "isCustom": false, "sortOrder": 70, "version": "AQIDBAUGBBk=" },
+      { "id": "9007199254741005", "organizationId": "2", "templateKey": "suggestion_submitted", "sourceTemplateId": "9007199254740999", "displayName": null, "subject": "Harbor request received: {{title}}", "body": null, "enabled": true, "isCustom": false, "sortOrder": 10, "version": "AQIDBAUGBB8=" },
+      { "id": "9007199254741007", "organizationId": "2", "templateKey": "rejection:local-budget", "sourceTemplateId": null, "displayName": "Local budget review", "subject": "Harbor budget decision", "body": "Harbor deferred this request because of local budget.", "enabled": true, "isCustom": true, "sortOrder": 80, "version": "AQIDBAUGBCA=" }
+    ],
+    "autoClaimRules": [
+      { "id": "9007199254741011", "materialFormatId": "9007199254741003", "staffUserId": "9007199254740993", "active": true, "version": "AQIDBAUGBCM=" },
+      { "id": "9007199254741013", "materialFormatId": "102", "staffUserId": "9007199254740995", "active": false, "version": "AQIDBAUGBCQ=" }
+    ],
+    "branding": { "hasLogo": false, "contentType": null, "fileName": null, "altText": null, "version": null }
+  },
+  "effective": {
+    "workflow": {
+      "suggestionLimit": 13,
+      "suggestionLimitMessage": "System limit is thirteen this week.",
+      "outstandingTimeoutEnabled": true,
+      "outstandingTimeoutDays": 72,
+      "outstandingTimeoutSendEmail": true,
+      "outstandingTimeoutRejectionTemplateId": "906",
+      "holdPickupTimeoutEnabled": true,
+      "holdPickupTimeoutDays": 25,
+      "pendingHoldTimeoutEnabled": false,
+      "pendingHoldTimeoutDays": 19,
+      "additionalCopyTimeoutEnabled": true,
+      "additionalCopyTimeoutDays": 35,
+      "autoPromote": false,
+      "commonAuthorsEnabled": true,
+      "commonAuthorsLabel": "System creators",
+      "commonAuthorsHelp": "Choose an established creator.",
+      "commonAuthorsMessage": "A creator suggestion is optional.",
+      "allowPatronAutoholdOptOut": true,
+      "allowAnyRegisteredCardLogin": false,
+      "patronCodeEligibilityEnabled": true,
+      "patronCodeEligibilityMessage": "This card cannot submit requests."
+    },
+    "organizationId": 2,
+    "organizationName": "Harbor City Library",
+    "isActive": true,
+    "suggestionLimit": 13,
+    "suggestionLimitMessage": "System limit is thirteen this week.",
+    "allowAnyRegisteredCardLogin": false,
+    "allowPatronAutoholdOptOut": true,
+    "patronCodeEligibilityEnabled": true,
+    "patronCodeEligibilityMessage": "This card cannot submit requests.",
+    "allowedPatronCodeIds": ["31", "47", "9007199254740993"],
+    "pageTitle": "Harbor Suggestions",
+    "barcodeLabel": "Library card number",
+    "pinLabel": "Library PIN",
+    "loginPrompt": "Sign in with your Harbor card.",
+    "loginNote": "Use the PIN assigned by Harbor City Library.",
+    "suggestionFormNote": "Staff review each request before ordering.",
+    "noEmailMessage": "Add an email to your library account for updates.",
+    "successTitle": "Request received",
+    "successMessage": "Your request is in the Harbor review queue.",
+    "alreadySubmittedMessage": "This title already has a request.",
+    "systemNotEnabledMessage": "{{library}} has not joined Harbor Suggestions.",
+    "misconfiguredMessage": "Harbor Suggestions needs staff attention at {{library}}.",
+    "ebookMessage": "Digital editions are reviewed separately.",
+    "eaudiobookMessage": "Audio editions are reviewed separately.",
+    "duplicateStatusLabels": {
+      "suggestion": "Submitted to Harbor",
+      "outstanding_purchase": "Waiting for Harbor purchase",
+      "pending_hold": "Waiting for Harbor cataloging",
+      "hold_placed": "Harbor hold placed",
+      "closed": "Completed at Harbor",
+      "rejected": "Declined by Harbor",
+      "hold_completed": "Picked up at Harbor",
+      "hold_not_picked_up": "Harbor hold expired",
+      "manual": "Staff handled at Harbor",
+      "silent": "Harbor staff review"
+    },
+    "externalSearchProviders": [
+      { "id": "9007199254740995", "key": "external_search_1", "isEnabled": true, "label": "Harbor Catalog", "urlTemplate": "https://catalog.harbor.example.org/search?q={{title}}", "sortOrder": 10 },
+      { "id": "202", "key": "external_search_2", "isEnabled": false, "label": "Harbor Research Index", "urlTemplate": "https://archive.harbor.example.org/search?q={{isbn}}", "sortOrder": 20 },
+      { "id": "203", "key": "external_search_3", "isEnabled": true, "label": "Regional Catalog", "urlTemplate": "https://regional.example.org/search?author={{author}}", "sortOrder": 30 }
+    ],
+    "publicationOptions": ["current_year", "older"],
+    "commonCreators": ["N. K. Jemisin", "Octavia E. Butler"],
+    "commonCreatorsLabel": "System creators",
+    "commonCreatorsHelp": "Choose an established creator.",
+    "commonCreatorsMessage": "A creator suggestion is optional.",
+    "commonCreatorsEnabled": true,
+    "formats": [
+      { "id": "9007199254740997", "code": "book", "label": "Harbor books", "sortOrder": 11, "isEnabled": true, "messageBehavior": "none", "message": "", "title": { "mode": "required", "label": "Book title" }, "author": { "mode": "optional", "label": "Creator" }, "identifier": { "mode": "hidden", "label": "Harbor catalog number" }, "publication": { "mode": "hidden", "label": "Publication date" }, "customFields": { "audience_note": { "mode": "optional", "labelOverride": "Harbor audience" } } },
+      { "id": "102", "code": "dvd", "label": "Video disc", "sortOrder": 28, "isEnabled": false, "messageBehavior": "message", "message": "Ask staff about video formats.", "title": { "mode": "required", "label": "Film title" }, "author": { "mode": "hidden", "label": "Director" }, "identifier": { "mode": "optional", "label": "UPC" }, "publication": { "mode": "optional", "label": "Release year" }, "customFields": {} },
+      { "id": "9007199254741003", "code": "zine", "label": "Community zine", "sortOrder": 57, "isEnabled": true, "messageBehavior": "message", "message": "Bring a local zine to the Harbor desk.", "title": { "mode": "required", "label": "Zine title" }, "author": { "mode": "optional", "label": "Maker" }, "identifier": { "mode": "hidden", "label": "Identifier" }, "publication": { "mode": "optional", "label": "Issue date" }, "customFields": { "audience_note": { "mode": "required", "labelOverride": "Zine audience" } } }
+    ],
+    "customFields": [
+      { "id": "9007199254741009", "key": "audience_note", "type": "select", "label": "Audience note", "helpText": "Choose the intended audience.", "sortOrder": 37, "options": [ { "id": "general", "label": "General readers", "sortOrder": 13 }, { "id": "specialist", "label": "Specialists", "sortOrder": 31 } ] }
+    ],
+    "email": { "fromAddress": "suggestions@harbor.example.org", "fromName": "Harbor City Library", "hasServerToken": true },
+    "submissionTemplate": { "templateKey": "suggestion_submitted", "subjectTemplate": "Harbor received: {{title}}", "bodyTemplate": "Hello {{patron_name}}, Harbor received your request for {{title}}." },
+    "hasLogo": true,
+    "logoAltText": "Harbor City Library"
+  },
+  "workflow": {
+    "suggestionLimit": 13,
+    "suggestionLimitMessage": "System limit is thirteen this week.",
+    "allowAnyRegisteredCardLogin": false,
+    "allowPatronAutoholdOptOut": true,
+    "patronCodeEligibilityEnabled": true,
+    "patronCodeEligibilityMessage": "This card cannot submit requests.",
+    "commonAuthorsEnabled": true,
+    "commonAuthorsLabel": "System creators",
+    "commonAuthorsHelp": "Choose an established creator.",
+    "commonAuthorsMessage": "A creator suggestion is optional.",
+    "system": false
+  },
+  "ui_text": {
+    "publicationOptions": ["current_year", "older"],
+    "pageTitle": "Harbor Suggestions",
+    "barcodeLabel": "Library card number",
+    "pinLabel": "Library PIN",
+    "loginPrompt": "Sign in with your Harbor card.",
+    "loginNote": "Use the PIN assigned by Harbor City Library.",
+    "suggestionFormNote": "Staff review each request before ordering.",
+    "noEmailMessage": "Add an email to your library account for updates.",
+    "successTitle": "Request received",
+    "successMessage": "Your request is in the Harbor review queue.",
+    "alreadySubmittedMessage": "This title already has a request.",
+    "ebookMessage": "Digital editions are reviewed separately.",
+    "eaudiobookMessage": "Audio editions are reviewed separately.",
+    "duplicateStatusLabels": {
+      "suggestion": "Submitted to Harbor", "outstanding_purchase": "Waiting for Harbor purchase", "pending_hold": "Waiting for Harbor cataloging", "hold_placed": "Harbor hold placed", "closed": "Completed at Harbor", "rejected": "Declined by Harbor", "hold_completed": "Picked up at Harbor", "hold_not_picked_up": "Harbor hold expired", "manual": "Staff handled at Harbor", "silent": "Harbor staff review"
+    },
+    "systemNotEnabledMessage": "{{library}} has not joined Harbor Suggestions.",
+    "misconfiguredMessage": "Harbor Suggestions needs staff attention at {{library}}."
+  },
+  "emails": {
+    "fromAddress": "suggestions@harbor.example.org",
+    "fromName": "Harbor City Library",
+    "hasPostmarkToken": true,
+    "templates": [
+      { "id": "9007199254740999", "organizationId": "1", "templateKey": "suggestion_submitted", "sourceTemplateId": null, "displayName": "Request submitted", "subject": "Harbor received: {{title}}", "body": "Hello {{patron_name}}, Harbor received your request for {{title}}.", "enabled": true, "isCustom": false, "sortOrder": 10, "version": "AQIDBAUGBBM=" },
+      { "id": "901", "organizationId": "1", "templateKey": "purchase_approved", "sourceTemplateId": null, "displayName": "Purchase approved", "subject": "Harbor will order {{title}}", "body": "Harbor approved your request for {{title}}.", "enabled": true, "isCustom": false, "sortOrder": 20, "version": "AQIDBAUGBBQ=" },
+      { "id": "902", "organizationId": "1", "templateKey": "already_owned", "sourceTemplateId": null, "displayName": "Already owned", "subject": "Harbor already has {{title}}", "body": "Check the Harbor catalog for {{title}}.", "enabled": true, "isCustom": false, "sortOrder": 30, "version": "AQIDBAUGBBU=" },
+      { "id": "903", "organizationId": "1", "templateKey": "rejected", "sourceTemplateId": null, "displayName": "Request declined", "subject": "Harbor cannot order {{title}}", "body": "Harbor declined your request for {{title}}.", "enabled": true, "isCustom": false, "sortOrder": 40, "version": "AQIDBAUGBBY=" },
+      { "id": "904", "organizationId": "1", "templateKey": "hold_placed", "sourceTemplateId": null, "displayName": "Hold placed", "subject": "A Harbor hold is ready", "body": "Harbor placed a hold for {{title}}.", "enabled": true, "isCustom": false, "sortOrder": 50, "version": "AQIDBAUGBBc=" },
+      { "id": "905", "organizationId": "1", "templateKey": "rejection:rejected", "sourceTemplateId": null, "displayName": "General rejection", "subject": "Harbor declined {{title}}", "body": "Harbor cannot order this item.", "enabled": true, "isCustom": false, "sortOrder": 60, "version": "AQIDBAUGBBg=" },
+      { "id": "906", "organizationId": "1", "templateKey": "rejection:system-budget", "sourceTemplateId": null, "displayName": "Budget limit", "subject": "Harbor budget limit", "body": "Harbor cannot order this item due to budget.", "enabled": true, "isCustom": false, "sortOrder": 70, "version": "AQIDBAUGBBk=" },
+      { "id": "9007199254741005", "organizationId": "2", "templateKey": "suggestion_submitted", "sourceTemplateId": "9007199254740999", "displayName": null, "subject": "Harbor request received: {{title}}", "body": null, "enabled": true, "isCustom": false, "sortOrder": 10, "version": "AQIDBAUGBB8=" },
+      { "id": "9007199254741007", "organizationId": "2", "templateKey": "rejection:local-budget", "sourceTemplateId": null, "displayName": "Local budget review", "subject": "Harbor budget decision", "body": "Harbor deferred this request because of local budget.", "enabled": true, "isCustom": true, "sortOrder": 80, "version": "AQIDBAUGBCA=" }
+    ],
+    "submissionTemplate": { "templateKey": "suggestion_submitted", "subjectTemplate": "Harbor received: {{title}}", "bodyTemplate": "Hello {{patron_name}}, Harbor received your request for {{title}}." }
+  },
+  "formatClaimRules": [
+    { "id": "9007199254741011", "materialFormatId": "9007199254741003", "staffUserId": "9007199254740993", "active": true, "version": "AQIDBAUGBCM=" },
+    { "id": "9007199254741013", "materialFormatId": "102", "staffUserId": "9007199254740995", "active": false, "version": "AQIDBAUGBCQ=" }
+  ],
+  "autoClaimStaff": [{ "id": "9007199254740993", "label": "Harbor Librarian" }],
+  "originsForEditor": ["https://harbor.example.org", "https://branch.harbor.example.org"]
+}

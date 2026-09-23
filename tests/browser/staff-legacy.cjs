@@ -99,6 +99,173 @@ async function post(context, baseOrigin, route, data) {
   });
 }
 
+async function runLegacySettingsNoEditRoundTrip(page, context, baseOrigin, orgId, expectedSuggestionLimit) {
+  const select = page.locator('#select-library-context');
+  if (await select.inputValue() !== orgId) {
+    await select.selectOption(orgId, { force: true });
+  }
+  await page.waitForFunction(async ({ expectedOrgId, expectedSuggestionLimit: expected }) => {
+    const { currentLibraryContextOrgId } = await import('/staff/js/state.js');
+    const { currentLegacySettingsFormModel } = await import('/staff/js/state.js');
+    return currentLibraryContextOrgId === expectedOrgId &&
+      currentLegacySettingsFormModel?.contextOrgId === expectedOrgId &&
+      document.getElementById('suggestion-limit')?.value === expected;
+  }, { expectedOrgId: orgId, expectedSuggestionLimit: String(expectedSuggestionLimit) });
+
+  const beforeResponse = await context.request.get(
+    `${baseOrigin}/api/asap/staff/settings/library?orgId=${encodeURIComponent(orgId)}`
+  );
+  assert.equal(beforeResponse.status(), 200);
+  const before = await beforeResponse.json();
+  assert.equal(String(before.workflow.suggestionLimit), String(expectedSuggestionLimit));
+  const organizationsBeforeResponse = await context.request.get(`${baseOrigin}/api/asap/staff/organizations`);
+  assert.equal(organizationsBeforeResponse.status(), 200);
+  const participationBefore = ((await organizationsBeforeResponse.json()).data || [])
+    .filter(item => String(item.id) !== '1' && (item.isActive === true || item.active === true))
+    .map(item => String(item.id))
+    .sort();
+  if (orgId === 'system') {
+    try {
+      await page.waitForFunction(expectedIds => {
+        const container = document.getElementById('enabled-libraries-checkbox-container');
+        if (container?.getAttribute('data-loaded') !== 'true') return false;
+        const enabledIds = Array.from(container.querySelectorAll('.lib-participation-cb:checked'))
+          .map(item => item.value)
+          .sort();
+        return JSON.stringify(enabledIds) === JSON.stringify(expectedIds);
+      }, participationBefore, { timeout: 5000 });
+    } catch (error) {
+      const state = await page.evaluate(() => {
+        const container = document.getElementById('enabled-libraries-checkbox-container');
+        return {
+          loaded: container?.getAttribute('data-loaded'),
+          activeIds: container?.getAttribute('data-active-organizations'),
+          rendered: container?.getAttribute('data-rendered-participation'),
+          checkboxes: Array.from(container?.querySelectorAll('.lib-participation-cb') || [])
+            .map(item => ({ id: item.value, checked: item.checked }))
+        };
+      });
+      throw new Error(`Organization participation controls did not settle for ${orgId}: ${JSON.stringify({
+        expected: participationBefore,
+        state,
+        cause: error.message
+      })}`);
+    }
+  }
+
+  const serialized = await page.evaluate(async () => {
+    const { buildSettingsPayload } = await import('/staff/js/settings/serialize-save.js');
+    return buildSettingsPayload();
+  });
+  if (orgId === 'system') {
+    const participationDom = await page.evaluate(() => Array.from(
+      document.querySelectorAll('#enabled-libraries-checkbox-container .lib-participation-cb')
+    ).map(item => ({ id: item.value, checked: item.checked })));
+    const serializedContext = await page.evaluate(async () => {
+      const state = await import('/staff/js/state.js');
+      return {
+        currentLibraryContextOrgId: state.currentLibraryContextOrgId,
+        modelContextOrgId: state.currentLegacySettingsFormModel?.contextOrgId
+      };
+    });
+    assert.deepEqual((serialized.enabledLibraryOrgIds || []).map(String).sort(), participationBefore,
+      `System no-edit form must serialize the actual enabled organization IDs from the .NET DTO: ${JSON.stringify({
+        dom: participationDom,
+        serializedContext,
+        serializedHasPolaris: Object.hasOwn(serialized, 'polaris'),
+        serialized: serialized.enabledLibraryOrgIds
+      })}`);
+    const systemSettings = before.stored.systemSettings;
+    const actualSystemStaffUrl = await page.locator('#system-staff-url').inputValue();
+    const actualSystemNotEnabledMessage = await page.locator('#ui-system-not-enabled-msg').inputValue();
+    const actualMisconfiguredMessage = await page.locator('#ui-misconfigured-msg').inputValue();
+    assert.equal(actualSystemStaffUrl, systemSettings.staffUrl,
+      `system staff URL must be populated from the real Settings DTO: ${JSON.stringify({ actualSystemStaffUrl, expected: systemSettings.staffUrl })}`);
+    assert.equal(actualSystemNotEnabledMessage, systemSettings.systemNotEnabledMessage,
+      `system participation text must be populated from the real Settings DTO: ${JSON.stringify({ actualSystemNotEnabledMessage, expected: systemSettings.systemNotEnabledMessage })}`);
+    assert.equal(actualMisconfiguredMessage, systemSettings.misconfiguredMessage,
+      `system error text must be populated from the real Settings DTO: ${JSON.stringify({ actualMisconfiguredMessage, expected: systemSettings.misconfiguredMessage })}`);
+    assert.equal(serialized.staffUrl, actualSystemStaffUrl);
+    assert.equal(serialized.ui_text.systemNotEnabledMessage, systemSettings.systemNotEnabledMessage);
+    assert.equal(serialized.ui_text.misconfiguredMessage, systemSettings.misconfiguredMessage);
+  }
+  const posted = {
+    ...serialized,
+    orgId,
+    version: before.version
+  };
+  const saveResponse = await post(context, baseOrigin, '/api/asap/staff/settings/library', posted);
+  assert.equal(saveResponse.status(), 200, `${orgId} no-edit Settings save failed: ${await saveResponse.text()}`);
+  assert.equal(posted.orgId, orgId);
+  assert.equal(posted.version, before.version);
+  const standardTemplateKeys = ['suggestion_submitted', 'purchase_approved', 'already_owned', 'rejected', 'hold_placed'];
+  assert.deepEqual(Object.keys(posted.emails || {}).filter(key => standardTemplateKeys.includes(key) || key === 'rejection_templates'), [],
+    `${orgId} no-edit save must not create or rewrite backend email templates from JavaScript defaults`);
+
+  if (orgId === 'system') {
+    assert.equal(posted.polaris.systemPolarisUserId, 731);
+    assert.equal(posted.polaris.organizationIdForRequests, 910);
+    assert.equal(posted.polaris.pickupOrganizationId, 4201);
+    assert.equal(Object.hasOwn(posted.polaris, 'userId'), false);
+    assert.equal(Object.hasOwn(posted.polaris, 'requestingOrgId'), false);
+    assert.equal(Object.hasOwn(posted.polaris, 'pickupOrgId'), false);
+  }
+
+  const afterResponse = await context.request.get(
+    `${baseOrigin}/api/asap/staff/settings/library?orgId=${encodeURIComponent(orgId)}`
+  );
+  assert.equal(afterResponse.status(), 200);
+  const after = await afterResponse.json();
+  const organizationsAfterResponse = await context.request.get(`${baseOrigin}/api/asap/staff/organizations`);
+  assert.equal(organizationsAfterResponse.status(), 200);
+  const participationAfter = ((await organizationsAfterResponse.json()).data || [])
+    .filter(item => String(item.id) !== '1' && (item.isActive === true || item.active === true))
+    .map(item => String(item.id))
+    .sort();
+  assert.deepEqual(participationAfter, participationBefore,
+    `No-edit Settings save changed organization participation for ${orgId}: ${JSON.stringify({
+      before: participationBefore,
+      after: participationAfter,
+      submitted: posted.enabledLibraryOrgIds
+    })}`);
+  const changedStoredKeys = changedPaths(before.stored, after.stored);
+  assert.deepEqual(after.stored, before.stored,
+    `${orgId} no-edit save changed persisted Settings state: ${changedStoredKeys.join(', ')}; templates=${JSON.stringify({
+      emailKeys: Object.keys(posted.emails || {}),
+      before: (before.stored.templates || []).map(({ id, organizationId, templateKey, sourceTemplateId, isCustom }) =>
+        ({ id, organizationId, templateKey, sourceTemplateId, isCustom })),
+      after: (after.stored.templates || []).map(({ id, organizationId, templateKey, sourceTemplateId, isCustom }) =>
+        ({ id, organizationId, templateKey, sourceTemplateId, isCustom }))
+    })}`);
+
+  if (orgId === '92327') {
+    assert.equal(before.stored.libraryOverride.workflow, null,
+      'The zero-override library must inherit the system workflow without a local row.');
+  }
+  if (orgId === '92328') {
+    assert.equal(before.stored.libraryOverride.workflow.suggestionLimit, 73);
+    assert.equal(before.stored.libraryOverride.workflow.outstandingTimeoutDays, null,
+      'The sparse library fixture must contain exactly one workflow scalar override.');
+  }
+
+  return {
+    orgId,
+    suggestionLimit: expectedSuggestionLimit,
+    postedWorkflowKeys: Object.keys(posted.workflow || {}).sort(),
+    persistedSnapshotUnchanged: true
+  };
+}
+
+function changedPaths(before, after, prefix = '') {
+  if (before && after && typeof before === 'object' && typeof after === 'object') {
+    if (Array.isArray(before) !== Array.isArray(after)) return [prefix || '$'];
+    if (Array.isArray(before) && before.length !== after.length) return [prefix || '$'];
+    const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+    return [...keys].flatMap(key => changedPaths(before[key], after[key], prefix ? `${prefix}.${key}` : key));
+  }
+  return JSON.stringify(before) === JSON.stringify(after) ? [] : [prefix || '$'];
+}
+
 async function runAnonymous(browser, args, axeSource, report) {
   for (const [name, viewport] of [['desktop', { width: 1280, height: 900 }], ['mobile', { width: 390, height: 844 }]]) {
     const { context, traffic } = await createContext(browser, viewport, args.baseOrigin, null);
@@ -160,6 +327,8 @@ async function runSuperAdmin(browser, args, axeSource, report) {
       await page.locator('.polaris-search-result-meta').getByText(/Publication: 2020.*Format: Book.*Identifier: 9780000000001/).waitFor();
     }
     await page.getByText('Owned by you (1)', { exact: true }).waitFor();
+    assert.equal(await page.locator('#polaris-additional-copy-action').count(), 1,
+      'The inherited additional-copy action must expose its stable accessibility identity');
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'polaris-search');
     report.polarisSearchModes = ['identifier', 'title', 'author', 'title_author'];
     await page.locator('#close-polaris-search-btn').click();
@@ -184,6 +353,16 @@ async function runSuperAdmin(browser, args, axeSource, report) {
       const select = document.getElementById('select-library-context');
       return select && !select.disabled && select.options.length > 1;
     });
+    report.settingsNoEditRoundTrips = [];
+    for (const [orgId, suggestionLimit] of [
+      ['system', 17],
+      ['92327', 17],
+      ['92328', 73]
+    ]) {
+      report.settingsNoEditRoundTrips.push(
+        await runLegacySettingsNoEditRoundTrip(page, context, args.baseOrigin, orgId, suggestionLimit)
+      );
+    }
     await page.locator('#select-library-context').selectOption('2', { force: true });
     await page.waitForFunction(() => [...document.getElementById('new-publication').options]
       .some(option => option.value === 'Library early release'));
@@ -191,7 +370,11 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.locator('#btn-new-suggestion').click();
     await page.locator('#newSuggestionModal[open]').waitFor();
     await page.locator('#new-barcode').fill('Test Patron');
+    const newPatronLookup = page.waitForResponse(response =>
+      response.url().endsWith('/api/asap/staff/patron-lookup') && response.request().method() === 'POST');
     await page.locator('#btn-lookup-patron').click();
+    const newPatronResponse = await newPatronLookup;
+    assert.equal(newPatronResponse.status(), 200, await newPatronResponse.text());
     await page.waitForFunction(() => document.getElementById('new-barcode').value === '20000000000001');
     await page.locator('#new-barcode').fill('Multiple Patrons');
     await page.locator('#btn-lookup-patron').click();

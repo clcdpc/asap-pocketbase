@@ -21,7 +21,7 @@ assert.deepEqual(
   unexpectedLegacyAccessibilityFindings(state('polaris-search', 'color-contrast', [
     '#polaris-search-status',
     '.polaris-warning',
-    '.polaris-search-result-actions > .btn-outline-success.btn-sm.btn'
+    '#polaris-additional-copy-action'
   ])),
   []
 );
@@ -48,9 +48,14 @@ assert.equal(
   'A different rule on a baselined target must fail.'
 );
 assert.equal(
-  unexpectedLegacyAccessibilityFindings(state('polaris-search', 'color-contrast', ['.other-actions > .btn-outline-success.btn-sm.btn'])).length,
+  unexpectedLegacyAccessibilityFindings(state('polaris-search', 'color-contrast', ['.btn-outline-success'])).length,
   1,
   'A second element sharing the inherited class must not be baselined.'
+);
+assert.equal(
+  unexpectedLegacyAccessibilityFindings(state('polaris-search', 'color-contrast', ['.polaris-additional-copy-action'])).length,
+  1,
+  'The inherited class without its stable element identity must not be baselined.'
 );
 
 console.log('legacy accessibility baseline tests passed');

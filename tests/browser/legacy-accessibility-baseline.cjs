@@ -5,7 +5,7 @@
 const LEGACY_ACCESSIBILITY_BASELINE = Object.freeze([
   { state: 'polaris-search', ruleId: 'color-contrast', target: '#polaris-search-status' },
   { state: 'polaris-search', ruleId: 'color-contrast', target: '.polaris-warning' },
-  { state: 'polaris-search', ruleId: 'color-contrast', target: '.polaris-search-result-actions > .btn-outline-success.btn-sm.btn' },
+  { state: 'polaris-search', ruleId: 'color-contrast', target: '#polaris-additional-copy-action' },
   { state: 'settings-staff-access', ruleId: 'color-contrast', targetEndsWith: '.staff-user-delete.btn-outline-danger.btn-sm' },
   { state: 'settings-staff-access', ruleId: 'select-name', targetEndsWith: '.staff-role-select' },
   { state: 'postmark-settings', ruleId: 'color-contrast', target: '#btn-reset-library-settings' },

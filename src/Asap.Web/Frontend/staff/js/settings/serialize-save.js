@@ -1,5 +1,5 @@
 import { setFieldValue, setFieldChecked, getFieldValue, getFieldChecked, validateStaffUrl, normalizeStaffUrl, normalizeLeapBibUrlPattern, normalizeLeapPatronUrlPattern, setVisible, isSuperAdminStaff } from '../api.js';
-import { currentLibraryContextOrgId, currentRejectionTemplates, deletedSettingsFormats, deletedSettingsTemplates, leapBibUrlPattern, leapPatronUrlPattern, initialSettingsSnapshot, defaultPublicationOptions, setInitialSettingsSnapshot, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId, currentLegacySettingsFormModel } from '../state.js';
+import { currentLibraryContextOrgId, currentRejectionTemplates, deletedSettingsFormats, deletedSettingsTemplates, leapBibUrlPattern, leapPatronUrlPattern, initialSettingsSnapshot, defaultPublicationOptions, emailTemplateDefaults, setInitialSettingsSnapshot, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId, currentLegacySettingsFormModel } from '../state.js';
 import { normalizeExternalSearchUrlTemplate } from './utils.js';
 import { collectFormatLabels, collectAvailableFormats, collectFormatOrder, collectFormatClaimRules } from '../settings-formats.js';
 import { collectDuplicateStatusLabels } from './duplicate-labels.js';
@@ -41,26 +41,28 @@ function explicitOverride(override, key) {
 }
 
 function scopedFieldShouldSave(model, section, key, value, baselineFallback) {
-  if (model?.isSystem) return true;
-  if (model?.provenance?.authoritative === false) return true;
   const provenance = model?.provenance || {};
   const override = provenance[`${section}Override`] || {};
   const baselineSection = provenance[`system${section.charAt(0).toUpperCase()}${section.slice(1)}`] || {};
   const baseline = hasOwn(baselineSection, key) ? baselineSection[key] : baselineFallback;
+  if (model?.isSystem) return baseline !== undefined && !sameValue(value, baseline);
+  if (provenance.authoritative === false) return true;
   return explicitOverride(override, key) || (baseline !== undefined && !sameValue(value, baseline));
 }
 
 function scopedSetShouldSave(model, key, value) {
-  if (model?.isSystem) return true;
-  if (model?.provenance?.authoritative === false) return true;
+  if (model?.provenance?.authoritative === false) return false;
   const provenance = model?.provenance || {};
-  const raw = provenance.librarySets?.[key];
   const baseline = provenance.systemSets?.[key];
-  const hasOverride = raw?.exists === true && Array.isArray(raw.values) && raw.values.length > 0;
-  const fallback = model?.uiText?.publicationOptions;
-  const baselineValue = Array.isArray(baseline) ? baseline : (key === 'publicationOptions' ? fallback : undefined);
   const comparableSet = setValue => {
     if (key === 'commonCreators') {
+      if (typeof setValue === 'string') {
+        return setValue
+          .split(/\r?\n/)
+          .map(valueItem => valueItem.trim())
+          .filter(Boolean)
+          .join('\n');
+      }
       return (Array.isArray(setValue) ? setValue : [])
         .map(item => typeof item === 'string' ? item : item?.value)
         .filter(valueItem => valueItem !== undefined && valueItem !== null)
@@ -72,48 +74,89 @@ function scopedSetShouldSave(model, key, value) {
     }
     return setValue;
   };
+  if (model?.isSystem) {
+    return !Array.isArray(baseline) || !sameValue(comparableSet(value), comparableSet(baseline));
+  }
+
+  const raw = provenance.librarySets?.[key];
+  const hasOverride = raw?.exists === true && Array.isArray(raw.values) && raw.values.length > 0;
+  const fallback = model?.uiText?.publicationOptions;
+  const baselineValue = Array.isArray(baseline) ? baseline : (key === 'publicationOptions' ? fallback : undefined);
   return hasOverride || (baselineValue !== undefined && !sameValue(comparableSet(value), comparableSet(baselineValue)));
 }
 
 function templateChanged(template, subject, body) {
-  const baselineSubject = template?.subjectBaseline ?? template?.subject;
-  const baselineBody = template?.bodyBaseline ?? template?.body;
-  return !sameValue(subject, baselineSubject) || !sameValue(body, baselineBody);
+  const storedTemplate = template?.overridden === true || template?.hadOverride === true ||
+    (template?.isCustom === true && template?.isNew !== true);
+  const baselineSubject = storedTemplate ? (template?.loadedSubject ?? template?.subject) : (template?.subjectBaseline ?? template?.subject);
+  const baselineBody = storedTemplate ? (template?.loadedBody ?? template?.body) : (template?.bodyBaseline ?? template?.body);
+  const baselineName = storedTemplate
+    ? (template?.loadedName ?? template?.nameBaseline ?? template?.displayNameBaseline ?? template?.displayName ?? template?.name ?? '')
+    : (template?.nameBaseline ?? template?.displayNameBaseline ?? template?.displayName ?? template?.name ?? '');
+  const name = template?.name ?? template?.displayName ?? '';
+  return !sameValue(subject, baselineSubject) || !sameValue(body, baselineBody) || !sameValue(name, baselineName);
 }
 
 function templatePayload(template, subject, body, isSystem) {
   const key = template?.templateKey;
   if (!key) return null;
+  if (template.missingBackendTemplate === true) {
+    const changed = !sameValue(subject, template.subjectBaseline) || !sameValue(body, template.bodyBaseline);
+    if (!changed) return null;
+    if (!isSystem) {
+      throw new Error(`The system has no ${key} template to inherit. Ask a system administrator to create it first.`);
+    }
+    return { templateKey: key, subject, body };
+  }
+  const overridden = template.overridden === true || template.hadOverride === true;
+  const storedTemplate = isSystem || overridden ||
+    (template.isCustom === true && template.isNew !== true);
+  const subjectBaseline = storedTemplate ? (template.loadedSubject ?? template.subject) : (template.subjectBaseline ?? template.subject);
+  const bodyBaseline = storedTemplate ? (template.loadedBody ?? template.body) : (template.bodyBaseline ?? template.body);
+  const subjectChanged = !sameValue(subject, subjectBaseline);
+  const bodyChanged = !sameValue(body, bodyBaseline);
+  const name = template?.name ?? template?.displayName ?? '';
+  const nameBaseline = storedTemplate
+    ? (template.loadedName ?? template.nameBaseline ?? template.displayNameBaseline ?? template.displayName ?? template.name ?? '')
+    : (template.nameBaseline ?? template.displayNameBaseline ?? template.displayName ?? template.name ?? '');
+  const nameChanged = !sameValue(name, nameBaseline);
   if (isSystem) {
+    if (template.isNew !== true && !subjectChanged && !bodyChanged && !nameChanged) return null;
     return {
       templateKey: key,
-      subject,
-      body,
-      ...((template.displayName || template.name) ? { displayName: template.displayName || template.name } : {}),
+      ...(template.isNew === true || subjectChanged ? { subject } : {}),
+      ...(template.isNew === true || bodyChanged ? { body } : {}),
+      ...(nameChanged || template.isNew === true ? { displayName: name || 'Rejection template' } : {}),
       ...(template.enabled !== undefined ? { enabled: template.enabled } : {})
     };
   }
 
   const lineage = template.isCustom !== true;
-  const overridden = template.overridden === true || template.hadOverride === true;
-  if (lineage && !overridden && !templateChanged(template, subject, body)) return null;
+  const changed = templateChanged(template, subject, body);
+  if (!template.isNew && !changed) return null;
+  if (lineage && !overridden && !changed) return null;
 
   const result = {
     templateKey: key,
     ...(lineage && template.sourceTemplateId ? { sourceTemplateId: String(template.sourceTemplateId) } : {}),
     ...(template.isCustom === true ? { isCustom: true } : {})
   };
-  if (template.isNew || template.isCustom === true) {
-    result.displayName = template.displayName || template.name || 'Rejection template';
+  if (template.isNew) {
+    result.displayName = name || 'Rejection template';
     result.subject = subject;
     result.body = body;
     if (template.enabled !== undefined) result.enabled = template.enabled;
     return result;
   }
-  if (templateChanged(template, subject, body)) {
-    if (!sameValue(subject, template.subjectBaseline ?? template.subject)) result.subject = subject;
-    if (!sameValue(body, template.bodyBaseline ?? template.body)) result.body = body;
-  }
+  const baselineSubject = storedTemplate ? (template.loadedSubject ?? template.subject) : (template.subjectBaseline ?? template.subject);
+  const baselineBody = storedTemplate ? (template.loadedBody ?? template.body) : (template.bodyBaseline ?? template.body);
+  const baselineName = storedTemplate
+    ? (template.loadedName ?? template.nameBaseline ?? template.displayNameBaseline ?? template.displayName ?? template.name ?? '')
+    : (template.nameBaseline ?? template.displayNameBaseline ?? template.displayName ?? template.name ?? '');
+  if (!sameValue(subject, baselineSubject)) result.subject = subject;
+  if (!sameValue(body, baselineBody)) result.body = body;
+  if (!sameValue(name, baselineName)) result.displayName = name;
+  if (template.enabled !== undefined && template.isCustom === true) result.enabled = template.enabled;
   return result;
 }
 
@@ -186,7 +229,15 @@ function collectTemplatePayload(model, isSystem) {
     const record = records.find(item => item.templateKey === key && item.isCustom !== true);
     const subject = getFieldValue(subjectId);
     const body = getFieldValue(bodyId);
-    const value = templatePayload(record || { templateKey: key, subjectBaseline: subject, bodyBaseline: body }, subject, body, isSystem);
+    const defaults = emailTemplateDefaults[key] || {};
+    const value = templatePayload(record || {
+      templateKey: key,
+      subject: defaults.subject ?? subject,
+      body: defaults.body ?? body,
+      subjectBaseline: defaults.subject ?? subject,
+      bodyBaseline: defaults.body ?? body,
+      missingBackendTemplate: true
+    }, subject, body, isSystem);
     if (value) templates.push([key, value]);
   });
 
@@ -208,8 +259,11 @@ function collectTemplatePayload(model, isSystem) {
   return result;
 }
 
-export function buildEmailSettingsPayload({ includeTemplates = true, useSmtpFields = false } = {}) {
+export function buildEmailSettingsPayload({ includeTemplates = true, useSmtpFields = false, allowIncomplete = false } = {}) {
   const model = currentLegacySettingsFormModel;
+  if (!allowIncomplete && model && !model.isSystem && model.provenance?.authoritative === false) {
+    throw new Error('Library settings could not be loaded completely. Reload settings before saving.');
+  }
   const isSystem = model?.isSystem || (isSuperAdminStaff() && currentLibraryContextOrgId === 'system');
   const fromAddress = getFieldValue(useSmtpFields ? 'smtp-from' : 'email-from-address');
   const fromName = getFieldValue(useSmtpFields ? 'smtp-from-name' : 'email-from-name');
@@ -223,7 +277,7 @@ export function buildEmailSettingsPayload({ includeTemplates = true, useSmtpFiel
   if (scopedFieldShouldSave(model, 'email', 'fromName', fromName, model?.provenance?.systemEmail?.fromName)) {
     result.fromName = fromName;
   }
-  if (includeTemplates) {
+  if (includeTemplates && model?.templateStateTrusted) {
     Object.assign(result, collectTemplatePayload(model, isSystem));
   }
   return result;
@@ -416,12 +470,8 @@ function _serializeSettingsState(validate = false) {
   }
 
   const logoAlt = getFieldValue('ui-logo-alt');
-  const localBranding = model?.provenance?.libraryBranding;
-  const hasLocalBrandingAlt = !isSystemContext && localBranding &&
-    localBranding.altText !== null && localBranding.altText !== undefined;
-  if (isSystemContext || hasLocalBrandingAlt ||
-      scopedFieldShouldSave(model, 'patron', 'logoAlt', logoAlt,
-        model?.provenance?.systemBranding?.altText ?? model?.uiText?.logoAlt)) {
+  const currentLogoAlt = String(model?.uiText?.logoAlt ?? '');
+  if (!sameValue(logoAlt, currentLogoAlt)) {
     uiText.logoAlt = logoAlt;
   }
   if (isSystemContext) {
@@ -432,7 +482,7 @@ function _serializeSettingsState(validate = false) {
     uiText.publicationOptions = publicationOptions;
   }
 
-  const emails = buildEmailSettingsPayload();
+  const emails = buildEmailSettingsPayload({ allowIncomplete: true });
 
   const nextAutoRejectTemplateId = getFieldValue('outstanding-timeout-rejection-template-id');
   const patronCodeEligibilityEnabled = getPatronCodeEligibilityEnabled();
@@ -526,6 +576,10 @@ export function serializeSettingsState() {
 }
 
 export function buildSettingsPayload() {
+  const model = currentLegacySettingsFormModel;
+  if (model && !model.isSystem && model.provenance?.authoritative === false) {
+    throw new Error('Library settings could not be loaded completely. Reload settings before saving.');
+  }
   return _serializeSettingsState(true);
 }
 

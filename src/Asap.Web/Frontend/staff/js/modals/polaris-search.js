@@ -246,7 +246,8 @@ function renderPolarisSearchResults(row, mode, data, options = {}, ctx, onRefres
     // Always create additionalCopyBtn if we have a BIB ID, but hide it by default
     additionalCopyBtn = document.createElement('button');
     additionalCopyBtn.type = 'button';
-    additionalCopyBtn.className = 'btn btn-sm btn-outline-success hidden';
+    additionalCopyBtn.id = 'polaris-additional-copy-action';
+    additionalCopyBtn.className = 'btn btn-sm btn-outline-success polaris-additional-copy-action hidden';
     additionalCopyBtn.textContent = 'Buy another copy + Queue Now';
     additionalCopyBtn.disabled = true;
     additionalCopyBtn.addEventListener('click', async () => {

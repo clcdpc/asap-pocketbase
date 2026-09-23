@@ -1,5 +1,5 @@
 import { setFieldValue, setFieldChecked, setVisible, updateLibraryOverrideStatusVisibility, loadEmailStatus, updateOrganizationsStatusUi, activateSettingsSection, updateAutoRejectEmailControls } from '../api.js';
-import { currentLibraryContextOrgId, currentSettingsSection, settingsLoading, formatMap, availableFormats, setAvailableFormats, workflowSettings, lastWorkflowEnabledList, setLastWorkflowEnabledList, defaultPublicationOptions, setCurrentFormatClaimRules, setFormatClaimStaffOptions, setLeapBibUrlPattern, setLeapPatronUrlPattern, leapBibUrlPattern, leapPatronUrlPattern, setAdditionalFieldDefinitions, setCurrentPatronFieldConfig, setCurrentLegacySettingsFormModel, setDeletedSettingsFormats } from '../state.js';
+import { currentLibraryContextOrgId, currentSettingsSection, settingsLoading, formatMap, availableFormats, setAvailableFormats, workflowSettings, defaultPublicationOptions, setCurrentFormatClaimRules, setFormatClaimStaffOptions, setLeapBibUrlPattern, setLeapPatronUrlPattern, leapBibUrlPattern, leapPatronUrlPattern, setAdditionalFieldDefinitions, setCurrentPatronFieldConfig, setCurrentLegacySettingsFormModel, setDeletedSettingsFormats } from '../state.js';
 import { toggleTimeoutGroup, toggleHoldPickupTimeoutGroup, togglePendingHoldTimeoutGroup, toggleAdditionalCopyTimeoutGroup, toggleCommonAuthorsGroup } from './toggles.js';
 import { renderFormatSettings, updateModalFormatDropdowns } from '../settings-formats.js';
 import { renderDuplicateStatusLabelSettings } from './duplicate-labels.js';
@@ -193,16 +193,6 @@ export function populateWorkflowForms(wf, providers = []) {
   setFieldValue('additional-copy-timeout-days', wf.additionalCopyTimeoutDays !== undefined ? wf.additionalCopyTimeoutDays : '14');
   workflowSettings.additionalCopyTimeoutEnabled = !!wf.additionalCopyTimeoutEnabled;
   workflowSettings.additionalCopyTimeoutDays = parseInt(wf.additionalCopyTimeoutDays || '14', 10) || 14;
-
-  setLastWorkflowEnabledList((wf.enabledLibraryOrgIds || '').split(',').map(s => s.trim()).filter(s => s.length > 0));
-
-  const container = document.getElementById('enabled-libraries-checkbox-container');
-  if (container) {
-    const checkboxes = container.querySelectorAll('input[type="checkbox"]');
-    checkboxes.forEach(cb => {
-      cb.checked = lastWorkflowEnabledList.indexOf(cb.value) >= 0;
-    });
-  }
 
   toggleTimeoutGroup();
   updateAutoRejectEmailControls();

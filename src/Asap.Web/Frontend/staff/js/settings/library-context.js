@@ -142,7 +142,7 @@ export async function handleLibraryContextSwitch(orgId) {
   return switchLibraryContext(orgId || 'system', select);
 }
 
-export async function loadLibrarySettings(orgId) {
+export async function loadLibrarySettings(orgId, options = {}) {
   const requestedOrgId = orgId || 'system';
   const guard = librarySettingsLoads.begin('library-settings');
   incrementLibraryContextLoadSerial();
@@ -184,6 +184,7 @@ export async function loadLibrarySettings(orgId) {
     }
     console.error('Error loading library settings:', err);
     showToast('Failed to load library settings', 'error');
+    if (options.throwOnError) throw err;
   } finally {
     librarySettingsLoads.finish('library-settings', guard.token);
   }

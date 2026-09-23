@@ -27,7 +27,10 @@ export function normalizePatronFormatRules(rules) {
     if (['none', 'message', 'ebookMessage', 'eaudiobookMessage'].includes(behavior)) {
       normalized[format].messageBehavior = behavior;
     }
-    normalized[format].message = String(incomingFormat.message || normalized[format].message || '').trim();
+    const message = Object.prototype.hasOwnProperty.call(incomingFormat, 'message')
+      ? incomingFormat.message ?? ''
+      : normalized[format].message;
+    normalized[format].message = String(message || '').trim();
 
     const incomingFields = incomingFormat.fields || {};
     patronFormatFields.forEach(fieldInfo => {

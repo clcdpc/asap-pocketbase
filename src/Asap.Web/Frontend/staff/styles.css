@@ -926,6 +926,10 @@ body {
   margin: 0;
 }
 
+#settings-msg.text-success {
+  color: #155724 !important;
+}
+
 /* 11. Responsive Layout */
 @media (max-width: 900px) {
   .analytics-header {

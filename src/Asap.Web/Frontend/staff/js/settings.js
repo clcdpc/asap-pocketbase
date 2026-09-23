@@ -11,7 +11,7 @@ export * from './settings/save-controller.js';
 export * from './settings/save-ui.js';
 export * from './settings/polaris-sync.js';
 
-import { settingsForm, defaultPublicationOptions, verifiedBibId, setVerifiedBibId, currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId } from './state.js';
+import { settingsForm, defaultPublicationOptions, verifiedBibId, setVerifiedBibId, currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, libraryContextLoadSerial } from './state.js';
 import { markSettingsDirty, updateAutoRejectEmailControls } from './api.js';
 import { authorizedJson } from './http.js';
 import { showToast, showConfirm } from './dialogs.js';
@@ -28,6 +28,33 @@ function currentSettingsVersion() {
   return lastSavedLibrarySettingsOrgId === currentLibraryContextOrgId
     ? String(lastSavedLibrarySettingsSnapshot?.version || '')
     : '';
+}
+
+function settingsActionContextIsCurrent(organizationId, contextSerial) {
+  return organizationId === currentLibraryContextOrgId && contextSerial === libraryContextLoadSerial;
+}
+
+async function reportSettingsActionError(error, submittedVersion, actionOrganizationId, actionContextSerial) {
+  const contextIsCurrent = () => actionOrganizationId === currentLibraryContextOrgId &&
+    actionContextSerial === libraryContextLoadSerial;
+  if (error?.response?.code !== 'stale_version') {
+    if (contextIsCurrent()) showToast(error.message, 'error');
+    return;
+  }
+
+  const refreshStartSerial = libraryContextLoadSerial;
+  try {
+    await refreshSettingsView({ showErrors: false, throwOnError: true });
+    await loadStaffConfig();
+  } catch (refreshError) {
+    console.error('Settings changed in another session, but current values could not be reloaded.', refreshError);
+  }
+  if (actionOrganizationId !== currentLibraryContextOrgId || libraryContextLoadSerial > refreshStartSerial + 1) return;
+  const refreshedVersion = currentSettingsVersion();
+  const reloaded = !!refreshedVersion && refreshedVersion !== submittedVersion;
+  showToast(reloaded
+    ? 'Settings changed in another session. Current values were reloaded; review them before trying again.'
+    : 'Settings changed in another session. Reload settings before trying again.', 'error');
 }
 
 bindPolarisSecretControls();
@@ -104,6 +131,9 @@ document.getElementById('ui-logo-file').addEventListener('change', (e) => {
 });
 
 document.getElementById('btn-upload-logo').addEventListener('click', async () => {
+  const actionOrganizationId = currentLibraryContextOrgId;
+  const actionContextSerial = libraryContextLoadSerial;
+  const submittedVersion = currentSettingsVersion();
   const fileInput = document.getElementById('ui-logo-file');
   const altInput = document.getElementById('ui-logo-alt');
   const btn = document.getElementById('btn-upload-logo');
@@ -113,7 +143,7 @@ document.getElementById('btn-upload-logo').addEventListener('click', async () =>
     formData.append('logo', fileInput.files[0]);
   }
   formData.append('logoAlt', altInput.value.trim());
-  formData.append('version', currentSettingsVersion());
+  formData.append('version', submittedVersion);
 
   btn.disabled = true;
   const originalNodes = Array.from(btn.childNodes);
@@ -122,16 +152,19 @@ document.getElementById('btn-upload-logo').addEventListener('click', async () =>
   btn.replaceChildren(spinner, document.createTextNode(' Saving...'));
 
   try {
-    await authorizedJson(`/api/asap/staff/settings/logo?orgId=${encodeURIComponent(currentLibraryContextOrgId)}`, {
+    await authorizedJson(`/api/asap/staff/settings/logo?orgId=${encodeURIComponent(actionOrganizationId)}`, {
       method: 'POST',
       body: formData
     });
 
+    if (!settingsActionContextIsCurrent(actionOrganizationId, actionContextSerial)) return;
     showToast('Branding updated successfully.');
     await refreshSettingsView({ showErrors: true });
     await loadStaffConfig();
   } catch (err) {
-    showToast(err.message, 'error');
+    if (settingsActionContextIsCurrent(actionOrganizationId, actionContextSerial)) {
+      await reportSettingsActionError(err, submittedVersion, actionOrganizationId, actionContextSerial);
+    }
   } finally {
     btn.disabled = false;
     btn.replaceChildren(...originalNodes);
@@ -139,23 +172,30 @@ document.getElementById('btn-upload-logo').addEventListener('click', async () =>
 });
 
 document.getElementById('btn-reset-logo').addEventListener('click', async () => {
+  const actionOrganizationId = currentLibraryContextOrgId;
+  const actionContextSerial = libraryContextLoadSerial;
+  const submittedVersion = currentSettingsVersion();
   if (!await showConfirm('Reset branding?', 'This will delete the library-specific logo and fallback to the system default.')) {
     return;
   }
+  if (!settingsActionContextIsCurrent(actionOrganizationId, actionContextSerial)) return;
 
   const btn = document.getElementById('btn-reset-logo');
   btn.disabled = true;
 
   try {
-    await authorizedJson(`/api/asap/staff/settings/logo?orgId=${encodeURIComponent(currentLibraryContextOrgId)}&version=${encodeURIComponent(currentSettingsVersion())}`, {
+    await authorizedJson(`/api/asap/staff/settings/logo?orgId=${encodeURIComponent(actionOrganizationId)}&version=${encodeURIComponent(submittedVersion)}`, {
       method: 'DELETE'
     });
 
+    if (!settingsActionContextIsCurrent(actionOrganizationId, actionContextSerial)) return;
     showToast('Branding reset to system defaults.');
     await refreshSettingsView({ showErrors: true });
     await loadStaffConfig();
   } catch (err) {
-    showToast(err.message, 'error');
+    if (settingsActionContextIsCurrent(actionOrganizationId, actionContextSerial)) {
+      await reportSettingsActionError(err, submittedVersion, actionOrganizationId, actionContextSerial);
+    }
   } finally {
     btn.disabled = false;
   }
