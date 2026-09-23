@@ -26,6 +26,61 @@ const workflowFormDefaults = {
   patronCodeEligibilityMessage: 'Your library card is not eligible to use this suggestion service.'
 };
 
+export const patronFormDefaults = Object.freeze({
+  pageTitle: '',
+  barcodeLabel: '',
+  pinLabel: '',
+  loginPrompt: 'Please enter your information below to start the suggestion process.',
+  loginNote: 'Use of this service requires a valid library card. Contact your library if you need assistance with your card or PIN.',
+  suggestionFormNote: 'If the library approves your suggestion for purchase, we will email you while it is awaiting ordering and cataloging. Once the item is available in the catalog, we will automatically place a hold when possible and send another update.',
+  noEmailMessage: 'No email is specified on your library account, which means we won\'t be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.',
+  successTitle: 'Suggestion Submitted',
+  successMessage: 'You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>',
+  alreadySubmittedMessage: 'This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.<div>Thank you for using this library\'s suggestion service.</div>'
+});
+
+export const systemMessageFormDefaults = Object.freeze({
+  systemNotEnabledMessage: '{{library}} does not currently participate in this suggestion service.',
+  misconfiguredMessage: 'The {{library}} suggestion system is currently misconfigured. Please contact staff.'
+});
+
+const patronStatusFormDefaults = Object.freeze({
+  suggestionStatusLabel: ['suggestion', 'Received'],
+  outstandingPurchaseStatusLabel: ['outstanding_purchase', 'Under review'],
+  pendingHoldStatusLabel: ['pending_hold', 'Being prepared'],
+  holdPlacedStatusLabel: ['hold_placed', 'Hold placed'],
+  closedStatusLabel: ['closed', 'Completed'],
+  rejectedStatusLabel: ['rejected', 'Not selected for purchase'],
+  holdCompletedStatusLabel: ['hold_completed', 'Completed'],
+  holdNotPickedUpStatusLabel: ['hold_not_picked_up', 'Closed'],
+  manualStatusLabel: ['manual', 'Closed'],
+  silentStatusLabel: ['silent', 'Closed']
+});
+
+function isBlankText(value) {
+  return value === null || value === undefined ||
+    (typeof value === 'string' && value === '');
+}
+
+function patronFormBaseline(values, resolvedValues) {
+  const baseline = { ...values };
+  Object.entries(patronFormDefaults).forEach(([key, fallback]) => {
+    const configured = values?.[key];
+    const resolved = resolvedValues?.[key];
+    baseline[key] = String(!isBlankText(configured)
+      ? configured
+      : (!isBlankText(resolved) ? resolved : fallback));
+  });
+  Object.entries(patronStatusFormDefaults).forEach(([key, [label, fallback]]) => {
+    const configured = values?.[key];
+    const resolved = resolvedValues?.duplicateStatusLabels?.[label];
+    baseline[key] = String(!isBlankText(configured)
+      ? configured
+      : (!isBlankText(resolved) ? resolved : fallback));
+  });
+  return baseline;
+}
+
 function workflowFormBaseline(values) {
   return Object.fromEntries(Object.entries(workflowFormDefaults).map(([key, fallback]) => {
     const value = values?.[key];
@@ -377,8 +432,15 @@ export function buildLegacySettingsFormModel(settings, contextOrgId = 'system') 
     settings.orgId === 'system' ? stored.workflow : null,
     settings.workflow,
     effective.workflow));
-  const systemPatron = mergeObjects(settings.ui_text, effective, stored.patron, configuredSystem.patron);
+  const resolvedPatron = mergeObjects(effective, settings.ui_text);
+  const systemPatron = patronFormBaseline(
+    mergeObjects(settings.ui_text, effective, stored.patron, configuredSystem.patron),
+    resolvedPatron);
   const systemEmail = mergeObjects(settings.emails, effective.email, stored.email, configuredSystem.email);
+  const systemMessageBaseline = Object.fromEntries(Object.entries(systemMessageFormDefaults).map(([key, fallback]) => [
+    key,
+    String(uiText[key] || fallback)
+  ]));
   const systemSets = {
     commonCreators: scopedSnapshot(configuredSystem.commonCreators, null, true, stored.commonCreators ?? effective.commonCreators),
     allowedPatronCodeIds: scopedSnapshot(configuredSystem.allowedPatronCodeIds, null, true, stored.allowedPatronCodeIds ?? effective.allowedPatronCodeIds),
@@ -416,6 +478,7 @@ export function buildLegacySettingsFormModel(settings, contextOrgId = 'system') 
       emailOverride: isSystem ? {} : mergeObjects(libraryOverride.email),
       systemWorkflow,
       systemPatron,
+      systemMessageBaseline,
       systemEmail,
       systemSets,
       librarySets: isSystem ? {} : {

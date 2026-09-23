@@ -188,13 +188,17 @@ async function runLegacySettingsNoEditRoundTrip(
     const actualMisconfiguredMessage = await page.locator('#ui-misconfigured-msg').inputValue();
     assert.equal(actualSystemStaffUrl, systemSettings.staffUrl,
       `system staff URL must be populated from the real Settings DTO: ${JSON.stringify({ actualSystemStaffUrl, expected: systemSettings.staffUrl })}`);
-    assert.equal(actualSystemNotEnabledMessage, systemSettings.systemNotEnabledMessage,
-      `system participation text must be populated from the real Settings DTO: ${JSON.stringify({ actualSystemNotEnabledMessage, expected: systemSettings.systemNotEnabledMessage })}`);
-    assert.equal(actualMisconfiguredMessage, systemSettings.misconfiguredMessage,
-      `system error text must be populated from the real Settings DTO: ${JSON.stringify({ actualMisconfiguredMessage, expected: systemSettings.misconfiguredMessage })}`);
+    assert.equal(actualSystemNotEnabledMessage,
+      before.ui_text.systemNotEnabledMessage || '{{library}} does not currently participate in this suggestion service.',
+      `system participation text must use the effective DTO/default: ${JSON.stringify({ actualSystemNotEnabledMessage, expected: before.ui_text.systemNotEnabledMessage })}`);
+    assert.equal(actualMisconfiguredMessage,
+      before.ui_text.misconfiguredMessage || 'The {{library}} suggestion system is currently misconfigured. Please contact staff.',
+      `system error text must use the effective DTO/default: ${JSON.stringify({ actualMisconfiguredMessage, expected: before.ui_text.misconfiguredMessage })}`);
     assert.equal(serialized.staffUrl, actualSystemStaffUrl);
-    assert.equal(serialized.ui_text.systemNotEnabledMessage, systemSettings.systemNotEnabledMessage);
-    assert.equal(serialized.ui_text.misconfiguredMessage, systemSettings.misconfiguredMessage);
+    assert.equal(Object.hasOwn(serialized.ui_text, 'systemNotEnabledMessage'), false,
+      'A no-edit system save must leave a null system participation message absent.');
+    assert.equal(Object.hasOwn(serialized.ui_text, 'misconfiguredMessage'), false,
+      'A no-edit system save must leave a null system misconfiguration message absent.');
   }
   const posted = {
     ...serialized,
@@ -208,6 +212,48 @@ async function runLegacySettingsNoEditRoundTrip(
     for (const key of nullSystemWorkflowFields) {
       assert.equal(Object.hasOwn(posted.workflow || {}, key), false,
         orgId + ' no-edit save must not materialize the form or serializer fallback for null system workflow.' + key);
+    }
+    const nullSystemPatronFields = [
+      'pageTitle', 'barcodeLabel', 'pinLabel', 'loginPrompt', 'loginNote', 'suggestionFormNote',
+      'noEmailMessage', 'successTitle', 'successMessage', 'alreadySubmittedMessage'
+    ].filter(key => before.stored.configuredSystem.patron?.[key] === null);
+    for (const key of nullSystemPatronFields) {
+      assert.equal(Object.hasOwn(serialized.ui_text || {}, key), false,
+        orgId + ' no-edit save must not materialize null system PatronSettings.' + key);
+    }
+    const nullSystemStatusFields = {
+      suggestionStatusLabel: 'suggestion',
+      outstandingPurchaseStatusLabel: 'outstanding_purchase',
+      pendingHoldStatusLabel: 'pending_hold',
+      holdPlacedStatusLabel: 'hold_placed',
+      closedStatusLabel: 'closed',
+      rejectedStatusLabel: 'rejected',
+      holdCompletedStatusLabel: 'hold_completed',
+      holdNotPickedUpStatusLabel: 'hold_not_picked_up',
+      manualStatusLabel: 'manual',
+      silentStatusLabel: 'silent'
+    };
+    const statusDefaults = {
+      suggestion: 'Received',
+      outstanding_purchase: 'Under review',
+      pending_hold: 'Being prepared',
+      hold_placed: 'Hold placed',
+      closed: 'Completed',
+      rejected: 'Not selected for purchase',
+      hold_completed: 'Completed',
+      hold_not_picked_up: 'Closed',
+      manual: 'Closed',
+      silent: 'Closed'
+    };
+    for (const [field, key] of Object.entries(nullSystemStatusFields)) {
+      if (before.stored.configuredSystem.patron?.[field] !== null) {
+        continue;
+      }
+      const actualLabel = await page.locator(`#duplicate-status-${key}`).inputValue();
+      assert.equal(actualLabel, before.ui_text.duplicateStatusLabels?.[key] || statusDefaults[key],
+        `${orgId} status-label control must show the effective value for ${key}.`);
+      assert.equal(Object.hasOwn(serialized.ui_text?.duplicateStatusLabels || {}, key), false,
+        `${orgId} no-edit save must not materialize null system PatronSettings.${field}.`);
     }
   }
   const saveResponse = await post(context, baseOrigin, '/api/asap/staff/settings/library', posted);

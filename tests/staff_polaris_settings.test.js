@@ -1064,6 +1064,116 @@ function assertBackendShape(expected, actual, path = '$') {
         'A no-edit library save must leave nullable system workflow.' + key + ' inherited.');
     }
 
+    const nullPatronLibraryResponse = structuredClone(canonicalLibraryResponse);
+    const nullSystemPatronFields = [
+      'pageTitle', 'barcodeLabel', 'pinLabel', 'loginPrompt', 'loginNote', 'suggestionFormNote',
+      'noEmailMessage', 'successTitle', 'successMessage', 'alreadySubmittedMessage'
+    ];
+    const nullSystemStatusFields = [
+      'suggestionStatusLabel', 'outstandingPurchaseStatusLabel', 'pendingHoldStatusLabel',
+      'holdPlacedStatusLabel', 'closedStatusLabel', 'rejectedStatusLabel', 'holdCompletedStatusLabel',
+      'holdNotPickedUpStatusLabel', 'manualStatusLabel', 'silentStatusLabel'
+    ];
+    for (const key of nullSystemPatronFields) {
+      nullPatronLibraryResponse.stored.configuredSystem.patron[key] = null;
+      nullPatronLibraryResponse.stored.patron[key] = null;
+    }
+    for (const key of nullSystemStatusFields) {
+      nullPatronLibraryResponse.stored.configuredSystem.patron[key] = null;
+      nullPatronLibraryResponse.stored.patron[key] = null;
+    }
+    nullPatronLibraryResponse.stored.libraryOverride.patron = null;
+    state.setCurrentLibraryContextOrgId('2');
+    formPopulation.applyLibrarySettingsToForm(nullPatronLibraryResponse);
+    await settleAsyncRendering();
+    const patronControlIds = {
+      pageTitle: 'ui-patron-page-title',
+      barcodeLabel: 'ui-barcode-label',
+      pinLabel: 'ui-pin-label',
+      loginPrompt: 'ui-login-prompt',
+      loginNote: 'ui-login-note',
+      suggestionFormNote: 'ui-suggestion-note',
+      noEmailMessage: 'ui-no-email-msg',
+      successTitle: 'ui-success-title',
+      successMessage: 'ui-success-msg',
+      alreadySubmittedMessage: 'ui-already-submitted-msg'
+    };
+    for (const key of nullSystemPatronFields) {
+      const expected = nullPatronLibraryResponse.ui_text[key] ||
+        (key === 'pageTitle' || key === 'barcodeLabel' || key === 'pinLabel' ? '' : undefined);
+      assert.strictEqual(document.getElementById(patronControlIds[key]).value, expected,
+        'A null system PatronSettings value must show the inherited effective value for ' + key + '.');
+    }
+    const statusControlKeys = {
+      suggestionStatusLabel: 'suggestion',
+      outstandingPurchaseStatusLabel: 'outstanding_purchase',
+      pendingHoldStatusLabel: 'pending_hold',
+      holdPlacedStatusLabel: 'hold_placed',
+      closedStatusLabel: 'closed',
+      rejectedStatusLabel: 'rejected',
+      holdCompletedStatusLabel: 'hold_completed',
+      holdNotPickedUpStatusLabel: 'hold_not_picked_up',
+      manualStatusLabel: 'manual',
+      silentStatusLabel: 'silent'
+    };
+    const statusDefaults = {
+      suggestion: 'Received',
+      outstanding_purchase: 'Under review',
+      pending_hold: 'Being prepared',
+      hold_placed: 'Hold placed',
+      closed: 'Completed',
+      rejected: 'Not selected for purchase',
+      hold_completed: 'Completed',
+      hold_not_picked_up: 'Closed',
+      manual: 'Closed',
+      silent: 'Closed'
+    };
+    for (const [field, key] of Object.entries(statusControlKeys)) {
+      assert.strictEqual(document.getElementById('duplicate-status-' + key).value,
+        nullPatronLibraryResponse.ui_text.duplicateStatusLabels[key] || statusDefaults[key],
+        'A null system PatronSettings value must show the inherited status label for ' + field + '.');
+    }
+    const nullPatronNoEditPayload = serializer.buildSettingsPayload();
+    for (const key of nullSystemPatronFields) {
+      assert.strictEqual(Object.hasOwn(nullPatronNoEditPayload.ui_text, key), false,
+        'A no-edit library save must not materialize the inherited default for ' + key + '.');
+    }
+    assert.strictEqual(Object.hasOwn(nullPatronNoEditPayload.ui_text, 'duplicateStatusLabels'), false,
+      'A no-edit library save must not materialize null system status-label defaults.');
+
+    const whitespacePatronResponse = structuredClone(nullPatronLibraryResponse);
+    whitespacePatronResponse.stored.configuredSystem.patron.pageTitle = '   ';
+    whitespacePatronResponse.stored.patron.pageTitle = '   ';
+    whitespacePatronResponse.ui_text.pageTitle = '   ';
+    formPopulation.applyLibrarySettingsToForm(whitespacePatronResponse);
+    await settleAsyncRendering();
+    assert.strictEqual(document.getElementById('ui-patron-page-title').value, '   ',
+      'Whitespace is a configured value because the current form displays it rather than applying a fallback.');
+    assert.strictEqual(Object.hasOwn(serializer.buildSettingsPayload().ui_text, 'pageTitle'), false,
+      'A no-edit save must retain the configured whitespace value without treating it as a form default.');
+
+    const nullSystemMessagesResponse = structuredClone(systemSettingsResponse);
+    nullSystemMessagesResponse.stored.systemSettings.systemNotEnabledMessage = null;
+    nullSystemMessagesResponse.stored.systemSettings.misconfiguredMessage = null;
+    state.setStaffSession({
+      authenticated: true,
+      accessAllowed: true,
+      antiforgeryToken: 'test-antiforgery-token',
+      staff: { role: 'super_admin', userPrincipalName: 'admin@example.org' }
+    });
+    state.setCurrentLibraryContextOrgId('system');
+    formPopulation.applyLibrarySettingsToForm(nullSystemMessagesResponse);
+    await settleAsyncRendering();
+    const nullSystemMessagesPayload = serializer.buildSettingsPayload();
+    for (const key of ['systemNotEnabledMessage', 'misconfiguredMessage']) {
+      assert.strictEqual(Object.hasOwn(nullSystemMessagesPayload.ui_text, key), false,
+        'A no-edit system save must preserve nullable ' + key + ' without materializing its form default.');
+    }
+    const intentionalSystemMessage = document.getElementById('ui-system-not-enabled-msg');
+    intentionalSystemMessage.value += ' Updated';
+    assert.strictEqual(serializer.buildSettingsPayload().ui_text.systemNotEnabledMessage, intentionalSystemMessage.value,
+      'An intentional system-only message edit must still be submitted.');
+
     const index = fs.readFileSync(path.join(staffRoot, 'index.html'), 'utf8');
     const polarisSource = fs.readFileSync(path.join(staffRoot, 'js', 'settings-polaris.js'), 'utf8');
     const collectorSource = fs.readFileSync(path.join(staffRoot, 'js', 'settings', 'polaris-fields.js'), 'utf8');

@@ -460,7 +460,10 @@ function _serializeSettingsState(validate = false) {
   const scopedDuplicateLabels = {};
   Object.entries(DUPLICATE_LABEL_FIELDS).forEach(([key, patronKey]) => {
     const value = duplicateLabels[key];
-    const baseline = model?.provenance?.systemPatron?.[patronKey] ?? model?.uiText?.duplicateStatusLabels?.[key];
+    const storedBaseline = model?.provenance?.systemPatron?.[patronKey];
+    const baseline = typeof storedBaseline === 'string' && storedBaseline.trim()
+      ? storedBaseline
+      : model?.uiText?.duplicateStatusLabels?.[key];
     if (scopedFieldShouldSave(model, 'patron', patronKey, value, baseline)) {
       scopedDuplicateLabels[key] = value;
     }
@@ -475,8 +478,16 @@ function _serializeSettingsState(validate = false) {
     uiText.logoAlt = logoAlt;
   }
   if (isSystemContext) {
-    uiText.systemNotEnabledMessage = getFieldValue('ui-system-not-enabled-msg');
-    uiText.misconfiguredMessage = getFieldValue('ui-misconfigured-msg');
+    [
+      ['systemNotEnabledMessage', 'ui-system-not-enabled-msg'],
+      ['misconfiguredMessage', 'ui-misconfigured-msg']
+    ].forEach(([key, id]) => {
+      const value = getFieldValue(id);
+      const baseline = model?.provenance?.systemMessageBaseline?.[key];
+      if (baseline === undefined || !sameValue(value, baseline)) {
+        uiText[key] = value;
+      }
+    });
   }
   if (publicationOptions !== undefined && scopedSetShouldSave(model, 'publicationOptions', publicationOptions)) {
     uiText.publicationOptions = publicationOptions;

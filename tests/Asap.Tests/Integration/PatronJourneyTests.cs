@@ -455,11 +455,14 @@ public sealed partial class PatronJourneyTests
         }
 
         await settingsPoisoningJourney.SetSystemSuggestionLimitAsync(23);
+        await settingsPoisoningJourney.SetSystemPatronPageTitleAsync("Closure after no-edit system title");
         var inheritedAfterSystemEdit = await factory!.Services
             .GetRequiredService<PatronConfigurationService>()
             .GetAsync(92327, CancellationToken.None);
         Assert.AreEqual(23, inheritedAfterSystemEdit?.SuggestionLimit ?? -1,
             "A library with no local workflow row must inherit later system changes after a no-edit save.");
+        Assert.AreEqual("Closure after no-edit system title", inheritedAfterSystemEdit?.PageTitle,
+            "A library with no local patron row must inherit later system text after a no-edit save.");
         await settingsPoisoningJourney.AssertLibraryOverrideRowsAsync();
 
         await settingsPoisoningJourney.RestoreForFollowingBrowserJourneyAsync();
@@ -8316,6 +8319,18 @@ public sealed partial class PatronJourneyTests
             await command.ExecuteNonQueryAsync();
         }
 
+        public async Task SetSystemPatronPageTitleAsync(string pageTitle)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE [asap].[PatronSettings]
+                SET [PageTitle] = @pageTitle, [UpdatedUtc] = SYSUTCDATETIME()
+                WHERE [OrganizationId] = 1;
+                """;
+            command.Parameters.AddWithValue("@pageTitle", pageTitle);
+            await command.ExecuteNonQueryAsync();
+        }
+
         public async ValueTask DisposeAsync()
         {
             await RestoreAsync(connection);
@@ -8419,6 +8434,25 @@ public sealed partial class PatronJourneyTests
                     [HoldCompletedStatusLabel] = N'Closure hold completed',
                     [HoldNotPickedUpStatusLabel] = N'Closure hold expired',
                     [ManualStatusLabel] = N'Closure manual', [SilentStatusLabel] = N'Closure silent',
+                    [UpdatedUtc] = '2026-09-20T12:34:56'
+                WHERE [OrganizationId] = 1;
+
+                UPDATE [asap].[SystemSettings]
+                SET [SystemNotEnabledMessage] = NULL,
+                    [MisconfiguredMessage] = NULL,
+                    [UpdatedUtc] = '2026-09-20T12:34:56'
+                WHERE [OrganizationId] = 1;
+
+                UPDATE [asap].[PatronSettings]
+                SET [PageTitle] = NULL, [BarcodeLabel] = NULL, [PinLabel] = NULL,
+                    [LoginPrompt] = NULL, [LoginNote] = NULL, [SuggestionFormNote] = NULL,
+                    [NoEmailMessage] = NULL, [SuccessTitle] = NULL, [SuccessMessage] = NULL,
+                    [AlreadySubmittedMessage] = NULL,
+                    [SuggestionStatusLabel] = NULL, [OutstandingPurchaseStatusLabel] = NULL,
+                    [PendingHoldStatusLabel] = NULL, [HoldPlacedStatusLabel] = NULL,
+                    [ClosedStatusLabel] = NULL, [RejectedStatusLabel] = NULL,
+                    [HoldCompletedStatusLabel] = NULL, [HoldNotPickedUpStatusLabel] = NULL,
+                    [ManualStatusLabel] = NULL, [SilentStatusLabel] = NULL,
                     [UpdatedUtc] = '2026-09-20T12:34:56'
                 WHERE [OrganizationId] = 1;
 

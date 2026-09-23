@@ -9,7 +9,7 @@ import { renderAdditionalFieldsEditor } from '../settings-additional-fields.js';
 import { populatePolarisSettingsForm, renderLibraryParticipationCheckboxes } from './polaris-fields.js';
 import { renderPatronCodeEligibilityOptions, setPatronCodeEligibilityMode, updatePatronCodesStatusUi } from './patron-codes.js';
 import { updateSaveButtonText } from './save-ui.js';
-import { buildLegacySettingsFormModel } from './legacy-form-model.js';
+import { buildLegacySettingsFormModel, patronFormDefaults, systemMessageFormDefaults } from './legacy-form-model.js';
 
 function patronPortalUrl(orgId, embed) {
   const url = new URL('/patron/', window.location.origin);
@@ -283,27 +283,27 @@ export function populatePatronUiForms(uiText) {
   const fileLabel = document.querySelector('label[for="ui-logo-file"] + .custom-file-label') || document.querySelector('label[for="ui-logo-file"]');
   if (fileLabel) fileLabel.textContent = 'Choose image...';
 
-  setFieldValue('ui-patron-page-title', uiText.pageTitle || '');
-  setFieldValue('ui-barcode-label', uiText.barcodeLabel || '');
-  setFieldValue('ui-pin-label', uiText.pinLabel || '');
-  setFieldValue('ui-login-prompt', uiText.loginPrompt || 'Please enter your information below to start the suggestion process.');
-  setFieldValue('ui-login-note', uiText.loginNote || 'Use of this service requires a valid library card. Contact your library if you need assistance with your card or PIN.');
-  setFieldValue('ui-suggestion-note', uiText.suggestionFormNote || 'If the library approves your suggestion for purchase, we will email you while it is awaiting ordering and cataloging. Once the item is available in the catalog, we will automatically place a hold when possible and send another update.');
-  setFieldValue('ui-no-email-msg', uiText.noEmailMessage || 'No email is specified on your library account, which means we won\'t be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.');
+  setFieldValue('ui-patron-page-title', uiText.pageTitle || patronFormDefaults.pageTitle);
+  setFieldValue('ui-barcode-label', uiText.barcodeLabel || patronFormDefaults.barcodeLabel);
+  setFieldValue('ui-pin-label', uiText.pinLabel || patronFormDefaults.pinLabel);
+  setFieldValue('ui-login-prompt', uiText.loginPrompt || patronFormDefaults.loginPrompt);
+  setFieldValue('ui-login-note', uiText.loginNote || patronFormDefaults.loginNote);
+  setFieldValue('ui-suggestion-note', uiText.suggestionFormNote || patronFormDefaults.suggestionFormNote);
+  setFieldValue('ui-no-email-msg', uiText.noEmailMessage || patronFormDefaults.noEmailMessage);
   const participationGroup = document.getElementById('ui-system-not-enabled-group');
   if (participationGroup) {
     participationGroup.classList.toggle('hidden', currentLibraryContextOrgId !== 'system');
   }
-  setFieldValue('ui-system-not-enabled-msg', uiText.systemNotEnabledMessage || '{{library}} does not currently participate in this suggestion service.');
+  setFieldValue('ui-system-not-enabled-msg', uiText.systemNotEnabledMessage || systemMessageFormDefaults.systemNotEnabledMessage);
   const misconfiguredGroup = document.getElementById('ui-misconfigured-group');
   if (misconfiguredGroup) {
     misconfiguredGroup.classList.toggle('hidden', currentLibraryContextOrgId !== 'system');
   }
-  setFieldValue('ui-misconfigured-msg', uiText.misconfiguredMessage || 'The {{library}} suggestion system is currently misconfigured. Please contact staff.');
+  setFieldValue('ui-misconfigured-msg', uiText.misconfiguredMessage || systemMessageFormDefaults.misconfiguredMessage);
 
-  setFieldValue('ui-success-title', uiText.successTitle || 'Suggestion Submitted');
-  setFieldValue('ui-success-msg', uiText.successMessage || 'You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>');
-  setFieldValue('ui-already-submitted-msg', uiText.alreadySubmittedMessage || 'This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.<div>Thank you for using this library\'s suggestion service.</div>');
+  setFieldValue('ui-success-title', uiText.successTitle || patronFormDefaults.successTitle);
+  setFieldValue('ui-success-msg', uiText.successMessage || patronFormDefaults.successMessage);
+  setFieldValue('ui-already-submitted-msg', uiText.alreadySubmittedMessage || patronFormDefaults.alreadySubmittedMessage);
   renderDuplicateStatusLabelSettings(uiText.duplicateStatusLabels || {}, uiText.duplicateStatusLabelsSource || '', !!uiText.duplicateStatusLabelsInherited);
 
   const labels = uiText.formatLabels || {};
