@@ -27,7 +27,7 @@ async function settle() {
 
 (async () => {
   const root = path.resolve(__dirname, '..');
-  const frontend = path.join(root, 'src', 'Asap.Web', 'Frontend');
+  const frontend = process.env.ASAP_FRONTEND_TEST_ROOT || path.join(root, 'src', 'Asap.Web', 'Frontend');
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'asap-polaris-race-'));
   let dom;
   try {
@@ -96,6 +96,20 @@ async function settle() {
       await settle();
     };
     const open = (row) => search.openPolarisSearch(row, 'title', {}, ctx);
+
+    const oldContext = open({ type: 'title_request', id: '9007199254740994', title: 'Old context', libraryOrgId: '2' });
+    await settle();
+    const latestContext = open({ type: 'title_request', id: '9007199254740995', title: 'Latest context', libraryOrgId: '2' });
+    await settle();
+    await completeSearch(1, 'Latest context result');
+    await latestContext;
+    await completeSearch(0, 'Old context result');
+    await oldContext;
+    assert.match(results().textContent, /Latest context result/);
+    assert.doesNotMatch(results().textContent, /Old context result/,
+      'an older dialog invocation cannot replace a newer result');
+    dialog.close();
+    lookups.length = 0;
 
     // The same large ID exists in both tables. Search remains available for the copy.
     const copyOpen = open(copy);
