@@ -44,10 +44,14 @@ async function settle() {
 
     const calls = [];
     let completeRun;
+    let failRun;
     global.fetch = (url, options = {}) => {
       calls.push({ url: String(url), options });
       if (String(url).includes('/workflow/run-now')) {
-        return new Promise(resolve => { completeRun = resolve; });
+        return new Promise((resolve, reject) => {
+          completeRun = resolve;
+          failRun = reject;
+        });
       }
       throw new Error(`Unexpected request: ${url}`);
     };
@@ -60,7 +64,7 @@ async function settle() {
       authenticated: true,
       accessAllowed: true,
       antiforgeryToken: 'workflow-test-token',
-      staff: { role: 'super_admin', organizationId: 1 }
+      staff: { id: '7', role: 'super_admin', organizationId: 1 }
     });
     const gridContext = {
       currentStatus: 'pending_hold',
@@ -105,10 +109,14 @@ async function settle() {
     state.setCurrentLibraryContextOrgId('system');
     state.setCurrentWorkflowOrgScopeId('all');
     document.getElementById('workflow-library-scope').value = 'all';
+    state.staffSession.staff = state.normalizeSessionStaff({
+      ...state.staffSession.staff,
+      displayName: 'Updated profile'
+    });
     completeRun(response(202, { code: 'queued', jobId: 'job-2', organizationId: 2 }));
     await settle();
     assert.match(document.getElementById('job-msg').textContent, /queued.*Library 2/i,
-      'late feedback must describe the submitted scope and queue acceptance');
+      'profile replacement must retain truthful feedback for the submitted queue request');
     assert.equal(button.disabled, false);
 
     gridData.updateAdminActions('closed', gridContext);
@@ -209,6 +217,26 @@ async function settle() {
     gridData.updateAdminActions('closed', gridContext);
     assert.match(document.getElementById('job-msg').textContent, /reload/i,
       'tab navigation must preserve the reason the workflow action is disabled');
+
+    delete button.dataset.reloadMessage;
+    button.disabled = false;
+    state.setCurrentWorkflowOrgScopeId('2');
+    document.getElementById('workflow-library-scope').value = '2';
+    button.click();
+    await settle();
+    assert.equal(calls.length, 8);
+    failRun(new TypeError('Failed to fetch'));
+    await settle();
+    assert.match(document.getElementById('job-msg').textContent, /may have been queued.*reload/i,
+      'a lost response must not claim a rejected or completed workflow run');
+    assert.equal(button.disabled, true, 'an uncertain queue outcome must block an accidental repeat');
+    button.click();
+    await settle();
+    assert.equal(calls.length, 8);
+    gridData.clearJobMessage();
+    gridData.updateAdminActions('closed', gridContext);
+    assert.match(document.getElementById('job-msg').textContent, /may have been queued.*reload/i,
+      'tab navigation must preserve the unconfirmed outcome warning');
   } finally {
     dom?.window.close();
     fs.rmSync(temporary, { recursive: true, force: true });

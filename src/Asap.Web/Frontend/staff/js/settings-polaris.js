@@ -61,6 +61,9 @@ document.getElementById('btn-run-workflow-now').addEventListener('click', async 
   if (btn.disabled) return;
   const msg = document.getElementById('job-msg');
   const actionStaff = staffSession.staff;
+  const sameActionStaff = () => staffSession.authenticated && staffSession.accessAllowed &&
+    staffSession.staff?.id === actionStaff.id && staffSession.staff.role === actionStaff.role &&
+    String(staffSession.staff.organizationId) === String(actionStaff.organizationId);
   const scope = actionStaff.role === 'super_admin' ? currentWorkflowOrgScopeId : String(actionStaff.organizationId);
   if (actionStaff.role === 'super_admin') {
     const scopeWrapper = document.getElementById('workflow-library-scope-label');
@@ -78,7 +81,7 @@ document.getElementById('btn-run-workflow-now').addEventListener('click', async 
 
   try {
     const data = await authorizedJson(url, { method: 'POST' });
-    if (staffSession.staff !== actionStaff || !staffSession.authenticated || !staffSession.accessAllowed) {
+    if (!sameActionStaff()) {
       msg.textContent = '';
       return;
     }
@@ -96,8 +99,15 @@ document.getElementById('btn-run-workflow-now').addEventListener('click', async 
     msg.textContent = `Workflow run queued for ${scopeLabel}${data.jobId ? ` (job ${data.jobId})` : ''}.`;
     msg.className = 'mb-3 font-weight-bold text-success';
   } catch (err) {
-    if (staffSession.staff !== actionStaff || !staffSession.authenticated || !staffSession.accessAllowed) {
+    if (!sameActionStaff()) {
       msg.textContent = '';
+      return;
+    }
+    if (!err.status) {
+      reloadRequired = true;
+      msg.textContent = `Workflow run for ${scopeLabel} may have been queued, but its result could not be confirmed. Reload this page before another run.`;
+      msg.className = 'mb-3 font-weight-bold text-warning';
+      btn.dataset.reloadMessage = msg.textContent;
       return;
     }
     msg.textContent = 'Error: ' + err.message;
