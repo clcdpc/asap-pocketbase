@@ -42,7 +42,8 @@ export function updateSaveBarState(state) {
   const warningBadge = document.getElementById('settings-save-warning-badge');
   const discardBtn = document.getElementById('settings-discard-btn');
   const msg = document.getElementById('settings-msg');
-  const effectiveState = state || (settingsDirty ? 'dirty' : 'clean');
+  const effectiveState = settingsReloadRequired && state !== 'saving'
+    ? 'reload' : (state || (settingsDirty ? 'dirty' : 'clean'));
   const isSystem = currentLibraryContextOrgId === 'system';
   const states = {
     clean: ['No changes', isSystem ? 'System defaults are saved.' : 'Library settings are saved.', 'text-muted'],

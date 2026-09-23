@@ -1,7 +1,7 @@
 import { isRequestCanceledError, updateSaveBarState, markSettingsClean, getFieldValue, getFieldChecked } from '../api.js';
 import { authorizedJson } from '../http.js';
 import { showToast } from '../dialogs.js';
-import { settingsForm, currentLibraryContextOrgId, currentSettingsSection, initialSettingsSnapshot, settingsDirty, settingsReloadRequired, settingsSyncInProgress, setSettingsSaving, setSettingsLoading, setInitialSettingsSnapshot, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, libraryContextLoadSerial, deletedSettingsFormats, setDeletedSettingsFormats } from '../state.js';
+import { settingsForm, currentLibraryContextOrgId, currentSettingsSection, initialSettingsSnapshot, settingsDirty, settingsReloadRequired, settingsSyncInProgress, setSettingsReloadRequired, setSettingsSaving, setSettingsLoading, setInitialSettingsSnapshot, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, libraryContextLoadSerial, deletedSettingsFormats, setDeletedSettingsFormats } from '../state.js';
 import { refreshSettingsView, loadStaffConfig } from './refresh.js';
 import { loadStaffUsers } from '../settings-users.js';
 import { cloneLibrarySettingsSnapshot, captureSettingsBaseline, serializeSettingsState, buildSettingsPayload, buildEmailSettingsPayload } from './serialize-save.js';
@@ -120,17 +120,24 @@ export async function saveSettings(options = {}) {
       saveSuperseded = true;
       return false;
     }
+    setSettingsReloadRequired(true);
     // Clear the data-loaded flag so library participation checkboxes re-render after save
     const libCheckboxContainer = document.getElementById('enabled-libraries-checkbox-container');
     if (libCheckboxContainer) libCheckboxContainer.removeAttribute('data-loaded');
     const refreshStartSerial = libraryContextLoadSerial;
     try {
-      await refreshSettingsView({ showErrors: false, throwOnError: true, skipAutoSync: true });
+      const settings = await refreshSettingsView({ showErrors: false, throwOnError: true, skipAutoSync: true, preserveReloadRequired: true });
+      if (!settings?.version) {
+        throw new Error('The current Settings version was not returned.');
+      }
+      if (saveContextOrgId === currentLibraryContextOrgId && libraryContextLoadSerial <= refreshStartSerial + 1) {
+        setSettingsReloadRequired(false);
+      }
       await loadStaffConfig();
       loadStaffUsers();
     } catch (error) {
+      refreshError = error;
       if (!isRequestCanceledError(error)) {
-        refreshError = error;
         console.error('Settings were saved, but the refreshed values could not be loaded.', error);
       }
     }
@@ -203,7 +210,7 @@ export async function saveSettings(options = {}) {
       button.disabled = false;
     });
     if (!saveSuperseded) {
-      updateSaveBarState(saveHadError ? 'error' : (saveSucceeded ? 'saved' : (settingsDirty ? 'dirty' : 'clean')));
+      updateSaveBarState(settingsReloadRequired ? 'reload' : (saveHadError ? 'error' : (saveSucceeded ? 'saved' : (settingsDirty ? 'dirty' : 'clean'))));
     }
   }
 }

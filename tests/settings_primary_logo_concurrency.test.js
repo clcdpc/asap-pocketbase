@@ -222,9 +222,24 @@ async function flush() {
       'the UI must report reset success separately from a failed follow-up read');
     assert.strictEqual(document.getElementById('ui-logo-alt').value, 'Latest Settings after stale reset',
       'a failed reload must not render an assumed inherited value');
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, 'version-6',
+      'the reset response must not be used as a guessed Settings version');
+    assert.strictEqual(state.settingsReloadRequired, true);
+    assert.strictEqual(document.getElementById('settings-save-title').textContent, 'Reload required');
+    const mutationsBeforeBlockedReset = libraryResets.length;
+    assert.strictEqual(await settings.saveSettings(), false);
+    document.getElementById('btn-reset-library-settings').click();
+    await flush();
+    assert.strictEqual(libraryResets.length, mutationsBeforeBlockedReset,
+      'another reset must be blocked while the committed version is unknown');
+    document.getElementById('btn-upload-logo').click();
+    await flush();
+    assert.strictEqual(logoMutations.length, 3,
+      'branding must also be blocked while the committed version is unknown');
 
     await settings.loadSettings();
     assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, 'version-7');
+    assert.strictEqual(state.settingsReloadRequired, false);
     const readsBeforeUploadRefreshFailure = settingsReads;
     document.getElementById('ui-logo-alt').value = 'Committed upload with unavailable reload';
     document.getElementById('btn-upload-logo').click();

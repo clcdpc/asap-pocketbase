@@ -1,5 +1,5 @@
-import { currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, libraryContextLoadSerial, settingsReloadRequired, settingsSyncInProgress } from './state.js';
-import { markSettingsClean } from './api.js';
+import { currentLibraryContextOrgId, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, libraryContextLoadSerial, settingsReloadRequired, settingsSyncInProgress, setSettingsReloadRequired } from './state.js';
+import { markSettingsClean, updateSaveBarState } from './api.js';
 import { authorizedJson } from './http.js';
 import { showToast, showConfirm } from './dialogs.js';
 import { loadLibrarySettings } from './settings/library-context.js';
@@ -23,12 +23,12 @@ document.getElementById('btn-reset-library-settings').addEventListener('click', 
 
   const contextIsCurrent = () => actionOrganizationId === currentLibraryContextOrgId &&
     actionContextSerial === libraryContextLoadSerial;
-  async function reloadCurrentLibrarySettings() {
+  async function reloadCurrentLibrarySettings(preserveReloadRequired = false) {
     const loadSerial = libraryContextLoadSerial;
     try {
-      const settings = await loadLibrarySettings(actionOrganizationId, { throwOnError: true });
+      const settings = await loadLibrarySettings(actionOrganizationId, { throwOnError: true, preserveReloadRequired });
       const current = actionOrganizationId === currentLibraryContextOrgId && libraryContextLoadSerial === loadSerial + 1;
-      return { current, loaded: current && settings !== undefined };
+      return { current, loaded: current && !!settings?.version };
     } catch (error) {
       const current = actionOrganizationId === currentLibraryContextOrgId && libraryContextLoadSerial === loadSerial + 1;
       return { current, loaded: false, error };
@@ -57,13 +57,22 @@ document.getElementById('btn-reset-library-settings').addEventListener('click', 
   }
 
   if (!contextIsCurrent()) return;
-  const reload = await reloadCurrentLibrarySettings();
+  setSettingsReloadRequired(true);
+  const reload = await reloadCurrentLibrarySettings(true);
   if (reload.current) {
     if (reload.loaded) {
+      setSettingsReloadRequired(false);
       markSettingsClean('clean');
       showToast('Library settings reset to system defaults', 'success');
     } else {
-      showToast(`Library settings were reset, but current values could not be reloaded: ${reload.error?.message || 'reload failed.'}`, 'error');
+      updateSaveBarState('reload');
+      const message = `Library settings were reset, but current values could not be reloaded: ${reload.error?.message || 'reload failed.'} Reload Settings before further changes.`;
+      const settingsMessage = document.getElementById('settings-msg');
+      if (settingsMessage) {
+        settingsMessage.textContent = message;
+        settingsMessage.className = 'mt-2 font-weight-bold text-warning';
+      }
+      showToast(message, 'error');
     }
   }
 });

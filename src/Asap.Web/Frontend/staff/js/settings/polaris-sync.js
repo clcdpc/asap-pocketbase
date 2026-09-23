@@ -52,7 +52,8 @@ export async function syncPolarisOrganizations(options = {}) {
     const patronCodeContainer = document.getElementById('allowed-patron-code-container');
     if (patronCodeContainer) patronCodeContainer.removeAttribute('data-loaded');
     updatePatronCodesStatusUi('loaded', 'Refreshing patron code choices from Polaris.');
-    await renderPatronCodeEligibilityOptions(selectedPatronCodeIds);
+    await renderPatronCodeEligibilityOptions(settingsRefreshError
+      ? selectedPatronCodeIds : collectAllowedPatronCodeIds());
     const patronCodesLoaded = patronCodeContainer?.getAttribute('data-loaded') === 'true';
     const container = document.getElementById('enabled-libraries-checkbox-container');
     if (container) {

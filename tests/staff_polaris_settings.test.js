@@ -469,6 +469,7 @@ function assertBackendShape(expected, actual, path = '$') {
     let deferNextSettingsSave = false;
     let releaseDeferredSettingsSave = null;
     let settingsSaveAttempts = 0;
+    let nextSettingsSaveAdvancesLibraryVersion = false;
     let librarySettingsLoadCount = 0;
     let failNextSettingsRead = false;
     let syncRequests = 0;
@@ -494,6 +495,10 @@ function assertBackendShape(expected, actual, path = '$') {
           }) };
         }
         sentSettingsPayloads.push(body);
+        if (nextSettingsSaveAdvancesLibraryVersion) {
+          nextSettingsSaveAdvancesLibraryVersion = false;
+          librarySettingsResponse.version = 'library-version-after-save';
+        }
         if (deferNextSettingsSave) {
           deferNextSettingsSave = false;
           return new Promise(resolve => {
@@ -752,6 +757,7 @@ function assertBackendShape(expected, actual, path = '$') {
       if (state.currentLibraryContextOrgId === '2') librarySettingsLoadCount++;
       formPopulation.applyLibrarySettingsToForm(response);
       serializer.rememberLastSavedLibrarySettings(response);
+      return response;
     }
     settingsRefresh.registerSettingsRefreshHandlers({
       refreshSettingsView: refreshLibrarySettingsForm,
@@ -956,6 +962,10 @@ function assertBackendShape(expected, actual, path = '$') {
     serializer.rememberLastSavedLibrarySettings(librarySettingsResponse);
     await settleAsyncRendering();
     failNextSettingsRead = true;
+    nextSettingsSaveAdvancesLibraryVersion = true;
+    document.getElementById('ui-login-note').value = 'Committed library draft remains visible';
+    const versionBeforeFailedSaveRefresh = state.lastSavedLibrarySettingsSnapshot.version;
+    const attemptsBeforeFailedSaveRefresh = settingsSaveAttempts;
     settingsRefresh.registerSettingsRefreshHandlers({
       refreshSettingsView: settingsLoader.loadSettings,
       loadStaffConfig: async () => {}
@@ -968,6 +978,21 @@ function assertBackendShape(expected, actual, path = '$') {
       'a failed follow-up read must be reported as a successful save with an incomplete refresh');
     assert.strictEqual(document.getElementById('settings-msg').classList.contains('text-warning'), true,
       'the refresh warning must not be presented as a failed settings save');
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, versionBeforeFailedSaveRefresh,
+      'a failed post-save read must not guess the committed version');
+    assert.strictEqual(state.settingsReloadRequired, true);
+    assert.strictEqual(document.getElementById('settings-save-title').textContent, 'Reload required');
+    assert.strictEqual(document.getElementById('ui-login-note').value, 'Committed library draft remains visible');
+    document.getElementById('ui-login-note').value = 'Second draft while reload is required';
+    document.getElementById('ui-login-note').dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    assert.strictEqual(document.getElementById('settings-save-title').textContent, 'Reload required');
+    assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), false);
+    assert.strictEqual(settingsSaveAttempts, attemptsBeforeFailedSaveRefresh + 1,
+      'a second Settings save must be blocked before it sends a stale version');
+    assert.strictEqual(document.getElementById('ui-login-note').value, 'Second draft while reload is required');
+    await settingsLoader.loadSettings({ skipAutoSync: true });
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, 'library-version-after-save');
+    assert.strictEqual(state.settingsReloadRequired, false);
     settingsRefresh.registerSettingsRefreshHandlers({
       refreshSettingsView: refreshLibrarySettingsForm,
       loadStaffConfig: async () => {}
@@ -1279,6 +1304,9 @@ function assertBackendShape(expected, actual, path = '$') {
       'An intentional system-only message edit must still be submitted.');
 
     systemSettingsResponse.version = 'sync-version-1';
+    systemSettingsResponse.stored.allowedPatronCodeIds = ['14', '28'];
+    systemSettingsResponse.stored.configuredSystem.allowedPatronCodeIds = { exists: true, values: ['14', '28'] };
+    systemSettingsResponse.effective.allowedPatronCodeIds = ['14', '28'];
     enforceSyncVersion = true;
     settingsRefresh.registerSettingsRefreshHandlers({
       refreshSettingsView: settingsLoader.loadSettings,
@@ -1286,18 +1314,36 @@ function assertBackendShape(expected, actual, path = '$') {
     });
     await settingsLoader.loadSettings({ skipAutoSync: true });
     assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, 'sync-version-1');
+    assert.strictEqual(patronCodes.collectAllowedPatronCodeIds(), '14,28');
+    const originalSyncFetch = global.fetch;
+    global.fetch = async (request, options = {}) => {
+      if (String(request) === '/api/asap/staff/organizations/sync') {
+        systemSettingsResponse.stored.allowedPatronCodeIds = ['47'];
+        systemSettingsResponse.stored.configuredSystem.allowedPatronCodeIds = { exists: true, values: ['47'] };
+        systemSettingsResponse.effective.allowedPatronCodeIds = ['47'];
+      }
+      return originalSyncFetch(request, options);
+    };
     const savesBeforeSync = settingsSaveAttempts;
     await polarisSync.syncPolarisOrganizations();
+    global.fetch = originalSyncFetch;
     assert.strictEqual(syncRequests, 1);
     assert.match(document.getElementById('organizations-sync-result').textContent,
       /synced 4 organization records and refreshed patron code choices/i);
     assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, 'sync-version-2',
       'organization sync must reload the authoritative Settings version');
     assert.strictEqual(state.settingsReloadRequired, false);
+    assert.deepStrictEqual(Array.from(document.querySelectorAll('#allowed-patron-code-container input[type="checkbox"]:checked'),
+      checkbox => checkbox.value), ['47']);
+    assert.strictEqual(patronCodes.collectAllowedPatronCodeIds(), '47');
+    assert.strictEqual(Object.hasOwn(serializer.buildSettingsPayload(), 'allowedPatronCodeIds'), false,
+      'a no-edit serialization must not replace the authoritative patron-code set');
     assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), true);
     assert.strictEqual(settingsSaveAttempts, savesBeforeSync + 1,
       'the next ordinary save must succeed once using the post-sync version');
     assert.strictEqual(sentSettingsPayloads.at(-1).version, 'sync-version-2');
+    assert.strictEqual(Object.hasOwn(sentSettingsPayloads.at(-1).workflow, 'allowedPatronCodeIds'), false,
+      'a no-edit save must not replace another administrator\'s patron-code eligibility');
 
     const draftInput = document.getElementById('ui-login-note');
     draftInput.value = 'Unsaved draft before synchronization';
@@ -1324,6 +1370,23 @@ function assertBackendShape(expected, actual, path = '$') {
     await settingsLoader.loadSettings({ skipAutoSync: true });
     assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, 'sync-version-3');
     assert.strictEqual(state.settingsReloadRequired, false);
+
+    global.fetch = async (request, options = {}) => {
+      if (String(request).startsWith('/api/asap/staff/polaris/patron-codes')) {
+        return { ok: false, status: 503, statusText: 'Service Unavailable', json: async () => ({
+          code: 'polaris_unavailable', message: 'Patron code choices temporarily unavailable.'
+        }) };
+      }
+      return originalSyncFetch(request, options);
+    };
+    await polarisSync.syncPolarisOrganizations();
+    global.fetch = originalSyncFetch;
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, 'sync-version-4');
+    assert.strictEqual(state.settingsReloadRequired, false,
+      'unavailable patron-code choices must not invalidate a successful authoritative Settings reload');
+    assert.strictEqual(patronCodes.collectAllowedPatronCodeIds(), '47',
+      'a choice retrieval failure must retain the just-loaded Settings selection');
+    assert.strictEqual(Object.hasOwn(serializer.buildSettingsPayload(), 'allowedPatronCodeIds'), false);
 
     const index = fs.readFileSync(path.join(staffRoot, 'index.html'), 'utf8');
     const polarisSource = fs.readFileSync(path.join(staffRoot, 'js', 'settings-polaris.js'), 'utf8');
