@@ -1,14 +1,22 @@
 import { polarisSearchValueForRow, fallbackPolarisSearchValue, actionErrorMessage } from './utils.js';
 import { confirmAdditionalCopyAction } from './additional-copy.js';
-import { authorizedJson } from '../http.js';
+import { authorizedJson, isAbortError } from '../http.js';
 import { showToast, showAlert } from '../dialogs.js';
 import { applySelectedPolarisResultToEditForm } from '../settings-ui.js';
 import { escapeAttr } from '../grid-utils.js';
-import { staffSession, publicationOptions, currentWorkflowOrgScopeId } from '../state.js';
+import { staffSession, staffAccessGeneration, publicationOptions, currentWorkflowOrgScopeId } from '../state.js';
 import { submitTitleRequestAction } from './edit-submit.js';
 import { editRequestIdentity, findWorkflowRow, requestIdentity } from '../request-identity.mjs';
 
 let holdingsLookupUnavailable = false;
+let activeSearchContext = null;
+let observedDialog = null;
+let returnDialogListener = null;
+
+function invalidateSearchContext() {
+  activeSearchContext?.controller?.abort();
+  activeSearchContext = null;
+}
 
 function polarisSearchModeLabel(mode) {
   if (mode === 'author') return 'author';
@@ -77,7 +85,7 @@ function polarisSearchElements() {
   };
 }
 
-async function fetchPolarisSearch(row, mode, query, options, ctx) {
+async function fetchPolarisSearch(row, mode, query, options, ctx, signal) {
   const selectedSuggestionLibrary = document.getElementById('new-suggestion-library')?.value || '';
   const workflowLibrary = currentWorkflowOrgScopeId && !['all', 'system'].includes(currentWorkflowOrgScopeId)
     ? currentWorkflowOrgScopeId
@@ -102,7 +110,8 @@ async function fetchPolarisSearch(row, mode, query, options, ctx) {
   try {
     return await authorizedJson('/api/asap/staff/bib-lookup', {
       method: 'POST',
-      body: payload
+      body: payload,
+      signal
     });
   } catch (err) {
     if (err && err.status === 0) {
@@ -112,7 +121,8 @@ async function fetchPolarisSearch(row, mode, query, options, ctx) {
   }
 }
 
-function renderPolarisSearchResults(row, mode, data, options = {}, ctx, onRefresh) {
+function renderPolarisSearchResults(row, identity, mode, data, options = {}, ctx, onRefresh, isCurrent, signal) {
+  if (!isCurrent()) return;
   const els = polarisSearchElements();
   if (data.status === 'error') {
     els.status.className = 'alert alert-danger py-2 px-3 small';
@@ -212,7 +222,7 @@ function renderPolarisSearchResults(row, mode, data, options = {}, ctx, onRefres
       };
     };
 
-    const launchedFromEditForm = options.source === 'edit';
+    const launchedFromEditForm = options.source === 'edit' || options.source === 'new';
     let holdBtn = null;
     let additionalCopyBtn = null;
 
@@ -224,48 +234,52 @@ function renderPolarisSearchResults(row, mode, data, options = {}, ctx, onRefres
         ? 'Apply to Form'
         : 'Use BIB in Queue Form';
       applyBtn.addEventListener('click', () => {
+        if (!isCurrent()) return;
         applySelectedPolarisResultToEditForm(result, options.source || 'edit');
         els.dialog.close();
         showToast('Polaris details applied to form.', 'success');
       });
 
       actionsDiv.appendChild(applyBtn);
-    } else {
+    } else if (identity.type === 'title_request') {
       holdBtn = document.createElement('button');
       holdBtn.type = 'button';
       holdBtn.className = 'btn btn-sm btn-success';
       holdBtn.textContent = 'Use BIB & Queue Now';
       holdBtn.disabled = true; // Disabled until holdings check confirms holdable
       holdBtn.addEventListener('click', async () => {
+        if (!isCurrent()) return;
         const payload = buildPayload('pending_hold', 'catalogFound');
-        await performImmediateStaffAction(row.id, payload, ctx, onRefresh);
+        await performImmediateStaffAction(identity, payload, ctx, onRefresh);
       });
       actionsDiv.appendChild(holdBtn);
     }
 
-    // Always create additionalCopyBtn if we have a BIB ID, but hide it by default
-    additionalCopyBtn = document.createElement('button');
-    additionalCopyBtn.type = 'button';
-    additionalCopyBtn.id = 'polaris-additional-copy-action';
-    additionalCopyBtn.className = 'btn btn-sm btn-outline-success polaris-additional-copy-action hidden';
-    additionalCopyBtn.textContent = 'Buy another copy + Queue Now';
-    additionalCopyBtn.disabled = true;
-    additionalCopyBtn.addEventListener('click', async () => {
-      const confirmResult = await confirmAdditionalCopyAction(result);
-      if (!confirmResult.confirmed) return;
-      const payload = buildPayload('pending_hold', 'additionalCopy');
-      payload.emailPurchaseReminder = confirmResult.emailPurchaseReminder;
-      payload.autohold = true;
-      await performImmediateStaffAction(row.id, payload, ctx, onRefresh);
-    });
-    actionsDiv.appendChild(additionalCopyBtn);
-
+    if (!launchedFromEditForm && identity.type === 'title_request') {
+      additionalCopyBtn = document.createElement('button');
+      additionalCopyBtn.type = 'button';
+      additionalCopyBtn.id = 'polaris-additional-copy-action';
+      additionalCopyBtn.className = 'btn btn-sm btn-outline-success polaris-additional-copy-action hidden';
+      additionalCopyBtn.textContent = 'Buy another copy + Queue Now';
+      additionalCopyBtn.disabled = true;
+      additionalCopyBtn.addEventListener('click', async () => {
+        if (!isCurrent()) return;
+        const confirmResult = await confirmAdditionalCopyAction(result);
+        if (!confirmResult.confirmed || !isCurrent()) return;
+        const payload = buildPayload('pending_hold', 'additionalCopy');
+        payload.emailPurchaseReminder = confirmResult.emailPurchaseReminder;
+        payload.autohold = true;
+        await performImmediateStaffAction(identity, payload, ctx, onRefresh);
+      });
+      actionsDiv.appendChild(additionalCopyBtn);
+    }
 
     const holdingsUnavailable = ctx ? ctx.holdingsLookupUnavailable : holdingsLookupUnavailable;
     // Background Holdings Check
     if (result.bibId && !holdingsUnavailable) {
-      fetchPolarisSearch(row, 'identifier', '', { bibId: result.bibId }, ctx)
+      fetchPolarisSearch(row, 'identifier', '', { bibId: result.bibId }, ctx, signal)
         .then(details => {
+          if (!isCurrent()) return;
           holdingsDiv.replaceChildren();
           const summary = details.holdingsSummary || {};
           
@@ -316,6 +330,7 @@ function renderPolarisSearchResults(row, mode, data, options = {}, ctx, onRefres
           }
         })
         .catch(err => {
+          if (!isCurrent() || isAbortError(err)) return;
           if (err && err.networkError) {
             if (ctx) {
               ctx.holdingsLookupUnavailable = true;
@@ -353,8 +368,28 @@ function renderPolarisSearchResults(row, mode, data, options = {}, ctx, onRefres
 
 export async function openPolarisSearch(row, mode, options = {}, ctx, onRefresh) {
   if (!row) return;
+  row = { ...row, id: String(row.id ?? '').trim() };
   const els = polarisSearchElements();
   if (!els.dialog) return;
+
+  invalidateSearchContext();
+  if (returnDialogListener) {
+    els.dialog.removeEventListener('close', returnDialogListener);
+    returnDialogListener = null;
+  }
+  if (observedDialog !== els.dialog) {
+    els.dialog.addEventListener('close', invalidateSearchContext);
+    observedDialog = els.dialog;
+  }
+  const identity = { type: row.type, id: String(row.id ?? '').trim() };
+  const actionStaff = staffSession.staff;
+  const accessGeneration = staffAccessGeneration;
+  const context = { generation: 0, controller: null };
+  activeSearchContext = context;
+  const sameStaff = () => staffSession.authenticated && staffSession.accessAllowed &&
+    staffAccessGeneration === accessGeneration &&
+    staffSession.staff?.id === actionStaff?.id && staffSession.staff?.role === actionStaff?.role &&
+    String(staffSession.staff?.organizationId) === String(actionStaff?.organizationId);
 
   mode = String(mode || 'title').trim().toLowerCase();
   
@@ -381,23 +416,33 @@ export async function openPolarisSearch(row, mode, options = {}, ctx, onRefresh)
   updateUiForMode();
 
   const runSearch = async () => {
+    context.controller?.abort();
+    context.controller = new AbortController();
+    const generation = ++context.generation;
+    const isCurrent = () => activeSearchContext === context && context.generation === generation &&
+      els.dialog.open && sameStaff();
     const currentMode = els.modeSelect.value;
     const query = els.searchInput.value.trim();
     const author = els.authorInput.value.trim();
 
+    els.results.replaceChildren();
+
     if (!query && currentMode !== 'author' && currentMode !== 'title_author') {
+      els.status.className = 'alert alert-light border py-2 px-3 small';
+      els.status.textContent = 'Enter search terms to search Polaris.';
       showToast('Please enter search terms.', 'warning');
       return;
     }
 
     els.status.className = 'alert alert-light border py-2 px-3 small';
     els.status.textContent = 'Searching Polaris...';
-    els.results.innerHTML = '';
 
     try {
-      const data = await fetchPolarisSearch(row, currentMode, query, { title: query, author: author }, ctx);
-      renderPolarisSearchResults(row, currentMode, data, options, ctx, onRefresh);
+      const data = await fetchPolarisSearch(row, currentMode, query, { title: query, author: author }, ctx, context.controller.signal);
+      if (!isCurrent()) return;
+      renderPolarisSearchResults(row, identity, currentMode, data, options, ctx, onRefresh, isCurrent, context.controller.signal);
     } catch (err) {
+      if (!isCurrent() || isAbortError(err)) return;
       els.status.className = 'alert alert-danger py-2 px-3 small';
       els.status.textContent = 'Error: ' + err.message;
     }
@@ -430,6 +475,7 @@ export async function openPolarisSearch(row, mode, options = {}, ctx, onRefresh)
   if (shouldReturnDialog) {
     returnDialog.close();
     const reopenReturnDialog = () => {
+      returnDialogListener = null;
       if (shouldReturnDialog && returnDialog && !returnDialog.open) {
         returnDialog.showModal();
         if (returnFocus && typeof returnFocus.focus === 'function') {
@@ -437,6 +483,7 @@ export async function openPolarisSearch(row, mode, options = {}, ctx, onRefresh)
         }
       }
     };
+    returnDialogListener = reopenReturnDialog;
     els.dialog.addEventListener('close', reopenReturnDialog, { once: true });
   }
 
@@ -445,14 +492,15 @@ export async function openPolarisSearch(row, mode, options = {}, ctx, onRefresh)
   }
 
   await runSearch();
-  if (els.dialog.open) {
+  if (activeSearchContext === context && els.dialog.open) {
     els.searchInput.focus();
   }
 }
 
 export function closePolarisSearchDialog() {
   const dialog = document.getElementById('polarisSearchDialog');
-  if (dialog) dialog.close();
+  invalidateSearchContext();
+  if (dialog?.open) dialog.close();
 }
 
 function currentEditPolarisSearchRow(context = 'edit', ctx) {
@@ -514,9 +562,11 @@ export function launchEditPolarisSearch(mode, button, context = 'edit', ctx, onR
   }, ctx, onRefresh);
 }
 
-async function performImmediateStaffAction(id, payload, ctx, onRefresh) {
-  await submitTitleRequestAction(id, payload, {
+export async function performImmediateStaffAction(identity, payload, ctx, onRefresh) {
+  if (identity?.type !== 'title_request' || !String(identity.id ?? '').trim()) return false;
+  await submitTitleRequestAction(String(identity.id), payload, {
     onRefresh,
     dialogsToClose: ['polarisSearchDialog', 'editModal']
   });
+  return true;
 }

@@ -43,15 +43,25 @@ async function settle() {
     global.requestAnimationFrame = callback => callback();
 
     const calls = [];
+    const sessionResponses = [];
+    let sessionFetchCount = 0;
     let completeRun;
     let failRun;
     global.fetch = (url, options = {}) => {
-      calls.push({ url: String(url), options });
       if (String(url).includes('/workflow/run-now')) {
+        calls.push({ url: String(url), options });
         return new Promise((resolve, reject) => {
           completeRun = resolve;
           failRun = reject;
         });
+      }
+      if (String(url) === '/api/asap/staff/session') {
+        sessionFetchCount += 1;
+        const current = sessionResponses.shift() || {
+          authenticated: true, accessAllowed: true, antiforgeryToken: 'workflow-test-token',
+          staff: { ...state.staffSession.staff }
+        };
+        return Promise.resolve(response(200, current));
       }
       throw new Error(`Unexpected request: ${url}`);
     };
@@ -167,17 +177,46 @@ async function settle() {
     await settle();
     assert.doesNotMatch(document.getElementById('job-msg').textContent, /queued/i);
     assert.equal(button.disabled, false);
+    assert.equal(sessionFetchCount, 1, 'scope rejection revalidates the current staff before enabling retry');
 
     button.click();
     await settle();
-    assert.equal(calls.length, 5);
+    assert.equal(calls.filter(call => call.url.includes('/workflow/run-now')).length, 5);
+    sessionResponses.push({
+      authenticated: true, accessAllowed: true, antiforgeryToken: 'workflow-test-token',
+      staff: { id: '7', role: 'viewer', organizationId: 2 }
+    });
+    completeRun(response(403, { code: 'staff_scope_forbidden', message: 'Scope denied after role change' }));
+    await settle();
+    assert.equal(button.disabled, true, 'a server-side role change must lock stale privileged controls');
+    assert.match(document.getElementById('job-msg').textContent, /scope changed.*reload/i);
+    delete button.dataset.reloadMessage;
+    button.disabled = false; // Model a new page load with the original authorized staff.
+    state.setStaffSession({
+      authenticated: true, accessAllowed: true, antiforgeryToken: 'workflow-test-token',
+      staff: { id: '7', role: 'admin', organizationId: 2 }
+    });
+
+    button.click();
+    await settle();
+    assert.equal(calls.filter(call => call.url.includes('/workflow/run-now')).length, 6);
+    completeRun(response(400, { code: 'antiforgery_failed', message: 'Invalid request token' }));
+    await settle();
+    assert.doesNotMatch(document.getElementById('job-msg').textContent, /may have been queued/i);
+    assert.equal(button.disabled, false, 'known antiforgery rejection happens before enqueue');
+
+    button.click();
+    await settle();
+    assert.equal(calls.length, 7);
     completeRun(response(401, { code: 'staff_session_invalid' }));
     await settle();
     assert.equal(state.staffSession.authenticated, false);
     assert.equal(state.staffSession.staff, null);
     assert.doesNotMatch(document.getElementById('job-msg').textContent, /queued/i);
-    assert.equal(button.disabled, false);
+    assert.equal(button.disabled, true, 'session loss cannot leave privileged control enabled');
 
+    delete button.dataset.reloadMessage;
+    button.disabled = false; // Simulate a browser reload after signing in again.
     state.setStaffSession({
       authenticated: true,
       accessAllowed: true,
@@ -188,13 +227,16 @@ async function settle() {
     document.getElementById('workflow-library-scope').value = '2';
     button.click();
     await settle();
-    assert.equal(calls.length, 6);
+    assert.equal(calls.length, 8);
     state.setStaffSession({ authenticated: false, antiforgeryToken: 'workflow-test-token' });
     completeRun(response(202, { code: 'queued', jobId: 'late-job', organizationId: 2 }));
     await settle();
     assert.equal(document.getElementById('job-msg').textContent, '',
       'a response after sign-out must not leave pending privileged feedback behind');
+    assert.equal(button.disabled, true, 'a different session must not inherit an enabled run control');
 
+    delete button.dataset.reloadMessage;
+    button.disabled = false; // Simulate the browser reload required for a new staff session.
     state.setStaffSession({
       authenticated: true,
       accessAllowed: true,
@@ -205,7 +247,7 @@ async function settle() {
     document.getElementById('workflow-library-scope').value = 'all';
     button.click();
     await settle();
-    assert.equal(calls.length, 7);
+    assert.equal(calls.length, 9);
     completeRun(response(202, { code: 'queued', jobId: 'downgraded-job', organizationId: 2 }));
     await settle();
     assert.match(document.getElementById('job-msg').textContent, /queued for Library 2/i,
@@ -224,7 +266,7 @@ async function settle() {
     document.getElementById('workflow-library-scope').value = '2';
     button.click();
     await settle();
-    assert.equal(calls.length, 8);
+    assert.equal(calls.length, 10);
     failRun(new TypeError('Failed to fetch'));
     await settle();
     assert.match(document.getElementById('job-msg').textContent, /may have been queued.*reload/i,
@@ -232,11 +274,81 @@ async function settle() {
     assert.equal(button.disabled, true, 'an uncertain queue outcome must block an accidental repeat');
     button.click();
     await settle();
-    assert.equal(calls.length, 8);
+    assert.equal(calls.length, 10);
     gridData.clearJobMessage();
     gridData.updateAdminActions('closed', gridContext);
     assert.match(document.getElementById('job-msg').textContent, /may have been queued.*reload/i,
       'tab navigation must preserve the unconfirmed outcome warning');
+
+    const acceptedGatewayJobs = [];
+    const gatewayWarnings = [];
+    for (const [status, serverReality] of [
+      [502, 'enqueued'], [502, 'not enqueued'], [504, 'enqueued'], [500, 'not enqueued'], [503, 'enqueued']
+    ]) {
+      // A new browser load is the only way to begin another run after uncertainty.
+      delete button.dataset.reloadMessage;
+      button.disabled = false;
+      const previousCount = calls.length;
+      button.click();
+      await settle();
+      assert.equal(calls.length, previousCount + 1);
+      if (serverReality === 'enqueued') acceptedGatewayJobs.push(previousCount + 1);
+      completeRun(response(status, { message: 'Gateway unavailable' }));
+      await settle();
+      assert.match(document.getElementById('job-msg').textContent, /Library 2.*may have been queued.*reload/i,
+        `${status} must not claim the ${serverReality} reality is known`);
+      if (status === 502) gatewayWarnings.push(document.getElementById('job-msg').textContent);
+      assert.equal(button.disabled, true, `${status} must lock repeat submission`);
+      button.click();
+      await settle();
+      assert.equal(calls.length, previousCount + 1, `${status} must not enqueue a duplicate`);
+      gridData.clearJobMessage();
+      gridData.updateAdminActions('closed', gridContext);
+      assert.match(document.getElementById('job-msg').textContent, /may have been queued.*reload/i);
+      assert.equal(calls.length, previousCount + 1, 'tab navigation must not retry');
+    }
+    assert.equal(acceptedGatewayJobs.length, 3);
+    assert.equal(gatewayWarnings[0], gatewayWarnings[1],
+      'identical gateway responses must show identical behavior whether the server enqueued or not');
+
+    delete button.dataset.reloadMessage;
+    button.disabled = false;
+    const countBeforeReplacement = calls.length;
+    button.click();
+    await settle();
+    state.setStaffSession({
+      authenticated: true, accessAllowed: true, antiforgeryToken: 'new-staff-token',
+      staff: { id: '8', role: 'super_admin', organizationId: 1 }
+    });
+    completeRun(response(502, { message: 'Gateway response after session replacement' }));
+    await settle();
+    assert.match(document.getElementById('job-msg').textContent, /Library 2.*may have been queued.*reload/i);
+    assert.equal(button.disabled, true, 'a new active staff session cannot clear the ambiguous run lock');
+    button.click();
+    await settle();
+    assert.equal(calls.length, countBeforeReplacement + 1);
+
+    delete button.dataset.reloadMessage;
+    button.disabled = false;
+    state.setStaffSession({
+      authenticated: true, accessAllowed: true, antiforgeryToken: 'workflow-test-token',
+      staff: { id: '7', role: 'super_admin', organizationId: 1 }
+    });
+    const beforeRelogin = calls.length;
+    button.click();
+    await settle();
+    state.setStaffSession({ authenticated: false, antiforgeryToken: 'workflow-test-token' });
+    state.setStaffSession({
+      authenticated: true, accessAllowed: true, antiforgeryToken: 'workflow-test-token',
+      staff: { id: '7', role: 'super_admin', organizationId: 1 }
+    });
+    completeRun(response(202, { code: 'queued', jobId: 'old-session-job', organizationId: 2 }));
+    await settle();
+    assert.match(document.getElementById('job-msg').textContent, /changed staff session.*reload/i);
+    assert.equal(button.disabled, true, 'sign-out and same-staff sign-in cannot reuse a pending run control');
+    button.click();
+    await settle();
+    assert.equal(calls.length, beforeRelogin + 1);
   } finally {
     dom?.window.close();
     fs.rmSync(temporary, { recursive: true, force: true });

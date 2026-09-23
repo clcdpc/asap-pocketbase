@@ -7,6 +7,7 @@ export const staffSession = {
   code: '',
   staff: null
 };
+export let staffAccessGeneration = 0;
 
 export function normalizeSessionStaff(staff) {
   if (!staff) return null;
@@ -25,6 +26,15 @@ export function normalizeSessionStaff(staff) {
 }
 
 export function setStaffSession(session) {
+  const priorStaff = staffSession.staff;
+  const nextStaff = session?.staff;
+  if (staffSession.authenticated !== !!session?.authenticated ||
+      staffSession.accessAllowed !== (session?.accessAllowed !== false) ||
+      String(priorStaff?.id) !== String(nextStaff?.id) ||
+      priorStaff?.role !== nextStaff?.role ||
+      String(priorStaff?.organizationId) !== String(nextStaff?.organizationId)) {
+    staffAccessGeneration += 1;
+  }
   staffSession.authenticated = !!session?.authenticated;
   staffSession.accessAllowed = session?.accessAllowed !== false;
   staffSession.antiforgeryToken = session?.antiforgeryToken || staffSession.antiforgeryToken || '';

@@ -1,6 +1,6 @@
-import { currentLibraryContextOrgId, currentWorkflowOrgScopeId, staffSession } from './state.js';
+import { currentLibraryContextOrgId, currentWorkflowOrgScopeId, staffSession, staffAccessGeneration } from './state.js';
 import { isAdminStaff, setInlineResult } from './api.js';
-import { authorizedJson } from './http.js';
+import { authorizedJson, loadStaffSession } from './http.js';
 import { collectSettingsPolaris, renderLibraryParticipationCheckboxes, collectEnabledLibraryIds } from './settings/polaris-fields.js';
 import { syncPolarisOrganizations } from './settings/polaris-sync.js';
 import { saveSettings } from './settings/save-controller.js';
@@ -55,13 +55,24 @@ if (syncOrganizationsBtn) {
   });
 }
 
+function workflowRunWasRejectedBeforeEnqueue(err) {
+  // These exact responses leave the auth middleware, endpoint scope guard, or
+  // antiforgery filter before AdministrationEndpoints calls jobs.Enqueue.
+  const code = err.response?.code;
+  return (err.status === 401 && code === 'staff_session_invalid') ||
+    (err.status === 403 && code === 'staff_scope_forbidden') ||
+    (err.status === 400 && code === 'antiforgery_failed');
+}
+
 document.getElementById('btn-run-workflow-now').addEventListener('click', async (event) => {
   if (!isAdminStaff()) return;
   const btn = event.currentTarget;
   if (btn.disabled) return;
   const msg = document.getElementById('job-msg');
   const actionStaff = staffSession.staff;
+  const actionAccessGeneration = staffAccessGeneration;
   const sameActionStaff = () => staffSession.authenticated && staffSession.accessAllowed &&
+    staffAccessGeneration === actionAccessGeneration &&
     staffSession.staff?.id === actionStaff.id && staffSession.staff.role === actionStaff.role &&
     String(staffSession.staff.organizationId) === String(actionStaff.organizationId);
   const scope = actionStaff.role === 'super_admin' ? currentWorkflowOrgScopeId : String(actionStaff.organizationId);
@@ -78,37 +89,58 @@ document.getElementById('btn-run-workflow-now').addEventListener('click', async 
   msg.textContent = `Queueing workflow run for ${scopeLabel}...`;
   msg.className = 'mb-3 font-weight-bold text-info';
   let reloadRequired = false;
+  const requireReload = (message) => {
+    reloadRequired = true;
+    btn.dataset.reloadMessage = message;
+    if (staffSession.authenticated && staffSession.accessAllowed) {
+      msg.textContent = message;
+      msg.className = 'mb-3 font-weight-bold text-warning';
+    } else {
+      msg.textContent = '';
+    }
+  };
 
   try {
     const data = await authorizedJson(url, { method: 'POST' });
     if (!sameActionStaff()) {
-      msg.textContent = '';
+      requireReload(`Workflow run for ${scopeLabel} was queued under a changed staff session. Reload this page before another run.`);
       return;
     }
     const effectiveScope = data.organizationId == null ? '' : String(data.organizationId);
     const expectedScope = scope === 'all' ? '1' : scope;
     if (effectiveScope !== expectedScope) {
-      reloadRequired = true;
       const effectiveLabel = effectiveScope === '1' ? 'all libraries'
         : effectiveScope ? `Library ${effectiveScope}` : 'an unconfirmed scope';
-      msg.textContent = `Workflow run queued for ${effectiveLabel}${data.jobId ? ` (job ${data.jobId})` : ''}. Your staff scope changed. Reload this page before another run.`;
-      msg.className = 'mb-3 font-weight-bold text-warning';
-      btn.dataset.reloadMessage = msg.textContent;
+      requireReload(`Workflow run queued for ${effectiveLabel}${data.jobId ? ` (job ${data.jobId})` : ''}. Your staff scope changed. Reload this page before another run.`);
       return;
     }
     msg.textContent = `Workflow run queued for ${scopeLabel}${data.jobId ? ` (job ${data.jobId})` : ''}.`;
     msg.className = 'mb-3 font-weight-bold text-success';
   } catch (err) {
+    const ambiguous = !workflowRunWasRejectedBeforeEnqueue(err);
     if (!sameActionStaff()) {
-      msg.textContent = '';
+      if (ambiguous) {
+        requireReload(`Workflow run for ${scopeLabel} may have been queued, but its result could not be confirmed. Reload this page before another run.`);
+      } else {
+        requireReload(`Workflow run for ${scopeLabel} was rejected, but your staff session changed. Reload this page before another run.`);
+      }
       return;
     }
-    if (!err.status) {
-      reloadRequired = true;
-      msg.textContent = `Workflow run for ${scopeLabel} may have been queued, but its result could not be confirmed. Reload this page before another run.`;
-      msg.className = 'mb-3 font-weight-bold text-warning';
-      btn.dataset.reloadMessage = msg.textContent;
+    if (ambiguous) {
+      requireReload(`Workflow run for ${scopeLabel} may have been queued, but its result could not be confirmed. Reload this page before another run.`);
       return;
+    }
+    if (err.status === 403 && err.response?.code === 'staff_scope_forbidden') {
+      try {
+        await loadStaffSession();
+      } catch {
+        requireReload(`Workflow run for ${scopeLabel} was rejected, but your current staff scope could not be confirmed. Reload this page before another run.`);
+        return;
+      }
+      if (!sameActionStaff()) {
+        requireReload(`Workflow run for ${scopeLabel} was rejected after your staff scope changed. Reload this page before another run.`);
+        return;
+      }
     }
     msg.textContent = 'Error: ' + err.message;
     msg.className = 'mb-3 font-weight-bold text-danger';
