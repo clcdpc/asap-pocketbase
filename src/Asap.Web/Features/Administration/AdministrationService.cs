@@ -753,7 +753,8 @@ public sealed class AdministrationService(
         string? altText,
         bool clearLogo,
         string? expectedVersion,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool resetBranding = false)
     {
         if (!TryResolveScope(actor, requestedOrganization, out var organizationId, out var failure))
         {
@@ -799,11 +800,8 @@ public sealed class AdministrationService(
         var branding = await context.Branding.SingleOrDefaultAsync(
             item => item.OrganizationId == organizationId,
             cancellationToken);
+        var isNew = branding is null;
         branding ??= new Branding { OrganizationId = organizationId };
-        if (context.Entry(branding).State == EntityState.Detached)
-        {
-            context.Branding.Add(branding);
-        }
         if (clearLogo)
         {
             branding.LogoData = null;
@@ -816,11 +814,22 @@ public sealed class AdministrationService(
             branding.LogoContentType = logoInfo!.ContentType;
             branding.LogoFileName = Clean(fileName) ?? "logo";
         }
-        if (altText is not null)
+        if (altText is not null || (resetBranding && organizationId != 1))
         {
             branding.LogoAltText = Clean(altText);
         }
         branding.UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime;
+        if (organizationId != 1 && IsEmpty(branding))
+        {
+            if (!isNew)
+            {
+                context.Branding.Remove(branding);
+            }
+        }
+        else if (isNew)
+        {
+            context.Branding.Add(branding);
+        }
         await AddAuditAsync(
             context,
             actor,

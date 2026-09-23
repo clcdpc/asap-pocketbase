@@ -14,6 +14,203 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
+    public async Task DirectLibraryBrandingMutationsRemoveOnlyEmptyOverridesAndResetBothValues()
+    {
+        const int libraryId = 92327;
+        var actor = await ReadConfiguredSuperAdminAsync();
+        using var client = factory!.CreateClient();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+        var service = factory.Services.GetRequiredService<AdministrationService>();
+        var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        Branding? originalSystem;
+        await using (var setup = await contextFactory.CreateDbContextAsync())
+        {
+            originalSystem = await setup.Branding.AsNoTracking().SingleOrDefaultAsync(item => item.OrganizationId == 1);
+            setup.Organizations.Add(new Organization
+            {
+                Id = libraryId,
+                DisplayName = "Branding cleanup library",
+                Abbreviation = "BCL",
+                IsActive = true
+            });
+            var system = await setup.Branding.SingleOrDefaultAsync(item => item.OrganizationId == 1);
+            if (system is null)
+            {
+                system = new Branding { OrganizationId = 1 };
+                setup.Branding.Add(system);
+            }
+            system.LogoData = [1, 2, 3];
+            system.LogoContentType = "image/png";
+            system.LogoFileName = "system.png";
+            system.LogoAltText = "System alt";
+            system.UpdatedUtc = DateTime.UtcNow;
+            await setup.SaveChangesAsync();
+        }
+
+        async Task<JsonElement> CurrentSettingsAsync() => JsonSerializer.SerializeToElement(
+            (await service.GetSettingsAsync(actor, libraryId.ToString(), CancellationToken.None)).Data);
+
+        async Task SeedBrandingAsync(bool image, string? alt)
+        {
+            await using var seed = await contextFactory.CreateDbContextAsync();
+            var row = await seed.Branding.SingleOrDefaultAsync(item => item.OrganizationId == libraryId);
+            if (row is null)
+            {
+                row = new Branding { OrganizationId = libraryId };
+                seed.Branding.Add(row);
+            }
+            row.LogoData = image ? [4, 5, 6] : null;
+            row.LogoContentType = image ? "image/png" : null;
+            row.LogoFileName = image ? "library.png" : null;
+            row.LogoAltText = alt;
+            row.UpdatedUtc = DateTime.UtcNow;
+            await seed.SaveChangesAsync();
+        }
+
+        async Task AssertInheritedAsync(string oldVersion)
+        {
+            await using var verify = await contextFactory.CreateDbContextAsync();
+            Assert.IsFalse(await verify.Branding.AnyAsync(item => item.OrganizationId == libraryId));
+            var settings = await CurrentSettingsAsync();
+            Assert.AreEqual("System alt", settings.GetProperty("effective").GetProperty("LogoAltText").GetString());
+            Assert.IsTrue(settings.GetProperty("effective").GetProperty("HasLogo").GetBoolean());
+            Assert.AreEqual(JsonValueKind.Null, settings.GetProperty("stored").GetProperty("libraryOverride")
+                .GetProperty("branding").GetProperty("version").ValueKind);
+            Assert.IsFalse(settings.GetProperty("hasOverrides").GetBoolean());
+            Assert.AreNotEqual(oldVersion, settings.GetProperty("version").GetString());
+            var effectiveBranding = await factory.Services.GetRequiredService<PatronConfigurationService>()
+                .GetBrandingAsync(libraryId, CancellationToken.None);
+            Assert.IsNotNull(effectiveBranding);
+            CollectionAssert.AreEqual(new byte[] { 1, 2, 3 }, effectiveBranding.LogoData!);
+            Assert.AreEqual("system.png", effectiveBranding.LogoFileName);
+            Assert.AreEqual("System alt", effectiveBranding.LogoAltText);
+            var stale = await service.SaveLogoAsync(actor, libraryId.ToString(), [], "", "", "New alt", false,
+                oldVersion, CancellationToken.None);
+            Assert.AreEqual("stale_version", stale.Code);
+        }
+
+        try
+        {
+            // Clearing alt without a prior row must not insert a phantom override.
+            var empty = await CurrentSettingsAsync();
+            var noRowClear = await service.SaveLogoAsync(actor, libraryId.ToString(), [], "", "", "", false,
+                empty.GetProperty("version").GetString(), CancellationToken.None);
+            Assert.AreEqual("branding_saved", noRowClear.Code);
+            await using (var verify = await contextFactory.CreateDbContextAsync())
+            {
+                Assert.IsFalse(await verify.Branding.AnyAsync(item => item.OrganizationId == libraryId));
+            }
+
+            // A legacy empty row is also removed by the next direct branding write.
+            await SeedBrandingAsync(false, null);
+            var legacyEmpty = await CurrentSettingsAsync();
+            var clearLegacyEmpty = await service.SaveLogoAsync(actor, libraryId.ToString(), [], "", "", "", false,
+                legacyEmpty.GetProperty("version").GetString(), CancellationToken.None);
+            Assert.AreEqual("branding_saved", clearLegacyEmpty.Code);
+            await AssertInheritedAsync(legacyEmpty.GetProperty("version").GetString()!);
+
+            await SeedBrandingAsync(false, "Library alt");
+            var altOnly = await CurrentSettingsAsync();
+            var altOnlyVersion = altOnly.GetProperty("version").GetString()!;
+            using (var clearAlt = await client.PostAsync($"/api/asap/staff/settings/logo?orgId={libraryId}",
+                new FormUrlEncodedContent(new Dictionary<string, string>
+                {
+                    ["version"] = altOnlyVersion,
+                    ["logoAlt"] = ""
+                })))
+            {
+                Assert.AreEqual(System.Net.HttpStatusCode.OK, clearAlt.StatusCode);
+                using var result = JsonDocument.Parse(await clearAlt.Content.ReadAsStringAsync());
+                Assert.AreEqual("branding_saved", result.RootElement.GetProperty("code").GetString());
+            }
+            await AssertInheritedAsync(altOnlyVersion);
+
+            await SeedBrandingAsync(true, "Library alt");
+            var imageAndAlt = await CurrentSettingsAsync();
+            var clearWithImage = await service.SaveLogoAsync(actor, libraryId.ToString(), [], "", "", "", false,
+                imageAndAlt.GetProperty("version").GetString(), CancellationToken.None);
+            Assert.AreEqual("branding_saved", clearWithImage.Code);
+            await using (var verify = await contextFactory.CreateDbContextAsync())
+            {
+                var row = await verify.Branding.SingleAsync(item => item.OrganizationId == libraryId);
+                Assert.IsNotNull(row.LogoData);
+                Assert.IsNull(row.LogoAltText);
+            }
+            var inheritedAlt = await CurrentSettingsAsync();
+            Assert.AreEqual("System alt", inheritedAlt.GetProperty("effective").GetProperty("LogoAltText").GetString());
+            Assert.IsTrue(inheritedAlt.GetProperty("hasOverrides").GetBoolean());
+            var effectiveWithImage = await factory.Services.GetRequiredService<PatronConfigurationService>()
+                .GetBrandingAsync(libraryId, CancellationToken.None);
+            Assert.IsNotNull(effectiveWithImage);
+            CollectionAssert.AreEqual(new byte[] { 4, 5, 6 }, effectiveWithImage.LogoData!);
+            Assert.AreEqual("System alt", effectiveWithImage.LogoAltText);
+
+            await SeedBrandingAsync(true, "Library alt");
+            var beforeImageOnlyClear = await CurrentSettingsAsync();
+            var clearImageOnly = await service.SaveLogoAsync(actor, libraryId.ToString(), [], "", "", null, true,
+                beforeImageOnlyClear.GetProperty("version").GetString(), CancellationToken.None);
+            Assert.AreEqual("branding_saved", clearImageOnly.Code);
+            await using (var verify = await contextFactory.CreateDbContextAsync())
+            {
+                var row = await verify.Branding.SingleAsync(item => item.OrganizationId == libraryId);
+                Assert.IsNull(row.LogoData);
+                Assert.AreEqual("Library alt", row.LogoAltText);
+            }
+            var effectiveAfterImageClear = await factory.Services.GetRequiredService<PatronConfigurationService>()
+                .GetBrandingAsync(libraryId, CancellationToken.None);
+            Assert.IsNotNull(effectiveAfterImageClear);
+            CollectionAssert.AreEqual(new byte[] { 1, 2, 3 }, effectiveAfterImageClear.LogoData!);
+            Assert.AreEqual("Library alt", effectiveAfterImageClear.LogoAltText);
+
+            foreach (var withAlt in new[] { false, true })
+            {
+                await SeedBrandingAsync(true, withAlt ? "Library alt" : null);
+                var beforeReset = await CurrentSettingsAsync();
+                var oldVersion = beforeReset.GetProperty("version").GetString()!;
+                using var response = await client.DeleteAsync(
+                    $"/api/asap/staff/settings/logo?orgId={libraryId}&version={Uri.EscapeDataString(oldVersion)}");
+                Assert.AreEqual(System.Net.HttpStatusCode.OK, response.StatusCode);
+                using var result = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                Assert.AreEqual("branding_saved", result.RootElement.GetProperty("code").GetString());
+                var afterReset = await CurrentSettingsAsync();
+                Assert.AreEqual(afterReset.GetProperty("version").GetString(),
+                    result.RootElement.GetProperty("data").GetProperty("version").GetString());
+                await AssertInheritedAsync(oldVersion);
+            }
+        }
+        finally
+        {
+            await using var cleanup = await contextFactory.CreateDbContextAsync();
+            var libraryBranding = await cleanup.Branding.SingleOrDefaultAsync(item => item.OrganizationId == libraryId);
+            if (libraryBranding is not null)
+            {
+                cleanup.Branding.Remove(libraryBranding);
+            }
+            var system = await cleanup.Branding.SingleAsync(item => item.OrganizationId == 1);
+            if (originalSystem is null)
+            {
+                cleanup.Branding.Remove(system);
+            }
+            else
+            {
+                system.LogoData = originalSystem.LogoData;
+                system.LogoContentType = originalSystem.LogoContentType;
+                system.LogoFileName = originalSystem.LogoFileName;
+                system.LogoAltText = originalSystem.LogoAltText;
+                system.UpdatedUtc = originalSystem.UpdatedUtc;
+            }
+            await cleanup.SaveChangesAsync();
+            await using var connection = new SqlConnection(databaseConnectionString);
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "DELETE FROM [asap].[AdministrativeAudit] WHERE [OrganizationId] = @organizationId; DELETE FROM [asap].[Organization] WHERE [Id] = @organizationId;";
+            command.Parameters.AddWithValue("@organizationId", libraryId);
+            await command.ExecuteNonQueryAsync();
+        }
+    }
+
+    [TestMethod]
     public async Task SettingsStructuredNoEditSavePreservesThreeProvidersAndNonDefaultFormats()
     {
         using var startup = factory!.CreateClient();

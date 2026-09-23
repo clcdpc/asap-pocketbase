@@ -7,6 +7,7 @@ import { loadStaffUsers } from '../settings-users.js';
 import { cloneLibrarySettingsSnapshot, captureSettingsBaseline, serializeSettingsState, buildSettingsPayload, buildEmailSettingsPayload } from './serialize-save.js';
 import { applyLibrarySettingsToForm } from './form-population.js';
 import { deleteSettingsFormatsSequentially } from './delete-formats.js';
+import { isAmbiguousMutationError, markAmbiguousSettingsMutation } from './mutation-outcome.js';
 
 export async function saveSettings(options = {}) {
   if (settingsReloadRequired || settingsSyncInProgress || settingsSaving || settingsLoading || settingsActionInProgress) {
@@ -36,6 +37,7 @@ export async function saveSettings(options = {}) {
   let refreshError = null;
   let saveSucceeded = false;
   let saveSuperseded = false;
+  let mutationPending = false;
   const saveContextOrgId = currentLibraryContextOrgId;
   const saveContextSerial = libraryContextLoadSerial;
   const saveContextVersion = lastSavedLibrarySettingsOrgId === saveContextOrgId
@@ -112,12 +114,14 @@ export async function saveSettings(options = {}) {
       }
     }
 
+    mutationPending = true;
     const libraryPromise = authorizedJson('/api/asap/staff/settings/library', {
       method: 'POST',
       body: libraryPayload
     });
 
     await libraryPromise;
+    mutationPending = false;
     saveSucceeded = true;
     if (saveContextOrgId !== currentLibraryContextOrgId || saveContextSerial !== libraryContextLoadSerial) {
       saveSuperseded = true;
@@ -159,6 +163,15 @@ export async function saveSettings(options = {}) {
     }
     if (formatDeletionError) {
       saveHadError = true;
+      if (isAmbiguousMutationError(formatDeletionError)) {
+        const message = refreshError
+          ? 'Settings were saved, but the custom format removal result could not be confirmed. Reload Settings before further changes.'
+          : 'Settings were saved, but the custom format removal result could not be confirmed. Review the reloaded format list before continuing.';
+        msg.textContent = message;
+        msg.className = 'mt-2 font-weight-bold text-warning';
+        showToast(message, 'error', 'settings-save-toast');
+        return false;
+      }
       const detail = formatDeletionError.message || 'The custom format could not be deleted.';
       const refreshNote = refreshError ? ' Current settings could not be reloaded; reload before continuing.' : ' The format list has been reloaded.';
       msg.textContent = `Settings were saved, but custom format removal did not complete: ${detail}.${refreshNote}`;
@@ -188,6 +201,10 @@ export async function saveSettings(options = {}) {
     console.error(err);
     if (saveContextOrgId !== currentLibraryContextOrgId || saveContextSerial !== libraryContextLoadSerial) {
       saveSuperseded = true;
+      return false;
+    }
+    if (mutationPending && markAmbiguousSettingsMutation(err, () =>
+      saveContextOrgId === currentLibraryContextOrgId && saveContextSerial === libraryContextLoadSerial)) {
       return false;
     }
     let message = err.message || 'Failed to save settings.';

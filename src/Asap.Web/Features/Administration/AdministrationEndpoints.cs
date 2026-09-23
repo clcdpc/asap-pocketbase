@@ -219,7 +219,8 @@ public static class AdministrationEndpoints
                 null,
                 true,
                 version,
-                cancellationToken));
+                cancellationToken,
+                resetBranding: true));
         }
         catch (InvalidOperationException exception)
         {

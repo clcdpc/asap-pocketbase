@@ -21,6 +21,7 @@ import { saveSettings, discardLibrarySettingsChanges } from './settings/save-con
 import { toggleTimeoutGroup, toggleHoldPickupTimeoutGroup, togglePendingHoldTimeoutGroup, toggleAdditionalCopyTimeoutGroup, toggleCommonAuthorsGroup } from './settings/toggles.js';
 import { refreshSettingsView, loadStaffConfig } from './settings/loader.js';
 import { hasUnrelatedSettingsDraft } from './settings/serialize-save.js';
+import { markAmbiguousSettingsMutation } from './settings/mutation-outcome.js';
 import { bindPolarisSecretControls } from './settings/polaris-fields.js';
 import './settings-labels.js';
 import './settings-polaris.js';
@@ -38,6 +39,7 @@ function settingsActionContextIsCurrent(organizationId, contextSerial) {
 async function reportSettingsActionError(error, actionOrganizationId, actionContextSerial) {
   const contextIsCurrent = () => actionOrganizationId === currentLibraryContextOrgId &&
     actionContextSerial === libraryContextLoadSerial;
+  if (markAmbiguousSettingsMutation(error, contextIsCurrent)) return;
   if (error?.response?.code !== 'stale_version') {
     if (contextIsCurrent()) showToast(error.message, 'error');
     return;
@@ -108,23 +110,25 @@ document.getElementById('settings-reload-btn')?.addEventListener('click', async 
   if (!settingsReloadRequired || settingsSaving || settingsSyncInProgress || settingsActionInProgress || settingsLoading) return;
   const button = document.getElementById('settings-reload-btn');
   const actionOrganizationId = currentLibraryContextOrgId;
+  const reloadStartSerial = libraryContextLoadSerial;
   setSettingsActionInProgress(true);
   button.disabled = true;
   try {
     const settings = await refreshSettingsView({ showErrors: false, throwOnError: true, skipAutoSync: true, preserveReloadRequired: true });
-    if (actionOrganizationId !== currentLibraryContextOrgId || settings?.orgId !== actionOrganizationId) return;
+    if (actionOrganizationId !== currentLibraryContextOrgId ||
+        libraryContextLoadSerial !== reloadStartSerial + 1 || settings?.orgId !== actionOrganizationId) return;
     if (!settings?.version) {
       throw new Error('The current Settings version was not returned.');
     }
     const configRefreshed = await loadStaffConfig();
-    if (actionOrganizationId !== currentLibraryContextOrgId) return;
+    if (actionOrganizationId !== currentLibraryContextOrgId || libraryContextLoadSerial !== reloadStartSerial + 1) return;
     setSettingsReloadRequired(false);
     updateSaveBarState('clean');
     if (!configRefreshed) {
       showToast('Settings reloaded, but app configuration could not be refreshed.', 'error');
     }
   } catch (error) {
-    if (actionOrganizationId !== currentLibraryContextOrgId) return;
+    if (actionOrganizationId !== currentLibraryContextOrgId || libraryContextLoadSerial > reloadStartSerial + 1) return;
     showToast('Current Settings could not be reloaded. Try again.', 'error');
     updateSaveBarState('reload');
   } finally {
@@ -299,7 +303,7 @@ document.getElementById('btn-reset-logo').addEventListener('click', async () => 
   const actionOrganizationId = currentLibraryContextOrgId;
   const actionContextSerial = libraryContextLoadSerial;
   const submittedVersion = currentSettingsVersion();
-  if (!await showConfirm('Reset branding?', 'This will delete the library-specific logo and fallback to the system default.')) {
+  if (!await showConfirm('Reset branding?', 'This will delete the library-specific logo and alt text and use the system defaults.')) {
     return;
   }
   if (!settingsActionContextIsCurrent(actionOrganizationId, actionContextSerial) || brandingActionBlocked()) return;

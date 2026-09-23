@@ -477,6 +477,7 @@ function assertBackendShape(expected, actual, path = '$') {
     let enforceSyncVersion = false;
     const customFormatDeleteRequests = [];
     let deferredFormatDeleteId = null;
+    let transportFailedFormatDeleteId = null;
     let releaseDeferredFormatDelete = null;
     global.fetch = async (request, options = {}) => {
       const url = String(request);
@@ -582,6 +583,10 @@ function assertBackendShape(expected, actual, path = '$') {
               ok: true, status: 200, statusText: 'OK', json: async () => ({ code: 'format_deleted' })
             });
           });
+        }
+        if (formatId === transportFailedFormatDeleteId) {
+          transportFailedFormatDeleteId = null;
+          throw new TypeError('Format DELETE response lost');
         }
         if (formatId === '9007199254740994') {
           return { ok: false, status: 409, statusText: 'Conflict', json: async () => ({
@@ -905,6 +910,16 @@ function assertBackendShape(expected, actual, path = '$') {
       /settings were saved, but custom format removal did not complete/i,
       'a failed secondary deletion must not be described as a failed primary Settings save');
     assert.strictEqual(document.getElementById('settings-msg').classList.contains('text-warning'), true);
+
+    state.setDeletedSettingsFormats([{ id: '9007199254740993', version: 'rowversion-uncertain' }]);
+    transportFailedFormatDeleteId = '9007199254740993';
+    const attemptsBeforeUncertainDelete = customFormatDeleteRequests.length;
+    assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), false);
+    assert.strictEqual(customFormatDeleteRequests.length, attemptsBeforeUncertainDelete + 1,
+      'an uncertain custom-format DELETE must not be retried');
+    assert.match(document.getElementById('settings-msg').textContent, /removal result could not be confirmed/i);
+    assert.strictEqual(state.settingsReloadRequired, false,
+      'the successful authoritative Settings read-back resolves version uncertainty');
 
     const refreshesBeforeMainSaveScopeSwitch = librarySettingsLoadCount;
     const deleteAttemptsBeforeMainSaveScopeSwitch = customFormatDeleteRequests.length;

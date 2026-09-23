@@ -260,6 +260,23 @@ async function flush() {
     await settings.loadSettings({ skipAutoSync: true });
     assert.strictEqual(alt.value, systemAlt);
 
+    libraryHasLogo = false;
+    libraryAlt = 'Alt-only override';
+    versionNumber++;
+    await settings.loadSettings({ skipAutoSync: true });
+    assert.strictEqual(document.getElementById('ui-branding-status').textContent, 'Library Override');
+    alt.value = '';
+    alt.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    document.getElementById('btn-upload-logo').click();
+    await flush();
+    await flush();
+    assert.strictEqual(libraryAlt, null);
+    assert.strictEqual(libraryHasLogo, false);
+    assert.strictEqual(state.currentLegacySettingsFormModel.provenance.libraryBranding.version, null);
+    assert.strictEqual(document.getElementById('ui-branding-status').textContent, 'System Default');
+    assert.strictEqual(document.getElementById('btn-reset-logo').classList.contains('hidden'), true);
+    assert.strictEqual(alt.value, systemAlt);
+
     dom.window.close();
     console.log('Branding clear, inheritance, and explicit Settings recovery use the real UI controls');
   } finally {

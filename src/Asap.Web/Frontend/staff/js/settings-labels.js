@@ -6,6 +6,7 @@ import { showToast, showConfirm } from './dialogs.js';
 import { loadLibrarySettings } from './settings/library-context.js';
 import { loadStaffConfig } from './settings/refresh.js';
 import { normalizeDuplicateStatusLabels, renderDuplicateStatusLabelSettings, collectDuplicateStatusLabels } from './settings/duplicate-labels.js';
+import { markAmbiguousSettingsMutation } from './settings/mutation-outcome.js';
 
 export { normalizeDuplicateStatusLabels, renderDuplicateStatusLabelSettings, collectDuplicateStatusLabels };
 
@@ -43,10 +44,10 @@ document.getElementById('btn-reset-library-settings').addEventListener('click', 
       try {
         const settings = await loadLibrarySettings(actionOrganizationId, { throwOnError: true, preserveReloadRequired: true });
         const current = actionOrganizationId === currentLibraryContextOrgId && libraryContextLoadSerial === loadSerial + 1;
-        return { current, loaded: current && !!settings?.version };
+        return { current, loaded: current && !!settings?.version, serial: libraryContextLoadSerial };
       } catch (error) {
         const current = actionOrganizationId === currentLibraryContextOrgId && libraryContextLoadSerial === loadSerial + 1;
-        return { current, loaded: false, error };
+        return { current, loaded: false, error, serial: libraryContextLoadSerial };
       }
     }
 
@@ -57,12 +58,14 @@ document.getElementById('btn-reset-library-settings').addEventListener('click', 
       });
     } catch (error) {
       if (!contextIsCurrent()) return;
+      if (markAmbiguousSettingsMutation(error, contextIsCurrent)) return;
       if (error?.response?.code === 'stale_version') {
         setSettingsReloadRequired(true);
         const reload = await reloadCurrentLibrarySettings();
         if (reload.current) {
           if (reload.loaded) {
             const configRefreshed = await loadStaffConfig();
+            if (actionOrganizationId !== currentLibraryContextOrgId || libraryContextLoadSerial !== reload.serial) return;
             setSettingsReloadRequired(false);
             markSettingsClean('clean');
             if (!configRefreshed) {
@@ -88,6 +91,7 @@ document.getElementById('btn-reset-library-settings').addEventListener('click', 
     if (reload.current) {
       if (reload.loaded) {
         const configRefreshed = await loadStaffConfig();
+        if (actionOrganizationId !== currentLibraryContextOrgId || libraryContextLoadSerial !== reload.serial) return;
         setSettingsReloadRequired(false);
         markSettingsClean('clean');
         showToast(configRefreshed
