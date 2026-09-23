@@ -1,5 +1,5 @@
-import { settingsContainer, settingsLoading, currentLibraryContextOrgId, currentSettingsSection, setSettingsLoading, setAdditionalFieldDefinitions, setCurrentPatronFieldConfig, staffSession, setCurrentLibraryContextOrgId, workflowSettings, organizationsStatus } from '../state.js';
-import { setVisible, isSuperAdminStaff, activateSettingsSection, initSettingsNavigation, checkAuth, markSettingsClean, setFieldValue, setFieldChecked, isRequestCanceledError } from '../api.js';
+import { settingsContainer, settingsLoading, settingsDirty, settingsReloadRequired, settingsSaving, settingsSyncInProgress, settingsActionInProgress, libraryContextLoadSerial, currentLibraryContextOrgId, currentSettingsSection, setSettingsLoading, setSettingsReloadRequired, setAdditionalFieldDefinitions, setCurrentPatronFieldConfig, staffSession, setCurrentLibraryContextOrgId, workflowSettings, organizationsStatus } from '../state.js';
+import { setVisible, isSuperAdminStaff, activateSettingsSection, initSettingsNavigation, checkAuth, markSettingsClean, updateSaveBarState, setFieldValue, setFieldChecked, isRequestCanceledError } from '../api.js';
 import { updateSaveButtonText } from './save-ui.js';
 import { authorizedJson, loadStaffSession } from '../http.js';
 import { closeOpenDialogs } from '../dialogs.js';
@@ -7,7 +7,6 @@ import { closeActionMenu } from '../grid.js';
 import { populateLibrarySelector, loadLibrarySettings } from './library-context.js';
 import { updatePublicationOptionsUi } from '../settings-ui.js';
 import { syncPolarisOrganizations } from './polaris-sync.js';
-import { loadStaffAccessSettings } from './staff-access.js';
 import { registerSettingsRefreshHandlers } from './refresh.js';
 import { createLatestLoad } from '../../../shared/latest-load.js';
 import { isPolarisConfigured, populatePolarisSettingsForm } from './polaris-fields.js';
@@ -66,13 +65,9 @@ async function loadLibraryContext(isSuper) {
     : `${libraryName} (ID ${currentLibraryContextOrgId})`;
 }
 
-async function loadLibraryAdminSettings(options = {}) {
+function loadLibraryAdminSettings() {
   showSettingsForm();
-  const loaded = await loadStaffAccessSettings(options);
-  if (loaded && (!options.isCurrent || options.isCurrent())) {
-    updateSaveButtonText();
-  }
-  return loaded;
+  updateSaveButtonText();
 }
 
 function showSettingsForm() {
@@ -120,17 +115,24 @@ function populatePostmarkSettingsForm(emails) {
 }
 
 export async function loadSettings(options = {}) {
+  if (options.preserveDraft === true &&
+      ((settingsDirty && !settingsReloadRequired) || settingsSaving || settingsSyncInProgress || settingsActionInProgress || settingsLoading)) {
+    return;
+  }
+  const startingContextSerial = libraryContextLoadSerial;
   const isSuper = isSuperAdminStaff();
   const showErrors = options.showErrors !== false;
   const guard = settingsLoads.begin('settings');
   let loadFailed = false;
+  let settingsLoaded = false;
+  let autoSyncPolaris = null;
   setSettingsLoading(true);
 
   try {
     updateSettingsSidebar(isSuper);
     ensureAllowedSettingsSection(isSuper);
     await loadLibraryContext(isSuper);
-    if (!guard.isCurrent()) return;
+    if (!guard.isCurrent() || startingContextSerial !== libraryContextLoadSerial) return;
 
     const requestedContextOrgId = currentLibraryContextOrgId;
     const loadedLibrarySettings = await loadLibrarySettings(requestedContextOrgId, {
@@ -138,29 +140,19 @@ export async function loadSettings(options = {}) {
       preserveReloadRequired: options.preserveReloadRequired === true
     });
     if (!guard.isCurrent() || loadedLibrarySettings === undefined || requestedContextOrgId !== currentLibraryContextOrgId) return;
+    settingsLoaded = !!loadedLibrarySettings?.version;
 
     if (!isSuper) {
-      await loadLibraryAdminSettings({
-        contextOrgId: requestedContextOrgId,
-        signal: guard.signal,
-        isCurrent: guard.isCurrent
-      });
+      loadLibraryAdminSettings();
       return loadedLibrarySettings;
     }
 
     const polaris = (loadedLibrarySettings && loadedLibrarySettings.stored && loadedLibrarySettings.stored.polaris) ||
       (loadedLibrarySettings && loadedLibrarySettings.polaris) || {};
-    if (!options.skipAutoSync) {
-      maybeSyncPolarisOrganizations(polaris);
-    }
+    if (!options.skipAutoSync) autoSyncPolaris = polaris;
     updateWorkflowSettingsSummary(loadedLibrarySettings);
 
     populateSystemSettingsForms(loadedLibrarySettings);
-    await loadStaffAccessSettings({
-      contextOrgId: requestedContextOrgId,
-      signal: guard.signal,
-      isCurrent: guard.isCurrent
-    });
     if (!guard.isCurrent() || requestedContextOrgId !== currentLibraryContextOrgId) return;
     showSettingsForm();
     return loadedLibrarySettings;
@@ -168,13 +160,18 @@ export async function loadSettings(options = {}) {
   } catch (err) {
     loadFailed = true;
     if (guard.isCurrent()) {
+      if (settingsLoaded) {
+        setSettingsReloadRequired(true);
+        updateSaveBarState('reload');
+      }
       handleLoadSettingsError(err, showErrors);
     }
     if (options.throwOnError === true) throw err;
   } finally {
     if (guard.isCurrent()) {
       setSettingsLoading(false);
-      if (!loadFailed) markSettingsClean('clean');
+      if (!loadFailed && settingsLoaded) markSettingsClean('clean');
+      if (!loadFailed && settingsLoaded && autoSyncPolaris) maybeSyncPolarisOrganizations(autoSyncPolaris);
     }
     settingsLoads.finish('settings', guard.token);
   }
@@ -185,8 +182,11 @@ export function refreshSettingsView(options = {}) {
 }
 
 export async function loadStaffConfig() {
+  const contextOrgId = currentLibraryContextOrgId;
+  const contextSerial = libraryContextLoadSerial;
   try {
     const config = await authorizedJson('/api/asap/config');
+    if (contextOrgId !== currentLibraryContextOrgId || contextSerial !== libraryContextLoadSerial) return false;
     if (config) {
       if (config.logoUrl) {
         document.getElementById('app-icon').href = config.logoUrl;
@@ -202,10 +202,12 @@ export async function loadStaffConfig() {
         setAdditionalFieldDefinitions(config.additionalFieldDefinitions || []);
         setCurrentPatronFieldConfig(config.additionalFieldDefinitions || [], config.formatRules || {});
       }
+      return true;
     }
   } catch (err) {
     console.error('Failed to load global config');
   }
+  return false;
 }
 
 export async function initStaffApp() {

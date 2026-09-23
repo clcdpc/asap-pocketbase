@@ -139,6 +139,7 @@
         <strong>Access denied.</strong> Staff users cannot edit settings. Library admins can manage their own library's
         workflow, patron experience, and email templates. Super admins can manage system-wide settings.
       </div>
+      <button type="button" id="settings-reload-btn" class="btn btn-warning hidden mb-3">Reload Settings</button>
       <form id="settings-form">
         <div class="settings-shell">
           <aside class="settings-sidebar" aria-label="Settings sections">
@@ -745,6 +746,9 @@
                                 accept="image/png, image/jpeg, image/gif">
                               <label class="custom-file-label" for="ui-logo-file">Choose image...</label>
                             </div>
+                            <button type="button" id="btn-clear-selected-logo" class="btn btn-link btn-sm pl-0 hidden">
+                              Clear selected logo
+                            </button>
                             <small class="form-text text-muted">Recommended: PNG with transparent background, height
                               around 60-100px.</small>
                           </div>

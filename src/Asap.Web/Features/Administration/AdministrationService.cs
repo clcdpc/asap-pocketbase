@@ -490,7 +490,17 @@ public sealed class AdministrationService(
             return new AdministrationResult("staff_scope_forbidden");
         }
 
-        var snapshots = await polarisProvider.GetOrganizationsAsync(cancellationToken);
+        IReadOnlyList<PolarisOrganizationSnapshot> snapshots;
+        try
+        {
+            snapshots = await polarisProvider.GetOrganizationsAsync(cancellationToken);
+        }
+        catch (PolarisOperationalException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            // The local sync transaction has not started, so this response proves no local write occurred.
+            return new AdministrationResult("polaris_unavailable", Message: "Polaris organizations could not be loaded.");
+        }
         if (snapshots.Count == 0)
         {
             return new AdministrationResult("polaris_organizations_empty");
@@ -753,7 +763,8 @@ public sealed class AdministrationService(
         string? altText,
         bool clearLogo,
         string? expectedVersion,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool resetBranding = false)
     {
         if (!TryResolveScope(actor, requestedOrganization, out var organizationId, out var failure))
         {
@@ -799,11 +810,8 @@ public sealed class AdministrationService(
         var branding = await context.Branding.SingleOrDefaultAsync(
             item => item.OrganizationId == organizationId,
             cancellationToken);
+        var isNew = branding is null;
         branding ??= new Branding { OrganizationId = organizationId };
-        if (context.Entry(branding).State == EntityState.Detached)
-        {
-            context.Branding.Add(branding);
-        }
         if (clearLogo)
         {
             branding.LogoData = null;
@@ -816,11 +824,22 @@ public sealed class AdministrationService(
             branding.LogoContentType = logoInfo!.ContentType;
             branding.LogoFileName = Clean(fileName) ?? "logo";
         }
-        if (altText is not null)
+        if (altText is not null || (resetBranding && organizationId != 1))
         {
             branding.LogoAltText = Clean(altText);
         }
         branding.UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime;
+        if (organizationId != 1 && IsEmpty(branding))
+        {
+            if (!isNew)
+            {
+                context.Branding.Remove(branding);
+            }
+        }
+        else if (isNew)
+        {
+            context.Branding.Add(branding);
+        }
         await AddAuditAsync(
             context,
             actor,

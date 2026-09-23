@@ -600,3 +600,12 @@ export function checkSettingsDirty() {
   const currentState = JSON.stringify(serializeSettingsState());
   return currentState !== initialSettingsSnapshot;
 }
+
+export function hasUnrelatedSettingsDraft() {
+  if (!initialSettingsSnapshot) return false;
+  const baseline = JSON.parse(initialSettingsSnapshot);
+  const current = serializeSettingsState();
+  delete baseline.ui_text?.logoAlt;
+  delete current.ui_text?.logoAlt;
+  return JSON.stringify(current) !== JSON.stringify(baseline);
+}

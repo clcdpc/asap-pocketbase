@@ -321,6 +321,7 @@ function assertBackendShape(expected, actual, path = '$') {
       };
     };
     formPopulation.applyLibrarySettingsToForm(systemSettingsResponse);
+    serializer.rememberLastSavedLibrarySettings(systemSettingsResponse);
     async function settleAsyncRendering() {
       for (let index = 0; index < 4; index++) {
         await new Promise(resolve => setImmediate(resolve));
@@ -469,12 +470,14 @@ function assertBackendShape(expected, actual, path = '$') {
     let deferNextSettingsSave = false;
     let releaseDeferredSettingsSave = null;
     let settingsSaveAttempts = 0;
+    let nextSettingsSaveAdvancesLibraryVersion = false;
     let librarySettingsLoadCount = 0;
     let failNextSettingsRead = false;
     let syncRequests = 0;
     let enforceSyncVersion = false;
     const customFormatDeleteRequests = [];
     let deferredFormatDeleteId = null;
+    let transportFailedFormatDeleteId = null;
     let releaseDeferredFormatDelete = null;
     global.fetch = async (request, options = {}) => {
       const url = String(request);
@@ -494,6 +497,10 @@ function assertBackendShape(expected, actual, path = '$') {
           }) };
         }
         sentSettingsPayloads.push(body);
+        if (nextSettingsSaveAdvancesLibraryVersion) {
+          nextSettingsSaveAdvancesLibraryVersion = false;
+          librarySettingsResponse.version = 'library-version-after-save';
+        }
         if (deferNextSettingsSave) {
           deferNextSettingsSave = false;
           return new Promise(resolve => {
@@ -576,6 +583,10 @@ function assertBackendShape(expected, actual, path = '$') {
               ok: true, status: 200, statusText: 'OK', json: async () => ({ code: 'format_deleted' })
             });
           });
+        }
+        if (formatId === transportFailedFormatDeleteId) {
+          transportFailedFormatDeleteId = null;
+          throw new TypeError('Format DELETE response lost');
         }
         if (formatId === '9007199254740994') {
           return { ok: false, status: 409, statusText: 'Conflict', json: async () => ({
@@ -752,6 +763,7 @@ function assertBackendShape(expected, actual, path = '$') {
       if (state.currentLibraryContextOrgId === '2') librarySettingsLoadCount++;
       formPopulation.applyLibrarySettingsToForm(response);
       serializer.rememberLastSavedLibrarySettings(response);
+      return response;
     }
     settingsRefresh.registerSettingsRefreshHandlers({
       refreshSettingsView: refreshLibrarySettingsForm,
@@ -899,12 +911,26 @@ function assertBackendShape(expected, actual, path = '$') {
       'a failed secondary deletion must not be described as a failed primary Settings save');
     assert.strictEqual(document.getElementById('settings-msg').classList.contains('text-warning'), true);
 
+    state.setDeletedSettingsFormats([{ id: '9007199254740993', version: 'rowversion-uncertain' }]);
+    transportFailedFormatDeleteId = '9007199254740993';
+    const attemptsBeforeUncertainDelete = customFormatDeleteRequests.length;
+    assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), false);
+    assert.strictEqual(customFormatDeleteRequests.length, attemptsBeforeUncertainDelete + 1,
+      'an uncertain custom-format DELETE must not be retried');
+    assert.match(document.getElementById('settings-msg').textContent, /removal result could not be confirmed/i);
+    assert.strictEqual(state.settingsReloadRequired, false,
+      'the successful authoritative Settings read-back resolves version uncertainty');
+
     const refreshesBeforeMainSaveScopeSwitch = librarySettingsLoadCount;
     const deleteAttemptsBeforeMainSaveScopeSwitch = customFormatDeleteRequests.length;
     state.setDeletedSettingsFormats([{ id: '9007199254740993', version: 'rowversion-old-scope' }]);
     deferNextSettingsSave = true;
     const pendingOldScopeSave = saveController.saveSettings({ clearDelay: 0 });
     assert.strictEqual(typeof releaseDeferredSettingsSave, 'function', 'the old-scope primary Settings save must be pending');
+    assert.strictEqual(state.settingsForm.inert, true, 'ordinary Settings inputs must be unavailable while save is pending');
+    const attemptsDuringPendingSave = settingsSaveAttempts;
+    assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), false);
+    assert.strictEqual(settingsSaveAttempts, attemptsDuringPendingSave, 'a second save must not race the pending mutation');
     state.setCurrentLibraryContextOrgId('3');
     state.incrementLibraryContextLoadSerial();
     document.getElementById('ui-login-note').value = 'Library three current draft';
@@ -917,6 +943,7 @@ function assertBackendShape(expected, actual, path = '$') {
       'a superseded primary save must not refresh over the newly selected library');
     assert.strictEqual(document.getElementById('ui-login-note').value, 'Library three current draft',
       'a superseded primary save must not overwrite the current library form');
+    assert.strictEqual(state.settingsForm.inert, false, 'the form lock must clear when the mutation settles');
 
     state.setCurrentLibraryContextOrgId('2');
     state.incrementLibraryContextLoadSerial();
@@ -956,8 +983,12 @@ function assertBackendShape(expected, actual, path = '$') {
     serializer.rememberLastSavedLibrarySettings(librarySettingsResponse);
     await settleAsyncRendering();
     failNextSettingsRead = true;
+    nextSettingsSaveAdvancesLibraryVersion = true;
+    document.getElementById('ui-login-note').value = 'Committed library draft remains visible';
+    const versionBeforeFailedSaveRefresh = state.lastSavedLibrarySettingsSnapshot.version;
+    const attemptsBeforeFailedSaveRefresh = settingsSaveAttempts;
     settingsRefresh.registerSettingsRefreshHandlers({
-      refreshSettingsView: settingsLoader.loadSettings,
+      refreshSettingsView: settingsLoader.refreshSettingsView,
       loadStaffConfig: async () => {}
     });
     assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), true,
@@ -968,6 +999,25 @@ function assertBackendShape(expected, actual, path = '$') {
       'a failed follow-up read must be reported as a successful save with an incomplete refresh');
     assert.strictEqual(document.getElementById('settings-msg').classList.contains('text-warning'), true,
       'the refresh warning must not be presented as a failed settings save');
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, versionBeforeFailedSaveRefresh,
+      'a failed post-save read must not guess the committed version');
+    assert.strictEqual(state.settingsReloadRequired, true);
+    assert.strictEqual(document.getElementById('settings-save-title').textContent, 'Reload required');
+    assert.strictEqual(document.getElementById('ui-login-note').value, 'Committed library draft remains visible');
+    assert.strictEqual(state.settingsForm.inert, true, 'reload-required must prevent normal form editing');
+    assert.strictEqual(document.getElementById('settings-reload-btn').classList.contains('hidden'), false);
+    saveController.discardLibrarySettingsChanges();
+    assert.strictEqual(document.getElementById('settings-save-title').textContent, 'Reload required');
+    assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), false);
+    assert.strictEqual(settingsSaveAttempts, attemptsBeforeFailedSaveRefresh + 1,
+      'a second Settings save must be blocked before it sends a stale version');
+    assert.strictEqual(document.getElementById('ui-login-note').value, 'Committed library draft remains visible');
+    await settingsLoader.loadSettings({ skipAutoSync: true });
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, 'library-version-after-save');
+    assert.strictEqual(state.settingsReloadRequired, false);
+    assert.strictEqual(state.settingsForm.inert, false);
+    assert.strictEqual(document.getElementById('ui-login-note').value, librarySettingsResponse.effective.loginNote,
+      'recovery must replace the old value with the authoritative response');
     settingsRefresh.registerSettingsRefreshHandlers({
       refreshSettingsView: refreshLibrarySettingsForm,
       loadStaffConfig: async () => {}
@@ -990,6 +1040,38 @@ function assertBackendShape(expected, actual, path = '$') {
       'the stale conflict must replace the form with authoritative current values');
     assert.match(document.getElementById('settings-msg').textContent, /changed in another session.*reloaded/i,
       'the UI must explain that the stale Settings values were reloaded');
+
+    settingsRefresh.registerSettingsRefreshHandlers({
+      refreshSettingsView: settingsLoader.refreshSettingsView,
+      loadStaffConfig: async () => {}
+    });
+    librarySettingsResponse.version = 'library-version-3';
+    librarySettingsResponse.effective.loginNote = 'Authoritative value after failed stale recovery';
+    librarySettingsResponse.ui_text.loginNote = 'Authoritative value after failed stale recovery';
+    nextSettingsSaveIsStale = true;
+    failNextSettingsRead = true;
+    const attemptsBeforeFailedConflict = settingsSaveAttempts;
+    assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), false);
+    assert.strictEqual(settingsSaveAttempts, attemptsBeforeFailedConflict + 1,
+      'stale recovery failure must not retry the mutation');
+    assert.strictEqual(state.settingsReloadRequired, true);
+    assert.strictEqual(state.settingsForm.inert, true);
+    assert.strictEqual(document.getElementById('settings-save-title').textContent, 'Reload required');
+    assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), false);
+    assert.strictEqual(settingsSaveAttempts, attemptsBeforeFailedConflict + 1);
+    assert.strictEqual(await polarisSync.syncPolarisOrganizations(), null);
+    assert.strictEqual(settingsSaveAttempts, attemptsBeforeFailedConflict + 1);
+    await settingsLoader.loadSettings({ skipAutoSync: true });
+    assert.strictEqual(state.settingsReloadRequired, false);
+    assert.strictEqual(state.settingsForm.inert, false);
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, 'library-version-3');
+    assert.strictEqual(document.getElementById('ui-login-note').value, 'Authoritative value after failed stale recovery');
+    assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), true,
+      'ordinary save must resume after authoritative stale recovery');
+    settingsRefresh.registerSettingsRefreshHandlers({
+      refreshSettingsView: refreshLibrarySettingsForm,
+      loadStaffConfig: async () => {}
+    });
 
     formPopulation.applyLibrarySettingsToForm({ ...librarySettingsResponse, autoClaimStaff: undefined });
     await settleAsyncRendering();
@@ -1279,25 +1361,55 @@ function assertBackendShape(expected, actual, path = '$') {
       'An intentional system-only message edit must still be submitted.');
 
     systemSettingsResponse.version = 'sync-version-1';
+    systemSettingsResponse.stored.allowedPatronCodeIds = ['14', '28'];
+    systemSettingsResponse.stored.configuredSystem.allowedPatronCodeIds = { exists: true, values: ['14', '28'] };
+    systemSettingsResponse.effective.allowedPatronCodeIds = ['14', '28'];
     enforceSyncVersion = true;
     settingsRefresh.registerSettingsRefreshHandlers({
-      refreshSettingsView: settingsLoader.loadSettings,
+      refreshSettingsView: settingsLoader.refreshSettingsView,
       loadStaffConfig: async () => {}
     });
     await settingsLoader.loadSettings({ skipAutoSync: true });
     assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, 'sync-version-1');
+    await settleAsyncRendering();
+    assert.strictEqual(serializer.hasUnrelatedSettingsDraft(), false,
+      'loading participation choices must not manufacture a Settings draft');
+    assert.strictEqual(patronCodes.collectAllowedPatronCodeIds(), '14,28');
+    const originalSyncFetch = global.fetch;
+    global.fetch = async (request, options = {}) => {
+      if (String(request) === '/api/asap/staff/organizations/sync') {
+        systemSettingsResponse.stored.allowedPatronCodeIds = ['47'];
+        systemSettingsResponse.stored.configuredSystem.allowedPatronCodeIds = { exists: true, values: ['47'] };
+        systemSettingsResponse.effective.allowedPatronCodeIds = ['47'];
+      }
+      return originalSyncFetch(request, options);
+    };
     const savesBeforeSync = settingsSaveAttempts;
-    await polarisSync.syncPolarisOrganizations();
+    const pendingSync = polarisSync.syncPolarisOrganizations();
+    assert.strictEqual(state.settingsForm.inert, true, 'synchronization must protect the Settings form');
+    const contextBeforePendingSync = state.currentLibraryContextOrgId;
+    assert.strictEqual(await libraryContext.switchLibraryContext('2'), false,
+      'library context cannot change during organization synchronization');
+    assert.strictEqual(state.currentLibraryContextOrgId, contextBeforePendingSync);
+    await pendingSync;
+    global.fetch = originalSyncFetch;
     assert.strictEqual(syncRequests, 1);
     assert.match(document.getElementById('organizations-sync-result').textContent,
       /synced 4 organization records and refreshed patron code choices/i);
     assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, 'sync-version-2',
       'organization sync must reload the authoritative Settings version');
     assert.strictEqual(state.settingsReloadRequired, false);
+    assert.deepStrictEqual(Array.from(document.querySelectorAll('#allowed-patron-code-container input[type="checkbox"]:checked'),
+      checkbox => checkbox.value), ['47']);
+    assert.strictEqual(patronCodes.collectAllowedPatronCodeIds(), '47');
+    assert.strictEqual(Object.hasOwn(serializer.buildSettingsPayload(), 'allowedPatronCodeIds'), false,
+      'a no-edit serialization must not replace the authoritative patron-code set');
     assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), true);
     assert.strictEqual(settingsSaveAttempts, savesBeforeSync + 1,
       'the next ordinary save must succeed once using the post-sync version');
     assert.strictEqual(sentSettingsPayloads.at(-1).version, 'sync-version-2');
+    assert.strictEqual(Object.hasOwn(sentSettingsPayloads.at(-1).workflow, 'allowedPatronCodeIds'), false,
+      'a no-edit save must not replace another administrator\'s patron-code eligibility');
 
     const draftInput = document.getElementById('ui-login-note');
     draftInput.value = 'Unsaved draft before synchronization';
@@ -1306,6 +1418,11 @@ function assertBackendShape(expected, actual, path = '$') {
     await polarisSync.syncPolarisOrganizations();
     assert.strictEqual(syncRequests, 1, 'synchronization must be blocked while Settings has unsaved edits');
     assert.strictEqual(draftInput.value, 'Unsaved draft before synchronization');
+    const versionBeforeReopen = state.lastSavedLibrarySettingsSnapshot.version;
+    await settingsLoader.loadSettings({ skipAutoSync: true, preserveDraft: true });
+    assert.strictEqual(draftInput.value, 'Unsaved draft before synchronization',
+      'reopening Settings must preserve an unrelated unsaved draft');
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, versionBeforeReopen);
     await settingsLoader.loadSettings({ skipAutoSync: true });
 
     failNextSettingsRead = true;
@@ -1324,6 +1441,149 @@ function assertBackendShape(expected, actual, path = '$') {
     await settingsLoader.loadSettings({ skipAutoSync: true });
     assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, 'sync-version-3');
     assert.strictEqual(state.settingsReloadRequired, false);
+
+    global.fetch = async (request, options = {}) => {
+      if (String(request).startsWith('/api/asap/staff/polaris/patron-codes')) {
+        return { ok: false, status: 503, statusText: 'Service Unavailable', json: async () => ({
+          code: 'polaris_unavailable', message: 'Patron code choices temporarily unavailable.'
+        }) };
+      }
+      return originalSyncFetch(request, options);
+    };
+    await polarisSync.syncPolarisOrganizations();
+    global.fetch = originalSyncFetch;
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, 'sync-version-4');
+    assert.strictEqual(state.settingsReloadRequired, false,
+      'unavailable patron-code choices must not invalidate a successful authoritative Settings reload');
+    assert.strictEqual(patronCodes.collectAllowedPatronCodeIds(), '47',
+      'a choice retrieval failure must retain the just-loaded Settings selection');
+    assert.strictEqual(Object.hasOwn(serializer.buildSettingsPayload(), 'allowedPatronCodeIds'), false);
+
+    const fetchBeforeReferenceRace = global.fetch;
+    const patronCodeContainer = document.getElementById('allowed-patron-code-container');
+    patronCodes.updatePatronCodesStatusUi('loaded', 'Patron codes loaded.');
+    patronCodeContainer.removeAttribute('data-loaded');
+    let releaseOlderPatronCodes;
+    let patronCodeFetches = 0;
+    global.fetch = async (request, options = {}) => {
+      if (String(request) === '/api/asap/staff/polaris/patron-codes') {
+        patronCodeFetches++;
+        if (patronCodeFetches === 1) {
+          return new Promise(resolve => {
+            releaseOlderPatronCodes = () => resolve({ ok: true, status: 200, statusText: 'OK', json: async () => [
+              { id: '14', description: 'Old choice' }
+            ] });
+          });
+        }
+        return { ok: true, status: 200, statusText: 'OK', json: async () => [
+          { id: '28', description: 'Current choice' }
+        ] };
+      }
+      return fetchBeforeReferenceRace(request, options);
+    };
+    const olderPatronLoad = patronCodes.renderPatronCodeEligibilityOptions('14');
+    await patronCodes.renderPatronCodeEligibilityOptions('28');
+    releaseOlderPatronCodes();
+    await olderPatronLoad;
+    assert.strictEqual(patronCodes.collectAllowedPatronCodeIds(), '28',
+      'an older reference response must not replace the current Settings selection');
+    assert.deepStrictEqual(Array.from(patronCodeContainer.querySelectorAll('input[type="checkbox"]')).map(input => input.value), ['28']);
+
+    const raceParticipationContainer = document.getElementById('enabled-libraries-checkbox-container');
+    raceParticipationContainer.removeAttribute('data-loaded');
+    let releaseOlderOrganizations;
+    let organizationFetches = 0;
+    global.fetch = async (request, options = {}) => {
+      if (String(request) === '/api/asap/staff/organizations') {
+        organizationFetches++;
+        if (organizationFetches === 1) {
+          return new Promise(resolve => {
+            releaseOlderOrganizations = () => resolve({ ok: true, status: 200, statusText: 'OK', json: async () => [
+              { id: 2, displayName: 'Older library', active: true }
+            ] });
+          });
+        }
+        return { ok: true, status: 200, statusText: 'OK', json: async () => [
+          { id: 4, displayName: 'Current library', active: true }
+        ] };
+      }
+      return fetchBeforeReferenceRace(request, options);
+    };
+    const olderParticipationLoad = fields.renderLibraryParticipationCheckboxes();
+    await fields.renderLibraryParticipationCheckboxes();
+    releaseOlderOrganizations();
+    await olderParticipationLoad;
+    assert.deepStrictEqual(fields.collectEnabledLibraryIds(), ['4'],
+      'an older organization response must not replace current participation choices');
+    global.fetch = fetchBeforeReferenceRace;
+
+    let failStaffAccessAfterSettingsRead = false;
+    let failedStaffAccessReads = 0;
+    global.fetch = async (request, options = {}) => {
+      const url = String(request);
+      if (url.startsWith('/api/asap/staff/settings/library?')) {
+        failStaffAccessAfterSettingsRead = true;
+      }
+      if (url === '/api/asap/staff/organizations' && options.signal && failStaffAccessAfterSettingsRead) {
+        failStaffAccessAfterSettingsRead = false;
+        failedStaffAccessReads++;
+        return { ok: false, status: 503, statusText: 'Service Unavailable', json: async () => ({
+          code: 'organizations_unavailable', message: 'Staff Access choices temporarily unavailable.'
+        }) };
+      }
+      return fetchBeforeReferenceRace(request, options);
+    };
+    const settingsAfterAuxiliaryFailure = await settingsLoader.loadSettings({ skipAutoSync: true, throwOnError: true });
+    global.fetch = fetchBeforeReferenceRace;
+    assert.strictEqual(failedStaffAccessReads, 1);
+    assert.strictEqual(settingsAfterAuxiliaryFailure.version, 'sync-version-4');
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, 'sync-version-4');
+    assert.strictEqual(state.settingsReloadRequired, false,
+      'failed Staff Access reference data must not invalidate an authoritative Settings read');
+    assert.strictEqual(state.settingsForm.inert, false);
+    const savesBeforeAuxiliaryFailure = settingsSaveAttempts;
+    assert.strictEqual(await saveController.saveSettings({ clearDelay: 0 }), true);
+    assert.strictEqual(settingsSaveAttempts, savesBeforeAuxiliaryFailure + 1);
+    assert.strictEqual(sentSettingsPayloads.at(-1).version, 'sync-version-4');
+
+    const contextSelector = document.getElementById('select-library-context');
+    assert.strictEqual(await libraryContext.switchLibraryContext('2', contextSelector), true);
+    const selectorOptionsBeforeFailure = Array.from(contextSelector.options, option => option.value);
+    const fetchBeforeSelectorFailure = global.fetch;
+    global.fetch = async (request, options = {}) => String(request) === '/api/asap/staff/organizations'
+      ? { ok: false, status: 503, statusText: 'Service Unavailable', json: async () => ({
+          code: 'organizations_unavailable', message: 'Organization choices temporarily unavailable.'
+        }) }
+      : fetchBeforeSelectorFailure(request, options);
+    await libraryContext.populateLibrarySelector();
+    global.fetch = fetchBeforeSelectorFailure;
+    assert.strictEqual(contextSelector.value, '2');
+    assert.strictEqual(state.currentLibraryContextOrgId, '2');
+    assert.deepStrictEqual(Array.from(contextSelector.options, option => option.value), selectorOptionsBeforeFailure,
+      'a failed selector refresh must preserve the visible library scope');
+    assert.strictEqual(await libraryContext.switchLibraryContext('system', contextSelector), true);
+
+    const versionBeforeInvalidRead = state.lastSavedLibrarySettingsSnapshot.version;
+    const fetchBeforeInvalidRead = global.fetch;
+    let invalidSettingsReads = 0;
+    global.fetch = async (request, options = {}) => {
+      if (String(request).startsWith('/api/asap/staff/settings/library?')) {
+        invalidSettingsReads++;
+        return { ok: true, status: 200, statusText: 'OK', json: async () => ({ ui_text: { loginNote: 'Incomplete read' } }) };
+      }
+      return fetchBeforeInvalidRead(request, options);
+    };
+    await assert.rejects(settingsLoader.loadSettings({ skipAutoSync: true, throwOnError: true }), /version was not returned/);
+    global.fetch = fetchBeforeInvalidRead;
+    assert.strictEqual(invalidSettingsReads, 1);
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, versionBeforeInvalidRead,
+      'an incomplete read must not replace the last authoritative snapshot');
+    assert.strictEqual(state.settingsReloadRequired, true);
+    assert.strictEqual(state.settingsForm.inert, true);
+    const validSettingsAfterInvalidRead = await settingsLoader.loadSettings({ skipAutoSync: true, throwOnError: true });
+    assert.ok(validSettingsAfterInvalidRead.version);
+    assert.strictEqual(state.settingsReloadRequired, false);
+    assert.strictEqual(state.settingsForm.inert, false);
 
     const index = fs.readFileSync(path.join(staffRoot, 'index.html'), 'utf8');
     const polarisSource = fs.readFileSync(path.join(staffRoot, 'js', 'settings-polaris.js'), 'utf8');

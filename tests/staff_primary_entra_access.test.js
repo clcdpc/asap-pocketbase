@@ -17,6 +17,7 @@ function response(status, body) {
 function librarySettings(orgId, marker) {
   return {
     orgId,
+    version: `settings-${orgId}-${marker}`,
     isOverride: true,
     ui_text: { loginNote: marker },
     emails: {},

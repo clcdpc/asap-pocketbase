@@ -109,6 +109,7 @@ async function runLegacySettingsNoEditRoundTrip(
 ) {
   const select = page.locator('#select-library-context');
   if (await select.inputValue() !== orgId) {
+    await page.waitForFunction(() => !document.getElementById('select-library-context').disabled);
     await select.selectOption(orgId, { force: true });
   }
   await page.waitForFunction(async ({ expectedOrgId, expectedInput }) => {
@@ -118,6 +119,7 @@ async function runLegacySettingsNoEditRoundTrip(
       currentLegacySettingsFormModel?.contextOrgId === expectedOrgId &&
       document.getElementById('suggestion-limit')?.value === expectedInput;
   }, { expectedOrgId: orgId, expectedInput: expectedSuggestionLimitInput });
+  await page.waitForFunction(() => !document.getElementById('select-library-context').disabled);
 
   const beforeResponse = await context.request.get(
     `${baseOrigin}/api/asap/staff/settings/library?orgId=${encodeURIComponent(orgId)}`
@@ -425,9 +427,40 @@ async function runSuperAdmin(browser, args, axeSource, report) {
         await runLegacySettingsNoEditRoundTrip(page, context, args.baseOrigin, orgId, suggestionLimit, suggestionLimitInput)
       );
     }
+    const beforeLibraryTwoSelection = await page.evaluate(async () => {
+      const state = await import('/staff/js/state.js');
+      return {
+        selectedOrgId: document.getElementById('select-library-context').value,
+        contextOrgId: state.currentLibraryContextOrgId,
+        modelOrgId: state.currentLegacySettingsFormModel?.contextOrgId,
+        settingsDirty: state.settingsDirty,
+        selectorDisabled: document.getElementById('select-library-context').disabled
+      };
+    });
+    assert.equal(beforeLibraryTwoSelection.settingsDirty, false,
+      `No-edit Settings round trips must leave a clean draft: ${JSON.stringify(beforeLibraryTwoSelection)}`);
+    await page.waitForFunction(() => !document.getElementById('select-library-context').disabled);
     await page.locator('#select-library-context').selectOption('2', { force: true });
-    await page.waitForFunction(() => [...document.getElementById('new-publication').options]
-      .some(option => option.value === 'Library early release'));
+    try {
+      await page.waitForFunction(() => [...document.getElementById('new-publication').options]
+        .some(option => option.value === 'Library early release'));
+    } catch (error) {
+      const settingsState = await page.evaluate(async () => {
+        const state = await import('/staff/js/state.js');
+        return {
+          selectedOrgId: document.getElementById('select-library-context').value,
+          contextOrgId: state.currentLibraryContextOrgId,
+          modelOrgId: state.currentLegacySettingsFormModel?.contextOrgId,
+          settingsDirty: state.settingsDirty,
+          settingsLoading: state.settingsLoading,
+          settingsActionInProgress: state.settingsActionInProgress,
+          settingsReloadRequired: state.settingsReloadRequired,
+          toast: document.querySelector('#toast-container .asap-toast:last-child')?.textContent,
+          options: [...document.getElementById('new-publication').options].map(option => option.value)
+        };
+      });
+      throw new Error(`Library selection did not settle: ${JSON.stringify(settingsState)}; ${error.message}`);
+    }
     await page.locator('[data-status="suggestion"]').click();
     await page.locator('#btn-new-suggestion').click();
     await page.locator('#newSuggestionModal[open]').waitFor();
@@ -619,6 +652,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
       const select = document.getElementById('select-library-context');
       return select && !select.disabled && select.options.length > 1;
     });
+    await page.waitForFunction(() => !document.getElementById('select-library-context').disabled);
     await page.locator('#select-library-context').selectOption('2', { force: true });
     await page.locator('#library-context-display').getByText(/ID 2/).waitFor();
     assert.ok(await page.locator('#btn-reset-library-settings').count(), 'Inherited override reset control is missing');

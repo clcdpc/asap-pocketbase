@@ -37,7 +37,7 @@ export function updateOrganizationsStatusUi(status, message) {
       div.textContent = 'Organizations loading...';
     } else if (organizationsStatus === 'error') {
       div.classList.add('text-warning');
-      div.textContent = 'Polaris connected, but organizations could not be loaded. Some setup options may be unavailable until this sync succeeds.';
+      div.textContent = organizationsStatusMessage || 'Organization choices could not be loaded.';
     } else if (organizationsStatus === 'not_loaded') {
       div.classList.add('text-muted');
       div.textContent = 'Organizations not loaded yet.';
