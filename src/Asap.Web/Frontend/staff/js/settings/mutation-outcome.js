@@ -6,7 +6,7 @@ import { showToast } from '../dialogs.js';
 export const uncertainMutationMessage = 'The request result could not be confirmed. Reload Settings before making further changes.';
 
 const preCommitRejections = {
-  400: new Set(['logo_invalid', 'polaris_organizations_empty', 'organization_invalid',
+  400: new Set(['logo_invalid', 'settings_invalid', 'polaris_organizations_empty', 'organization_invalid',
     'patron_codes_invalid', 'patron_code_unknown']),
   401: new Set(['staff_session_invalid']),
   403: new Set(['staff_scope_forbidden']),

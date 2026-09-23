@@ -29,6 +29,8 @@ const flush = async () => { await new Promise(resolve => setImmediate(resolve));
     const patronCodes = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'patron-codes.js')).href);
     const outcome = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'mutation-outcome.js')).href);
     assert.strictEqual(outcome.classifyMutationOutcome({ status: 400, response: { code: 'logo_invalid' } }), 'definite_failure');
+    assert.strictEqual(outcome.classifyMutationOutcome({ status: 400, response: { code: 'settings_invalid' } }), 'definite_failure');
+    assert.strictEqual(outcome.isAmbiguousMutationError({ status: 400, response: { code: 'settings_invalid' } }), false);
     assert.strictEqual(outcome.isAmbiguousMutationError({ status: 409, response: { code: 'stale_version' } }), false);
     assert.strictEqual(outcome.isAmbiguousMutationError({ status: 403, response: { code: 'staff_scope_forbidden' } }), false);
     assert.strictEqual(outcome.isAmbiguousMutationError({ status: 502, response: { code: 'polaris_unavailable' } }), false);
@@ -165,7 +167,8 @@ const flush = async () => { await new Promise(resolve => setImmediate(resolve));
           });
         }
         if (failedRequest.status) {
-          return response(failedRequest.status, failedRequest.code ? { code: failedRequest.code } : {});
+          return response(failedRequest.status, failedRequest.code
+            ? { code: failedRequest.code, message: failedRequest.message } : {});
         }
         throw new TypeError('Connection lost');
       }
@@ -173,6 +176,40 @@ const flush = async () => { await new Promise(resolve => setImmediate(resolve));
     };
 
     await settings.loadSettings({ skipAutoSync: true });
+    const logoInput = document.getElementById('ui-logo-file');
+    let selectedLogo = new dom.window.File([new Uint8Array(2 * 1024 * 1024 + 1)], 'oversized.png', { type: 'image/png' });
+    Object.defineProperty(logoInput, 'files', { configurable: true, get: () => selectedLogo ? [selectedLogo] : [] });
+    logoInput.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    const validationVersion = version();
+    const validationMessage = 'The logo must be between 1 byte and 2 MB.';
+    failure = { family: 'logo-post', commit: false, status: 400, code: 'settings_invalid', message: validationMessage };
+    document.getElementById('btn-upload-logo').click();
+    await flush(); await flush();
+    assert.strictEqual(mutations.filter(item => item.family === 'logo-post').length, 1, 'validation failure must not retry');
+    assert.strictEqual(mutations.at(-1).version, validationVersion);
+    assert.strictEqual(version(), validationVersion, 'validation must not change Settings version');
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, validationVersion);
+    assert.strictEqual(state.settingsReloadRequired, false);
+    assert.strictEqual(state.settingsForm.inert, false);
+    assert.strictEqual(document.getElementById('settings-reload-btn').classList.contains('hidden'), true);
+    assert.strictEqual(logoInput.files[0], selectedLogo, 'validation must keep the selected file');
+    const validationToast = Array.from(document.querySelectorAll('#toast-container .asap-toast')).at(-1).textContent;
+    assert.match(validationToast, /The logo must be between 1 byte and 2 MB\./);
+    assert.doesNotMatch(validationToast, /request result could not be confirmed/i);
+    assert.doesNotMatch(document.getElementById('settings-msg').textContent, /request result could not be confirmed/i);
+
+    const correctedPng = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13,
+      73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1]);
+    selectedLogo = new dom.window.File([correctedPng], 'corrected.png', { type: 'image/png' });
+    logoInput.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    document.getElementById('btn-upload-logo').click();
+    await flush(); await flush();
+    assert.strictEqual(mutations.filter(item => item.family === 'logo-post').length, 2, 'corrected input can be submitted');
+    assert.strictEqual(mutations.at(-1).version, validationVersion, 'retry uses the unchanged Settings version');
+    assert.strictEqual(state.settingsReloadRequired, false);
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.version, version(), 'successful retry must read back authoritative Settings');
+    selectedLogo = null;
+    logoInput.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
     async function recover(expectedVersion) {
       document.getElementById('settings-reload-btn').click();
       await flush(); await flush();
