@@ -1,8 +1,6 @@
-import { currentLibraryContextOrgId } from './state.js';
+import { currentLibraryContextOrgId, currentWorkflowOrgScopeId, staffSession } from './state.js';
 import { isAdminStaff, setInlineResult } from './api.js';
 import { authorizedJson } from './http.js';
-import { showToast } from './dialogs.js';
-import { refreshCurrentStaffView, refreshStaffStatus } from './grid.js';
 import { collectSettingsPolaris, renderLibraryParticipationCheckboxes, collectEnabledLibraryIds } from './settings/polaris-fields.js';
 import { syncPolarisOrganizations } from './settings/polaris-sync.js';
 import { saveSettings } from './settings/save-controller.js';
@@ -57,112 +55,40 @@ if (syncOrganizationsBtn) {
   });
 }
 
-document.getElementById('btn-run-hold-check').addEventListener('click', async () => {
-  const btn = document.getElementById('btn-run-hold-check');
+document.getElementById('btn-run-workflow-now').addEventListener('click', async (event) => {
+  if (!isAdminStaff()) return;
+  const btn = event.currentTarget;
+  if (btn.disabled) return;
   const msg = document.getElementById('job-msg');
-
+  const actionStaff = staffSession.staff;
+  const scope = actionStaff.role === 'super_admin' ? currentWorkflowOrgScopeId : String(actionStaff.organizationId);
+  const scopeLabel = scope === 'all' ? 'all libraries' : `Library ${scope}`;
+  const url = scope === 'all' || actionStaff.role !== 'super_admin'
+    ? '/api/asap/staff/workflow/run-now'
+    : `/api/asap/staff/workflow/run-now?organizationId=${encodeURIComponent(scope)}`;
   btn.disabled = true;
-  msg.textContent = 'Running hold check...';
+  msg.textContent = `Queueing workflow run for ${scopeLabel}...`;
   msg.className = 'mb-3 font-weight-bold text-info';
 
   try {
-    const orgId = currentLibraryContextOrgId !== 'system' ? currentLibraryContextOrgId : '';
-    const data = await authorizedJson(`/api/asap/staff/workflow/run-now${orgId ? `?organizationId=${encodeURIComponent(orgId)}` : ''}`, { method: 'POST' });
-    msg.textContent = `Workflow run queued${data.jobId ? ` (job ${data.jobId})` : ''}.`;
+    const data = await authorizedJson(url, { method: 'POST' });
+    if (staffSession.staff !== actionStaff || !staffSession.authenticated || !staffSession.accessAllowed) {
+      msg.textContent = '';
+      return;
+    }
+    msg.textContent = `Workflow run queued for ${scopeLabel}${data.jobId ? ` (job ${data.jobId})` : ''}.`;
     msg.className = 'mb-3 font-weight-bold text-success';
-    refreshCurrentStaffView();
   } catch (err) {
+    if (staffSession.staff !== actionStaff || !staffSession.authenticated || !staffSession.accessAllowed) {
+      msg.textContent = '';
+      return;
+    }
     msg.textContent = 'Error: ' + err.message;
     msg.className = 'mb-3 font-weight-bold text-danger';
   } finally {
     btn.disabled = false;
   }
 });
-
-document.getElementById('btn-run-promoter-check').addEventListener('click', async () => {
-  const btn = document.getElementById('btn-run-promoter-check');
-  const msg = document.getElementById('job-msg');
-
-  btn.disabled = true;
-  msg.textContent = 'Running auto-promoter...';
-  msg.className = 'mb-3 font-weight-bold text-info';
-
-  try {
-    const orgId = currentLibraryContextOrgId !== 'system' ? currentLibraryContextOrgId : '';
-    const data = await authorizedJson(`/api/asap/staff/workflow/run-now${orgId ? `?organizationId=${encodeURIComponent(orgId)}` : ''}`, { method: 'POST' });
-    msg.textContent = `Workflow run queued${data.jobId ? ` (job ${data.jobId})` : ''}.`;
-    msg.className = 'mb-3 font-weight-bold text-success';
-    refreshCurrentStaffView();
-  } catch (err) {
-    msg.textContent = 'Error: ' + err.message;
-    msg.className = 'mb-3 font-weight-bold text-danger';
-  } finally {
-    btn.disabled = false;
-  }
-});
-
-const deleteClosedRequestsBtn = document.getElementById('btn-delete-closed-requests');
-const bulkDeleteClosedDialog = document.getElementById('bulk-delete-closed-dialog');
-const bulkDeleteClosedForm = document.getElementById('bulk-delete-closed-form');
-const bulkDeleteClosedInput = document.getElementById('bulk-delete-closed-confirm');
-const bulkDeleteClosedSubmit = document.getElementById('bulk-delete-closed-submit');
-const bulkDeleteClosedCancel = document.getElementById('bulk-delete-closed-cancel');
-const bulkDeleteClosedMsg = document.getElementById('bulk-delete-closed-msg');
-
-if (deleteClosedRequestsBtn && bulkDeleteClosedDialog) {
-  deleteClosedRequestsBtn.addEventListener('click', () => {
-    if (!isAdminStaff()) return;
-    if (bulkDeleteClosedInput) bulkDeleteClosedInput.value = '';
-    if (bulkDeleteClosedSubmit) bulkDeleteClosedSubmit.disabled = true;
-    if (bulkDeleteClosedMsg) bulkDeleteClosedMsg.textContent = '';
-    bulkDeleteClosedDialog.showModal();
-    if (bulkDeleteClosedInput) bulkDeleteClosedInput.focus();
-  });
-}
-
-if (bulkDeleteClosedInput && bulkDeleteClosedSubmit) {
-  bulkDeleteClosedInput.addEventListener('input', () => {
-    bulkDeleteClosedSubmit.disabled = bulkDeleteClosedInput.value !== 'DELETE';
-  });
-}
-
-if (bulkDeleteClosedCancel && bulkDeleteClosedDialog) {
-  bulkDeleteClosedCancel.addEventListener('click', () => {
-    if (bulkDeleteClosedDialog.open) bulkDeleteClosedDialog.close();
-  });
-}
-
-if (bulkDeleteClosedForm) {
-  bulkDeleteClosedForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    if (!isAdminStaff() || !bulkDeleteClosedSubmit || !bulkDeleteClosedInput) return;
-    bulkDeleteClosedSubmit.disabled = true;
-    if (bulkDeleteClosedMsg) {
-      bulkDeleteClosedMsg.textContent = 'Deleting closed requests...';
-      bulkDeleteClosedMsg.className = 'mb-3 font-weight-bold text-info';
-    }
-    try {
-      const scope = currentLibraryContextOrgId !== 'system' ? currentLibraryContextOrgId : 'all';
-      const result = await authorizedJson(`/api/asap/staff/title-requests?scope=${encodeURIComponent(scope)}`);
-      const closed = (result.items || []).filter(item => item.status === 'closed');
-      for (const item of closed) {
-        await authorizedJson(`/api/asap/staff/requests/${encodeURIComponent(item.id)}`, {
-          method: 'DELETE',
-          body: { version: item.version }
-        });
-      }
-      if (bulkDeleteClosedDialog && bulkDeleteClosedDialog.open) bulkDeleteClosedDialog.close();
-      showToast(`Deleted ${closed.length} closed request${closed.length === 1 ? '' : 's'}.`, 'success');
-      refreshStaffStatus('closed');
-    } catch (err) {
-      if (bulkDeleteClosedMsg) {
-        bulkDeleteClosedMsg.textContent = err.message || 'Could not delete closed requests.';
-        bulkDeleteClosedMsg.className = 'mb-3 font-weight-bold text-danger';
-      }
-      bulkDeleteClosedSubmit.disabled = bulkDeleteClosedInput.value !== 'DELETE';
-    }
-  });
-}
 
 document.getElementById('btn-test-smtp').addEventListener('click', async (e) => {
   e.preventDefault();

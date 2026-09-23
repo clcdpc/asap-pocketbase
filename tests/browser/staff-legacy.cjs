@@ -461,6 +461,35 @@ async function runSuperAdmin(browser, args, axeSource, report) {
       });
       throw new Error(`Library selection did not settle: ${JSON.stringify(settingsState)}; ${error.message}`);
     }
+    assert.equal(await page.locator('#btn-delete-closed-requests').count(), 0);
+    assert.equal(await page.locator('#btn-run-promoter-check, #btn-run-hold-check').count(), 0);
+    await page.locator('[data-status="pending_hold"]').click();
+    const workflowScope = page.locator('#workflow-library-scope');
+    await workflowScope.waitFor({ state: 'visible' });
+    await workflowScope.selectOption('92327');
+    await page.waitForFunction(async () => {
+      const state = await import('/staff/js/state.js');
+      return state.currentWorkflowOrgScopeId === '92327' &&
+        document.getElementById('workflow-library-scope').value === '92327';
+    });
+    const workflowRunRequests = [];
+    const workflowRunRoute = async route => {
+      workflowRunRequests.push(new URL(route.request().url()));
+      await route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 'queued', jobId: 'browser-workflow-job', organizationId: 92327 })
+      });
+    };
+    await page.route('**/api/asap/staff/workflow/run-now*', workflowRunRoute);
+    await page.locator('#btn-run-workflow-now').click();
+    await page.locator('#job-msg').getByText(/queued for Library 92327/i).waitFor();
+    assert.equal(workflowRunRequests.length, 1);
+    assert.equal(workflowRunRequests[0].searchParams.get('organizationId'), '92327',
+      'workflow execution must follow the visible queue scope, not Settings library 2');
+    await page.unroute('**/api/asap/staff/workflow/run-now*', workflowRunRoute);
+    await workflowScope.selectOption('all');
+    await page.waitForFunction(async () => (await import('/staff/js/state.js')).currentWorkflowOrgScopeId === 'all');
     await page.locator('[data-status="suggestion"]').click();
     await page.locator('#btn-new-suggestion').click();
     await page.locator('#newSuggestionModal[open]').waitFor();

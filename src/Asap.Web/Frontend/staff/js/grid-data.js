@@ -188,29 +188,13 @@ export function clearJobMessage() {
 
 export function updateAdminActions(status, ctx) {
   const adminBar = document.getElementById('admin-actions-bar');
-  const promoterBtn = document.getElementById('btn-run-promoter-check');
-  const holdBtn = document.getElementById('btn-run-hold-check');
-  const deleteClosedBtn = document.getElementById('btn-delete-closed-requests');
+  const workflowBtn = document.getElementById('btn-run-workflow-now');
 
   adminBar.classList.add('hidden');
-  promoterBtn.classList.add('hidden');
-  holdBtn.classList.add('hidden');
-  if (deleteClosedBtn) deleteClosedBtn.classList.add('hidden');
-
-  const isCurrentlySuperAdmin = isSuperAdminStaff();
-
-  if (isCurrentlySuperAdmin) {
-    if (status === 'outstanding_purchase' && ctx.workflowSettings.autoPromote) {
-      adminBar.classList.remove('hidden');
-      promoterBtn.classList.remove('hidden');
-    } else if (status === 'pending_hold') {
-      adminBar.classList.remove('hidden');
-      holdBtn.classList.remove('hidden');
-    }
-  }
-  if (status === 'closed' && isAdminStaff() && deleteClosedBtn) {
+  workflowBtn.classList.add('hidden');
+  if (isAdminStaff() && status !== 'settings' && status !== 'analytics') {
     adminBar.classList.remove('hidden');
-    deleteClosedBtn.classList.remove('hidden');
+    workflowBtn.classList.remove('hidden');
   }
 }
 

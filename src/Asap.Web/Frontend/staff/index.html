@@ -87,20 +87,16 @@
     <div class="d-flex flex-wrap justify-content-between align-items-center mt-3 mb-2" style="gap: 0.5rem;">
       <div id="tab-desc" class="text-muted small" tabindex="-1" style="flex: 1 1 auto; min-width: 0;"></div>
       <div id="admin-actions-bar" class="hidden">
-        <button type="button" id="btn-run-promoter-check" class="btn btn-warning btn-sm hidden"><i
-            class="fa fa-search"></i> Run auto-promoter now</button>
-        <button type="button" id="btn-run-hold-check" class="btn btn-danger btn-sm hidden"><i
-            class="fa fa-hand-paper"></i> Run hold check now</button>
-        <button type="button" id="btn-delete-closed-requests" class="btn btn-outline-danger btn-sm hidden"><i
-            class="fa fa-trash"></i> Delete all closed</button>
+        <button type="button" id="btn-run-workflow-now" class="btn btn-warning btn-sm hidden"><i
+            class="fa fa-play" aria-hidden="true"></i> Queue workflow run</button>
       </div>
     </div>
-    <div id="job-msg" class="mb-3 font-weight-bold job-message"></div>
+    <div id="job-msg" class="mb-3 font-weight-bold job-message" role="status" aria-live="polite"></div>
 
     <div id="staff-grid-filter-bar" class="staff-grid-filter-bar hidden">
       <label id="workflow-library-scope-label" for="workflow-library-scope" class="workflow-scope-control hidden">
         <span class="workflow-scope-label">Library</span>
-        <select id="workflow-library-scope" class="form-control form-control-sm" aria-label="Filter workflow queues by library"></select>
+        <select id="workflow-library-scope" class="form-control form-control-sm" aria-label="Select workflow library scope"></select>
       </label>
       <div id="grid-search-container">
         <input type="text" id="grid-search-input" class="form-control form-control-sm" placeholder="Search..." aria-label="Search suggestions">
@@ -1666,23 +1662,6 @@
       <button type="button" id="confirm-dialog-ok" class="btn btn-sm btn-primary">OK</button>
     </div>
   </div>
-</dialog>
-
-<!-- Bulk Delete Closed Dialog -->
-<dialog id="bulk-delete-closed-dialog" class="asap-dialog asap-dialog-small">
-  <form id="bulk-delete-closed-form" class="asap-dialog-small-body">
-    <h2 class="h5 mb-3">Delete all closed requests?</h2>
-    <p class="dialog-message">This will permanently delete all closed requests you are allowed to manage.</p>
-    <div class="form-group">
-      <label for="bulk-delete-closed-confirm" class="font-weight-bold">Type DELETE to confirm.</label>
-      <input type="text" id="bulk-delete-closed-confirm" class="form-control" autocomplete="off">
-    </div>
-    <div id="bulk-delete-closed-msg" class="mb-3 font-weight-bold"></div>
-    <div class="asap-dialog-actions">
-      <button type="button" id="bulk-delete-closed-cancel" class="btn btn-sm btn-secondary">Cancel</button>
-      <button type="submit" id="bulk-delete-closed-submit" class="btn btn-sm btn-danger" disabled>Delete</button>
-    </div>
-  </form>
 </dialog>
 
 <!-- Assign Suggestion Dialog -->

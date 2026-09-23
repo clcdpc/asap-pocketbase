@@ -32,6 +32,10 @@ public sealed partial class PatronJourneyTests
         using var forgedBody = System.Text.Json.JsonDocument.Parse(await forged.Content.ReadAsStringAsync());
         Assert.AreEqual("staff_scope_forbidden", forgedBody.RootElement.GetProperty("code").GetString());
 
+        using var forgedAll = await client.PostAsync(
+            "/api/asap/staff/workflow/run-now?organizationId=1", content: null);
+        Assert.AreEqual(System.Net.HttpStatusCode.Forbidden, forgedAll.StatusCode);
+
         var superClient = factory.CreateClient();
         AddTestingStaffHeaders(superClient, superAdmin.Id, superAdmin.EntraTenantId, superAdmin.AuthenticationEmail);
         superClient.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(superClient));
@@ -39,6 +43,13 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(System.Net.HttpStatusCode.Accepted, global.StatusCode);
         using var globalBody = System.Text.Json.JsonDocument.Parse(await global.Content.ReadAsStringAsync());
         Assert.AreEqual(1, globalBody.RootElement.GetProperty("organizationId").GetInt32());
+
+        using var selected = await superClient.PostAsync(
+            "/api/asap/staff/workflow/run-now?organizationId=2", content: null);
+        Assert.AreEqual(System.Net.HttpStatusCode.Accepted, selected.StatusCode);
+        using var selectedBody = System.Text.Json.JsonDocument.Parse(await selected.Content.ReadAsStringAsync());
+        Assert.AreEqual(2, selectedBody.RootElement.GetProperty("organizationId").GetInt32());
+        Assert.IsFalse(string.IsNullOrWhiteSpace(selectedBody.RootElement.GetProperty("jobId").GetString()));
         await DeactivateCorrectiveStaffAsync(adminSeed.Id);
     }
 
