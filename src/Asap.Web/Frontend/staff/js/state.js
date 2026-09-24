@@ -80,7 +80,7 @@ export let deletedSettingsFormats = [];
 export function setDeletedSettingsFormats(formats) { deletedSettingsFormats = Array.isArray(formats) ? formats : []; }
 export function addDeletedSettingsFormat(format) { deletedSettingsFormats.push(format); }
 
-export const closeReasonMap = { rejected: 'Rejected by staff', hold_completed: 'Hold placed / completed', duplicate_hold: 'Duplicate hold / request', manual: 'Manually closed' };
+export const closeReasonMap = { rejected: 'Rejected by staff', hold_completed: 'Hold placed / completed', duplicate_hold: 'Duplicate hold / request', manual: 'Manually closed', purchased_no_hold: 'Purchased, no hold' };
 export const duplicateStatusLabelDefaults = { suggestion: 'Received', outstanding_purchase: 'Under review', pending_hold: 'Being prepared', hold_placed: 'Hold placed', closed: 'Completed', rejected: 'Not selected for purchase', hold_completed: 'Completed', hold_not_picked_up: 'Closed', duplicate_hold: 'Duplicate hold / request', manual: 'Closed', silent: 'Closed', 'Silently Closed': 'Closed' };
 export const duplicateStatusLabelFields = [['suggestion','Received suggestion'],['outstanding_purchase','Pending purchase'],['pending_hold','Pending hold'],['hold_placed','Hold placed'],['closed','Closed'],['rejected','Rejected outcome'],['hold_completed','Fulfilled outcome'],['hold_not_picked_up','Hold not picked up'],['duplicate_hold','Duplicate hold / request'],['manual','Manual close'],['silent','Silent close']];
 export const patronFormatKeys = ['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'];

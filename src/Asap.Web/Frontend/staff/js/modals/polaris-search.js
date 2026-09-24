@@ -239,7 +239,7 @@ function renderPolarisSearchResults(row, identity, mode, data, options = {}, ctx
         : 'Use BIB in Queue Form';
       applyBtn.addEventListener('click', () => {
         if (!isCurrent()) return;
-        applySelectedPolarisResultToEditForm(result, options.source || 'edit');
+        if (!applySelectedPolarisResultToEditForm(result, options.source || 'edit')) return;
         els.dialog.close();
         showToast('Polaris details applied to form.', 'success');
       });
@@ -583,6 +583,7 @@ function editPolarisSearchInputForMode(mode, context = 'edit') {
 }
 
 export function launchEditPolarisSearch(mode, button, context = 'edit', ctx, onRefresh) {
+  if (context === 'edit' && document.getElementById('edit-bibid')?.disabled) return;
   const input = editPolarisSearchInputForMode(mode, context);
   const row = currentEditPolarisSearchRow(context, ctx);
   const query = mode === 'identifier'

@@ -124,6 +124,7 @@ public sealed partial class PatronJourneyTests
             Title = title,
             MaterialFormatId = formatId,
             Status = status,
+            AutoHold = true,
             Identifier = identifier,
             IsbnCheckStatus = "pending",
             IsbnCheckRetryCount = 2,

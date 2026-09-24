@@ -580,10 +580,15 @@ async function settle() {
     results().querySelector('.polaris-additional-copy-action').click();
     await settle();
     failNextAction = true;
+    const refreshesBeforeUncertainAction = editRefreshes;
     const failedConfirmation = document.getElementById('confirm-additional-copy-reminder')?.closest('dialog');
     [...failedConfirmation.querySelectorAll('button')].find(button => button.textContent === 'Confirm').click();
     await settle();
     assert.equal(document.getElementById('alert-dialog').open, true, 'a failed mutation shows the existing error');
+    assert.match(document.getElementById('alert-dialog-message').textContent, /Could not confirm whether/);
+    assert.equal(editRefreshes, refreshesBeforeUncertainAction + 1,
+      'an ambiguous write refreshes data silently before another attempt');
+    assert.equal(editRefreshModes.at(-1), 'silent');
     assert.equal(dialog.open, true, 'a failed mutation keeps Polaris available');
     assert.equal(actions.length, 2);
     document.getElementById('alert-dialog-ok').click();
@@ -611,6 +616,7 @@ async function settle() {
     assert.ok(confirmation, 'the edit action uses the existing confirmation flow');
     document.getElementById('confirm-additional-copy-reminder').checked = true;
     const closeEventsBeforeAction = polarisCloseEvents;
+    const refreshesBeforeSuccess = editRefreshes;
     [...confirmation.querySelectorAll('button')].find(button => button.textContent === 'Confirm').click();
     await settle();
     await flushDialogCloseEvents();
@@ -623,7 +629,7 @@ async function settle() {
     assert.equal(dialog.open, false, 'the successful action closes Polaris');
     assert.equal(polarisCloseEvents, closeEventsBeforeAction + 1, 'the queued Polaris close event fired');
     assert.equal(editModal.open, false, 'the queued close event must not reopen the stale edit dialog');
-    assert.equal(editRefreshes, 1, 'the successful action refreshes the staff grid');
+    assert.equal(editRefreshes, refreshesBeforeSuccess + 1, 'the successful action refreshes the staff grid');
     assert.equal(editRefreshModes.at(-1), 'normal');
     assert.equal(window.location.search, '?stage=submitted', 'owned success clears only the matching request selection');
     assert.equal(window.location.hash, '#settings-workflow');

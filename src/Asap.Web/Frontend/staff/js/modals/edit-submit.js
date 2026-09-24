@@ -72,7 +72,11 @@ export async function submitTitleRequestAction(identity, payload, options = {}) 
       }
       return false;
     }
-    if (ownsUiNow()) await showAlert(err.message || 'Error updating suggestion');
+    const uncertain = !err?.status || err.status >= 500;
+    if (uncertain) await refreshAfterAction(true);
+    if (ownsUiNow()) await showAlert(uncertain
+      ? 'Could not confirm whether the request was saved. Refresh before retrying.'
+      : err.message || 'Error updating suggestion');
     return false;
   }
 
@@ -168,7 +172,7 @@ export async function submitEditForm(e, ctx, options = {}) {
     editRequestGeneration === dialogGeneration &&
     ctx.id?.dataset.requestType === 'title_request' &&
     sameRequestIdentity(editRequestIdentity(ctx.id), identity);
-  const actionValue = ctx.action.value || undefined;
+  const actionValue = ctx.action.value || 'edit';
   const row = findWorkflowRow(identity, ctx.currentSuggestions, ctx.allSuggestions);
   if (!row) {
     await showAlert('Could not find that request. Refresh and try again.');
@@ -183,10 +187,18 @@ export async function submitEditForm(e, ctx, options = {}) {
     await showAlert('This request changed. Refresh and try again.');
     return false;
   }
+  if (row.capabilities?.canEditIdentifier === false &&
+      ctx.identifier.value.trim() !== String(row.identifier || '').trim()) {
+    await showAlert('The identifier is locked for this request. Reload it before continuing.');
+    return false;
+  }
+  if (row.capabilities?.canChangeBib === false &&
+      ctx.bibid.value.trim() !== String(row.bibid || '').trim()) {
+    await showAlert('The BIB ID is locked for this request. Reload it before continuing.');
+    return false;
+  }
   const bibInput = ctx.bibid;
-  const bibid = row && row.status === 'hold_placed'
-    ? String(row.bibid || '').trim()
-    : bibInput.value.trim();
+  const bibid = bibInput.value.trim();
   const nextStatus = actionValue === 'purchase'
     ? (bibid ? 'pending_hold' : 'outstanding_purchase')
     : ctx.nextStatus.value;

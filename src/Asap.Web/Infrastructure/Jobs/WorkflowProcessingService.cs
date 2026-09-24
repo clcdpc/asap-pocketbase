@@ -933,22 +933,33 @@ public sealed class WorkflowProcessingService(
             }
             else if (settings.AutoPromote == true && !string.IsNullOrWhiteSpace(request.BibId))
             {
-                request.Status = request.AutoHold ? "pending_hold" : "closed";
-                request.CloseReason = request.AutoHold ? null : "purchased_no_hold";
-                request.LastPromoterCheckUtc = UtcNow();
-                request.UpdatedUtc = UtcNow();
-                context.TitleRequestEvents.Add(new TitleRequestEvent
+                var duplicate = request.AutoHold && await context.TitleRequests.AsNoTracking().AnyAsync(item =>
+                    item.LibraryOrganizationId == request.LibraryOrganizationId &&
+                    item.Barcode == request.Barcode && item.BibId == request.BibId &&
+                    item.Id != request.Id && item.Status != "closed", cancellationToken);
+                if (duplicate)
                 {
-                    TitleRequestId = request.Id,
-                    EventType = "promoted",
-                    Status = request.Status,
-                    CloseReason = request.CloseReason,
-                    ActorType = "system",
-                    Message = request.AutoHold ? "Purchase promoted to hold placement." : "Purchase completed without an automatic hold.",
-                    CreatedUtc = UtcNow()
-                });
-                code = "changed";
-                changed = true;
+                    code = "duplicate_open_request";
+                }
+                else
+                {
+                    request.Status = request.AutoHold ? "pending_hold" : "closed";
+                    request.CloseReason = request.AutoHold ? null : "purchased_no_hold";
+                    request.LastPromoterCheckUtc = UtcNow();
+                    request.UpdatedUtc = UtcNow();
+                    context.TitleRequestEvents.Add(new TitleRequestEvent
+                    {
+                        TitleRequestId = request.Id,
+                        EventType = "promoted",
+                        Status = request.Status,
+                        CloseReason = request.CloseReason,
+                        ActorType = "system",
+                        Message = request.AutoHold ? "Purchase promoted to hold placement." : "Purchase completed without an automatic hold.",
+                        CreatedUtc = UtcNow()
+                    });
+                    code = "changed";
+                    changed = true;
+                }
             }
         }
 

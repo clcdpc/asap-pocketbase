@@ -1,4 +1,5 @@
 using System.Data;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -24,7 +25,7 @@ public sealed class TitleRequestActionInput
     public string? Author { get; init; }
     public JsonElement Identifier { get; init; }
     public string? Publication { get; init; }
-    public DateOnly? ExactPublicationDate { get; init; }
+    public JsonElement ExactPublicationDate { get; init; }
     public JsonElement CustomFields { get; init; }
     public JsonElement Autohold { get; init; }
     public JsonElement Bibid { get; init; }
@@ -188,6 +189,18 @@ public sealed class TitleRequestMutationService(
             return new TitleRequestMutationResult("invalid_version");
         }
 
+        DateOnly? exactPublicationDate = null;
+        if (input.ExactPublicationDate.ValueKind == JsonValueKind.String &&
+            DateOnly.TryParseExact(input.ExactPublicationDate.GetString(), "yyyy-MM-dd",
+                CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedDate))
+        {
+            exactPublicationDate = parsedDate;
+        }
+        else if (input.ExactPublicationDate.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null))
+        {
+            return new TitleRequestMutationResult("invalid_exact_publication_date");
+        }
+
         var bibPreflight = await PreflightExplicitBibAsync(
             actor,
             requestId,
@@ -242,16 +255,29 @@ public sealed class TitleRequestMutationService(
         var proposedBib = bibSupplied ? Clean(ElementString(input.Bibid)) : Clean(request.BibId);
         var bibChanged = bibSupplied &&
                          !string.Equals(Clean(proposedBib), Clean(request.BibId), StringComparison.Ordinal);
+        // The edit form submits the existing BIB with every save. Changing only the
+        // identifier must clear that BIB rather than silently reattaching it.
+        var applySuppliedBib = bibSupplied && (!identifierChanged || bibChanged || selectedCatalogAction);
+        if (identifierChanged && !applySuppliedBib && bibPreflight.ValidatedBib is null)
+        {
+            proposedBib = null;
+        }
         var autoHoldSupplied = input.Autohold.ValueKind is JsonValueKind.True or JsonValueKind.False;
         var proposedAutoHold = input.Action == "additionalCopy"
             ? true
             : autoHoldSupplied ? input.Autohold.GetBoolean() : request.AutoHold;
-        var targetStatus = ResolveStatus(input.Action, input.Status, request.Status, proposedBib);
+        var requestedTarget = ResolveStatus(input.Action, input.Status, request.Status, proposedBib);
+        var targetStatus = ResolveBibTargetStatus(input.Action, request.Status, requestedTarget,
+            proposedBib, proposedAutoHold, bibSupplied);
         if (targetStatus is null)
         {
             return new TitleRequestMutationResult("invalid_transition");
         }
         var statusChanged = targetStatus != request.Status;
+        var autoHoldOptOut = targetStatus == "closed" &&
+            (requestedTarget == "pending_hold" ||
+             input.Action == "edit" && request.Status == "outstanding_purchase" &&
+             bibSupplied && proposedBib is not null);
 
         if (incompleteOperation && (identifierChanged || bibChanged || statusChanged || proposedAutoHold != request.AutoHold))
         {
@@ -261,7 +287,8 @@ public sealed class TitleRequestMutationService(
         {
             return new TitleRequestMutationResult(capabilities.BlockingReason ?? "identifier_locked_by_stage");
         }
-        if (targetStatus is "hold_placed" or "closed" && (identifierChanged || bibChanged))
+        if (targetStatus is "hold_placed" or "closed" && !autoHoldOptOut &&
+            (identifierChanged || bibChanged))
         {
             return new TitleRequestMutationResult("identifier_locked_by_stage");
         }
@@ -280,12 +307,12 @@ public sealed class TitleRequestMutationService(
         {
             return new TitleRequestMutationResult("invalid_bib");
         }
-        if (input.Action == "additionalCopy" && targetStatus == "pending_hold" &&
-            (request.Status != "pending_hold" || bibChanged) && proposedBib is not null)
+        if (targetStatus == "pending_hold" &&
+            (request.Status != "pending_hold" || !request.AutoHold || bibChanged) && proposedBib is not null)
         {
             // Serialize actions for this patron before checking the competing BIB. The
             // transaction-owned lock also protects the empty-result case.
-            await LockPatronAdditionalCopyAsync(context, request, cancellationToken);
+            await LockPatronBibTargetAsync(context, request, cancellationToken);
             var duplicate = await context.TitleRequests.AsNoTracking().AnyAsync(item =>
                 item.LibraryOrganizationId == request.LibraryOrganizationId &&
                 item.Barcode == request.Barcode && item.BibId == proposedBib &&
@@ -310,7 +337,7 @@ public sealed class TitleRequestMutationService(
                 await RemoveIdentifierTagsAsync(context, request.Id, cancellationToken);
             }
         }
-        if (bibSupplied || bibPreflight.ValidatedBib is not null)
+        if (applySuppliedBib || bibPreflight.ValidatedBib is not null)
         {
             request.BibId = Clean(proposedBib);
         }
@@ -342,9 +369,9 @@ public sealed class TitleRequestMutationService(
             request.Publication = Clean(input.Publication);
         }
         if (input.Notes is not null) request.Notes = input.Notes;
-        if (input.ExactPublicationDate.HasValue && input.Action != "additionalCopy")
+        if (IsSupplied(input.ExactPublicationDate) && input.Action != "additionalCopy")
         {
-            request.ExactPublicationDate = input.ExactPublicationDate;
+            request.ExactPublicationDate = exactPublicationDate;
         }
         if (input.CustomFields.ValueKind == JsonValueKind.Object) request.CustomFieldsJson = input.CustomFields.GetRawText();
         if (input.Action == "additionalCopy")
@@ -367,7 +394,9 @@ public sealed class TitleRequestMutationService(
 
         var now = DateTime.UtcNow;
         request.Status = targetStatus;
-        request.CloseReason = targetStatus == "closed" ? ResolveCloseReason(input.Action) : null;
+        request.CloseReason = targetStatus == "closed"
+            ? autoHoldOptOut ? "purchased_no_hold" : ResolveCloseReason(input.Action)
+            : null;
         request.UpdatedUtc = now;
         if (statusChanged)
         {
@@ -377,6 +406,13 @@ public sealed class TitleRequestMutationService(
                 toStatus = targetStatus,
                 action = Clean(input.Action)
             });
+        }
+        if (autoHoldOptOut)
+        {
+            AddEvent(context, request, actor, "autohold_opt_out",
+                input.Action == "alreadyOwn"
+                    ? "Closed without hold because Already Own was selected and the patron opted out of automatic hold placement."
+                    : "Closed without hold because a BIB ID was supplied and the patron opted out of automatic hold placement.");
         }
         var previousClaimantId = request.ClaimedByStaffUserId;
         SetManualClaim(request, locked.Staff[actor.Id]);
@@ -486,7 +522,10 @@ public sealed class TitleRequestMutationService(
         var identifierChanged = input.Action != "additionalCopy" && identifierSupplied &&
                                 !string.Equals(proposedIdentifier, Clean(request.Identifier), StringComparison.Ordinal);
         var bibChanged = !string.Equals(proposedBib, Clean(request.BibId), StringComparison.Ordinal);
-        if (!bibChanged && !identifierChanged && input.Action is not
+        var activatesOutstandingBib = input.Action == "edit" && request.Status == "outstanding_purchase" &&
+            bibSupplied && proposedBib is not null;
+        if (!bibChanged && !(identifierChanged && request.Status == "pending_hold") &&
+            !activatesOutstandingBib && input.Action is not
                 ("additionalCopy" or "catalogFound" or "purchase" or "alreadyOwn"))
         {
             return new();
@@ -695,13 +734,13 @@ public sealed class TitleRequestMutationService(
         return new LockedMutation("locked", request, staff, request.Status);
     }
 
-    private static async Task LockPatronAdditionalCopyAsync(
+    private static async Task LockPatronBibTargetAsync(
         AsapDbContext context,
         TitleRequest request,
         CancellationToken cancellationToken)
     {
         var patronKey = $"{request.LibraryOrganizationId}:{request.Barcode.ToUpperInvariant()}";
-        var resource = "asap:additional-copy:" + Convert.ToHexString(
+        var resource = "asap:title-request-bib:" + Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(patronKey)));
         var result = new SqlParameter("@result", SqlDbType.Int) { Direction = ParameterDirection.Output };
         var name = new SqlParameter("@resource", SqlDbType.NVarChar, 255) { Value = resource };
@@ -710,7 +749,7 @@ public sealed class TitleRequestMutationService(
             [result, name], cancellationToken);
         if (result.Value is not int code || code < 0)
         {
-            throw new InvalidOperationException("Could not acquire the patron additional-copy lock.");
+            throw new InvalidOperationException("Could not acquire the patron BIB-target lock.");
         }
     }
 
@@ -952,6 +991,22 @@ public sealed class TitleRequestMutationService(
             _ => null
         };
         return target is not null && (requested is null || requested == target) ? target : null;
+    }
+
+    private static string? ResolveBibTargetStatus(string? action, string current, string? requestedTarget,
+        string? proposedBib, bool proposedAutoHold, bool bibSupplied)
+    {
+        if (requestedTarget is null || action == "additionalCopy")
+        {
+            return requestedTarget;
+        }
+        var targetsHold = requestedTarget == "pending_hold" ||
+            action == "edit" && current == "outstanding_purchase" && bibSupplied && proposedBib is not null;
+        if (!targetsHold)
+        {
+            return requestedTarget;
+        }
+        return proposedAutoHold ? "pending_hold" : "closed";
     }
 
     private static string ResolveCloseReason(string? action) => action switch

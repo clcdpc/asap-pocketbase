@@ -10,11 +10,13 @@ import { renderPendingAuditPreview } from './audit-preview.js';
 import { renderRejectionTemplateSelector } from './rejection-templates.js';
 import { renderEditPatronContext } from './patron-context.js';
 import { findWorkflowRow, requestIdentity, setEditRequestIdentity } from '../request-identity.mjs';
+import { invalidateRowActionOwnership } from '../row-action-ownership.mjs';
 
 export function openEdit(identity, nextStatus, dialogTitle, actionStr, buttonLabel, ctx) {
   if (!['title_request', 'additional_copy'].includes(identity?.type) || !String(identity.id ?? '').trim()) return;
   const row = findWorkflowRow(identity, ctx.currentSuggestions, ctx.allSuggestions);
   if (!row || row.type !== identity.type) return;
+  invalidateRowActionOwnership();
   const isAdditionalCopy = row.type === 'additional_copy';
 
   rememberRecentSuggestion(row);
@@ -66,11 +68,11 @@ export function openEdit(identity, nextStatus, dialogTitle, actionStr, buttonLab
       ctx.bibidHint.textContent = 'Required for Pending hold. Use Lookup to verify.';
     }
   }
-  applyHoldPlacedBibLock(row, ctx);
   for (const field of [ctx.title, ctx.author, ctx.identifier, ctx.bibid, ctx.format,
     ctx.publication, ctx.exactPublicationDate, ctx.autohold, ctx.notes]) {
-    if (field) field.disabled = isAdditionalCopy || (field === ctx.bibid && row.status === 'hold_placed');
+    if (field) field.disabled = isAdditionalCopy;
   }
+  applyEditCapabilities(row, ctx);
 
   renderEditPatronContext(row, ctx);
   renderEditWorkflowTags(row.workflowTags, row, ctx);
@@ -95,21 +97,31 @@ export function openEdit(identity, nextStatus, dialogTitle, actionStr, buttonLab
   document.getElementById('close-modal-btn').focus();
 }
 
-function applyHoldPlacedBibLock(row, ctx) {
-  const isLocked = row.status === 'hold_placed';
+function applyEditCapabilities(row, ctx) {
+  const canChangeBib = row.type !== 'additional_copy' && (row.capabilities?.canChangeBib ??
+    !['hold_placed', 'closed'].includes(row.status));
+  const canEditIdentifier = row.type !== 'additional_copy' && (row.capabilities?.canEditIdentifier ??
+    !['hold_placed', 'closed'].includes(row.status));
+  const isLocked = !canChangeBib;
   const bibHint = ctx.bibidHint;
 
   ctx.bibid.disabled = isLocked;
+  ctx.identifier.disabled = !canEditIdentifier;
   const bibLookupBtn = document.getElementById('btn-bib-lookup');
   if (bibLookupBtn) {
-    bibLookupBtn.disabled = isLocked;
-    bibLookupBtn.classList.toggle('hidden', isLocked);
+    bibLookupBtn.disabled = isLocked && row.type !== 'additional_copy';
+    bibLookupBtn.classList.toggle('hidden', isLocked && row.type !== 'additional_copy');
   }
-  document.getElementById('edit-title-polaris-search')?.classList.toggle('hidden', isLocked);
-  document.getElementById('edit-author-polaris-search')?.classList.toggle('hidden', isLocked);
-  document.getElementById('edit-identifier-polaris-search')?.classList.toggle('hidden', isLocked);
+  for (const id of ['edit-title-polaris-search', 'edit-author-polaris-search',
+    'edit-identifier-polaris-search']) {
+    const button = document.getElementById(id);
+    if (button) {
+      button.disabled = isLocked;
+      button.classList.toggle('hidden', isLocked);
+    }
+  }
   if (bibHint && isLocked) {
-    bibHint.textContent = 'BIB ID is locked because the hold has already been placed.';
+    bibHint.textContent = 'BIB ID is locked for this request.';
     bibHint.classList.remove('text-danger', 'font-weight-bold');
   }
 }

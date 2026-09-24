@@ -50,8 +50,17 @@ async function settle() {
     const posts = [];
     let failNextCreate = false;
     let deferPickup = false;
+    let deferRowWrites = false;
+    const rowWrites = [];
     global.fetch = (url, options = {}) => {
       const endpoint = String(url);
+      if (deferRowWrites && ['POST', 'DELETE'].includes(options.method) &&
+          (/\/(claim|unclaim)$/.test(endpoint) || endpoint.includes('/title-requests/') &&
+            endpoint.endsWith('/action') || options.method === 'DELETE')) {
+        const pending = deferred();
+        rowWrites.push({ endpoint, body: options.body ? JSON.parse(options.body) : null, pending });
+        return pending.promise;
+      }
       if (endpoint.includes('/assignment-candidates?')) {
         const pending = deferred();
         candidates.push(pending);
@@ -91,6 +100,7 @@ async function settle() {
     };
     const state = await import(pathToFileURL(path.join(temporary, 'staff/js/state.js')).href);
     const actions = await import(pathToFileURL(path.join(temporary, 'staff/js/grid-actions.js')).href);
+    const directActions = await import(pathToFileURL(path.join(temporary, 'staff/js/actions.js')).href);
     const modals = await import(pathToFileURL(path.join(temporary, 'staff/js/modals.js')).href);
     const edit = await import(pathToFileURL(path.join(temporary, 'staff/js/modals/edit-submit.js')).href);
     const dialogs = await import(pathToFileURL(path.join(temporary, 'staff/js/dialogs.js')).href);
@@ -166,10 +176,54 @@ async function settle() {
     modals.openEdit(rows[6], 'open', 'Additional-copy task', '', 'Save');
     assert.equal(document.getElementById('edit-submit-btn').hidden, true,
       'additional-copy detail cannot expose a Save action that has no endpoint');
+    assert.equal(document.getElementById('edit-bibid').disabled, true);
+    assert.equal(document.getElementById('btn-bib-lookup').disabled, false,
+      'read-only additional-copy detail can inspect its existing BIB');
     document.getElementById('editModal').close();
     modals.openEdit(rows[0], 'suggestion', 'Edit suggestion', 'edit', 'Save');
     assert.equal(document.getElementById('edit-submit-btn').hidden, false);
     document.getElementById('editModal').close();
+
+    const withCapabilities = (row, canEdit) => ({ ...row, capabilities: {
+      canEditIdentifier: canEdit, canChangeBib: canEdit,
+      canRetryIdentifierCheck: false, canChangeWorkflowState: true
+    } });
+    const capabilityRows = [withCapabilities(rows[0], true), withCapabilities(rows[1], true),
+      withCapabilities(rows[2], true), withCapabilities(rows[3], false),
+      withCapabilities(rows[4], false), withCapabilities(title('50', 'suggestion', '9003'), false)];
+    state.setCurrentSuggestions(capabilityRows);
+    state.setAllSuggestions(capabilityRows);
+    for (const row of capabilityRows) {
+      modals.openEdit(row, row.status, 'Capability check', 'edit', 'Save');
+      const editable = row.capabilities.canChangeBib;
+      assert.equal(document.getElementById('edit-bibid').disabled, !editable, row.status);
+      assert.equal(document.getElementById('edit-identifier').disabled, !editable, row.status);
+      assert.equal(document.getElementById('btn-bib-lookup').disabled, !editable, row.status);
+      assert.equal(document.getElementById('edit-title-polaris-search').disabled, !editable, row.status);
+      modal.close();
+    }
+    const protectedRow = capabilityRows.at(-1);
+    modals.openEdit(protectedRow, 'suggestion', 'Protected', 'edit', 'Save');
+    const bibLookup = await import(pathToFileURL(path.join(temporary, 'staff/js/settings/bib-lookup.js')).href);
+    assert.equal(bibLookup.applySelectedPolarisResultToEditForm({ bibId: '9004' }), false);
+    assert.equal(document.getElementById('edit-bibid').value, '9003');
+    const beforeProtectedPost = posts.length;
+    document.getElementById('edit-bibid').value = '9004';
+    const blockedSave = edit.submitEditForm({ preventDefault() {} }, modalContext.createModalContext(state),
+      { onRefresh: async () => {} });
+    await settle();
+    assert.match(document.getElementById('alert-dialog-message').textContent, /BIB ID is locked/);
+    document.getElementById('alert-dialog-ok').click();
+    await blockedSave;
+    assert.equal(posts.length, beforeProtectedPost);
+    modal.close();
+    state.setCurrentSuggestions(rows);
+    state.setAllSuggestions(rows);
+
+    modals.openEdit(rows[0], 'suggestion', 'Deep-linked request', '', 'Save');
+    await edit.submitEditForm({ preventDefault() {} }, modalContext.createModalContext(state),
+      { onRefresh: async () => {} });
+    assert.equal(posts.at(-1).body.action, 'edit', 'deep-link Save selects the explicit edit action');
 
     await action(rows[0], 'edit').onClick();
     document.getElementById('edit-title').value = 'Edited via row action';
@@ -214,6 +268,8 @@ async function settle() {
     assert.equal(posts.at(-1).endpoint, '/api/asap/staff/title-requests/5/action');
     assert.equal(posts.at(-1).body.action, 'reopen');
     assert.equal(posts.at(-1).body.status, 'suggestion');
+    state.setCurrentSuggestions(rows);
+    state.setAllSuggestions(rows);
     const copyUndo = action(rows[5], 'undo').onClick();
     document.getElementById('confirm-dialog-ok').click();
     await copyUndo;
@@ -275,6 +331,17 @@ async function settle() {
     await pendingSessionAssign;
     assert.equal(assignDialog.open, false);
     state.setStaffSession(staff('7'));
+    state.setCurrentStatus('suggestion');
+    state.setCurrentSuggestions([assignA, assignB]);
+    state.setAllSuggestions([assignA, assignB]);
+    const assignBeforeEdit = actions.openAssignDialog(assignA);
+    candidates.at(-1).resolve(response(200, { candidates: [{ id: '88', displayName: 'A staff' }] }));
+    await assignBeforeEdit;
+    assert.equal(assignDialog.open, true);
+    modals.openEdit(assignB, 'suggestion', 'Edit B', 'edit', 'Save');
+    assert.equal(assignDialog.open, false, 'a newer edit replaces the old assignment dialog');
+    assert.equal(modal.open, true);
+    modal.close();
 
     const source = title('20', 'pending_hold', '9003');
     const newer = title('21', 'pending_hold', '9003');
@@ -369,6 +436,93 @@ async function settle() {
     assert.match(pickupSelect.textContent, /B Branch/);
     assert.equal([...document.querySelectorAll('.asap-toast-success')].length, pickupToasts);
     modal.close();
+    // A completed server write can refresh data, but only the newest row action owns feedback.
+    deferRowWrites = true;
+    const claimA = title('30', 'suggestion');
+    const claimB = title('31', 'suggestion');
+    const closedA = title('32', 'closed');
+    state.setCurrentStatus('suggestion');
+    state.setCurrentSuggestions([claimA, claimB, closedA]);
+    state.setAllSuggestions([claimA, claimB, closedA]);
+    const refreshes = [];
+    const refresh = async options => { refreshes.push(options || {}); };
+    const firstClaim = actions.claimRequest(claimA, ctx, refresh);
+    assert.equal(rowWrites.at(-1).endpoint, '/api/asap/staff/title-requests/30/claim');
+    modals.openEdit(claimB, 'suggestion', 'Edit B', 'edit', 'Save');
+    window.history.replaceState(null, '', '/staff/?request=31&requestType=title_request');
+    const beforeClaimToasts = document.querySelectorAll('.asap-toast-success').length;
+    rowWrites.at(-1).pending.resolve(response(200, { request: { ...claimA, version: 'claim-committed' } }));
+    await firstClaim;
+    assert.equal(modal.open, true);
+    assert.equal(document.getElementById('edit-id').value, '31');
+    assert.match(window.location.search, /request=31/);
+    assert.equal(document.querySelectorAll('.asap-toast-success').length, beforeClaimToasts);
+    assert.deepEqual(refreshes.at(-1), { silent: true });
+    modal.close();
+
+    const staleClaim = actions.claimRequest(claimA, ctx, refresh);
+    const currentClaim = actions.claimRequest(claimB, ctx, refresh);
+    const claimToasts = document.querySelectorAll('.asap-toast-success').length;
+    rowWrites.at(-2).pending.resolve(response(200, { request: claimA }));
+    await staleClaim;
+    assert.equal(document.querySelectorAll('.asap-toast-success').length, claimToasts);
+    rowWrites.at(-1).pending.resolve(response(200, { request: claimB }));
+    await currentClaim;
+    assert.equal(document.querySelectorAll('.asap-toast-success').length, claimToasts + 1);
+    assert.deepEqual(refreshes.slice(-2), [{ silent: true }, { silent: false }]);
+
+    const oldUndo = directActions.undoRow(closedA);
+    document.getElementById('confirm-dialog-ok').click();
+    await settle();
+    assert.equal(rowWrites.at(-1).body.action, 'reopen');
+    modals.openEdit(claimB, 'suggestion', 'Edit B', 'edit', 'Save');
+    rowWrites.at(-1).pending.resolve(response(200, { request: { ...closedA, status: 'suggestion' } }));
+    await oldUndo;
+    assert.equal(modal.open, true);
+    assert.equal(document.getElementById('edit-id').value, '31');
+    modal.close();
+
+    state.setCurrentStatus('suggestion');
+    state.setCurrentSuggestions([claimA, claimB, closedA]);
+    state.setAllSuggestions([claimA, claimB, closedA]);
+    const oldDelete = directActions.deleteClosedRequest(closedA);
+    document.getElementById('confirm-dialog-ok').click();
+    await settle();
+    assert.equal(rowWrites.at(-1).endpoint, '/api/asap/staff/requests/32');
+    modals.openEdit(claimB, 'suggestion', 'Edit B', 'edit', 'Save');
+    const beforeDeleteToasts = document.querySelectorAll('.asap-toast-success').length;
+    rowWrites.at(-1).pending.resolve(response(200, { deleted: true }));
+    await oldDelete;
+    assert.equal(modal.open, true);
+    assert.equal(document.querySelectorAll('.asap-toast-success').length, beforeDeleteToasts);
+    modal.close();
+
+    state.setCurrentStatus('suggestion');
+    state.setCurrentSuggestions([claimA, claimB, closedA]);
+    state.setAllSuggestions([claimA, claimB, closedA]);
+    const duplicateClose = directActions.closeDuplicateRequest(claimA, { alreadyConfirmed: true });
+    assert.equal(rowWrites.at(-1).body.action, 'closeDuplicate');
+    modals.openEdit(claimB, 'suggestion', 'Edit B', 'edit', 'Save');
+    const beforeCloseToasts = document.querySelectorAll('.asap-toast-success').length;
+    rowWrites.at(-1).pending.resolve(response(200, { request: { ...claimA, status: 'closed' } }));
+    await duplicateClose;
+    assert.equal(modal.open, true);
+    assert.equal(document.querySelectorAll('.asap-toast-success').length, beforeCloseToasts);
+    modal.close();
+
+    state.setCurrentStatus('suggestion');
+    state.setCurrentSuggestions([claimA, claimB, closedA]);
+    state.setAllSuggestions([claimA, claimB, closedA]);
+    const sessionClaim = actions.claimRequest(claimA, ctx, refresh);
+    state.setStaffSession({ authenticated: false, accessAllowed: false });
+    state.setStaffSession(staff('7'));
+    const beforeSessionToasts = document.querySelectorAll('.asap-toast-success').length;
+    const beforeSessionRefreshes = refreshes.length;
+    rowWrites.at(-1).pending.resolve(response(200, { request: claimA }));
+    await sessionClaim;
+    assert.equal(document.querySelectorAll('.asap-toast-success').length, beforeSessionToasts);
+    assert.equal(refreshes.length, beforeSessionRefreshes);
+    deferRowWrites = false;
     console.log('Staff row action contracts and ownership races passed.');
   } finally {
     dom?.window.close();

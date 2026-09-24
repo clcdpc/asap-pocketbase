@@ -986,6 +986,32 @@ public sealed partial class PatronJourneyTests
             {
                 Assert.AreEqual(200, rowActions.GetProperty(action).GetInt32(), action);
             }
+            var bibParity = legacyReport.RootElement.GetProperty("bibActionParity");
+            Assert.IsTrue(bibParity.GetProperty("dateSet").GetBoolean());
+            Assert.IsTrue(bibParity.GetProperty("dateCleared").GetBoolean());
+            Assert.IsTrue(bibParity.GetProperty("closedFieldsLocked").GetBoolean());
+            Assert.AreEqual("closed", bibParity.GetProperty("catalogOptOut").GetString());
+            Assert.AreEqual("closed", bibParity.GetProperty("outstandingOptOut").GetString());
+            Assert.AreEqual(409, bibParity.GetProperty("duplicateConflict").GetInt32());
+            Assert.AreEqual("closed", bibParity.GetProperty("duplicateClose").GetString());
+            await using var parityScope = factory.Services.CreateAsyncScope();
+            var parityContexts = parityScope.ServiceProvider.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+            await using var parityDb = await parityContexts.CreateDbContextAsync();
+            foreach (var property in new[] { "optOutId", "outstandingOptOutId" })
+            {
+                var id = long.Parse(bibParity.GetProperty(property).GetString()!);
+                var request = await parityDb.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == id);
+                Assert.AreEqual("closed", request.Status);
+                Assert.AreEqual("purchased_no_hold", request.CloseReason);
+                Assert.IsFalse(request.AutoHold);
+                Assert.AreEqual(0, await parityDb.HoldPlacementOperations.CountAsync(item =>
+                    item.TitleRequestId == id));
+            }
+            var duplicateId = long.Parse(bibParity.GetProperty("duplicateId").GetString()!);
+            var duplicate = await parityDb.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == duplicateId);
+            Assert.AreEqual("closed", duplicate.Status);
+            Assert.AreEqual("duplicate_hold", duplicate.CloseReason);
+            Assert.IsNull(duplicate.BibId);
         }
 
         await settingsPoisoningJourney.SetSystemSuggestionLimitAsync(23);

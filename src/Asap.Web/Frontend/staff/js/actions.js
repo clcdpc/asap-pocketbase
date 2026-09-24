@@ -1,23 +1,10 @@
-import { staffSession, staffAccessGeneration, currentStatus, currentSuggestions, allSuggestions,
-  currentWorkflowOrgScopeId } from './state.js';
+import { staffSession, currentSuggestions, allSuggestions } from './state.js';
 import { isAdminStaff } from './api.js';
 import { authorizedJson } from './http.js';
 import { showToast, showAlert, showConfirm } from './dialogs.js';
 import { refreshCurrentStaffView, escapeAttr } from './grid.js';
-import { findWorkflowRow, sameRequestIdentity } from './request-identity.mjs';
-
-function ownsRowAction(row) {
-  const accessGeneration = staffAccessGeneration;
-  const status = currentStatus;
-  const scope = currentWorkflowOrgScopeId;
-  return () => {
-    const current = findWorkflowRow(row, currentSuggestions, allSuggestions);
-    return staffAccessGeneration === accessGeneration && staffSession.authenticated &&
-      staffSession.accessAllowed && currentStatus === status && currentWorkflowOrgScopeId === scope &&
-      current && sameRequestIdentity(current, row) && current.version === row.version &&
-      current.status === row.status;
-  };
-}
+import { findWorkflowRow } from './request-identity.mjs';
+import { beginRowAction } from './row-action-ownership.mjs';
 
 export function undoConfirmMessage(type) {
   if (type === 'additional_copy') {
@@ -30,7 +17,8 @@ export async function undoRow(identity) {
   if (!['title_request', 'additional_copy'].includes(identity?.type) || !String(identity.id ?? '').trim()) return;
   const row = findWorkflowRow(identity, currentSuggestions, allSuggestions);
   if (!row || row.type !== identity.type) return;
-  const isCurrent = ownsRowAction(row);
+  const ownership = beginRowAction(row);
+  const isCurrent = ownership.ownsUi;
   const id = row.id;
 
   if (!await showConfirm('Undo action', undoConfirmMessage(row.type)) || !isCurrent()) return;
@@ -52,9 +40,13 @@ export async function undoRow(identity) {
       method: 'POST',
       body
     });
-    if (isCurrent()) refreshCurrentStaffView();
+    if (ownership.sessionCurrent()) await refreshCurrentStaffView({ silent: !isCurrent() });
   } catch (err) {
-    if (isCurrent()) await showAlert(err.message || 'Error undoing action');
+    const uncertain = !err?.status || err.status >= 500;
+    if (uncertain && ownership.sessionCurrent()) await refreshCurrentStaffView({ silent: true });
+    if (isCurrent()) await showAlert(uncertain
+      ? 'Could not confirm whether Undo was saved. Refresh before retrying.'
+      : err.message || 'Error undoing action');
   }
 }
 
@@ -63,7 +55,8 @@ export async function deleteClosedRequest(identity) {
   if (!['title_request', 'additional_copy'].includes(identity?.type) || !String(identity.id ?? '').trim()) return;
   const row = findWorkflowRow(identity, currentSuggestions, allSuggestions);
   if (!row || row.type !== identity.type) return;
-  const isCurrent = ownsRowAction(row);
+  const ownership = beginRowAction(row);
+  const isCurrent = ownership.ownsUi;
   const confirmed = await showConfirm('Delete this closed request?', 'This cannot be undone.');
   if (!confirmed || !isCurrent()) return;
   try {
@@ -71,12 +64,14 @@ export async function deleteClosedRequest(identity) {
       ? `/api/asap/staff/additional-copies/${encodeURIComponent(row.id)}`
       : `/api/asap/staff/requests/${encodeURIComponent(row.id)}`;
     await authorizedJson(url, { method: 'DELETE', body: { version: row.version } });
-    if (isCurrent()) {
-      showToast('Closed request deleted.', 'success');
-      refreshCurrentStaffView();
-    }
+    if (isCurrent()) showToast('Closed request deleted.', 'success');
+    if (ownership.sessionCurrent()) await refreshCurrentStaffView({ silent: !isCurrent() });
   } catch (err) {
-    if (isCurrent()) await showAlert(err.message || 'Could not delete closed request.');
+    const uncertain = !err?.status || err.status >= 500;
+    if (uncertain && ownership.sessionCurrent()) await refreshCurrentStaffView({ silent: true });
+    if (isCurrent()) await showAlert(uncertain
+      ? 'Could not confirm whether deletion was saved. Refresh before retrying.'
+      : err.message || 'Could not delete closed request.');
   }
 }
 
@@ -85,7 +80,8 @@ export async function closeDuplicateRequest(identity, options = {}) {
   if (identity?.type !== 'title_request' || !String(identity.id ?? '').trim()) return false;
   const row = findWorkflowRow(identity, currentSuggestions, allSuggestions);
   if (!row || row.type !== 'title_request') return false;
-  const ownsRow = ownsRowAction(row);
+  const ownership = beginRowAction(row);
+  const ownsRow = ownership.ownsUi;
   const id = row.id;
   if (!alreadyConfirmed && !await showConfirm('Close this duplicate request?',
     'The patron already has an open request or hold for this BIB ID.')) return false;
@@ -109,10 +105,16 @@ export async function closeDuplicateRequest(identity, options = {}) {
       }
     });
     if (isCurrent() && ownsRow()) showToast('Duplicate request closed.', 'success');
-    if (refresh && ownsRow()) await refreshCurrentStaffView({ silent: !isCurrent() });
+    if (refresh && ownership.sessionCurrent()) {
+      await refreshCurrentStaffView({ silent: !isCurrent() || !ownsRow() });
+    }
     return true;
   } catch (err) {
-    if (isCurrent() && ownsRow()) await showAlert(err.message || 'Could not close duplicate request.');
+    const uncertain = !err?.status || err.status >= 500;
+    if (uncertain && ownership.sessionCurrent()) await refreshCurrentStaffView({ silent: true });
+    if (isCurrent() && ownsRow()) await showAlert(uncertain
+      ? 'Could not confirm whether the duplicate was closed. Refresh before retrying.'
+      : err.message || 'Could not close duplicate request.');
     return false;
   }
 }

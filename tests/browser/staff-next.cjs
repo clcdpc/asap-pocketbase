@@ -551,6 +551,8 @@ async function runStaleAssignmentCandidates(browser, args, report) {
         apiPath: id => `/api/asap/staff/title-requests/${id}`,
         assignPath: id => `/api/asap/staff/title-requests/${id}/assign`,
         openLabel: id => `Open request ${id}`,
+        searchSelector: '#request-search',
+        searchValue: 'Stale title assignment B',
         pickerLabel: 'Assign to staff member',
         kicker: id => `Request ${id}`
       },
@@ -562,6 +564,8 @@ async function runStaleAssignmentCandidates(browser, args, report) {
         apiPath: id => `/api/asap/staff/additional-copies/${id}`,
         assignPath: id => `/api/asap/staff/additional-copies/${id}/assign`,
         openLabel: id => `Open additional-copy task ${id}`,
+        searchSelector: '#additional-copy-search',
+        searchValue: 'Stale additional-copy assignment B',
         pickerLabel: 'Assign additional-copy task',
         kicker: id => `Additional copy ${id}`
       }
@@ -580,6 +584,7 @@ async function runStaleAssignmentCandidates(browser, args, report) {
       await delayed.requested;
       await page.keyboard.press('Escape');
       await page.locator('#request-dialog').waitFor({ state: 'hidden' });
+      await page.locator(scenario.searchSelector).fill(scenario.searchValue);
       await page.getByRole('button', { name: scenario.openLabel(scenario.bId) }).click();
       await page.locator('#request-dialog[open]').waitFor();
       await page.locator('#request-dialog-kicker').filter({ hasText: scenario.kicker(scenario.bId) }).waitFor();
@@ -716,7 +721,9 @@ async function runStaleMutationCompletions(browser, args, report) {
           kicker: `Additional copy ${id}`,
           picker: 'Assign additional-copy task',
           listPath: '/api/asap/staff/additional-copies',
-          claimFilter: '#additional-copy-claim-filter'
+          claimFilter: '#additional-copy-claim-filter',
+          searchSelector: '#additional-copy-search',
+          searchValue: 'Stale additional-copy assignment B'
         }
       : {
           apiPath: `/api/asap/staff/title-requests/${id}`,
@@ -724,7 +731,9 @@ async function runStaleMutationCompletions(browser, args, report) {
           kicker: `Request ${id}`,
           picker: 'Assign to staff member',
           listPath: '/api/asap/staff/title-requests',
-          claimFilter: '#claim-filter'
+          claimFilter: '#claim-filter',
+          searchSelector: '#request-search',
+          searchValue: 'Stale title assignment B'
         };
 
     async function holdCurrentB(type, id) {
@@ -732,6 +741,7 @@ async function runStaleMutationCompletions(browser, args, report) {
       await page.keyboard.press('Escape');
       await page.locator('#request-dialog').waitFor({ state: 'hidden' });
       await page.locator(target.claimFilter).selectOption('all');
+      await page.locator(target.searchSelector).fill(target.searchValue);
       await page.getByRole('button', { name: target.openLabel }).click();
       await page.locator('#request-dialog-kicker').filter({ hasText: target.kicker }).waitFor();
       const beforeResponse = await context.request.get(`${args.baseOrigin}${target.apiPath}`);
@@ -964,11 +974,13 @@ async function runStaleOperationErrorCompletion(browser, args, report) {
     await page.locator('#request-dialog').waitFor({ state: 'hidden' });
     await page.locator('[data-status="suggestion"]').click();
     await page.locator('#claim-filter').selectOption('all');
+    await page.locator('#request-search').fill('Stale title assignment B');
     await page.getByRole('button', { name: `Open request ${args.staleTitleBId}`, exact: true }).click();
     await page.locator('#request-dialog-kicker').filter({ hasText: `Request ${args.staleTitleBId}` }).waitFor();
     await page.keyboard.press('Escape');
     await page.locator('#request-dialog').waitFor({ state: 'hidden' });
     await page.locator('[data-status="pending_hold"]').click();
+    await page.locator('#request-search').fill('Operator evidence browser title');
 
     await page.getByRole('button', { name: `Open request ${args.resolutionRequestId}`, exact: true }).click();
     await page.locator('#request-dialog-kicker').filter({ hasText: `Request ${args.resolutionRequestId}` }).waitFor();
@@ -1221,7 +1233,9 @@ async function runScopedBlocked(browser, args, axeSource, report) {
 
     await page.getByRole('button', { name: 'Additional copies' }).click();
     assert.equal(await page.evaluate(() => document.activeElement.id), 'additional-copy-title');
+    await page.locator('#additional-copy-search').fill('Mobile browser additional copy');
     await page.getByRole('button', { name: `Open additional-copy task ${args.mobileCopyId}`, exact: true }).waitFor();
+    await page.locator('#additional-copy-search').fill('');
     const openTab = page.locator('[data-copy-status="open"]');
     await openTab.focus();
     await page.keyboard.press('ArrowRight');
@@ -1229,10 +1243,13 @@ async function runScopedBlocked(browser, args, axeSource, report) {
     await page.keyboard.press('ArrowLeft');
     assert.equal(await page.evaluate(() => document.activeElement.dataset.copyStatus), 'open');
     await page.keyboard.press('Enter');
+    await page.locator('#additional-copy-search').fill('Mobile browser additional copy');
     await page.getByRole('button', { name: `Open additional-copy task ${args.mobileCopyId}`, exact: true }).waitFor();
+    await page.locator('#additional-copy-search').fill('');
     await page.locator('#additional-copy-claim-filter').selectOption('mine_unclaimed');
     await assertReadableMobileQueue(page, '#additional-copy-grid');
     await scan(page, axeSource, args.artifactRoot, report, 'mobile', 'additional-copy-scoped-grid');
+    await page.locator('#additional-copy-search').fill('Mobile browser additional copy');
     const openCopy = page.getByRole('button', { name: `Open additional-copy task ${args.mobileCopyId}`, exact: true });
     await openCopy.click();
     await page.getByText('The source title request is no longer available.', { exact: true }).waitFor();

@@ -615,9 +615,10 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await rowActionRow().waitFor();
     await rowActionRow().locator('.row-action-primary').getByText('Queue Hold', { exact: true }).click();
     await page.locator('#editModal[open]').waitFor();
-    await page.locator('#edit-bibid').fill('9001');
+    // The fixture patron already has an active 9001 request; this row exercises a valid queue transition.
+    await page.locator('#edit-bibid').fill('9002');
     const queueBibLookup = page.waitForResponse(response => response.url().endsWith('/staff/bib-lookup') &&
-      response.request().postDataJSON()?.bibId === '9001');
+      response.request().postDataJSON()?.bibId === '9002');
     await page.locator('#btn-bib-lookup').click();
     assert.equal((await queueBibLookup).status(), 200);
     await page.locator('#edit-autohold').check();
@@ -628,8 +629,143 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     const queued = await queueAction;
     assert.equal(queued.status(), 200, await queued.text());
     assert.equal(queued.request().postDataJSON().action, 'catalogFound');
-    assert.equal((await persistedRowAction('pending_hold')).bibid, '9001');
+    assert.equal((await persistedRowAction('pending_hold')).bibid, '9002');
     report.rowActionJourney = { id: rowActionId, edit: 200, purchase: 200, queueHold: 200 };
+
+    const createBibJourneyRequest = async title => {
+      const response = await post(context, args.baseOrigin, '/api/asap/staff/suggestions', {
+        barcode: '20000000000001', title, author: 'Browser creator', format: 'dvd',
+        publication: 'Library early release', preferredPickupBranchId: '101',
+        autohold: false, libraryOrgId: '2'
+      });
+      assert.equal(response.status(), 201, await response.text());
+      return String((await response.json()).id);
+    };
+    const readBibJourneyRequest = async id => {
+      const response = await context.request.get(`${args.baseOrigin}/api/asap/staff/title-requests/${id}`);
+      assert.equal(response.status(), 200, await response.text());
+      return response.json();
+    };
+    const optOutId = await createBibJourneyRequest('Browser opt-out BIB action');
+    await page.goto(`${args.baseOrigin}/staff/?stage=submitted&request=${optOutId}&requestType=title_request`,
+      { waitUntil: 'networkidle' });
+    await page.locator('#editModal[open]').waitFor();
+    await page.locator('#edit-exact-publication-date').fill('2026-10-01');
+    if (await page.locator('#edit-autohold').isChecked()) {
+      await page.locator('label[for="edit-autohold"]').click();
+    }
+    assert.equal(await page.locator('#edit-autohold').isChecked(), false);
+    const dateSetResponse = page.waitForResponse(response =>
+      response.url().endsWith(`/title-requests/${optOutId}/action`) && response.request().method() === 'POST');
+    await page.locator('#edit-submit-btn').click();
+    const dateSet = await dateSetResponse;
+    assert.equal(dateSet.status(), 200,
+      `${await dateSet.text()} ${JSON.stringify(dateSet.request().postDataJSON())}`);
+    assert.equal((await readBibJourneyRequest(optOutId)).exactPublicationDate, '2026-10-01');
+    assert.equal((await readBibJourneyRequest(optOutId)).autohold, false);
+    await page.goto(`${args.baseOrigin}/staff/?stage=submitted&request=${optOutId}&requestType=title_request`,
+      { waitUntil: 'networkidle' });
+    await page.locator('#editModal[open]').waitFor();
+    await page.locator('#edit-exact-publication-date').fill('');
+    const dateClearResponse = page.waitForResponse(response =>
+      response.url().endsWith(`/title-requests/${optOutId}/action`) && response.request().method() === 'POST');
+    await page.locator('#edit-submit-btn').click();
+    const dateClear = await dateClearResponse;
+    assert.equal(dateClear.status(), 200,
+      `${await dateClear.text()} ${JSON.stringify(dateClear.request().postDataJSON())}`);
+    assert.equal((await readBibJourneyRequest(optOutId)).exactPublicationDate, null);
+    const optOutBefore = await readBibJourneyRequest(optOutId);
+    const optOutResponse = await post(context, args.baseOrigin,
+      `/api/asap/staff/title-requests/${optOutId}/action`,
+      { version: optOutBefore.version, action: 'catalogFound', status: 'pending_hold', bibid: '9001' });
+    assert.equal(optOutResponse.status(), 200, await optOutResponse.text());
+    const optedOut = await readBibJourneyRequest(optOutId);
+    assert.equal(optedOut.status, 'closed');
+    assert.equal(optedOut.closeReason, 'purchased_no_hold');
+    assert.equal(optedOut.bibid, '9001');
+    assert.equal(optedOut.holdOperation, null);
+    await page.goto(`${args.baseOrigin}/staff/?stage=closed&request=${optOutId}&requestType=title_request`,
+      { waitUntil: 'networkidle' });
+    await page.locator('#editModal[open]').waitFor();
+    assert.equal(await page.locator('#edit-identifier').isDisabled(), true);
+    assert.equal(await page.locator('#edit-bibid').isDisabled(), true);
+    assert.equal(await page.locator('#btn-bib-lookup').isDisabled(), true);
+    await page.locator('#close-modal-x').click();
+
+    const outstandingOptOutId = await createBibJourneyRequest('Browser outstanding opt-out');
+    const outstandingBefore = await readBibJourneyRequest(outstandingOptOutId);
+    const purchaseWithoutBib = await post(context, args.baseOrigin,
+      `/api/asap/staff/title-requests/${outstandingOptOutId}/action`,
+      { version: outstandingBefore.version, action: 'purchase', status: 'outstanding_purchase', autohold: false });
+    assert.equal(purchaseWithoutBib.status(), 200, await purchaseWithoutBib.text());
+    await page.goto(`${args.baseOrigin}/staff/?stage=outstanding_purchase&request=${outstandingOptOutId}&requestType=title_request`,
+      { waitUntil: 'networkidle' });
+    await page.locator('#editModal[open]').waitFor();
+    await page.locator('#close-modal-x').click();
+    const outstandingRow = page.locator(`#grid-container .asap-row-marker[data-suggestion-id="${outstandingOptOutId}"]`)
+      .locator('xpath=ancestor::tr');
+    await outstandingRow.locator('.row-action-primary').getByText('Queue Hold', { exact: true }).click();
+    await page.locator('#editModal[open]').waitFor();
+    await page.locator('#edit-bibid').fill('9003');
+    const optOutLookup = page.waitForResponse(response => response.url().endsWith('/staff/bib-lookup') &&
+      response.request().postDataJSON()?.bibId === '9003');
+    await page.locator('#btn-bib-lookup').click();
+    assert.equal((await optOutLookup).status(), 200);
+    assert.equal(await page.locator('#edit-autohold').isChecked(), false);
+    const outstandingQueue = page.waitForResponse(response =>
+      response.url().endsWith(`/title-requests/${outstandingOptOutId}/action`) &&
+      response.request().method() === 'POST');
+    await page.locator('#edit-submit-btn').click();
+    await page.locator('#confirm-dialog[open]').waitFor();
+    await page.locator('#confirm-dialog-ok').click();
+    assert.equal((await outstandingQueue).status(), 200);
+    const outstandingClosed = await readBibJourneyRequest(outstandingOptOutId);
+    assert.equal(outstandingClosed.status, 'closed');
+    assert.equal(outstandingClosed.closeReason, 'purchased_no_hold');
+    if (await page.locator('#alert-dialog[open]').count()) await page.locator('#alert-dialog-ok').click();
+
+    const duplicateId = await createBibJourneyRequest('Browser duplicate queue target');
+    const duplicateBefore = await readBibJourneyRequest(duplicateId);
+    const duplicatePurchase = await post(context, args.baseOrigin,
+      `/api/asap/staff/title-requests/${duplicateId}/action`,
+      { version: duplicateBefore.version, action: 'purchase', status: 'outstanding_purchase', autohold: true });
+    assert.equal(duplicatePurchase.status(), 200, await duplicatePurchase.text());
+    await page.goto(`${args.baseOrigin}/staff/?stage=outstanding_purchase&request=${duplicateId}&requestType=title_request`,
+      { waitUntil: 'networkidle' });
+    await page.locator('#editModal[open]').waitFor();
+    await page.locator('#close-modal-x').click();
+    const duplicateRow = page.locator(`#grid-container .asap-row-marker[data-suggestion-id="${duplicateId}"]`)
+      .locator('xpath=ancestor::tr');
+    await duplicateRow.locator('.row-action-primary').getByText('Queue Hold', { exact: true }).click();
+    await page.locator('#editModal[open]').waitFor();
+    await page.locator('#edit-bibid').fill('9002');
+    const duplicateLookup = page.waitForResponse(response => response.url().endsWith('/staff/bib-lookup') &&
+      response.request().postDataJSON()?.bibId === '9002');
+    await page.locator('#btn-bib-lookup').click();
+    assert.equal((await duplicateLookup).status(), 200);
+    await page.locator('#edit-autohold').check();
+    const duplicateConflict = page.waitForResponse(response =>
+      response.url().endsWith(`/title-requests/${duplicateId}/action`) &&
+      response.request().method() === 'POST' && response.status() === 409);
+    await page.locator('#edit-submit-btn').click();
+    assert.equal((await duplicateConflict).status(), 409);
+    await page.locator('#confirm-dialog[open]').waitFor();
+    const unchangedDuplicate = await readBibJourneyRequest(duplicateId);
+    assert.equal(unchangedDuplicate.status, 'outstanding_purchase');
+    assert.equal(unchangedDuplicate.bibid, null);
+    assert.equal(unchangedDuplicate.version, (await duplicatePurchase.json()).version);
+    const duplicateClose = page.waitForResponse(response =>
+      response.url().endsWith(`/title-requests/${duplicateId}/action`) &&
+      response.request().method() === 'POST' && response.status() === 200);
+    await page.locator('#confirm-dialog-ok').click();
+    assert.equal((await duplicateClose).status(), 200);
+    const closedDuplicate = await readBibJourneyRequest(duplicateId);
+    assert.equal(closedDuplicate.status, 'closed');
+    assert.equal(closedDuplicate.closeReason, 'duplicate_hold');
+    report.bibActionParity = { optOutId, outstandingOptOutId, duplicateId,
+      dateSet: true, dateCleared: true, closedFieldsLocked: true,
+      catalogOptOut: optedOut.status, outstandingOptOut: outstandingClosed.status,
+      duplicateConflict: 409, duplicateClose: closedDuplicate.status };
     await page.locator('[data-status="suggestion"]').click();
     const tabs = page.locator('#status-tabs [data-status]');
     assert.ok(await tabs.count() >= 8, 'Legacy status/settings navigation was not rendered');

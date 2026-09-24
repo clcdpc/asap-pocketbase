@@ -7,17 +7,15 @@ import { normalizeStatus } from './grid-policy.mjs';
 import { buildRowActions } from './grid-row-actions.mjs';
 import { escapeAttr } from './grid-utils.js';
 import { hasWorkflowTag, isUnclaimed } from './grid-filters.js';
-import { findWorkflowRow, requestIdentity, sameRequestIdentity } from './request-identity.mjs';
-import { staffSession, staffAccessGeneration, currentSuggestions, allSuggestions, currentStatus, currentWorkflowOrgScopeId } from './state.js';
+import { findWorkflowRow } from './request-identity.mjs';
+import { currentSuggestions, allSuggestions } from './state.js';
+import { beginRowAction, invalidateRowActionOwnership } from './row-action-ownership.mjs';
 
 const noopRefresh = async () => {};
-let rowActionGeneration = 0;
 let assignmentGeneration = 0;
 export function invalidatePendingRowAction() {
-  rowActionGeneration += 1;
+  invalidateRowActionOwnership();
   assignmentGeneration += 1;
-  const assignmentDialog = document.getElementById('assign-dialog');
-  if (assignmentDialog?.open) assignmentDialog.close();
 }
 function selectPlaceholder(select, label) {
   const option = document.createElement('option');
@@ -132,18 +130,8 @@ export async function runRowActionDescriptor(row, action, ctx, onRefresh = noopR
 export async function openAssignDialog(row, onRefresh = noopRefresh) {
   if (!['title_request', 'additional_copy'].includes(row?.type) || !String(row.id ?? '').trim()) return;
   const generation = ++assignmentGeneration;
-  const accessGeneration = staffAccessGeneration;
-  const identity = requestIdentity(row);
-  const status = currentStatus;
-  const scope = currentWorkflowOrgScopeId;
-  const ownsRequest = () => {
-    const current = findWorkflowRow(identity, currentSuggestions, allSuggestions);
-    return generation === assignmentGeneration && staffAccessGeneration === accessGeneration &&
-      staffSession.authenticated && staffSession.accessAllowed && currentStatus === status &&
-      currentWorkflowOrgScopeId === scope && current?.type === identity.type &&
-      sameRequestIdentity(current, identity) && current.version === row.version &&
-      current.status === row.status;
-  };
+  const ownership = beginRowAction(row);
+  const ownsRequest = () => generation === assignmentGeneration && ownership.ownsUi();
   if (!ownsRequest()) return;
   const dialog = document.getElementById('assign-dialog');
   const staffSelect = document.getElementById('assign-staff-select');
@@ -212,14 +200,22 @@ export async function openAssignDialog(row, onRefresh = noopRefresh) {
         method: 'POST',
         body: { assigneeId, version: row.version }
       });
-      if (!ownsRequest()) return;
+      if (!ownsRequest()) {
+        if (ownership.sessionCurrent()) await onRefresh({ silent: true });
+        return;
+      }
       const typeLabel = row.type === 'additional_copy' ? 'Additional-copy task' : 'Claim';
       showToast(`${typeLabel} assigned.`, 'success');
       cleanup();
       await onRefresh();
     } catch (err) {
       if (!ownsRequest()) return;
-      const message = err && err.message ? err.message : 'Assignment failed.';
+      const uncertain = !err?.status || err.status >= 500;
+      const message = uncertain
+        ? 'Could not confirm whether assignment was saved. Refresh before retrying.'
+        : err && err.message ? err.message : 'Assignment failed.';
+      if (uncertain && ownership.sessionCurrent()) await onRefresh({ silent: true });
+      if (!ownsRequest()) return;
       await showAlert(message);
       confirmBtn.disabled = false;
       confirmBtn.textContent = 'Assign';
@@ -234,17 +230,8 @@ export async function closeAdditionalCopyRequest(identity, onRefresh = noopRefre
   if (identity?.type !== 'additional_copy' || !String(identity.id ?? '').trim()) return;
   const row = findWorkflowRow(identity, currentSuggestions, allSuggestions);
   if (!row || row.type !== 'additional_copy' || normalizeStatus(row.status) === 'closed') return;
-  const generation = ++rowActionGeneration;
-  const accessGeneration = staffAccessGeneration;
-  const status = currentStatus;
-  const scope = currentWorkflowOrgScopeId;
-  const ownsRequest = () => {
-    const current = findWorkflowRow(row, currentSuggestions, allSuggestions);
-    return generation === rowActionGeneration && staffAccessGeneration === accessGeneration &&
-      staffSession.authenticated && staffSession.accessAllowed && currentStatus === status &&
-      currentWorkflowOrgScopeId === scope && current?.type === 'additional_copy' &&
-      sameRequestIdentity(current, row) && current.version === row.version && current.status === row.status;
-  };
+  const ownership = beginRowAction(row);
+  const ownsRequest = ownership.ownsUi;
   const confirmed = await showConfirm('Close additional-copy task?', 'Closing this task will not change the original patron suggestion.');
   if (!confirmed || !ownsRequest()) return;
   try {
@@ -252,10 +239,16 @@ export async function closeAdditionalCopyRequest(identity, onRefresh = noopRefre
       method: 'POST',
       body: { version: row.version }
     });
-    if (!ownsRequest()) return;
+    if (!ownsRequest()) {
+      if (ownership.sessionCurrent()) await onRefresh({ silent: true });
+      return;
+    }
     showToast('Additional-copy task closed.', 'success');
     await onRefresh();
   } catch (error) {
+    if (ownership.sessionCurrent() && (!error?.status || error.status >= 500)) {
+      await onRefresh({ silent: true });
+    }
     if (ownsRequest()) throw error;
   }
 }
@@ -281,19 +274,9 @@ export function additionalCopyConfirmMessage(bibid, count) {
 
 export async function buyAnotherCopyForRow(row, ctx, onRefresh = noopRefresh) {
   if (row?.type !== 'title_request' || !String(row.id ?? '').trim()) return;
-  const generation = ++rowActionGeneration;
-  const accessGeneration = staffAccessGeneration;
-  const identity = requestIdentity(row);
-  const status = currentStatus;
-  const scope = currentWorkflowOrgScopeId;
-  const ownsRequest = () => {
-    const current = findWorkflowRow(identity, currentSuggestions, allSuggestions);
-    return generation === rowActionGeneration && staffAccessGeneration === accessGeneration &&
-      staffSession.authenticated && staffSession.accessAllowed && currentStatus === status &&
-      currentWorkflowOrgScopeId === scope && current?.type === 'title_request' &&
-      sameRequestIdentity(current, identity) && current.version === row.version &&
-      current.status === row.status && current.bibid === row.bibid;
-  };
+  const ownership = beginRowAction(row);
+  const ownsRequest = () => ownership.ownsUi() &&
+    findWorkflowRow(row, currentSuggestions, allSuggestions)?.bibid === row.bibid;
   if (!ownsRequest()) return;
   const id = String(row.id);
   try {
@@ -311,11 +294,17 @@ export async function buyAnotherCopyForRow(row, ctx, onRefresh = noopRefresh) {
       method: 'POST',
       body: { emailPurchaseReminder: confirmed.emailPurchaseReminder, version: row.version }
     });
-    if (!ownsRequest()) return;
+    if (!ownsRequest()) {
+      if (ownership.sessionCurrent()) await onRefresh({ silent: true });
+      return;
+    }
     const afterCount = Number(response && response.openCountAfter || openCount + 1);
     showToast(`Additional-copy task created. Open tasks for this BIB: ${afterCount}.`, 'success');
     await onRefresh();
   } catch (error) {
+    if (ownership.sessionCurrent() && (!error?.status || error.status >= 500)) {
+      await onRefresh({ silent: true });
+    }
     if (ownsRequest()) throw error;
   }
 }
@@ -353,15 +342,8 @@ export async function mutateRequestClaim(identity, action, successMessage, ctx, 
   const row = findWorkflowRow(identity, ctx.currentSuggestions, ctx.allSuggestions);
   if (!row || row.type !== identity.type) return;
   const requestId = row.id;
-  const accessGeneration = staffAccessGeneration;
-  const status = ctx.currentStatus;
-  const scope = currentWorkflowOrgScopeId;
-  const ownsRequest = () => {
-    const current = findWorkflowRow(identity, ctx.currentSuggestions, ctx.allSuggestions);
-    return staffAccessGeneration === accessGeneration && staffSession.authenticated &&
-      staffSession.accessAllowed && ctx.currentStatus === status && currentWorkflowOrgScopeId === scope &&
-      current?.type === row.type && current.version === row.version && current.status === row.status;
-  };
+  const ownership = beginRowAction(row);
+  const ownsRequest = ownership.ownsUi;
   if (!ownsRequest()) return;
 
   try {
@@ -372,9 +354,11 @@ export async function mutateRequestClaim(identity, action, successMessage, ctx, 
     });
     if (ownsRequest()) showToast(successMessage, 'success');
   } catch (err) {
-    if (ownsRequest()) await showAlert(err.message || 'Claim update failed.');
+    if (ownsRequest()) await showAlert(!err?.status || err.status >= 500
+      ? 'Could not confirm whether the claim changed. Refresh before retrying.'
+      : err.message || 'Claim update failed.');
   } finally {
-    if (ownsRequest()) await onRefresh();
+    if (ownership.sessionCurrent()) await onRefresh({ silent: !ownsRequest() });
   }
 }
 
@@ -383,7 +367,9 @@ export async function runRowAction(action, ctx) {
   try {
     await action.onClick();
   } catch (error) {
-    await showAlert(error.message || String(error) || 'Action failed');
+    await showAlert(!error?.status || error.status >= 500
+      ? 'Could not confirm whether the action was saved. Refresh before retrying.'
+      : error.message || String(error) || 'Action failed');
   }
 }
 

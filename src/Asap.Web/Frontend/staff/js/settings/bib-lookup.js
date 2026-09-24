@@ -6,7 +6,12 @@ let editBibLookupSerial = 0;
 
 export async function lookupEditBibById(options = {}) {
   const bibInput = document.getElementById('edit-bibid');
+  const editId = document.getElementById('edit-id');
+  const identity = editRequestIdentity(editId);
+  const row = findWorkflowRow(identity, currentSuggestions, allSuggestions);
+  if (!bibInput || !row || bibInput.disabled && row.type !== 'additional_copy') return null;
   const bibId = String(options.bibId !== undefined ? options.bibId : bibInput.value).trim();
+  if (row.type === 'additional_copy' && bibId !== String(row.bibid || '').trim()) return null;
   if (options.bibId !== undefined) {
     bibInput.value = bibId;
     bibInput.dispatchEvent(new Event('input', { bubbles: true }));
@@ -15,9 +20,6 @@ export async function lookupEditBibById(options = {}) {
   const display = document.getElementById('bib-info-display');
   const text = document.getElementById('bib-info-text');
   const originalButtonText = btn ? btn.textContent : '';
-  const editId = document.getElementById('edit-id');
-  const identity = editRequestIdentity(editId);
-  const row = findWorkflowRow(identity, currentSuggestions, allSuggestions);
   if (!['title_request', 'additional_copy'].includes(editId?.dataset.requestType) ||
       !identity.id || !row || row.type !== identity.type) {
     return null;
@@ -30,7 +32,8 @@ export async function lookupEditBibById(options = {}) {
     staffAccessGeneration === accessGeneration && editRequestGeneration === dialogGeneration &&
     document.getElementById('editModal')?.open &&
     editId.dataset.requestType === identity.type &&
-    sameRequestIdentity(editRequestIdentity(editId), identity);
+    sameRequestIdentity(editRequestIdentity(editId), identity) &&
+    findWorkflowRow(identity, currentSuggestions, allSuggestions)?.version === row.version;
   const ownsResult = () => ownsDialog() && bibInput.value.trim() === bibId;
 
   if (!bibId) {
@@ -68,7 +71,7 @@ export async function lookupEditBibById(options = {}) {
     const titleInput = document.getElementById('edit-title');
     const authorInput = document.getElementById('edit-author');
 
-    if (data.title) {
+    if (data.title && row.type !== 'additional_copy') {
       const oldTitle = titleInput.value.trim();
       const pTitle = data.title.trim();
       if (pTitle && oldTitle !== pTitle && oldTitle.indexOf(pTitle + " (") !== 0) {
@@ -76,7 +79,7 @@ export async function lookupEditBibById(options = {}) {
       }
     }
 
-    if (data.author) {
+    if (data.author && row.type !== 'additional_copy') {
       const oldAuthor = authorInput.value.trim();
       const pAuthor = data.author.trim();
       if (pAuthor && oldAuthor !== pAuthor && oldAuthor.indexOf(pAuthor + " (") !== 0) {
@@ -107,7 +110,7 @@ export async function lookupEditBibById(options = {}) {
     return null;
   } finally {
     if (btn && ownsDialog()) {
-      btn.disabled = false;
+      btn.disabled = bibInput.disabled && row.type !== 'additional_copy';
       btn.textContent = options.doneText || originalButtonText || 'Lookup BIB';
     }
   }
@@ -144,6 +147,14 @@ function setHiddenEditValue(id, value) {
 }
 
 export function applySelectedPolarisResultToEditForm(result = {}, context = 'edit') {
+  if (context === 'edit') {
+    const identity = editRequestIdentity(document.getElementById('edit-id'));
+    const row = findWorkflowRow(identity, currentSuggestions, allSuggestions);
+    if (!row || row.capabilities?.canChangeBib === false ||
+        document.getElementById('edit-bibid')?.disabled) return false;
+    if (row.capabilities?.canEditIdentifier === false &&
+        String(result.identifier || '').trim() !== String(row.identifier || '').trim()) return false;
+  }
   const bibId = String(result.bibId || '').trim();
   const title = String(result.title || '').trim();
   const author = String(result.author || '').trim();
@@ -203,6 +214,7 @@ export function applySelectedPolarisResultToEditForm(result = {}, context = 'edi
       detail: { bibId, rowId: identity.id, requestType: identity.type }
     }));
   }
+  return true;
 }
 
 const btnBibLookup = document.getElementById('btn-bib-lookup');
