@@ -114,6 +114,21 @@ export function replaceResolvedRequestId(id, requestType = 'title_request') {
   window.history.replaceState(null, '', url.pathname + url.search + url.hash);
 }
 
+export function matchesRequestSelection(identity) {
+  const requestId = requestedRequestIdFromUrl();
+  const requestType = requestedRequestTypeFromUrl(requestedStatusFromUrl());
+  return !!requestId && requestId === String(identity?.id || '').trim() && requestType === identity?.type;
+}
+
+export function clearMatchingRequestSelection(identity) {
+  if (!matchesRequestSelection(identity)) return false;
+  const url = new URL(window.location.href);
+  url.searchParams.delete('request');
+  url.searchParams.delete('requestType');
+  window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+  return true;
+}
+
 export function updateStageQuery(status) {
   try {
     const url = new URL(window.location.href);

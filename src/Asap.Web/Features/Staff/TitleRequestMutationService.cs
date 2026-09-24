@@ -1,4 +1,6 @@
 using System.Data;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Asap.Web.Features.Email;
 using Asap.Web.Features.Patron;
@@ -6,6 +8,7 @@ using Asap.Web.Infrastructure.Configuration;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Data.SqlClient;
 
 namespace Asap.Web.Features.Staff;
 
@@ -33,7 +36,10 @@ public sealed class TitleRequestActionInput
 public sealed record TitleRequestMutationResult(
     string Code,
     long? RequestId = null,
-    IReadOnlyList<long>? DispatchOutboxIds = null);
+    IReadOnlyList<long>? DispatchOutboxIds = null,
+    long? AdditionalCopyRequestId = null,
+    bool ReminderRequested = false,
+    bool ReminderQueued = false);
 
 public sealed class TitleRequestMutationService(
     IDbContextFactory<AsapDbContext> contextFactory,
@@ -42,11 +48,13 @@ public sealed class TitleRequestMutationService(
     RecipientDomainPolicy recipientDomainPolicy,
     IEmailOutboxDispatcher outboxDispatcher,
     IStaffPolarisProvider staffPolarisProvider,
+    AdditionalCopyService additionalCopies,
     IIdentifierLookupDispatcher identifierLookupDispatcher,
     ILogger<TitleRequestMutationService> logger)
 {
     private static readonly string[] IdentifierDerivedTagCodes =
         ["polaris_bib_found", "polaris_bib_not_found", "polaris_multiple_matches"];
+    private sealed record ExplicitBibPreflight(string? Error = null, BibValidationResult? ValidatedBib = null);
     private readonly HashSet<Guid> allowedTenantIds = configuration.Authentication.Entra.AllowedTenantIds!
         .Select(Guid.Parse)
         .ToHashSet();
@@ -184,9 +192,9 @@ public sealed class TitleRequestMutationService(
             expectedVersion,
             input,
             cancellationToken);
-        if (bibPreflight is not null)
+        if (bibPreflight.Error is not null)
         {
-            return new TitleRequestMutationResult(bibPreflight);
+            return new TitleRequestMutationResult(bibPreflight.Error);
         }
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
@@ -221,15 +229,21 @@ public sealed class TitleRequestMutationService(
         var capabilities = TitleRequestCapabilityPolicy.Evaluate(request, incompleteOperation, placedProtection);
 
         var identifierSupplied = IsSupplied(input.Identifier);
-        var proposedIdentifier = identifierSupplied ? Clean(ElementString(input.Identifier)) : Clean(request.Identifier);
-        var identifierChanged = identifierSupplied &&
-                                !string.Equals(Clean(proposedIdentifier), Clean(request.Identifier), StringComparison.Ordinal);
+        var validatedIdentifier = Clean(bibPreflight.ValidatedBib?.Identifier);
+        var proposedIdentifier = input.Action == "additionalCopy"
+            ? validatedIdentifier ?? Clean(request.Identifier)
+            : identifierSupplied ? Clean(ElementString(input.Identifier)) : Clean(request.Identifier);
+        var identifierChanged = (input.Action == "additionalCopy" && validatedIdentifier is not null ||
+                                 input.Action != "additionalCopy" && identifierSupplied) &&
+                                !string.Equals(proposedIdentifier, Clean(request.Identifier), StringComparison.Ordinal);
         var bibSupplied = IsSupplied(input.Bibid);
         var proposedBib = bibSupplied ? Clean(ElementString(input.Bibid)) : Clean(request.BibId);
         var bibChanged = bibSupplied &&
                          !string.Equals(Clean(proposedBib), Clean(request.BibId), StringComparison.Ordinal);
         var autoHoldSupplied = input.Autohold.ValueKind is JsonValueKind.True or JsonValueKind.False;
-        var proposedAutoHold = autoHoldSupplied ? input.Autohold.GetBoolean() : request.AutoHold;
+        var proposedAutoHold = input.Action == "additionalCopy"
+            ? true
+            : autoHoldSupplied ? input.Autohold.GetBoolean() : request.AutoHold;
         var targetStatus = ResolveStatus(input.Action, input.Status, request.Status, proposedBib);
         if (targetStatus is null)
         {
@@ -257,6 +271,21 @@ public sealed class TitleRequestMutationService(
         {
             return new TitleRequestMutationResult("invalid_bib");
         }
+        if (input.Action == "additionalCopy" && targetStatus == "pending_hold" &&
+            (request.Status != "pending_hold" || bibChanged) && proposedBib is not null)
+        {
+            // Serialize actions for this patron before checking the competing BIB. The
+            // transaction-owned lock also protects the empty-result case.
+            await LockPatronAdditionalCopyAsync(context, request, cancellationToken);
+            var duplicate = await context.TitleRequests.AsNoTracking().AnyAsync(item =>
+                item.LibraryOrganizationId == request.LibraryOrganizationId &&
+                item.Barcode == request.Barcode && item.BibId == proposedBib &&
+                item.Id != request.Id && item.Status != "closed", cancellationToken);
+            if (duplicate)
+            {
+                return new TitleRequestMutationResult("duplicate_open_request");
+            }
+        }
 
         if (identifierChanged)
         {
@@ -267,20 +296,41 @@ public sealed class TitleRequestMutationService(
             request.IsbnCheckLastErrorCode = null;
             request.LastCheckedUtc = null;
             request.IsbnCheckStatus = request.Identifier is null ? "skipped_no_isbn" : "pending";
-            await RemoveIdentifierTagsAsync(context, request.Id, cancellationToken);
+            if (input.Action != "additionalCopy")
+            {
+                await RemoveIdentifierTagsAsync(context, request.Id, cancellationToken);
+            }
         }
         if (bibSupplied)
         {
             request.BibId = Clean(proposedBib);
         }
+        if (input.Action == "additionalCopy")
+        {
+            await ReconcileExplicitPolarisIdentifierAsync(
+                context, request, validatedIdentifier, cancellationToken);
+        }
 
         if (input.Title is not null) request.Title = input.Title.Trim();
         if (input.Author is not null) request.Author = Clean(input.Author);
-        if (input.Publication is not null) request.Publication = Clean(input.Publication);
+        if (input.Publication is not null && input.Action != "additionalCopy")
+        {
+            request.Publication = Clean(input.Publication);
+        }
         if (input.Notes is not null) request.Notes = input.Notes;
-        if (input.ExactPublicationDate.HasValue) request.ExactPublicationDate = input.ExactPublicationDate;
+        if (input.ExactPublicationDate.HasValue && input.Action != "additionalCopy")
+        {
+            request.ExactPublicationDate = input.ExactPublicationDate;
+        }
         if (input.CustomFields.ValueKind == JsonValueKind.Object) request.CustomFieldsJson = input.CustomFields.GetRawText();
-        if (autoHoldSupplied) request.AutoHold = proposedAutoHold;
+        if (input.Action == "additionalCopy")
+        {
+            request.AutoHold = true;
+        }
+        else if (autoHoldSupplied)
+        {
+            request.AutoHold = proposedAutoHold;
+        }
         if (!string.IsNullOrWhiteSpace(input.Format))
         {
             var formatId = await ResolveFormatIdAsync(context, request.LibraryOrganizationId, input.Format, cancellationToken);
@@ -313,6 +363,20 @@ public sealed class TitleRequestMutationService(
             $"Claim automatically set to {DisplayName(locked.Staff[actor.Id])} after staff action.");
 
         var outboxIds = new List<long>();
+        AdditionalCopyMutationResult? copyResult = null;
+        if (input.Action == "additionalCopy")
+        {
+            copyResult = await additionalCopies.CreateFromLockedSourceAsync(
+                context, request, locked.Staff[actor.Id], locked.Staff[actor.Id],
+                input.EmailPurchaseReminder, readiness.IsConfigured, cancellationToken);
+            AddEvent(context, request, actor, "additional_copy_created",
+                $"Additional-copy task {copyResult.RequestId} created for BIB {request.BibId}.",
+                new { additionalCopyRequestId = copyResult.RequestId, bibId = request.BibId });
+            if (copyResult.DispatchOutboxId.HasValue)
+            {
+                outboxIds.Add(copyResult.DispatchOutboxId.Value);
+            }
+        }
         if (input.EmailPurchaseReminder && input.Action == "purchase" && targetStatus == "outstanding_purchase")
         {
             var outbox = await AddStaffNotificationAsync(
@@ -329,11 +393,23 @@ public sealed class TitleRequestMutationService(
 
         await context.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        foreach (var outboxId in outboxIds) outboxDispatcher.Enqueue(outboxId);
-        return new TitleRequestMutationResult("updated", request.Id, outboxIds);
+        foreach (var outboxId in outboxIds)
+        {
+            try
+            {
+                outboxDispatcher.Enqueue(outboxId);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                logger.LogWarning(exception, "Committed reminder {OutboxId} remains pending for retry.", outboxId);
+            }
+        }
+        return new TitleRequestMutationResult("updated", request.Id, outboxIds,
+            copyResult?.RequestId, copyResult?.ReminderRequested ?? false,
+            copyResult?.DispatchOutboxId.HasValue ?? false);
     }
 
-    private async Task<string?> PreflightExplicitBibAsync(
+    private async Task<ExplicitBibPreflight> PreflightExplicitBibAsync(
         CurrentStaff actor,
         long requestId,
         byte[] expectedVersion,
@@ -343,12 +419,16 @@ public sealed class TitleRequestMutationService(
         var bibSupplied = IsSupplied(input.Bibid);
         if (!bibSupplied)
         {
-            return null;
+            return new(input.Action == "additionalCopy" ? "bib_required" : null);
         }
         var proposedBib = Clean(ElementString(input.Bibid));
+        if (input.Action == "additionalCopy" && proposedBib is null)
+        {
+            return new("bib_required");
+        }
         if (proposedBib is not null && !IsPositiveInteger(proposedBib))
         {
-            return "invalid_bib";
+            return new("invalid_bib");
         }
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
@@ -356,34 +436,34 @@ public sealed class TitleRequestMutationService(
             .SingleOrDefaultAsync(item => item.Id == requestId, cancellationToken);
         if (request is null || !TitleRequestViewService.CanAccess(actor, request.LibraryOrganizationId))
         {
-            return "not_found";
+            return new("not_found");
         }
         if (!request.RowVersion.SequenceEqual(expectedVersion))
         {
-            return "stale_version";
+            return new("stale_version");
         }
 
         if (!await context.Organizations.AsNoTracking()
                 .AnyAsync(item => item.Id == request.LibraryOrganizationId && item.IsActive, cancellationToken))
         {
-            return "organization_inactive";
+            return new("organization_inactive");
         }
 
         var identifierSupplied = IsSupplied(input.Identifier);
         var proposedIdentifier = identifierSupplied ? Clean(ElementString(input.Identifier)) : Clean(request.Identifier);
-        var identifierChanged = identifierSupplied &&
+        var identifierChanged = input.Action != "additionalCopy" && identifierSupplied &&
                                 !string.Equals(proposedIdentifier, Clean(request.Identifier), StringComparison.Ordinal);
         var bibChanged = !string.Equals(proposedBib, Clean(request.BibId), StringComparison.Ordinal);
-        if (!bibChanged && !identifierChanged)
+        if (!bibChanged && !identifierChanged && input.Action != "additionalCopy")
         {
-            return null;
+            return new();
         }
 
         var incompleteOperation = await context.HoldPlacementOperations.AsNoTracking()
             .AnyAsync(item => item.TitleRequestId == request.Id && item.CompletedUtc == null, cancellationToken);
         if (incompleteOperation)
         {
-            return "hold_operation_incomplete";
+            return new("hold_operation_incomplete");
         }
         var successfulOperation = await context.HoldPlacementOperations.AsNoTracking()
             .AnyAsync(item => item.TitleRequestId == request.Id && item.State == "succeeded", cancellationToken);
@@ -396,30 +476,40 @@ public sealed class TitleRequestMutationService(
             successfulOperation || TitleRequestViewService.HasLegacyPlacedProtection(events));
         if (identifierChanged && !capability.CanEditIdentifier || bibChanged && !capability.CanChangeBib)
         {
-            return capability.BlockingReason ?? "identifier_locked_by_stage";
+            return new(capability.BlockingReason ?? "identifier_locked_by_stage");
         }
         var targetStatus = ResolveStatus(input.Action, input.Status, request.Status, proposedBib);
         if (targetStatus is null)
         {
-            return "invalid_transition";
+            return new("invalid_transition");
         }
         if (targetStatus is "hold_placed" or "closed")
         {
-            return "identifier_locked_by_stage";
+            return new("identifier_locked_by_stage");
         }
         if (proposedBib is null)
         {
-            return null;
+            return new();
         }
 
         try
         {
             var result = await staffPolarisProvider.ValidateBibAsync(int.Parse(proposedBib), cancellationToken);
-            return result.IsValid ? null : "bib_not_found";
+            if (!result.IsValid)
+            {
+                return new("bib_not_found");
+            }
+            if (input.Action == "additionalCopy" && Clean(result.Identifier) is { } catalogIdentifier &&
+                !string.Equals(catalogIdentifier, Clean(request.Identifier), StringComparison.Ordinal) &&
+                !capability.CanEditIdentifier)
+            {
+                return new(capability.BlockingReason ?? "identifier_locked_by_stage");
+            }
+            return new(ValidatedBib: result);
         }
         catch (PolarisOperationalException)
         {
-            return "bib_validation_unavailable";
+            return new("bib_validation_unavailable");
         }
     }
 
@@ -572,6 +662,25 @@ public sealed class TitleRequestMutationService(
         return new LockedMutation("locked", request, staff, request.Status);
     }
 
+    private static async Task LockPatronAdditionalCopyAsync(
+        AsapDbContext context,
+        TitleRequest request,
+        CancellationToken cancellationToken)
+    {
+        var patronKey = $"{request.LibraryOrganizationId}:{request.Barcode.ToUpperInvariant()}";
+        var resource = "asap:additional-copy:" + Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(patronKey)));
+        var result = new SqlParameter("@result", SqlDbType.Int) { Direction = ParameterDirection.Output };
+        var name = new SqlParameter("@resource", SqlDbType.NVarChar, 255) { Value = resource };
+        await context.Database.ExecuteSqlRawAsync(
+            "EXEC @result = sys.sp_getapplock @Resource = @resource, @LockMode = 'Exclusive', @LockOwner = 'Transaction';",
+            [result, name], cancellationToken);
+        if (result.Value is not int code || code < 0)
+        {
+            throw new InvalidOperationException("Could not acquire the patron additional-copy lock.");
+        }
+    }
+
     private bool IsSameCurrentActor(CurrentStaff ticket, StaffUser row) =>
         row.IsActive && allowedTenantIds.Contains(ticket.EntraTenantId) &&
         StaffEmail.MatchesAuthenticationEmail(row, ticket.AuthenticationEmail);
@@ -693,6 +802,69 @@ public sealed class TitleRequestMutationService(
         context.TitleRequestWorkflowTags.RemoveRange(links);
     }
 
+    private static async Task ReconcileExplicitPolarisIdentifierAsync(
+        AsapDbContext context,
+        TitleRequest request,
+        string? validatedIdentifier,
+        CancellationToken cancellationToken)
+    {
+        // A valid BIB alone does not verify the request's identifier. The preflight
+        // catalog snapshot is safe to use here only after the locked RowVersion and
+        // capability checks have confirmed the same request and selected BIB.
+        var found = validatedIdentifier is not null;
+        var hasIdentifier = Clean(request.Identifier) is not null;
+        var preserveNotFound = !found && hasIdentifier && request.IsbnCheckStatus == "not_found";
+        if (found)
+        {
+            request.IsbnCheckStatus = "found";
+            request.IsbnCheckResult = "Polaris bibliographic identifier verified for the BIB selected by staff.";
+            request.LastCheckedUtc = DateTime.UtcNow;
+        }
+        else if (!hasIdentifier)
+        {
+            request.IsbnCheckStatus = "skipped_no_isbn";
+            request.IsbnCheckResult = null;
+            request.LastCheckedUtc = null;
+        }
+        else if (!preserveNotFound)
+        {
+            // The schema has no terminal "unverified" state. With no catalog
+            // identifier, not_found is the least misleading terminal value; the
+            // result explains that no identifier/BIB match was established.
+            request.IsbnCheckStatus = "not_found";
+            request.IsbnCheckResult = "Selected Polaris BIB has no catalog identifier; request identifier was not verified.";
+            request.LastCheckedUtc = DateTime.UtcNow;
+        }
+        request.IsbnCheckRetryCount = 0;
+        request.IsbnCheckLastErrorCode = null;
+
+        var tags = await (
+            from link in context.TitleRequestWorkflowTags
+            join tag in context.WorkflowTags on link.WorkflowTagId equals tag.Id
+            where link.TitleRequestId == request.Id && IdentifierDerivedTagCodes.Contains(tag.Code)
+            select new { Link = link, tag.Code }).ToListAsync(cancellationToken);
+        foreach (var tag in tags)
+        {
+            if (tag.Code == "polaris_multiple_matches" ||
+                tag.Code == "polaris_bib_found" && !found ||
+                tag.Code == "polaris_bib_not_found")
+            {
+                context.TitleRequestWorkflowTags.Remove(tag.Link);
+            }
+        }
+        if (found && tags.All(item => item.Code != "polaris_bib_found"))
+        {
+            var foundTagId = await context.WorkflowTags
+                .Where(item => item.Code == "polaris_bib_found")
+                .Select(item => item.Id).SingleAsync(cancellationToken);
+            context.TitleRequestWorkflowTags.Add(new TitleRequestWorkflowTag
+            {
+                TitleRequestId = request.Id,
+                WorkflowTagId = foundTagId
+            });
+        }
+    }
+
     private static async Task<long?> ResolveFormatIdAsync(
         AsapDbContext context,
         int libraryOrganizationId,
@@ -717,6 +889,8 @@ public sealed class TitleRequestMutationService(
             "alreadyOwn" when current == "suggestion" && !string.IsNullOrWhiteSpace(bib) => "pending_hold",
             "catalogFound" when current is "suggestion" or "outstanding_purchase" &&
                                 !string.IsNullOrWhiteSpace(bib) => "pending_hold",
+            "additionalCopy" when current is "suggestion" or "outstanding_purchase" or "pending_hold" &&
+                                  !string.IsNullOrWhiteSpace(bib) => "pending_hold",
             "reject" or "silentClose" when current == "suggestion" => "closed",
             "closeDuplicate" when current != "closed" => "closed",
             "close" when current == "hold_placed" => "closed",
@@ -738,7 +912,7 @@ public sealed class TitleRequestMutationService(
     private static string? ElementString(JsonElement value) => value.ValueKind == JsonValueKind.String
         ? value.GetString()
         : value.ToString();
-    private static bool IsPositiveInteger(string? value) => long.TryParse(value, out var result) && result > 0;
+    private static bool IsPositiveInteger(string? value) => int.TryParse(value, out var result) && result > 0;
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     private static string DisplayName(StaffUser value) =>
         Clean(value.DisplayName) ?? Clean(value.UserPrincipalName) ?? "Staff";

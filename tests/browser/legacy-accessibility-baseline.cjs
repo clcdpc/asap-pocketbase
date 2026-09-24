@@ -4,7 +4,7 @@
 // report. Keep the match at state/rule/target level so new .NET-port regressions fail.
 const LEGACY_ACCESSIBILITY_BASELINE = Object.freeze([
   { state: 'polaris-search', ruleId: 'color-contrast', target: '#polaris-search-status' },
-  { state: 'polaris-search', ruleId: 'color-contrast', target: '#polaris-additional-copy-action' },
+  { state: 'polaris-search', ruleId: 'color-contrast', target: '#polaris-additional-copy-action-9001-0' },
   { state: 'postmark-settings', ruleId: 'color-contrast', target: '#btn-reset-library-settings' },
   { state: 'postmark-settings', ruleId: 'color-contrast', target: '#btn-test-smtp' },
   { state: 'postmark-settings', ruleId: 'color-contrast', target: '#settings-save-detail' },

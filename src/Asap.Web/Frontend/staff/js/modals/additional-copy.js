@@ -1,8 +1,9 @@
-import { staffSession } from '../state.js';
+import { staffSession, staffAccessGeneration } from '../state.js';
 
 export function confirmAdditionalCopyAction(result, options = {}) {
   return new Promise(resolve => {
     const previousFocus = document.activeElement;
+    const accessGeneration = staffAccessGeneration;
     const dialog = document.createElement('dialog');
     dialog.className = 'asap-dialog asap-dialog-small';
 
@@ -67,7 +68,8 @@ export function confirmAdditionalCopyAction(result, options = {}) {
       settled = true;
       if (dialog.open) dialog.close();
       dialog.remove();
-      if (previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
+      if (staffAccessGeneration === accessGeneration && staffSession.authenticated && staffSession.accessAllowed &&
+          previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
       resolve(resultValue);
     }
     cancelBtn.addEventListener('click', () => cleanup({ confirmed: false, emailPurchaseReminder: false }));
@@ -76,6 +78,7 @@ export function confirmAdditionalCopyAction(result, options = {}) {
       event.preventDefault();
       cleanup({ confirmed: false, emailPurchaseReminder: false });
     });
+    dialog.addEventListener('close', () => cleanup({ confirmed: false, emailPurchaseReminder: false }));
     dialog.showModal();
     cancelBtn.focus();
   });

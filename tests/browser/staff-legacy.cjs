@@ -10,8 +10,8 @@ const {
 } = require('./legacy-accessibility-baseline.cjs');
 
 function parseArguments(argv) {
-  if (argv.length !== 26) {
-    throw new Error('Usage: node tests/browser/staff-legacy.cjs <baseURL> <artifactDirectory> <superId> <tenantId> <superEmail> <staffId> <staffEmail> <legacyRequestId> <primaryRequestId> <blockedRequestId> <resolutionRequestId> <otherRequestId> <copySourceRequestId> <invalidClosedCopyId> <invalidClaimantId> <legacyRuleId> <mobileCopyId> <foreignStaffId> <invalidTenantStaffId> <unboundStaffId> <staleTitleAId> <staleTitleBId> <staleCopyAId> <staleCopyBId> <staleCreateSourceId> <collidingRequestId>');
+  if (argv.length !== 27) {
+    throw new Error('Usage: node tests/browser/staff-legacy.cjs <baseURL> <artifactDirectory> <superId> <tenantId> <superEmail> <staffId> <staffEmail> <legacyRequestId> <primaryRequestId> <blockedRequestId> <resolutionRequestId> <otherRequestId> <copySourceRequestId> <invalidClosedCopyId> <invalidClaimantId> <legacyRuleId> <mobileCopyId> <foreignStaffId> <invalidTenantStaffId> <unboundStaffId> <staleTitleAId> <staleTitleBId> <staleCopyAId> <staleCopyBId> <staleCreateSourceId> <collidingRequestId> <polarisActionRequestId>');
   }
   const parsed = new URL(argv[0]);
   if (!['http:', 'https:'].includes(parsed.protocol) || parsed.pathname !== '/' ||
@@ -28,7 +28,8 @@ function parseArguments(argv) {
     otherRequestId: argv[11],
     mobileCopyId: argv[16],
     staleTitleBId: argv[21],
-    collidingRequestId: argv[25]
+    collidingRequestId: argv[25],
+    polarisActionRequestId: argv[26]
   };
 }
 
@@ -391,15 +392,70 @@ async function runSuperAdmin(browser, args, axeSource, report) {
       await page.locator('.polaris-search-result-meta').getByText(/Publication: 2020.*Format: Book.*Identifier: 9780000000001/).waitFor();
     }
     await page.getByText('Owned by you (1)', { exact: true }).waitFor();
-    assert.equal(await page.locator('#polaris-additional-copy-action').count(), 1,
+    assert.equal(await page.locator('.polaris-additional-copy-action').count(), 1,
       'The inherited additional-copy action must expose its stable accessibility identity');
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'polaris-search');
     report.polarisSearchModes = ['identifier', 'title', 'author', 'title_author'];
     await page.locator('#close-polaris-search-btn').click();
     await page.locator('#editModal[open]').waitFor();
-
     await page.locator('#close-modal-x').click();
     await page.locator('#editModal').waitFor({ state: 'hidden' });
+    await page.goto(`${args.baseOrigin}/staff/?stage=submitted&request=${encodeURIComponent(args.polarisActionRequestId)}&requestType=title_request`, { waitUntil: 'networkidle' });
+    await page.locator('#editModal[open]').waitFor();
+    assert.equal(await page.locator('#edit-id').inputValue(), args.polarisActionRequestId);
+    const beforeActionResponse = await context.request.get(
+      `${args.baseOrigin}/api/asap/staff/title-requests/${args.polarisActionRequestId}`);
+    assert.equal(beforeActionResponse.status(), 200);
+    const beforeAction = await beforeActionResponse.json();
+    await page.locator('#edit-title-polaris-search').click();
+    await page.locator('#polarisSearchDialog[open]').waitFor();
+    await page.locator('.polaris-additional-copy-action:not([disabled])').waitFor();
+    await page.locator('.polaris-additional-copy-action').click();
+    await page.locator('label[for="confirm-additional-copy-reminder"]').click();
+    assert.equal(await page.locator('#confirm-additional-copy-reminder').isChecked(), true);
+    const actionResponse = page.waitForResponse(response =>
+      response.url().endsWith(`/api/asap/staff/title-requests/${args.polarisActionRequestId}/action`) &&
+      response.request().method() === 'POST');
+    await page.getByRole('button', { name: 'Confirm', exact: true }).click();
+    const action = await actionResponse;
+    assert.equal(action.status(), 200, await action.text());
+    const actionResult = await action.json();
+    assert.equal(actionResult.request.status, 'pending_hold');
+    assert.equal(actionResult.request.bibid, '9001');
+    assert.equal(actionResult.request.publication, 'Original publication timing');
+    assert.equal(actionResult.request.autohold, true);
+    assert.notEqual(actionResult.request.version, beforeAction.version);
+    assert.equal(actionResult.additionalCopyRequest.sourceTitleRequest, args.polarisActionRequestId);
+    assert.equal(actionResult.additionalCopyRequest.bibid, '9001');
+    assert.equal(actionResult.additionalCopyRequest.title, 'Catalog title 9001');
+    assert.equal(actionResult.purchaseReminderEmail.requested, true);
+    await page.locator('#polarisSearchDialog').waitFor({ state: 'hidden' });
+    await page.locator('#editModal').waitFor({ state: 'hidden' });
+    await page.getByText(/Additional-copy task created and request queued|Additional-copy task created, request queued/).waitFor();
+    await page.waitForFunction(() => {
+      const params = new URLSearchParams(window.location.search);
+      return !params.has('request') && !params.has('requestType');
+    });
+    const afterActionUrl = new URL(page.url());
+    assert.equal(afterActionUrl.searchParams.has('request'), false);
+    assert.equal(afterActionUrl.searchParams.has('requestType'), false);
+    assert.equal(afterActionUrl.searchParams.get('stage'), 'submitted');
+    await page.locator('[data-status="suggestion"].active').waitFor({ state: 'visible' });
+    await page.waitForFunction(id => !document.querySelector(`#grid-container [data-suggestion-id="${id}"]`),
+      args.polarisActionRequestId);
+    const currentUrl = page.url();
+    await page.reload({ waitUntil: 'networkidle' });
+    assert.equal(page.url(), currentUrl, 'Reloading the cleaned URL must retain the workflow stage');
+    await page.locator('#app-container').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#editModal').evaluate(dialog => dialog.open), false,
+      'Reloading after the action must not reopen the old request');
+    await page.locator('[data-status="pending_hold"]').click();
+    await page.locator(`#grid-container .asap-row-marker[data-suggestion-id="${args.polarisActionRequestId}"]`).waitFor({ state: 'attached' });
+    const copyResponse = await context.request.get(
+      `${args.baseOrigin}/api/asap/staff/additional-copies/${actionResult.additionalCopyRequestId}`);
+    assert.equal(copyResponse.status(), 200);
+    assert.equal((await copyResponse.json()).sourceTitleRequest, args.polarisActionRequestId);
+    report.polarisAdditionalCopyAction = { status: action.status(), taskId: actionResult.additionalCopyRequestId };
     const patronLookupResponse = await post(
       context,
       args.baseOrigin,
@@ -547,8 +603,9 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     assert.equal(await page.locator('#edit-id').inputValue(), args.staleTitleBId);
     await page.locator('#close-modal-x').click();
     await page.locator('#editModal').waitFor({ state: 'hidden' });
+    await page.locator('#grid-search-input').fill('Stale title assignment B');
     const openRowMenu = async () => {
-      const marker = page.locator(`[data-suggestion-id="${args.staleTitleBId}"]`).first();
+      const marker = page.locator(`#grid-container .asap-row-marker[data-suggestion-id="${args.staleTitleBId}"]`);
       const row = marker.locator('xpath=ancestor::tr');
       await row.waitFor();
       await row.locator('.row-action-menu-trigger').evaluate(button => button.click());

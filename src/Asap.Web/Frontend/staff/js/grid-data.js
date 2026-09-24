@@ -11,7 +11,7 @@ import { findWorkflowRow, requestIdentity, sameRequestIdentity } from './request
 
 const tabLoads = createLatestLoad();
 
-export async function loadTab(status, ctx) {
+export async function loadTab(status, ctx, options = {}) {
   const guard = tabLoads.begin('tab');
   if (status !== ctx.currentStatus) {
     ctx.setGridSearchKeyword('');
@@ -36,7 +36,7 @@ export async function loadTab(status, ctx) {
     if (ctx.staffGridFilterBar) ctx.staffGridFilterBar.classList.add('hidden');
     await refreshAnalyticsView(ctx.gridContainer);
     if (guard.isCurrent()) {
-      await announceTabLoaded(status, ctx);
+      await announceTabLoaded(status, ctx, options);
     }
     tabLoads.finish('tab', guard.token);
     return;
@@ -93,7 +93,7 @@ export async function loadTab(status, ctx) {
     }
   } finally {
     if (guard.isCurrent()) {
-      await announceTabLoaded(status, ctx);
+      await announceTabLoaded(status, ctx, options);
     }
     tabLoads.finish('tab', guard.token);
   }
@@ -373,12 +373,14 @@ export async function renderAdditionalCopiesLoadError(err, ctx) {
   ctx.gridContainer.appendChild(alert);
 }
 
-export async function announceTabLoaded(status, ctx) {
+export async function announceTabLoaded(status, ctx, options = {}) {
   const announcer = document.getElementById('status-announcer');
   announcer.textContent = "Loaded " + status + " tab.";
 
   const firstHeader = document.getElementById('tab-desc');
-  if (firstHeader) firstHeader.focus();
+  if (firstHeader && options.focusHeader !== false) firstHeader.focus();
+
+  if (options.openLinkedRequest === false) return;
 
   const requestId = requestedRequestIdFromUrl();
   if (requestId) {
@@ -428,8 +430,13 @@ export function resetGrid(ctx) {
   ctx.gridContainer.innerHTML = '';
 }
 
-export function refreshCurrentStaffView(ctx) {
-  return loadTab(ctx.currentStatus, ctx);
+export function refreshCurrentStaffView(ctx, options = {}) {
+  if (options.silent && (ctx.currentStatus === 'settings' || ctx.currentStatus === 'analytics')) {
+    return Promise.resolve();
+  }
+  return loadTab(ctx.currentStatus, ctx, options.silent
+    ? { openLinkedRequest: false, focusHeader: false }
+    : {});
 }
 
 export function refreshStaffStatus(status, ctx) {

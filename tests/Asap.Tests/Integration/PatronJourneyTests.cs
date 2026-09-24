@@ -20,6 +20,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -363,6 +364,468 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task PolarisAdditionalCopyActionCommitsSourceTaskAndReminderTogether()
+    {
+        await using var scope = factory!.Services.CreateAsyncScope();
+        var contexts = scope.ServiceProvider.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var seed = await contexts.CreateDbContextAsync();
+        var admin = await seed.StaffUsers.SingleAsync(item => item.NormalizedUserPrincipalName == "ADMIN@EXAMPLE.ORG");
+        var formatId = await seed.MaterialFormats.Where(item => item.Code == "book")
+            .Select(item => item.Id).FirstAsync();
+        var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
+        var actor = new CurrentStaff(admin.Id, admin.NormalizedUserPrincipalName!, Guid.Parse(identity.TenantId!),
+            admin.UserPrincipalName, admin.DisplayName, admin.NotificationEmail, "super_admin", 1, "System", true,
+            false, null, false, false, false, admin.RowVersion);
+        TitleRequest NewSource(string title, string status = "suggestion") => new()
+        {
+            LibraryOrganizationId = 2,
+            LibraryNameSnapshot = "Test Library",
+            Barcode = $"200{Guid.NewGuid():N}"[..14],
+            Title = title,
+            Author = "Original author",
+            Publication = "Original publication timing",
+            MaterialFormatId = formatId,
+            Status = status,
+            CloseReason = status == "closed" ? "manual" : null,
+            AutoHold = false,
+            CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(-1),
+            UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(-1)
+        };
+        var source = NewSource("Additional copy integration source");
+        source.Identifier = "9780000000000";
+        source.IsbnCheckStatus = "not_found";
+        source.IsbnCheckResult = "Old identifier not found.";
+        source.IsbnCheckRetryCount = 3;
+        source.IsbnCheckLastErrorCode = "old_failure";
+        source.LastCheckedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddDays(-1);
+        var pending = NewSource("Pending identifier source");
+        pending.Identifier = "9780000000001";
+        pending.IsbnCheckStatus = "pending";
+        pending.IsbnCheckRetryCount = 2;
+        pending.IsbnCheckLastErrorCode = "temporary_failure";
+        var noIdentifier = NewSource("No identifier source");
+        noIdentifier.IsbnCheckStatus = "pending";
+        var found = NewSource("Already found source");
+        found.Identifier = "9780000000001";
+        found.BibId = "9001";
+        found.IsbnCheckStatus = "found";
+        found.IsbnCheckResult = "Useful previous result.";
+        found.LastCheckedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddDays(-2);
+        var notFound = NewSource("Previously not found source");
+        notFound.Identifier = "9780000000001";
+        notFound.IsbnCheckStatus = "not_found";
+        notFound.IsbnCheckResult = "No previous match.";
+        var invalid = NewSource("Invalid BIB source");
+        invalid.Identifier = "9780000000001";
+        invalid.IsbnCheckStatus = "pending";
+        var closed = NewSource("Closed source", "closed");
+        var failed = NewSource("Creation failure source");
+        failed.Identifier = "9780000000000";
+        failed.IsbnCheckStatus = "not_found";
+        failed.IsbnCheckResult = "Original result.";
+        failed.IsbnCheckRetryCount = 4;
+        failed.IsbnCheckLastErrorCode = "original_error";
+        failed.LastCheckedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddDays(-1);
+        var blocked = NewSource("Incomplete hold source", "pending_hold");
+        blocked.BibId = "9001";
+        seed.TitleRequests.AddRange(source, pending, noIdentifier, found, notFound, invalid, closed, failed, blocked);
+        await seed.SaveChangesAsync();
+        var tagIds = await seed.WorkflowTags.Where(item =>
+                item.Code == "polaris_bib_found" || item.Code == "polaris_bib_not_found" ||
+                item.Code == "polaris_multiple_matches" || item.Code == "duplicate_suggestion")
+            .ToDictionaryAsync(item => item.Code, item => item.Id);
+        void AddTag(TitleRequest request, string code) => seed.TitleRequestWorkflowTags.Add(new TitleRequestWorkflowTag
+        {
+            TitleRequestId = request.Id,
+            WorkflowTagId = tagIds[code]
+        });
+        AddTag(source, "polaris_bib_not_found");
+        AddTag(source, "polaris_multiple_matches");
+        AddTag(source, "duplicate_suggestion");
+        AddTag(found, "polaris_bib_found");
+        AddTag(found, "polaris_multiple_matches");
+        AddTag(notFound, "polaris_bib_not_found");
+        AddTag(failed, "polaris_bib_not_found");
+        await seed.SaveChangesAsync();
+        seed.HoldPlacementOperations.Add(new HoldPlacementOperation
+        {
+            TitleRequestId = blocked.Id,
+            PatronBarcodeSnapshot = blocked.Barcode,
+            BibIdSnapshot = "9001",
+            AttemptNumber = 1,
+            ExecutionEpoch = 1,
+            State = "operator_required",
+            Phase = "create_started",
+            RequestStartedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(-1),
+            CreateStartedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddSeconds(-30),
+            CreateResponseObservedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddSeconds(-29),
+            OutcomeEvidenceKind = "create_transport_ambiguous",
+            LastErrorCode = "hold_identity_ambiguous"
+        });
+        await seed.SaveChangesAsync();
+        var originalVersion = source.RowVersion.ToArray();
+
+        // A copy with the same numeric ID must remain a separate typed record.
+        var existingCollision = await seed.AdditionalCopyRequests.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.Id == source.Id);
+        var collisionTitle = existingCollision?.Title ?? "Collision sentinel copy";
+        if (existingCollision is null)
+        {
+            await seed.Database.ExecuteSqlInterpolatedAsync($"""
+                SET IDENTITY_INSERT [asap].[AdditionalCopyRequest] ON;
+                INSERT INTO [asap].[AdditionalCopyRequest]
+                    ([Id], [LibraryOrganizationId], [BibId], [Title], [Status], [CreatedUtc], [UpdatedUtc])
+                VALUES ({source.Id}, 2, N'8999', N'Collision sentinel copy', N'open', SYSUTCDATETIME(), SYSUTCDATETIME());
+                SET IDENTITY_INSERT [asap].[AdditionalCopyRequest] OFF;
+                """);
+        }
+        var copyOnlyId = Math.Max(await seed.TitleRequests.MaxAsync(item => item.Id),
+            await seed.AdditionalCopyRequests.MaxAsync(item => item.Id)) + 1000;
+        await seed.Database.ExecuteSqlInterpolatedAsync($"""
+            SET IDENTITY_INSERT [asap].[AdditionalCopyRequest] ON;
+            INSERT INTO [asap].[AdditionalCopyRequest]
+                ([Id], [LibraryOrganizationId], [BibId], [Title], [Status], [CreatedUtc], [UpdatedUtc])
+            VALUES ({copyOnlyId}, 2, N'8998', N'Copy-only identity', N'open', SYSUTCDATETIME(), SYSUTCDATETIME());
+            SET IDENTITY_INSERT [asap].[AdditionalCopyRequest] OFF;
+            """);
+
+        var mutations = scope.ServiceProvider.GetRequiredService<TitleRequestMutationService>();
+        TitleRequestActionInput Action(TitleRequest request, string? bib = "9001", string? identifier = "9780000000001") => new()
+        {
+            Version = StaffVersion.Encode(request.RowVersion),
+            Action = "additionalCopy",
+            Status = "pending_hold",
+            Bibid = bib is null ? default : JsonSerializer.SerializeToElement(bib),
+            Title = "Catalog title 9001",
+            Author = "Catalog author",
+            Identifier = JsonSerializer.SerializeToElement(identifier),
+            Publication = "2020",
+            Format = "book",
+            Autohold = JsonSerializer.SerializeToElement(false),
+            EmailPurchaseReminder = true
+        };
+        var action = Action(source);
+        var created = await mutations.ActionAsync(actor, source.Id, action, CancellationToken.None);
+        Assert.AreEqual("updated", created.Code);
+        Assert.IsNotNull(created.AdditionalCopyRequestId);
+        Assert.IsTrue(created.ReminderRequested);
+        Assert.IsTrue(created.ReminderQueued);
+
+        await using (var verify = await contexts.CreateDbContextAsync())
+        {
+            var saved = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == source.Id);
+            Assert.AreEqual("9001", saved.BibId);
+            Assert.AreEqual("pending_hold", saved.Status);
+            Assert.AreEqual("9780000000001", saved.Identifier);
+            Assert.AreEqual("found", saved.IsbnCheckStatus);
+            Assert.AreEqual("Polaris bibliographic identifier verified for the BIB selected by staff.", saved.IsbnCheckResult);
+            Assert.AreEqual(0, saved.IsbnCheckRetryCount);
+            Assert.IsNull(saved.IsbnCheckLastErrorCode);
+            Assert.IsNotNull(saved.LastCheckedUtc);
+            var sourceTags = await (from link in verify.TitleRequestWorkflowTags
+                join tag in verify.WorkflowTags on link.WorkflowTagId equals tag.Id
+                where link.TitleRequestId == source.Id
+                select tag.Code).ToListAsync();
+            CollectionAssert.AreEquivalent(new[] { "polaris_bib_found", "duplicate_suggestion" }, sourceTags);
+            Assert.IsTrue(saved.AutoHold);
+            Assert.AreEqual("Original publication timing", saved.Publication);
+            Assert.AreEqual("Catalog title 9001", saved.Title);
+            Assert.IsFalse(saved.RowVersion.SequenceEqual(originalVersion));
+            StringAssert.Contains(saved.Notes!, "Additional copy request created for BIB 9001");
+            var tasks = await verify.AdditionalCopyRequests.AsNoTracking()
+                .Where(item => item.SourceTitleRequestId == source.Id).ToListAsync();
+            Assert.HasCount(1, tasks);
+            Assert.AreEqual(created.AdditionalCopyRequestId, tasks[0].Id);
+            Assert.AreEqual(2, tasks[0].LibraryOrganizationId);
+            Assert.AreEqual("9001", tasks[0].BibId);
+            Assert.AreEqual("Catalog title 9001", tasks[0].Title);
+            Assert.AreEqual(admin.Id, tasks[0].ClaimedByStaffUserId);
+            Assert.AreEqual(collisionTitle,
+                (await verify.AdditionalCopyRequests.AsNoTracking().SingleAsync(item => item.Id == source.Id)).Title);
+            Assert.AreEqual(1, await verify.EmailOutbox.CountAsync(item =>
+                item.BusinessKey == $"additional-copy-reminder:{tasks[0].Id}" && item.Status == "pending"));
+            Assert.AreEqual(1, await verify.TitleRequestEvents.CountAsync(item =>
+                item.TitleRequestId == source.Id && item.EventType == "additional_copy_created"));
+        }
+        var views = scope.ServiceProvider.GetRequiredService<TitleRequestViewService>();
+        var returned = await views.GetAsync(actor, source.Id.ToString(), CancellationToken.None);
+        Assert.IsNotNull(returned);
+        Assert.AreEqual("found", returned.IsbnCheckStatus);
+        Assert.AreEqual("9780000000001", returned.Identifier);
+        Assert.AreEqual("9001", returned.Bibid);
+        CollectionAssert.Contains(returned.WorkflowTags.ToArray(), "Polaris BIB found");
+        foreach (var (candidate, identifier) in new[]
+        {
+            (pending, "9780000000001"), (noIdentifier, (string?)null),
+            (found, "9780000000001"), (notFound, "9780000000001")
+        })
+        {
+            var result = await mutations.ActionAsync(actor, candidate.Id,
+                Action(candidate, identifier: identifier), CancellationToken.None);
+            Assert.AreEqual("updated", result.Code);
+            Assert.IsNotNull(result.AdditionalCopyRequestId);
+            await using var verify = await contexts.CreateDbContextAsync();
+            var saved = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == candidate.Id);
+            Assert.AreEqual("pending_hold", saved.Status);
+            Assert.AreEqual("9001", saved.BibId);
+            Assert.AreEqual("9780000000001", saved.Identifier);
+            Assert.AreEqual("found", saved.IsbnCheckStatus);
+            Assert.AreNotEqual("pending", saved.IsbnCheckStatus);
+            Assert.AreEqual(0, saved.IsbnCheckRetryCount);
+            Assert.IsNull(saved.IsbnCheckLastErrorCode);
+            Assert.AreEqual(1, await verify.AdditionalCopyRequests.CountAsync(item =>
+                item.SourceTitleRequestId == candidate.Id));
+            var derivedTags = await (from link in verify.TitleRequestWorkflowTags
+                join tag in verify.WorkflowTags on link.WorkflowTagId equals tag.Id
+                where link.TitleRequestId == candidate.Id &&
+                      (tag.Code == "polaris_bib_found" || tag.Code == "polaris_bib_not_found" ||
+                       tag.Code == "polaris_multiple_matches")
+                select tag.Code).ToListAsync();
+            CollectionAssert.AreEquivalent(new[] { "polaris_bib_found" }, derivedTags);
+            Assert.AreEqual("Polaris bibliographic identifier verified for the BIB selected by staff.", saved.IsbnCheckResult);
+            Assert.IsNotNull(saved.LastCheckedUtc);
+        }
+        Assert.AreEqual("stale_version", (await mutations.ActionAsync(actor, source.Id, action, CancellationToken.None)).Code);
+        await using (var current = await contexts.CreateDbContextAsync())
+        {
+            var currentVersion = await current.TitleRequests.Where(item => item.Id == source.Id)
+                .Select(item => item.RowVersion).SingleAsync();
+            Assert.AreEqual("invalid_transition", (await mutations.ActionAsync(actor, source.Id,
+                new TitleRequestActionInput
+                {
+                    Version = StaffVersion.Encode(currentVersion), Action = "catalogFound", Status = "pending_hold",
+                    Bibid = JsonSerializer.SerializeToElement("9001")
+                }, CancellationToken.None)).Code);
+        }
+        Assert.AreEqual("bib_required", (await mutations.ActionAsync(actor, invalid.Id, Action(invalid, null), CancellationToken.None)).Code);
+        Assert.AreEqual("invalid_bib", (await mutations.ActionAsync(actor, invalid.Id, Action(invalid, "not-a-bib"), CancellationToken.None)).Code);
+        Assert.AreEqual("invalid_bib", (await mutations.ActionAsync(actor, invalid.Id, Action(invalid, "9999999999999999"), CancellationToken.None)).Code);
+        await using (var verifyInvalid = await contexts.CreateDbContextAsync())
+        {
+            var rejected = await verifyInvalid.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == invalid.Id);
+            Assert.AreEqual("suggestion", rejected.Status);
+            Assert.AreEqual("pending", rejected.IsbnCheckStatus);
+            Assert.IsNull(rejected.BibId);
+        }
+        Assert.AreEqual("identifier_locked_by_stage", (await mutations.ActionAsync(actor, closed.Id, Action(closed), CancellationToken.None)).Code);
+        Assert.AreEqual("hold_operation_incomplete", (await mutations.ActionAsync(actor, blocked.Id,
+            new TitleRequestActionInput
+            {
+                Version = StaffVersion.Encode(blocked.RowVersion), Action = "additionalCopy", Status = "pending_hold",
+                Bibid = JsonSerializer.SerializeToElement("9001"), Autohold = JsonSerializer.SerializeToElement(false)
+            }, CancellationToken.None)).Code);
+        Assert.AreEqual("not_found", (await mutations.ActionAsync(actor with { Role = "staff", OrganizationId = 1 },
+            invalid.Id, Action(invalid), CancellationToken.None)).Code);
+        var copyOnly = await seed.AdditionalCopyRequests.AsNoTracking().SingleAsync(item => item.Id == copyOnlyId);
+        Assert.AreEqual("not_found", (await mutations.ActionAsync(actor, copyOnlyId,
+            new TitleRequestActionInput
+            {
+                Version = StaffVersion.Encode(copyOnly.RowVersion), Action = "additionalCopy", Status = "pending_hold",
+                Bibid = JsonSerializer.SerializeToElement("9001")
+            }, CancellationToken.None)).Code);
+        Assert.AreEqual("Copy-only identity",
+            (await seed.AdditionalCopyRequests.AsNoTracking().SingleAsync(item => item.Id == copyOnlyId)).Title);
+
+        var outboxCountBeforeFailure = await seed.EmailOutbox.CountAsync();
+        await seed.Database.ExecuteSqlRawAsync("""
+            CREATE TRIGGER [asap].[AdditionalCopyActionFailureTest]
+            ON [asap].[AdditionalCopyRequest] AFTER INSERT AS
+            BEGIN
+                IF EXISTS (SELECT 1 FROM inserted WHERE [Title] = N'Catalog title 9001')
+                    THROW 51000, 'Injected additional-copy insert failure', 1;
+            END;
+            """);
+        try
+        {
+            await Assert.ThrowsAsync<DbUpdateException>(async () =>
+                await mutations.ActionAsync(actor, failed.Id, Action(failed), CancellationToken.None));
+        }
+        finally
+        {
+            await seed.Database.ExecuteSqlRawAsync("DROP TRIGGER [asap].[AdditionalCopyActionFailureTest];");
+        }
+        await using var afterFailure = await contexts.CreateDbContextAsync();
+        var unchanged = await afterFailure.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == failed.Id);
+        Assert.AreEqual("suggestion", unchanged.Status);
+        Assert.AreEqual("9780000000000", unchanged.Identifier);
+        Assert.AreEqual("not_found", unchanged.IsbnCheckStatus);
+        Assert.AreEqual("Original result.", unchanged.IsbnCheckResult);
+        Assert.AreEqual(4, unchanged.IsbnCheckRetryCount);
+        Assert.AreEqual("original_error", unchanged.IsbnCheckLastErrorCode);
+        Assert.AreEqual(failed.LastCheckedUtc, unchanged.LastCheckedUtc);
+        Assert.IsNull(unchanged.BibId);
+        Assert.IsTrue(unchanged.RowVersion.SequenceEqual(failed.RowVersion));
+        var failedTags = await (from link in afterFailure.TitleRequestWorkflowTags
+            join tag in afterFailure.WorkflowTags on link.WorkflowTagId equals tag.Id
+            where link.TitleRequestId == failed.Id
+            select tag.Code).ToListAsync();
+        CollectionAssert.AreEquivalent(new[] { "polaris_bib_not_found" }, failedTags);
+        Assert.AreEqual(0, await afterFailure.AdditionalCopyRequests.CountAsync(item => item.SourceTitleRequestId == failed.Id));
+        Assert.AreEqual(0, await afterFailure.TitleRequestEvents.CountAsync(item =>
+            item.TitleRequestId == failed.Id && item.EventType == "additional_copy_created"));
+        Assert.AreEqual(outboxCountBeforeFailure, await afterFailure.EmailOutbox.CountAsync());
+    }
+
+    [TestMethod]
+    public async Task PolarisAdditionalCopyUsesValidatedIdentifierAndDoesNotInventMissingEvidence()
+    {
+        var bibProvider = new ScriptedBibStaffProvider(new Dictionary<int, string?>
+        {
+            [9002] = null,
+            [9003] = "9785555555555"
+        });
+        using var actionFactory = factory!.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<IStaffPolarisProvider>();
+            services.AddSingleton<IStaffPolarisProvider>(bibProvider);
+        }));
+        await using var scope = actionFactory.Services.CreateAsyncScope();
+        var contexts = scope.ServiceProvider.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var seed = await contexts.CreateDbContextAsync();
+        var admin = await seed.StaffUsers.SingleAsync(item => item.NormalizedUserPrincipalName == "ADMIN@EXAMPLE.ORG");
+        var formatId = await seed.MaterialFormats.Where(item => item.Code == "book")
+            .Select(item => item.Id).FirstAsync();
+        var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
+        var actor = new CurrentStaff(admin.Id, admin.NormalizedUserPrincipalName!, Guid.Parse(identity.TenantId!),
+            admin.UserPrincipalName, admin.DisplayName, admin.NotificationEmail, "super_admin", 1, "System", true,
+            false, null, false, false, false, admin.RowVersion);
+        TitleRequest Source(string title, string? identifier, string status, string? result = null) => new()
+        {
+            LibraryOrganizationId = 2,
+            LibraryNameSnapshot = "Test Library",
+            Barcode = $"200{Guid.NewGuid():N}"[..14],
+            Title = title,
+            Publication = "Original publication timing",
+            MaterialFormatId = formatId,
+            Status = "suggestion",
+            Identifier = identifier,
+            IsbnCheckStatus = status,
+            IsbnCheckResult = result,
+            IsbnCheckRetryCount = 2,
+            IsbnCheckLastErrorCode = "old_error",
+            AutoHold = false,
+            CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(-1),
+            UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(-1)
+        };
+        var notFound = Source("No catalog identifier, previously not found", "9781111111111", "not_found", "Earlier lookup found no BIB.");
+        var pending = Source("No catalog identifier, pending", "9782222222222", "pending");
+        var empty = Source("No source or catalog identifier", null, "pending");
+        var conflict = Source("Conflicting client identifier", "9783333333333", "not_found", "Old result.");
+        var failed = Source("Rollback catalog identifier", "9786666666666", "not_found", "Original result.");
+        seed.TitleRequests.AddRange(notFound, pending, empty, conflict, failed);
+        await seed.SaveChangesAsync();
+        var notFoundTagId = await seed.WorkflowTags.Where(item => item.Code == "polaris_bib_not_found")
+            .Select(item => item.Id).SingleAsync();
+        foreach (var request in new[] { notFound, conflict, failed })
+        {
+            seed.TitleRequestWorkflowTags.Add(new TitleRequestWorkflowTag
+            {
+                TitleRequestId = request.Id,
+                WorkflowTagId = notFoundTagId
+            });
+        }
+        await seed.SaveChangesAsync();
+
+        TitleRequestActionInput Action(TitleRequest request, string bib, string? clientIdentifier) => new()
+        {
+            Version = StaffVersion.Encode(request.RowVersion),
+            Action = "additionalCopy",
+            Status = "pending_hold",
+            Bibid = JsonSerializer.SerializeToElement(bib),
+            Identifier = JsonSerializer.SerializeToElement(clientIdentifier),
+            Title = request.Title,
+            Format = "book"
+        };
+        var mutations = scope.ServiceProvider.GetRequiredService<TitleRequestMutationService>();
+        foreach (var (request, bib, clientIdentifier, expectedIdentifier, expectedStatus, expectedResult, expectedTag) in new[]
+        {
+            (notFound, "9002", "9789999999999", "9781111111111", "not_found", "Earlier lookup found no BIB.", (string?)null),
+            (pending, "9002", "9782222222222", "9782222222222", "not_found", "Selected Polaris BIB has no catalog identifier; request identifier was not verified.", (string?)null),
+            (empty, "9002", (string?)null, (string?)null, "skipped_no_isbn", (string?)null, (string?)null),
+            (conflict, "9003", "9784444444444", "9785555555555", "found", "Polaris bibliographic identifier verified for the BIB selected by staff.", "polaris_bib_found")
+        })
+        {
+            var result = await mutations.ActionAsync(actor, request.Id, Action(request, bib, clientIdentifier), CancellationToken.None);
+            Assert.AreEqual("updated", result.Code);
+            Assert.IsNotNull(result.AdditionalCopyRequestId);
+            await using var verify = await contexts.CreateDbContextAsync();
+            var saved = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == request.Id);
+            Assert.AreEqual(bib, saved.BibId);
+            Assert.AreEqual("pending_hold", saved.Status);
+            Assert.AreEqual(expectedIdentifier, saved.Identifier);
+            Assert.AreEqual(expectedStatus, saved.IsbnCheckStatus);
+            Assert.AreEqual(expectedResult, saved.IsbnCheckResult);
+            Assert.AreEqual(0, saved.IsbnCheckRetryCount);
+            Assert.IsNull(saved.IsbnCheckLastErrorCode);
+            Assert.AreEqual(1, await verify.AdditionalCopyRequests.CountAsync(item => item.SourceTitleRequestId == request.Id));
+            var derivedTags = await (from link in verify.TitleRequestWorkflowTags
+                join tag in verify.WorkflowTags on link.WorkflowTagId equals tag.Id
+                where link.TitleRequestId == request.Id &&
+                      (tag.Code == "polaris_bib_found" || tag.Code == "polaris_bib_not_found" ||
+                       tag.Code == "polaris_multiple_matches")
+                select tag.Code).ToListAsync();
+            CollectionAssert.AreEquivalent(expectedTag is null ? Array.Empty<string>() : [expectedTag], derivedTags);
+        }
+        Assert.AreEqual(4, bibProvider.ValidationCount, "Each action validates the selected BIB once.");
+        var views = scope.ServiceProvider.GetRequiredService<TitleRequestViewService>();
+        var pendingView = await views.GetAsync(actor, pending.Id.ToString(), CancellationToken.None);
+        Assert.IsNotNull(pendingView);
+        Assert.AreEqual("not_found", pendingView.IsbnCheckStatus);
+        Assert.AreEqual("Selected Polaris BIB has no catalog identifier; request identifier was not verified.",
+            pendingView.IsbnCheckResult);
+        CollectionAssert.DoesNotContain(pendingView.WorkflowTags.ToArray(), "Polaris BIB found");
+
+        await seed.Database.ExecuteSqlRawAsync("""
+            CREATE TRIGGER [asap].[AdditionalCopyIdentifierRollbackTest]
+            ON [asap].[AdditionalCopyRequest] AFTER INSERT AS
+            BEGIN
+                IF EXISTS (SELECT 1 FROM inserted WHERE [Title] = N'Rollback catalog identifier')
+                    THROW 51000, 'Injected additional-copy insert failure', 1;
+            END;
+            """);
+        try
+        {
+            await Assert.ThrowsAsync<DbUpdateException>(async () =>
+                await mutations.ActionAsync(actor, failed.Id, Action(failed, "9003", "9784444444444"), CancellationToken.None));
+        }
+        finally
+        {
+            await seed.Database.ExecuteSqlRawAsync("DROP TRIGGER [asap].[AdditionalCopyIdentifierRollbackTest];");
+        }
+        await using var afterFailure = await contexts.CreateDbContextAsync();
+        var unchanged = await afterFailure.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == failed.Id);
+        Assert.AreEqual("9786666666666", unchanged.Identifier);
+        Assert.AreEqual("not_found", unchanged.IsbnCheckStatus);
+        Assert.AreEqual("Original result.", unchanged.IsbnCheckResult);
+        Assert.AreEqual(2, unchanged.IsbnCheckRetryCount);
+        Assert.AreEqual("old_error", unchanged.IsbnCheckLastErrorCode);
+        Assert.IsNull(unchanged.BibId);
+        Assert.AreEqual("suggestion", unchanged.Status);
+        Assert.IsTrue(unchanged.RowVersion.SequenceEqual(failed.RowVersion));
+        Assert.AreEqual(1, await afterFailure.TitleRequestWorkflowTags.CountAsync(item =>
+            item.TitleRequestId == failed.Id && item.WorkflowTagId == notFoundTagId));
+        Assert.AreEqual(0, await afterFailure.AdditionalCopyRequests.CountAsync(item => item.SourceTitleRequestId == failed.Id));
+        // These cases share the SQL fixture with browser journeys that page open rows.
+        await afterFailure.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE [asap].[AdditionalCopyRequest]
+            SET [Status] = N'closed', [ClosedUtc] = SYSUTCDATETIME(), [UpdatedUtc] = SYSUTCDATETIME()
+            WHERE [SourceTitleRequestId] IN ({notFound.Id}, {pending.Id}, {empty.Id}, {conflict.Id});
+            """);
+        await afterFailure.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE [asap].[TitleRequest]
+            SET [Status] = N'closed', [CloseReason] = N'manual', [UpdatedUtc] = SYSUTCDATETIME()
+            WHERE [Id] IN ({notFound.Id}, {pending.Id}, {empty.Id}, {conflict.Id}, {failed.Id});
+            """);
+        Assert.AreEqual(0, await afterFailure.AdditionalCopyRequests.CountAsync(item =>
+            (item.SourceTitleRequestId == notFound.Id || item.SourceTitleRequestId == pending.Id ||
+             item.SourceTitleRequestId == empty.Id || item.SourceTitleRequestId == conflict.Id) &&
+            item.Status == "open"));
+        Assert.AreEqual(0, await afterFailure.TitleRequests.CountAsync(item =>
+            (item.Id == notFound.Id || item.Id == pending.Id || item.Id == empty.Id ||
+             item.Id == conflict.Id || item.Id == failed.Id) && item.Status != "closed"));
+    }
+
+    [TestMethod]
     public async Task StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers()
     {
         factory!.UseKestrel(0);
@@ -420,6 +883,7 @@ public sealed partial class PatronJourneyTests
         startInfo.ArgumentList.Add(seeded.StaleCopyBId.ToString());
         startInfo.ArgumentList.Add(seeded.StaleCreateSourceId.ToString());
         startInfo.ArgumentList.Add(seeded.CollidingRequestId.ToString());
+        startInfo.ArgumentList.Add(seeded.PolarisActionRequestId.ToString());
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Could not start the staff browser runner.");
@@ -514,6 +978,8 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(collision.GetProperty("notes").GetBoolean());
             Assert.IsTrue(collision.GetProperty("polarisSearches").GetBoolean());
             Assert.IsTrue(collision.GetProperty("additionalCopyBibLookup").GetBoolean());
+            Assert.AreEqual(200, legacyReport.RootElement.GetProperty("polarisAdditionalCopyAction")
+                .GetProperty("status").GetInt32());
         }
 
         await settingsPoisoningJourney.SetSystemSuggestionLimitAsync(23);
@@ -537,7 +1003,8 @@ public sealed partial class PatronJourneyTests
             UseShellExecute = false
         };
         nextStartInfo.ArgumentList.Add(Path.Combine(repositoryRoot, "tests", "browser", "staff-next.cjs"));
-        foreach (var argument in startInfo.ArgumentList.Skip(1))
+        // The new Polaris mutation fixture is used by the legacy browser journey only.
+        foreach (var argument in startInfo.ArgumentList.Skip(1).Take(26))
         {
             nextStartInfo.ArgumentList.Add(argument);
         }
@@ -8908,6 +9375,14 @@ public sealed partial class PatronJourneyTests
                  @formatId, N'suggestion', NULL, 101, N'Main Library', @superId, N'Initial Administrator',
                  SYSUTCDATETIME(), N'manual', N'not_found', SYSUTCDATETIME(), SYSUTCDATETIME());
             DECLARE @primaryId bigint = SCOPE_IDENTITY();
+            INSERT INTO [asap].[TitleRequest]
+                ([LibraryOrganizationId], [LibraryNameSnapshot], [Barcode], [Title], [Author], [Identifier],
+                 [Publication], [AutoHold], [MaterialFormatId], [Status], [CreatedUtc], [UpdatedUtc])
+            VALUES
+                (2, N'Browser Action Library', N'20000000002921', N'Polaris action source',
+                 N'Original author', N'9780000002921', N'Original publication timing', 0, @formatId,
+                 N'suggestion', SYSUTCDATETIME(), SYSUTCDATETIME());
+            DECLARE @polarisActionId bigint = SCOPE_IDENTITY();
             INSERT INTO [asap].[LegacyPocketBaseMapping] ([EntityType], [PocketBaseId], [NewId])
             VALUES (N'title_request', @legacyId, @primaryId);
 
@@ -9069,7 +9544,7 @@ public sealed partial class PatronJourneyTests
                    @copySourceId, @invalidClosedCopyId, @invalidClaimantId, @legacyRuleId, @mobileCopyId,
                    @foreignStaffId, @invalidTenantStaffId, @unboundStaffId,
                    @staleTitleAId, @staleTitleBId, @staleCopyAId, @staleCopyBId, @staleCreateSourceId,
-                   @collidingRequestId;
+                   @collidingRequestId, @polarisActionId;
             """;
         seed.Parameters.AddWithValue("@superObjectId", superObjectId);
         seed.Parameters.AddWithValue("@tenantId", tenantId);
@@ -9102,7 +9577,8 @@ public sealed partial class PatronJourneyTests
             result.GetInt64(16),
             result.GetInt64(17),
             result.GetInt64(18),
-            result.GetInt64(19));
+            result.GetInt64(19),
+            result.GetInt64(20));
     }
 
     private sealed record SeededStaffBrowserState(
@@ -9126,7 +9602,8 @@ public sealed partial class PatronJourneyTests
         long StaleCopyAId,
         long StaleCopyBId,
         long StaleCreateSourceId,
-        long CollidingRequestId);
+        long CollidingRequestId,
+        long PolarisActionRequestId);
 
     private static async Task SeedLibraryAsync()
     {
@@ -10073,6 +10550,29 @@ public sealed partial class PatronJourneyTests
             }
             return Task.FromResult(replyResult);
         }
+    }
+
+    private sealed class ScriptedBibStaffProvider(Dictionary<int, string?> identifiers) : IStaffPolarisProvider
+    {
+        public int ValidationCount { get; private set; }
+
+        public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ValidationCount++;
+            return Task.FromResult(identifiers.TryGetValue(bibId, out var identifier)
+                ? new BibValidationResult(true, Identifier: identifier)
+                : new BibValidationResult(false));
+        }
+
+        public Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(
+            string barcode, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<HoldProviderResult> CreateHoldAsync(
+            HoldCreateCommand command, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<HoldProviderResult> ReplyToHoldAsync(
+            HoldReplyCommand command, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
     private sealed class RejectingBibStaffProvider : IStaffPolarisProvider

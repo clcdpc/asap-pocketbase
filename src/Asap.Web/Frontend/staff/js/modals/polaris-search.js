@@ -7,6 +7,7 @@ import { escapeAttr } from '../grid-utils.js';
 import { staffSession, staffAccessGeneration, publicationOptions, currentWorkflowOrgScopeId } from '../state.js';
 import { submitTitleRequestAction } from './edit-submit.js';
 import { editRequestIdentity, findWorkflowRow, requestIdentity } from '../request-identity.mjs';
+import { matchesRequestSelection } from '../app/url-utils.js';
 
 let holdingsLookupUnavailable = false;
 let activeSearchContext = null;
@@ -121,7 +122,7 @@ async function fetchPolarisSearch(row, mode, query, options, ctx, signal) {
   }
 }
 
-function renderPolarisSearchResults(row, identity, mode, data, options = {}, ctx, onRefresh, isCurrent, signal) {
+function renderPolarisSearchResults(row, identity, mode, data, options = {}, ctx, onRefresh, isCurrent, signal, context) {
   if (!isCurrent()) return;
   const els = polarisSearchElements();
   if (data.status === 'error') {
@@ -205,11 +206,11 @@ function renderPolarisSearchResults(row, identity, mode, data, options = {}, ctx
         status: nextStatus,
         title: result.title || row.title,
         author: result.author || row.author,
-        identifier: result.identifier || row.identifier,
+        identifier: isAdditionalCopyAction ? (result.identifier || null) : (result.identifier || row.identifier),
         bibid: result.bibId,
         format: result.format || row.format,
         publication: workflowPublication,
-        exactPublicationDate: row.exactPublicationDate || '',
+        exactPublicationDate: row.exactPublicationDate || null,
         selectedPolarisBibId: result.bibId,
         selectedPolarisTitle: result.title,
         selectedPolarisAuthor: result.author,
@@ -250,16 +251,22 @@ function renderPolarisSearchResults(row, identity, mode, data, options = {}, ctx
       holdBtn.addEventListener('click', async () => {
         if (!isCurrent()) return;
         const payload = buildPayload('pending_hold', 'catalogFound');
-        await performImmediateStaffAction(identity, payload, ctx, onRefresh);
+        await performImmediateStaffAction(identity, payload, ctx, onRefresh, context);
       });
       actionsDiv.appendChild(holdBtn);
     }
 
-    if (!launchedFromEditForm && identity.type === 'title_request') {
+    if (identity.type === 'title_request' && identity.id && options.source !== 'new' &&
+        ['suggestion', 'outstanding_purchase', 'pending_hold'].includes(row.status)) {
       additionalCopyBtn = document.createElement('button');
       additionalCopyBtn.type = 'button';
-      additionalCopyBtn.id = 'polaris-additional-copy-action';
+      const safeBibId = String(result.bibId || 'unknown').replace(/[^A-Za-z0-9_-]/g, '-');
+      additionalCopyBtn.id = `polaris-additional-copy-action-${safeBibId}-${index}`;
       additionalCopyBtn.className = 'btn btn-sm btn-outline-success polaris-additional-copy-action hidden';
+      additionalCopyBtn.dataset.polarisAdditionalCopyAction = '';
+      additionalCopyBtn.dataset.bibId = String(result.bibId || '');
+      additionalCopyBtn.setAttribute('aria-label',
+        `Buy another copy and queue now for result ${index + 1}, BIB ${result.bibId}, ${title.slice(0, 80)}`);
       additionalCopyBtn.textContent = 'Buy another copy + Queue Now';
       additionalCopyBtn.disabled = true;
       additionalCopyBtn.addEventListener('click', async () => {
@@ -269,7 +276,7 @@ function renderPolarisSearchResults(row, identity, mode, data, options = {}, ctx
         const payload = buildPayload('pending_hold', 'additionalCopy');
         payload.emailPurchaseReminder = confirmResult.emailPurchaseReminder;
         payload.autohold = true;
-        await performImmediateStaffAction(identity, payload, ctx, onRefresh);
+        await performImmediateStaffAction(identity, payload, ctx, onRefresh, context);
       });
       actionsDiv.appendChild(additionalCopyBtn);
     }
@@ -378,18 +385,24 @@ export async function openPolarisSearch(row, mode, options = {}, ctx, onRefresh)
     returnDialogListener = null;
   }
   if (observedDialog !== els.dialog) {
-    els.dialog.addEventListener('close', invalidateSearchContext);
+    els.dialog.addEventListener('close', () => {
+      if (!els.dialog.open) invalidateSearchContext();
+    });
     observedDialog = els.dialog;
   }
   const identity = { type: row.type, id: String(row.id ?? '').trim() };
+  const openedFromDeepLink = matchesRequestSelection(identity);
   const actionStaff = staffSession.staff;
   const accessGeneration = staffAccessGeneration;
-  const context = { generation: 0, controller: null };
+  const context = { generation: 0, controller: null, returnAllowed: true, suppressReturnDialog: null };
   activeSearchContext = context;
   const sameStaff = () => staffSession.authenticated && staffSession.accessAllowed &&
     staffAccessGeneration === accessGeneration &&
     staffSession.staff?.id === actionStaff?.id && staffSession.staff?.role === actionStaff?.role &&
     String(staffSession.staff?.organizationId) === String(actionStaff?.organizationId);
+  context.isSessionCurrent = sameStaff;
+  context.ownsCurrentUi = () => activeSearchContext === context && els.dialog.open && sameStaff() &&
+    (!openedFromDeepLink || matchesRequestSelection(identity));
 
   mode = String(mode || 'title').trim().toLowerCase();
   
@@ -440,7 +453,7 @@ export async function openPolarisSearch(row, mode, options = {}, ctx, onRefresh)
     try {
       const data = await fetchPolarisSearch(row, currentMode, query, { title: query, author: author }, ctx, context.controller.signal);
       if (!isCurrent()) return;
-      renderPolarisSearchResults(row, identity, currentMode, data, options, ctx, onRefresh, isCurrent, context.controller.signal);
+      renderPolarisSearchResults(row, identity, currentMode, data, options, ctx, onRefresh, isCurrent, context.controller.signal, context);
     } catch (err) {
       if (!isCurrent() || isAbortError(err)) return;
       els.status.className = 'alert alert-danger py-2 px-3 small';
@@ -471,12 +484,14 @@ export async function openPolarisSearch(row, mode, options = {}, ctx, onRefresh)
 
   const returnDialog = options.returnDialog || null;
   const returnFocus = options.returnFocus || null;
-  let shouldReturnDialog = !!(returnDialog && returnDialog.open);
+  const shouldReturnDialog = !!(returnDialog && returnDialog.open);
   if (shouldReturnDialog) {
     returnDialog.close();
     const reopenReturnDialog = () => {
+      if (els.dialog.open || returnDialogListener !== reopenReturnDialog) return;
+      els.dialog.removeEventListener('close', reopenReturnDialog);
       returnDialogListener = null;
-      if (shouldReturnDialog && returnDialog && !returnDialog.open) {
+      if (context.returnAllowed && sameStaff() && returnDialog && !returnDialog.open) {
         returnDialog.showModal();
         if (returnFocus && typeof returnFocus.focus === 'function') {
           returnFocus.focus();
@@ -484,7 +499,12 @@ export async function openPolarisSearch(row, mode, options = {}, ctx, onRefresh)
       }
     };
     returnDialogListener = reopenReturnDialog;
-    els.dialog.addEventListener('close', reopenReturnDialog, { once: true });
+    els.dialog.addEventListener('close', reopenReturnDialog);
+    context.suppressReturnDialog = () => {
+      context.returnAllowed = false;
+      els.dialog.removeEventListener('close', reopenReturnDialog);
+      if (returnDialogListener === reopenReturnDialog) returnDialogListener = null;
+    };
   }
 
   if (!els.dialog.open) {
@@ -562,11 +582,14 @@ export function launchEditPolarisSearch(mode, button, context = 'edit', ctx, onR
   }, ctx, onRefresh);
 }
 
-export async function performImmediateStaffAction(identity, payload, ctx, onRefresh) {
+export async function performImmediateStaffAction(identity, payload, ctx, onRefresh, context) {
   if (identity?.type !== 'title_request' || !String(identity.id ?? '').trim()) return false;
   await submitTitleRequestAction(String(identity.id), payload, {
     onRefresh,
-    dialogsToClose: ['polarisSearchDialog', 'editModal']
+    isSessionCurrent: context?.isSessionCurrent,
+    ownsCurrentUi: context?.ownsCurrentUi,
+    beforeDialogsClose: context?.suppressReturnDialog,
+    dialogsToClose: ['polarisSearchDialog']
   });
   return true;
 }

@@ -20,7 +20,7 @@ assert.ok(LEGACY_ACCESSIBILITY_BASELINE.length > 0, 'The inherited baseline must
 assert.deepEqual(
   unexpectedLegacyAccessibilityFindings(state('polaris-search', 'color-contrast', [
     '#polaris-search-status',
-    '#polaris-additional-copy-action'
+    '#polaris-additional-copy-action-9001-0'
   ])),
   []
 );

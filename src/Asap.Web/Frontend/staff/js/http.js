@@ -1,4 +1,4 @@
-import { staffSession, setStaffSession } from './state.js';
+import { staffSession, staffAccessGeneration, setStaffSession } from './state.js';
 import { HttpError, requestJson, isAbortError } from '../../shared/http.js';
 
 const titleRequestVersions = new Map();
@@ -131,6 +131,7 @@ export async function loadStaffSession(options = {}) {
 }
 
 export async function authorizedJson(path, options = {}) {
+  let accessGeneration = staffAccessGeneration;
   const method = String(options.method || 'GET').toUpperCase();
   const headers = { ...(options.headers || {}) };
   if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
@@ -139,6 +140,7 @@ export async function authorizedJson(path, options = {}) {
       if (!session.authenticated) {
         throw new HttpError('Your staff session has ended.', 401, { code: 'staff_session_invalid' });
       }
+      accessGeneration = staffAccessGeneration;
     }
     headers['X-ASAP-Antiforgery'] = staffSession.antiforgeryToken;
   }
@@ -150,8 +152,11 @@ export async function authorizedJson(path, options = {}) {
       headers,
       cache: 'no-store'
     });
-    return adaptResponse(path, result);
+    return staffAccessGeneration === accessGeneration ? adaptResponse(path, result) : result;
   } catch (error) {
+    if (staffAccessGeneration !== accessGeneration) {
+      throw error;
+    }
     if (!applyStaffAccessFailure(error) && error?.status === 409) {
       window.dispatchEvent(new CustomEvent('asap:stale-write', { detail: error.response }));
     }
