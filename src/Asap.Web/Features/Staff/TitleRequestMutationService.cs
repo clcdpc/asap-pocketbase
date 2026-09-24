@@ -291,11 +291,19 @@ public sealed class TitleRequestMutationService(
             request.IsbnCheckLastErrorCode = null;
             request.LastCheckedUtc = null;
             request.IsbnCheckStatus = request.Identifier is null ? "skipped_no_isbn" : "pending";
-            await RemoveIdentifierTagsAsync(context, request.Id, cancellationToken);
+            if (input.Action != "additionalCopy")
+            {
+                await RemoveIdentifierTagsAsync(context, request.Id, cancellationToken);
+            }
         }
         if (bibSupplied)
         {
             request.BibId = Clean(proposedBib);
+        }
+        if (input.Action == "additionalCopy")
+        {
+            await ReconcileExplicitPolarisIdentifierAsync(
+                context, request, identifierChanged, bibChanged, cancellationToken);
         }
 
         if (input.Title is not null) request.Title = input.Title.Trim();
@@ -777,6 +785,54 @@ public sealed class TitleRequestMutationService(
                 select link)
             .ToListAsync(cancellationToken);
         context.TitleRequestWorkflowTags.RemoveRange(links);
+    }
+
+    private static async Task ReconcileExplicitPolarisIdentifierAsync(
+        AsapDbContext context,
+        TitleRequest request,
+        bool identifierChanged,
+        bool bibChanged,
+        CancellationToken cancellationToken)
+    {
+        // The selected BIB has passed Polaris validation. This action leaves the
+        // suggestion-only identifier queue, so resolve its identifier state now.
+        var hasIdentifier = Clean(request.Identifier) is not null;
+        var preserveFoundHistory = hasIdentifier && !identifierChanged && !bibChanged &&
+                                   request.IsbnCheckStatus == "found";
+        if (!preserveFoundHistory || request.IsbnCheckRetryCount != 0 ||
+            request.IsbnCheckLastErrorCode is not null)
+        {
+            request.IsbnCheckStatus = hasIdentifier ? "found" : "skipped_no_isbn";
+            request.IsbnCheckResult = hasIdentifier ? "Polaris bibliographic match selected by staff." : null;
+            request.IsbnCheckRetryCount = 0;
+            request.IsbnCheckLastErrorCode = null;
+            request.LastCheckedUtc = hasIdentifier ? DateTime.UtcNow : null;
+        }
+
+        var tags = await (
+            from link in context.TitleRequestWorkflowTags
+            join tag in context.WorkflowTags on link.WorkflowTagId equals tag.Id
+            where link.TitleRequestId == request.Id && IdentifierDerivedTagCodes.Contains(tag.Code)
+            select new { Link = link, tag.Code }).ToListAsync(cancellationToken);
+        foreach (var tag in tags)
+        {
+            if (!hasIdentifier || tag.Code == "polaris_bib_not_found" ||
+                tag.Code == "polaris_multiple_matches" && !preserveFoundHistory)
+            {
+                context.TitleRequestWorkflowTags.Remove(tag.Link);
+            }
+        }
+        if (hasIdentifier && tags.All(item => item.Code != "polaris_bib_found"))
+        {
+            var foundTagId = await context.WorkflowTags
+                .Where(item => item.Code == "polaris_bib_found")
+                .Select(item => item.Id).SingleAsync(cancellationToken);
+            context.TitleRequestWorkflowTags.Add(new TitleRequestWorkflowTag
+            {
+                TitleRequestId = request.Id,
+                WorkflowTagId = foundTagId
+            });
+        }
     }
 
     private static async Task<long?> ResolveFormatIdAsync(
