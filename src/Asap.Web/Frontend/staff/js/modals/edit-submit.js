@@ -7,7 +7,9 @@ import { collectEditCustomFieldValues } from '../request-custom-fields.js';
 import { editRequestIdentity, findWorkflowRow } from '../request-identity.mjs';
 import { clearMatchingRequestSelection } from '../app/url-utils.js';
 
-export async function submitTitleRequestAction(id, payload, options = {}) {
+export async function submitTitleRequestAction(identity, payload, options = {}) {
+  if (identity?.type !== 'title_request' || !String(identity.id ?? '').trim()) return false;
+  const id = String(identity.id).trim();
   const {
     onRefresh,
     beforeDialogsClose,
@@ -156,6 +158,7 @@ export async function submitEditForm(e, ctx, options = {}) {
 
   const identity = editRequestIdentity(ctx.id);
   const id = identity.id;
+  if (ctx.id?.dataset.requestType !== 'title_request' || !id) return false;
   const nextStatus = ctx.nextStatus.value;
   const row = findWorkflowRow(identity, ctx.currentSuggestions, ctx.allSuggestions);
   if (!row) {
@@ -233,7 +236,7 @@ export async function submitEditForm(e, ctx, options = {}) {
     payload.rejectionTemplateId = ctx.rejectionTemplate.value;
   }
 
-  await submitTitleRequestAction(id, payload, {
+  await submitTitleRequestAction(identity, payload, {
     onRefresh,
     dialogsToClose: ['editModal']
   });

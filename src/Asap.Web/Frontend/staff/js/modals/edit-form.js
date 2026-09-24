@@ -12,8 +12,9 @@ import { renderEditPatronContext } from './patron-context.js';
 import { findWorkflowRow, requestIdentity, setEditRequestIdentity } from '../request-identity.mjs';
 
 export function openEdit(identity, nextStatus, dialogTitle, actionStr, buttonLabel, ctx) {
+  if (!['title_request', 'additional_copy'].includes(identity?.type) || !String(identity.id ?? '').trim()) return;
   const row = findWorkflowRow(identity, ctx.currentSuggestions, ctx.allSuggestions);
-  if (!row) return;
+  if (!row || row.type !== identity.type) return;
   const isAdditionalCopy = row.type === 'additional_copy';
 
   rememberRecentSuggestion(row);

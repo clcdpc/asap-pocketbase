@@ -9,7 +9,7 @@ import {
   renderDuplicateSummary
 } from './grid-filters.js';
 import { getGridColumns } from './grid-columns.js';
-import { requestIdentityKey, requestType } from './request-identity.mjs';
+import { requestIdentityKey } from './request-identity.mjs';
 
 export function renderBibIdCell(row, ctx) {
   const bibId = String(row?.bibid || '').trim();
@@ -20,7 +20,7 @@ export function renderBibIdCell(row, ctx) {
 }
 
 export function rowMarker(row) {
-  return `<span class="asap-row-marker" data-suggestion-id="${escapeAttr(row.id)}" data-request-type="${escapeAttr(requestType(row.type))}" hidden></span>`;
+  return `<span class="asap-row-marker" data-suggestion-id="${escapeAttr(row.id)}" data-request-type="${escapeAttr(row.type)}" hidden></span>`;
 }
 
 export function renderBarcodeCell(row, ctx) {
@@ -81,7 +81,7 @@ export function renderPolarisRowSearchButton(row, mode, ctx) {
     'data-no-row-edit': 'true',
     'data-polaris-search-mode': mode,
     'data-suggestion-id': row.id,
-    'data-request-type': requestType(row.type)
+    'data-request-type': row.type
   });
 }
 

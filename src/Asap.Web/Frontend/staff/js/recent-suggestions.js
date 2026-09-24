@@ -1,6 +1,6 @@
 import { staffSession } from './state.js';
 import { workflowStatusLabel } from './modals.js';
-import { requestIdentity, sameRequestIdentity } from './request-identity.mjs';
+import { sameRequestIdentity } from './request-identity.mjs';
 
 function getStorageKey() {
   const userId = staffSession.staff?.id;
@@ -169,7 +169,8 @@ export function renderRecentSuggestionsSwitcher() {
       // Dispatch custom event to let grid.js handle the jump
       document.dispatchEvent(new CustomEvent('asap:recent-suggestion-selected', {
         detail: {
-          ...requestIdentity(r),
+          type: r.type,
+          id: String(r.id ?? '').trim(),
           status: r.type === 'additional_copy' && r.status !== 'closed' ? 'additional_copies' : r.status
         }
       }));

@@ -413,7 +413,7 @@ export async function announceTabLoaded(status, ctx, options = {}) {
       }
     }
     if (row) {
-      openEdit(requestIdentity(row), row.status, 'Edit', '', 'Save');
+      openEdit(row, row.status, 'Edit', '', 'Save');
     }
   }
 }

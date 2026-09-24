@@ -4512,7 +4512,12 @@ public sealed partial class PatronJourneyTests
                 status = "pending_hold",
                 identifier = (string?)null
             });
-        Assert.AreEqual(HttpStatusCode.OK, pendingClear.StatusCode, await pendingClear.Content.ReadAsStringAsync());
+        Assert.AreEqual(HttpStatusCode.BadRequest, pendingClear.StatusCode,
+            await pendingClear.Content.ReadAsStringAsync());
+        using (var pendingClearBody = JsonDocument.Parse(await pendingClear.Content.ReadAsStringAsync()))
+        {
+            Assert.AreEqual("bib_required", pendingClearBody.RootElement.GetProperty("code").GetString());
+        }
 
         using var placed = await GetAsync(placedId);
         using var placedUnchanged = await client.PostAsJsonAsync(
@@ -4574,8 +4579,9 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("outstanding_purchase", result.GetString(1));
         Assert.AreEqual("9780000002190", result.GetString(3));
         Assert.IsTrue(result.IsDBNull(4));
-        Assert.AreEqual("pending", result.GetString(5));
-        Assert.IsTrue(result.IsDBNull(6));
+        Assert.AreEqual("not_found", result.GetString(5));
+        Assert.AreEqual("Identifier processing was not completed before this request left suggestions.",
+            result.GetString(6));
         Assert.AreEqual(0, result.GetInt32(7));
         Assert.IsTrue(result.IsDBNull(8));
         Assert.IsTrue(result.IsDBNull(9));
@@ -4584,14 +4590,14 @@ public sealed partial class PatronJourneyTests
         Assert.IsTrue(await result.ReadAsync());
         Assert.AreEqual(pendingHoldId, result.GetInt64(0));
         Assert.AreEqual("pending_hold", result.GetString(1));
-        Assert.IsTrue(result.IsDBNull(3));
-        Assert.IsTrue(result.IsDBNull(4));
-        Assert.AreEqual("skipped_no_isbn", result.GetString(5));
-        Assert.IsTrue(result.IsDBNull(6));
-        Assert.AreEqual(0, result.GetInt32(7));
-        Assert.IsTrue(result.IsDBNull(8));
-        Assert.IsTrue(result.IsDBNull(9));
-        Assert.AreEqual(0, result.GetInt32(10));
+        Assert.AreEqual("9780000002151", result.GetString(3));
+        Assert.AreEqual("9051", result.GetString(4));
+        Assert.AreEqual("found", result.GetString(5));
+        Assert.AreEqual("Old result", result.GetString(6));
+        Assert.AreEqual(3, result.GetInt32(7));
+        Assert.AreEqual("old_error", result.GetString(8));
+        Assert.IsFalse(result.IsDBNull(9));
+        Assert.AreEqual(1, result.GetInt32(10));
 
         Assert.IsTrue(await result.ReadAsync());
         Assert.AreEqual(placedId, result.GetInt64(0));

@@ -66,6 +66,7 @@ async function settle() {
 
     const lookups = [];
     const actions = [];
+    const outbound = [];
     let failNextAction = false;
     let deferNextAction = false;
     const id = '9007199254740993';
@@ -73,6 +74,7 @@ async function settle() {
     const copy = { type: 'additional_copy', id, title: 'Collision copy', libraryOrgId: '2' };
     const persisted = { title: 'Collision title', copy: 'Collision copy' };
     global.fetch = (url, options = {}) => {
+      outbound.push({ url: String(url), method: options.method || 'GET' });
       if (String(url).endsWith('/bib-lookup')) {
         const pending = deferred();
         lookups.push({ body: JSON.parse(options.body), pending, signal: options.signal });
@@ -107,6 +109,11 @@ async function settle() {
 
     const state = await import(pathToFileURL(path.join(temporary, 'staff/js/state.js')).href);
     const search = await import(pathToFileURL(path.join(temporary, 'staff/js/modals/polaris-search.js')).href);
+    const editSubmit = await import(pathToFileURL(path.join(temporary, 'staff/js/modals/edit-submit.js')).href);
+    const rowActions = await import(pathToFileURL(path.join(temporary, 'staff/js/actions.js')).href);
+    const gridActions = await import(pathToFileURL(path.join(temporary, 'staff/js/grid-actions.js')).href);
+    const gridRendering = await import(pathToFileURL(path.join(temporary, 'staff/js/grid-rendering.js')).href);
+    const editPickup = await import(pathToFileURL(path.join(temporary, 'staff/js/edit-pickup.js')).href);
     state.setStaffSession({
       authenticated: true, accessAllowed: true, antiforgeryToken: 'test-token',
       staff: { id: '7', role: 'super_admin', organizationId: 1, userPrincipalName: 'staff@example.org' }
@@ -278,6 +285,42 @@ async function settle() {
       assert.equal(await search.performImmediateStaffAction(identity, { action: 'catalogFound' }, ctx), false);
     }
     assert.equal(actions.length, 2, 'invalid type or missing ID must fail closed at the mutation boundary');
+    for (const identity of [
+      { type: 'additional_copy', id }, { type: 'unknown', id }, { id },
+      { type: 'title_request', id: '' }, id
+    ]) {
+      const dispatch = editSubmit.submitTitleRequestAction(identity, { action: 'catalogFound' });
+      await settle();
+      assert.equal(actions.length, 2, 'invalid identity must not emit a title-request mutation');
+      assert.equal(await Promise.race([dispatch, new Promise(resolve => setTimeout(resolve, 10))]), false);
+    }
+    assert.equal(actions.length, 2, 'the exported action helper must require an explicit title-request type');
+
+    state.setCurrentSuggestions([title, copy]);
+    state.setAllSuggestions([title, copy]);
+    const assertNoMixedDispatch = async invoke => {
+      const before = outbound.length;
+      const attempt = invoke();
+      await settle();
+      if (document.getElementById('confirm-dialog')?.open) {
+        document.getElementById('confirm-dialog-ok').click();
+        await settle();
+      }
+      assert.equal(outbound.length, before, 'mixed-context operation emitted a request');
+      await Promise.race([attempt, new Promise(resolve => setTimeout(resolve, 10))]);
+    };
+    const mixedCtx = { currentSuggestions: [title, copy], allSuggestions: [title, copy], staffSession: state.staffSession };
+    await assertNoMixedDispatch(() => rowActions.undoRow({ type: 'unknown', id }));
+    await assertNoMixedDispatch(() => rowActions.deleteClosedRequest({ id }));
+    await assertNoMixedDispatch(() => rowActions.closeDuplicateRequest({ type: 'unknown', id }, { alreadyConfirmed: true }));
+    await assertNoMixedDispatch(() => gridActions.mutateRequestClaim({ type: 'unknown', id }, 'claim', '', mixedCtx));
+    await assertNoMixedDispatch(() => gridActions.openAssignDialog({ type: 'unknown', id }));
+    await assertNoMixedDispatch(() => gridActions.buyAnotherCopyForRow(copy, mixedCtx));
+    await assertNoMixedDispatch(() => gridActions.runRowActionDescriptor(copy, { key: 'buyAnotherCopy' }, mixedCtx));
+    await assertNoMixedDispatch(() => gridActions.closeAdditionalCopyRequest(id));
+    await assertNoMixedDispatch(() => editPickup.loadEditPickupForRequest({ type: 'unknown', id }));
+    assert.match(gridRendering.rowMarker({ type: 'unknown', id }), /data-request-type="unknown"/,
+      'rendered row identity must retain an unknown type for the event guard');
 
     const newFormOpen = search.openPolarisSearch({ id: '', title: 'New suggestion', libraryOrgId: '2' }, 'title', { source: 'new' }, ctx);
     await settle();

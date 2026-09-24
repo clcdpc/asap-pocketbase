@@ -169,12 +169,12 @@ export async function loadEditPickupForRequest(row, options = {}) {
   const els = pickupEls();
   const requestedIdentity = requestIdentity(row || {});
   const requestedId = requestedIdentity.id;
-  editPickupRequestIdentity = requestedIdentity;
 
-  if (!row || row.type === 'additional_copy') {
+  if (!row || row.type !== 'title_request') {
     if (els.group) els.group.classList.add('hidden');
     return;
   }
+  editPickupRequestIdentity = requestedIdentity;
   if (els.group) els.group.classList.remove('hidden');
 
   if (!requestedId) return;
@@ -221,13 +221,13 @@ async function handleEditPickupSave() {
     }
     showToast(result && result.pickupChanged ? 'Pickup preference updated.' : 'Pickup preference saved.', 'success');
     if (sameRequestIdentity(editPickupRequestIdentity, activeIdentity)) {
-      await loadEditPickupForRequest(updated || { id: activeId });
+      await loadEditPickupForRequest(updated || { type: 'title_request', id: activeId });
     }
   } catch (err) {
     if (err.status === 409) {
       await showAlert(err.message || 'Pickup preference changed in Polaris. Reloading pickup options.');
       if (sameRequestIdentity(editPickupRequestIdentity, activeIdentity)) {
-        await loadEditPickupForRequest({ id: activeId });
+        await loadEditPickupForRequest({ type: 'title_request', id: activeId });
       }
       return;
     }

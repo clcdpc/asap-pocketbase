@@ -3,7 +3,7 @@ import { isAdminStaff } from './api.js';
 import { authorizedJson } from './http.js';
 import { showToast, showAlert, showConfirm } from './dialogs.js';
 import { refreshCurrentStaffView, escapeAttr } from './grid.js';
-import { findWorkflowRow, requestIdentity } from './request-identity.mjs';
+import { findWorkflowRow } from './request-identity.mjs';
 
 export function undoConfirmMessage(type) {
   if (type === 'additional_copy') {
@@ -13,8 +13,9 @@ export function undoConfirmMessage(type) {
 }
 
 export async function undoRow(identity) {
+  if (!['title_request', 'additional_copy'].includes(identity?.type) || !String(identity.id ?? '').trim()) return;
   const row = findWorkflowRow(identity, currentSuggestions, allSuggestions);
-  if (!row) return;
+  if (!row || row.type !== identity.type) return;
   const id = row.id;
 
   if (!await showConfirm('Undo action', undoConfirmMessage(row.type))) return;
@@ -43,8 +44,9 @@ export async function undoRow(identity) {
 
 export async function deleteClosedRequest(identity) {
   if (!isAdminStaff()) return;
+  if (!['title_request', 'additional_copy'].includes(identity?.type) || !String(identity.id ?? '').trim()) return;
   const row = findWorkflowRow(identity, currentSuggestions, allSuggestions);
-  if (!row) return;
+  if (!row || row.type !== identity.type) return;
   const confirmed = await showConfirm('Delete this closed request?', 'This cannot be undone.');
   if (!confirmed) return;
   try {
@@ -61,8 +63,9 @@ export async function deleteClosedRequest(identity) {
 
 export async function closeDuplicateRequest(identity, options = {}) {
   const { alreadyConfirmed = false, isCurrent = () => true, refresh = true } = options;
+  if (identity?.type !== 'title_request' || !String(identity.id ?? '').trim()) return false;
   const row = findWorkflowRow(identity, currentSuggestions, allSuggestions);
-  if (!row || requestIdentity(row).type !== 'title_request') return;
+  if (!row || row.type !== 'title_request') return false;
   const id = row.id;
   if (!alreadyConfirmed && !await showConfirm('Close this duplicate request?',
     'The patron already has an open request or hold for this BIB ID.')) return false;

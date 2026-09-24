@@ -7,7 +7,7 @@ import { normalizeStatus } from './grid-policy.mjs';
 import { buildRowActions } from './grid-row-actions.mjs';
 import { escapeAttr } from './grid-utils.js';
 import { hasWorkflowTag, isUnclaimed } from './grid-filters.js';
-import { findWorkflowRow, requestIdentity } from './request-identity.mjs';
+import { findWorkflowRow } from './request-identity.mjs';
 
 const noopRefresh = async () => {};
 
@@ -46,43 +46,44 @@ function materializeRowAction(row, action, ctx, onRefresh) {
 }
 
 export async function runRowActionDescriptor(row, action, ctx, onRefresh = noopRefresh) {
+  if (!['title_request', 'additional_copy'].includes(row?.type) || !String(row.id ?? '').trim()) return;
   if (action.key === 'purchase') {
     const hasBib = String(row.bibid || '').trim().length > 0;
-    openEdit(requestIdentity(row), hasBib ? 'pending_hold' : 'outstanding_purchase', 'Approve for purchase', 'purchase', 'Purchase');
+    openEdit(row, hasBib ? 'pending_hold' : 'outstanding_purchase', 'Approve for purchase', 'purchase', 'Purchase');
     return;
   }
   if (action.key === 'reject') {
-    openEdit(requestIdentity(row), 'closed', 'Reject', 'reject', 'Reject');
+    openEdit(row, 'closed', 'Reject', 'reject', 'Reject');
     return;
   }
   if (action.key === 'alreadyOwn') {
-    openEdit(requestIdentity(row), 'pending_hold', 'Already own', 'alreadyOwn', 'Already own');
+    openEdit(row, 'pending_hold', 'Already own', 'alreadyOwn', 'Already own');
     return;
   }
   if (action.key === 'silentClose') {
-    openEdit(requestIdentity(row), 'closed', 'Silent close', 'silentClose', 'Silent close');
+    openEdit(row, 'closed', 'Silent close', 'silentClose', 'Silent close');
     return;
   }
   if (action.key === 'queueHold') {
-    openEdit(requestIdentity(row), 'pending_hold', 'Queue for hold', '', 'Queue Hold');
+    openEdit(row, 'pending_hold', 'Queue for hold', '', 'Queue Hold');
     return;
   }
   if (action.key === 'undo') {
-    await undoRow(requestIdentity(row));
+    await undoRow(row);
     return;
   }
   if (action.key === 'edit') {
     const status = normalizeStatus(row.status);
     const title = status === 'suggestion' ? 'Edit suggestion' : 'Edit';
-    openEdit(requestIdentity(row), row.status, title, '', 'Save');
+    openEdit(row, row.status, title, '', 'Save');
     return;
   }
   if (action.key === 'delete') {
-    await deleteClosedRequest(requestIdentity(row));
+    await deleteClosedRequest(row);
     return;
   }
   if (action.key === 'closeDuplicate') {
-    await closeDuplicateRequest(requestIdentity(row));
+    await closeDuplicateRequest(row);
     return;
   }
   if (action.key === 'buyAnotherCopy') {
@@ -90,15 +91,15 @@ export async function runRowActionDescriptor(row, action, ctx, onRefresh = noopR
     return;
   }
   if (action.key === 'closeAdditionalCopy') {
-    await closeAdditionalCopyRequest(row.id, onRefresh);
+    await closeAdditionalCopyRequest(row, onRefresh);
     return;
   }
   if (action.key === 'claim') {
-    await claimRequest(requestIdentity(row), ctx, onRefresh);
+    await claimRequest(row, ctx, onRefresh);
     return;
   }
   if (action.key === 'unclaim' || action.key === 'clearClaim') {
-    await unclaimRequest(requestIdentity(row), ctx, onRefresh);
+    await unclaimRequest(row, ctx, onRefresh);
     return;
   }
   if (action.key === 'assign') {
@@ -107,6 +108,7 @@ export async function runRowActionDescriptor(row, action, ctx, onRefresh = noopR
 }
 
 export async function openAssignDialog(row, onRefresh = noopRefresh) {
+  if (!['title_request', 'additional_copy'].includes(row?.type) || !String(row.id ?? '').trim()) return;
   const dialog = document.getElementById('assign-dialog');
   const staffSelect = document.getElementById('assign-staff-select');
   const contextText = document.getElementById('assign-dialog-context');
@@ -181,10 +183,11 @@ export async function openAssignDialog(row, onRefresh = noopRefresh) {
   dialog.showModal();
 }
 
-export async function closeAdditionalCopyRequest(id, onRefresh = noopRefresh) {
+export async function closeAdditionalCopyRequest(identity, onRefresh = noopRefresh) {
+  if (identity?.type !== 'additional_copy' || !String(identity.id ?? '').trim()) return;
   const confirmed = await showConfirm('Close additional-copy task?', 'Closing this task will not change the original patron suggestion.');
   if (!confirmed) return;
-  await authorizedJson(`/api/asap/staff/additional-copies/${encodeURIComponent(id)}/close`, {
+  await authorizedJson(`/api/asap/staff/additional-copies/${encodeURIComponent(String(identity.id))}/close`, {
     method: 'POST',
     body: {}
   });
@@ -195,7 +198,7 @@ export async function closeAdditionalCopyRequest(id, onRefresh = noopRefresh) {
 export function additionalCopyActionForRow(row) {
   const status = normalizeStatus(row && row.status);
   const bibid = String(row && row.bibid || '').trim();
-  if ((status !== 'pending_hold' && status !== 'hold_placed') || !bibid || row.type === 'additional_copy') {
+  if ((status !== 'pending_hold' && status !== 'hold_placed') || !bibid || row.type !== 'title_request') {
     return null;
   }
   return { label: 'Buy another copy', onClick: () => buyAnotherCopyForRow(row) };
@@ -212,8 +215,8 @@ export function additionalCopyConfirmMessage(bibid, count) {
 }
 
 export async function buyAnotherCopyForRow(row, ctx, onRefresh = noopRefresh) {
-  const id = row && row.id;
-  if (!id) return;
+  if (row?.type !== 'title_request' || !String(row.id ?? '').trim()) return;
+  const id = String(row.id);
   const preview = await authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(id)}/additional-copy`, { cache: 'no-store' });
   const bibid = String(preview.bibid || row.bibid || '').trim();
   const openCount = Number(preview.openCount || 0);
@@ -235,18 +238,18 @@ export function duplicateCloseActionForRow(row) {
   if (!row || normalizeStatus(row.status) === 'closed' || !hasWorkflowTag(row, 'Hold exists (same patron)')) {
     return null;
   }
-  return { label: 'Close duplicate', className: 'danger', onClick: () => closeDuplicateRequest(requestIdentity(row)) };
+  return { label: 'Close duplicate', className: 'danger', onClick: () => closeDuplicateRequest(row) };
 }
 
 export function claimActionsForRow(row, ctx, onRefresh = noopRefresh) {
   if (isUnclaimed(row)) {
-    return [{ label: 'Claim', onClick: () => claimRequest(requestIdentity(row), ctx, onRefresh) }];
+    return [{ label: 'Claim', onClick: () => claimRequest(row, ctx, onRefresh) }];
   }
   if (isClaimedByCurrentUser(row, ctx)) {
-    return [{ label: 'Unclaim', onClick: () => unclaimRequest(requestIdentity(row), ctx, onRefresh) }];
+    return [{ label: 'Unclaim', onClick: () => unclaimRequest(row, ctx, onRefresh) }];
   }
   if (isAdminStaff()) {
-    return [{ label: 'Clear claim', className: 'danger', onClick: () => unclaimRequest(requestIdentity(row), ctx, onRefresh) }];
+    return [{ label: 'Clear claim', className: 'danger', onClick: () => unclaimRequest(row, ctx, onRefresh) }];
   }
   return [];
 }
@@ -260,8 +263,9 @@ export async function unclaimRequest(identity, ctx, onRefresh = noopRefresh) {
 }
 
 export async function mutateRequestClaim(identity, action, successMessage, ctx, onRefresh = noopRefresh) {
+  if (!['title_request', 'additional_copy'].includes(identity?.type) || !String(identity.id ?? '').trim()) return;
   const row = findWorkflowRow(identity, ctx.currentSuggestions, ctx.allSuggestions);
-  if (!row) return;
+  if (!row || row.type !== identity.type) return;
   const requestId = row.id;
 
   try {

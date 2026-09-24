@@ -230,12 +230,12 @@ public sealed class TitleRequestMutationService(
 
         var identifierSupplied = IsSupplied(input.Identifier);
         var validatedIdentifier = Clean(bibPreflight.ValidatedBib?.Identifier);
-        var proposedIdentifier = input.Action == "additionalCopy"
-            ? validatedIdentifier ?? Clean(request.Identifier)
-            : identifierSupplied ? Clean(ElementString(input.Identifier)) : Clean(request.Identifier);
-        var identifierChanged = (input.Action == "additionalCopy" && validatedIdentifier is not null ||
-                                 input.Action != "additionalCopy" && identifierSupplied) &&
-                                !string.Equals(proposedIdentifier, Clean(request.Identifier), StringComparison.Ordinal);
+        var selectedCatalogAction = input.Action is "additionalCopy" or "catalogFound" or "purchase" or "alreadyOwn";
+        var proposedIdentifier = validatedIdentifier ??
+            (selectedCatalogAction && bibPreflight.ValidatedBib is not null
+                ? Clean(request.Identifier)
+                : identifierSupplied ? Clean(ElementString(input.Identifier)) : Clean(request.Identifier));
+        var identifierChanged = !string.Equals(proposedIdentifier, Clean(request.Identifier), StringComparison.Ordinal);
         var bibSupplied = IsSupplied(input.Bibid);
         var proposedBib = bibSupplied ? Clean(ElementString(input.Bibid)) : Clean(request.BibId);
         var bibChanged = bibSupplied &&
@@ -267,6 +267,13 @@ public sealed class TitleRequestMutationService(
         {
             return new TitleRequestMutationResult("bib_required");
         }
+        if (targetStatus == "pending_hold" && identifierChanged && !bibSupplied &&
+            bibPreflight.ValidatedBib is null)
+        {
+            // Changing the identifier clears the old BIB. A pending hold needs a
+            // selected, validated BIB to replace it in the same action.
+            return new TitleRequestMutationResult("bib_required");
+        }
         if (bibChanged && proposedBib is not null && !IsPositiveInteger(proposedBib))
         {
             return new TitleRequestMutationResult("invalid_bib");
@@ -296,19 +303,23 @@ public sealed class TitleRequestMutationService(
             request.IsbnCheckLastErrorCode = null;
             request.LastCheckedUtc = null;
             request.IsbnCheckStatus = request.Identifier is null ? "skipped_no_isbn" : "pending";
-            if (input.Action != "additionalCopy")
+            if (bibPreflight.ValidatedBib is null)
             {
                 await RemoveIdentifierTagsAsync(context, request.Id, cancellationToken);
             }
         }
-        if (bibSupplied)
+        if (bibSupplied || bibPreflight.ValidatedBib is not null)
         {
             request.BibId = Clean(proposedBib);
         }
-        if (input.Action == "additionalCopy")
+        if (bibPreflight.ValidatedBib is not null)
         {
             await ReconcileExplicitPolarisIdentifierAsync(
                 context, request, validatedIdentifier, cancellationToken);
+        }
+        else if (targetStatus != "suggestion" && request.IsbnCheckStatus == "pending")
+        {
+            await ResolveUnreachableIdentifierCheckAsync(context, request, cancellationToken);
         }
 
         if (input.Title is not null) request.Title = input.Title.Trim();
@@ -417,11 +428,11 @@ public sealed class TitleRequestMutationService(
         CancellationToken cancellationToken)
     {
         var bibSupplied = IsSupplied(input.Bibid);
-        if (!bibSupplied)
+        if (!bibSupplied && input.Action is not ("catalogFound" or "purchase" or "alreadyOwn"))
         {
             return new(input.Action == "additionalCopy" ? "bib_required" : null);
         }
-        var proposedBib = Clean(ElementString(input.Bibid));
+        var proposedBib = bibSupplied ? Clean(ElementString(input.Bibid)) : null;
         if (input.Action == "additionalCopy" && proposedBib is null)
         {
             return new("bib_required");
@@ -450,11 +461,20 @@ public sealed class TitleRequestMutationService(
         }
 
         var identifierSupplied = IsSupplied(input.Identifier);
+        if (!bibSupplied)
+        {
+            proposedBib = Clean(request.BibId);
+        }
+        if (proposedBib is not null && !IsPositiveInteger(proposedBib))
+        {
+            return new("invalid_bib");
+        }
         var proposedIdentifier = identifierSupplied ? Clean(ElementString(input.Identifier)) : Clean(request.Identifier);
         var identifierChanged = input.Action != "additionalCopy" && identifierSupplied &&
                                 !string.Equals(proposedIdentifier, Clean(request.Identifier), StringComparison.Ordinal);
         var bibChanged = !string.Equals(proposedBib, Clean(request.BibId), StringComparison.Ordinal);
-        if (!bibChanged && !identifierChanged && input.Action != "additionalCopy")
+        if (!bibChanged && !identifierChanged && input.Action is not
+                ("additionalCopy" or "catalogFound" or "purchase" or "alreadyOwn"))
         {
             return new();
         }
@@ -499,7 +519,7 @@ public sealed class TitleRequestMutationService(
             {
                 return new("bib_not_found");
             }
-            if (input.Action == "additionalCopy" && Clean(result.Identifier) is { } catalogIdentifier &&
+            if (Clean(result.Identifier) is { } catalogIdentifier &&
                 !string.Equals(catalogIdentifier, Clean(request.Identifier), StringComparison.Ordinal) &&
                 !capability.CanEditIdentifier)
             {
@@ -800,6 +820,27 @@ public sealed class TitleRequestMutationService(
                 select link)
             .ToListAsync(cancellationToken);
         context.TitleRequestWorkflowTags.RemoveRange(links);
+    }
+
+    private static async Task ResolveUnreachableIdentifierCheckAsync(
+        AsapDbContext context,
+        TitleRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (Clean(request.Identifier) is null)
+        {
+            request.IsbnCheckStatus = "skipped_no_isbn";
+            request.IsbnCheckResult = null;
+        }
+        else
+        {
+            request.IsbnCheckStatus = "not_found";
+            request.IsbnCheckResult = "Identifier processing was not completed before this request left suggestions.";
+        }
+        request.IsbnCheckRetryCount = 0;
+        request.IsbnCheckLastErrorCode = null;
+        request.LastCheckedUtc = null;
+        await RemoveIdentifierTagsAsync(context, request.Id, cancellationToken);
     }
 
     private static async Task ReconcileExplicitPolarisIdentifierAsync(

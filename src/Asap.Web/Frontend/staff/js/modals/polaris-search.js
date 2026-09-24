@@ -584,7 +584,7 @@ export function launchEditPolarisSearch(mode, button, context = 'edit', ctx, onR
 
 export async function performImmediateStaffAction(identity, payload, ctx, onRefresh, context) {
   if (identity?.type !== 'title_request' || !String(identity.id ?? '').trim()) return false;
-  await submitTitleRequestAction(String(identity.id), payload, {
+  await submitTitleRequestAction(identity, payload, {
     onRefresh,
     isSessionCurrent: context?.isSessionCurrent,
     ownsCurrentUi: context?.ownsCurrentUi,
