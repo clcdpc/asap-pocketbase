@@ -206,7 +206,7 @@ function renderPolarisSearchResults(row, identity, mode, data, options = {}, ctx
         status: nextStatus,
         title: result.title || row.title,
         author: result.author || row.author,
-        identifier: result.identifier || row.identifier,
+        identifier: isAdditionalCopyAction ? (result.identifier || null) : (result.identifier || row.identifier),
         bibid: result.bibId,
         format: result.format || row.format,
         publication: workflowPublication,
@@ -260,8 +260,13 @@ function renderPolarisSearchResults(row, identity, mode, data, options = {}, ctx
         ['suggestion', 'outstanding_purchase', 'pending_hold'].includes(row.status)) {
       additionalCopyBtn = document.createElement('button');
       additionalCopyBtn.type = 'button';
-      additionalCopyBtn.id = 'polaris-additional-copy-action';
+      const safeBibId = String(result.bibId || 'unknown').replace(/[^A-Za-z0-9_-]/g, '-');
+      additionalCopyBtn.id = `polaris-additional-copy-action-${safeBibId}-${index}`;
       additionalCopyBtn.className = 'btn btn-sm btn-outline-success polaris-additional-copy-action hidden';
+      additionalCopyBtn.dataset.polarisAdditionalCopyAction = '';
+      additionalCopyBtn.dataset.bibId = String(result.bibId || '');
+      additionalCopyBtn.setAttribute('aria-label',
+        `Buy another copy and queue now for result ${index + 1}, BIB ${result.bibId}, ${title.slice(0, 80)}`);
       additionalCopyBtn.textContent = 'Buy another copy + Queue Now';
       additionalCopyBtn.disabled = true;
       additionalCopyBtn.addEventListener('click', async () => {

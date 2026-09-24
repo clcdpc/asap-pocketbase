@@ -120,9 +120,18 @@ async function settle() {
       }));
       await settle();
     };
-    const completeHoldings = async (index) => {
+    const completeHoldings = async (index, count = 1) => {
       lookups[index].pending.resolve(response(200, {
-        holdingsSummary: { isHoldable: true, myLibraryCount: 1, otherLibraryCount: 0, consortiumCount: 1 }
+        holdingsSummary: { isHoldable: true, myLibraryCount: count, otherLibraryCount: 0, consortiumCount: count }
+      }));
+      await settle();
+    };
+    const completeMultiSearch = async index => {
+      lookups[index].pending.resolve(response(200, {
+        status: 'ok', totalMatches: 2, results: [
+          { title: 'First multi result', bibId: '9001', identifier: '9781111111111' },
+          { title: 'Second multi result', bibId: '9002' }
+        ]
       }));
       await settle();
     };
@@ -166,7 +175,7 @@ async function settle() {
     assert.equal(lookups[1].body.requestId, id);
     assert.equal(lookups[1].body.bibId, 'BIB-Copy result');
     await completeHoldings(1);
-    assert.equal(results().querySelector('#polaris-additional-copy-action'), null,
+    assert.equal(results().querySelector('.polaris-additional-copy-action'), null,
       'additional-copy rows must not expose title-request-only buy/queue action');
     const copyButtons = [...results().querySelectorAll('button')].filter(button => !button.disabled && !button.classList.contains('hidden'));
     for (const button of copyButtons) {
@@ -187,7 +196,7 @@ async function settle() {
     assert.equal(lookups[3].body.requestType, 'title_request');
     assert.equal(lookups[3].body.requestId, id);
     await completeHoldings(3);
-    assert.equal(results().querySelector('#polaris-additional-copy-action')?.disabled, false,
+    assert.equal(results().querySelector('.polaris-additional-copy-action')?.disabled, false,
       'the established title-request buy/queue control remains available');
     const queueButton = [...results().querySelectorAll('button')].find(button => button.textContent === 'Use BIB & Queue Now');
     assert.ok(queueButton && !queueButton.disabled, 'title-request action remains available');
@@ -277,7 +286,7 @@ async function settle() {
     assert.ok([...results().querySelectorAll('button')].some(button => button.textContent === 'Apply to Form'));
     assert.equal([...results().querySelectorAll('button')].some(button => button.textContent === 'Use BIB & Queue Now'), false);
     await completeHoldings(17);
-    assert.equal(results().querySelector('#polaris-additional-copy-action'), null,
+    assert.equal(results().querySelector('.polaris-additional-copy-action'), null,
       'qualifying holdings cannot create an immediate action for an unsaved suggestion');
     assert.equal(actions.length, 2, 'a new suggestion has no persisted title request to mutate');
 
@@ -288,7 +297,7 @@ async function settle() {
     await oldTitleOpen;
     const oldHoldings = lookups.length - 1;
     const detachedAction = [...results().querySelectorAll('button')].find(button => button.textContent === 'Use BIB & Queue Now');
-    const detachedAdditionalCopyAction = results().querySelector('#polaris-additional-copy-action');
+    const detachedAdditionalCopyAction = results().querySelector('.polaris-additional-copy-action');
     assert.ok(detachedAction && detachedAction.disabled);
     assert.ok(detachedAdditionalCopyAction && detachedAdditionalCopyAction.disabled);
     const latestCopySearch = lookups.length;
@@ -347,9 +356,96 @@ async function settle() {
       holdingsSummary: { isHoldable: false, myLibraryCount: 0, otherLibraryCount: 0, consortiumCount: 0 }
     }));
     await settle();
-    const unownedEditAction = results().querySelector('#polaris-additional-copy-action');
+    const unownedEditAction = results().querySelector('.polaris-additional-copy-action');
     assert.ok(unownedEditAction && unownedEditAction.disabled && unownedEditAction.classList.contains('hidden'),
       'edit actions remain unavailable when the BIB has no consortium holdings');
+
+    const runMultiResultChecks = async () => {
+      const multiSearch = lookups.length;
+      const multiOpen = open({ ...title, identifier: '9789999999999' });
+      await settle();
+      await completeMultiSearch(multiSearch);
+      await multiOpen;
+      let multiActions = [...results().querySelectorAll('.polaris-additional-copy-action')];
+      assert.equal(multiActions.length, 2);
+      assert.equal(new Set(multiActions.map(button => button.id)).size, 2);
+      const resultIds = [...results().querySelectorAll('[id]')].map(element => element.id);
+      assert.equal(new Set(resultIds).size, resultIds.length, 'result DOM IDs must be unique');
+      assert.match(multiActions[0].getAttribute('aria-label'), /BIB 9001, First multi result/);
+      assert.match(multiActions[1].getAttribute('aria-label'), /BIB 9002, Second multi result/);
+      assert.deepEqual(lookups.slice(multiSearch + 1, multiSearch + 3).map(lookup => lookup.body.bibId), ['9001', '9002']);
+      for (const button of multiActions) {
+        assert.equal(button.disabled, true);
+        assert.equal(button.classList.contains('hidden'), true);
+      }
+      await completeHoldings(multiSearch + 1);
+      assert.equal(multiActions[0].disabled, false);
+      assert.equal(multiActions[1].disabled, true, 'BIB A holdings cannot enable BIB B');
+      await completeHoldings(multiSearch + 2, 2);
+      assert.match(results().querySelectorAll('.polaris-search-result')[1].textContent, /Owned by you \(2\)/);
+      assert.equal(multiActions[1].disabled, false);
+      const confirmMultiAction = async button => {
+        button.click();
+        await settle();
+        const confirmation = document.getElementById('confirm-additional-copy-reminder')?.closest('dialog');
+        assert.ok(confirmation?.open);
+        [...confirmation.querySelectorAll('button')].find(item => item.textContent === 'Confirm').click();
+        await settle();
+        return actions.at(-1).body;
+      };
+      const firstMultiAction = await confirmMultiAction(multiActions[0]);
+      assert.equal(firstMultiAction.bibid, '9001');
+      assert.equal(firstMultiAction.title, 'First multi result');
+      assert.equal(firstMultiAction.identifier, '9781111111111');
+
+      const secondMultiSearch = lookups.length;
+      const secondMultiOpen = open({ ...title, identifier: '9789999999999' });
+      await settle();
+      await completeMultiSearch(secondMultiSearch);
+      await secondMultiOpen;
+      await completeHoldings(secondMultiSearch + 1);
+      await completeHoldings(secondMultiSearch + 2, 2);
+      multiActions = [...results().querySelectorAll('.polaris-additional-copy-action')];
+      const secondMultiAction = await confirmMultiAction(multiActions[1]);
+      assert.equal(secondMultiAction.bibid, '9002');
+      assert.equal(secondMultiAction.title, 'Second multi result');
+      assert.equal(secondMultiAction.identifier, null,
+        'a result without an identifier cannot submit the source identifier as catalog evidence');
+
+      const staleMultiSearch = lookups.length;
+      const staleMultiOpen = open({ ...title, identifier: '9789999999999' });
+      await settle();
+      await completeMultiSearch(staleMultiSearch);
+      await staleMultiOpen;
+      const staleMultiActions = [...results().querySelectorAll('.polaris-additional-copy-action')];
+      const replacementMultiSearch = lookups.length;
+      const replacementMultiOpen = open(copy);
+      await settle();
+      await completeSearch(replacementMultiSearch, 'Replacement after multi result');
+      await replacementMultiOpen;
+      await completeHoldings(staleMultiSearch + 1);
+      await completeHoldings(staleMultiSearch + 2);
+      assert.ok(staleMultiActions.every(button => button.disabled && button.classList.contains('hidden')),
+        'stale holdings cannot enable either detached result action');
+      assert.equal(results().querySelectorAll('.polaris-additional-copy-action').length, 0);
+
+      const repeatedBibSearch = lookups.length;
+      const repeatedBibOpen = open(title);
+      await settle();
+      lookups[repeatedBibSearch].pending.resolve(response(200, {
+        status: 'ok', totalMatches: 2, results: [
+          { title: 'Repeated catalog row', bibId: '9001' },
+          { title: 'Repeated catalog row', bibId: '9001' }
+        ]
+      }));
+      await repeatedBibOpen;
+      const repeatedActions = [...results().querySelectorAll('.polaris-additional-copy-action')];
+      assert.equal(repeatedActions.length, 2);
+      assert.equal(new Set(repeatedActions.map(button => button.id)).size, 2,
+        'result index disambiguates repeated BIB IDs');
+      assert.equal(new Set(repeatedActions.map(button => button.getAttribute('aria-label'))).size, 2,
+        'repeated catalog rows still have distinct accessible names');
+    };
 
     queueCloseEvents = true;
     ctx.currentSuggestions = [title, copy];
@@ -404,7 +500,7 @@ async function settle() {
     await settle();
     await completeSearch(canceledSearch, 'Canceled result');
     await completeHoldings(canceledSearch + 1);
-    results().querySelector('#polaris-additional-copy-action').click();
+    results().querySelector('.polaris-additional-copy-action').click();
     await settle();
     const canceledConfirmation = document.getElementById('confirm-additional-copy-reminder')?.closest('dialog');
     [...canceledConfirmation.querySelectorAll('button')].find(button => button.textContent === 'Cancel').click();
@@ -420,7 +516,7 @@ async function settle() {
     await settle();
     await completeSearch(failedSearch, 'Failed result');
     await completeHoldings(failedSearch + 1);
-    results().querySelector('#polaris-additional-copy-action').click();
+    results().querySelector('.polaris-additional-copy-action').click();
     await settle();
     failNextAction = true;
     const failedConfirmation = document.getElementById('confirm-additional-copy-reminder')?.closest('dialog');
@@ -439,7 +535,7 @@ async function settle() {
     launchEditSearch();
     await settle();
     await completeSearch(editSearch, 'Edit result');
-    const editAction = results().querySelector('#polaris-additional-copy-action');
+    const editAction = results().querySelector('.polaris-additional-copy-action');
     assert.ok(editAction, 'a persisted title request opened from edit retains the additional-copy action');
     assert.equal(editAction.disabled, true);
     assert.equal(editAction.classList.contains('hidden'), true);
@@ -480,7 +576,7 @@ async function settle() {
     await completeSearch(staleEditSearch, 'Stale edit result');
     await staleEditOpen;
     await completeHoldings(staleEditSearch + 1);
-    results().querySelector('#polaris-additional-copy-action').click();
+    results().querySelector('.polaris-additional-copy-action').click();
     await settle();
     const staleConfirmation = document.getElementById('confirm-additional-copy-reminder')?.closest('dialog');
     assert.ok(staleConfirmation);
@@ -508,7 +604,7 @@ async function settle() {
       await completeSearch(searchIndex, row.title);
       await pendingOpen;
       await completeHoldings(searchIndex + 1);
-      assert.equal(results().querySelector('#polaris-additional-copy-action'), null,
+      assert.equal(results().querySelector('.polaris-additional-copy-action'), null,
         `invalid immediate-action context ${row.type}/${options.source || 'row'} must stay unavailable`);
     }
     assert.equal(actions.length, 3);
@@ -526,7 +622,7 @@ async function settle() {
       await settle();
       await completeSearch(index, label);
       await completeHoldings(index + 1);
-      return results().querySelector('#polaris-additional-copy-action');
+      return results().querySelector('.polaris-additional-copy-action');
     };
     const confirmPendingAction = async button => {
       deferNextAction = true;
@@ -718,6 +814,7 @@ async function settle() {
     assert.equal(editModal.open, true, 'a stale workflow completion cannot run Settings dialog teardown');
     assert.equal(document.activeElement, document.getElementById('edit-title'));
     editModal.close();
+    await runMultiResultChecks();
   } finally {
     dom?.window.close();
     fs.rmSync(temporary, { recursive: true, force: true });

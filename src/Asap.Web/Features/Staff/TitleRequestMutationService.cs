@@ -54,6 +54,7 @@ public sealed class TitleRequestMutationService(
 {
     private static readonly string[] IdentifierDerivedTagCodes =
         ["polaris_bib_found", "polaris_bib_not_found", "polaris_multiple_matches"];
+    private sealed record ExplicitBibPreflight(string? Error = null, BibValidationResult? ValidatedBib = null);
     private readonly HashSet<Guid> allowedTenantIds = configuration.Authentication.Entra.AllowedTenantIds!
         .Select(Guid.Parse)
         .ToHashSet();
@@ -191,9 +192,9 @@ public sealed class TitleRequestMutationService(
             expectedVersion,
             input,
             cancellationToken);
-        if (bibPreflight is not null)
+        if (bibPreflight.Error is not null)
         {
-            return new TitleRequestMutationResult(bibPreflight);
+            return new TitleRequestMutationResult(bibPreflight.Error);
         }
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
@@ -228,9 +229,13 @@ public sealed class TitleRequestMutationService(
         var capabilities = TitleRequestCapabilityPolicy.Evaluate(request, incompleteOperation, placedProtection);
 
         var identifierSupplied = IsSupplied(input.Identifier);
-        var proposedIdentifier = identifierSupplied ? Clean(ElementString(input.Identifier)) : Clean(request.Identifier);
-        var identifierChanged = identifierSupplied &&
-                                !string.Equals(Clean(proposedIdentifier), Clean(request.Identifier), StringComparison.Ordinal);
+        var validatedIdentifier = Clean(bibPreflight.ValidatedBib?.Identifier);
+        var proposedIdentifier = input.Action == "additionalCopy"
+            ? validatedIdentifier ?? Clean(request.Identifier)
+            : identifierSupplied ? Clean(ElementString(input.Identifier)) : Clean(request.Identifier);
+        var identifierChanged = (input.Action == "additionalCopy" && validatedIdentifier is not null ||
+                                 input.Action != "additionalCopy" && identifierSupplied) &&
+                                !string.Equals(proposedIdentifier, Clean(request.Identifier), StringComparison.Ordinal);
         var bibSupplied = IsSupplied(input.Bibid);
         var proposedBib = bibSupplied ? Clean(ElementString(input.Bibid)) : Clean(request.BibId);
         var bibChanged = bibSupplied &&
@@ -303,7 +308,7 @@ public sealed class TitleRequestMutationService(
         if (input.Action == "additionalCopy")
         {
             await ReconcileExplicitPolarisIdentifierAsync(
-                context, request, identifierChanged, bibChanged, cancellationToken);
+                context, request, validatedIdentifier, cancellationToken);
         }
 
         if (input.Title is not null) request.Title = input.Title.Trim();
@@ -404,7 +409,7 @@ public sealed class TitleRequestMutationService(
             copyResult?.DispatchOutboxId.HasValue ?? false);
     }
 
-    private async Task<string?> PreflightExplicitBibAsync(
+    private async Task<ExplicitBibPreflight> PreflightExplicitBibAsync(
         CurrentStaff actor,
         long requestId,
         byte[] expectedVersion,
@@ -414,16 +419,16 @@ public sealed class TitleRequestMutationService(
         var bibSupplied = IsSupplied(input.Bibid);
         if (!bibSupplied)
         {
-            return input.Action == "additionalCopy" ? "bib_required" : null;
+            return new(input.Action == "additionalCopy" ? "bib_required" : null);
         }
         var proposedBib = Clean(ElementString(input.Bibid));
         if (input.Action == "additionalCopy" && proposedBib is null)
         {
-            return "bib_required";
+            return new("bib_required");
         }
         if (proposedBib is not null && !IsPositiveInteger(proposedBib))
         {
-            return "invalid_bib";
+            return new("invalid_bib");
         }
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
@@ -431,34 +436,34 @@ public sealed class TitleRequestMutationService(
             .SingleOrDefaultAsync(item => item.Id == requestId, cancellationToken);
         if (request is null || !TitleRequestViewService.CanAccess(actor, request.LibraryOrganizationId))
         {
-            return "not_found";
+            return new("not_found");
         }
         if (!request.RowVersion.SequenceEqual(expectedVersion))
         {
-            return "stale_version";
+            return new("stale_version");
         }
 
         if (!await context.Organizations.AsNoTracking()
                 .AnyAsync(item => item.Id == request.LibraryOrganizationId && item.IsActive, cancellationToken))
         {
-            return "organization_inactive";
+            return new("organization_inactive");
         }
 
         var identifierSupplied = IsSupplied(input.Identifier);
         var proposedIdentifier = identifierSupplied ? Clean(ElementString(input.Identifier)) : Clean(request.Identifier);
-        var identifierChanged = identifierSupplied &&
+        var identifierChanged = input.Action != "additionalCopy" && identifierSupplied &&
                                 !string.Equals(proposedIdentifier, Clean(request.Identifier), StringComparison.Ordinal);
         var bibChanged = !string.Equals(proposedBib, Clean(request.BibId), StringComparison.Ordinal);
         if (!bibChanged && !identifierChanged && input.Action != "additionalCopy")
         {
-            return null;
+            return new();
         }
 
         var incompleteOperation = await context.HoldPlacementOperations.AsNoTracking()
             .AnyAsync(item => item.TitleRequestId == request.Id && item.CompletedUtc == null, cancellationToken);
         if (incompleteOperation)
         {
-            return "hold_operation_incomplete";
+            return new("hold_operation_incomplete");
         }
         var successfulOperation = await context.HoldPlacementOperations.AsNoTracking()
             .AnyAsync(item => item.TitleRequestId == request.Id && item.State == "succeeded", cancellationToken);
@@ -471,30 +476,40 @@ public sealed class TitleRequestMutationService(
             successfulOperation || TitleRequestViewService.HasLegacyPlacedProtection(events));
         if (identifierChanged && !capability.CanEditIdentifier || bibChanged && !capability.CanChangeBib)
         {
-            return capability.BlockingReason ?? "identifier_locked_by_stage";
+            return new(capability.BlockingReason ?? "identifier_locked_by_stage");
         }
         var targetStatus = ResolveStatus(input.Action, input.Status, request.Status, proposedBib);
         if (targetStatus is null)
         {
-            return "invalid_transition";
+            return new("invalid_transition");
         }
         if (targetStatus is "hold_placed" or "closed")
         {
-            return "identifier_locked_by_stage";
+            return new("identifier_locked_by_stage");
         }
         if (proposedBib is null)
         {
-            return null;
+            return new();
         }
 
         try
         {
             var result = await staffPolarisProvider.ValidateBibAsync(int.Parse(proposedBib), cancellationToken);
-            return result.IsValid ? null : "bib_not_found";
+            if (!result.IsValid)
+            {
+                return new("bib_not_found");
+            }
+            if (input.Action == "additionalCopy" && Clean(result.Identifier) is { } catalogIdentifier &&
+                !string.Equals(catalogIdentifier, Clean(request.Identifier), StringComparison.Ordinal) &&
+                !capability.CanEditIdentifier)
+            {
+                return new(capability.BlockingReason ?? "identifier_locked_by_stage");
+            }
+            return new(ValidatedBib: result);
         }
         catch (PolarisOperationalException)
         {
-            return "bib_validation_unavailable";
+            return new("bib_validation_unavailable");
         }
     }
 
@@ -790,24 +805,38 @@ public sealed class TitleRequestMutationService(
     private static async Task ReconcileExplicitPolarisIdentifierAsync(
         AsapDbContext context,
         TitleRequest request,
-        bool identifierChanged,
-        bool bibChanged,
+        string? validatedIdentifier,
         CancellationToken cancellationToken)
     {
-        // The selected BIB has passed Polaris validation. This action leaves the
-        // suggestion-only identifier queue, so resolve its identifier state now.
+        // A valid BIB alone does not verify the request's identifier. The preflight
+        // catalog snapshot is safe to use here only after the locked RowVersion and
+        // capability checks have confirmed the same request and selected BIB.
+        var found = validatedIdentifier is not null;
         var hasIdentifier = Clean(request.Identifier) is not null;
-        var preserveFoundHistory = hasIdentifier && !identifierChanged && !bibChanged &&
-                                   request.IsbnCheckStatus == "found";
-        if (!preserveFoundHistory || request.IsbnCheckRetryCount != 0 ||
-            request.IsbnCheckLastErrorCode is not null)
+        var preserveNotFound = !found && hasIdentifier && request.IsbnCheckStatus == "not_found";
+        if (found)
         {
-            request.IsbnCheckStatus = hasIdentifier ? "found" : "skipped_no_isbn";
-            request.IsbnCheckResult = hasIdentifier ? "Polaris bibliographic match selected by staff." : null;
-            request.IsbnCheckRetryCount = 0;
-            request.IsbnCheckLastErrorCode = null;
-            request.LastCheckedUtc = hasIdentifier ? DateTime.UtcNow : null;
+            request.IsbnCheckStatus = "found";
+            request.IsbnCheckResult = "Polaris bibliographic identifier verified for the BIB selected by staff.";
+            request.LastCheckedUtc = DateTime.UtcNow;
         }
+        else if (!hasIdentifier)
+        {
+            request.IsbnCheckStatus = "skipped_no_isbn";
+            request.IsbnCheckResult = null;
+            request.LastCheckedUtc = null;
+        }
+        else if (!preserveNotFound)
+        {
+            // The schema has no terminal "unverified" state. With no catalog
+            // identifier, not_found is the least misleading terminal value; the
+            // result explains that no identifier/BIB match was established.
+            request.IsbnCheckStatus = "not_found";
+            request.IsbnCheckResult = "Selected Polaris BIB has no catalog identifier; request identifier was not verified.";
+            request.LastCheckedUtc = DateTime.UtcNow;
+        }
+        request.IsbnCheckRetryCount = 0;
+        request.IsbnCheckLastErrorCode = null;
 
         var tags = await (
             from link in context.TitleRequestWorkflowTags
@@ -816,13 +845,14 @@ public sealed class TitleRequestMutationService(
             select new { Link = link, tag.Code }).ToListAsync(cancellationToken);
         foreach (var tag in tags)
         {
-            if (!hasIdentifier || tag.Code == "polaris_bib_not_found" ||
-                tag.Code == "polaris_multiple_matches" && !preserveFoundHistory)
+            if (tag.Code == "polaris_multiple_matches" ||
+                tag.Code == "polaris_bib_found" && !found ||
+                tag.Code == "polaris_bib_not_found")
             {
                 context.TitleRequestWorkflowTags.Remove(tag.Link);
             }
         }
-        if (hasIdentifier && tags.All(item => item.Code != "polaris_bib_found"))
+        if (found && tags.All(item => item.Code != "polaris_bib_found"))
         {
             var foundTagId = await context.WorkflowTags
                 .Where(item => item.Code == "polaris_bib_found")

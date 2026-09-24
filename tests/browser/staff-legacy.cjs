@@ -392,7 +392,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
       await page.locator('.polaris-search-result-meta').getByText(/Publication: 2020.*Format: Book.*Identifier: 9780000000001/).waitFor();
     }
     await page.getByText('Owned by you (1)', { exact: true }).waitFor();
-    assert.equal(await page.locator('#polaris-additional-copy-action').count(), 1,
+    assert.equal(await page.locator('.polaris-additional-copy-action').count(), 1,
       'The inherited additional-copy action must expose its stable accessibility identity');
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'polaris-search');
     report.polarisSearchModes = ['identifier', 'title', 'author', 'title_author'];
@@ -409,8 +409,8 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     const beforeAction = await beforeActionResponse.json();
     await page.locator('#edit-title-polaris-search').click();
     await page.locator('#polarisSearchDialog[open]').waitFor();
-    await page.locator('#polaris-additional-copy-action:not([disabled])').waitFor();
-    await page.locator('#polaris-additional-copy-action').click();
+    await page.locator('.polaris-additional-copy-action:not([disabled])').waitFor();
+    await page.locator('.polaris-additional-copy-action').click();
     await page.locator('label[for="confirm-additional-copy-reminder"]').click();
     assert.equal(await page.locator('#confirm-additional-copy-reminder').isChecked(), true);
     const actionResponse = page.waitForResponse(response =>

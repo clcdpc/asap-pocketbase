@@ -137,9 +137,7 @@ export function effectiveWorkflowFlagsForRow(row, tags = row?.workflowTags) {
 
   const flags = clean.filter(flag => flag !== 'Identifier found' && flag !== 'Identifier number not found in system');
   const status = typeof row?.isbnCheckStatus === 'string' ? row.isbnCheckStatus : '';
-  const bibid = String(row?.bibid || '').trim();
-
-  if (bibid || status === 'found' || (hasIdentifierFound && status !== 'not_found')) {
+  if (status === 'found' || (hasIdentifierFound && status !== 'not_found' && status !== 'skipped_no_isbn')) {
     flags.push('Identifier found');
   } else {
     flags.push('Identifier number not found in system');
@@ -150,6 +148,10 @@ export function effectiveWorkflowFlagsForRow(row, tags = row?.workflowTags) {
 
 export function getIsbnCheckLabel(row) {
   const status = typeof row?.isbnCheckStatus === 'string' ? row.isbnCheckStatus : '';
+  if (status === 'not_found' &&
+      row?.isbnCheckResult === 'Selected Polaris BIB has no catalog identifier; request identifier was not verified.') {
+    return 'Identifier not verified on selected BIB';
+  }
   const isbnStatusLabels = {
     pending: 'New / identifier number check in progress',
     found: 'Identifier number found',
