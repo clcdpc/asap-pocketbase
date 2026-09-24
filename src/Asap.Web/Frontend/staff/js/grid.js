@@ -108,8 +108,8 @@ export function resetGrid() {
   return resetGridWithContext(currentGridDataContext());
 }
 
-export function refreshCurrentStaffView() {
-  return refreshCurrentStaffViewWithContext(currentGridDataContext());
+export function refreshCurrentStaffView(options = {}) {
+  return refreshCurrentStaffViewWithContext(currentGridDataContext(), options);
 }
 
 export function refreshStaffStatus(status) {

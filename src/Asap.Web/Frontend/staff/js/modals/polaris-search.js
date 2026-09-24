@@ -7,6 +7,7 @@ import { escapeAttr } from '../grid-utils.js';
 import { staffSession, staffAccessGeneration, publicationOptions, currentWorkflowOrgScopeId } from '../state.js';
 import { submitTitleRequestAction } from './edit-submit.js';
 import { editRequestIdentity, findWorkflowRow, requestIdentity } from '../request-identity.mjs';
+import { matchesRequestSelection } from '../app/url-utils.js';
 
 let holdingsLookupUnavailable = false;
 let activeSearchContext = null;
@@ -385,6 +386,7 @@ export async function openPolarisSearch(row, mode, options = {}, ctx, onRefresh)
     observedDialog = els.dialog;
   }
   const identity = { type: row.type, id: String(row.id ?? '').trim() };
+  const openedFromDeepLink = matchesRequestSelection(identity);
   const actionStaff = staffSession.staff;
   const accessGeneration = staffAccessGeneration;
   const context = { generation: 0, controller: null, returnAllowed: true, suppressReturnDialog: null };
@@ -394,7 +396,8 @@ export async function openPolarisSearch(row, mode, options = {}, ctx, onRefresh)
     staffSession.staff?.id === actionStaff?.id && staffSession.staff?.role === actionStaff?.role &&
     String(staffSession.staff?.organizationId) === String(actionStaff?.organizationId);
   context.isSessionCurrent = sameStaff;
-  context.ownsCurrentUi = () => activeSearchContext === context && els.dialog.open && sameStaff();
+  context.ownsCurrentUi = () => activeSearchContext === context && els.dialog.open && sameStaff() &&
+    (!openedFromDeepLink || matchesRequestSelection(identity));
 
   mode = String(mode || 'title').trim().toLowerCase();
   

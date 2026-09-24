@@ -430,8 +430,13 @@ export function resetGrid(ctx) {
   ctx.gridContainer.innerHTML = '';
 }
 
-export function refreshCurrentStaffView(ctx) {
-  return loadTab(ctx.currentStatus, ctx, { openLinkedRequest: false, focusHeader: false });
+export function refreshCurrentStaffView(ctx, options = {}) {
+  if (options.silent && (ctx.currentStatus === 'settings' || ctx.currentStatus === 'analytics')) {
+    return Promise.resolve();
+  }
+  return loadTab(ctx.currentStatus, ctx, options.silent
+    ? { openLinkedRequest: false, focusHeader: false }
+    : {});
 }
 
 export function refreshStaffStatus(status, ctx) {

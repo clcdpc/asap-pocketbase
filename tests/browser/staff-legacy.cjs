@@ -400,7 +400,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.locator('#editModal[open]').waitFor();
     await page.locator('#close-modal-x').click();
     await page.locator('#editModal').waitFor({ state: 'hidden' });
-    await page.goto(`${args.baseOrigin}/staff/?request=${encodeURIComponent(args.polarisActionRequestId)}`, { waitUntil: 'networkidle' });
+    await page.goto(`${args.baseOrigin}/staff/?stage=submitted&request=${encodeURIComponent(args.polarisActionRequestId)}&requestType=title_request`, { waitUntil: 'networkidle' });
     await page.locator('#editModal[open]').waitFor();
     assert.equal(await page.locator('#edit-id').inputValue(), args.polarisActionRequestId);
     const beforeActionResponse = await context.request.get(
@@ -432,13 +432,30 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.locator('#polarisSearchDialog').waitFor({ state: 'hidden' });
     await page.locator('#editModal').waitFor({ state: 'hidden' });
     await page.getByText(/Additional-copy task created and request queued|Additional-copy task created, request queued/).waitFor();
+    await page.waitForFunction(() => {
+      const params = new URLSearchParams(window.location.search);
+      return !params.has('request') && !params.has('requestType');
+    });
+    const afterActionUrl = new URL(page.url());
+    assert.equal(afterActionUrl.searchParams.has('request'), false);
+    assert.equal(afterActionUrl.searchParams.has('requestType'), false);
+    assert.equal(afterActionUrl.searchParams.get('stage'), 'submitted');
+    await page.locator('[data-status="suggestion"].active').waitFor({ state: 'visible' });
+    await page.waitForFunction(id => !document.querySelector(`#grid-container [data-suggestion-id="${id}"]`),
+      args.polarisActionRequestId);
+    const currentUrl = page.url();
+    await page.reload({ waitUntil: 'networkidle' });
+    assert.equal(page.url(), currentUrl, 'Reloading the cleaned URL must retain the workflow stage');
+    await page.locator('#app-container').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#editModal').evaluate(dialog => dialog.open), false,
+      'Reloading after the action must not reopen the old request');
+    await page.locator('[data-status="pending_hold"]').click();
+    await page.locator(`#grid-container .asap-row-marker[data-suggestion-id="${args.polarisActionRequestId}"]`).waitFor({ state: 'attached' });
     const copyResponse = await context.request.get(
       `${args.baseOrigin}/api/asap/staff/additional-copies/${actionResult.additionalCopyRequestId}`);
     assert.equal(copyResponse.status(), 200);
     assert.equal((await copyResponse.json()).sourceTitleRequest, args.polarisActionRequestId);
     report.polarisAdditionalCopyAction = { status: action.status(), taskId: actionResult.additionalCopyRequestId };
-    await page.goto(`${args.baseOrigin}/staff/`, { waitUntil: 'networkidle' });
-    await page.locator('#app-container').waitFor({ state: 'visible' });
     const patronLookupResponse = await post(
       context,
       args.baseOrigin,
@@ -586,8 +603,9 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     assert.equal(await page.locator('#edit-id').inputValue(), args.staleTitleBId);
     await page.locator('#close-modal-x').click();
     await page.locator('#editModal').waitFor({ state: 'hidden' });
+    await page.locator('#grid-search-input').fill('Stale title assignment B');
     const openRowMenu = async () => {
-      const marker = page.locator(`[data-suggestion-id="${args.staleTitleBId}"]`).first();
+      const marker = page.locator(`#grid-container .asap-row-marker[data-suggestion-id="${args.staleTitleBId}"]`);
       const row = marker.locator('xpath=ancestor::tr');
       await row.waitFor();
       await row.locator('.row-action-menu-trigger').evaluate(button => button.click());

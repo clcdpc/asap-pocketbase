@@ -96,6 +96,12 @@ async function settle() {
         deferNextAction = false;
         return action.pending.promise;
       }
+      if (String(url).includes('/title-requests/') && String(url).endsWith('/claim')) {
+        return Promise.resolve(response(200, { ...title, version: 'claimed-version' }));
+      }
+      if (String(url).includes('/title-requests?') || String(url).includes('/additional-copies?')) {
+        return Promise.resolve(response(200, { items: [], scope: 'all', availableLibraries: [] }));
+      }
       throw new Error(`Unexpected request: ${url}`);
     };
 
@@ -351,11 +357,19 @@ async function settle() {
     const editModal = document.getElementById('editModal');
     const editSearchButton = document.getElementById('edit-title-polaris-search');
     const editId = document.getElementById('edit-id');
+    const linkedUrl = requestId => `/staff/?stage=submitted&request=${requestId}&requestType=title_request#settings-workflow`;
+    const setLinkedUrl = requestId => window.history.replaceState(null, '', linkedUrl(requestId));
+    setLinkedUrl(id);
     editId.value = id;
     editId.dataset.requestType = 'title_request';
     document.getElementById('edit-title').value = title.title;
     let editRefreshes = 0;
-    const launchEditSearch = () => search.launchEditPolarisSearch('title', editSearchButton, 'edit', ctx, () => { editRefreshes += 1; });
+    const editRefreshModes = [];
+    const launchEditSearch = () => search.launchEditPolarisSearch('title', editSearchButton, 'edit', ctx, options => {
+      editRefreshes += 1;
+      editRefreshModes.push(options?.silent === true ? 'silent' : 'normal');
+      if (options?.silent !== true) document.getElementById('tab-desc').focus();
+    });
 
     editModal.showModal();
     const manualSearch = lookups.length;
@@ -367,6 +381,8 @@ async function settle() {
     await flushDialogCloseEvents();
     assert.equal(editModal.open, true, 'closing Polaris returns to the edit dialog');
     assert.equal(document.activeElement, editSearchButton, 'focus returns to the Polaris launch button');
+    assert.equal(window.location.pathname + window.location.search + window.location.hash, linkedUrl(id),
+      'manual Polaris close preserves the request deep link and unrelated URL state');
 
     const applySearch = lookups.length;
     launchEditSearch();
@@ -451,6 +467,11 @@ async function settle() {
     assert.equal(polarisCloseEvents, closeEventsBeforeAction + 1, 'the queued Polaris close event fired');
     assert.equal(editModal.open, false, 'the queued close event must not reopen the stale edit dialog');
     assert.equal(editRefreshes, 1, 'the successful action refreshes the staff grid');
+    assert.equal(editRefreshModes.at(-1), 'normal');
+    assert.equal(window.location.search, '?stage=submitted', 'owned success clears only the matching request selection');
+    assert.equal(window.location.hash, '#settings-workflow');
+    assert.equal(document.activeElement, document.getElementById('tab-desc'),
+      'owned success restores normal refresh focus');
     assert.match(document.getElementById('toast-container').textContent, /Additional-copy task created/);
 
     const staleEditSearch = lookups.length;
@@ -524,10 +545,15 @@ async function settle() {
     search.closePolarisSearchDialog();
     await flushDialogCloseEvents();
     assert.equal(editModal.open, true);
+    editSearchButton.focus();
+    const manualUrl = window.location.href;
     const refreshesBeforeManualCompletion = editRefreshes;
     await finishAction(manuallyClosedAction);
     assert.equal(editModal.open, true);
     assert.equal(editRefreshes, refreshesBeforeManualCompletion + 1);
+    assert.equal(editRefreshModes.at(-1), 'silent');
+    assert.equal(window.location.href, manualUrl);
+    assert.equal(document.activeElement, editSearchButton, 'stale completion keeps the returned edit form focused');
     assert.match(document.getElementById('toast-container').textContent, /Additional-copy task created/);
 
     // A newer Polaris invocation owns the reused dialog and its return listener.
@@ -551,10 +577,16 @@ async function settle() {
     await flushDialogCloseEvents();
     editId.value = '9007199254740996';
     document.getElementById('edit-title').value = 'Different request B';
+    setLinkedUrl('9007199254740996');
+    document.getElementById('edit-title').focus();
+    const newerUrl = window.location.href;
     await finishAction(differentEditAction);
     assert.equal(editModal.open, true);
     assert.equal(editId.value, '9007199254740996');
     assert.equal(document.getElementById('edit-title').value, 'Different request B');
+    assert.equal(window.location.href, newerUrl, 'stale A cannot clear B deep link');
+    assert.equal(editRefreshModes.at(-1), 'silent');
+    assert.equal(document.activeElement, document.getElementById('edit-title'), 'stale A cannot steal B focus');
     editModal.close();
     await flushDialogCloseEvents();
 
@@ -594,6 +626,47 @@ async function settle() {
     assert.equal(dialog.open, false);
     assert.equal(editModal.open, false);
 
+    // A duplicate response from an old interaction cannot prompt over a newer edit request.
+    state.setCurrentSuggestions([title, copy]);
+    const staleDuplicate = await confirmPendingAction(await openReadyEdit('Stale duplicate action'));
+    search.closePolarisSearchDialog();
+    await flushDialogCloseEvents();
+    editId.value = '9007199254740996';
+    setLinkedUrl('9007199254740996');
+    document.getElementById('edit-title').focus();
+    const duplicateNewerUrl = window.location.href;
+    staleDuplicate.pending.resolve(response(409, {
+      code: 'duplicate_open_request', message: 'Another request has this BIB.'
+    }));
+    await settle();
+    assert.equal(document.getElementById('confirm-dialog').open, false);
+    assert.equal(document.getElementById('alert-dialog').open, false);
+    assert.equal(editModal.open, true);
+    assert.equal(window.location.href, duplicateNewerUrl);
+    assert.equal(document.activeElement, document.getElementById('edit-title'));
+    assert.equal(editRefreshModes.at(-1), 'silent');
+    editModal.close();
+    await flushDialogCloseEvents();
+
+    // The current duplicate confirmation closes using the existing title-request version.
+    setLinkedUrl(id);
+    const ownedDuplicate = await confirmPendingAction(await openReadyEdit('Owned duplicate action'));
+    ownedDuplicate.pending.resolve(response(409, {
+      code: 'duplicate_open_request', message: 'Another request has this BIB.'
+    }));
+    await settle();
+    assert.equal(document.getElementById('confirm-dialog').open, true);
+    document.getElementById('confirm-dialog-ok').click();
+    await settle();
+    await flushDialogCloseEvents();
+    assert.equal(actions.at(-1).body.action, 'closeDuplicate');
+    assert.ok(actions.at(-1).body.version, 'duplicate close sends the current RowVersion');
+    assert.equal(document.getElementById('confirm-dialog').open, false, 'one confirmation is sufficient');
+    assert.equal(dialog.open, false);
+    assert.equal(editModal.open, false);
+    assert.equal(window.location.search, '?stage=submitted');
+    assert.equal(editRefreshModes.at(-1), 'normal');
+
     // Model checkAuth's queued close event after 401 while edit-origin Polaris is open.
     const accessLostButton = await openReadyEdit('Access lost while open');
     accessLostButton.click();
@@ -613,6 +686,38 @@ async function settle() {
     });
     await flushDialogCloseEvents();
     assert.equal(editModal.open, false, 'a later same-staff session inherits no stale edit dialog');
+
+    // The real legacy refresh path restores focus for an ordinary row claim.
+    const grid = await import(pathToFileURL(path.join(temporary, 'staff/js/grid.js')).href);
+    window.history.replaceState(null, '', '/staff/?stage=submitted');
+    state.setCurrentSuggestions([title]);
+    state.setAllSuggestions([title]);
+    const detachedClaimButton = document.createElement('button');
+    document.getElementById('grid-container').appendChild(detachedClaimButton);
+    detachedClaimButton.focus();
+    await grid.claimRequest({ type: 'title_request', id });
+    assert.equal(detachedClaimButton.isConnected, false, 'the grid refresh removes the old row control');
+    assert.equal(document.activeElement, document.getElementById('tab-desc'),
+      'ordinary row action refresh gives focus to the workflow header');
+
+    // Silent refresh may update grid data without disturbing a newer edit control or deep link.
+    setLinkedUrl('9007199254740996');
+    editId.value = '9007199254740996';
+    editModal.showModal();
+    document.getElementById('edit-title').focus();
+    const silentUrl = window.location.href;
+    await grid.refreshCurrentStaffView({ silent: true });
+    assert.equal(window.location.href, silentUrl);
+    assert.equal(editModal.open, true);
+    assert.equal(document.activeElement, document.getElementById('edit-title'));
+    editModal.close();
+    state.setCurrentStatus('settings');
+    editModal.showModal();
+    document.getElementById('edit-title').focus();
+    await grid.refreshCurrentStaffView({ silent: true });
+    assert.equal(editModal.open, true, 'a stale workflow completion cannot run Settings dialog teardown');
+    assert.equal(document.activeElement, document.getElementById('edit-title'));
+    editModal.close();
   } finally {
     dom?.window.close();
     fs.rmSync(temporary, { recursive: true, force: true });

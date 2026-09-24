@@ -59,12 +59,14 @@ export async function deleteClosedRequest(identity) {
   }
 }
 
-export async function closeDuplicateRequest(identity) {
+export async function closeDuplicateRequest(identity, options = {}) {
+  const { alreadyConfirmed = false, isCurrent = () => true, refresh = true } = options;
   const row = findWorkflowRow(identity, currentSuggestions, allSuggestions);
   if (!row || requestIdentity(row).type !== 'title_request') return;
   const id = row.id;
-  const confirmed = await showConfirm('Close this duplicate request?', 'The patron already has an open request or hold for this BIB ID.');
-  if (!confirmed) return;
+  if (!alreadyConfirmed && !await showConfirm('Close this duplicate request?',
+    'The patron already has an open request or hold for this BIB ID.')) return false;
+  if (!isCurrent()) return false;
   try {
     await authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(id)}/action`, {
       method: 'POST',
@@ -82,10 +84,12 @@ export async function closeDuplicateRequest(identity) {
         editedBy: staffSession.staff?.username
       }
     });
-    showToast('Duplicate request closed.', 'success');
-    refreshCurrentStaffView();
+    if (isCurrent()) showToast('Duplicate request closed.', 'success');
+    if (refresh) await refreshCurrentStaffView({ silent: !isCurrent() });
+    return true;
   } catch (err) {
-    await showAlert(err.message || 'Could not close duplicate request.');
+    if (isCurrent()) await showAlert(err.message || 'Could not close duplicate request.');
+    return false;
   }
 }
 

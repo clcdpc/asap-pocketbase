@@ -5,6 +5,7 @@ import { confirmDuplicateOpenRequestClose } from './confirm-duplicate.js';
 import { rememberRecentSuggestion, updateRecentSuggestion, renderRecentSuggestionsSwitcher } from '../recent-suggestions.js';
 import { collectEditCustomFieldValues } from '../request-custom-fields.js';
 import { editRequestIdentity, findWorkflowRow } from '../request-identity.mjs';
+import { clearMatchingRequestSelection } from '../app/url-utils.js';
 
 export async function submitTitleRequestAction(id, payload, options = {}) {
   const {
@@ -16,6 +17,24 @@ export async function submitTitleRequestAction(id, payload, options = {}) {
   } = options;
 
   let response;
+  let ownedAtCompletion = false;
+  const ownsUiNow = () => {
+    if (!isSessionCurrent()) return false;
+    try {
+      return ownsCurrentUi();
+    } catch (error) {
+      console.error('Could not verify title-request dialog ownership:', error);
+      return false;
+    }
+  };
+  const refreshAfterAction = async silent => {
+    if (!isSessionCurrent() || typeof onRefresh !== 'function') return;
+    try {
+      await onRefresh({ silent });
+    } catch (error) {
+      console.error('Could not refresh the staff view after a title-request action:', error);
+    }
+  };
   try {
     response = await authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(id)}/action`, {
       method: 'POST',
@@ -26,12 +45,29 @@ export async function submitTitleRequestAction(id, payload, options = {}) {
     if (err.response) {
       err.code = err.response.code || '';
     }
+    if (!ownsUiNow()) {
+      await refreshAfterAction(true);
+      return false;
+    }
     if (err && err.code === 'duplicate_open_request') {
-      const confirmed = await confirmDuplicateOpenRequestClose(err, { type: 'title_request', id });
-      if (confirmed) {
-        if (typeof onRefresh === 'function' && isSessionCurrent()) onRefresh();
-        return false;
+      const closed = await confirmDuplicateOpenRequestClose(err, { type: 'title_request', id }, ownsUiNow);
+      if (closed) {
+        const stillOwnsUi = ownsUiNow();
+        if (stillOwnsUi) {
+          try {
+            if (typeof beforeDialogsClose === 'function') beforeDialogsClose();
+            clearMatchingRequestSelection({ type: 'title_request', id });
+            dialogsToClose.forEach(dialogId => {
+              const el = document.getElementById(dialogId);
+              if (el?.open) el.close();
+            });
+          } catch (error) {
+            console.error('Could not close the duplicate title-request dialog:', error);
+          }
+        }
+        await refreshAfterAction(!stillOwnsUi);
       }
+      return false;
     }
     if (isSessionCurrent()) await showAlert(err.message || 'Error updating suggestion');
     return false;
@@ -44,15 +80,12 @@ export async function submitTitleRequestAction(id, payload, options = {}) {
       rememberRecentSuggestion(updatedRecord);
       updateRecentSuggestion(updatedRecord);
       renderRecentSuggestionsSwitcher();
-      let ownsUi = false;
-      try {
-        ownsUi = ownsCurrentUi();
-      } catch (error) {
-        console.error('Could not verify title-request dialog ownership:', error);
-      }
+      const ownsUi = ownsUiNow();
       if (ownsUi) {
+        ownedAtCompletion = true;
         try {
           if (typeof beforeDialogsClose === 'function') beforeDialogsClose();
+          clearMatchingRequestSelection({ type: 'title_request', id });
           dialogsToClose.forEach(dialogId => {
             const el = document.getElementById(dialogId);
             if (el?.open) el.close();
@@ -112,13 +145,7 @@ export async function submitTitleRequestAction(id, payload, options = {}) {
   } catch (err) {
     console.error('Committed title-request action could not update the staff view:', err);
   } finally {
-    if (isSessionCurrent() && typeof onRefresh === 'function') {
-      try {
-        await onRefresh();
-      } catch (error) {
-        console.error('Could not refresh the staff view after a committed action:', error);
-      }
-    }
+    await refreshAfterAction(!ownedAtCompletion);
   }
   return true;
 }

@@ -1,4 +1,6 @@
 using System.Data;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Asap.Web.Features.Email;
 using Asap.Web.Features.Patron;
@@ -6,6 +8,7 @@ using Asap.Web.Infrastructure.Configuration;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Data.SqlClient;
 
 namespace Asap.Web.Features.Staff;
 
@@ -262,6 +265,21 @@ public sealed class TitleRequestMutationService(
         if (bibChanged && proposedBib is not null && !IsPositiveInteger(proposedBib))
         {
             return new TitleRequestMutationResult("invalid_bib");
+        }
+        if (input.Action == "additionalCopy" && targetStatus == "pending_hold" &&
+            (request.Status != "pending_hold" || bibChanged) && proposedBib is not null)
+        {
+            // Serialize actions for this patron before checking the competing BIB. The
+            // transaction-owned lock also protects the empty-result case.
+            await LockPatronAdditionalCopyAsync(context, request, cancellationToken);
+            var duplicate = await context.TitleRequests.AsNoTracking().AnyAsync(item =>
+                item.LibraryOrganizationId == request.LibraryOrganizationId &&
+                item.Barcode == request.Barcode && item.BibId == proposedBib &&
+                item.Id != request.Id && item.Status != "closed", cancellationToken);
+            if (duplicate)
+            {
+                return new TitleRequestMutationResult("duplicate_open_request");
+            }
         }
 
         if (identifierChanged)
@@ -619,6 +637,25 @@ public sealed class TitleRequestMutationService(
             return new LockedMutation("not_found");
         }
         return new LockedMutation("locked", request, staff, request.Status);
+    }
+
+    private static async Task LockPatronAdditionalCopyAsync(
+        AsapDbContext context,
+        TitleRequest request,
+        CancellationToken cancellationToken)
+    {
+        var patronKey = $"{request.LibraryOrganizationId}:{request.Barcode.ToUpperInvariant()}";
+        var resource = "asap:additional-copy:" + Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(patronKey)));
+        var result = new SqlParameter("@result", SqlDbType.Int) { Direction = ParameterDirection.Output };
+        var name = new SqlParameter("@resource", SqlDbType.NVarChar, 255) { Value = resource };
+        await context.Database.ExecuteSqlRawAsync(
+            "EXEC @result = sys.sp_getapplock @Resource = @resource, @LockMode = 'Exclusive', @LockOwner = 'Transaction';",
+            [result, name], cancellationToken);
+        if (result.Value is not int code || code < 0)
+        {
+            throw new InvalidOperationException("Could not acquire the patron additional-copy lock.");
+        }
     }
 
     private bool IsSameCurrentActor(CurrentStaff ticket, StaffUser row) =>

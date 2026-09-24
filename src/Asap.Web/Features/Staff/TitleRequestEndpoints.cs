@@ -430,7 +430,7 @@ public static class TitleRequestEndpoints
         "staff_scope_forbidden" or "claim_forbidden" or "delete_forbidden" => Results.Json(
             new { code = result.Code, message = "This request is outside your authorized scope." },
             statusCode: StatusCodes.Status403Forbidden),
-        "stale_version" or "claim_conflict" or "hold_operation_incomplete" or
+        "stale_version" or "claim_conflict" or "duplicate_open_request" or "hold_operation_incomplete" or
             "identifier_locked_by_stage" or "identifier_retry_not_allowed" or "organization_inactive" or
             "hold_history_retained" => Results.Conflict(new
             {
