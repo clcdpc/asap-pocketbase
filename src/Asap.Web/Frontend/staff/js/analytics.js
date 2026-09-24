@@ -1,4 +1,6 @@
-import { authorizedJson, isAbortError, latestLoads } from './http.js';
+import { authorizedJson } from './http.js';
+import { isAbortError } from './http.js';
+import { createLatestLoad } from '../../shared/latest-load.js';
 
 const dateRangeLabels = {
   last30: 'Last 30 days',
@@ -23,19 +25,17 @@ const reasonLabels = {
   duplicate_hold: 'Duplicate hold / request',
   manual: 'Manual close',
   purchased_no_hold: 'Purchased, no hold',
-  'Silently Closed': 'Silent close',
-  unrecorded: 'No reason recorded'
+  'Silently Closed': 'Silent close'
 };
 
 let analyticsScope = '';
 let analyticsRange = 'lastMonth';
+const analyticsLoads = createLatestLoad();
 
-function formatDate(value) {
-  if (!value) return '';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? String(value)
-    : date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+function formatAnalyticsDate(iso) {
+  if (!iso) return '';
+  var d = new Date(iso);
+  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 function formatCount(value) {
@@ -52,55 +52,38 @@ function formatDays(value) {
 function analyticsUrl() {
   const params = new URLSearchParams();
   params.set('range', analyticsRange);
-  if (analyticsScope) params.set('scope', analyticsScope);
+  if (analyticsScope) {
+    params.set('scope', analyticsScope);
+  }
   params.set('_', String(Date.now()));
-  return `/api/asap/staff/analytics?${params.toString()}`;
+  return '/api/asap/staff/analytics?' + params.toString();
 }
 
 function renderStatus(container, className, message) {
-  const node = document.createElement('p');
+  const node = document.createElement('div');
   node.className = className;
-  node.setAttribute('role', 'status');
   node.textContent = message;
   container.replaceChildren(node);
 }
 
-function restoreAnalyticsFocus(container, focusedControlId) {
-  if (!['analytics-scope', 'analytics-date-range'].includes(focusedControlId)) return;
-  container.querySelector(`#${focusedControlId}`)?.focus();
-}
-
-export async function loadAnalytics(
-  container,
-  allowScopeRecovery = true,
-  focusedControlId = document.activeElement?.id || '') {
+export async function loadAnalytics(container) {
   if (!container) return;
-  const load = latestLoads.begin('analytics');
-  renderStatus(container, 'analytics-status', 'Loading analytics...');
+  const guard = analyticsLoads.begin('analytics');
+  renderStatus(container, 'alert alert-light border', 'Loading analytics...');
+
   try {
-    const data = await authorizedJson(analyticsUrl(), { signal: load.signal });
-    if (!load.isCurrent()) return;
-    analyticsScope = data.scope?.mode === 'all'
-      ? 'all'
-      : data.scope?.libraryOrgId || analyticsScope;
-    analyticsRange = data.dateRange?.key || analyticsRange;
+    const data = await authorizedJson(analyticsUrl(), {
+      cache: 'no-store',
+      signal: guard.signal
+    });
+    if (!guard.isCurrent()) return;
+    analyticsScope = data.scope && data.scope.mode === 'all' ? 'all' : (data.scope && data.scope.libraryOrgId) || analyticsScope;
     renderAnalytics(container, data);
-    restoreAnalyticsFocus(container, focusedControlId);
-  } catch (error) {
-    if (isAbortError(error) || !load.isCurrent()) return;
-    if (allowScopeRecovery &&
-        error?.status === 400 &&
-        error.response?.code === 'invalid_scope' &&
-        analyticsScope &&
-        analyticsScope !== 'all' &&
-        analyticsScope !== 'system') {
-      analyticsScope = 'all';
-      await loadAnalytics(container, false, focusedControlId);
-      return;
-    }
-    renderStatus(container, 'analytics-status error', error.message || 'Analytics could not be loaded.');
+  } catch (err) {
+    if (isAbortError(err) || !guard.isCurrent()) return;
+    renderStatus(container, 'alert alert-danger', err.message || 'Analytics could not be loaded.');
   } finally {
-    latestLoads.finish('analytics', load.token);
+    analyticsLoads.finish('analytics', guard.token);
   }
 }
 
@@ -108,16 +91,10 @@ export function refreshAnalyticsView(container) {
   return loadAnalytics(container);
 }
 
-export function resetAnalytics() {
-  latestLoads.begin('analytics').abort();
-  analyticsScope = '';
-  analyticsRange = 'lastMonth';
-}
-
 function renderAnalytics(container, data) {
   const shell = document.createElement('section');
   shell.className = 'analytics-shell';
-  shell.setAttribute('aria-label', 'Analytics results');
+  shell.setAttribute('aria-labelledby', 'analytics-title');
   shell.append(
     renderAnalyticsHeader(data),
     renderSummaryCards(data.summary),
@@ -131,72 +108,96 @@ function renderAnalyticsHeader(data) {
   const header = document.createElement('div');
   header.className = 'analytics-header';
 
-  const description = document.createElement('p');
-  description.className = 'analytics-range-summary';
-  description.textContent = `${data.scope.label}: ${formatDate(data.dateRange.start)} through ${formatDate(data.dateRange.end)}`;
+  const titleGroup = document.createElement('div');
+  const h2 = document.createElement('h2');
+  h2.id = 'analytics-title';
+  h2.className = 'h4 mb-1';
+  h2.textContent = 'Analytics';
+  const p = document.createElement('p');
+  p.className = 'text-muted mb-0';
+  p.textContent = 'Operational summary for ' + data.scope.label + ': ' + formatAnalyticsDate(data.dateRange.start) + ' through ' + formatAnalyticsDate(data.dateRange.end);
+  titleGroup.append(h2, p);
 
   const controls = document.createElement('div');
   controls.className = 'analytics-controls';
-  controls.append(renderScopeControl(data), renderDateRangeControl(data.dateRange.key));
-  header.append(description, controls);
+  controls.append(
+    renderScopeControl(data),
+    renderDateRangeControl(data.dateRange.key)
+  );
+
+  header.append(titleGroup, controls);
   return header;
 }
 
 function renderScopeControl(data) {
-  const label = document.createElement('label');
-  label.className = 'analytics-control';
-  const labelText = document.createElement('span');
-  labelText.className = 'analytics-control-label';
-  labelText.textContent = 'Scope';
+  const control = document.createElement('div');
+  control.className = 'analytics-control';
 
   if (!data.scope.superAdmin) {
-    const value = document.createElement('strong');
-    value.textContent = data.scope.label;
-    label.append(labelText, value);
-    return label;
+    const span = document.createElement('span');
+    span.className = 'analytics-control-label';
+    span.textContent = 'Scope';
+    const strong = document.createElement('strong');
+    strong.textContent = data.scope.label;
+    control.append(span, strong);
+    return control;
   }
+
+  const libraries = (data.availableLibraries || []).slice();
+  if (data.scope.mode === 'library' && data.scope.libraryOrgId && !libraries.some(library => library.orgId === data.scope.libraryOrgId)) {
+    libraries.push({ orgId: data.scope.libraryOrgId, name: data.scope.label || 'Current library' });
+  }
+
+  const label = document.createElement('label');
+  label.className = 'analytics-control';
+
+  const labelSpan = document.createElement('span');
+  labelSpan.className = 'analytics-control-label';
+  labelSpan.textContent = 'Scope';
 
   const select = document.createElement('select');
   select.id = 'analytics-scope';
-  select.setAttribute('aria-label', 'Analytics scope');
+  select.className = 'form-control form-control-sm';
+
   const allOption = document.createElement('option');
   allOption.value = 'all';
   allOption.textContent = 'All libraries';
-  select.append(allOption);
+  if (data.scope.mode === 'all') allOption.selected = true;
+  select.appendChild(allOption);
 
-  const libraries = (data.availableLibraries || []).slice();
-  if (data.scope.mode === 'library' && data.scope.libraryOrgId &&
-      !libraries.some(item => item.orgId === data.scope.libraryOrgId)) {
-    libraries.push({ orgId: data.scope.libraryOrgId, name: data.scope.label || 'Current library' });
-  }
-  for (const library of libraries) {
+  libraries.forEach(library => {
     const option = document.createElement('option');
     option.value = library.orgId;
-    option.textContent = `${library.name} (ID ${library.orgId})`;
-    select.append(option);
-  }
-  select.value = data.scope.mode === 'all' ? 'all' : data.scope.libraryOrgId;
-  label.append(labelText, select);
+    option.textContent = library.name + ' (ID ' + library.orgId + ')';
+    if (data.scope.mode === 'library' && data.scope.libraryOrgId === library.orgId) option.selected = true;
+    select.appendChild(option);
+  });
+
+  label.append(labelSpan, select);
   return label;
 }
 
 function renderDateRangeControl(selected) {
   const label = document.createElement('label');
   label.className = 'analytics-control';
-  const labelText = document.createElement('span');
-  labelText.className = 'analytics-control-label';
-  labelText.textContent = 'Date range';
+
+  const span = document.createElement('span');
+  span.className = 'analytics-control-label';
+  span.textContent = 'Date range';
+
   const select = document.createElement('select');
   select.id = 'analytics-date-range';
-  select.setAttribute('aria-label', 'Analytics date range');
-  for (const [value, text] of Object.entries(dateRangeLabels)) {
+  select.className = 'form-control form-control-sm';
+
+  Object.entries(dateRangeLabels).forEach(([value, labelText]) => {
     const option = document.createElement('option');
     option.value = value;
-    option.textContent = text;
-    option.selected = value === selected;
-    select.append(option);
-  }
-  label.append(labelText, select);
+    option.textContent = labelText;
+    if (value === selected) option.selected = true;
+    select.appendChild(option);
+  });
+
+  label.append(span, select);
   return label;
 }
 
@@ -208,7 +209,7 @@ function renderSummaryCards(summary) {
     renderSummaryCard('New suggestions', formatCount(summary.newSuggestions), 'Created in selected period'),
     renderSummaryCard('Open requests', formatCount(summary.openRequests), 'Current non-closed requests'),
     renderSummaryCard('Closed requests', formatCount(summary.closedRequests), 'Closed and updated in selected period'),
-    renderSummaryCard('Avg days to hold', formatDays(summary.averageDaysToHold), 'Created to first hold placement')
+    renderSummaryCard('Avg days to hold', formatDays(summary.averageDaysToHold), 'Created to first Polaris hold placement')
   );
   return container;
 }
@@ -216,16 +217,20 @@ function renderSummaryCards(summary) {
 function renderSummaryCard(label, value, hint) {
   const article = document.createElement('article');
   article.className = 'analytics-card';
-  const name = document.createElement('div');
-  name.className = 'analytics-card-label';
-  name.textContent = label;
-  const number = document.createElement('div');
-  number.className = 'analytics-card-value';
-  number.textContent = value;
-  const detail = document.createElement('div');
-  detail.className = 'analytics-card-hint';
-  detail.textContent = hint;
-  article.append(name, number, detail);
+
+  const labelDiv = document.createElement('div');
+  labelDiv.className = 'analytics-card-label';
+  labelDiv.textContent = label;
+
+  const valueDiv = document.createElement('div');
+  valueDiv.className = 'analytics-card-value';
+  valueDiv.textContent = value;
+
+  const hintDiv = document.createElement('div');
+  hintDiv.className = 'analytics-card-hint';
+  hintDiv.textContent = hint;
+
+  article.append(labelDiv, valueDiv, hintDiv);
   return article;
 }
 
@@ -243,7 +248,10 @@ function renderAnalyticsGrid(data) {
 
 function renderStageCounts(stageCounts) {
   return renderPanel('Requests by stage', 'Current workflow state counts.', renderRows(
-    Object.keys(stageLabels).map(status => ({ label: stageLabels[status], value: formatCount(stageCounts[status]) }))
+    Object.keys(stageLabels).map(status => ({
+      label: stageLabels[status],
+      value: formatCount(stageCounts[status])
+    }))
   ));
 }
 
@@ -259,10 +267,10 @@ function renderAging(aging) {
   );
 }
 
-function renderClosedReasons(reasons) {
-  const total = (reasons || []).reduce((sum, row) => sum + Number(row.count || 0), 0);
+function renderClosedReasons(closedReasons) {
+  const total = (closedReasons || []).reduce((sum, row) => sum + Number(row.count || 0), 0);
   const rows = total
-    ? reasons.map(row => ({
+    ? closedReasons.map(row => ({
         label: reasonLabels[row.reason] || row.reason || 'No reason recorded',
         value: `${formatCount(row.count)} (${Math.round((Number(row.count || 0) / total) * 100)}%)`
       }))
@@ -271,23 +279,30 @@ function renderClosedReasons(reasons) {
 }
 
 function renderExceptions(exceptions) {
-  return renderPanel('Exceptions', 'Current records with reliable exception signals.', renderRows([
+  const rows = [
     { label: 'Hold failures', value: formatCount(exceptions.holdFailures) },
     { label: 'Identifier failures', value: formatCount(exceptions.identifierFailures) }
-  ]));
+  ];
+  return renderPanel('Exceptions', 'Current records with reliable exception signals.', renderRows(rows));
 }
 
 function renderPanel(title, hint, body) {
   const article = document.createElement('article');
   article.className = 'analytics-panel';
-  const heading = document.createElement('div');
-  heading.className = 'analytics-panel-header';
-  const h2 = document.createElement('h2');
-  h2.textContent = title;
+
+  const header = document.createElement('div');
+  header.className = 'analytics-panel-header';
+
+  const h3 = document.createElement('h3');
+  h3.className = 'h6 mb-1';
+  h3.textContent = title;
+
   const p = document.createElement('p');
+  p.className = 'text-muted small mb-0';
   p.textContent = hint;
-  heading.append(h2, p);
-  article.append(heading, body);
+
+  header.append(h3, p);
+  article.append(header, body);
   return article;
 }
 
@@ -295,31 +310,41 @@ function renderRows(rows) {
   const table = document.createElement('div');
   table.className = 'analytics-table';
   table.setAttribute('role', 'table');
-  for (const row of rows || []) {
-    const rowNode = document.createElement('div');
-    rowNode.className = 'analytics-row';
-    rowNode.setAttribute('role', 'row');
-    const label = document.createElement('div');
-    label.setAttribute('role', 'cell');
-    label.textContent = row.label;
-    const value = document.createElement('strong');
-    value.setAttribute('role', 'cell');
-    value.textContent = row.value;
-    rowNode.append(label, value);
-    table.append(rowNode);
-  }
+
+  (rows || []).forEach(row => {
+    const rowDiv = document.createElement('div');
+    rowDiv.className = 'analytics-row';
+    rowDiv.setAttribute('role', 'row');
+
+    const labelCell = document.createElement('div');
+    labelCell.setAttribute('role', 'cell');
+    labelCell.textContent = row.label;
+
+    const valueCell = document.createElement('strong');
+    valueCell.setAttribute('role', 'cell');
+    valueCell.textContent = row.value;
+
+    rowDiv.append(labelCell, valueCell);
+    table.appendChild(rowDiv);
+  });
+
   return table;
 }
 
 function bindAnalyticsControls(container) {
-  const scope = container.querySelector('#analytics-scope');
-  if (scope) scope.addEventListener('change', () => {
-    analyticsScope = scope.value || 'all';
-    loadAnalytics(container);
-  });
-  const range = container.querySelector('#analytics-date-range');
-  if (range) range.addEventListener('change', () => {
-    analyticsRange = range.value || 'lastMonth';
-    loadAnalytics(container);
-  });
+  const scopeSelect = container.querySelector('#analytics-scope');
+  if (scopeSelect) {
+    scopeSelect.addEventListener('change', () => {
+      analyticsScope = scopeSelect.value || 'all';
+      loadAnalytics(container);
+    });
+  }
+
+  const rangeSelect = container.querySelector('#analytics-date-range');
+  if (rangeSelect) {
+    rangeSelect.addEventListener('change', () => {
+      analyticsRange = rangeSelect.value || 'lastMonth';
+      loadAnalytics(container);
+    });
+  }
 }

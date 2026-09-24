@@ -13,8 +13,11 @@ Testing Kestrel fixtures used by the .NET test suite:
 
 Each integration journey provisions its isolated SQL fixture, starts the Testing app with
 deterministic providers, and tears down the host and browser in test cleanup.
-The runners reject external requests, page errors, serious or critical axe
-violations, horizontal overflow, and unintended missing images. Hosted CI
+The runners reject external requests, page errors, unexpected serious or critical axe
+violations, horizontal overflow, and unintended missing images. The restored
+PocketBase staff journey keeps a node-level baseline in
+`legacy-accessibility-baseline.cjs` for inherited defects only; all axe findings
+remain in the JSON report, and any new state/rule/target combination fails. Hosted CI
 uploads `.artifacts/browser` only when the job fails; the directory contains
 synthetic screenshots and JSON reports, not credentials or provider traffic.
 

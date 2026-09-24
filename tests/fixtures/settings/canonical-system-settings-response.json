@@ -1,0 +1,916 @@
+{
+  "orgId": "system",
+  "organization": {
+    "id": 1,
+    "name": "System",
+    "abbreviation": null,
+    "active": true,
+    "version": "AAAAAAAAB/s="
+  },
+  "isOverride": false,
+  "hasOverrides": false,
+  "version": "qVA5o3D5gYdpcyX8N5e4WnYxVI9lM04bDWTVM+05aJA=",
+  "stored": {
+    "systemSettings": {
+      "staffUrl": null,
+      "leapBibUrlPattern": null,
+      "leapPatronUrlPattern": null,
+      "formatIconUrlPattern": null,
+      "systemNotEnabledMessage": "{{library}} does not currently participate in this suggestion service.",
+      "misconfiguredMessage": "The {{library}} suggestion system is currently misconfigured. Please contact staff.",
+      "patronEmbedAllowedOrigins": [],
+      "version": "AAAAAAAAB/w="
+    },
+    "polaris": {
+      "host": null,
+      "accessId": "SuggestAPI",
+      "staffDomain": null,
+      "adminUser": null,
+      "workstationId": 1,
+      "systemPolarisUserId": 1,
+      "organizationIdForRequests": 3,
+      "pickupOrganizationId": 0,
+      "hasApiKey": false,
+      "hasAdminPassword": false,
+      "version": "AAAAAAAAB/0="
+    },
+    "configuredSystem": {
+      "workflow": {
+        "suggestionLimit": 5,
+        "suggestionLimitMessage": "Weekly suggestion limit reached. You can try again after {{next_available_date}}.",
+        "outstandingTimeoutEnabled": false,
+        "outstandingTimeoutDays": 30,
+        "outstandingTimeoutSendEmail": false,
+        "outstandingTimeoutRejectionTemplateId": null,
+        "holdPickupTimeoutEnabled": false,
+        "holdPickupTimeoutDays": 14,
+        "pendingHoldTimeoutEnabled": false,
+        "pendingHoldTimeoutDays": 14,
+        "additionalCopyTimeoutEnabled": false,
+        "additionalCopyTimeoutDays": 14,
+        "autoPromote": false,
+        "commonAuthorsEnabled": false,
+        "commonAuthorsLabel": "Popular Creators",
+        "commonAuthorsHelp": "See if this is a creator we already collect.",
+        "commonAuthorsMessage": "We automatically purchase all upcoming titles by this creator. Please check the catalog to place a hold on 'On Order' items.",
+        "allowPatronAutoholdOptOut": true,
+        "allowAnyRegisteredCardLogin": false,
+        "patronCodeEligibilityEnabled": false,
+        "patronCodeEligibilityMessage": "Your patron account is not eligible to submit suggestions.",
+        "version": "AAAAAAAAB/4="
+      },
+      "patron": {
+        "pageTitle": "Material Suggestion",
+        "barcodeLabel": "Library Card",
+        "pinLabel": "Pin",
+        "loginPrompt": "",
+        "loginNote": "",
+        "suggestionFormNote": "",
+        "noEmailMessage": "No email is specified on your library account, which means we won't be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.",
+        "successTitle": "Suggestion Submitted",
+        "successMessage": "You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>",
+        "alreadySubmittedMessage": "This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.<div>Thank you for using this library's suggestion service.</div>",
+        "ebookMessage": "<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
+        "eaudiobookMessage": "<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
+        "suggestionStatusLabel": "Received",
+        "outstandingPurchaseStatusLabel": "Under review",
+        "pendingHoldStatusLabel": "Being prepared",
+        "holdPlacedStatusLabel": "Hold placed",
+        "closedStatusLabel": "Completed",
+        "rejectedStatusLabel": "Not selected for purchase",
+        "holdCompletedStatusLabel": "Completed",
+        "holdNotPickedUpStatusLabel": "Closed",
+        "manualStatusLabel": "Closed",
+        "silentStatusLabel": "Closed"
+      },
+      "email": {
+        "fromAddress": "asap@example.org",
+        "fromName": "ASAP Tests",
+        "hasPostmarkToken": false,
+        "version": "AAAAAAAACC0="
+      },
+      "publicationOptions": {
+        "exists": true,
+        "values": [
+          {
+            "id": "already_published",
+            "label": "Already published",
+            "enabled": true,
+            "sortOrder": 10
+          },
+          {
+            "id": "coming_soon",
+            "label": "Coming soon",
+            "enabled": true,
+            "sortOrder": 20
+          },
+          {
+            "id": "published_a_while_back",
+            "label": "Published a while back",
+            "enabled": true,
+            "sortOrder": 30
+          }
+        ]
+      },
+      "commonCreators": {
+        "exists": true,
+        "values": []
+      },
+      "allowedPatronCodeIds": {
+        "exists": true,
+        "values": []
+      },
+      "providers": [
+        {
+          "kind": "system",
+          "id": "1",
+          "key": "external_search_1",
+          "isEnabled": true,
+          "label": "Search Amazon",
+          "urlTemplate": "https://www.amazon.com/s?k={{title}}",
+          "version": "AAAAAAAACAU="
+        },
+        {
+          "kind": "system",
+          "id": "2",
+          "key": "external_search_2",
+          "isEnabled": true,
+          "label": "Search Goodreads",
+          "urlTemplate": "https://www.goodreads.com/search?q={{title}}",
+          "version": "AAAAAAAACAY="
+        },
+        {
+          "kind": "system",
+          "id": "3",
+          "key": "external_search_3",
+          "isEnabled": true,
+          "label": "Search WorldCat",
+          "urlTemplate": "https://www.worldcat.org/search?q={{title}}",
+          "version": "AAAAAAAACAc="
+        }
+      ],
+      "formats": [
+        {
+          "kind": "system",
+          "id": "1",
+          "materialFormatId": null,
+          "ownerOrganizationId": "1",
+          "code": "book",
+          "label": "Book",
+          "sortOrder": 10,
+          "isEnabled": true,
+          "messageBehavior": "none",
+          "message": null,
+          "titleMode": "required",
+          "titleLabel": "Title",
+          "authorMode": "required",
+          "authorLabel": "Author",
+          "identifierMode": "optional",
+          "identifierLabel": "Identifier number",
+          "publicationMode": "required",
+          "publicationLabel": "Publication Timing",
+          "version": "AAAAAAAACAk="
+        },
+        {
+          "kind": "system",
+          "id": "2",
+          "materialFormatId": null,
+          "ownerOrganizationId": "1",
+          "code": "audiobook_cd",
+          "label": "Audiobook (Physical CD)",
+          "sortOrder": 20,
+          "isEnabled": true,
+          "messageBehavior": "none",
+          "message": null,
+          "titleMode": "required",
+          "titleLabel": "Title",
+          "authorMode": "required",
+          "authorLabel": "Author",
+          "identifierMode": "optional",
+          "identifierLabel": "Identifier number",
+          "publicationMode": "required",
+          "publicationLabel": "Publication Timing",
+          "version": "AAAAAAAACAo="
+        },
+        {
+          "kind": "system",
+          "id": "3",
+          "materialFormatId": null,
+          "ownerOrganizationId": "1",
+          "code": "dvd",
+          "label": "DVD",
+          "sortOrder": 30,
+          "isEnabled": true,
+          "messageBehavior": "none",
+          "message": null,
+          "titleMode": "required",
+          "titleLabel": "Title",
+          "authorMode": "required",
+          "authorLabel": "Director/Actors/Producer",
+          "identifierMode": "hidden",
+          "identifierLabel": "UPC",
+          "publicationMode": "required",
+          "publicationLabel": "Publication Timing",
+          "version": "AAAAAAAACAs="
+        },
+        {
+          "kind": "system",
+          "id": "4",
+          "materialFormatId": null,
+          "ownerOrganizationId": "1",
+          "code": "music_cd",
+          "label": "Music CD",
+          "sortOrder": 40,
+          "isEnabled": true,
+          "messageBehavior": "none",
+          "message": null,
+          "titleMode": "required",
+          "titleLabel": "Title",
+          "authorMode": "required",
+          "authorLabel": "Artist",
+          "identifierMode": "hidden",
+          "identifierLabel": "UPC",
+          "publicationMode": "required",
+          "publicationLabel": "Publication Timing",
+          "version": "AAAAAAAACAw="
+        },
+        {
+          "kind": "system",
+          "id": "5",
+          "materialFormatId": null,
+          "ownerOrganizationId": "1",
+          "code": "ebook",
+          "label": "eBook",
+          "sortOrder": 50,
+          "isEnabled": true,
+          "messageBehavior": "ebookMessage",
+          "message": null,
+          "titleMode": "required",
+          "titleLabel": "Title",
+          "authorMode": "required",
+          "authorLabel": "Author",
+          "identifierMode": "optional",
+          "identifierLabel": "Identifier number",
+          "publicationMode": "required",
+          "publicationLabel": "Publication Timing",
+          "version": "AAAAAAAACA0="
+        },
+        {
+          "kind": "system",
+          "id": "6",
+          "materialFormatId": null,
+          "ownerOrganizationId": "1",
+          "code": "eaudiobook",
+          "label": "eAudiobook",
+          "sortOrder": 60,
+          "isEnabled": true,
+          "messageBehavior": "eaudiobookMessage",
+          "message": null,
+          "titleMode": "required",
+          "titleLabel": "Title",
+          "authorMode": "required",
+          "authorLabel": "Author",
+          "identifierMode": "optional",
+          "identifierLabel": "Identifier number",
+          "publicationMode": "required",
+          "publicationLabel": "Publication Timing",
+          "version": "AAAAAAAACA4="
+        }
+      ],
+      "templates": [
+        {
+          "id": "1",
+          "organizationId": "1",
+          "templateKey": "suggestion_submitted",
+          "sourceTemplateId": null,
+          "displayName": "Suggestion submitted",
+          "subject": "Suggestion received: {{title}}",
+          "body": "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format. Our collection development team has received your request and will review it.\n\nIf we add this item, we will place a hold for you automatically and send another update.\n\nThank you for helping us shape the library collection.",
+          "enabled": true,
+          "isCustom": false,
+          "sortOrder": 10,
+          "version": "AAAAAAAACA8="
+        }
+      ],
+      "branding": {
+        "hasLogo": false,
+        "contentType": null,
+        "fileName": null,
+        "altText": null,
+        "version": null
+      }
+    },
+    "libraryOverride": null,
+    "workflow": {
+      "suggestionLimit": 5,
+      "suggestionLimitMessage": "Weekly suggestion limit reached. You can try again after {{next_available_date}}.",
+      "outstandingTimeoutEnabled": false,
+      "outstandingTimeoutDays": 30,
+      "outstandingTimeoutSendEmail": false,
+      "outstandingTimeoutRejectionTemplateId": null,
+      "holdPickupTimeoutEnabled": false,
+      "holdPickupTimeoutDays": 14,
+      "pendingHoldTimeoutEnabled": false,
+      "pendingHoldTimeoutDays": 14,
+      "additionalCopyTimeoutEnabled": false,
+      "additionalCopyTimeoutDays": 14,
+      "autoPromote": false,
+      "commonAuthorsEnabled": false,
+      "commonAuthorsLabel": "Popular Creators",
+      "commonAuthorsHelp": "See if this is a creator we already collect.",
+      "commonAuthorsMessage": "We automatically purchase all upcoming titles by this creator. Please check the catalog to place a hold on 'On Order' items.",
+      "allowPatronAutoholdOptOut": true,
+      "allowAnyRegisteredCardLogin": false,
+      "patronCodeEligibilityEnabled": false,
+      "patronCodeEligibilityMessage": "Your patron account is not eligible to submit suggestions.",
+      "version": "AAAAAAAAB/4="
+    },
+    "patron": {
+      "pageTitle": "Material Suggestion",
+      "barcodeLabel": "Library Card",
+      "pinLabel": "Pin",
+      "loginPrompt": "",
+      "loginNote": "",
+      "suggestionFormNote": "",
+      "noEmailMessage": "No email is specified on your library account, which means we won't be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.",
+      "successTitle": "Suggestion Submitted",
+      "successMessage": "You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>",
+      "alreadySubmittedMessage": "This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.<div>Thank you for using this library's suggestion service.</div>",
+      "ebookMessage": "<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
+      "eaudiobookMessage": "<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
+      "suggestionStatusLabel": "Received",
+      "outstandingPurchaseStatusLabel": "Under review",
+      "pendingHoldStatusLabel": "Being prepared",
+      "holdPlacedStatusLabel": "Hold placed",
+      "closedStatusLabel": "Completed",
+      "rejectedStatusLabel": "Not selected for purchase",
+      "holdCompletedStatusLabel": "Completed",
+      "holdNotPickedUpStatusLabel": "Closed",
+      "manualStatusLabel": "Closed",
+      "silentStatusLabel": "Closed"
+    },
+    "email": {
+      "fromAddress": "asap@example.org",
+      "fromName": "ASAP Tests",
+      "hasPostmarkToken": false,
+      "version": "AAAAAAAACC0="
+    },
+    "origins": [],
+    "publicationOptions": [
+      {
+        "organizationId": 1,
+        "id": "already_published",
+        "label": "Already published",
+        "enabled": true,
+        "sortOrder": 10
+      },
+      {
+        "organizationId": 1,
+        "id": "coming_soon",
+        "label": "Coming soon",
+        "enabled": true,
+        "sortOrder": 20
+      },
+      {
+        "organizationId": 1,
+        "id": "published_a_while_back",
+        "label": "Published a while back",
+        "enabled": true,
+        "sortOrder": 30
+      }
+    ],
+    "commonCreators": [],
+    "allowedPatronCodeIds": [],
+    "providers": [
+      {
+        "key": "external_search_1",
+        "id": "1",
+        "isEnabled": true,
+        "label": "Search Amazon",
+        "urlTemplate": "https://www.amazon.com/s?k={{title}}",
+        "system": {
+          "isEnabled": true,
+          "label": "Search Amazon",
+          "urlTemplate": "https://www.amazon.com/s?k={{title}}"
+        },
+        "overridden": false
+      },
+      {
+        "key": "external_search_2",
+        "id": "2",
+        "isEnabled": true,
+        "label": "Search Goodreads",
+        "urlTemplate": "https://www.goodreads.com/search?q={{title}}",
+        "system": {
+          "isEnabled": true,
+          "label": "Search Goodreads",
+          "urlTemplate": "https://www.goodreads.com/search?q={{title}}"
+        },
+        "overridden": false
+      },
+      {
+        "key": "external_search_3",
+        "id": "3",
+        "isEnabled": true,
+        "label": "Search WorldCat",
+        "urlTemplate": "https://www.worldcat.org/search?q={{title}}",
+        "system": {
+          "isEnabled": true,
+          "label": "Search WorldCat",
+          "urlTemplate": "https://www.worldcat.org/search?q={{title}}"
+        },
+        "overridden": false
+      }
+    ],
+    "formats": [
+      {
+        "id": "1",
+        "code": "book",
+        "ownerOrganizationId": "1",
+        "label": "Book",
+        "sortOrder": 10,
+        "isEnabled": true,
+        "messageBehavior": "none",
+        "message": null,
+        "titleMode": "required",
+        "titleLabel": "Title",
+        "authorMode": "required",
+        "authorLabel": "Author",
+        "identifierMode": "optional",
+        "identifierLabel": "Identifier number",
+        "publicationMode": "required",
+        "publicationLabel": "Publication Timing",
+        "overridden": false,
+        "version": "AAAAAAAACAk="
+      },
+      {
+        "id": "2",
+        "code": "audiobook_cd",
+        "ownerOrganizationId": "1",
+        "label": "Audiobook (Physical CD)",
+        "sortOrder": 20,
+        "isEnabled": true,
+        "messageBehavior": "none",
+        "message": null,
+        "titleMode": "required",
+        "titleLabel": "Title",
+        "authorMode": "required",
+        "authorLabel": "Author",
+        "identifierMode": "optional",
+        "identifierLabel": "Identifier number",
+        "publicationMode": "required",
+        "publicationLabel": "Publication Timing",
+        "overridden": false,
+        "version": "AAAAAAAACAo="
+      },
+      {
+        "id": "3",
+        "code": "dvd",
+        "ownerOrganizationId": "1",
+        "label": "DVD",
+        "sortOrder": 30,
+        "isEnabled": true,
+        "messageBehavior": "none",
+        "message": null,
+        "titleMode": "required",
+        "titleLabel": "Title",
+        "authorMode": "required",
+        "authorLabel": "Director/Actors/Producer",
+        "identifierMode": "hidden",
+        "identifierLabel": "UPC",
+        "publicationMode": "required",
+        "publicationLabel": "Publication Timing",
+        "overridden": false,
+        "version": "AAAAAAAACAs="
+      },
+      {
+        "id": "4",
+        "code": "music_cd",
+        "ownerOrganizationId": "1",
+        "label": "Music CD",
+        "sortOrder": 40,
+        "isEnabled": true,
+        "messageBehavior": "none",
+        "message": null,
+        "titleMode": "required",
+        "titleLabel": "Title",
+        "authorMode": "required",
+        "authorLabel": "Artist",
+        "identifierMode": "hidden",
+        "identifierLabel": "UPC",
+        "publicationMode": "required",
+        "publicationLabel": "Publication Timing",
+        "overridden": false,
+        "version": "AAAAAAAACAw="
+      },
+      {
+        "id": "5",
+        "code": "ebook",
+        "ownerOrganizationId": "1",
+        "label": "eBook",
+        "sortOrder": 50,
+        "isEnabled": true,
+        "messageBehavior": "ebookMessage",
+        "message": null,
+        "titleMode": "required",
+        "titleLabel": "Title",
+        "authorMode": "required",
+        "authorLabel": "Author",
+        "identifierMode": "optional",
+        "identifierLabel": "Identifier number",
+        "publicationMode": "required",
+        "publicationLabel": "Publication Timing",
+        "overridden": false,
+        "version": "AAAAAAAACA0="
+      },
+      {
+        "id": "6",
+        "code": "eaudiobook",
+        "ownerOrganizationId": "1",
+        "label": "eAudiobook",
+        "sortOrder": 60,
+        "isEnabled": true,
+        "messageBehavior": "eaudiobookMessage",
+        "message": null,
+        "titleMode": "required",
+        "titleLabel": "Title",
+        "authorMode": "required",
+        "authorLabel": "Author",
+        "identifierMode": "optional",
+        "identifierLabel": "Identifier number",
+        "publicationMode": "required",
+        "publicationLabel": "Publication Timing",
+        "overridden": false,
+        "version": "AAAAAAAACA4="
+      }
+    ],
+    "customFields": [],
+    "templates": [
+      {
+        "id": "1",
+        "organizationId": "1",
+        "templateKey": "suggestion_submitted",
+        "sourceTemplateId": null,
+        "displayName": "Suggestion submitted",
+        "subject": "Suggestion received: {{title}}",
+        "body": "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format. Our collection development team has received your request and will review it.\n\nIf we add this item, we will place a hold for you automatically and send another update.\n\nThank you for helping us shape the library collection.",
+        "enabled": true,
+        "isCustom": false,
+        "sortOrder": 10,
+        "version": "AAAAAAAACA8="
+      }
+    ],
+    "autoClaimRules": [],
+    "branding": {
+      "hasLogo": false,
+      "contentType": null,
+      "fileName": null,
+      "altText": null,
+      "version": null
+    }
+  },
+  "effective": {
+    "workflow": {
+      "suggestionLimit": 5,
+      "suggestionLimitMessage": "Weekly suggestion limit reached. You can try again after {{next_available_date}}.",
+      "outstandingTimeoutEnabled": false,
+      "outstandingTimeoutDays": 30,
+      "outstandingTimeoutSendEmail": false,
+      "outstandingTimeoutRejectionTemplateId": null,
+      "holdPickupTimeoutEnabled": false,
+      "holdPickupTimeoutDays": 14,
+      "pendingHoldTimeoutEnabled": false,
+      "pendingHoldTimeoutDays": 14,
+      "additionalCopyTimeoutEnabled": false,
+      "additionalCopyTimeoutDays": 14,
+      "autoPromote": false,
+      "commonAuthorsEnabled": false,
+      "commonAuthorsLabel": "Popular Creators",
+      "commonAuthorsHelp": "See if this is a creator we already collect.",
+      "commonAuthorsMessage": "We automatically purchase all upcoming titles by this creator. Please check the catalog to place a hold on 'On Order' items.",
+      "allowPatronAutoholdOptOut": true,
+      "allowAnyRegisteredCardLogin": false,
+      "patronCodeEligibilityEnabled": false,
+      "patronCodeEligibilityMessage": "Your patron account is not eligible to submit suggestions."
+    },
+    "organizationId": 1,
+    "organizationName": "System",
+    "isActive": true,
+    "suggestionLimit": 5,
+    "suggestionLimitMessage": "Weekly suggestion limit reached. You can try again after {{next_available_date}}.",
+    "allowAnyRegisteredCardLogin": false,
+    "allowPatronAutoholdOptOut": true,
+    "patronCodeEligibilityEnabled": false,
+    "patronCodeEligibilityMessage": "Your patron account is not eligible to submit suggestions.",
+    "allowedPatronCodeIds": [],
+    "pageTitle": "Material Suggestion",
+    "barcodeLabel": "Library Card",
+    "pinLabel": "Pin",
+    "loginPrompt": "Please enter your information below to start the suggestion process.",
+    "loginNote": "Use of this service requires a valid library card. Contact your library if you need assistance with your card or PIN.",
+    "suggestionFormNote": "If the library approves your suggestion for purchase, we will email you while it is awaiting ordering and cataloging. Once the item is available in the catalog, we will automatically place a hold when possible and send another update.",
+    "noEmailMessage": "No email is specified on your library account, which means we won't be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.",
+    "successTitle": "Suggestion Submitted",
+    "successMessage": "You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>",
+    "alreadySubmittedMessage": "This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.<div>Thank you for using this library's suggestion service.</div>",
+    "systemNotEnabledMessage": "System does not currently participate in this suggestion service.",
+    "misconfiguredMessage": "The System suggestion system is currently misconfigured. Please contact staff.",
+    "ebookMessage": "<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
+    "eaudiobookMessage": "<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
+    "duplicateStatusLabels": {
+      "suggestion": "Received",
+      "outstanding_purchase": "Under review",
+      "pending_hold": "Being prepared",
+      "hold_placed": "Hold placed",
+      "closed": "Completed",
+      "rejected": "Not selected for purchase",
+      "hold_completed": "Completed",
+      "hold_not_picked_up": "Closed",
+      "manual": "Closed",
+      "silent": "Closed",
+      "Silently Closed": "Closed"
+    },
+    "externalSearchProviders": [
+      {
+        "id": "1",
+        "key": "external_search_1",
+        "isEnabled": true,
+        "label": "Search Amazon",
+        "urlTemplate": "https://www.amazon.com/s?k={{title}}",
+        "sortOrder": 10
+      },
+      {
+        "id": "2",
+        "key": "external_search_2",
+        "isEnabled": true,
+        "label": "Search Goodreads",
+        "urlTemplate": "https://www.goodreads.com/search?q={{title}}",
+        "sortOrder": 20
+      },
+      {
+        "id": "3",
+        "key": "external_search_3",
+        "isEnabled": true,
+        "label": "Search WorldCat",
+        "urlTemplate": "https://www.worldcat.org/search?q={{title}}",
+        "sortOrder": 30
+      }
+    ],
+    "publicationOptions": [
+      "Already published",
+      "Coming soon",
+      "Published a while back"
+    ],
+    "commonCreators": [],
+    "commonCreatorsLabel": "Popular Creators",
+    "commonCreatorsHelp": "See if this is a creator we already collect.",
+    "commonCreatorsMessage": "We automatically purchase all upcoming titles by this creator. Please check the catalog to place a hold on 'On Order' items.",
+    "commonCreatorsEnabled": false,
+    "formats": [
+      {
+        "id": "1",
+        "code": "book",
+        "label": "Book",
+        "sortOrder": 10,
+        "isEnabled": true,
+        "messageBehavior": "none",
+        "message": null,
+        "title": {
+          "mode": "required",
+          "label": "Title"
+        },
+        "author": {
+          "mode": "required",
+          "label": "Author"
+        },
+        "identifier": {
+          "mode": "optional",
+          "label": "Identifier number"
+        },
+        "publication": {
+          "mode": "required",
+          "label": "Publication Timing"
+        },
+        "customFields": {}
+      },
+      {
+        "id": "2",
+        "code": "audiobook_cd",
+        "label": "Audiobook (Physical CD)",
+        "sortOrder": 20,
+        "isEnabled": true,
+        "messageBehavior": "none",
+        "message": null,
+        "title": {
+          "mode": "required",
+          "label": "Title"
+        },
+        "author": {
+          "mode": "required",
+          "label": "Author"
+        },
+        "identifier": {
+          "mode": "optional",
+          "label": "Identifier number"
+        },
+        "publication": {
+          "mode": "required",
+          "label": "Publication Timing"
+        },
+        "customFields": {}
+      },
+      {
+        "id": "3",
+        "code": "dvd",
+        "label": "DVD",
+        "sortOrder": 30,
+        "isEnabled": true,
+        "messageBehavior": "none",
+        "message": null,
+        "title": {
+          "mode": "required",
+          "label": "Title"
+        },
+        "author": {
+          "mode": "required",
+          "label": "Director/Actors/Producer"
+        },
+        "identifier": {
+          "mode": "hidden",
+          "label": "UPC"
+        },
+        "publication": {
+          "mode": "required",
+          "label": "Publication Timing"
+        },
+        "customFields": {}
+      },
+      {
+        "id": "4",
+        "code": "music_cd",
+        "label": "Music CD",
+        "sortOrder": 40,
+        "isEnabled": true,
+        "messageBehavior": "none",
+        "message": null,
+        "title": {
+          "mode": "required",
+          "label": "Title"
+        },
+        "author": {
+          "mode": "required",
+          "label": "Artist"
+        },
+        "identifier": {
+          "mode": "hidden",
+          "label": "UPC"
+        },
+        "publication": {
+          "mode": "required",
+          "label": "Publication Timing"
+        },
+        "customFields": {}
+      },
+      {
+        "id": "5",
+        "code": "ebook",
+        "label": "eBook",
+        "sortOrder": 50,
+        "isEnabled": true,
+        "messageBehavior": "ebookMessage",
+        "message": null,
+        "title": {
+          "mode": "required",
+          "label": "Title"
+        },
+        "author": {
+          "mode": "required",
+          "label": "Author"
+        },
+        "identifier": {
+          "mode": "optional",
+          "label": "Identifier number"
+        },
+        "publication": {
+          "mode": "required",
+          "label": "Publication Timing"
+        },
+        "customFields": {}
+      },
+      {
+        "id": "6",
+        "code": "eaudiobook",
+        "label": "eAudiobook",
+        "sortOrder": 60,
+        "isEnabled": true,
+        "messageBehavior": "eaudiobookMessage",
+        "message": null,
+        "title": {
+          "mode": "required",
+          "label": "Title"
+        },
+        "author": {
+          "mode": "required",
+          "label": "Author"
+        },
+        "identifier": {
+          "mode": "optional",
+          "label": "Identifier number"
+        },
+        "publication": {
+          "mode": "required",
+          "label": "Publication Timing"
+        },
+        "customFields": {}
+      }
+    ],
+    "customFields": [],
+    "email": {
+      "fromAddress": "asap@example.org",
+      "fromName": "ASAP Tests",
+      "hasServerToken": false
+    },
+    "submissionTemplate": {
+      "templateKey": "suggestion_submitted",
+      "subjectTemplate": "Suggestion received: {{title}}",
+      "bodyTemplate": "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format. Our collection development team has received your request and will review it.\n\nIf we add this item, we will place a hold for you automatically and send another update.\n\nThank you for helping us shape the library collection."
+    },
+    "hasLogo": false,
+    "logoAltText": "Library Logo"
+  },
+  "workflow": {
+    "suggestionLimit": 5,
+    "suggestionLimitMessage": "Weekly suggestion limit reached. You can try again after {{next_available_date}}.",
+    "allowAnyRegisteredCardLogin": false,
+    "allowPatronAutoholdOptOut": true,
+    "patronCodeEligibilityEnabled": false,
+    "patronCodeEligibilityMessage": "Your patron account is not eligible to submit suggestions.",
+    "commonAuthorsEnabled": false,
+    "commonAuthorsLabel": "Popular Creators",
+    "commonAuthorsHelp": "See if this is a creator we already collect.",
+    "commonAuthorsMessage": "We automatically purchase all upcoming titles by this creator. Please check the catalog to place a hold on 'On Order' items.",
+    "system": true
+  },
+  "ui_text": {
+    "publicationOptions": [
+      "Already published",
+      "Coming soon",
+      "Published a while back"
+    ],
+    "pageTitle": "Material Suggestion",
+    "barcodeLabel": "Library Card",
+    "pinLabel": "Pin",
+    "loginPrompt": "Please enter your information below to start the suggestion process.",
+    "loginNote": "Use of this service requires a valid library card. Contact your library if you need assistance with your card or PIN.",
+    "suggestionFormNote": "If the library approves your suggestion for purchase, we will email you while it is awaiting ordering and cataloging. Once the item is available in the catalog, we will automatically place a hold when possible and send another update.",
+    "noEmailMessage": "No email is specified on your library account, which means we won't be able to send you updates regarding your suggestion. Please contact the library to add an email address to your account if you would like to receive status updates.",
+    "successTitle": "Suggestion Submitted",
+    "successMessage": "You have successfully submitted your material suggestion! Check your email inbox for status updates.<div>Thank you for using our suggestion service.</div>",
+    "alreadySubmittedMessage": "This suggestion has already been submitted from your account. Your previous request was submitted on {{duplicate_date}} and is currently {{duplicate_status}}.<div>Thank you for using this library's suggestion service.</div>",
+    "ebookMessage": "<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
+    "eaudiobookMessage": "<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>",
+    "duplicateStatusLabels": {
+      "suggestion": "Received",
+      "outstanding_purchase": "Under review",
+      "pending_hold": "Being prepared",
+      "hold_placed": "Hold placed",
+      "closed": "Completed",
+      "rejected": "Not selected for purchase",
+      "hold_completed": "Completed",
+      "hold_not_picked_up": "Closed",
+      "manual": "Closed",
+      "silent": "Closed",
+      "Silently Closed": "Closed"
+    },
+    "systemNotEnabledMessage": "System does not currently participate in this suggestion service.",
+    "misconfiguredMessage": "The System suggestion system is currently misconfigured. Please contact staff."
+  },
+  "emails": {
+    "fromAddress": "asap@example.org",
+    "fromName": "ASAP Tests",
+    "hasPostmarkToken": false,
+    "templates": [
+      {
+        "id": "1",
+        "organizationId": "1",
+        "templateKey": "suggestion_submitted",
+        "sourceTemplateId": null,
+        "displayName": "Suggestion submitted",
+        "subject": "Suggestion received: {{title}}",
+        "body": "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format. Our collection development team has received your request and will review it.\n\nIf we add this item, we will place a hold for you automatically and send another update.\n\nThank you for helping us shape the library collection.",
+        "enabled": true,
+        "isCustom": false,
+        "sortOrder": 10,
+        "version": "AAAAAAAACA8="
+      }
+    ],
+    "submissionTemplate": {
+      "templateKey": "suggestion_submitted",
+      "subjectTemplate": "Suggestion received: {{title}}",
+      "bodyTemplate": "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format. Our collection development team has received your request and will review it.\n\nIf we add this item, we will place a hold for you automatically and send another update.\n\nThank you for helping us shape the library collection."
+    }
+  },
+  "formatClaimRules": [],
+  "autoClaimStaff": [],
+  "originsForEditor": []
+}

@@ -20,6 +20,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -363,6 +364,468 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task PolarisAdditionalCopyActionCommitsSourceTaskAndReminderTogether()
+    {
+        await using var scope = factory!.Services.CreateAsyncScope();
+        var contexts = scope.ServiceProvider.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var seed = await contexts.CreateDbContextAsync();
+        var admin = await seed.StaffUsers.SingleAsync(item => item.NormalizedUserPrincipalName == "ADMIN@EXAMPLE.ORG");
+        var formatId = await seed.MaterialFormats.Where(item => item.Code == "book")
+            .Select(item => item.Id).FirstAsync();
+        var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
+        var actor = new CurrentStaff(admin.Id, admin.NormalizedUserPrincipalName!, Guid.Parse(identity.TenantId!),
+            admin.UserPrincipalName, admin.DisplayName, admin.NotificationEmail, "super_admin", 1, "System", true,
+            false, null, false, false, false, admin.RowVersion);
+        TitleRequest NewSource(string title, string status = "suggestion") => new()
+        {
+            LibraryOrganizationId = 2,
+            LibraryNameSnapshot = "Test Library",
+            Barcode = $"200{Guid.NewGuid():N}"[..14],
+            Title = title,
+            Author = "Original author",
+            Publication = "Original publication timing",
+            MaterialFormatId = formatId,
+            Status = status,
+            CloseReason = status == "closed" ? "manual" : null,
+            AutoHold = false,
+            CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(-1),
+            UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(-1)
+        };
+        var source = NewSource("Additional copy integration source");
+        source.Identifier = "9780000000000";
+        source.IsbnCheckStatus = "not_found";
+        source.IsbnCheckResult = "Old identifier not found.";
+        source.IsbnCheckRetryCount = 3;
+        source.IsbnCheckLastErrorCode = "old_failure";
+        source.LastCheckedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddDays(-1);
+        var pending = NewSource("Pending identifier source");
+        pending.Identifier = "9780000000001";
+        pending.IsbnCheckStatus = "pending";
+        pending.IsbnCheckRetryCount = 2;
+        pending.IsbnCheckLastErrorCode = "temporary_failure";
+        var noIdentifier = NewSource("No identifier source");
+        noIdentifier.IsbnCheckStatus = "pending";
+        var found = NewSource("Already found source");
+        found.Identifier = "9780000000001";
+        found.BibId = "9001";
+        found.IsbnCheckStatus = "found";
+        found.IsbnCheckResult = "Useful previous result.";
+        found.LastCheckedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddDays(-2);
+        var notFound = NewSource("Previously not found source");
+        notFound.Identifier = "9780000000001";
+        notFound.IsbnCheckStatus = "not_found";
+        notFound.IsbnCheckResult = "No previous match.";
+        var invalid = NewSource("Invalid BIB source");
+        invalid.Identifier = "9780000000001";
+        invalid.IsbnCheckStatus = "pending";
+        var closed = NewSource("Closed source", "closed");
+        var failed = NewSource("Creation failure source");
+        failed.Identifier = "9780000000000";
+        failed.IsbnCheckStatus = "not_found";
+        failed.IsbnCheckResult = "Original result.";
+        failed.IsbnCheckRetryCount = 4;
+        failed.IsbnCheckLastErrorCode = "original_error";
+        failed.LastCheckedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddDays(-1);
+        var blocked = NewSource("Incomplete hold source", "pending_hold");
+        blocked.BibId = "9001";
+        seed.TitleRequests.AddRange(source, pending, noIdentifier, found, notFound, invalid, closed, failed, blocked);
+        await seed.SaveChangesAsync();
+        var tagIds = await seed.WorkflowTags.Where(item =>
+                item.Code == "polaris_bib_found" || item.Code == "polaris_bib_not_found" ||
+                item.Code == "polaris_multiple_matches" || item.Code == "duplicate_suggestion")
+            .ToDictionaryAsync(item => item.Code, item => item.Id);
+        void AddTag(TitleRequest request, string code) => seed.TitleRequestWorkflowTags.Add(new TitleRequestWorkflowTag
+        {
+            TitleRequestId = request.Id,
+            WorkflowTagId = tagIds[code]
+        });
+        AddTag(source, "polaris_bib_not_found");
+        AddTag(source, "polaris_multiple_matches");
+        AddTag(source, "duplicate_suggestion");
+        AddTag(found, "polaris_bib_found");
+        AddTag(found, "polaris_multiple_matches");
+        AddTag(notFound, "polaris_bib_not_found");
+        AddTag(failed, "polaris_bib_not_found");
+        await seed.SaveChangesAsync();
+        seed.HoldPlacementOperations.Add(new HoldPlacementOperation
+        {
+            TitleRequestId = blocked.Id,
+            PatronBarcodeSnapshot = blocked.Barcode,
+            BibIdSnapshot = "9001",
+            AttemptNumber = 1,
+            ExecutionEpoch = 1,
+            State = "operator_required",
+            Phase = "create_started",
+            RequestStartedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(-1),
+            CreateStartedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddSeconds(-30),
+            CreateResponseObservedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddSeconds(-29),
+            OutcomeEvidenceKind = "create_transport_ambiguous",
+            LastErrorCode = "hold_identity_ambiguous"
+        });
+        await seed.SaveChangesAsync();
+        var originalVersion = source.RowVersion.ToArray();
+
+        // A copy with the same numeric ID must remain a separate typed record.
+        var existingCollision = await seed.AdditionalCopyRequests.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.Id == source.Id);
+        var collisionTitle = existingCollision?.Title ?? "Collision sentinel copy";
+        if (existingCollision is null)
+        {
+            await seed.Database.ExecuteSqlInterpolatedAsync($"""
+                SET IDENTITY_INSERT [asap].[AdditionalCopyRequest] ON;
+                INSERT INTO [asap].[AdditionalCopyRequest]
+                    ([Id], [LibraryOrganizationId], [BibId], [Title], [Status], [CreatedUtc], [UpdatedUtc])
+                VALUES ({source.Id}, 2, N'8999', N'Collision sentinel copy', N'open', SYSUTCDATETIME(), SYSUTCDATETIME());
+                SET IDENTITY_INSERT [asap].[AdditionalCopyRequest] OFF;
+                """);
+        }
+        var copyOnlyId = Math.Max(await seed.TitleRequests.MaxAsync(item => item.Id),
+            await seed.AdditionalCopyRequests.MaxAsync(item => item.Id)) + 1000;
+        await seed.Database.ExecuteSqlInterpolatedAsync($"""
+            SET IDENTITY_INSERT [asap].[AdditionalCopyRequest] ON;
+            INSERT INTO [asap].[AdditionalCopyRequest]
+                ([Id], [LibraryOrganizationId], [BibId], [Title], [Status], [CreatedUtc], [UpdatedUtc])
+            VALUES ({copyOnlyId}, 2, N'8998', N'Copy-only identity', N'open', SYSUTCDATETIME(), SYSUTCDATETIME());
+            SET IDENTITY_INSERT [asap].[AdditionalCopyRequest] OFF;
+            """);
+
+        var mutations = scope.ServiceProvider.GetRequiredService<TitleRequestMutationService>();
+        TitleRequestActionInput Action(TitleRequest request, string? bib = "9001", string? identifier = "9780000000001") => new()
+        {
+            Version = StaffVersion.Encode(request.RowVersion),
+            Action = "additionalCopy",
+            Status = "pending_hold",
+            Bibid = bib is null ? default : JsonSerializer.SerializeToElement(bib),
+            Title = "Catalog title 9001",
+            Author = "Catalog author",
+            Identifier = JsonSerializer.SerializeToElement(identifier),
+            Publication = "2020",
+            Format = "book",
+            Autohold = JsonSerializer.SerializeToElement(false),
+            EmailPurchaseReminder = true
+        };
+        var action = Action(source);
+        var created = await mutations.ActionAsync(actor, source.Id, action, CancellationToken.None);
+        Assert.AreEqual("updated", created.Code);
+        Assert.IsNotNull(created.AdditionalCopyRequestId);
+        Assert.IsTrue(created.ReminderRequested);
+        Assert.IsTrue(created.ReminderQueued);
+
+        await using (var verify = await contexts.CreateDbContextAsync())
+        {
+            var saved = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == source.Id);
+            Assert.AreEqual("9001", saved.BibId);
+            Assert.AreEqual("pending_hold", saved.Status);
+            Assert.AreEqual("9780000000001", saved.Identifier);
+            Assert.AreEqual("found", saved.IsbnCheckStatus);
+            Assert.AreEqual("Polaris bibliographic identifier verified for the BIB selected by staff.", saved.IsbnCheckResult);
+            Assert.AreEqual(0, saved.IsbnCheckRetryCount);
+            Assert.IsNull(saved.IsbnCheckLastErrorCode);
+            Assert.IsNotNull(saved.LastCheckedUtc);
+            var sourceTags = await (from link in verify.TitleRequestWorkflowTags
+                join tag in verify.WorkflowTags on link.WorkflowTagId equals tag.Id
+                where link.TitleRequestId == source.Id
+                select tag.Code).ToListAsync();
+            CollectionAssert.AreEquivalent(new[] { "polaris_bib_found", "duplicate_suggestion" }, sourceTags);
+            Assert.IsTrue(saved.AutoHold);
+            Assert.AreEqual("Original publication timing", saved.Publication);
+            Assert.AreEqual("Catalog title 9001", saved.Title);
+            Assert.IsFalse(saved.RowVersion.SequenceEqual(originalVersion));
+            Assert.IsFalse((saved.Notes ?? string.Empty).Contains("Additional copy request created for BIB 9001"));
+            var tasks = await verify.AdditionalCopyRequests.AsNoTracking()
+                .Where(item => item.SourceTitleRequestId == source.Id).ToListAsync();
+            Assert.HasCount(1, tasks);
+            Assert.AreEqual(created.AdditionalCopyRequestId, tasks[0].Id);
+            Assert.AreEqual(2, tasks[0].LibraryOrganizationId);
+            Assert.AreEqual("9001", tasks[0].BibId);
+            Assert.AreEqual("Catalog title 9001", tasks[0].Title);
+            Assert.AreEqual(admin.Id, tasks[0].ClaimedByStaffUserId);
+            Assert.AreEqual(collisionTitle,
+                (await verify.AdditionalCopyRequests.AsNoTracking().SingleAsync(item => item.Id == source.Id)).Title);
+            Assert.AreEqual(1, await verify.EmailOutbox.CountAsync(item =>
+                item.BusinessKey == $"additional-copy-reminder:{tasks[0].Id}" && item.Status == "pending"));
+            Assert.AreEqual(1, await verify.TitleRequestEvents.CountAsync(item =>
+                item.TitleRequestId == source.Id && item.EventType == "additional_copy_created"));
+        }
+        var views = scope.ServiceProvider.GetRequiredService<TitleRequestViewService>();
+        var returned = await views.GetAsync(actor, source.Id.ToString(), CancellationToken.None);
+        Assert.IsNotNull(returned);
+        Assert.AreEqual("found", returned.IsbnCheckStatus);
+        Assert.AreEqual("9780000000001", returned.Identifier);
+        Assert.AreEqual("9001", returned.Bibid);
+        CollectionAssert.Contains(returned.WorkflowTags.ToArray(), "Polaris BIB found");
+        foreach (var (candidate, identifier) in new[]
+        {
+            (pending, "9780000000001"), (noIdentifier, (string?)null),
+            (found, "9780000000001"), (notFound, "9780000000001")
+        })
+        {
+            var result = await mutations.ActionAsync(actor, candidate.Id,
+                Action(candidate, identifier: identifier), CancellationToken.None);
+            Assert.AreEqual("updated", result.Code);
+            Assert.IsNotNull(result.AdditionalCopyRequestId);
+            await using var verify = await contexts.CreateDbContextAsync();
+            var saved = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == candidate.Id);
+            Assert.AreEqual("pending_hold", saved.Status);
+            Assert.AreEqual("9001", saved.BibId);
+            Assert.AreEqual("9780000000001", saved.Identifier);
+            Assert.AreEqual("found", saved.IsbnCheckStatus);
+            Assert.AreNotEqual("pending", saved.IsbnCheckStatus);
+            Assert.AreEqual(0, saved.IsbnCheckRetryCount);
+            Assert.IsNull(saved.IsbnCheckLastErrorCode);
+            Assert.AreEqual(1, await verify.AdditionalCopyRequests.CountAsync(item =>
+                item.SourceTitleRequestId == candidate.Id));
+            var derivedTags = await (from link in verify.TitleRequestWorkflowTags
+                join tag in verify.WorkflowTags on link.WorkflowTagId equals tag.Id
+                where link.TitleRequestId == candidate.Id &&
+                      (tag.Code == "polaris_bib_found" || tag.Code == "polaris_bib_not_found" ||
+                       tag.Code == "polaris_multiple_matches")
+                select tag.Code).ToListAsync();
+            CollectionAssert.AreEquivalent(new[] { "polaris_bib_found" }, derivedTags);
+            Assert.AreEqual("Polaris bibliographic identifier verified for the BIB selected by staff.", saved.IsbnCheckResult);
+            Assert.IsNotNull(saved.LastCheckedUtc);
+        }
+        Assert.AreEqual("stale_version", (await mutations.ActionAsync(actor, source.Id, action, CancellationToken.None)).Code);
+        await using (var current = await contexts.CreateDbContextAsync())
+        {
+            var currentVersion = await current.TitleRequests.Where(item => item.Id == source.Id)
+                .Select(item => item.RowVersion).SingleAsync();
+            Assert.AreEqual("invalid_transition", (await mutations.ActionAsync(actor, source.Id,
+                new TitleRequestActionInput
+                {
+                    Version = StaffVersion.Encode(currentVersion), Action = "catalogFound", Status = "pending_hold",
+                    Bibid = JsonSerializer.SerializeToElement("9001")
+                }, CancellationToken.None)).Code);
+        }
+        Assert.AreEqual("bib_required", (await mutations.ActionAsync(actor, invalid.Id, Action(invalid, null), CancellationToken.None)).Code);
+        Assert.AreEqual("invalid_bib", (await mutations.ActionAsync(actor, invalid.Id, Action(invalid, "not-a-bib"), CancellationToken.None)).Code);
+        Assert.AreEqual("invalid_bib", (await mutations.ActionAsync(actor, invalid.Id, Action(invalid, "9999999999999999"), CancellationToken.None)).Code);
+        await using (var verifyInvalid = await contexts.CreateDbContextAsync())
+        {
+            var rejected = await verifyInvalid.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == invalid.Id);
+            Assert.AreEqual("suggestion", rejected.Status);
+            Assert.AreEqual("pending", rejected.IsbnCheckStatus);
+            Assert.IsNull(rejected.BibId);
+        }
+        Assert.AreEqual("identifier_locked_by_stage", (await mutations.ActionAsync(actor, closed.Id, Action(closed), CancellationToken.None)).Code);
+        Assert.AreEqual("hold_operation_incomplete", (await mutations.ActionAsync(actor, blocked.Id,
+            new TitleRequestActionInput
+            {
+                Version = StaffVersion.Encode(blocked.RowVersion), Action = "additionalCopy", Status = "pending_hold",
+                Bibid = JsonSerializer.SerializeToElement("9001"), Autohold = JsonSerializer.SerializeToElement(false)
+            }, CancellationToken.None)).Code);
+        Assert.AreEqual("not_found", (await mutations.ActionAsync(actor with { Role = "staff", OrganizationId = 1 },
+            invalid.Id, Action(invalid), CancellationToken.None)).Code);
+        var copyOnly = await seed.AdditionalCopyRequests.AsNoTracking().SingleAsync(item => item.Id == copyOnlyId);
+        Assert.AreEqual("not_found", (await mutations.ActionAsync(actor, copyOnlyId,
+            new TitleRequestActionInput
+            {
+                Version = StaffVersion.Encode(copyOnly.RowVersion), Action = "additionalCopy", Status = "pending_hold",
+                Bibid = JsonSerializer.SerializeToElement("9001")
+            }, CancellationToken.None)).Code);
+        Assert.AreEqual("Copy-only identity",
+            (await seed.AdditionalCopyRequests.AsNoTracking().SingleAsync(item => item.Id == copyOnlyId)).Title);
+
+        var outboxCountBeforeFailure = await seed.EmailOutbox.CountAsync();
+        await seed.Database.ExecuteSqlRawAsync("""
+            CREATE TRIGGER [asap].[AdditionalCopyActionFailureTest]
+            ON [asap].[AdditionalCopyRequest] AFTER INSERT AS
+            BEGIN
+                IF EXISTS (SELECT 1 FROM inserted WHERE [Title] = N'Catalog title 9001')
+                    THROW 51000, 'Injected additional-copy insert failure', 1;
+            END;
+            """);
+        try
+        {
+            await Assert.ThrowsAsync<DbUpdateException>(async () =>
+                await mutations.ActionAsync(actor, failed.Id, Action(failed), CancellationToken.None));
+        }
+        finally
+        {
+            await seed.Database.ExecuteSqlRawAsync("DROP TRIGGER [asap].[AdditionalCopyActionFailureTest];");
+        }
+        await using var afterFailure = await contexts.CreateDbContextAsync();
+        var unchanged = await afterFailure.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == failed.Id);
+        Assert.AreEqual("suggestion", unchanged.Status);
+        Assert.AreEqual("9780000000000", unchanged.Identifier);
+        Assert.AreEqual("not_found", unchanged.IsbnCheckStatus);
+        Assert.AreEqual("Original result.", unchanged.IsbnCheckResult);
+        Assert.AreEqual(4, unchanged.IsbnCheckRetryCount);
+        Assert.AreEqual("original_error", unchanged.IsbnCheckLastErrorCode);
+        Assert.AreEqual(failed.LastCheckedUtc, unchanged.LastCheckedUtc);
+        Assert.IsNull(unchanged.BibId);
+        Assert.IsTrue(unchanged.RowVersion.SequenceEqual(failed.RowVersion));
+        var failedTags = await (from link in afterFailure.TitleRequestWorkflowTags
+            join tag in afterFailure.WorkflowTags on link.WorkflowTagId equals tag.Id
+            where link.TitleRequestId == failed.Id
+            select tag.Code).ToListAsync();
+        CollectionAssert.AreEquivalent(new[] { "polaris_bib_not_found" }, failedTags);
+        Assert.AreEqual(0, await afterFailure.AdditionalCopyRequests.CountAsync(item => item.SourceTitleRequestId == failed.Id));
+        Assert.AreEqual(0, await afterFailure.TitleRequestEvents.CountAsync(item =>
+            item.TitleRequestId == failed.Id && item.EventType == "additional_copy_created"));
+        Assert.AreEqual(outboxCountBeforeFailure, await afterFailure.EmailOutbox.CountAsync());
+    }
+
+    [TestMethod]
+    public async Task PolarisAdditionalCopyUsesValidatedIdentifierAndDoesNotInventMissingEvidence()
+    {
+        var bibProvider = new ScriptedBibStaffProvider(new Dictionary<int, string?>
+        {
+            [9002] = null,
+            [9003] = "9785555555555"
+        });
+        using var actionFactory = factory!.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<IStaffPolarisProvider>();
+            services.AddSingleton<IStaffPolarisProvider>(bibProvider);
+        }));
+        await using var scope = actionFactory.Services.CreateAsyncScope();
+        var contexts = scope.ServiceProvider.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var seed = await contexts.CreateDbContextAsync();
+        var admin = await seed.StaffUsers.SingleAsync(item => item.NormalizedUserPrincipalName == "ADMIN@EXAMPLE.ORG");
+        var formatId = await seed.MaterialFormats.Where(item => item.Code == "book")
+            .Select(item => item.Id).FirstAsync();
+        var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
+        var actor = new CurrentStaff(admin.Id, admin.NormalizedUserPrincipalName!, Guid.Parse(identity.TenantId!),
+            admin.UserPrincipalName, admin.DisplayName, admin.NotificationEmail, "super_admin", 1, "System", true,
+            false, null, false, false, false, admin.RowVersion);
+        TitleRequest Source(string title, string? identifier, string status, string? result = null) => new()
+        {
+            LibraryOrganizationId = 2,
+            LibraryNameSnapshot = "Test Library",
+            Barcode = $"200{Guid.NewGuid():N}"[..14],
+            Title = title,
+            Publication = "Original publication timing",
+            MaterialFormatId = formatId,
+            Status = "suggestion",
+            Identifier = identifier,
+            IsbnCheckStatus = status,
+            IsbnCheckResult = result,
+            IsbnCheckRetryCount = 2,
+            IsbnCheckLastErrorCode = "old_error",
+            AutoHold = false,
+            CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(-1),
+            UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(-1)
+        };
+        var notFound = Source("No catalog identifier, previously not found", "9781111111111", "not_found", "Earlier lookup found no BIB.");
+        var pending = Source("No catalog identifier, pending", "9782222222222", "pending");
+        var empty = Source("No source or catalog identifier", null, "pending");
+        var conflict = Source("Conflicting client identifier", "9783333333333", "not_found", "Old result.");
+        var failed = Source("Rollback catalog identifier", "9786666666666", "not_found", "Original result.");
+        seed.TitleRequests.AddRange(notFound, pending, empty, conflict, failed);
+        await seed.SaveChangesAsync();
+        var notFoundTagId = await seed.WorkflowTags.Where(item => item.Code == "polaris_bib_not_found")
+            .Select(item => item.Id).SingleAsync();
+        foreach (var request in new[] { notFound, conflict, failed })
+        {
+            seed.TitleRequestWorkflowTags.Add(new TitleRequestWorkflowTag
+            {
+                TitleRequestId = request.Id,
+                WorkflowTagId = notFoundTagId
+            });
+        }
+        await seed.SaveChangesAsync();
+
+        TitleRequestActionInput Action(TitleRequest request, string bib, string? clientIdentifier) => new()
+        {
+            Version = StaffVersion.Encode(request.RowVersion),
+            Action = "additionalCopy",
+            Status = "pending_hold",
+            Bibid = JsonSerializer.SerializeToElement(bib),
+            Identifier = JsonSerializer.SerializeToElement(clientIdentifier),
+            Title = request.Title,
+            Format = "book"
+        };
+        var mutations = scope.ServiceProvider.GetRequiredService<TitleRequestMutationService>();
+        foreach (var (request, bib, clientIdentifier, expectedIdentifier, expectedStatus, expectedResult, expectedTag) in new[]
+        {
+            (notFound, "9002", "9789999999999", "9781111111111", "not_found", "Earlier lookup found no BIB.", (string?)null),
+            (pending, "9002", "9782222222222", "9782222222222", "not_found", "Selected Polaris BIB has no catalog identifier; request identifier was not verified.", (string?)null),
+            (empty, "9002", (string?)null, (string?)null, "skipped_no_isbn", (string?)null, (string?)null),
+            (conflict, "9003", "9784444444444", "9785555555555", "found", "Polaris bibliographic identifier verified for the BIB selected by staff.", "polaris_bib_found")
+        })
+        {
+            var result = await mutations.ActionAsync(actor, request.Id, Action(request, bib, clientIdentifier), CancellationToken.None);
+            Assert.AreEqual("updated", result.Code);
+            Assert.IsNotNull(result.AdditionalCopyRequestId);
+            await using var verify = await contexts.CreateDbContextAsync();
+            var saved = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == request.Id);
+            Assert.AreEqual(bib, saved.BibId);
+            Assert.AreEqual("pending_hold", saved.Status);
+            Assert.AreEqual(expectedIdentifier, saved.Identifier);
+            Assert.AreEqual(expectedStatus, saved.IsbnCheckStatus);
+            Assert.AreEqual(expectedResult, saved.IsbnCheckResult);
+            Assert.AreEqual(0, saved.IsbnCheckRetryCount);
+            Assert.IsNull(saved.IsbnCheckLastErrorCode);
+            Assert.AreEqual(1, await verify.AdditionalCopyRequests.CountAsync(item => item.SourceTitleRequestId == request.Id));
+            var derivedTags = await (from link in verify.TitleRequestWorkflowTags
+                join tag in verify.WorkflowTags on link.WorkflowTagId equals tag.Id
+                where link.TitleRequestId == request.Id &&
+                      (tag.Code == "polaris_bib_found" || tag.Code == "polaris_bib_not_found" ||
+                       tag.Code == "polaris_multiple_matches")
+                select tag.Code).ToListAsync();
+            CollectionAssert.AreEquivalent(expectedTag is null ? Array.Empty<string>() : [expectedTag], derivedTags);
+        }
+        Assert.AreEqual(4, bibProvider.ValidationCount, "Each action validates the selected BIB once.");
+        var views = scope.ServiceProvider.GetRequiredService<TitleRequestViewService>();
+        var pendingView = await views.GetAsync(actor, pending.Id.ToString(), CancellationToken.None);
+        Assert.IsNotNull(pendingView);
+        Assert.AreEqual("not_found", pendingView.IsbnCheckStatus);
+        Assert.AreEqual("Selected Polaris BIB has no catalog identifier; request identifier was not verified.",
+            pendingView.IsbnCheckResult);
+        CollectionAssert.DoesNotContain(pendingView.WorkflowTags.ToArray(), "Polaris BIB found");
+
+        await seed.Database.ExecuteSqlRawAsync("""
+            CREATE TRIGGER [asap].[AdditionalCopyIdentifierRollbackTest]
+            ON [asap].[AdditionalCopyRequest] AFTER INSERT AS
+            BEGIN
+                IF EXISTS (SELECT 1 FROM inserted WHERE [Title] = N'Rollback catalog identifier')
+                    THROW 51000, 'Injected additional-copy insert failure', 1;
+            END;
+            """);
+        try
+        {
+            await Assert.ThrowsAsync<DbUpdateException>(async () =>
+                await mutations.ActionAsync(actor, failed.Id, Action(failed, "9003", "9784444444444"), CancellationToken.None));
+        }
+        finally
+        {
+            await seed.Database.ExecuteSqlRawAsync("DROP TRIGGER [asap].[AdditionalCopyIdentifierRollbackTest];");
+        }
+        await using var afterFailure = await contexts.CreateDbContextAsync();
+        var unchanged = await afterFailure.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == failed.Id);
+        Assert.AreEqual("9786666666666", unchanged.Identifier);
+        Assert.AreEqual("not_found", unchanged.IsbnCheckStatus);
+        Assert.AreEqual("Original result.", unchanged.IsbnCheckResult);
+        Assert.AreEqual(2, unchanged.IsbnCheckRetryCount);
+        Assert.AreEqual("old_error", unchanged.IsbnCheckLastErrorCode);
+        Assert.IsNull(unchanged.BibId);
+        Assert.AreEqual("suggestion", unchanged.Status);
+        Assert.IsTrue(unchanged.RowVersion.SequenceEqual(failed.RowVersion));
+        Assert.AreEqual(1, await afterFailure.TitleRequestWorkflowTags.CountAsync(item =>
+            item.TitleRequestId == failed.Id && item.WorkflowTagId == notFoundTagId));
+        Assert.AreEqual(0, await afterFailure.AdditionalCopyRequests.CountAsync(item => item.SourceTitleRequestId == failed.Id));
+        // These cases share the SQL fixture with browser journeys that page open rows.
+        await afterFailure.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE [asap].[AdditionalCopyRequest]
+            SET [Status] = N'closed', [ClosedUtc] = SYSUTCDATETIME(), [UpdatedUtc] = SYSUTCDATETIME()
+            WHERE [SourceTitleRequestId] IN ({notFound.Id}, {pending.Id}, {empty.Id}, {conflict.Id});
+            """);
+        await afterFailure.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE [asap].[TitleRequest]
+            SET [Status] = N'closed', [CloseReason] = N'manual', [UpdatedUtc] = SYSUTCDATETIME()
+            WHERE [Id] IN ({notFound.Id}, {pending.Id}, {empty.Id}, {conflict.Id}, {failed.Id});
+            """);
+        Assert.AreEqual(0, await afterFailure.AdditionalCopyRequests.CountAsync(item =>
+            (item.SourceTitleRequestId == notFound.Id || item.SourceTitleRequestId == pending.Id ||
+             item.SourceTitleRequestId == empty.Id || item.SourceTitleRequestId == conflict.Id) &&
+            item.Status == "open"));
+        Assert.AreEqual(0, await afterFailure.TitleRequests.CountAsync(item =>
+            (item.Id == notFound.Id || item.Id == pending.Id || item.Id == empty.Id ||
+             item.Id == conflict.Id || item.Id == failed.Id) && item.Status != "closed"));
+    }
+
+    [TestMethod]
     public async Task StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers()
     {
         factory!.UseKestrel(0);
@@ -375,6 +838,8 @@ public sealed partial class PatronJourneyTests
             Guid.Parse(identity.TenantId!),
             Guid.Parse(identity.ObjectId!),
             staffObjectId);
+        await using var settingsPoisoningJourney = await LegacySettingsPoisoningJourney.CreateAsync(
+            databaseConnectionString);
 
         var repositoryRoot = Path.GetDirectoryName(TestArtifactPaths.FindRepositoryFile("Asap.sln"))!;
         var artifactDirectory = Path.Combine(
@@ -391,7 +856,7 @@ public sealed partial class PatronJourneyTests
             RedirectStandardError = true,
             UseShellExecute = false
         };
-        startInfo.ArgumentList.Add(Path.Combine(repositoryRoot, "tests", "browser", "staff.cjs"));
+        startInfo.ArgumentList.Add(Path.Combine(repositoryRoot, "tests", "browser", "staff-legacy.cjs"));
         startInfo.ArgumentList.Add(baseAddress.GetLeftPart(UriPartial.Authority));
         startInfo.ArgumentList.Add(artifactDirectory);
         startInfo.ArgumentList.Add(seeded.SuperId.ToString());
@@ -417,6 +882,8 @@ public sealed partial class PatronJourneyTests
         startInfo.ArgumentList.Add(seeded.StaleCopyAId.ToString());
         startInfo.ArgumentList.Add(seeded.StaleCopyBId.ToString());
         startInfo.ArgumentList.Add(seeded.StaleCreateSourceId.ToString());
+        startInfo.ArgumentList.Add(seeded.CollidingRequestId.ToString());
+        startInfo.ArgumentList.Add(seeded.PolarisActionRequestId.ToString());
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Could not start the staff browser runner.");
@@ -426,6 +893,164 @@ public sealed partial class PatronJourneyTests
         var stdout = await stdoutTask;
         var stderr = await stderrTask;
         Assert.AreEqual(0, process.ExitCode, $"{stdout}{Environment.NewLine}{stderr}");
+        var settingsSqlAfterBrowser = await settingsPoisoningJourney.CaptureSqlStateAsync();
+        foreach (var (table, before) in settingsPoisoningJourney.SqlStateBeforeBrowser)
+        {
+            Assert.IsTrue(settingsSqlAfterBrowser.TryGetValue(table, out var after), $"Missing SQL snapshot for {table}.");
+            Assert.AreEqual(before, after, $"A legacy no-edit Settings journey changed SQL rows in {table}.");
+        }
+        await settingsPoisoningJourney.AssertLibraryOverrideRowsAsync();
+
+        var sqlBeforeTargetedInheritanceReset = await settingsPoisoningJourney.CaptureSqlStateAsync();
+        var resetStartInfo = new ProcessStartInfo
+        {
+            FileName = "node",
+            WorkingDirectory = repositoryRoot,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        };
+        resetStartInfo.ArgumentList.Add(Path.Combine(repositoryRoot, "tests", "browser", "staff-settings-inheritance-reset.cjs"));
+        resetStartInfo.ArgumentList.Add(baseAddress.GetLeftPart(UriPartial.Authority));
+        resetStartInfo.ArgumentList.Add(artifactDirectory);
+        resetStartInfo.ArgumentList.Add(seeded.SuperId.ToString());
+        resetStartInfo.ArgumentList.Add(identity.TenantId!);
+        resetStartInfo.ArgumentList.Add(identity.UserPrincipalName!);
+        using (var resetProcess = Process.Start(resetStartInfo)
+               ?? throw new InvalidOperationException("Could not start the Settings inheritance reset browser runner."))
+        {
+            var resetStdoutTask = resetProcess.StandardOutput.ReadToEndAsync();
+            var resetStderrTask = resetProcess.StandardError.ReadToEndAsync();
+            await resetProcess.WaitForExitAsync();
+            var resetStdout = await resetStdoutTask;
+            var resetStderr = await resetStderrTask;
+            Assert.AreEqual(0, resetProcess.ExitCode, $"{resetStdout}{Environment.NewLine}{resetStderr}");
+        }
+
+        var sqlAfterTargetedInheritanceReset = await settingsPoisoningJourney.CaptureSqlStateAsync();
+        foreach (var (table, before) in sqlBeforeTargetedInheritanceReset)
+        {
+            if (table is "WorkflowSettings" or "PatronSettings")
+            {
+                continue;
+            }
+            Assert.IsTrue(sqlAfterTargetedInheritanceReset.TryGetValue(table, out var after), $"Missing SQL snapshot for {table}.");
+            Assert.AreEqual(before, after, $"The targeted inheritance reset unexpectedly changed SQL rows in {table}.");
+        }
+        await settingsPoisoningJourney.AssertTargetedInheritanceResetAsync();
+
+        using (var settingsClient = factory!.CreateClient())
+        {
+            AddTestingStaffHeaders(
+                settingsClient,
+                seeded.SuperId,
+                Guid.Parse(identity.TenantId!),
+                identity.UserPrincipalName!);
+            using var resetSettingsResponse = await settingsClient.GetAsync(
+                "/api/asap/staff/settings/library?orgId=92329");
+            Assert.AreEqual(HttpStatusCode.OK, resetSettingsResponse.StatusCode,
+                await resetSettingsResponse.Content.ReadAsStringAsync());
+            using var resetSettingsDocument = JsonDocument.Parse(await resetSettingsResponse.Content.ReadAsStringAsync());
+            var resetSettings = resetSettingsDocument.RootElement;
+            Assert.AreEqual(JsonValueKind.Null,
+                resetSettings.GetProperty("stored").GetProperty("libraryOverride").GetProperty("workflow").ValueKind);
+            Assert.AreEqual("System creators inherited after reset",
+                resetSettings.GetProperty("workflow").GetProperty("commonAuthorsLabel").GetString());
+            Assert.AreEqual("System patron-code message inherited after reset",
+                resetSettings.GetProperty("workflow").GetProperty("patronCodeEligibilityMessage").GetString());
+            Assert.AreEqual("Closure ebook message", resetSettings.GetProperty("ui_text").GetProperty("ebookMessage").GetString());
+            Assert.AreEqual("Library eAudiobook override intentionally edited",
+                resetSettings.GetProperty("ui_text").GetProperty("eaudiobookMessage").GetString());
+        }
+
+        using (var legacyReport = JsonDocument.Parse(
+                   await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "staff-legacy-browser-results.json"))))
+        {
+            var noEdit = legacyReport.RootElement.GetProperty("settingsNoEditRoundTrips").EnumerateArray().ToArray();
+            Assert.HasCount(3, noEdit);
+            CollectionAssert.AreEqual(
+                new[] { "system", "92327", "92328" },
+                noEdit.Select(item => item.GetProperty("orgId").GetString()).ToArray());
+            Assert.IsTrue(noEdit.All(item => item.GetProperty("persistedSnapshotUnchanged").GetBoolean()));
+            var collision = legacyReport.RootElement.GetProperty("requestIdentityCollision");
+            Assert.IsTrue(collision.GetProperty("rowClicks").GetBoolean());
+            Assert.IsTrue(collision.GetProperty("deepLinks").GetBoolean());
+            Assert.IsTrue(collision.GetProperty("notes").GetBoolean());
+            Assert.IsTrue(collision.GetProperty("polarisSearches").GetBoolean());
+            Assert.IsTrue(collision.GetProperty("additionalCopyBibLookup").GetBoolean());
+            Assert.AreEqual(200, legacyReport.RootElement.GetProperty("polarisAdditionalCopyAction")
+                .GetProperty("status").GetInt32());
+            var rowActions = legacyReport.RootElement.GetProperty("rowActionJourney");
+            foreach (var action in new[] { "edit", "purchase", "queueHold", "titleReopen", "titleClose",
+                         "copyClose", "copyReopen" })
+            {
+                Assert.AreEqual(200, rowActions.GetProperty(action).GetInt32(), action);
+            }
+            var bibParity = legacyReport.RootElement.GetProperty("bibActionParity");
+            Assert.IsTrue(bibParity.GetProperty("dateSet").GetBoolean());
+            Assert.IsTrue(bibParity.GetProperty("dateCleared").GetBoolean());
+            Assert.IsTrue(bibParity.GetProperty("closedFieldsLocked").GetBoolean());
+            Assert.AreEqual("closed", bibParity.GetProperty("catalogOptOut").GetString());
+            Assert.AreEqual("closed", bibParity.GetProperty("outstandingOptOut").GetString());
+            Assert.AreEqual(409, bibParity.GetProperty("duplicateConflict").GetInt32());
+            Assert.AreEqual("closed", bibParity.GetProperty("duplicateClose").GetString());
+            await using var parityScope = factory.Services.CreateAsyncScope();
+            var parityContexts = parityScope.ServiceProvider.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+            await using var parityDb = await parityContexts.CreateDbContextAsync();
+            foreach (var property in new[] { "optOutId", "outstandingOptOutId" })
+            {
+                var id = long.Parse(bibParity.GetProperty(property).GetString()!);
+                var request = await parityDb.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == id);
+                Assert.AreEqual("closed", request.Status);
+                Assert.AreEqual("purchased_no_hold", request.CloseReason);
+                Assert.IsFalse(request.AutoHold);
+                Assert.AreEqual(0, await parityDb.HoldPlacementOperations.CountAsync(item =>
+                    item.TitleRequestId == id));
+            }
+            var duplicateId = long.Parse(bibParity.GetProperty("duplicateId").GetString()!);
+            var duplicate = await parityDb.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == duplicateId);
+            Assert.AreEqual("closed", duplicate.Status);
+            Assert.AreEqual("duplicate_hold", duplicate.CloseReason);
+            Assert.IsNull(duplicate.BibId);
+        }
+
+        await settingsPoisoningJourney.SetSystemSuggestionLimitAsync(23);
+        await settingsPoisoningJourney.SetSystemPatronPageTitleAsync("Closure after no-edit system title");
+        var inheritedAfterSystemEdit = await factory!.Services
+            .GetRequiredService<PatronConfigurationService>()
+            .GetAsync(92327, CancellationToken.None);
+        Assert.AreEqual(23, inheritedAfterSystemEdit?.SuggestionLimit ?? -1,
+            "A library with no local workflow row must inherit later system changes after a no-edit save.");
+        Assert.AreEqual("Closure after no-edit system title", inheritedAfterSystemEdit?.PageTitle,
+            "A library with no local patron row must inherit later system text after a no-edit save.");
+        await settingsPoisoningJourney.AssertLibraryOverrideRowsAsync(targetedResetComplete: true);
+
+        await settingsPoisoningJourney.RestoreForFollowingBrowserJourneyAsync();
+        var nextStartInfo = new ProcessStartInfo
+        {
+            FileName = "node",
+            WorkingDirectory = repositoryRoot,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        };
+        nextStartInfo.ArgumentList.Add(Path.Combine(repositoryRoot, "tests", "browser", "staff-next.cjs"));
+        // The new Polaris mutation fixture is used by the legacy browser journey only.
+        foreach (var argument in startInfo.ArgumentList.Skip(1).Take(26))
+        {
+            nextStartInfo.ArgumentList.Add(argument);
+        }
+
+        using (var nextProcess = Process.Start(nextStartInfo)
+               ?? throw new InvalidOperationException("Could not start the staff-next browser runner."))
+        {
+            var nextStdoutTask = nextProcess.StandardOutput.ReadToEndAsync();
+            var nextStderrTask = nextProcess.StandardError.ReadToEndAsync();
+            await nextProcess.WaitForExitAsync();
+            var nextStdout = await nextStdoutTask;
+            var nextStderr = await nextStderrTask;
+            Assert.AreEqual(0, nextProcess.ExitCode, $"{nextStdout}{Environment.NewLine}{nextStderr}");
+        }
 
         using (var report = JsonDocument.Parse(
                    await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "staff-browser-results.json"))))
@@ -479,7 +1104,9 @@ public sealed partial class PatronJourneyTests
                    r.[Publication],
                    JSON_VALUE(r.[CustomFieldsJson], '$.audience_note.value'),
                    JSON_VALUE(r.[CustomFieldsJson], '$.binding.value'),
-                   JSON_VALUE(r.[CustomFieldsJson], '$.retired.value')
+                   JSON_VALUE(r.[CustomFieldsJson], '$.retired.value'),
+                   (SELECT COUNT(*) FROM [asap].[TitleRequestEvent]
+                    WHERE [TitleRequestId] = @requestId AND [EventType] = N'request_edited')
             FROM [asap].[TitleRequest] r
             JOIN [asap].[StaffUser] s ON s.[Id] = @superId
             WHERE r.[Id] = @requestId;
@@ -494,11 +1121,12 @@ public sealed partial class PatronJourneyTests
         Assert.IsTrue(verified.GetBoolean(3));
         Assert.AreEqual("browser-weekly@example.org", verified.GetString(4));
         Assert.IsTrue(verified.GetBoolean(5));
-        Assert.AreEqual(4, verified.GetInt32(6));
+        Assert.AreEqual(2, verified.GetInt32(6));
         Assert.AreEqual("Library backlist", verified.GetString(7));
         Assert.AreEqual("Edited audience", verified.GetString(8));
         Assert.AreEqual("hardback", verified.GetString(9));
         Assert.AreEqual("Keep me", verified.GetString(10));
+        Assert.IsGreaterThanOrEqualTo(1, verified.GetInt32(11));
         await verified.CloseAsync();
 
         await using var resolution = verify.CreateCommand();
@@ -558,7 +1186,9 @@ public sealed partial class PatronJourneyTests
                 (SELECT COUNT(*) FROM [asap].[TitleRequest]
                  WHERE [Id]=@copySourceId
                    AND [Status]=N'hold_placed'
-                   AND [Notes] LIKE N'%Additional copy request created for BIB 92905.%'),
+                   AND EXISTS (SELECT 1 FROM [asap].[TitleRequestEvent]
+                               WHERE [TitleRequestId]=@copySourceId
+                                 AND [EventType]=N'additional_copy_created')),
                 (SELECT COUNT(*) FROM [asap].[EmailOutbox]
                  WHERE [Subject]=N'ASAP additional-copy reminder'
                    AND [BodyText] LIKE N'%Browser additional copy source (BIB 92905)%'
@@ -3919,7 +4549,12 @@ public sealed partial class PatronJourneyTests
                 status = "pending_hold",
                 identifier = (string?)null
             });
-        Assert.AreEqual(HttpStatusCode.OK, pendingClear.StatusCode, await pendingClear.Content.ReadAsStringAsync());
+        Assert.AreEqual(HttpStatusCode.BadRequest, pendingClear.StatusCode,
+            await pendingClear.Content.ReadAsStringAsync());
+        using (var pendingClearBody = JsonDocument.Parse(await pendingClear.Content.ReadAsStringAsync()))
+        {
+            Assert.AreEqual("bib_required", pendingClearBody.RootElement.GetProperty("code").GetString());
+        }
 
         using var placed = await GetAsync(placedId);
         using var placedUnchanged = await client.PostAsJsonAsync(
@@ -3981,8 +4616,9 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("outstanding_purchase", result.GetString(1));
         Assert.AreEqual("9780000002190", result.GetString(3));
         Assert.IsTrue(result.IsDBNull(4));
-        Assert.AreEqual("pending", result.GetString(5));
-        Assert.IsTrue(result.IsDBNull(6));
+        Assert.AreEqual("not_found", result.GetString(5));
+        Assert.AreEqual("Identifier processing was not completed before this request left suggestions.",
+            result.GetString(6));
         Assert.AreEqual(0, result.GetInt32(7));
         Assert.IsTrue(result.IsDBNull(8));
         Assert.IsTrue(result.IsDBNull(9));
@@ -3991,14 +4627,14 @@ public sealed partial class PatronJourneyTests
         Assert.IsTrue(await result.ReadAsync());
         Assert.AreEqual(pendingHoldId, result.GetInt64(0));
         Assert.AreEqual("pending_hold", result.GetString(1));
-        Assert.IsTrue(result.IsDBNull(3));
-        Assert.IsTrue(result.IsDBNull(4));
-        Assert.AreEqual("skipped_no_isbn", result.GetString(5));
-        Assert.IsTrue(result.IsDBNull(6));
-        Assert.AreEqual(0, result.GetInt32(7));
-        Assert.IsTrue(result.IsDBNull(8));
-        Assert.IsTrue(result.IsDBNull(9));
-        Assert.AreEqual(0, result.GetInt32(10));
+        Assert.AreEqual("9780000002151", result.GetString(3));
+        Assert.AreEqual("9051", result.GetString(4));
+        Assert.AreEqual("found", result.GetString(5));
+        Assert.AreEqual("Old result", result.GetString(6));
+        Assert.AreEqual(3, result.GetInt32(7));
+        Assert.AreEqual("old_error", result.GetString(8));
+        Assert.IsFalse(result.IsDBNull(9));
+        Assert.AreEqual(1, result.GetInt32(10));
 
         Assert.IsTrue(await result.ReadAsync());
         Assert.AreEqual(placedId, result.GetInt64(0));
@@ -8154,6 +8790,522 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(expectLifecycleAudit ? 1 : 0, reader.GetInt32(7));
     }
 
+    private sealed class LegacySettingsPoisoningJourney : IAsyncDisposable
+    {
+        private readonly SqlConnection connection;
+
+        private LegacySettingsPoisoningJourney(
+            SqlConnection connection,
+            IReadOnlyDictionary<string, string> sqlStateBeforeBrowser)
+        {
+            this.connection = connection;
+            SqlStateBeforeBrowser = sqlStateBeforeBrowser;
+        }
+
+        public IReadOnlyDictionary<string, string> SqlStateBeforeBrowser { get; }
+
+        public static async Task<LegacySettingsPoisoningJourney> CreateAsync(string connectionString)
+        {
+            var connection = new SqlConnection(connectionString);
+            await connection.OpenAsync();
+            try
+            {
+                await SeedAsync(connection);
+                return new LegacySettingsPoisoningJourney(
+                    connection,
+                    await CaptureSqlStateAsync(connection));
+            }
+            catch
+            {
+                await RestoreAsync(connection);
+                await connection.DisposeAsync();
+                throw;
+            }
+        }
+
+        public Task<Dictionary<string, string>> CaptureSqlStateAsync() => CaptureSqlStateAsync(connection);
+
+        public async Task AssertLibraryOverrideRowsAsync(bool targetedResetComplete = false)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = 92327) +
+                    (SELECT COUNT(*) FROM [asap].[PatronSettings] WHERE [OrganizationId] = 92327) +
+                    (SELECT COUNT(*) FROM [asap].[EmailSettings] WHERE [OrganizationId] = 92327) +
+                    (SELECT COUNT(*) FROM [asap].[PublicationOptionSet] WHERE [OrganizationId] = 92327) +
+                    (SELECT COUNT(*) FROM [asap].[CommonCreatorSet] WHERE [OrganizationId] = 92327) +
+                    (SELECT COUNT(*) FROM [asap].[PatronCodeEligibilitySet] WHERE [OrganizationId] = 92327) +
+                    (SELECT COUNT(*) FROM [asap].[ExternalSearchProviderOverride] WHERE [LibraryOrganizationId] = 92327) +
+                    (SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] WHERE [LibraryOrganizationId] = 92327) +
+                    (SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 92327) +
+                    (SELECT COUNT(*) FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 92327) +
+                    (SELECT COUNT(*) FROM [asap].[FormatAutoClaimRule] WHERE [LibraryOrganizationId] = 92327) +
+                    (SELECT COUNT(*) FROM [asap].[Branding] WHERE [OrganizationId] = 92327),
+                    (SELECT COUNT(*) FROM [asap].[WorkflowSettings]
+                     WHERE [OrganizationId] = 92328 AND [SuggestionLimit] = 73),
+                    (SELECT COUNT(*) FROM [asap].[WorkflowSettings]
+                     WHERE [OrganizationId] = 92328 AND
+                       ([SuggestionLimitMessage] IS NOT NULL OR [OutstandingTimeoutEnabled] IS NOT NULL OR
+                        [OutstandingTimeoutDays] IS NOT NULL OR [OutstandingTimeoutSendEmail] IS NOT NULL OR
+                        [OutstandingTimeoutRejectionTemplateId] IS NOT NULL OR [HoldPickupTimeoutEnabled] IS NOT NULL OR
+                        [HoldPickupTimeoutDays] IS NOT NULL OR [PendingHoldTimeoutEnabled] IS NOT NULL OR
+                        [PendingHoldTimeoutDays] IS NOT NULL OR [AdditionalCopyTimeoutEnabled] IS NOT NULL OR
+                        [AdditionalCopyTimeoutDays] IS NOT NULL OR [AutoPromote] IS NOT NULL OR
+                        [CommonAuthorsEnabled] IS NOT NULL OR [CommonAuthorsLabel] IS NOT NULL OR
+                        [CommonAuthorsHelp] IS NOT NULL OR [CommonAuthorsMessage] IS NOT NULL OR
+                        [AllowPatronAutoholdOptOut] IS NOT NULL OR [AllowAnyRegisteredCardLogin] IS NOT NULL OR
+                        [PatronCodeEligibilityEnabled] IS NOT NULL OR [PatronCodeEligibilityMessage] IS NOT NULL)),
+                    (SELECT COUNT(*) FROM [asap].[PatronSettings] WHERE [OrganizationId] = 92328) +
+                    (SELECT COUNT(*) FROM [asap].[EmailSettings] WHERE [OrganizationId] = 92328) +
+                    (SELECT COUNT(*) FROM [asap].[PublicationOptionSet] WHERE [OrganizationId] = 92328) +
+                    (SELECT COUNT(*) FROM [asap].[CommonCreatorSet] WHERE [OrganizationId] = 92328) +
+                    (SELECT COUNT(*) FROM [asap].[PatronCodeEligibilitySet] WHERE [OrganizationId] = 92328) +
+                    (SELECT COUNT(*) FROM [asap].[ExternalSearchProviderOverride] WHERE [LibraryOrganizationId] = 92328) +
+                    (SELECT COUNT(*) FROM [asap].[MaterialFormatOverride] WHERE [LibraryOrganizationId] = 92328) +
+                    (SELECT COUNT(*) FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = 92328) +
+                    (SELECT COUNT(*) FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 92328) +
+                    (SELECT COUNT(*) FROM [asap].[FormatAutoClaimRule] WHERE [LibraryOrganizationId] = 92328) +
+                    (SELECT COUNT(*) FROM [asap].[Branding] WHERE [OrganizationId] = 92328),
+                    (SELECT COUNT(*) FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = 92329 AND
+                     [CommonAuthorsLabel] = N'Library creators override before reset' AND
+                     [CommonAuthorsHelp] = N'Library creator help override before reset'),
+                    (SELECT COUNT(*) FROM [asap].[PatronSettings] WHERE [OrganizationId] = 92329 AND
+                     [EbookMessage] = N'Library eBook override before reset' AND
+                     [EaudiobookMessage] = N'Library eAudiobook override before reset');
+                """;
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.IsTrue(await reader.ReadAsync());
+            Assert.AreEqual(0, reader.GetInt32(0), "The zero-override library acquired local Settings rows.");
+            Assert.AreEqual(1, reader.GetInt32(1), "The sparse library's one workflow override disappeared.");
+            Assert.AreEqual(0, reader.GetInt32(2), "The sparse library acquired another workflow scalar override.");
+            Assert.AreEqual(0, reader.GetInt32(3), "The sparse library acquired additional Settings override rows.");
+            Assert.AreEqual(targetedResetComplete ? 0 : 1, reader.GetInt32(4),
+                "The targeted workflow override row must only disappear after the browser clears its last two values.");
+            Assert.AreEqual(targetedResetComplete ? 0 : 1, reader.GetInt32(5),
+                "The targeted PatronSettings override must reflect the browser's clear and intentional edit.");
+        }
+
+        public async Task AssertTargetedInheritanceResetAsync()
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                "SELECT (SELECT COUNT(*) FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = 92329), " +
+                "(SELECT COUNT(*) FROM [asap].[PatronSettings] WHERE [OrganizationId] = 92329), " +
+                "(SELECT COUNT(*) FROM [asap].[PatronSettings] WHERE [OrganizationId] = 92329 AND [EbookMessage] IS NULL), " +
+                "(SELECT [EaudiobookMessage] FROM [asap].[PatronSettings] WHERE [OrganizationId] = 92329);";
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.IsTrue(await reader.ReadAsync());
+            Assert.AreEqual(0, reader.GetInt32(0), "Clearing the three sole workflow overrides must delete their empty library row.");
+            Assert.AreEqual(1, reader.GetInt32(1), "The intentional eAudiobook edit must keep one PatronSettings row.");
+            Assert.AreEqual(1, reader.GetInt32(2), "The eBook override must be stored as absent after it is cleared.");
+            Assert.AreEqual("Library eAudiobook override intentionally edited", reader.GetString(3));
+        }
+
+        public Task RestoreForFollowingBrowserJourneyAsync() => RestoreAsync(connection);
+
+        public async Task SetSystemSuggestionLimitAsync(int suggestionLimit)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE [asap].[WorkflowSettings]
+                SET [SuggestionLimit] = @suggestionLimit, [UpdatedUtc] = SYSUTCDATETIME()
+                WHERE [OrganizationId] = 1;
+                """;
+            command.Parameters.AddWithValue("@suggestionLimit", suggestionLimit);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        public async Task SetSystemPatronPageTitleAsync(string pageTitle)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE [asap].[PatronSettings]
+                SET [PageTitle] = @pageTitle, [UpdatedUtc] = SYSUTCDATETIME()
+                WHERE [OrganizationId] = 1;
+                """;
+            command.Parameters.AddWithValue("@pageTitle", pageTitle);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await RestoreAsync(connection);
+            await connection.DisposeAsync();
+        }
+
+        private static async Task SeedAsync(SqlConnection connection)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT * INTO #Issue323OriginalOrganizations FROM [asap].[Organization];
+                SELECT * INTO #Issue323OriginalSystemSettings FROM [asap].[SystemSettings] WHERE [OrganizationId] = 1;
+                SELECT * INTO #Issue323OriginalPolarisSettings FROM [asap].[PolarisSettings] WHERE [OrganizationId] = 1;
+                SELECT * INTO #Issue323OriginalWorkflowSettings FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = 1;
+                SELECT * INTO #Issue323OriginalPatronSettings FROM [asap].[PatronSettings] WHERE [OrganizationId] = 1;
+                SELECT * INTO #Issue323OriginalEmailSettings FROM [asap].[EmailSettings] WHERE [OrganizationId] = 1;
+                SELECT * INTO #Issue323OriginalProviders FROM [asap].[ExternalSearchProvider] WHERE [OrganizationId] = 1;
+                SELECT * INTO #Issue323OriginalPublicationOptions FROM [asap].[PublicationOption] WHERE [OrganizationId] = 1;
+                SELECT * INTO #Issue323OriginalMaterialFormats FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = 1;
+                SELECT * INTO #Issue323OriginalEmailTemplates FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1;
+                SELECT * INTO #Issue323OriginalBranding FROM [asap].[Branding] WHERE [OrganizationId] = 1;
+
+                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
+                VALUES (92327, N'Closure Zero Override Library', N'CZO', 1),
+                       (92328, N'Closure Sparse Override Library', N'CSO', 1),
+                       (92329, N'Closure Targeted Reset Library', N'CTR', 1);
+                INSERT INTO [asap].[WorkflowSettings] ([OrganizationId], [SuggestionLimit], [UpdatedUtc])
+                VALUES (92328, 73, SYSUTCDATETIME());
+                INSERT INTO [asap].[WorkflowSettings]
+                    ([OrganizationId], [CommonAuthorsLabel], [CommonAuthorsHelp], [UpdatedUtc])
+                VALUES (92329, N'Library creators override before reset', N'Library creator help override before reset',
+                        SYSUTCDATETIME());
+                INSERT INTO [asap].[PatronSettings] ([OrganizationId], [EbookMessage], [EaudiobookMessage], [UpdatedUtc])
+                VALUES (92329, N'Library eBook override before reset', N'Library eAudiobook override before reset', SYSUTCDATETIME());
+
+                UPDATE [asap].[SystemSettings]
+                SET [StaffApplicationUrl] = N'https://settings-poison.example.org/staff/',
+                    [LeapBibUrlPattern] = N'https://settings-poison.example.org/item/{{bibid}}',
+                    [LeapPatronUrlPattern] = N'https://settings-poison.example.org/patron/{{patron-id}}',
+                    [MaterialTypeIconUrlPattern] = N'https://settings-poison.example.org/icons/{{code}}.svg',
+                    [SystemNotEnabledMessage] = N'Closure poison participation message {{library}}',
+                    [MisconfiguredMessage] = N'Closure poison unavailable message {{library}}',
+                    [UpdatedUtc] = '2026-09-20T12:34:56'
+                WHERE [OrganizationId] = 1;
+
+                UPDATE [asap].[PolarisSettings]
+                SET [Host] = N'polaris-poison.example.org', [AccessId] = N'closure-poison-access',
+                    [StaffDomain] = N'closure.example.org', [AdminUser] = N'closure-poison-user',
+                    [WorkstationId] = 137, [SystemPolarisUserId] = 731,
+                    [OrganizationIdForRequests] = 910, [PickupOrganizationId] = 4201,
+                    [UpdatedUtc] = '2026-09-20T12:34:56'
+                WHERE [OrganizationId] = 1;
+
+                UPDATE [asap].[WorkflowSettings]
+                SET [SuggestionLimit] = 17,
+                    [SuggestionLimitMessage] = N'Closure poison suggestion limit {{next_available_date}}',
+                    [OutstandingTimeoutEnabled] = 1, [OutstandingTimeoutDays] = 61,
+                    [OutstandingTimeoutSendEmail] = 1, [HoldPickupTimeoutEnabled] = 1,
+                    [HoldPickupTimeoutDays] = 47, [PendingHoldTimeoutEnabled] = 1,
+                    [PendingHoldTimeoutDays] = 31, [AdditionalCopyTimeoutEnabled] = 1,
+                    [AdditionalCopyTimeoutDays] = 41, [AutoPromote] = 1,
+                    [CommonAuthorsEnabled] = 1, [CommonAuthorsLabel] = N'Closure poison creators',
+                    [CommonAuthorsHelp] = N'Closure poison creator help',
+                    [CommonAuthorsMessage] = N'Closure poison creator message',
+                    [AllowPatronAutoholdOptOut] = 0, [AllowAnyRegisteredCardLogin] = 1,
+                    [PatronCodeEligibilityEnabled] = 0,
+                    [PatronCodeEligibilityMessage] = N'Closure poison eligibility message',
+                    [UpdatedUtc] = '2026-09-20T12:34:56'
+                WHERE [OrganizationId] = 1;
+
+                UPDATE [asap].[WorkflowSettings]
+                SET [SuggestionLimit] = NULL,
+                    [SuggestionLimitMessage] = NULL,
+                    [OutstandingTimeoutEnabled] = NULL,
+                    [OutstandingTimeoutDays] = NULL,
+                    [OutstandingTimeoutSendEmail] = NULL,
+                    [OutstandingTimeoutRejectionTemplateId] = NULL,
+                    [HoldPickupTimeoutEnabled] = NULL,
+                    [HoldPickupTimeoutDays] = NULL,
+                    [PendingHoldTimeoutEnabled] = NULL,
+                    [PendingHoldTimeoutDays] = NULL,
+                    [AdditionalCopyTimeoutEnabled] = NULL,
+                    [AdditionalCopyTimeoutDays] = NULL,
+                    [AutoPromote] = NULL,
+                    [CommonAuthorsEnabled] = NULL,
+                    [CommonAuthorsLabel] = NULL,
+                    [CommonAuthorsHelp] = NULL,
+                    [CommonAuthorsMessage] = NULL,
+                    [AllowPatronAutoholdOptOut] = NULL,
+                    [AllowAnyRegisteredCardLogin] = NULL,
+                    [PatronCodeEligibilityEnabled] = NULL,
+                    [PatronCodeEligibilityMessage] = NULL,
+                    [UpdatedUtc] = '2026-09-20T12:34:56'
+                WHERE [OrganizationId] = 1;
+
+                UPDATE [asap].[WorkflowSettings]
+                SET [CommonAuthorsLabel] = N'System creators inherited after reset',
+                    [CommonAuthorsHelp] = N'System creator help inherited after reset',
+                    [PatronCodeEligibilityMessage] = N'System patron-code message inherited after reset',
+                    [CommonAuthorsEnabled] = 1,
+                    [UpdatedUtc] = '2026-09-20T12:34:56'
+                WHERE [OrganizationId] = 1;
+
+                UPDATE [asap].[PatronSettings]
+                SET [PageTitle] = N'Closure poison patron title', [BarcodeLabel] = N'Closure card label',
+                    [PinLabel] = N'Closure PIN label', [LoginPrompt] = N'Closure login prompt',
+                    [LoginNote] = N'Closure login note', [SuggestionFormNote] = N'Closure suggestion note',
+                    [NoEmailMessage] = N'Closure no-email message', [SuccessTitle] = N'Closure success title',
+                    [SuccessMessage] = N'Closure success message', [AlreadySubmittedMessage] = N'Closure duplicate message',
+                    [EbookMessage] = N'Closure ebook message', [EaudiobookMessage] = N'Closure audiobook message',
+                    [SuggestionStatusLabel] = N'Closure received',
+                    [OutstandingPurchaseStatusLabel] = N'Closure reviewing',
+                    [PendingHoldStatusLabel] = N'Closure preparing', [HoldPlacedStatusLabel] = N'Closure hold placed',
+                    [ClosedStatusLabel] = N'Closure completed', [RejectedStatusLabel] = N'Closure not selected',
+                    [HoldCompletedStatusLabel] = N'Closure hold completed',
+                    [HoldNotPickedUpStatusLabel] = N'Closure hold expired',
+                    [ManualStatusLabel] = N'Closure manual', [SilentStatusLabel] = N'Closure silent',
+                    [UpdatedUtc] = '2026-09-20T12:34:56'
+                WHERE [OrganizationId] = 1;
+
+                UPDATE [asap].[SystemSettings]
+                SET [SystemNotEnabledMessage] = NULL,
+                    [MisconfiguredMessage] = NULL,
+                    [UpdatedUtc] = '2026-09-20T12:34:56'
+                WHERE [OrganizationId] = 1;
+
+                UPDATE [asap].[PatronSettings]
+                SET [PageTitle] = NULL, [BarcodeLabel] = NULL, [PinLabel] = NULL,
+                    [LoginPrompt] = NULL, [LoginNote] = NULL, [SuggestionFormNote] = NULL,
+                    [NoEmailMessage] = NULL, [SuccessTitle] = NULL, [SuccessMessage] = NULL,
+                    [AlreadySubmittedMessage] = NULL,
+                    [SuggestionStatusLabel] = NULL, [OutstandingPurchaseStatusLabel] = NULL,
+                    [PendingHoldStatusLabel] = NULL, [HoldPlacedStatusLabel] = NULL,
+                    [ClosedStatusLabel] = NULL, [RejectedStatusLabel] = NULL,
+                    [HoldCompletedStatusLabel] = NULL, [HoldNotPickedUpStatusLabel] = NULL,
+                    [ManualStatusLabel] = NULL, [SilentStatusLabel] = NULL,
+                    [UpdatedUtc] = '2026-09-20T12:34:56'
+                WHERE [OrganizationId] = 1;
+
+                UPDATE [asap].[EmailSettings]
+                SET [FromAddress] = N'closure-system@example.org', [FromName] = N'Closure System Sender',
+                    [UpdatedUtc] = '2026-09-20T12:34:56'
+                WHERE [OrganizationId] = 1;
+
+                UPDATE [asap].[ExternalSearchProvider]
+                SET [Label] = CASE [ProviderKey]
+                        WHEN N'external_search_1' THEN N'Closure Catalog One'
+                        WHEN N'external_search_2' THEN N'Closure Catalog Two'
+                        WHEN N'external_search_3' THEN N'Closure Catalog Three'
+                        ELSE [Label] END,
+                    [UrlTemplate] = CASE [ProviderKey]
+                        WHEN N'external_search_1' THEN N'https://closure-one.example.org/?q={{title}}'
+                        WHEN N'external_search_2' THEN N'https://closure-two.example.org/?q={{title}}'
+                        WHEN N'external_search_3' THEN N'https://closure-three.example.org/?q={{title}}'
+                        ELSE [UrlTemplate] END
+                WHERE [OrganizationId] = 1 AND [ProviderKey] IN
+                    (N'external_search_1', N'external_search_2', N'external_search_3');
+
+                UPDATE [asap].[PublicationOption]
+                SET [Label] = N'Closure before publication'
+                WHERE [OrganizationId] = 1 AND [OptionKey] = N'already_published';
+                UPDATE [asap].[MaterialFormat]
+                SET [Label] = N'Closure system book format', [UpdatedUtc] = '2026-09-20T12:34:56'
+                WHERE [OwnerOrganizationId] = 1 AND [Code] = N'book';
+                UPDATE [asap].[EmailTemplate]
+                SET [DisplayName] = N'Closure customized submission',
+                    [SubjectTemplate] = N'Closure request received: {{title}}',
+                    [BodyTemplate] = N'Closure template body for {{name}} and {{title}}'
+                WHERE [OrganizationId] = 1 AND [TemplateKey] = N'suggestion_submitted';
+
+                IF EXISTS (SELECT 1 FROM [asap].[Branding] WHERE [OrganizationId] = 1)
+                BEGIN
+                    UPDATE [asap].[Branding]
+                    SET [LogoAltText] = N'Closure system logo alt text', [UpdatedUtc] = '2026-09-20T12:34:56'
+                    WHERE [OrganizationId] = 1;
+                END;
+                ELSE
+                BEGIN
+                    INSERT INTO [asap].[Branding] ([OrganizationId], [LogoAltText], [UpdatedUtc])
+                    VALUES (1, N'Closure system logo alt text', '2026-09-20T12:34:56');
+                END;
+                """;
+            await command.ExecuteNonQueryAsync();
+        }
+
+        private static async Task<Dictionary<string, string>> CaptureSqlStateAsync(SqlConnection connection)
+        {
+            var queries = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Organization"] = "SELECT * FROM [asap].[Organization] ORDER BY [Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["SystemSettings"] = "SELECT * FROM [asap].[SystemSettings] WHERE [OrganizationId] = 1 FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["PolarisSettings"] = "SELECT [OrganizationId], [Host], [AccessId], CASE WHEN [ProtectedApiKey] IS NULL THEN 0 ELSE 1 END AS [HasApiKey], [StaffDomain], [AdminUser], CASE WHEN [ProtectedAdminPassword] IS NULL THEN 0 ELSE 1 END AS [HasAdminPassword], [WorkstationId], [SystemPolarisUserId], [OrganizationIdForRequests], [PickupOrganizationId], [UpdatedUtc], [RowVersion] FROM [asap].[PolarisSettings] WHERE [OrganizationId] = 1 FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["WorkflowSettings"] = "SELECT * FROM [asap].[WorkflowSettings] WHERE [OrganizationId] IN (1, 92327, 92328, 92329) ORDER BY [OrganizationId] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["PatronSettings"] = "SELECT * FROM [asap].[PatronSettings] WHERE [OrganizationId] IN (1, 92327, 92328, 92329) ORDER BY [OrganizationId] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["EmailSettings"] = "SELECT [OrganizationId], CASE WHEN [ProtectedServerToken] IS NULL THEN 0 ELSE 1 END AS [HasPostmarkToken], [FromAddress], [FromName], [UpdatedUtc], [RowVersion] FROM [asap].[EmailSettings] WHERE [OrganizationId] IN (1, 92327, 92328, 92329) ORDER BY [OrganizationId] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["PatronEmbedAllowedOrigin"] = "SELECT * FROM [asap].[PatronEmbedAllowedOrigin] WHERE [OrganizationId] = 1 ORDER BY [Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["PublicationOptionSet"] = "SELECT * FROM [asap].[PublicationOptionSet] WHERE [OrganizationId] IN (1, 92327, 92328, 92329) ORDER BY [OrganizationId] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["PublicationOption"] = "SELECT * FROM [asap].[PublicationOption] WHERE [OrganizationId] IN (1, 92327, 92328, 92329) ORDER BY [Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["CommonCreatorSet"] = "SELECT * FROM [asap].[CommonCreatorSet] WHERE [OrganizationId] IN (1, 92327, 92328, 92329) ORDER BY [OrganizationId] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["CommonCreatorTerm"] = "SELECT * FROM [asap].[CommonCreatorTerm] WHERE [OrganizationId] IN (1, 92327, 92328, 92329) ORDER BY [Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["PatronCodeEligibilitySet"] = "SELECT * FROM [asap].[PatronCodeEligibilitySet] WHERE [OrganizationId] IN (1, 92327, 92328, 92329) ORDER BY [OrganizationId] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["PatronCodeEligibilityMember"] = "SELECT * FROM [asap].[PatronCodeEligibilityMember] WHERE [OrganizationId] IN (1, 92327, 92328, 92329) ORDER BY [OrganizationId], [PatronCodeId] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["ExternalSearchProvider"] = "SELECT * FROM [asap].[ExternalSearchProvider] WHERE [OrganizationId] = 1 ORDER BY [Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["ExternalSearchProviderOverride"] = "SELECT * FROM [asap].[ExternalSearchProviderOverride] WHERE [LibraryOrganizationId] IN (92327, 92328, 92329) ORDER BY [LibraryOrganizationId], [ExternalSearchProviderId] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["MaterialFormat"] = "SELECT * FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] IN (1, 92327, 92328, 92329) ORDER BY [Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["MaterialFormatOverride"] = "SELECT * FROM [asap].[MaterialFormatOverride] WHERE [LibraryOrganizationId] IN (92327, 92328, 92329) ORDER BY [Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["MaterialFormatCustomFieldRule"] = "SELECT * FROM [asap].[MaterialFormatCustomFieldRule] WHERE [LibraryOrganizationId] IN (92327, 92328, 92329) ORDER BY [Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["PatronCustomField"] = "SELECT * FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] IN (92327, 92328, 92329) ORDER BY [Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["PatronCustomFieldOption"] = "SELECT optionRow.* FROM [asap].[PatronCustomFieldOption] optionRow JOIN [asap].[PatronCustomField] fieldRow ON fieldRow.[Id] = optionRow.[PatronCustomFieldId] WHERE fieldRow.[LibraryOrganizationId] IN (92327, 92328, 92329) ORDER BY optionRow.[Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["EmailTemplate"] = "SELECT * FROM [asap].[EmailTemplate] WHERE [OrganizationId] IN (1, 92327, 92328, 92329) ORDER BY [OrganizationId], [SortOrder], [Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["FormatAutoClaimRule"] = "SELECT * FROM [asap].[FormatAutoClaimRule] WHERE [LibraryOrganizationId] IN (92327, 92328, 92329) ORDER BY [Id] FOR JSON PATH, INCLUDE_NULL_VALUES;",
+                ["Branding"] = "SELECT [OrganizationId], CASE WHEN [LogoData] IS NULL THEN NULL ELSE CONVERT(varchar(64), HASHBYTES('SHA2_256', [LogoData]), 2) END AS [LogoSha256], [LogoContentType], [LogoFileName], [LogoAltText], [UpdatedUtc], [RowVersion] FROM [asap].[Branding] WHERE [OrganizationId] IN (1, 92327, 92328, 92329) ORDER BY [OrganizationId] FOR JSON PATH, INCLUDE_NULL_VALUES;"
+            };
+            var snapshots = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var (name, query) in queries)
+            {
+                await using var command = connection.CreateCommand();
+                command.CommandText = query;
+                await using var reader = await command.ExecuteReaderAsync();
+                var chunks = new List<string>();
+                while (await reader.ReadAsync())
+                {
+                    chunks.Add(reader.GetString(0));
+                }
+
+                snapshots.Add(name, string.Concat(chunks));
+            }
+
+            return snapshots;
+        }
+
+        private static async Task RestoreAsync(SqlConnection connection)
+        {
+            if (connection.State != System.Data.ConnectionState.Open)
+            {
+                return;
+            }
+
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                DELETE FROM [asap].[MaterialFormatCustomFieldRule] WHERE [LibraryOrganizationId] IN (92327, 92328, 92329);
+                DELETE FROM [asap].[FormatAutoClaimRule] WHERE [LibraryOrganizationId] IN (92327, 92328, 92329);
+                DELETE FROM [asap].[MaterialFormatOverride] WHERE [LibraryOrganizationId] IN (92327, 92328, 92329);
+                DELETE optionRow FROM [asap].[PatronCustomFieldOption] optionRow
+                JOIN [asap].[PatronCustomField] fieldRow ON fieldRow.[Id] = optionRow.[PatronCustomFieldId]
+                WHERE fieldRow.[LibraryOrganizationId] IN (92327, 92328, 92329);
+                DELETE FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] IN (92327, 92328, 92329);
+                DELETE FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] IN (92327, 92328, 92329);
+                DELETE FROM [asap].[ExternalSearchProviderOverride] WHERE [LibraryOrganizationId] IN (92327, 92328, 92329);
+                DELETE FROM [asap].[EmailTemplate] WHERE [OrganizationId] IN (92327, 92328, 92329);
+                DELETE FROM [asap].[Branding] WHERE [OrganizationId] IN (92327, 92328, 92329);
+                DELETE FROM [asap].[EmailSettings] WHERE [OrganizationId] IN (92327, 92328, 92329);
+                DELETE FROM [asap].[WorkflowSettings] WHERE [OrganizationId] IN (92327, 92328, 92329);
+                DELETE FROM [asap].[PatronSettings] WHERE [OrganizationId] IN (92327, 92328, 92329);
+                DELETE FROM [asap].[PublicationOptionSet] WHERE [OrganizationId] IN (92327, 92328, 92329);
+                DELETE FROM [asap].[CommonCreatorSet] WHERE [OrganizationId] IN (92327, 92328, 92329);
+                DELETE FROM [asap].[PatronCodeEligibilitySet] WHERE [OrganizationId] IN (92327, 92328, 92329);
+                DELETE FROM [asap].[AdministrativeAudit] WHERE [OrganizationId] IN (92327, 92328, 92329);
+                DELETE FROM [asap].[Organization] WHERE [Id] IN (92327, 92328, 92329);
+
+                UPDATE target
+                SET [StaffApplicationUrl] = originalRow.[StaffApplicationUrl],
+                    [LeapBibUrlPattern] = originalRow.[LeapBibUrlPattern],
+                    [LeapPatronUrlPattern] = originalRow.[LeapPatronUrlPattern],
+                    [MaterialTypeIconUrlPattern] = originalRow.[MaterialTypeIconUrlPattern],
+                    [SystemNotEnabledMessage] = originalRow.[SystemNotEnabledMessage],
+                    [MisconfiguredMessage] = originalRow.[MisconfiguredMessage],
+                    [UpdatedUtc] = originalRow.[UpdatedUtc]
+                FROM [asap].[SystemSettings] target CROSS JOIN #Issue323OriginalSystemSettings originalRow;
+                UPDATE target
+                SET [Host] = originalRow.[Host], [AccessId] = originalRow.[AccessId],
+                    [ProtectedApiKey] = originalRow.[ProtectedApiKey], [StaffDomain] = originalRow.[StaffDomain],
+                    [AdminUser] = originalRow.[AdminUser], [ProtectedAdminPassword] = originalRow.[ProtectedAdminPassword],
+                    [WorkstationId] = originalRow.[WorkstationId],
+                    [SystemPolarisUserId] = originalRow.[SystemPolarisUserId],
+                    [OrganizationIdForRequests] = originalRow.[OrganizationIdForRequests],
+                    [PickupOrganizationId] = originalRow.[PickupOrganizationId], [UpdatedUtc] = originalRow.[UpdatedUtc]
+                FROM [asap].[PolarisSettings] target CROSS JOIN #Issue323OriginalPolarisSettings originalRow;
+                UPDATE target
+                SET [SuggestionLimit] = originalRow.[SuggestionLimit],
+                    [SuggestionLimitMessage] = originalRow.[SuggestionLimitMessage],
+                    [OutstandingTimeoutEnabled] = originalRow.[OutstandingTimeoutEnabled],
+                    [OutstandingTimeoutDays] = originalRow.[OutstandingTimeoutDays],
+                    [OutstandingTimeoutSendEmail] = originalRow.[OutstandingTimeoutSendEmail],
+                    [OutstandingTimeoutRejectionTemplateId] = originalRow.[OutstandingTimeoutRejectionTemplateId],
+                    [HoldPickupTimeoutEnabled] = originalRow.[HoldPickupTimeoutEnabled],
+                    [HoldPickupTimeoutDays] = originalRow.[HoldPickupTimeoutDays],
+                    [PendingHoldTimeoutEnabled] = originalRow.[PendingHoldTimeoutEnabled],
+                    [PendingHoldTimeoutDays] = originalRow.[PendingHoldTimeoutDays],
+                    [AdditionalCopyTimeoutEnabled] = originalRow.[AdditionalCopyTimeoutEnabled],
+                    [AdditionalCopyTimeoutDays] = originalRow.[AdditionalCopyTimeoutDays],
+                    [AutoPromote] = originalRow.[AutoPromote], [CommonAuthorsEnabled] = originalRow.[CommonAuthorsEnabled],
+                    [CommonAuthorsLabel] = originalRow.[CommonAuthorsLabel], [CommonAuthorsHelp] = originalRow.[CommonAuthorsHelp],
+                    [CommonAuthorsMessage] = originalRow.[CommonAuthorsMessage],
+                    [AllowPatronAutoholdOptOut] = originalRow.[AllowPatronAutoholdOptOut],
+                    [AllowAnyRegisteredCardLogin] = originalRow.[AllowAnyRegisteredCardLogin],
+                    [PatronCodeEligibilityEnabled] = originalRow.[PatronCodeEligibilityEnabled],
+                    [PatronCodeEligibilityMessage] = originalRow.[PatronCodeEligibilityMessage],
+                    [UpdatedUtc] = originalRow.[UpdatedUtc]
+                FROM [asap].[WorkflowSettings] target CROSS JOIN #Issue323OriginalWorkflowSettings originalRow;
+                UPDATE target
+                SET [PageTitle] = originalRow.[PageTitle], [BarcodeLabel] = originalRow.[BarcodeLabel],
+                    [PinLabel] = originalRow.[PinLabel], [LoginPrompt] = originalRow.[LoginPrompt],
+                    [LoginNote] = originalRow.[LoginNote], [SuggestionFormNote] = originalRow.[SuggestionFormNote],
+                    [NoEmailMessage] = originalRow.[NoEmailMessage], [SuccessTitle] = originalRow.[SuccessTitle],
+                    [SuccessMessage] = originalRow.[SuccessMessage], [AlreadySubmittedMessage] = originalRow.[AlreadySubmittedMessage],
+                    [EbookMessage] = originalRow.[EbookMessage], [EaudiobookMessage] = originalRow.[EaudiobookMessage],
+                    [SuggestionStatusLabel] = originalRow.[SuggestionStatusLabel],
+                    [OutstandingPurchaseStatusLabel] = originalRow.[OutstandingPurchaseStatusLabel],
+                    [PendingHoldStatusLabel] = originalRow.[PendingHoldStatusLabel],
+                    [HoldPlacedStatusLabel] = originalRow.[HoldPlacedStatusLabel],
+                    [ClosedStatusLabel] = originalRow.[ClosedStatusLabel], [RejectedStatusLabel] = originalRow.[RejectedStatusLabel],
+                    [HoldCompletedStatusLabel] = originalRow.[HoldCompletedStatusLabel],
+                    [HoldNotPickedUpStatusLabel] = originalRow.[HoldNotPickedUpStatusLabel],
+                    [ManualStatusLabel] = originalRow.[ManualStatusLabel], [SilentStatusLabel] = originalRow.[SilentStatusLabel],
+                    [UpdatedUtc] = originalRow.[UpdatedUtc]
+                FROM [asap].[PatronSettings] target CROSS JOIN #Issue323OriginalPatronSettings originalRow;
+                UPDATE target
+                SET [ProtectedServerToken] = originalRow.[ProtectedServerToken],
+                    [FromAddress] = originalRow.[FromAddress], [FromName] = originalRow.[FromName],
+                    [UpdatedUtc] = originalRow.[UpdatedUtc]
+                FROM [asap].[EmailSettings] target CROSS JOIN #Issue323OriginalEmailSettings originalRow;
+                UPDATE target
+                SET [ProviderKey] = originalRow.[ProviderKey], [IsEnabled] = originalRow.[IsEnabled],
+                    [Label] = originalRow.[Label], [UrlTemplate] = originalRow.[UrlTemplate],
+                    [SortOrder] = originalRow.[SortOrder]
+                FROM [asap].[ExternalSearchProvider] target
+                JOIN #Issue323OriginalProviders originalRow ON originalRow.[Id] = target.[Id];
+                UPDATE target
+                SET [OptionKey] = originalRow.[OptionKey], [Label] = originalRow.[Label],
+                    [IsEnabled] = originalRow.[IsEnabled], [SortOrder] = originalRow.[SortOrder]
+                FROM [asap].[PublicationOption] target
+                JOIN #Issue323OriginalPublicationOptions originalRow ON originalRow.[Id] = target.[Id];
+                UPDATE target
+                SET [Label] = originalRow.[Label], [SortOrder] = originalRow.[SortOrder],
+                    [IsEnabled] = originalRow.[IsEnabled], [MessageBehavior] = originalRow.[MessageBehavior],
+                    [Message] = originalRow.[Message], [TitleMode] = originalRow.[TitleMode],
+                    [TitleLabel] = originalRow.[TitleLabel], [AuthorMode] = originalRow.[AuthorMode],
+                    [AuthorLabel] = originalRow.[AuthorLabel], [IdentifierMode] = originalRow.[IdentifierMode],
+                    [IdentifierLabel] = originalRow.[IdentifierLabel], [PublicationMode] = originalRow.[PublicationMode],
+                    [PublicationLabel] = originalRow.[PublicationLabel], [CreatedUtc] = originalRow.[CreatedUtc],
+                    [UpdatedUtc] = originalRow.[UpdatedUtc]
+                FROM [asap].[MaterialFormat] target
+                JOIN #Issue323OriginalMaterialFormats originalRow ON originalRow.[Id] = target.[Id];
+                UPDATE target
+                SET [TemplateKey] = originalRow.[TemplateKey], [SourceTemplateId] = originalRow.[SourceTemplateId],
+                    [DisplayName] = originalRow.[DisplayName], [SubjectTemplate] = originalRow.[SubjectTemplate],
+                    [BodyTemplate] = originalRow.[BodyTemplate], [IsHidden] = originalRow.[IsHidden],
+                    [IsCustom] = originalRow.[IsCustom], [SortOrder] = originalRow.[SortOrder]
+                FROM [asap].[EmailTemplate] target
+                JOIN #Issue323OriginalEmailTemplates originalRow ON originalRow.[Id] = target.[Id];
+
+                IF EXISTS (SELECT 1 FROM #Issue323OriginalBranding)
+                BEGIN
+                    UPDATE target
+                    SET [LogoData] = originalRow.[LogoData], [LogoContentType] = originalRow.[LogoContentType],
+                        [LogoFileName] = originalRow.[LogoFileName], [LogoAltText] = originalRow.[LogoAltText],
+                        [UpdatedUtc] = originalRow.[UpdatedUtc]
+                    FROM [asap].[Branding] target CROSS JOIN #Issue323OriginalBranding originalRow;
+                END;
+                ELSE
+                BEGIN
+                    DELETE FROM [asap].[Branding] WHERE [OrganizationId] = 1;
+                END;
+
+                UPDATE target
+                SET [DisplayName] = originalRow.[DisplayName], [Abbreviation] = originalRow.[Abbreviation],
+                    [IsActive] = originalRow.[IsActive], [LastSyncedUtc] = originalRow.[LastSyncedUtc]
+                FROM [asap].[Organization] target JOIN #Issue323OriginalOrganizations originalRow
+                    ON originalRow.[Id] = target.[Id];
+                """;
+            await command.ExecuteNonQueryAsync();
+        }
+    }
+
     private static async Task<SeededStaffBrowserState> SeedStaffBrowserStateAsync(
         Guid tenantId,
         Guid superObjectId,
@@ -8266,6 +9418,14 @@ public sealed partial class PatronJourneyTests
                  @formatId, N'suggestion', NULL, 101, N'Main Library', @superId, N'Initial Administrator',
                  SYSUTCDATETIME(), N'manual', N'not_found', SYSUTCDATETIME(), SYSUTCDATETIME());
             DECLARE @primaryId bigint = SCOPE_IDENTITY();
+            INSERT INTO [asap].[TitleRequest]
+                ([LibraryOrganizationId], [LibraryNameSnapshot], [Barcode], [Title], [Author], [Identifier],
+                 [Publication], [AutoHold], [MaterialFormatId], [Status], [CreatedUtc], [UpdatedUtc])
+            VALUES
+                (2, N'Browser Action Library', N'20000000002921', N'Polaris action source',
+                 N'Original author', N'9780000002921', N'Original publication timing', 0, @formatId,
+                 N'suggestion', SYSUTCDATETIME(), SYSUTCDATETIME());
+            DECLARE @polarisActionId bigint = SCOPE_IDENTITY();
             INSERT INTO [asap].[LegacyPocketBaseMapping] ([EntityType], [PocketBaseId], [NewId])
             VALUES (N'title_request', @legacyId, @primaryId);
 
@@ -8394,10 +9554,40 @@ public sealed partial class PatronJourneyTests
                  '2026-09-01T13:04:00', '2026-09-01T13:04:00');
             DECLARE @staleCreateSourceId bigint = SCOPE_IDENTITY();
 
+            DECLARE @collidingRequestId bigint = (
+                SELECT ISNULL(MAX([Id]), 0) + 1000
+                FROM (
+                    SELECT [Id] FROM [asap].[TitleRequest]
+                    UNION ALL
+                    SELECT [Id] FROM [asap].[AdditionalCopyRequest]
+                ) ids);
+            SET IDENTITY_INSERT [asap].[TitleRequest] ON;
+            INSERT INTO [asap].[TitleRequest]
+                ([Id], [LibraryOrganizationId], [Barcode], [Title], [Author], [AutoHold], [MaterialFormatId],
+                 [Status], [CloseReason], [BibId], [Notes], [CreatedUtc], [UpdatedUtc])
+            VALUES
+                (@collidingRequestId, 2, N'20000000002920', N'Browser collision title', N'Collision Title Author',
+                 0, @formatId, N'closed', N'manual', N'92920', N'Title collision note',
+                 '2026-09-01T13:10:00', '2026-09-01T13:10:00');
+            SET IDENTITY_INSERT [asap].[TitleRequest] OFF;
+
+            SET IDENTITY_INSERT [asap].[AdditionalCopyRequest] ON;
+            INSERT INTO [asap].[AdditionalCopyRequest]
+                ([Id], [LibraryOrganizationId], [BibId], [Title], [Author], [Status], [Notes],
+                 [CreatedByStaffUserId], [CreatedByDisplayName], [CreatedUtc], [UpdatedUtc],
+                 [ClosedByStaffUserId], [ClosedByDisplayName], [ClosedUtc])
+            VALUES
+                (@collidingRequestId, 2, N'92921', N'Browser collision additional copy', N'Collision Copy Author',
+                 N'closed', N'Additional-copy collision note', @superId, N'Initial Administrator',
+                 '2026-09-01T13:11:00', '2026-09-01T13:11:00', @superId, N'Initial Administrator',
+                 '2026-09-01T13:12:00');
+            SET IDENTITY_INSERT [asap].[AdditionalCopyRequest] OFF;
+
             SELECT @superId, @staffId, @primaryId, @blockedId, @resolutionId, @otherId,
                    @copySourceId, @invalidClosedCopyId, @invalidClaimantId, @legacyRuleId, @mobileCopyId,
                    @foreignStaffId, @invalidTenantStaffId, @unboundStaffId,
-                   @staleTitleAId, @staleTitleBId, @staleCopyAId, @staleCopyBId, @staleCreateSourceId;
+                   @staleTitleAId, @staleTitleBId, @staleCopyAId, @staleCopyBId, @staleCreateSourceId,
+                   @collidingRequestId, @polarisActionId;
             """;
         seed.Parameters.AddWithValue("@superObjectId", superObjectId);
         seed.Parameters.AddWithValue("@tenantId", tenantId);
@@ -8429,7 +9619,9 @@ public sealed partial class PatronJourneyTests
             result.GetInt64(15),
             result.GetInt64(16),
             result.GetInt64(17),
-            result.GetInt64(18));
+            result.GetInt64(18),
+            result.GetInt64(19),
+            result.GetInt64(20));
     }
 
     private sealed record SeededStaffBrowserState(
@@ -8452,7 +9644,9 @@ public sealed partial class PatronJourneyTests
         long StaleTitleBId,
         long StaleCopyAId,
         long StaleCopyBId,
-        long StaleCreateSourceId);
+        long StaleCreateSourceId,
+        long CollidingRequestId,
+        long PolarisActionRequestId);
 
     private static async Task SeedLibraryAsync()
     {
@@ -9247,6 +10441,8 @@ public sealed partial class PatronJourneyTests
         public int ReplyCount { get; private set; }
         public int HoldReadCount { get; private set; }
         public IReadOnlyList<PolarisHoldSnapshot> Holds { get; set; } = [];
+        public string? Email { get; set; } = "hold-patron@example.org";
+        public bool RefreshFailure { get; set; }
         public Exception? CreateException { get; set; }
         public Exception? ReplyException { get; set; }
         public PolarisHoldSnapshot? HoldAfterCreate { get; set; }
@@ -9325,10 +10521,14 @@ public sealed partial class PatronJourneyTests
         public Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (RefreshFailure)
+            {
+                throw new PolarisOperationalException("polaris_patron_read_failed", "Patron unavailable.");
+            }
             return Task.FromResult(new PatronSnapshot(
                 7105,
                 barcode,
-                "hold-patron@example.org",
+                Email,
                 "Hold",
                 "Patron",
                 "1",
@@ -9399,6 +10599,29 @@ public sealed partial class PatronJourneyTests
             }
             return Task.FromResult(replyResult);
         }
+    }
+
+    private sealed class ScriptedBibStaffProvider(Dictionary<int, string?> identifiers) : IStaffPolarisProvider
+    {
+        public int ValidationCount { get; private set; }
+
+        public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ValidationCount++;
+            return Task.FromResult(identifiers.TryGetValue(bibId, out var identifier)
+                ? new BibValidationResult(true, Identifier: identifier)
+                : new BibValidationResult(false));
+        }
+
+        public Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(
+            string barcode, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<HoldProviderResult> CreateHoldAsync(
+            HoldCreateCommand command, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<HoldProviderResult> ReplyToHoldAsync(
+            HoldReplyCommand command, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
     private sealed class RejectingBibStaffProvider : IStaffPolarisProvider

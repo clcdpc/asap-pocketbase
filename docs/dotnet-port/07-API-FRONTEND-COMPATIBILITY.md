@@ -8,6 +8,18 @@ Do not perform a broad API redesign or frontend rewrite simply because the backe
 
 ## 2. Frontend architecture
 
+The primary `/staff/` client is the PocketBase-style staff frontend from the
+authoritative source pin `150b30b776565194260cc327eeeffdfb46475e81`, with only
+the adaptations required to use the .NET session, antiforgery, API DTO,
+authorization, and concurrency contracts. Restoring that established
+production UX makes it the compatibility and acceptance client for validating
+the new backend before any replacement UI is considered.
+
+The newer .NET staff interface that previously occupied `/staff/` is preserved
+unchanged in structure and remains published at `/staff-next/` for comparison
+and possible future development. It is not the primary acceptance surface and
+does not require a duplicate backend implementation.
+
 Preserve:
 
 - vanilla HTML/CSS/ES modules;
@@ -31,7 +43,8 @@ Recommended source shape:
 ```text
 src/Asap.Web/Frontend/
   patron/
-  staff/
+  staff/       # pinned legacy compatibility client, served at /staff/
+  staff-next/  # preserved newer .NET client, served at /staff-next/
   shared/
   vendor/
 ```
@@ -107,6 +120,14 @@ The frontend should distinguish auth/authorization/upstream/configuration failur
 All PocketBase JavaScript SDK/authStore/direct collection reads are removed. Remaining current direct browser reads (notably organization/patron-code reference access) become ASP.NET Core APIs so the browser has one backend contract.
 
 The .NET app serves only explicit DTOs; never expose EF entities directly.
+
+The restored staff client uses three deliberately narrow compatibility routes
+where its existing controls had no prior .NET request surface:
+`POST /api/asap/staff/bib-lookup`, `POST /api/asap/staff/patron-lookup`, and
+`POST /api/asap/staff/suggestions`. They delegate to the current provider,
+configuration, and suggestion services, require the normal staff authorization
+and antiforgery checks, and enforce the selected/assigned library scope. They do
+not emulate PocketBase queries or introduce a second set of domain rules.
 
 ## 10. Deep links
 

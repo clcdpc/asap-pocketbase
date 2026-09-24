@@ -22,9 +22,10 @@ async function afterFocusFrame(window) {
 }
 async function settleGridWork(window) {
   // Grid.js schedules follow-up renders after its data promise resolves.
-  await afterFocusFrame(window);
-  await afterFocusFrame(window);
-  await new Promise(resolve => window.setTimeout(resolve, 0));
+  for (let frame = 0; frame < 4; frame += 1) {
+    await afterFocusFrame(window);
+  }
+  await new Promise(resolve => window.setTimeout(resolve, 25));
 }
 
 async function runJourney(scenario) {
@@ -35,12 +36,12 @@ async function runJourney(scenario) {
   const openerLabel = titleRequest ? 'Open request' : 'Open additional-copy task';
   const source = path.join(__dirname, '..', 'src', 'Asap.Web', 'Frontend');
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'asap-dialog-focus-'));
-  fs.cpSync(path.join(source, 'staff'), path.join(temporary, 'staff'), { recursive: true });
+  fs.cpSync(path.join(source, 'staff-next'), path.join(temporary, 'staff'), { recursive: true });
   fs.cpSync(path.join(source, 'shared'), path.join(temporary, 'shared'), { recursive: true });
   fs.writeFileSync(path.join(temporary, 'package.json'), '{"type":"module"}');
   let dom;
   try {
-    dom = new JSDOM(fs.readFileSync(path.join(source, 'staff', 'index.html'), 'utf8'), {
+    dom = new JSDOM(fs.readFileSync(path.join(source, 'staff-next', 'index.html'), 'utf8'), {
       url: `https://localhost/staff/${titleRequest ? '' : '?stage=additional_copies'}`,
       pretendToBeVisual: true
     });

@@ -476,6 +476,9 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
                     value?.UrlTemplate ?? provider.UrlTemplate,
                     provider.SortOrder);
             })
+            .Where(provider => provider.IsEnabled ||
+                !string.IsNullOrWhiteSpace(provider.Label) ||
+                !string.IsNullOrWhiteSpace(provider.UrlTemplate))
             .ToArray();
     }
 

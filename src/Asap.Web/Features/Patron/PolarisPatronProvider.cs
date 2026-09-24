@@ -11,7 +11,7 @@ using Asap.Web.Features.Staff;
 
 namespace Asap.Web.Features.Patron;
 
-public sealed class PolarisPatronProvider(
+public sealed partial class PolarisPatronProvider(
     IDbContextFactory<AsapDbContext> contextFactory,
     IntegrationCredentialProtector credentialProtector,
     IHttpClientFactory httpClientFactory) : IPatronProvider, IStaffPolarisProvider, IPolarisReferenceProvider
@@ -433,7 +433,9 @@ public sealed class PolarisPatronProvider(
             {
                 return new BibValidationResult(false);
             }
-            return new BibValidationResult(true, Clean(data.Title), Clean(data.Author.FirstOrDefault()));
+            return new BibValidationResult(true, Clean(data.Title), Clean(data.Author.FirstOrDefault()),
+                Clean(data.Publisher.FirstOrDefault()), Clean(data.Format),
+                Clean(data.ISBN) ?? Clean(data.ISSN) ?? Clean(data.UPC.FirstOrDefault()), Clean(data.Publisher.FirstOrDefault()));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -783,7 +785,7 @@ public sealed class PolarisPatronProvider(
         if (response.Response?.IsSuccessStatusCode != true)
         {
             throw new PolarisOperationalException(
-                "polaris_patron_transport_failed",
+                response.Response?.StatusCode == HttpStatusCode.NotFound ? "polaris_patron_not_found" : "polaris_patron_transport_failed",
                 "Polaris patron data was unavailable.");
         }
 
@@ -799,7 +801,7 @@ public sealed class PolarisPatronProvider(
         {
             throw string.IsNullOrEmpty(pin)
                 ? new PolarisOperationalException(
-                    "polaris_patron_refresh_failed",
+                    papiErrorCode == -3000 ? "polaris_patron_not_found" : "polaris_patron_refresh_failed",
                     "Polaris did not return the patron.")
                 : new PatronAuthenticationException("Incorrect Login - Please try again");
         }

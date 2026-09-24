@@ -9,12 +9,12 @@ const { JSDOM } = require('jsdom');
   const repositoryRoot = path.join(__dirname, '..');
   const frontendRoot = path.join(repositoryRoot, 'src', 'Asap.Web', 'Frontend');
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'asap-settings-domains-'));
-  fs.cpSync(path.join(frontendRoot, 'staff'), path.join(temporary, 'staff'), { recursive: true });
+  fs.cpSync(path.join(frontendRoot, 'staff-next'), path.join(temporary, 'staff'), { recursive: true });
   fs.writeFileSync(path.join(temporary, 'package.json'), '{"type":"module"}\n');
 
   try {
     const module = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings-domains.js')).href);
-    const html = fs.readFileSync(path.join(frontendRoot, 'staff', 'index.html'), 'utf8');
+    const html = fs.readFileSync(path.join(frontendRoot, 'staff-next', 'index.html'), 'utf8');
     const dom = new JSDOM(html, { url: 'http://localhost/staff/' });
     global.window = dom.window;
     global.document = dom.window.document;

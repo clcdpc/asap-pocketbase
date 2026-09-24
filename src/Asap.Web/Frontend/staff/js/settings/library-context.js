@@ -1,0 +1,274 @@
+import { currentLibraryContextOrgId, libraryContextLoadSerial, librarySelectorBound, organizationsStatus, organizationsStatusMessage, currentSettingsSection, settingsDirty, settingsSyncInProgress, settingsSaving, settingsLoading, settingsActionInProgress, workflowSettings, libraryOverridesSummary, setCurrentLibraryContextOrgId, setLibrarySelectorBound, setLibraryOverridesSummary, incrementLibraryContextLoadSerial, setOrganizationsStatus, setSettingsReloadRequired, setSettingsActionInProgress } from '../state.js';
+import { isSuperAdminStaff, isRequestCanceledError, setVisible, activateSettingsSection, markSettingsClean } from '../api.js';
+import { authorizedJson, isAbortError } from '../http.js';
+import { showConfirm, showToast } from '../dialogs.js';
+import { applyLibrarySettingsToForm } from './form-population.js';
+import { rememberLastSavedLibrarySettings, captureSettingsBaseline } from './serialize-save.js';
+import { loadStaffAccessSettings } from './staff-access.js';
+import { showStaffAccessLoading } from '../settings-users.js';
+import { createLatestLoad } from '../../../shared/latest-load.js';
+
+const SUPER_ADMIN_LIBRARY_CONTEXT_STORAGE_KEY = 'asap.superAdmin.settings.libraryContextOrgId';
+const librarySettingsLoads = createLatestLoad();
+let librarySelectorLoadSerial = 0;
+
+function readSavedSuperAdminLibraryContext() {
+  try {
+    const value = window.localStorage.getItem(SUPER_ADMIN_LIBRARY_CONTEXT_STORAGE_KEY);
+    return String(value || '').trim();
+  } catch (err) {
+    return '';
+  }
+}
+
+function saveSuperAdminLibraryContext(orgId) {
+  try {
+    window.localStorage.setItem(SUPER_ADMIN_LIBRARY_CONTEXT_STORAGE_KEY, String(orgId || 'system'));
+  } catch (err) {}
+}
+
+export async function fetchLibraryOverridesSummary() {
+  setLibraryOverridesSummary({});
+}
+
+export function refreshLibrarySelectorIndicators() {
+  const select = document.getElementById('select-library-context');
+  if (!select) return;
+
+  const summary = libraryOverridesSummary || {};
+  const activeSection = currentSettingsSection;
+
+  Array.from(select.options).forEach(opt => {
+    if (opt.value === 'system') return;
+
+    let text = opt.textContent.replace(/ ●$/, '');
+
+    const sections = summary[opt.value] || [];
+    if (sections.includes(activeSection)) {
+      text += ' ●';
+    }
+
+    if (opt.textContent !== text) {
+      opt.textContent = text;
+      if (opt.value === currentLibraryContextOrgId) {
+        const display = document.getElementById('library-context-display');
+        if (display) display.textContent = text;
+      }
+    }
+  });
+}
+
+export async function populateLibrarySelector() {
+  const select = document.getElementById('select-library-context');
+  if (!select) return;
+  const selectorLoadId = ++librarySelectorLoadSerial;
+  const startingContextOrgId = currentLibraryContextOrgId;
+  const startingContextSerial = libraryContextLoadSerial;
+
+  try {
+    select.disabled = true;
+    const orgs = await authorizedJson('/api/asap/staff/organizations');
+    if (selectorLoadId !== librarySelectorLoadSerial ||
+        startingContextOrgId !== currentLibraryContextOrgId || startingContextSerial !== libraryContextLoadSerial) {
+      return;
+    }
+
+    const systemOption = document.createElement('option');
+    systemOption.value = 'system';
+    systemOption.textContent = 'System Defaults';
+    select.replaceChildren(systemOption);
+
+    orgs.filter(org => Number(org.id) > 1).forEach(org => {
+      const opt = document.createElement('option');
+      opt.value = org.id;
+      opt.textContent = `${org.displayName || org.name} (ID ${org.id})`;
+      select.appendChild(opt);
+    });
+
+    const savedOrgId = readSavedSuperAdminLibraryContext();
+    const selectedOrgId = savedOrgId || currentLibraryContextOrgId || select.value || 'system';
+    select.value = Array.from(select.options).some(option => option.value === selectedOrgId) ? selectedOrgId : 'system';
+
+    if (isSuperAdminStaff()) {
+      await fetchLibraryOverridesSummary();
+      refreshLibrarySelectorIndicators();
+    }
+
+    if (selectorLoadId !== librarySelectorLoadSerial ||
+        startingContextOrgId !== currentLibraryContextOrgId || startingContextSerial !== libraryContextLoadSerial) {
+      return;
+    }
+
+    setCurrentLibraryContextOrgId(select.value);
+
+    saveSuperAdminLibraryContext(select.value);
+    const selectedOption = select.options[select.selectedIndex];
+    if (selectedOption) {
+      document.getElementById('library-context-display').textContent = selectedOption.text;
+    }
+
+    if (!librarySelectorBound) {
+      select.addEventListener('change', async (e) => {
+        await switchLibraryContext(e.target.value || 'system', e.target);
+      });
+      setLibrarySelectorBound(true);
+    }
+  } catch (err) {
+    if (!isRequestCanceledError(err)) {
+      console.error('Failed to populate library selector', err);
+    }
+  } finally {
+    if (selectorLoadId === librarySelectorLoadSerial) {
+      select.disabled = settingsLoading || settingsSaving || settingsSyncInProgress || settingsActionInProgress;
+    }
+  }
+}
+
+export async function switchLibraryContext(orgId, select = document.getElementById('select-library-context')) {
+  const nextOrgId = orgId || 'system';
+  const previousOrgId = currentLibraryContextOrgId || 'system';
+  if (!select) return false;
+  if (settingsSyncInProgress || settingsSaving || settingsActionInProgress || settingsLoading) {
+    select.value = previousOrgId;
+    showToast('Wait for the current Settings operation before switching libraries.', 'error');
+    return false;
+  }
+
+  const draftWasConfirmed = settingsDirty;
+  if (draftWasConfirmed) {
+    const proceed = await showConfirm('Unsaved changes', 'You have unsaved changes. Switch libraries without saving?');
+    if (!proceed) {
+      select.value = previousOrgId;
+      return false;
+    }
+  }
+
+  if (currentLibraryContextOrgId !== previousOrgId) return false;
+  if (settingsSyncInProgress || settingsSaving || settingsActionInProgress || settingsLoading ||
+      (settingsDirty && !draftWasConfirmed)) {
+    select.value = previousOrgId;
+    return false;
+  }
+
+  setSettingsActionInProgress(true);
+  select.value = nextOrgId;
+  setCurrentLibraryContextOrgId(nextOrgId);
+  saveSuperAdminLibraryContext(nextOrgId);
+  const selectedOption = select.options && select.options[select.selectedIndex];
+  const contextDisplay = document.getElementById('library-context-display');
+  if (selectedOption && contextDisplay) {
+    contextDisplay.textContent = selectedOption.text;
+  }
+
+  const settingsLoad = loadLibrarySettings(currentLibraryContextOrgId, { throwOnError: true });
+  const settingsLoadSerial = libraryContextLoadSerial;
+  try {
+    const settings = await settingsLoad;
+    if (!settings) {
+      if (currentLibraryContextOrgId === nextOrgId && libraryContextLoadSerial === settingsLoadSerial) {
+        restoreLibraryContextSelection(previousOrgId, select, contextDisplay);
+      }
+      return false;
+    }
+    if (currentLibraryContextOrgId !== nextOrgId) {
+      return false;
+    }
+  } catch {
+    if (currentLibraryContextOrgId !== nextOrgId || libraryContextLoadSerial !== settingsLoadSerial) {
+      return false;
+    }
+    restoreLibraryContextSelection(previousOrgId, select, contextDisplay);
+    return false;
+  } finally {
+    setSettingsActionInProgress(false);
+  }
+  markSettingsClean('clean');
+  activateSettingsSection(currentSettingsSection, { updateHash: false });
+  return true;
+}
+
+function restoreLibraryContextSelection(orgId, select, contextDisplay) {
+  setCurrentLibraryContextOrgId(orgId);
+  saveSuperAdminLibraryContext(orgId);
+  select.value = orgId;
+  const selectedOption = select.options && select.options[select.selectedIndex];
+  if (selectedOption && contextDisplay) {
+    contextDisplay.textContent = selectedOption.text;
+  }
+}
+
+export async function handleLibraryContextSwitch(orgId) {
+  const select = document.getElementById('select-library-context');
+  return switchLibraryContext(orgId || 'system', select);
+}
+
+export async function loadLibrarySettings(orgId, options = {}) {
+  const requestedOrgId = orgId || 'system';
+  const guard = librarySettingsLoads.begin('library-settings');
+  incrementLibraryContextLoadSerial();
+  const requestId = libraryContextLoadSerial;
+  setCurrentLibraryContextOrgId(requestedOrgId);
+  showStaffAccessLoading({ contextOrgId: requestedOrgId, isCurrent: guard.isCurrent });
+  let applyingSettings = false;
+
+  try {
+    let settings = {};
+
+    const result = await authorizedJson(`/api/asap/staff/settings/library?orgId=${encodeURIComponent(requestedOrgId)}&_=${Date.now()}`, {
+      cache: 'no-store',
+      signal: guard.signal
+    });
+    if (!guard.isCurrent() || requestId !== libraryContextLoadSerial || requestedOrgId !== currentLibraryContextOrgId) {
+      return;
+    }
+
+    if (!result?.version) {
+      setSettingsReloadRequired(true);
+      throw new Error('The current Settings version was not returned.');
+    }
+    settings = result;
+    applyingSettings = true;
+    await applyLibrarySettingsToForm(settings);
+    if (!guard.isCurrent() || requestId !== libraryContextLoadSerial || requestedOrgId !== currentLibraryContextOrgId) {
+      return;
+    }
+    captureSettingsBaseline();
+    rememberLastSavedLibrarySettings(settings);
+    applyingSettings = false;
+    if (!settingsSyncInProgress && !options.preserveReloadRequired) {
+      setSettingsReloadRequired(false);
+    }
+    try {
+      await loadStaffAccessSettings({
+        contextOrgId: requestedOrgId,
+        signal: guard.signal,
+        isCurrent: guard.isCurrent
+      });
+    } catch (accessError) {
+      if (guard.isCurrent() && requestedOrgId === currentLibraryContextOrgId) {
+        console.error('Staff Access could not be refreshed after Settings loaded.', accessError);
+        showToast('Settings loaded, but Staff Access could not be refreshed.', 'error', 'settings-save-toast');
+      }
+    }
+    if (!guard.isCurrent() || requestId !== libraryContextLoadSerial || requestedOrgId !== currentLibraryContextOrgId) {
+      return;
+    }
+    return settings;
+
+  } catch (err) {
+    if (isAbortError(err)) {
+      return;
+    }
+    if (isRequestCanceledError(err)) {
+      return;
+    }
+    if (applyingSettings && guard.isCurrent() && requestId === libraryContextLoadSerial && requestedOrgId === currentLibraryContextOrgId) {
+      setSettingsReloadRequired(true);
+    }
+    console.error('Error loading library settings:', err);
+    showToast('Failed to load library settings', 'error', 'settings-save-toast');
+    if (options.throwOnError) throw err;
+  } finally {
+    librarySettingsLoads.finish('library-settings', guard.token);
+  }
+}

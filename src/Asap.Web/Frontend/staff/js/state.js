@@ -1,0 +1,283 @@
+export const defaultPublicationOptions = ['Already published', 'Coming soon', 'Published a while back'];
+
+export const staffSession = {
+  authenticated: false,
+  accessAllowed: true,
+  antiforgeryToken: '',
+  code: '',
+  staff: null
+};
+export let staffAccessGeneration = 0;
+
+export function normalizeSessionStaff(staff) {
+  if (!staff) return null;
+  return {
+    ...staff,
+    username: staff.userPrincipalName,
+    identityKey: staff.userPrincipalName,
+    libraryOrgId: staff.organizationId,
+    libraryOrgName: staff.organizationName,
+    weekly_action_summary_enabled: staff.weeklyActionSummaryEnabled,
+    weekly_action_summary_email: staff.weeklyActionSummaryEmail,
+    purchase_reminder_default: staff.purchaseReminderDefault,
+    additional_copy_reminder_default: staff.additionalCopyReminderDefault,
+    default_mine_unclaimed_filter: staff.defaultMineUnclaimedFilter
+  };
+}
+
+export function setStaffSession(session) {
+  const priorStaff = staffSession.staff;
+  const nextStaff = session?.staff;
+  if (staffSession.authenticated !== !!session?.authenticated ||
+      staffSession.accessAllowed !== (session?.accessAllowed !== false) ||
+      String(priorStaff?.id) !== String(nextStaff?.id) ||
+      priorStaff?.role !== nextStaff?.role ||
+      String(priorStaff?.organizationId) !== String(nextStaff?.organizationId)) {
+    staffAccessGeneration += 1;
+  }
+  staffSession.authenticated = !!session?.authenticated;
+  staffSession.accessAllowed = session?.accessAllowed !== false;
+  staffSession.antiforgeryToken = session?.antiforgeryToken || staffSession.antiforgeryToken || '';
+  staffSession.code = session?.code || '';
+  staffSession.staff = normalizeSessionStaff(session?.staff || null);
+}
+export const SETTINGS_RECORD_ID = 'settings0000001';
+export const loginContainer = document.getElementById('login-container');
+export const appContainer = document.getElementById('app-container');
+export const loginForm = document.getElementById('login-form');
+export const logoutBtn = document.getElementById('logout-btn');
+export const loginSignOutBtn = document.getElementById('login-sign-out-btn');
+export const profileBtn = document.getElementById('profile-btn');
+export const gridContainer = document.getElementById('grid-container');
+export const staffGridFilterBar = document.getElementById('staff-grid-filter-bar');
+export const gridSearchInput = document.getElementById('grid-search-input');
+export const tagFilterSelect = document.getElementById('tag-filter');
+export const claimFilterSelect = document.getElementById('claim-filter');
+export const similarRequestFilterSelect = document.getElementById('similar-request-filter');
+export const additionalCopyStatusFilterSelect = document.getElementById('additional-copy-status-filter');
+export const closedTypeFilterSelect = document.getElementById('closed-type-filter');
+export const settingsContainer = document.getElementById('settings-container');
+export const settingsForm = document.getElementById('settings-form');
+export let grid = undefined;
+export function setGrid(newGrid) { grid = newGrid; }
+
+export const formatMap = { book: 'Book', ebook: 'eBook', audiobook_cd: 'Audiobook (Physical CD)', eaudiobook: 'eAudiobook', dvd: 'DVD', music_cd: 'Music CD' };
+export let availableFormats = ['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'];
+export function setAvailableFormats(formats) { availableFormats = formats; }
+export let currentFormatClaimRules = [];
+export function setCurrentFormatClaimRules(rules) { currentFormatClaimRules = Array.isArray(rules) ? rules : []; }
+export let formatClaimStaffOptions = [];
+export function setFormatClaimStaffOptions(options) { formatClaimStaffOptions = Array.isArray(options) ? options : []; }
+export let currentLegacySettingsFormModel = null;
+export function setCurrentLegacySettingsFormModel(model) { currentLegacySettingsFormModel = model || null; }
+export const ageMap = { adult: 'Adult', teen: 'Teen', children: 'Children' };
+export let currentRejectionTemplates = [];
+export function setCurrentRejectionTemplates(templates) { currentRejectionTemplates = templates; }
+export let deletedSettingsTemplates = [];
+export function setDeletedSettingsTemplates(templates) { deletedSettingsTemplates = Array.isArray(templates) ? templates : []; }
+export function addDeletedSettingsTemplate(template) { deletedSettingsTemplates.push(template); }
+export let deletedSettingsFormats = [];
+export function setDeletedSettingsFormats(formats) { deletedSettingsFormats = Array.isArray(formats) ? formats : []; }
+export function addDeletedSettingsFormat(format) { deletedSettingsFormats.push(format); }
+
+export const closeReasonMap = { rejected: 'Rejected by staff', hold_completed: 'Hold placed / completed', duplicate_hold: 'Duplicate hold / request', manual: 'Manually closed', purchased_no_hold: 'Purchased, no hold' };
+export const duplicateStatusLabelDefaults = { suggestion: 'Received', outstanding_purchase: 'Under review', pending_hold: 'Being prepared', hold_placed: 'Hold placed', closed: 'Completed', rejected: 'Not selected for purchase', hold_completed: 'Completed', hold_not_picked_up: 'Closed', duplicate_hold: 'Duplicate hold / request', manual: 'Closed', silent: 'Closed', 'Silently Closed': 'Closed' };
+export const duplicateStatusLabelFields = [['suggestion','Received suggestion'],['outstanding_purchase','Pending purchase'],['pending_hold','Pending hold'],['hold_placed','Hold placed'],['closed','Closed'],['rejected','Rejected outcome'],['hold_completed','Fulfilled outcome'],['hold_not_picked_up','Hold not picked up'],['duplicate_hold','Duplicate hold / request'],['manual','Manual close'],['silent','Silent close']];
+export const patronFormatKeys = ['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'];
+export const patronFormatFields = [{ key: 'title', label: 'Title (original)', storage: 'title' },{ key: 'author', label: 'Author (original)', storage: 'author' },{ key: 'identifier', label: 'Identifier', storage: 'identifier' },{ key: 'publication', label: 'Publication timing', storage: 'publication' }];
+export const defaultPatronFormatRules = {"book":{"messageBehavior":"none","message":"","fields":{"title":{"mode":"required","label":"Title"},"author":{"mode":"required","label":"Author"},"identifier":{"mode":"optional","label":"Identifier number"},"publication":{"mode":"required","label":"Publication timing"}}},"audiobook_cd":{"messageBehavior":"none","message":"","fields":{"title":{"mode":"required","label":"Title"},"author":{"mode":"required","label":"Author"},"identifier":{"mode":"optional","label":"Identifier number"},"publication":{"mode":"required","label":"Publication timing"}}},"dvd":{"messageBehavior":"none","message":"","fields":{"title":{"mode":"required","label":"Title"},"author":{"mode":"required","label":"Director/Actors/Producer"},"identifier":{"mode":"hidden","label":"UPC"},"publication":{"mode":"required","label":"Publication timing"}}},"music_cd":{"messageBehavior":"none","message":"","fields":{"title":{"mode":"required","label":"Title"},"author":{"mode":"required","label":"Artist"},"identifier":{"mode":"hidden","label":"UPC"},"publication":{"mode":"required","label":"Publication timing"}}},"ebook":{"messageBehavior":"message","message":"<p>This is an eBook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>","fields":{"title":{"mode":"required","label":"Title"},"author":{"mode":"required","label":"Author"},"identifier":{"mode":"optional","label":"Identifier number"},"publication":{"mode":"required","label":"Publication timing"}}},"eaudiobook":{"messageBehavior":"message","message":"<p>This is an eAudiobook suggestion, please use Libby to notify us of your interest.</p><p><a href=\"https://help.libbyapp.com/en-us/6260.htm\" target=\"_blank\" rel=\"noreferrer\">Learn how to suggest a purchase using Libby here.</a></p>","fields":{"title":{"mode":"required","label":"Title"},"author":{"mode":"required","label":"Author"},"identifier":{"mode":"optional","label":"Identifier number"},"publication":{"mode":"required","label":"Publication timing"}}}};
+export const descriptions = {"suggestion":"Suggestions submitted by patrons and awaiting staff review. Review each suggestion and choose Purchase, Already own, Reject, or Silent close.","outstanding_purchase":"Pending purchase contains approved suggestions that are waiting to appear in Polaris. Use Queue Hold with a verified BIB ID to move a suggestion to Pending hold.","pending_hold":"Pending hold contains suggestions with catalog matches that are waiting for hold placement. ASAP can place holds automatically during the hold check. Staff should confirm BIB IDs and resolve skipped items.","hold_placed":"Hold placed contains active holds ASAP is tracking for checkout or pickup completion. Staff should review items that do not close automatically.","additional_copies":"Additional copies contains open tasks created from existing suggestions when staff choose to buy another copy while queueing the patron on an existing consortium BIB.","closed":"Closed suggestions include rejected, silent-closed, fulfilled, or auto-closed suggestions. Use this tab to review outcomes or undo a closure when needed.","settings":"Settings control staff access, patron experience, workflow automation, Polaris, Postmark, and email templates.","analytics":"Analytics provides a lightweight operational summary for the selected scope and date range."};
+export const emptyStateMessages = {"suggestion":"No new suggestions need review.","outstanding_purchase":"No approved suggestions are waiting for catalog matches.","pending_hold":"No items are waiting for hold placement.","hold_placed":"No active holds are being tracked.","additional_copies":"No additional-copy tasks are open.","closed":"No closed suggestions found."};
+export const statusStages = ['suggestion', 'outstanding_purchase', 'pending_hold', 'hold_placed', 'additional_copies', 'closed', 'settings', 'analytics'];
+export const stageQueryMap = {"submitted":"suggestion","suggestion":"suggestion","new":"suggestion","purchased_waiting_for_bib":"outstanding_purchase","outstanding_purchase":"outstanding_purchase","pending_hold":"pending_hold","hold_placed":"hold_placed","additional_copies":"additional_copies","closed":"closed","settings":"settings","analytics":"analytics"};
+
+export let currentStatus = 'suggestion';
+export function setCurrentStatus(status) { currentStatus = status; }
+
+export let currentSuggestions = [];
+export function setCurrentSuggestions(suggestions) { currentSuggestions = suggestions; }
+
+export let activeTagFilter = '';
+export function setActiveTagFilter(filter) { activeTagFilter = filter; }
+
+export let gridSearchKeyword = '';
+export function setGridSearchKeyword(keyword) { gridSearchKeyword = keyword; }
+
+export let currentClaimFilter = 'all';
+export function setCurrentClaimFilter(filter) { currentClaimFilter = ['mine', 'unclaimed', 'mine_unclaimed'].includes(filter) ? filter : 'all'; }
+
+export let currentSimilarRequestFilter = 'all';
+export function setCurrentSimilarRequestFilter(filter) { currentSimilarRequestFilter = ['all', 'similar', 'unique'].includes(filter) ? filter : 'all'; }
+
+export let currentAdditionalCopyStatus = 'open';
+export function setCurrentAdditionalCopyStatus(status) { currentAdditionalCopyStatus = ['open', 'closed'].includes(status) ? status : 'open'; }
+
+export let currentClosedTypeFilter = 'all';
+export function setCurrentClosedTypeFilter(filter) { currentClosedTypeFilter = ['all', 'suggestion', 'additional_copy'].includes(filter) ? filter : 'all'; }
+
+export let currentWorkflowOrgScopeId = 'all';
+export function setCurrentWorkflowOrgScopeId(scopeId) { currentWorkflowOrgScopeId = String(scopeId || 'all').trim() || 'all'; }
+
+export let allSuggestions = [];
+export function setAllSuggestions(suggestions) { allSuggestions = suggestions; }
+
+export let verifiedNewSuggestionBarcode = '';
+export function setVerifiedNewSuggestionBarcode(barcode) { verifiedNewSuggestionBarcode = barcode; }
+
+export let verifiedBibId = '';
+export function setVerifiedBibId(id) { verifiedBibId = id; }
+
+export let publicationOptions = defaultPublicationOptions.slice();
+export function setPublicationOptions(opts) { publicationOptions = opts; }
+
+export let additionalFieldDefinitions = [];
+export function setAdditionalFieldDefinitions(definitions) { additionalFieldDefinitions = Array.isArray(definitions) ? definitions : []; }
+export let currentAdditionalFieldDefinitions = [];
+export let currentFormatRules = {};
+export function setCurrentPatronFieldConfig(definitions, formatRules) {
+  currentAdditionalFieldDefinitions = Array.isArray(definitions) ? definitions : [];
+  currentFormatRules = formatRules && typeof formatRules === 'object' ? formatRules : {};
+}
+
+export let workflowSettings = { isOverride: false, autoPromote: false, allowPatronAutoholdOptOut: false, allowAnyRegisteredCardLogin: false, outstandingTimeoutEnabled: false, outstandingTimeoutDays: 30, outstandingTimeoutSendEmail: false, outstandingTimeoutRejectionTemplateId: '', holdPickupTimeoutEnabled: false, holdPickupTimeoutDays: 14, pendingHoldTimeoutEnabled: false, pendingHoldTimeoutDays: 14, additionalCopyTimeoutEnabled: false, additionalCopyTimeoutDays: 14,
+    externalSearch1Enabled: true,
+    externalSearch1Label: 'Search Amazon',
+    externalSearch1UrlTemplate: 'https://www.amazon.com/s?k={{title}}',
+    externalSearch2Enabled: false,
+    externalSearch2Label: 'Search Goodreads',
+    externalSearch2UrlTemplate: 'https://www.goodreads.com/search?q={{title}}',
+    externalSearch3Enabled: false,
+    externalSearch3Label: 'Search WorldCat',
+    externalSearch3UrlTemplate: 'https://www.worldcat.org/search?q={{title}}',
+    externalSearch4Enabled: false,
+    externalSearch4Label: '',
+    externalSearch4UrlTemplate: ''
+  };
+
+export let currentLibraryContextOrgId = 'system';
+export function setCurrentLibraryContextOrgId(id) { currentLibraryContextOrgId = id; }
+
+export let lastSavedLibrarySettingsSnapshot = null;
+export function setLastSavedLibrarySettingsSnapshot(snapshot) { lastSavedLibrarySettingsSnapshot = snapshot; }
+
+export let lastSavedLibrarySettingsOrgId = 'system';
+export function setLastSavedLibrarySettingsOrgId(id) { lastSavedLibrarySettingsOrgId = id; }
+
+export let initialSettingsSnapshot = null;
+export function setInitialSettingsSnapshot(snapshot) { initialSettingsSnapshot = snapshot; }
+
+export let libraryTemplateOverrides = {};
+export function setLibraryTemplateOverrides(overrides) { libraryTemplateOverrides = overrides; }
+
+export let libraryContextLoadSerial = 0;
+export function incrementLibraryContextLoadSerial() { libraryContextLoadSerial++; }
+
+export let librarySelectorBound = false;
+export function setLibrarySelectorBound(bound) { librarySelectorBound = bound; }
+
+export let canAssignSuperAdmin = false;
+export function setCanAssignSuperAdmin(canAssign) { canAssignSuperAdmin = canAssign; }
+
+export let currentEmailStatus = { enabled: false };
+export function setCurrentEmailStatus(status) { currentEmailStatus = status; }
+
+export let organizationsStatus = 'not_loaded';
+export let organizationsStatusSerial = 0;
+export function setOrganizationsStatus(status) { organizationsStatus = status; organizationsStatusSerial++; }
+
+export let organizationsStatusMessage = 'Polaris organizations have not been loaded yet. Organization selection will be available after the Polaris organization sync completes.';
+export function setOrganizationsStatusMessage(msg) { organizationsStatusMessage = msg; }
+
+export const settingsSectionIds = ['start', 'polaris', 'smtp', 'staff', 'workflow', 'patron', 'templates'];
+export let currentSettingsSection = 'start';
+export function setCurrentSettingsSection(section) { currentSettingsSection = section; }
+
+export let settingsDirty = false;
+export function setSettingsDirty(dirty) { settingsDirty = dirty; }
+
+export let settingsReloadRequired = false;
+function updateSettingsInteractionState() {
+  if (settingsForm) {
+    settingsForm.inert = settingsReloadRequired || settingsSaving || settingsSyncInProgress || settingsActionInProgress || settingsLoading;
+  }
+  const librarySelector = document.getElementById('select-library-context');
+  if (librarySelector) {
+    librarySelector.disabled = settingsSaving || settingsSyncInProgress || settingsActionInProgress || settingsLoading;
+  }
+  const reloadButton = document.getElementById('settings-reload-btn');
+  if (reloadButton) {
+    reloadButton.classList.toggle('hidden', !settingsReloadRequired);
+    reloadButton.disabled = settingsSaving || settingsSyncInProgress || settingsActionInProgress || settingsLoading;
+  }
+  const syncButton = document.getElementById('btn-sync-organizations');
+  if (syncButton) {
+    syncButton.disabled = settingsReloadRequired || settingsSaving || settingsSyncInProgress || settingsActionInProgress || settingsLoading;
+  }
+}
+export function setSettingsReloadRequired(required) { settingsReloadRequired = required; updateSettingsInteractionState(); }
+
+export let settingsSyncInProgress = false;
+export function setSettingsSyncInProgress(inProgress) { settingsSyncInProgress = inProgress; updateSettingsInteractionState(); }
+
+export let settingsSaving = false;
+export function setSettingsSaving(saving) { settingsSaving = saving; updateSettingsInteractionState(); }
+
+export let settingsActionInProgress = false;
+export function setSettingsActionInProgress(inProgress) { settingsActionInProgress = inProgress; updateSettingsInteractionState(); }
+
+export let settingsLoading = false;
+export function setSettingsLoading(loading) { settingsLoading = loading; updateSettingsInteractionState(); }
+
+export let activeActionMenu = null;
+export function setActiveActionMenu(menu) { activeActionMenu = menu; }
+
+export let rowActionIdCounter = 0;
+export function incrementRowActionIdCounter() { rowActionIdCounter++; return rowActionIdCounter; }
+
+export let rowActionRegistry = new Map();
+
+export let leapBibUrlPattern = '';
+export function setLeapBibUrlPattern(pattern) { leapBibUrlPattern = pattern; }
+
+export let leapPatronUrlPattern = '';
+export function setLeapPatronUrlPattern(pattern) { leapPatronUrlPattern = pattern; }
+
+
+export const templateFieldIds = [
+  'email-submit-subject',
+  'email-submit-body',
+  'email-purchase-approved-subject',
+  'email-purchase-approved-body',
+  'email-owned-subject',
+  'email-owned-body',
+  'email-rejected-subject',
+  'email-rejected-body',
+  'email-hold-subject',
+  'email-hold-body'
+];
+
+export const emailTemplateDefaults = {
+  suggestion_submitted: {
+    subject: 'Suggestion received: {{title}}',
+    body: 'Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format. Our collection development team has received your request and will review it.\n\nIf we add this item, we will place a hold for you automatically and send another update.\n\nThank you for helping us shape the library collection.'
+  },
+  purchase_approved: {
+    subject: 'Purchase approved: {{title}}',
+    body: 'Hello {{name}},\n\nGood news. The library has approved your suggestion for purchase: {{title}} by {{author}} in {{format}} format.\n\nThis request is now awaiting ordering and cataloging. Once the item is available in the catalog, ASAP will place a hold automatically when possible and send another update.\n\nThank you for your suggestion.'
+  },
+  already_owned: {
+    subject: '{{title}} is already available',
+    body: 'Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format.\n\nThe library already owns this title or has it on order. We have placed a hold on card {{barcode}} so you will be notified when it is ready.\n\nThank you for using the library\'s suggestion service.'
+  },
+  rejected: {
+    subject: 'Update on your suggestion: {{title}}',
+    body: 'Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format.\n\nAfter review, we are not able to add this item to the collection at this time. We appreciate you taking the time to share your suggestion with us.\n\nThank you for helping us build a collection that reflects our community.'
+  },
+  hold_placed: {
+    subject: 'Hold placed: {{title}}',
+    body: 'Hello {{name}},\n\n{{title}} by {{author}} in {{format}} format is now available in the catalog.\n\nWe have placed a hold on card {{barcode}}. You will receive the usual pickup notice when the item is ready.\n\nThank you for your suggestion.'
+  }
+};
+
+export let libraryOverridesSummary = {};
+export function setLibraryOverridesSummary(summary) { libraryOverridesSummary = summary || {}; }

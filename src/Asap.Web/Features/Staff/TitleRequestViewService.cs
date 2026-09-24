@@ -27,6 +27,8 @@ public sealed record HoldOperationSummary(
     bool CanResolveSucceeded,
     bool CanResolveNotPerformed);
 
+public sealed record TitleRequestActivity(string EventType, string Message, string? ActorName, DateTime Created);
+
 public sealed record TitleRequestDto(
     string Id,
     string Type,
@@ -55,6 +57,7 @@ public sealed record TitleRequestDto(
     string? CloseReason,
     string? Bibid,
     string? Notes,
+    IReadOnlyList<TitleRequestActivity> Activity,
     string? ClaimedByStaffUserId,
     string? ClaimedByDisplayName,
     DateTime? ClaimedAt,
@@ -315,6 +318,8 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
                 request.CloseReason,
                 request.BibId,
                 request.Notes,
+                requestEvents.Select(item => new TitleRequestActivity(
+                    item.EventType, item.Message ?? string.Empty, item.ActorName, AsUtc(item.CreatedUtc))).ToList(),
                 request.ClaimedByStaffUserId?.ToString(CultureInfo.InvariantCulture),
                 request.ClaimedByDisplayName,
                 AsUtc(request.ClaimedAtUtc),

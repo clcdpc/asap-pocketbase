@@ -79,7 +79,8 @@ public sealed class AdditionalCopyService(
     IEmailSender emailSender,
     RecipientDomainPolicy recipientDomainPolicy,
     IEmailOutboxDispatcher outboxDispatcher,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    ILogger<AdditionalCopyService> logger)
 {
     private readonly HashSet<Guid> allowedTenantIds = configuration.Authentication.Entra.AllowedTenantIds!
         .Select(Guid.Parse)
@@ -238,7 +239,33 @@ public sealed class AdditionalCopyService(
             return new AdditionalCopyMutationResult("bib_required");
         }
 
-        var now = UtcNow();
+        var result = await CreateFromLockedSourceAsync(
+            context, source, locked.Staff[actor.Id],
+            snapshot.CandidateStaffUserId.HasValue && locked.Staff.TryGetValue(snapshot.CandidateStaffUserId.Value, out var candidate)
+                ? candidate : null,
+            input.EmailPurchaseReminder, readiness.IsConfigured, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        if (result.DispatchOutboxId.HasValue)
+        {
+            Dispatch(result.DispatchOutboxId.Value);
+        }
+        return result;
+    }
+
+    internal async Task<AdditionalCopyMutationResult> CreateFromLockedSourceAsync(
+        AsapDbContext context,
+        TitleRequest source,
+        StaffUser actor,
+        StaffUser? candidate,
+        bool emailPurchaseReminder,
+        bool transportConfigured,
+        CancellationToken cancellationToken)
+    {
+        if (source.Status is not ("pending_hold" or "hold_placed") || string.IsNullOrWhiteSpace(source.BibId))
+        {
+            throw new InvalidOperationException("The locked source cannot create an additional-copy task.");
+        }
+        var now = new[] { UtcNow(), source.CreatedUtc, source.UpdatedUtc }.Max();
         var openCount = await LockAndCountOpenAsync(
             context,
             source.LibraryOrganizationId,
@@ -261,15 +288,13 @@ public sealed class AdditionalCopyService(
             MaterialFormatId = source.MaterialFormatId,
             FormatSnapshot = format,
             Status = "open",
-            Notes = $"Created from request {source.Id} by {DisplayName(locked.Staff[actor.Id])}.",
+            Notes = $"Created from request {source.Id} by {DisplayName(actor)}.",
             CreatedByStaffUserId = actor.Id,
-            CreatedByDisplayName = DisplayName(locked.Staff[actor.Id]),
+            CreatedByDisplayName = DisplayName(actor),
             CreatedUtc = now,
             UpdatedUtc = now
         };
-        if (snapshot.CandidateStaffUserId.HasValue &&
-            locked.Staff.TryGetValue(snapshot.CandidateStaffUserId.Value, out var candidate) &&
-            IsRelationshipEligible(candidate, source.LibraryOrganizationId))
+        if (candidate is not null && IsRelationshipEligible(candidate, source.LibraryOrganizationId))
         {
             request.ClaimedByStaffUserId = candidate.Id;
             request.ClaimedByDisplayName = source.ClaimedByDisplayName ?? DisplayName(candidate);
@@ -281,34 +306,42 @@ public sealed class AdditionalCopyService(
 
         var openCountAfter = openCount + 1;
         var holdText = source.Status == "hold_placed" ? "placed" : "queued";
-        source.Notes = AppendNote(
-            source.Notes,
-            $"Additional copy request created for BIB {source.BibId}. Patron hold remains {holdText} for the same BIB. Open additional-copy tasks for this library/BIB: {openCountAfter}.");
         source.UpdatedUtc = now;
+        await context.SaveChangesAsync(cancellationToken);
+        context.TitleRequestEvents.Add(new TitleRequestEvent
+        {
+            TitleRequestId = source.Id,
+            EventType = "additional_copy_created",
+            Status = source.Status,
+            CloseReason = source.CloseReason,
+            ActorType = "staff",
+            StaffUserId = actor.Id,
+            ActorName = DisplayName(actor),
+            Message = $"Additional-copy task {request.Id} created for BIB {source.BibId}. Patron hold remains {holdText} for the same BIB. Open additional-copy tasks for this library/BIB: {openCountAfter}.",
+            CreatedUtc = now
+        });
         await context.SaveChangesAsync(cancellationToken);
 
         EmailOutbox? outbox = null;
-        if (input.EmailPurchaseReminder)
+        if (emailPurchaseReminder)
         {
             outbox = await AddStaffNotificationAsync(
                 context,
-                locked.Staff[actor.Id],
+                actor,
                 source.LibraryOrganizationId,
                 $"additional-copy-reminder:{request.Id}",
                 "ASAP additional-copy reminder",
                 $"Additional-copy task {request.Id} for {request.Title} (BIB {request.BibId}) was created.",
-                readiness.IsConfigured,
+                transportConfigured,
                 cancellationToken);
         }
-        await transaction.CommitAsync(cancellationToken);
-        Dispatch(outbox);
         return new AdditionalCopyMutationResult(
             "created",
             request.Id,
             OpenCountBefore: openCount,
             OpenCountAfter: openCountAfter,
-            ReminderRequested: input.EmailPurchaseReminder,
-            DispatchOutboxId: outbox?.Id);
+            ReminderRequested: emailPurchaseReminder,
+            DispatchOutboxId: outbox?.Status == "pending" ? outbox.Id : null);
     }
 
     public Task<AdditionalCopyMutationResult> ClaimAsync(
@@ -696,7 +729,19 @@ public sealed class AdditionalCopyService(
     {
         if (outbox?.Status == "pending")
         {
-            outboxDispatcher.Enqueue(outbox.Id);
+            Dispatch(outbox.Id);
+        }
+    }
+
+    private void Dispatch(long outboxId)
+    {
+        try
+        {
+            outboxDispatcher.Enqueue(outboxId);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "Committed email {OutboxId} remains pending for retry.", outboxId);
         }
     }
 

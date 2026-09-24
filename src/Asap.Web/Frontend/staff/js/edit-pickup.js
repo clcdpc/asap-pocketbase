@@ -1,0 +1,309 @@
+import { currentSuggestions, allSuggestions, staffSession, staffAccessGeneration,
+  currentStatus, currentWorkflowOrgScopeId } from './state.js';
+import { authorizedJson } from './http.js';
+import { showToast, showAlert } from './dialogs.js';
+import { updateRecentSuggestion } from './recent-suggestions.js';
+import { editRequestIdentity, editRequestGeneration, requestIdentity, sameRequestIdentity } from './request-identity.mjs';
+
+let editPickupContext = null;
+let editPickupRequestIdentity = requestIdentity({});
+let pickupLoadGeneration = 0;
+
+function pickupOwner(identity, generation = editRequestGeneration) {
+  const accessGeneration = staffAccessGeneration;
+  const status = currentStatus;
+  const scope = currentWorkflowOrgScopeId;
+  const editId = document.getElementById('edit-id');
+  return () => staffSession.authenticated && staffSession.accessAllowed &&
+    staffAccessGeneration === accessGeneration && editRequestGeneration === generation &&
+    currentStatus === status && currentWorkflowOrgScopeId === scope &&
+    document.getElementById('editModal')?.open &&
+    sameRequestIdentity(editPickupRequestIdentity, identity) &&
+    sameRequestIdentity(editRequestIdentity(editId), identity);
+}
+
+function pickupEls() {
+  return {
+    group: document.getElementById('edit-pickup-branch-group'),
+    select: document.getElementById('edit-pickup-branch'),
+    save: document.getElementById('edit-pickup-save-btn'),
+    refresh: document.getElementById('edit-pickup-refresh-btn'),
+    warning: document.getElementById('edit-pickup-warning'),
+    status: document.getElementById('edit-pickup-status')
+  };
+}
+
+function resetEditPickupUi() {
+  editPickupContext = null;
+  editPickupRequestIdentity = requestIdentity({});
+  const els = pickupEls();
+  if (!els.select) return;
+  els.select.replaceChildren();
+  const opt = document.createElement('option');
+  opt.value = '';
+  opt.textContent = 'Loading pickup locations...';
+  els.select.appendChild(opt);
+  els.select.disabled = true;
+  if (els.save) els.save.disabled = true;
+  if (els.refresh) {
+    els.refresh.disabled = true;
+    els.refresh.textContent = 'Refresh';
+  }
+  if (els.warning) {
+    els.warning.textContent = '';
+    els.warning.classList.add('hidden');
+  }
+  if (els.status) {
+    els.status.textContent = '';
+  }
+}
+
+async function fetchEditPickupOptions(id, options = {}) {
+  return authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(id)}/pickup-options`, {
+    method: 'POST',
+    body: {
+      forceRefresh: !!options.forceRefresh
+    }
+  });
+}
+
+async function saveEditPickupPreference(id, selectedId, atLoadId, version) {
+  return authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(id)}/pickup-preference`, {
+    method: 'POST',
+    body: {
+      preferredPickupBranchId: selectedId,
+      currentPreferredPickupBranchIdAtLoad: atLoadId || '',
+      version
+    }
+  });
+}
+
+function renderEditPickupOptions(context) {
+  const els = pickupEls();
+  if (!els.select) return;
+
+  editPickupContext = context || {};
+  editPickupRequestIdentity = requestIdentity({
+    type: 'title_request',
+    id: context.requestId || editPickupRequestIdentity.id
+  });
+
+  const branches = context.pickupBranches || [];
+  const unavailable = !!context.pickupOptionsUnavailable || branches.length === 0;
+
+  els.select.replaceChildren();
+  const blank = document.createElement('option');
+  blank.value = '';
+  blank.textContent = branches.length
+    ? 'Select a pickup location...'
+    : 'Pickup locations unavailable';
+  els.select.appendChild(blank);
+
+  branches.forEach((branch) => {
+    const opt = document.createElement('option');
+    opt.value = String(branch.id || '');
+    opt.textContent = String(branch.label || branch.id || '');
+    els.select.appendChild(opt);
+  });
+
+  els.select.value = context.selectedPickupBranchId || '';
+  els.select.disabled = !!context.readOnly || unavailable;
+  if (els.save) {
+    els.save.disabled = !!context.readOnly || unavailable || !els.select.value;
+  }
+  if (els.refresh) {
+    els.refresh.disabled = !!context.readOnly;
+    els.refresh.classList.toggle('hidden', false);
+  }
+
+  const warnings = [];
+  if (context.pickupBranchWarning) warnings.push(context.pickupBranchWarning);
+  const snapshotId = String(context.requestSnapshotPickupBranchId || '');
+  const liveId = String(context.currentPreferredPickupBranchId || '');
+  if (snapshotId && liveId && snapshotId !== liveId) {
+    warnings.push('Current Polaris preference differs from the pickup saved on this request.');
+  }
+  if (context.readOnly) {
+    warnings.push('Pickup preference is read-only after the hold has been placed.');
+  }
+
+  if (els.warning) {
+    els.warning.textContent = warnings.join(' ');
+    els.warning.classList.toggle('hidden', warnings.length === 0);
+  }
+  if (els.status) {
+    const parts = [];
+    if (context.currentPreferredPickupBranchName) {
+      parts.push(`Current Polaris pickup: ${context.currentPreferredPickupBranchName}`);
+    } else {
+      parts.push('Current Polaris pickup is not set.');
+    }
+
+    if (!branches.length && !context.readOnly) {
+      parts.push('Use Refresh to try loading pickup options again.');
+    }
+
+    els.status.textContent = parts.join(' ');
+  }
+}
+
+function updateRequestInMemory(updated) {
+  [currentSuggestions, allSuggestions].forEach((list) => {
+    const idx = list.findIndex((row) => sameRequestIdentity(row, updated));
+    if (idx >= 0) {
+      list[idx] = Object.assign({}, list[idx], updated);
+    }
+  });
+}
+
+function renderEditPickupLoadError(err) {
+  const els = pickupEls();
+
+  if (els.warning) {
+    els.warning.textContent = err.message || 'Could not load pickup locations.';
+    els.warning.classList.remove('hidden');
+  }
+
+  if (els.status) {
+    els.status.textContent = '';
+  }
+
+  if (els.select) {
+    els.select.replaceChildren();
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'Pickup locations unavailable';
+    els.select.appendChild(opt);
+    els.select.disabled = true;
+  }
+
+  if (els.save) els.save.disabled = true;
+}
+
+export async function loadEditPickupForRequest(row, options = {}) {
+  const loadGeneration = ++pickupLoadGeneration;
+  resetEditPickupUi();
+  const els = pickupEls();
+  const requestedIdentity = requestIdentity(row || {});
+  const requestedId = requestedIdentity.id;
+
+  if (!row || row.type !== 'title_request') {
+    if (els.group) els.group.classList.add('hidden');
+    return;
+  }
+  editPickupRequestIdentity = requestedIdentity;
+  const ownsDialog = pickupOwner(requestedIdentity);
+  const ownsLoad = () => loadGeneration === pickupLoadGeneration && ownsDialog();
+  if (els.group) els.group.classList.remove('hidden');
+
+  if (!requestedId) return;
+
+  if (els.refresh) els.refresh.disabled = true;
+
+  try {
+    const context = await fetchEditPickupOptions(requestedId, options);
+    if (!ownsLoad()) return;
+    renderEditPickupOptions(context || {});
+  } catch (err) {
+    if (!ownsLoad()) return;
+    renderEditPickupLoadError(err);
+  } finally {
+    if (ownsLoad() && els.refresh) {
+      els.refresh.disabled = !!(editPickupContext && editPickupContext.readOnly);
+    }
+  }
+}
+
+async function handleEditPickupSave() {
+  const els = pickupEls();
+  const activeIdentity = requestIdentity(editPickupRequestIdentity);
+  const activeId = activeIdentity.id;
+  if (!activeId || !els.select || !els.select.value) return;
+  const ownsDialog = pickupOwner(activeIdentity);
+  if (!ownsDialog()) return;
+
+  if (els.save) {
+    els.save.disabled = true;
+    els.save.textContent = 'Saving...';
+  }
+
+  try {
+    const result = await saveEditPickupPreference(
+      activeId,
+      els.select.value,
+      editPickupContext && editPickupContext.currentPreferredPickupBranchId,
+      document.getElementById('edit-id')?.dataset.requestVersion || undefined
+    );
+    if (!ownsDialog()) return;
+    const updated = result && result.request ? result.request : null;
+    if (updated && updated.id) {
+      updateRequestInMemory(updated);
+      updateRecentSuggestion(updated);
+      if (updated.version) {
+        document.getElementById('edit-id').dataset.requestVersion = updated.version;
+      }
+    }
+    showToast(result && result.pickupChanged ? 'Pickup preference updated.' : 'Pickup preference saved.', 'success');
+    if (ownsDialog()) {
+      await loadEditPickupForRequest(updated || { type: 'title_request', id: activeId });
+    }
+  } catch (err) {
+    if (!ownsDialog()) return;
+    if (err.status === 409) {
+      await showAlert(err.message || 'Pickup preference changed in Polaris. Reloading pickup options.');
+      if (ownsDialog()) {
+        await loadEditPickupForRequest({ type: 'title_request', id: activeId });
+      }
+      return;
+    }
+    await showAlert(err.message || 'Could not save pickup preference.');
+    if (ownsDialog() && els.save) els.save.disabled = !els.select.value;
+  } finally {
+    if (ownsDialog() && els.save) {
+      els.save.textContent = 'Save pickup';
+    }
+  }
+}
+
+async function handleEditPickupRefresh() {
+  if (!editPickupRequestIdentity.id) return;
+  const identity = requestIdentity(editPickupRequestIdentity);
+  const ownsDialog = pickupOwner(identity);
+  if (!ownsDialog()) return;
+
+  const els = pickupEls();
+  if (els.refresh) {
+    els.refresh.disabled = true;
+    els.refresh.textContent = 'Refreshing...';
+  }
+
+  try {
+    await loadEditPickupForRequest(identity, { forceRefresh: true });
+  } finally {
+    if (ownsDialog() && els.refresh) {
+      els.refresh.textContent = 'Refresh';
+      els.refresh.disabled = !!(editPickupContext && editPickupContext.readOnly);
+    }
+  }
+}
+
+const selectEl = document.getElementById('edit-pickup-branch');
+if (selectEl) {
+  selectEl.addEventListener('change', () => {
+    const els = pickupEls();
+    if (els.save) {
+      const readOnly = !!(editPickupContext && editPickupContext.readOnly);
+      els.save.disabled = readOnly || !selectEl.value;
+    }
+  });
+}
+
+const saveBtn = document.getElementById('edit-pickup-save-btn');
+if (saveBtn) {
+  saveBtn.addEventListener('click', handleEditPickupSave);
+}
+
+const refreshBtn = document.getElementById('edit-pickup-refresh-btn');
+if (refreshBtn) {
+  refreshBtn.addEventListener('click', handleEditPickupRefresh);
+}
