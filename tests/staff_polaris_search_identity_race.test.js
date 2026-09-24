@@ -123,6 +123,7 @@ async function settle() {
     const editPickup = await import(pathToFileURL(path.join(temporary, 'staff/js/edit-pickup.js')).href);
     const bibLookup = await import(pathToFileURL(path.join(temporary, 'staff/js/settings/bib-lookup.js')).href);
     const modalContext = await import(pathToFileURL(path.join(temporary, 'staff/js/modals/context.js')).href);
+    const editIdentity = await import(pathToFileURL(path.join(temporary, 'staff/js/request-identity.mjs')).href);
     state.setStaffSession({
       authenticated: true, accessAllowed: true, antiforgeryToken: 'test-token',
       staff: { id: '7', role: 'super_admin', organizationId: 1, userPrincipalName: 'staff@example.org' }
@@ -900,6 +901,24 @@ async function settle() {
     assert.equal(state.verifiedBibId, '9004', 'stale exact-BIB validation must not replace the active BIB');
     editModal.close();
 
+    editIdentity.setEditRequestIdentity(editId, title);
+    bibInput.value = '9003';
+    editTitle.value = 'First draft for BIB lookup';
+    editModal.showModal();
+    const sameTitleBibLookup = bibLookup.lookupEditBibById();
+    await settle();
+    const pendingSameTitleBib = lookups.at(-1);
+    editModal.close();
+    editIdentity.setEditRequestIdentity(editId, title);
+    bibInput.value = '9003';
+    editTitle.value = 'New draft for BIB lookup';
+    editModal.showModal();
+    pendingSameTitleBib.pending.resolve(response(200, { title: 'Old catalog title' }));
+    await sameTitleBibLookup;
+    assert.equal(editTitle.value, 'New draft for BIB lookup',
+      'a reopened edit of the same row must reject an older BIB lookup');
+    editModal.close();
+
     editId.dataset.requestType = 'title_request';
     document.getElementById('edit-next-status').value = 'suggestion';
     document.getElementById('edit-action').value = 'edit';
@@ -926,6 +945,28 @@ async function settle() {
     assert.equal(editModal.open, true, 'an old edit completion must not close a replacement modal');
     assert.equal(editTitle.value, 'Copy B after submit');
     assert.deepEqual(ordinaryEditRefreshes, [true], 'the old completion must use a silent refresh');
+    editModal.close();
+
+    editIdentity.setEditRequestIdentity(editId, title);
+    editTitle.value = 'First draft for same title';
+    editModal.showModal();
+    deferNextAction = true;
+    const sameTitleEdit = editSubmit.submitEditForm({ preventDefault() {} }, modalContext.createModalContext(state), {
+      onRefresh: async () => {}
+    });
+    await settle();
+    const pendingSameTitleEdit = actions.at(-1);
+    assert.equal(pendingSameTitleEdit.body.title, 'First draft for same title');
+    editModal.close();
+    editIdentity.setEditRequestIdentity(editId, title);
+    editTitle.value = 'New draft for same title';
+    editModal.showModal();
+    pendingSameTitleEdit.pending.resolve(response(200, {
+      request: { ...title, title: 'First draft for same title', version: 'same-title-version' }
+    }));
+    await sameTitleEdit;
+    assert.equal(editModal.open, true, 'an old edit must not close a reopened modal for the same request');
+    assert.equal(editTitle.value, 'New draft for same title');
     editModal.close();
 
     const gridData = await import(pathToFileURL(path.join(temporary, 'staff/js/grid-data.js')).href);

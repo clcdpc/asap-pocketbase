@@ -1,5 +1,6 @@
 export const TITLE_REQUEST_TYPE = 'title_request';
 export const ADDITIONAL_COPY_TYPE = 'additional_copy';
+export let editRequestGeneration = 0;
 
 export function requestType(value) {
   return value === ADDITIONAL_COPY_TYPE ? ADDITIONAL_COPY_TYPE : TITLE_REQUEST_TYPE;
@@ -50,6 +51,7 @@ export function setEditRequestIdentity(input, identity) {
   const value = requestIdentity(identity);
   input.value = value.id;
   input.dataset.requestType = value.type;
+  editRequestGeneration += 1;
   return value;
 }
 

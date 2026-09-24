@@ -1,6 +1,6 @@
 import { currentSuggestions, allSuggestions, setVerifiedBibId, staffSession, staffAccessGeneration } from '../state.js';
 import { authorizedJson } from '../http.js';
-import { editRequestIdentity, findWorkflowRow, requestIdentity, sameRequestIdentity } from '../request-identity.mjs';
+import { editRequestIdentity, editRequestGeneration, findWorkflowRow, requestIdentity, sameRequestIdentity } from '../request-identity.mjs';
 
 let editBibLookupSerial = 0;
 
@@ -23,10 +23,11 @@ export async function lookupEditBibById(options = {}) {
     return null;
   }
   const accessGeneration = staffAccessGeneration;
+  const dialogGeneration = editRequestGeneration;
   const lookupSerial = ++editBibLookupSerial;
   const ownsDialog = () => lookupSerial === editBibLookupSerial &&
     staffSession.authenticated && staffSession.accessAllowed &&
-    staffAccessGeneration === accessGeneration &&
+    staffAccessGeneration === accessGeneration && editRequestGeneration === dialogGeneration &&
     document.getElementById('editModal')?.open &&
     editId.dataset.requestType === identity.type &&
     sameRequestIdentity(editRequestIdentity(editId), identity);

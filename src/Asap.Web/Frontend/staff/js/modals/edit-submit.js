@@ -4,7 +4,7 @@ import { actionErrorMessage } from './utils.js';
 import { confirmDuplicateOpenRequestClose } from './confirm-duplicate.js';
 import { rememberRecentSuggestion, updateRecentSuggestion, renderRecentSuggestionsSwitcher } from '../recent-suggestions.js';
 import { collectEditCustomFieldValues } from '../request-custom-fields.js';
-import { editRequestIdentity, findWorkflowRow, sameRequestIdentity } from '../request-identity.mjs';
+import { editRequestIdentity, editRequestGeneration, findWorkflowRow, sameRequestIdentity } from '../request-identity.mjs';
 import { clearMatchingRequestSelection } from '../app/url-utils.js';
 import { staffSession, staffAccessGeneration } from '../state.js';
 
@@ -161,9 +161,11 @@ export async function submitEditForm(e, ctx, options = {}) {
   const id = identity.id;
   if (ctx.id?.dataset.requestType !== 'title_request' || !id) return false;
   const accessGeneration = staffAccessGeneration;
+  const dialogGeneration = editRequestGeneration;
   const isSessionCurrent = () => staffSession.authenticated && staffSession.accessAllowed &&
     staffAccessGeneration === accessGeneration;
   const ownsCurrentUi = () => isSessionCurrent() && ctx.modal?.open &&
+    editRequestGeneration === dialogGeneration &&
     ctx.id?.dataset.requestType === 'title_request' &&
     sameRequestIdentity(editRequestIdentity(ctx.id), identity);
   const nextStatus = ctx.nextStatus.value;
