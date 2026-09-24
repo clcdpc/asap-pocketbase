@@ -259,7 +259,7 @@ export function renderPurchaseReminderOption(actionStr, ctx) {
   }
   const email = staffProfileEmail(ctx.staffSession);
   checkbox.disabled = !email;
-  help.innerHTML = email
-    ? `Send purchase details to ${escapeAttr(email)}.`
-    : 'Add an email address to your <a href="#" class="js-open-profile-dialog">staff profile</a> to email yourself purchase reminders.';
+  help.textContent = email
+    ? 'Send purchase details to your staff notification email.'
+    : 'Ask an administrator to set your staff notification email to receive purchase reminders.';
 }

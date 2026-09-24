@@ -36,7 +36,7 @@ export function actionErrorMessage(status, data, raw) {
 
 export function staffProfileEmail(session) {
   const model = session.staff || {};
-  return String(model.weekly_action_summary_email || '').trim();
+  return String(model.notificationEmail || '').trim();
 }
 
 export function hasOwn(obj, key) {

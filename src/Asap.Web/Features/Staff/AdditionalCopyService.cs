@@ -79,7 +79,8 @@ public sealed class AdditionalCopyService(
     IEmailSender emailSender,
     RecipientDomainPolicy recipientDomainPolicy,
     IEmailOutboxDispatcher outboxDispatcher,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    ILogger<AdditionalCopyService> logger)
 {
     private readonly HashSet<Guid> allowedTenantIds = configuration.Authentication.Entra.AllowedTenantIds!
         .Select(Guid.Parse)
@@ -246,7 +247,7 @@ public sealed class AdditionalCopyService(
         await transaction.CommitAsync(cancellationToken);
         if (result.DispatchOutboxId.HasValue)
         {
-            outboxDispatcher.Enqueue(result.DispatchOutboxId.Value);
+            Dispatch(result.DispatchOutboxId.Value);
         }
         return result;
     }
@@ -305,10 +306,20 @@ public sealed class AdditionalCopyService(
 
         var openCountAfter = openCount + 1;
         var holdText = source.Status == "hold_placed" ? "placed" : "queued";
-        source.Notes = AppendNote(
-            source.Notes,
-            $"Additional copy request created for BIB {source.BibId}. Patron hold remains {holdText} for the same BIB. Open additional-copy tasks for this library/BIB: {openCountAfter}.");
         source.UpdatedUtc = now;
+        await context.SaveChangesAsync(cancellationToken);
+        context.TitleRequestEvents.Add(new TitleRequestEvent
+        {
+            TitleRequestId = source.Id,
+            EventType = "additional_copy_created",
+            Status = source.Status,
+            CloseReason = source.CloseReason,
+            ActorType = "staff",
+            StaffUserId = actor.Id,
+            ActorName = DisplayName(actor),
+            Message = $"Additional-copy task {request.Id} created for BIB {source.BibId}. Patron hold remains {holdText} for the same BIB. Open additional-copy tasks for this library/BIB: {openCountAfter}.",
+            CreatedUtc = now
+        });
         await context.SaveChangesAsync(cancellationToken);
 
         EmailOutbox? outbox = null;
@@ -718,7 +729,19 @@ public sealed class AdditionalCopyService(
     {
         if (outbox?.Status == "pending")
         {
-            outboxDispatcher.Enqueue(outbox.Id);
+            Dispatch(outbox.Id);
+        }
+    }
+
+    private void Dispatch(long outboxId)
+    {
+        try
+        {
+            outboxDispatcher.Enqueue(outboxId);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "Committed email {OutboxId} remains pending for retry.", outboxId);
         }
     }
 

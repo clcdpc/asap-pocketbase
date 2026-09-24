@@ -415,7 +415,7 @@ public static class TitleRequestEndpoints
                 ? Results.Json(new
                 {
                     request = row,
-                    purchaseReminderEmail = new { requested = true, queued = result.ReminderQueued }
+                    purchaseReminderEmail = new { requested = true, queued = result.ReminderQueued, reason = result.ReminderSkippedReason }
                 })
                 : Results.Json(row);
         }
@@ -425,7 +425,7 @@ public static class TitleRequestEndpoints
             request = row,
             additionalCopyRequest = copy,
             additionalCopyRequestId = copyId.ToString(),
-            purchaseReminderEmail = new { requested = result.ReminderRequested, queued = result.ReminderQueued }
+            purchaseReminderEmail = new { requested = result.ReminderRequested, queued = result.ReminderQueued, reason = result.ReminderSkippedReason }
         });
     }
 
@@ -437,6 +437,7 @@ public static class TitleRequestEndpoints
             new { code = result.Code, message = "This request is outside your authorized scope." },
             statusCode: StatusCodes.Status403Forbidden),
         "stale_version" or "claim_conflict" or "duplicate_open_request" or "hold_operation_incomplete" or
+            "claim_rule_changed" or
             "identifier_locked_by_stage" or "identifier_retry_not_allowed" or "organization_inactive" or
             "hold_history_retained" => Results.Conflict(new
             {

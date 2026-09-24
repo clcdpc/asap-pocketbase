@@ -299,7 +299,12 @@ export async function buyAnotherCopyForRow(row, ctx, onRefresh = noopRefresh) {
       return;
     }
     const afterCount = Number(response && response.openCountAfter || openCount + 1);
-    showToast(`Additional-copy task created. Open tasks for this BIB: ${afterCount}.`, 'success');
+    const reminder = response?.purchaseReminderEmail;
+    const reminderResult = reminder?.requested
+      ? reminder.queued ? ' Reminder email queued.' : ' Reminder email was not queued.'
+      : '';
+    showToast(`Additional-copy task created. Open tasks for this BIB: ${afterCount}.${reminderResult}`,
+      reminder?.requested && !reminder.queued ? 'warning' : 'success');
     await onRefresh();
   } catch (error) {
     if (ownership.sessionCurrent() && (!error?.status || error.status >= 500)) {

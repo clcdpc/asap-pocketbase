@@ -110,6 +110,8 @@ export async function submitTitleRequestAction(identity, payload, options = {}) 
       if (actionValue === 'purchase') {
         if (reminder?.requested && reminder.queued) {
           showToast('Purchase saved and reminder email queued.', 'success');
+        } else if (reminder?.reason === 'skipped_purchase_queue') {
+          showToast('Purchase saved; reminder skipped because the request left the purchase queue.', 'warning');
         } else if (reminder?.requested) {
           showToast('Purchase saved, but the reminder email was not queued.', 'warning');
         } else {

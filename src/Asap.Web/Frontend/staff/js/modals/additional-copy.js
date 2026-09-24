@@ -35,13 +35,21 @@ export function confirmAdditionalCopyAction(result, options = {}) {
     checkbox.checked = Object.prototype.hasOwnProperty.call(options, 'emailPurchaseReminderDefault')
       ? !!options.emailPurchaseReminderDefault
       : !!staffSession.staff?.additional_copy_reminder_default;
+    const notificationEmail = String(staffSession.staff?.notificationEmail || '').trim();
+    checkbox.disabled = !notificationEmail;
+    if (checkbox.disabled) checkbox.checked = false;
 
     const label = document.createElement('label');
     label.className = 'custom-control-label font-weight-bold';
     label.setAttribute('for', 'confirm-additional-copy-reminder');
     label.textContent = 'Email me a purchase reminder';
 
-    checkboxGroup.append(checkbox, label);
+    const reminderHelp = document.createElement('p');
+    reminderHelp.className = 'small text-muted mt-2';
+    reminderHelp.textContent = notificationEmail
+      ? 'Send purchase details to your staff notification email.'
+      : 'Ask an administrator to set your staff notification email to receive purchase reminders.';
+    checkboxGroup.append(checkbox, label, reminderHelp);
 
     const actions = document.createElement('div');
     actions.className = 'asap-dialog-actions';

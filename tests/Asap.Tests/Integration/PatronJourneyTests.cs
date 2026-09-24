@@ -531,7 +531,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("Original publication timing", saved.Publication);
             Assert.AreEqual("Catalog title 9001", saved.Title);
             Assert.IsFalse(saved.RowVersion.SequenceEqual(originalVersion));
-            StringAssert.Contains(saved.Notes!, "Additional copy request created for BIB 9001");
+            Assert.IsFalse((saved.Notes ?? string.Empty).Contains("Additional copy request created for BIB 9001"));
             var tasks = await verify.AdditionalCopyRequests.AsNoTracking()
                 .Where(item => item.SourceTitleRequestId == source.Id).ToListAsync();
             Assert.HasCount(1, tasks);
@@ -1186,7 +1186,9 @@ public sealed partial class PatronJourneyTests
                 (SELECT COUNT(*) FROM [asap].[TitleRequest]
                  WHERE [Id]=@copySourceId
                    AND [Status]=N'hold_placed'
-                   AND [Notes] LIKE N'%Additional copy request created for BIB 92905.%'),
+                   AND EXISTS (SELECT 1 FROM [asap].[TitleRequestEvent]
+                               WHERE [TitleRequestId]=@copySourceId
+                                 AND [EventType]=N'additional_copy_created')),
                 (SELECT COUNT(*) FROM [asap].[EmailOutbox]
                  WHERE [Subject]=N'ASAP additional-copy reminder'
                    AND [BodyText] LIKE N'%Browser additional copy source (BIB 92905)%'
@@ -10439,6 +10441,8 @@ public sealed partial class PatronJourneyTests
         public int ReplyCount { get; private set; }
         public int HoldReadCount { get; private set; }
         public IReadOnlyList<PolarisHoldSnapshot> Holds { get; set; } = [];
+        public string? Email { get; set; } = "hold-patron@example.org";
+        public bool RefreshFailure { get; set; }
         public Exception? CreateException { get; set; }
         public Exception? ReplyException { get; set; }
         public PolarisHoldSnapshot? HoldAfterCreate { get; set; }
@@ -10517,10 +10521,14 @@ public sealed partial class PatronJourneyTests
         public Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (RefreshFailure)
+            {
+                throw new PolarisOperationalException("polaris_patron_read_failed", "Patron unavailable.");
+            }
             return Task.FromResult(new PatronSnapshot(
                 7105,
                 barcode,
-                "hold-patron@example.org",
+                Email,
                 "Hold",
                 "Patron",
                 "1",

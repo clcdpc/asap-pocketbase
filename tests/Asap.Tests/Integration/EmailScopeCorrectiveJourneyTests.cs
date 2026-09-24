@@ -145,6 +145,10 @@ public sealed partial class PatronJourneyTests
             var copies = scoped.Services.GetRequiredService<AdditionalCopyService>();
             var created = await copies.CreateAsync(actor, source.Id, new AdditionalCopyCreateInput(StaffVersion.Encode(source.RowVersion), true), CancellationToken.None);
             Assert.AreEqual("created", created.Code);
+            Assert.AreEqual(1, await context.TitleRequestEvents.CountAsync(item =>
+                item.TitleRequestId == source.Id && item.EventType == "additional_copy_created"));
+            Assert.IsFalse((await context.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == source.Id))
+                .Notes?.Contains("Additional copy request created") == true);
             var copy = await context.AdditionalCopyRequests.AsNoTracking().SingleAsync(item => item.Id == created.RequestId);
             Assert.AreEqual("updated", (await copies.AssignAsync(actor, copy.Id,
                 new AssignAdditionalCopyInput(StaffVersion.Encode(copy.RowVersion), staff.Id), CancellationToken.None)).Code);
@@ -155,17 +159,18 @@ public sealed partial class PatronJourneyTests
             CollectionAssert.AreEqual(new[] { 2, 2, 2, 2, 2 }, sender.Organizations.ToArray());
             var outboxes = await context.EmailOutbox.AsNoTracking().Where(item => item.Id > beforeId).ToListAsync();
             Assert.AreEqual(6, outboxes.Count);
+            Assert.IsTrue(outboxes.Where(item => item.BusinessKey?.Contains("reminder:") == true)
+                .All(item => item.RecipientAddressKind == "notification_email" &&
+                    item.ToAddress == staff.NotificationEmail));
             foreach (var outbox in outboxes)
             {
                 Assert.AreEqual(2, outbox.OrganizationId);
                 if (outbox.AuthorizationOrganizationId.HasValue) Assert.AreEqual(2, outbox.AuthorizationOrganizationId);
                 Assert.AreEqual("library.sender@example.org", outbox.FromAddress);
-                var patronAction = outbox.BusinessKey?.StartsWith("staff-patron-action:purchase:") == true;
-                Assert.AreEqual(patronAction ? "suppressed" : configured ? "pending" : "suppressed", outbox.Status);
-                Assert.AreEqual(patronAction ? "recipient_invalid" : configured ? null : "mail_not_configured",
-                    outbox.SuppressionReason);
+                Assert.AreEqual(configured ? "pending" : "suppressed", outbox.Status);
+                Assert.AreEqual(configured ? null : "mail_not_configured", outbox.SuppressionReason);
             }
-            Assert.AreEqual(configured ? 5 : 0, localDispatcher.EnqueuedIds.Count);
+            Assert.AreEqual(configured ? 6 : 0, localDispatcher.EnqueuedIds.Count);
         }
         finally
         {
@@ -175,6 +180,70 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("updated", (await factory.Services.GetRequiredService<StaffLifecycleService>().DeactivateAsync(superAdmin,
                 staff.Id, new StaffDeactivateInput(StaffVersion.Encode(current.RowVersion)), CancellationToken.None)).Code);
         }
+    }
+
+    [TestMethod]
+    public async Task CommittedStaffMutationsSucceedWhenOutboxEnqueueFails()
+    {
+        using var startup = factory!.CreateClient();
+        await startup.GetAsync("/api/asap/staff/session");
+        var actor = await ReadConfiguredSuperAdminAsync();
+        await using var scoped = factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+        {
+            services.RemoveAll<IEmailSender>();
+            services.AddSingleton<IEmailSender>(new ScopedReadinessEmailSender(true));
+            services.RemoveAll<IEmailOutboxDispatcher>();
+            services.AddSingleton<IEmailOutboxDispatcher>(new ThrowingOutboxDispatcher());
+        }));
+        var contexts = scoped.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var seed = await contexts.CreateDbContextAsync();
+        var formatId = await seed.MaterialFormats.Where(item => item.Code == "book")
+            .Select(item => item.Id).SingleAsync();
+        var now = timeProvider!.GetUtcNow().UtcDateTime;
+        var title = new TitleRequest
+        {
+            LibraryOrganizationId = 2, Barcode = $"2{Guid.NewGuid():N}"[..14],
+            Title = "Enqueue failure title", MaterialFormatId = formatId, Status = "suggestion",
+            AutoHold = true, CreatedUtc = now, UpdatedUtc = now
+        };
+        var source = new TitleRequest
+        {
+            LibraryOrganizationId = 2, Barcode = $"2{Guid.NewGuid():N}"[..14],
+            Title = "Enqueue failure copy", MaterialFormatId = formatId, Status = "pending_hold",
+            BibId = "9001", IsbnCheckStatus = "found", AutoHold = true,
+            CreatedUtc = now, UpdatedUtc = now
+        };
+        seed.TitleRequests.AddRange(title, source);
+        await seed.SaveChangesAsync();
+        var beforeOutboxId = await seed.EmailOutbox.Select(item => (long?)item.Id).MaxAsync() ?? 0;
+
+        var titles = scoped.Services.GetRequiredService<TitleRequestMutationService>();
+        var assigned = await titles.AssignAsync(actor, title.Id,
+            new AssignTitleRequestInput(StaffVersion.Encode(title.RowVersion), actor.Id), CancellationToken.None);
+        Assert.AreEqual("updated", assigned.Code);
+        var copies = scoped.Services.GetRequiredService<AdditionalCopyService>();
+        var created = await copies.CreateAsync(actor, source.Id,
+            new AdditionalCopyCreateInput(StaffVersion.Encode(source.RowVersion), true), CancellationToken.None);
+        Assert.AreEqual("created", created.Code);
+        await using var currentCopyContext = await contexts.CreateDbContextAsync();
+        var copy = await currentCopyContext.AdditionalCopyRequests.AsNoTracking()
+            .SingleAsync(item => item.Id == created.RequestId);
+        var copyAssigned = await copies.AssignAsync(actor, copy.Id,
+            new AssignAdditionalCopyInput(StaffVersion.Encode(copy.RowVersion), actor.Id), CancellationToken.None);
+        Assert.AreEqual("updated", copyAssigned.Code);
+
+        await using var verify = await contexts.CreateDbContextAsync();
+        Assert.AreEqual(actor.Id, (await verify.TitleRequests.AsNoTracking()
+            .SingleAsync(item => item.Id == title.Id)).ClaimedByStaffUserId);
+        Assert.AreEqual(actor.Id, (await verify.AdditionalCopyRequests.AsNoTracking()
+            .SingleAsync(item => item.Id == copy.Id)).ClaimedByStaffUserId);
+        Assert.AreEqual(3, await verify.EmailOutbox.CountAsync(item =>
+            item.Id > beforeOutboxId && item.Status == "pending"));
+    }
+
+    private sealed class ThrowingOutboxDispatcher : IEmailOutboxDispatcher
+    {
+        public void Enqueue(long outboxId) => throw new InvalidOperationException("Test enqueue failure.");
     }
 
     private sealed class ConfigurationReadinessEmailSender(PatronConfigurationService configuration) : IEmailSender

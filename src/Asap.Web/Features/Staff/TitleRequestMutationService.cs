@@ -42,7 +42,8 @@ public sealed record TitleRequestMutationResult(
     IReadOnlyList<long>? DispatchOutboxIds = null,
     long? AdditionalCopyRequestId = null,
     bool ReminderRequested = false,
-    bool ReminderQueued = false);
+    bool ReminderQueued = false,
+    string? ReminderSkippedReason = null);
 
 public sealed class TitleRequestMutationService(
     IDbContextFactory<AsapDbContext> contextFactory,
@@ -51,6 +52,7 @@ public sealed class TitleRequestMutationService(
     RecipientDomainPolicy recipientDomainPolicy,
     IEmailOutboxDispatcher outboxDispatcher,
     IStaffPolarisProvider staffPolarisProvider,
+    IPatronProvider patronProvider,
     PatronConfigurationService patronConfigurations,
     AdditionalCopyService additionalCopies,
     IIdentifierLookupDispatcher identifierLookupDispatcher,
@@ -216,19 +218,59 @@ public sealed class TitleRequestMutationService(
         }
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        var notificationOrganizationId = await context.TitleRequests.AsNoTracking().Where(item => item.Id == requestId)
-            .Select(item => (int?)item.LibraryOrganizationId).SingleOrDefaultAsync(cancellationToken);
-        if (!notificationOrganizationId.HasValue || !TitleRequestViewService.CanAccess(actor, notificationOrganizationId.Value))
+        var actionSnapshot = await context.TitleRequests.AsNoTracking().Where(item => item.Id == requestId)
+            .Select(item => new
+            {
+                item.LibraryOrganizationId, item.Barcode, item.RowVersion, item.MaterialFormatId,
+                item.ClaimType, item.ClaimedByStaffUserId
+            })
+            .SingleOrDefaultAsync(cancellationToken);
+        if (actionSnapshot is null || !TitleRequestViewService.CanAccess(actor, actionSnapshot.LibraryOrganizationId))
             return new TitleRequestMutationResult("not_found");
-        var readiness = await emailSender.CheckReadinessAsync(notificationOrganizationId.Value, cancellationToken);
+        if (!actionSnapshot.RowVersion.SequenceEqual(expectedVersion))
+        {
+            return new TitleRequestMutationResult("stale_version");
+        }
+        PatronSnapshot? currentPatron = null;
+        if (input.Action is "reject" or "alreadyOwn" or "purchase")
+        {
+            try
+            {
+                currentPatron = await patronProvider.RefreshAsync(actionSnapshot.Barcode, cancellationToken);
+            }
+            catch (PolarisOperationalException exception)
+            {
+                logger.LogWarning(exception, "Patron refresh failed before staff action email for request {RequestId}.", requestId);
+            }
+        }
+        FormatAutoClaimRule? preflightClaimRule = null;
+        if (actionSnapshot.ClaimType == "automatic_format_rule" &&
+            actionSnapshot.ClaimedByStaffUserId == actor.Id &&
+            !string.IsNullOrWhiteSpace(input.Format))
+        {
+            var proposedFormatId = await ResolveFormatIdAsync(context, actionSnapshot.LibraryOrganizationId,
+                input.Format, cancellationToken);
+            if (proposedFormatId.HasValue && proposedFormatId != actionSnapshot.MaterialFormatId)
+            {
+                preflightClaimRule = await context.FormatAutoClaimRules.AsNoTracking()
+                    .Where(item => item.LibraryOrganizationId == actionSnapshot.LibraryOrganizationId &&
+                                   item.MaterialFormatId == proposedFormatId && item.IsActive)
+                    .OrderBy(item => item.Id)
+                    .FirstOrDefaultAsync(cancellationToken);
+            }
+        }
+        var readiness = await emailSender.CheckReadinessAsync(actionSnapshot.LibraryOrganizationId, cancellationToken);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
-        var locked = await LockForMutationAsync(context, actor, requestId, [actor.Id], cancellationToken);
+        var staffIds = preflightClaimRule?.StaffUserId is long targetStaffId
+            ? new[] { actor.Id, targetStaffId }
+            : [actor.Id];
+        var locked = await LockForMutationAsync(context, actor, requestId, staffIds, cancellationToken);
         if (locked.Code != "locked")
         {
             return new TitleRequestMutationResult(locked.Code);
         }
         var request = locked.Request!;
-        if (!request.RowVersion.SequenceEqual(expectedVersion) || request.LibraryOrganizationId != notificationOrganizationId)
+        if (!request.RowVersion.SequenceEqual(expectedVersion) || request.LibraryOrganizationId != actionSnapshot.LibraryOrganizationId)
         {
             return new TitleRequestMutationResult("stale_version");
         }
@@ -344,6 +386,17 @@ public sealed class TitleRequestMutationService(
         {
             request.BibId = Clean(proposedBib);
         }
+        if (bibChanged && request.BibId is null && request.IsbnCheckStatus == "found")
+        {
+            request.IsbnCheckStatus = request.Identifier is null ? "skipped_no_isbn" : "not_found";
+            request.IsbnCheckResult = request.Identifier is null
+                ? null
+                : "Selected BIB cleared by staff; the identifier match is no longer verified.";
+            request.IsbnCheckRetryCount = 0;
+            request.IsbnCheckLastErrorCode = null;
+            request.LastCheckedUtc = null;
+            await RemoveIdentifierTagsAsync(context, request.Id, cancellationToken);
+        }
         if (bibPreflight.ValidatedBib is not null)
         {
             await ReconcileExplicitPolarisIdentifierAsync(
@@ -365,7 +418,14 @@ public sealed class TitleRequestMutationService(
             await RemoveIdentifierTagsAsync(context, request.Id, cancellationToken);
         }
 
-        if (input.Title is not null) request.Title = input.Title.Trim();
+        if (input.Title is not null)
+        {
+            if (string.IsNullOrWhiteSpace(input.Title))
+            {
+                return new TitleRequestMutationResult("title_required");
+            }
+            request.Title = input.Title.Trim();
+        }
         if (input.Author is not null) request.Author = Clean(input.Author);
         if (input.Publication is not null && input.Action != "additionalCopy")
         {
@@ -430,12 +490,16 @@ public sealed class TitleRequestMutationService(
                     ? "Closed without hold because Already Own was selected and the patron opted out of automatic hold placement."
                     : "Closed without hold because a BIB ID was supplied and the patron opted out of automatic hold placement.");
         }
-        await ApplyActionClaimAsync(context, request, actor, locked.Staff[actor.Id],
-            originalFormatId != request.MaterialFormatId, cancellationToken);
+        var claimError = await ApplyActionClaimAsync(context, request, actor, locked.Staff,
+            originalFormatId != request.MaterialFormatId, preflightClaimRule, cancellationToken);
+        if (claimError is not null)
+        {
+            return new TitleRequestMutationResult(claimError);
+        }
 
         var outboxIds = new List<long>();
         var patronEmail = await AddPatronActionEmailAsync(context, request, locked.OriginalStatus!,
-            input, expectedVersion, readiness.IsConfigured, cancellationToken);
+            input, expectedVersion, currentPatron, readiness.IsConfigured, cancellationToken);
         if (patronEmail.Error is not null)
         {
             return new TitleRequestMutationResult(patronEmail.Error);
@@ -446,18 +510,14 @@ public sealed class TitleRequestMutationService(
             copyResult = await additionalCopies.CreateFromLockedSourceAsync(
                 context, request, locked.Staff[actor.Id], locked.Staff[actor.Id],
                 input.EmailPurchaseReminder, readiness.IsConfigured, cancellationToken);
-            AddEvent(context, request, actor, "additional_copy_created",
-                $"Additional-copy task {copyResult.RequestId} created for BIB {request.BibId}.",
-                new { additionalCopyRequestId = copyResult.RequestId, bibId = request.BibId });
             if (copyResult.DispatchOutboxId.HasValue)
             {
                 outboxIds.Add(copyResult.DispatchOutboxId.Value);
             }
         }
-        var reminderRequested = input.EmailPurchaseReminder && input.Action == "purchase" &&
-            targetStatus == "outstanding_purchase";
+        var reminderRequested = input.EmailPurchaseReminder && input.Action == "purchase";
         var reminderQueued = false;
-        if (reminderRequested)
+        if (reminderRequested && targetStatus == "outstanding_purchase")
         {
             var outbox = await AddStaffNotificationAsync(
                 context,
@@ -494,7 +554,8 @@ public sealed class TitleRequestMutationService(
         }
         return new TitleRequestMutationResult("updated", request.Id, outboxIds,
             copyResult?.RequestId, copyResult?.ReminderRequested ?? reminderRequested,
-            copyResult?.DispatchOutboxId.HasValue ?? reminderQueued);
+            copyResult?.DispatchOutboxId.HasValue ?? reminderQueued,
+            reminderRequested && targetStatus != "outstanding_purchase" ? "skipped_purchase_queue" : null);
     }
 
     private async Task<ExplicitBibPreflight> PreflightExplicitBibAsync(
@@ -799,57 +860,68 @@ public sealed class TitleRequestMutationService(
         request.ClaimRuleId = null;
     }
 
-    private async Task ApplyActionClaimAsync(
+    private async Task<string?> ApplyActionClaimAsync(
         AsapDbContext context,
         TitleRequest request,
         CurrentStaff actor,
-        StaffUser actingStaff,
+        IReadOnlyDictionary<long, StaffUser> lockedStaff,
         bool formatChanged,
+        FormatAutoClaimRule? preflightClaimRule,
         CancellationToken cancellationToken)
     {
-        if (formatChanged && request.ClaimType == "automatic_format_rule")
+        if (request.ClaimedByStaffUserId != actor.Id)
         {
-            var candidate = await context.FormatAutoClaimRules.AsNoTracking()
-                .Where(item => item.LibraryOrganizationId == request.LibraryOrganizationId &&
-                               item.MaterialFormatId == request.MaterialFormatId && item.IsActive &&
-                               item.StaffUserId != null)
-                .OrderBy(item => item.Id)
-                .Select(item => new { item.Id, StaffUserId = item.StaffUserId!.Value })
-                .FirstOrDefaultAsync(cancellationToken);
-            if (candidate is not null)
+            var previousClaimantId = request.ClaimedByStaffUserId;
+            SetManualClaim(request, lockedStaff[actor.Id]);
+            AddEvent(context, request, actor,
+                previousClaimantId.HasValue ? "claim_manual_transferred" : "claim_manual_assigned",
+                $"Claim set to {DisplayName(lockedStaff[actor.Id])} after staff action.");
+            return null;
+        }
+
+        if (!formatChanged || request.ClaimType != "automatic_format_rule")
+        {
+            return null;
+        }
+
+        var candidate = await context.FormatAutoClaimRules.FromSqlInterpolated(
+                $"SELECT * FROM [asap].[FormatAutoClaimRule] WITH (UPDLOCK,HOLDLOCK) WHERE [LibraryOrganizationId] = {request.LibraryOrganizationId} AND [MaterialFormatId] = {request.MaterialFormatId} AND [IsActive] = 1")
+            .OrderBy(item => item.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (candidate?.Id != preflightClaimRule?.Id ||
+            candidate?.StaffUserId != preflightClaimRule?.StaffUserId)
+        {
+            return "claim_rule_changed";
+        }
+        if (candidate is null)
+        {
+            request.ClaimedByStaffUserId = null;
+            request.ClaimedByDisplayName = null;
+            request.ClaimedAtUtc = null;
+            request.ClaimType = null;
+            request.ClaimRuleId = null;
+            AddEvent(context, request, actor, "claim_auto_cleared",
+                "Auto-claim cleared because no automatic claimant is configured for the new format.");
+            return null;
+        }
+        if (candidate.StaffUserId is long candidateStaffId &&
+            lockedStaff.TryGetValue(candidateStaffId, out var assignee))
+        {
+            if (IsEligibleForLibrary(assignee, request.LibraryOrganizationId))
             {
-                var assignee = await context.StaffUsers.AsNoTracking()
-                    .SingleOrDefaultAsync(item => item.Id == candidate.StaffUserId, cancellationToken);
-                if (assignee is not null && IsEligibleForLibrary(assignee, request.LibraryOrganizationId))
-                {
-                    request.ClaimedByStaffUserId = assignee.Id;
-                    request.ClaimedByDisplayName = DisplayName(assignee);
-                    request.ClaimedAtUtc = DateTime.UtcNow;
-                    request.ClaimType = "automatic_format_rule";
-                    request.ClaimRuleId = candidate.Id;
-                    AddEvent(context, request, actor, "claim_auto_assigned",
-                        $"Format rule reassigned this request to {DisplayName(assignee)}.");
-                    return;
-                }
+                request.ClaimedByStaffUserId = assignee.Id;
+                request.ClaimedByDisplayName = DisplayName(assignee);
+                request.ClaimedAtUtc = DateTime.UtcNow;
+                request.ClaimType = "automatic_format_rule";
+                request.ClaimRuleId = candidate.Id;
+                AddEvent(context, request, actor, "claim_auto_reassigned",
+                    $"Format rule reassigned this request to {DisplayName(assignee)}.");
+                return null;
             }
         }
-
-        if (request.ClaimedByStaffUserId == actor.Id && !formatChanged)
-        {
-            return;
-        }
-        if (request.ClaimedByStaffUserId == actor.Id && request.ClaimType == "manual")
-        {
-            return;
-        }
-
-        var previousClaimantId = request.ClaimedByStaffUserId;
-        SetManualClaim(request, actingStaff);
-        AddEvent(context, request, actor,
-            previousClaimantId.HasValue && previousClaimantId != actor.Id
-                ? "claim_manual_transferred"
-                : "claim_manual_assigned",
-            $"Claim set to {DisplayName(actingStaff)} after staff action.");
+        AddEvent(context, request, actor, "claim_auto_skipped",
+            "Auto-claim skipped because the configured claimant is unavailable or outside this library.");
+        return null;
     }
 
     private static void AddEvent(
@@ -879,6 +951,7 @@ public sealed class TitleRequestMutationService(
         string previousStatus,
         TitleRequestActionInput input,
         byte[] expectedVersion,
+        PatronSnapshot? currentPatron,
         bool transportConfigured,
         CancellationToken cancellationToken)
     {
@@ -963,7 +1036,7 @@ public sealed class TitleRequestMutationService(
                 .Where(item => item.Id == request.MaterialFormatId)
                 .Select(item => item.Label)
                 .SingleAsync(cancellationToken);
-        var patron = new PatronSnapshot(0, request.Barcode, request.Email, request.NameFirst,
+        var patron = currentPatron ?? new PatronSnapshot(0, request.Barcode, null, request.NameFirst,
             request.NameLast, request.PatronCodeId, request.PatronCodeDescription,
             request.PatronOrganizationId ?? 0, request.LibraryOrganizationId,
             request.LibraryNameSnapshot ?? string.Empty, request.PreferredPickupBranchId);
@@ -975,10 +1048,14 @@ public sealed class TitleRequestMutationService(
             .SingleOrDefaultAsync(item => item.OrganizationId == request.LibraryOrganizationId, cancellationToken);
         var fromAddress = Clean(libraryEmail?.FromAddress) ?? Clean(systemEmail?.FromAddress);
         var fromName = Clean(libraryEmail?.FromName) ?? Clean(systemEmail?.FromName);
-        var toAddress = Clean(request.Email);
+        var toAddress = Clean(currentPatron?.Email);
         string? suppressionReason = source?.IsHidden == true || overrideRow?.IsHidden == true
             ? "template_hidden"
             : null;
+        if (suppressionReason is null && currentPatron is null)
+        {
+            suppressionReason = "patron_refresh_unavailable";
+        }
         if (suppressionReason is null &&
             (toAddress is null || !MailAddress.TryCreate(toAddress, out var parsedAddress) ||
              parsedAddress.Address != toAddress))
@@ -1084,7 +1161,18 @@ public sealed class TitleRequestMutationService(
 
     private void Dispatch(EmailOutbox? outbox)
     {
-        if (outbox?.Status == "pending") outboxDispatcher.Enqueue(outbox.Id);
+        if (outbox?.Status != "pending")
+        {
+            return;
+        }
+        try
+        {
+            outboxDispatcher.Enqueue(outbox.Id);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "Committed email {OutboxId} remains pending for retry.", outbox.Id);
+        }
     }
 
     private static async Task RemoveIdentifierTagsAsync(
@@ -1271,6 +1359,16 @@ public sealed class TitleRequestMutationService(
         catch (JsonException)
         {
             merged = new(StringComparer.Ordinal);
+        }
+
+        foreach (var field in format.CustomFields)
+        {
+            if (field.Value.Mode == "required" &&
+                configuration!.CustomFields.Any(item => item.Key == field.Key) &&
+                !submitted.TryGetProperty(field.Key, out _))
+            {
+                return ("invalid_custom_fields", null);
+            }
         }
 
         foreach (var property in submitted.EnumerateObject())

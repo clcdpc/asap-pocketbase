@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Asap.Web.Features.Patron;
 using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Jobs;
@@ -18,7 +19,14 @@ public sealed partial class PatronJourneyTests
     {
         const int libraryId = 99041;
         var actor = await ReadConfiguredSuperAdminAsync();
-        await using var scope = factory!.Services.CreateAsyncScope();
+        var provider = ScriptedHoldProvider.ReplyRequiredThenSuccess();
+        provider.Email = "current-patron@example.org";
+        await using var scoped = factory!.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+        {
+            services.RemoveAll<IPatronProvider>();
+            services.AddSingleton<IPatronProvider>(provider);
+        }));
+        await using var scope = scoped.Services.CreateAsyncScope();
         var contexts = scope.ServiceProvider.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         await using var seed = await contexts.CreateDbContextAsync();
         var formatId = await seed.MaterialFormats.Where(item => item.Code == "book")
@@ -42,21 +50,21 @@ public sealed partial class PatronJourneyTests
         var rejected = new TitleRequest
         {
             LibraryOrganizationId = libraryId, Barcode = $"2{Guid.NewGuid():N}"[..14],
-            Email = "patron@example.org", NameFirst = "Pat", Title = "Declined title",
+            Email = "old-patron@example.org", NameFirst = "Pat", Title = "Declined title",
             MaterialFormatId = formatId, Status = "suggestion", AutoHold = true,
             Notes = "Draft comment", CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow
         };
         var purchased = new TitleRequest
         {
             LibraryOrganizationId = libraryId, Barcode = $"2{Guid.NewGuid():N}"[..14],
-            Email = "patron@example.org", NameFirst = "Pat", Title = "Approved title",
+            Email = "old-patron@example.org", NameFirst = "Pat", Title = "Approved title",
             MaterialFormatId = formatId, Status = "suggestion", AutoHold = true,
             CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow
         };
         var alreadyOwned = new TitleRequest
         {
             LibraryOrganizationId = libraryId, Barcode = $"2{Guid.NewGuid():N}"[..14],
-            Email = "patron@example.org", NameFirst = "Pat", Title = "Owned title",
+            Email = "old-patron@example.org", NameFirst = "Pat", Title = "Owned title",
             MaterialFormatId = formatId, Status = "suggestion", AutoHold = true,
             CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow
         };
@@ -102,17 +110,65 @@ public sealed partial class PatronJourneyTests
         var email = await verify.EmailOutbox.AsNoTracking().SingleAsync(item =>
             item.BusinessKey != null && item.BusinessKey.StartsWith($"staff-patron-action:reject:{rejected.Id}:"));
         Assert.AreEqual("Selected: Declined title", email.Subject);
-        StringAssert.Contains(email.BodyText!, "Hello Pat, Declined title was declined.");
+        StringAssert.Contains(email.BodyText!, "Hello Hold, Declined title was declined.");
+        Assert.AreEqual("current-patron@example.org", email.ToAddress);
         Assert.AreEqual("business_event", email.DeliveryClass);
         Assert.IsTrue(await verify.EmailOutbox.AnyAsync(item =>
             item.BusinessKey != null && item.BusinessKey.StartsWith($"staff-patron-action:purchase:{purchased.Id}:")));
         Assert.IsTrue(await verify.EmailOutbox.AnyAsync(item =>
             item.BusinessKey != null && item.BusinessKey.StartsWith($"staff-patron-action:alreadyOwn:{alreadyOwned.Id}:")));
+        Assert.IsFalse(await verify.EmailOutbox.AnyAsync(item =>
+            item.ToAddress == "old-patron@example.org"));
         var views = scope.ServiceProvider.GetRequiredService<TitleRequestViewService>();
         var rowDto = await views.GetAsync(actor, rejected.Id.ToString(), CancellationToken.None);
         Assert.IsNotNull(rowDto);
         Assert.AreEqual("Draft comment", rowDto.Notes);
         Assert.IsTrue(rowDto.Activity.Any(item => item.EventType == "status_changed" && item.Message.Contains("closed")));
+
+        var immediate = new TitleRequest
+        {
+            LibraryOrganizationId = libraryId, Barcode = $"2{Guid.NewGuid():N}"[..14],
+            Email = "old-patron@example.org", Title = "Immediate hold purchase",
+            MaterialFormatId = formatId, Status = "suggestion", AutoHold = true,
+            CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow
+        };
+        verify.TitleRequests.Add(immediate);
+        await verify.SaveChangesAsync();
+        var immediateResult = await mutations.ActionAsync(actor, immediate.Id,
+            new TitleRequestActionInput
+            {
+                Version = Convert.ToBase64String(immediate.RowVersion), Action = "purchase",
+                Bibid = JsonSerializer.SerializeToElement("9001"), EmailPurchaseReminder = true
+            }, CancellationToken.None);
+        Assert.AreEqual("updated", immediateResult.Code);
+        Assert.IsTrue(immediateResult.ReminderRequested);
+        Assert.IsFalse(immediateResult.ReminderQueued);
+        Assert.AreEqual("skipped_purchase_queue", immediateResult.ReminderSkippedReason);
+        await using var afterImmediate = await contexts.CreateDbContextAsync();
+        Assert.IsFalse(await afterImmediate.EmailOutbox.AnyAsync(item =>
+            item.BusinessKey != null && item.BusinessKey.StartsWith($"purchase-reminder:{immediate.Id}:")));
+
+        var unavailable = new TitleRequest
+        {
+            LibraryOrganizationId = libraryId, Barcode = $"2{Guid.NewGuid():N}"[..14],
+            Email = "old-patron@example.org", Title = "Unavailable patron",
+            MaterialFormatId = formatId, Status = "suggestion", AutoHold = true,
+            CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow
+        };
+        verify.TitleRequests.Add(unavailable);
+        await verify.SaveChangesAsync();
+        provider.RefreshFailure = true;
+        Assert.AreEqual("updated", (await mutations.ActionAsync(actor, unavailable.Id,
+            new TitleRequestActionInput
+            {
+                Version = Convert.ToBase64String(unavailable.RowVersion), Action = "reject"
+            }, CancellationToken.None)).Code);
+        await using var afterUnavailable = await contexts.CreateDbContextAsync();
+        var suppressed = await afterUnavailable.EmailOutbox.AsNoTracking().SingleAsync(item =>
+            item.BusinessKey != null && item.BusinessKey.StartsWith($"staff-patron-action:reject:{unavailable.Id}:"));
+        Assert.AreEqual("suppressed", suppressed.Status);
+        Assert.AreEqual("patron_refresh_unavailable", suppressed.SuppressionReason);
+        Assert.IsNull(suppressed.ToAddress);
     }
 
     [TestMethod]
@@ -179,7 +235,40 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(dvdRule.Id, reassigned.ClaimRuleId);
         Assert.AreEqual(assignee.Id, reassigned.ClaimedByStaffUserId);
         Assert.IsTrue(await afterFormat.TitleRequestEvents.AnyAsync(item =>
-            item.TitleRequestId == request.Id && item.EventType == "claim_auto_assigned"));
+            item.TitleRequestId == request.Id && item.EventType == "claim_auto_reassigned"));
+
+        var noRule = new TitleRequest
+        {
+            LibraryOrganizationId = libraryId, Barcode = $"2{Guid.NewGuid():N}"[..14],
+            Title = "No matching rule", MaterialFormatId = bookId, Status = "suggestion", AutoHold = true,
+            ClaimedByStaffUserId = actor.Id, ClaimedByDisplayName = "Actor",
+            ClaimedAtUtc = DateTime.UtcNow, ClaimType = "automatic_format_rule", ClaimRuleId = bookRule.Id,
+            CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow
+        };
+        afterFormat.TitleRequests.Add(noRule);
+        await afterFormat.SaveChangesAsync();
+        Assert.AreEqual("updated", (await mutations.ActionAsync(actor, noRule.Id, new TitleRequestActionInput
+        {
+            Version = Convert.ToBase64String(noRule.RowVersion), Action = "edit", Format = "music_cd"
+        }, CancellationToken.None)).Code);
+        await using var afterNoRule = await contexts.CreateDbContextAsync();
+        var cleared = await afterNoRule.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == noRule.Id);
+        Assert.IsNull(cleared.ClaimedByStaffUserId);
+        Assert.IsNull(cleared.ClaimType);
+        Assert.IsTrue(await afterNoRule.TitleRequestEvents.AnyAsync(item =>
+            item.TitleRequestId == noRule.Id && item.EventType == "claim_auto_cleared"));
+
+        var transferred = await afterNoRule.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == request.Id);
+        Assert.AreEqual("updated", (await mutations.ActionAsync(actor, request.Id, new TitleRequestActionInput
+        {
+            Version = Convert.ToBase64String(transferred.RowVersion), Action = "edit", Format = "book"
+        }, CancellationToken.None)).Code);
+        await using var afterTransfer = await contexts.CreateDbContextAsync();
+        var manuallyTransferred = await afterTransfer.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == request.Id);
+        Assert.AreEqual("manual", manuallyTransferred.ClaimType);
+        Assert.AreEqual(actor.Id, manuallyTransferred.ClaimedByStaffUserId);
+        Assert.IsTrue(await afterTransfer.TitleRequestEvents.AnyAsync(item =>
+            item.TitleRequestId == request.Id && item.EventType == "claim_manual_transferred"));
     }
 
     [TestMethod]
@@ -250,6 +339,95 @@ public sealed partial class PatronJourneyTests
                     .GetProperty("value").GetString());
             }
         }
+    }
+
+    [TestMethod]
+    public async Task StaffEditRejectsOmittedRequiredCustomField()
+    {
+        const int libraryId = 99043;
+        var actor = await ReadConfiguredSuperAdminAsync();
+        await using var scope = factory!.Services.CreateAsyncScope();
+        var contexts = scope.ServiceProvider.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var seed = await contexts.CreateDbContextAsync();
+        var formatId = await seed.MaterialFormats.Where(item => item.Code == "book")
+            .Select(item => item.Id).FirstAsync();
+        seed.Organizations.Add(new Organization
+        {
+            Id = libraryId, DisplayName = "Required field library", Abbreviation = "RFL", IsActive = true
+        });
+        var field = new PatronCustomField
+        {
+            LibraryOrganizationId = libraryId, FieldKey = "audience_note", FieldType = "text",
+            Label = "Audience note", IsEnabled = true, SortOrder = 1
+        };
+        seed.PatronCustomFields.Add(field);
+        await seed.SaveChangesAsync();
+        seed.MaterialFormatCustomFieldRules.Add(new MaterialFormatCustomFieldRule
+        {
+            LibraryOrganizationId = libraryId, MaterialFormatId = formatId,
+            PatronCustomFieldId = field.Id, Mode = "required"
+        });
+        var request = new TitleRequest
+        {
+            LibraryOrganizationId = libraryId, Barcode = $"2{Guid.NewGuid():N}"[..14],
+            Title = "Required field", MaterialFormatId = formatId, Status = "suggestion", AutoHold = true,
+            CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow
+        };
+        seed.TitleRequests.Add(request);
+        await seed.SaveChangesAsync();
+        var mutation = scope.ServiceProvider.GetRequiredService<TitleRequestMutationService>();
+        Assert.AreEqual("title_required", (await mutation.ActionAsync(actor, request.Id,
+            new TitleRequestActionInput
+            {
+                Version = Convert.ToBase64String(request.RowVersion), Action = "edit", Title = " "
+            }, CancellationToken.None)).Code);
+        var result = await mutation.ActionAsync(actor, request.Id, new TitleRequestActionInput
+        {
+            Version = Convert.ToBase64String(request.RowVersion), Action = "edit",
+            CustomFields = JsonSerializer.SerializeToElement(new { })
+        }, CancellationToken.None);
+        Assert.AreEqual("invalid_custom_fields", result.Code);
+        await using var verify = await contexts.CreateDbContextAsync();
+        var unchanged = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == request.Id);
+        Assert.IsTrue(unchanged.RowVersion.SequenceEqual(request.RowVersion));
+    }
+
+    [TestMethod]
+    public async Task StaffEditClearsFoundBibAndItsVerificationState()
+    {
+        const int libraryId = 99044;
+        var actor = await ReadConfiguredSuperAdminAsync();
+        await using var scope = factory!.Services.CreateAsyncScope();
+        var contexts = scope.ServiceProvider.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var seed = await contexts.CreateDbContextAsync();
+        var formatId = await seed.MaterialFormats.Where(item => item.Code == "book")
+            .Select(item => item.Id).FirstAsync();
+        seed.Organizations.Add(new Organization
+        {
+            Id = libraryId, DisplayName = "BIB clear library", Abbreviation = "BCL", IsActive = true
+        });
+        var request = new TitleRequest
+        {
+            LibraryOrganizationId = libraryId, Barcode = $"2{Guid.NewGuid():N}"[..14],
+            Title = "Clear catalog match", MaterialFormatId = formatId, Status = "suggestion",
+            Identifier = "9780000000001", BibId = "9001", IsbnCheckStatus = "found",
+            IsbnCheckResult = "Matched BIB", AutoHold = true,
+            CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow
+        };
+        seed.TitleRequests.Add(request);
+        await seed.SaveChangesAsync();
+        var mutation = scope.ServiceProvider.GetRequiredService<TitleRequestMutationService>();
+        var result = await mutation.ActionAsync(actor, request.Id, new TitleRequestActionInput
+        {
+            Version = Convert.ToBase64String(request.RowVersion), Action = "edit",
+            Bibid = JsonSerializer.SerializeToElement("")
+        }, CancellationToken.None);
+        Assert.AreEqual("updated", result.Code);
+        await using var verify = await contexts.CreateDbContextAsync();
+        var current = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == request.Id);
+        Assert.IsNull(current.BibId);
+        Assert.AreEqual("not_found", current.IsbnCheckStatus);
+        StringAssert.Contains(current.IsbnCheckResult!, "cleared by staff");
     }
 
     [TestMethod]
