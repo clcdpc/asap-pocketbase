@@ -121,7 +121,7 @@ async function fetchPolarisSearch(row, mode, query, options, ctx, signal) {
   }
 }
 
-function renderPolarisSearchResults(row, identity, mode, data, options = {}, ctx, onRefresh, isCurrent, signal) {
+function renderPolarisSearchResults(row, identity, mode, data, options = {}, ctx, onRefresh, isCurrent, signal, beforeDialogsClose) {
   if (!isCurrent()) return;
   const els = polarisSearchElements();
   if (data.status === 'error') {
@@ -250,7 +250,7 @@ function renderPolarisSearchResults(row, identity, mode, data, options = {}, ctx
       holdBtn.addEventListener('click', async () => {
         if (!isCurrent()) return;
         const payload = buildPayload('pending_hold', 'catalogFound');
-        await performImmediateStaffAction(identity, payload, ctx, onRefresh);
+        await performImmediateStaffAction(identity, payload, ctx, onRefresh, beforeDialogsClose);
       });
       actionsDiv.appendChild(holdBtn);
     }
@@ -269,7 +269,7 @@ function renderPolarisSearchResults(row, identity, mode, data, options = {}, ctx
         const payload = buildPayload('pending_hold', 'additionalCopy');
         payload.emailPurchaseReminder = confirmResult.emailPurchaseReminder;
         payload.autohold = true;
-        await performImmediateStaffAction(identity, payload, ctx, onRefresh);
+        await performImmediateStaffAction(identity, payload, ctx, onRefresh, beforeDialogsClose);
       });
       actionsDiv.appendChild(additionalCopyBtn);
     }
@@ -384,7 +384,7 @@ export async function openPolarisSearch(row, mode, options = {}, ctx, onRefresh)
   const identity = { type: row.type, id: String(row.id ?? '').trim() };
   const actionStaff = staffSession.staff;
   const accessGeneration = staffAccessGeneration;
-  const context = { generation: 0, controller: null };
+  const context = { generation: 0, controller: null, suppressReturnDialog: null };
   activeSearchContext = context;
   const sameStaff = () => staffSession.authenticated && staffSession.accessAllowed &&
     staffAccessGeneration === accessGeneration &&
@@ -440,7 +440,7 @@ export async function openPolarisSearch(row, mode, options = {}, ctx, onRefresh)
     try {
       const data = await fetchPolarisSearch(row, currentMode, query, { title: query, author: author }, ctx, context.controller.signal);
       if (!isCurrent()) return;
-      renderPolarisSearchResults(row, identity, currentMode, data, options, ctx, onRefresh, isCurrent, context.controller.signal);
+      renderPolarisSearchResults(row, identity, currentMode, data, options, ctx, onRefresh, isCurrent, context.controller.signal, context.suppressReturnDialog);
     } catch (err) {
       if (!isCurrent() || isAbortError(err)) return;
       els.status.className = 'alert alert-danger py-2 px-3 small';
@@ -485,6 +485,12 @@ export async function openPolarisSearch(row, mode, options = {}, ctx, onRefresh)
     };
     returnDialogListener = reopenReturnDialog;
     els.dialog.addEventListener('close', reopenReturnDialog, { once: true });
+    context.suppressReturnDialog = () => {
+      // A successful action closes Polaris without reopening the stale edit form on the queued close event.
+      shouldReturnDialog = false;
+      els.dialog.removeEventListener('close', reopenReturnDialog);
+      if (returnDialogListener === reopenReturnDialog) returnDialogListener = null;
+    };
   }
 
   if (!els.dialog.open) {
@@ -562,10 +568,11 @@ export function launchEditPolarisSearch(mode, button, context = 'edit', ctx, onR
   }, ctx, onRefresh);
 }
 
-export async function performImmediateStaffAction(identity, payload, ctx, onRefresh) {
+export async function performImmediateStaffAction(identity, payload, ctx, onRefresh, beforeDialogsClose) {
   if (identity?.type !== 'title_request' || !String(identity.id ?? '').trim()) return false;
   await submitTitleRequestAction(String(identity.id), payload, {
     onRefresh,
+    beforeDialogsClose,
     dialogsToClose: ['polarisSearchDialog', 'editModal']
   });
   return true;

@@ -9,6 +9,7 @@ import { editRequestIdentity, findWorkflowRow } from '../request-identity.mjs';
 export async function submitTitleRequestAction(id, payload, options = {}) {
   const {
     onRefresh,
+    beforeDialogsClose,
     dialogsToClose = ['editModal']
   } = options;
 
@@ -22,6 +23,7 @@ export async function submitTitleRequestAction(id, payload, options = {}) {
     updateRecentSuggestion(updatedRecord);
     renderRecentSuggestionsSwitcher();
 
+    if (typeof beforeDialogsClose === 'function') beforeDialogsClose();
     dialogsToClose.forEach(dialogId => {
       const el = document.getElementById(dialogId);
       if (el) el.close();

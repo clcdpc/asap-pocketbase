@@ -47,15 +47,26 @@ async function settle() {
     global.localStorage = dom.window.localStorage;
     global.navigator = dom.window.navigator;
     global.requestAnimationFrame = callback => callback();
+    let queueCloseEvents = false;
+    let polarisCloseEvents = 0;
     dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
     dom.window.HTMLDialogElement.prototype.close = function () {
       this.open = false;
-      this.dispatchEvent(new dom.window.Event('close'));
+      const dispatchClose = () => {
+        if (this.id === 'polarisSearchDialog') polarisCloseEvents += 1;
+        this.dispatchEvent(new dom.window.Event('close'));
+      };
+      if (queueCloseEvents) {
+        setTimeout(dispatchClose, 0);
+      } else {
+        dispatchClose();
+      }
     };
     const dialog = document.getElementById('polarisSearchDialog');
 
     const lookups = [];
     const actions = [];
+    let failNextAction = false;
     const id = '9007199254740993';
     const title = { type: 'title_request', id, title: 'Collision title', libraryOrgId: '2' };
     const copy = { type: 'additional_copy', id, title: 'Collision copy', libraryOrgId: '2' };
@@ -67,6 +78,10 @@ async function settle() {
         return pending.promise;
       }
       if (String(url).includes('/title-requests/') && String(url).endsWith('/action')) {
+        if (failNextAction) {
+          failNextAction = false;
+          return Promise.resolve(response(503, { message: 'Action temporarily unavailable.' }));
+        }
         actions.push({ url: String(url), body: JSON.parse(options.body) });
         persisted.title = actions.at(-1).body.title;
         return Promise.resolve(response(200, { type: 'title_request', id, title: persisted.title, status: 'pending_hold' }));
@@ -93,6 +108,10 @@ async function settle() {
       lookups[index].pending.resolve(response(200, {
         holdingsSummary: { isHoldable: true, myLibraryCount: 1, otherLibraryCount: 0, consortiumCount: 1 }
       }));
+      await settle();
+    };
+    const flushDialogCloseEvents = async () => {
+      await new Promise(resolve => setTimeout(resolve, 10));
       await settle();
     };
     const open = (row) => search.openPolarisSearch(row, 'title', {}, ctx);
@@ -307,11 +326,84 @@ async function settle() {
     assert.ok(unownedEditAction && unownedEditAction.disabled && unownedEditAction.classList.contains('hidden'),
       'edit actions remain unavailable when the BIB has no consortium holdings');
 
+    queueCloseEvents = true;
+    ctx.currentSuggestions = [title, copy];
+    ctx.allSuggestions = [];
+    const editModal = document.getElementById('editModal');
+    const editSearchButton = document.getElementById('edit-title-polaris-search');
+    const editId = document.getElementById('edit-id');
+    editId.value = id;
+    editId.dataset.requestType = 'title_request';
+    document.getElementById('edit-title').value = title.title;
+    let editRefreshes = 0;
+    const launchEditSearch = () => search.launchEditPolarisSearch('title', editSearchButton, 'edit', ctx, () => { editRefreshes += 1; });
+
+    editModal.showModal();
+    const manualSearch = lookups.length;
+    launchEditSearch();
+    await settle();
+    await completeSearch(manualSearch, 'Manual close result');
+    assert.equal(editModal.open, false, 'opening Polaris closes the parent edit dialog');
+    search.closePolarisSearchDialog();
+    await flushDialogCloseEvents();
+    assert.equal(editModal.open, true, 'closing Polaris returns to the edit dialog');
+    assert.equal(document.activeElement, editSearchButton, 'focus returns to the Polaris launch button');
+
+    const applySearch = lookups.length;
+    launchEditSearch();
+    await settle();
+    await completeSearch(applySearch, 'Apply result');
+    const applyButton = [...results().querySelectorAll('button')].find(button => button.textContent === 'Apply to Form');
+    assert.ok(applyButton);
+    applyButton.click();
+    await flushDialogCloseEvents();
+    assert.equal(dialog.open, false);
+    assert.equal(editModal.open, true, 'Apply to Form returns to the edit dialog');
+    assert.equal(document.getElementById('edit-bibid').value, 'BIB-Apply result');
+    assert.equal(document.getElementById('selectedPolarisBibId').value, 'BIB-Apply result');
+    assert.match(document.getElementById('edit-title').value, /Apply result/);
+    assert.equal(document.activeElement, editSearchButton);
+
+    const canceledSearch = lookups.length;
+    launchEditSearch();
+    await settle();
+    await completeSearch(canceledSearch, 'Canceled result');
+    await completeHoldings(canceledSearch + 1);
+    results().querySelector('#polaris-additional-copy-action').click();
+    await settle();
+    const canceledConfirmation = document.getElementById('confirm-additional-copy-reminder')?.closest('dialog');
+    [...canceledConfirmation.querySelectorAll('button')].find(button => button.textContent === 'Cancel').click();
+    await settle();
+    assert.equal(actions.length, 2, 'canceling confirmation cannot mutate the title request');
+    assert.equal(dialog.open, true, 'canceling confirmation keeps Polaris open');
+    search.closePolarisSearchDialog();
+    await flushDialogCloseEvents();
+    assert.equal(editModal.open, true, 'canceling confirmation preserves the return-to-edit path');
+
+    const failedSearch = lookups.length;
+    launchEditSearch();
+    await settle();
+    await completeSearch(failedSearch, 'Failed result');
+    await completeHoldings(failedSearch + 1);
+    results().querySelector('#polaris-additional-copy-action').click();
+    await settle();
+    failNextAction = true;
+    const failedConfirmation = document.getElementById('confirm-additional-copy-reminder')?.closest('dialog');
+    [...failedConfirmation.querySelectorAll('button')].find(button => button.textContent === 'Confirm').click();
+    await settle();
+    assert.equal(document.getElementById('alert-dialog').open, true, 'a failed mutation shows the existing error');
+    assert.equal(dialog.open, true, 'a failed mutation keeps Polaris available');
+    assert.equal(actions.length, 2);
+    document.getElementById('alert-dialog-ok').click();
+    await settle();
+    search.closePolarisSearchDialog();
+    await flushDialogCloseEvents();
+    assert.equal(editModal.open, true, 'a failed mutation does not suppress return to edit');
+
     const editSearch = lookups.length;
-    const editOpen = search.openPolarisSearch(title, 'title', { source: 'edit' }, ctx);
+    launchEditSearch();
     await settle();
     await completeSearch(editSearch, 'Edit result');
-    await editOpen;
     const editAction = results().querySelector('#polaris-additional-copy-action');
     assert.ok(editAction, 'a persisted title request opened from edit retains the additional-copy action');
     assert.equal(editAction.disabled, true);
@@ -326,14 +418,21 @@ async function settle() {
     const confirmation = document.getElementById('confirm-additional-copy-reminder')?.closest('dialog');
     assert.ok(confirmation, 'the edit action uses the existing confirmation flow');
     document.getElementById('confirm-additional-copy-reminder').checked = true;
+    const closeEventsBeforeAction = polarisCloseEvents;
     [...confirmation.querySelectorAll('button')].find(button => button.textContent === 'Confirm').click();
     await settle();
+    await flushDialogCloseEvents();
     assert.equal(actions.length, 3);
     assert.equal(actions[2].url, `/api/asap/staff/title-requests/${id}/action`);
     assert.equal(actions[2].body.action, 'additionalCopy');
     assert.equal(actions[2].body.emailPurchaseReminder, true);
     assert.equal(actions[2].body.title, 'Edit result');
     assert.equal(persisted.copy, 'Collision copy');
+    assert.equal(dialog.open, false, 'the successful action closes Polaris');
+    assert.equal(polarisCloseEvents, closeEventsBeforeAction + 1, 'the queued Polaris close event fired');
+    assert.equal(editModal.open, false, 'the queued close event must not reopen the stale edit dialog');
+    assert.equal(editRefreshes, 1, 'the successful action refreshes the staff grid');
+    assert.match(document.getElementById('toast-container').textContent, /Additional-copy task created/);
 
     const staleEditSearch = lookups.length;
     const staleEditOpen = search.openPolarisSearch(title, 'title', { source: 'edit' }, ctx);
