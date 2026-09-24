@@ -158,13 +158,22 @@ public sealed partial class PatronJourneyTests
         duplicateClosed.BibId = "9003";
         var placedClosed = Source("Close placed pending check", "hold_placed");
         placedClosed.BibId = "9003";
-        var reopened = Source("Reopen pending check", "closed");
-        reopened.CloseReason = "manual";
+        var reopened = Source("Reopen interrupted check", "suggestion");
+        var genuineNotFound = Source("Reopen completed not found", "suggestion");
+        genuineNotFound.IsbnCheckStatus = "not_found";
+        genuineNotFound.IsbnCheckResult = "Identifier not found in Polaris.";
+        var genuineFound = Source("Reopen completed found", "suggestion");
+        genuineFound.IsbnCheckStatus = "found";
+        genuineFound.IsbnCheckResult = "Identifier found in Polaris.";
+        genuineFound.BibId = "9003";
+        var withoutIdentifier = Source("Reopen without identifier", "suggestion", null);
+        withoutIdentifier.IsbnCheckStatus = "skipped_no_isbn";
         seed.TitleRequests.AddRange(catalogChanged, catalogPending, catalogNoIdentifier, catalogEmpty, purchaseNoBib,
             purchaseWithBib, purchaseRetainedBib, alreadyOwn, alreadyOwnRetainedBib, catalogFromPurchase,
             invalidBib, staleVersion,
             editSuggestion, clearSuggestion, editPurchase, editHold,
-            rejected, silentClosed, duplicateClosed, placedClosed, reopened);
+            rejected, silentClosed, duplicateClosed, placedClosed, reopened,
+            genuineNotFound, genuineFound, withoutIdentifier);
         await seed.SaveChangesAsync();
         var notFoundTagId = await seed.WorkflowTags.Where(item => item.Code == "polaris_bib_not_found")
             .Select(item => item.Id).SingleAsync();
@@ -320,18 +329,65 @@ public sealed partial class PatronJourneyTests
         Assert.IsNull(clearedRow.Identifier);
         Assert.AreEqual("skipped_no_isbn", clearedRow.IsbnCheckStatus);
 
-        var reopenResult = await mutations.ActionAsync(actor, reopened.Id, new TitleRequestActionInput
+        foreach (var (source, expectedClosedStatus, expectedReopenStatus, expectedResult) in new[]
         {
-            Version = StaffVersion.Encode(reopened.RowVersion),
-            Action = "reopen",
-            Status = "suggestion"
-        }, CancellationToken.None);
-        Assert.AreEqual("updated", reopenResult.Code);
-        await using var reopenVerify = await contexts.CreateDbContextAsync();
-        var reopenedRow = await reopenVerify.TitleRequests.AsNoTracking()
-            .SingleAsync(item => item.Id == reopened.Id);
-        Assert.AreEqual("suggestion", reopenedRow.Status);
-        Assert.AreEqual("pending", reopenedRow.IsbnCheckStatus);
+            (reopened, "not_found", "pending", (string?)null),
+            (genuineNotFound, "not_found", "not_found", "Identifier not found in Polaris."),
+            (genuineFound, "found", "found", "Identifier found in Polaris."),
+            (withoutIdentifier, "skipped_no_isbn", "skipped_no_isbn", (string?)null)
+        })
+        {
+            var closed = await mutations.ActionAsync(actor, source.Id, new TitleRequestActionInput
+            {
+                Version = StaffVersion.Encode(source.RowVersion),
+                Action = "reject",
+                Status = "closed"
+            }, CancellationToken.None);
+            Assert.AreEqual("updated", closed.Code);
+            await using var closedContext = await contexts.CreateDbContextAsync();
+            var closedRow = await closedContext.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == source.Id);
+            Assert.AreEqual("closed", closedRow.Status);
+            Assert.AreEqual(expectedClosedStatus, closedRow.IsbnCheckStatus);
+            if (source.Id == reopened.Id)
+            {
+                Assert.AreEqual("Identifier processing was not completed before this request left suggestions.",
+                    closedRow.IsbnCheckResult);
+                Assert.AreEqual(0, closedRow.IsbnCheckRetryCount);
+                Assert.IsNull(closedRow.IsbnCheckLastErrorCode);
+                Assert.IsNull(closedRow.LastCheckedUtc);
+            }
+
+            var staleReopen = await mutations.ActionAsync(actor, source.Id, new TitleRequestActionInput
+            {
+                Version = StaffVersion.Encode(source.RowVersion),
+                Action = "reopen",
+                Status = "suggestion"
+            }, CancellationToken.None);
+            Assert.AreEqual("stale_version", staleReopen.Code);
+            var reopenedResult = await mutations.ActionAsync(actor, source.Id, new TitleRequestActionInput
+            {
+                Version = StaffVersion.Encode(closedRow.RowVersion),
+                Action = "reopen",
+                Status = "suggestion"
+            }, CancellationToken.None);
+            Assert.AreEqual("updated", reopenedResult.Code);
+            await using var reopenedContext = await contexts.CreateDbContextAsync();
+            var reopenedRow = await reopenedContext.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == source.Id);
+            Assert.AreEqual("suggestion", reopenedRow.Status);
+            Assert.AreEqual(expectedReopenStatus, reopenedRow.IsbnCheckStatus);
+            Assert.AreEqual(expectedResult, reopenedRow.IsbnCheckResult);
+            if (source.Id == reopened.Id)
+            {
+                Assert.AreEqual(0, reopenedRow.IsbnCheckRetryCount);
+                Assert.IsNull(reopenedRow.IsbnCheckLastErrorCode);
+                Assert.IsNull(reopenedRow.LastCheckedUtc);
+                Assert.IsTrue(await reopenedContext.TitleRequests.AsNoTracking().AnyAsync(item =>
+                    item.Id == source.Id && item.Status == "suggestion" && item.IsbnCheckStatus == "pending"));
+                Assert.IsFalse(await reopenedContext.TitleRequestWorkflowTags.AnyAsync(item =>
+                    item.TitleRequestId == source.Id &&
+                    (item.WorkflowTagId == foundTagId || item.WorkflowTagId == notFoundTagId)));
+            }
+        }
     }
 
     [TestMethod]

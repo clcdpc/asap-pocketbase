@@ -51,6 +51,7 @@ export function setEditRequestIdentity(input, identity) {
   const value = requestIdentity(identity);
   input.value = value.id;
   input.dataset.requestType = value.type;
+  delete input.dataset.requestVersion;
   editRequestGeneration += 1;
   return value;
 }

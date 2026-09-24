@@ -54,6 +54,8 @@ public sealed class TitleRequestMutationService(
 {
     private static readonly string[] IdentifierDerivedTagCodes =
         ["polaris_bib_found", "polaris_bib_not_found", "polaris_multiple_matches"];
+    private const string InterruptedIdentifierResult =
+        "Identifier processing was not completed before this request left suggestions.";
     private sealed record ExplicitBibPreflight(string? Error = null, BibValidationResult? ValidatedBib = null);
     private readonly HashSet<Guid> allowedTenantIds = configuration.Authentication.Entra.AllowedTenantIds!
         .Select(Guid.Parse)
@@ -320,6 +322,17 @@ public sealed class TitleRequestMutationService(
         else if (targetStatus != "suggestion" && request.IsbnCheckStatus == "pending")
         {
             await ResolveUnreachableIdentifierCheckAsync(context, request, cancellationToken);
+        }
+        else if (input.Action == "reopen" && targetStatus == "suggestion" &&
+                 request.IsbnCheckStatus == "not_found" &&
+                 request.IsbnCheckResult == InterruptedIdentifierResult)
+        {
+            request.IsbnCheckStatus = request.Identifier is null ? "skipped_no_isbn" : "pending";
+            request.IsbnCheckResult = null;
+            request.IsbnCheckRetryCount = 0;
+            request.IsbnCheckLastErrorCode = null;
+            request.LastCheckedUtc = null;
+            await RemoveIdentifierTagsAsync(context, request.Id, cancellationToken);
         }
 
         if (input.Title is not null) request.Title = input.Title.Trim();
@@ -835,7 +848,7 @@ public sealed class TitleRequestMutationService(
         else
         {
             request.IsbnCheckStatus = "not_found";
-            request.IsbnCheckResult = "Identifier processing was not completed before this request left suggestions.";
+            request.IsbnCheckResult = InterruptedIdentifierResult;
         }
         request.IsbnCheckRetryCount = 0;
         request.IsbnCheckLastErrorCode = null;

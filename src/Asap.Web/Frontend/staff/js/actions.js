@@ -1,9 +1,23 @@
-import { staffSession, currentStatus, currentSuggestions, allSuggestions } from './state.js';
+import { staffSession, staffAccessGeneration, currentStatus, currentSuggestions, allSuggestions,
+  currentWorkflowOrgScopeId } from './state.js';
 import { isAdminStaff } from './api.js';
 import { authorizedJson } from './http.js';
 import { showToast, showAlert, showConfirm } from './dialogs.js';
 import { refreshCurrentStaffView, escapeAttr } from './grid.js';
-import { findWorkflowRow } from './request-identity.mjs';
+import { findWorkflowRow, sameRequestIdentity } from './request-identity.mjs';
+
+function ownsRowAction(row) {
+  const accessGeneration = staffAccessGeneration;
+  const status = currentStatus;
+  const scope = currentWorkflowOrgScopeId;
+  return () => {
+    const current = findWorkflowRow(row, currentSuggestions, allSuggestions);
+    return staffAccessGeneration === accessGeneration && staffSession.authenticated &&
+      staffSession.accessAllowed && currentStatus === status && currentWorkflowOrgScopeId === scope &&
+      current && sameRequestIdentity(current, row) && current.version === row.version &&
+      current.status === row.status;
+  };
+}
 
 export function undoConfirmMessage(type) {
   if (type === 'additional_copy') {
@@ -16,18 +30,20 @@ export async function undoRow(identity) {
   if (!['title_request', 'additional_copy'].includes(identity?.type) || !String(identity.id ?? '').trim()) return;
   const row = findWorkflowRow(identity, currentSuggestions, allSuggestions);
   if (!row || row.type !== identity.type) return;
+  const isCurrent = ownsRowAction(row);
   const id = row.id;
 
-  if (!await showConfirm('Undo action', undoConfirmMessage(row.type))) return;
+  if (!await showConfirm('Undo action', undoConfirmMessage(row.type)) || !isCurrent()) return;
 
   try {
     const url = row.type === 'additional_copy'
       ? `/api/asap/staff/additional-copies/${encodeURIComponent(id)}/reopen`
       : `/api/asap/staff/title-requests/${encodeURIComponent(id)}/action`;
     const body = row.type === 'additional_copy'
-      ? {}
+      ? { version: row.version }
       : {
-          ...row,
+          version: row.version,
+          action: 'reopen',
           status: 'suggestion',
           editedBy: staffSession.staff?.username
         };
@@ -36,9 +52,9 @@ export async function undoRow(identity) {
       method: 'POST',
       body
     });
-    refreshCurrentStaffView();
+    if (isCurrent()) refreshCurrentStaffView();
   } catch (err) {
-    await showAlert(err.message || 'Error undoing action');
+    if (isCurrent()) await showAlert(err.message || 'Error undoing action');
   }
 }
 
@@ -47,17 +63,20 @@ export async function deleteClosedRequest(identity) {
   if (!['title_request', 'additional_copy'].includes(identity?.type) || !String(identity.id ?? '').trim()) return;
   const row = findWorkflowRow(identity, currentSuggestions, allSuggestions);
   if (!row || row.type !== identity.type) return;
+  const isCurrent = ownsRowAction(row);
   const confirmed = await showConfirm('Delete this closed request?', 'This cannot be undone.');
-  if (!confirmed) return;
+  if (!confirmed || !isCurrent()) return;
   try {
     const url = row.type === 'additional_copy'
       ? `/api/asap/staff/additional-copies/${encodeURIComponent(row.id)}`
       : `/api/asap/staff/requests/${encodeURIComponent(row.id)}`;
-    await authorizedJson(url, { method: 'DELETE' });
-    showToast('Closed request deleted.', 'success');
-    refreshCurrentStaffView();
+    await authorizedJson(url, { method: 'DELETE', body: { version: row.version } });
+    if (isCurrent()) {
+      showToast('Closed request deleted.', 'success');
+      refreshCurrentStaffView();
+    }
   } catch (err) {
-    await showAlert(err.message || 'Could not delete closed request.');
+    if (isCurrent()) await showAlert(err.message || 'Could not delete closed request.');
   }
 }
 
@@ -66,14 +85,16 @@ export async function closeDuplicateRequest(identity, options = {}) {
   if (identity?.type !== 'title_request' || !String(identity.id ?? '').trim()) return false;
   const row = findWorkflowRow(identity, currentSuggestions, allSuggestions);
   if (!row || row.type !== 'title_request') return false;
+  const ownsRow = ownsRowAction(row);
   const id = row.id;
   if (!alreadyConfirmed && !await showConfirm('Close this duplicate request?',
     'The patron already has an open request or hold for this BIB ID.')) return false;
-  if (!isCurrent()) return false;
+  if (!isCurrent() || !ownsRow()) return false;
   try {
     await authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(id)}/action`, {
       method: 'POST',
       body: {
+        version: row.version,
         action: 'closeDuplicate',
         status: 'closed',
         title: row.title || '',
@@ -82,16 +103,16 @@ export async function closeDuplicateRequest(identity, options = {}) {
         bibid: row.bibid || '',
         format: row.format || '',
         publication: row.publication || '',
-        exactPublicationDate: row.exactPublicationDate || '',
+        exactPublicationDate: row.exactPublicationDate || null,
         notes: row.notes || '',
         editedBy: staffSession.staff?.username
       }
     });
-    if (isCurrent()) showToast('Duplicate request closed.', 'success');
-    if (refresh) await refreshCurrentStaffView({ silent: !isCurrent() });
+    if (isCurrent() && ownsRow()) showToast('Duplicate request closed.', 'success');
+    if (refresh && ownsRow()) await refreshCurrentStaffView({ silent: !isCurrent() });
     return true;
   } catch (err) {
-    if (isCurrent()) await showAlert(err.message || 'Could not close duplicate request.');
+    if (isCurrent() && ownsRow()) await showAlert(err.message || 'Could not close duplicate request.');
     return false;
   }
 }

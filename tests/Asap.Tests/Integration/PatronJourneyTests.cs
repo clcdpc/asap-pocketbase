@@ -980,6 +980,12 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(collision.GetProperty("additionalCopyBibLookup").GetBoolean());
             Assert.AreEqual(200, legacyReport.RootElement.GetProperty("polarisAdditionalCopyAction")
                 .GetProperty("status").GetInt32());
+            var rowActions = legacyReport.RootElement.GetProperty("rowActionJourney");
+            foreach (var action in new[] { "edit", "purchase", "queueHold", "titleReopen", "titleClose",
+                         "copyClose", "copyReopen" })
+            {
+                Assert.AreEqual(200, rowActions.GetProperty(action).GetInt32(), action);
+            }
         }
 
         await settingsPoisoningJourney.SetSystemSuggestionLimitAsync(23);

@@ -69,11 +69,13 @@ export function confirmAdditionalCopyAction(result, options = {}) {
       if (dialog.open) dialog.close();
       dialog.remove();
       if (staffAccessGeneration === accessGeneration && staffSession.authenticated && staffSession.accessAllowed &&
+          options.isCurrent?.() !== false &&
           previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
       resolve(resultValue);
     }
     cancelBtn.addEventListener('click', () => cleanup({ confirmed: false, emailPurchaseReminder: false }));
-    okBtn.addEventListener('click', () => cleanup({ confirmed: true, emailPurchaseReminder: checkbox.checked }));
+    okBtn.addEventListener('click', () => cleanup({ confirmed: options.isCurrent?.() !== false,
+      emailPurchaseReminder: checkbox.checked }));
     dialog.addEventListener('cancel', event => {
       event.preventDefault();
       cleanup({ confirmed: false, emailPurchaseReminder: false });

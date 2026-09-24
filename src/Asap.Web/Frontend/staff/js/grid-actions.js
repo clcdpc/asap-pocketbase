@@ -7,9 +7,24 @@ import { normalizeStatus } from './grid-policy.mjs';
 import { buildRowActions } from './grid-row-actions.mjs';
 import { escapeAttr } from './grid-utils.js';
 import { hasWorkflowTag, isUnclaimed } from './grid-filters.js';
-import { findWorkflowRow } from './request-identity.mjs';
+import { findWorkflowRow, requestIdentity, sameRequestIdentity } from './request-identity.mjs';
+import { staffSession, staffAccessGeneration, currentSuggestions, allSuggestions, currentStatus, currentWorkflowOrgScopeId } from './state.js';
 
 const noopRefresh = async () => {};
+let rowActionGeneration = 0;
+let assignmentGeneration = 0;
+export function invalidatePendingRowAction() {
+  rowActionGeneration += 1;
+  assignmentGeneration += 1;
+  const assignmentDialog = document.getElementById('assign-dialog');
+  if (assignmentDialog?.open) assignmentDialog.close();
+}
+function selectPlaceholder(select, label) {
+  const option = document.createElement('option');
+  option.value = '';
+  option.textContent = label;
+  select.replaceChildren(option);
+}
 
 export function currentStaffId(ctx) {
   return String(ctx.staffSession.staff?.id || '').trim();
@@ -47,6 +62,9 @@ function materializeRowAction(row, action, ctx, onRefresh) {
 
 export async function runRowActionDescriptor(row, action, ctx, onRefresh = noopRefresh) {
   if (!['title_request', 'additional_copy'].includes(row?.type) || !String(row.id ?? '').trim()) return;
+  const current = findWorkflowRow(row, currentSuggestions);
+  if (!current || current.version !== row.version || current.status !== row.status) return;
+  invalidatePendingRowAction();
   if (action.key === 'purchase') {
     const hasBib = String(row.bibid || '').trim().length > 0;
     openEdit(row, hasBib ? 'pending_hold' : 'outstanding_purchase', 'Approve for purchase', 'purchase', 'Purchase');
@@ -65,7 +83,11 @@ export async function runRowActionDescriptor(row, action, ctx, onRefresh = noopR
     return;
   }
   if (action.key === 'queueHold') {
-    openEdit(row, 'pending_hold', 'Queue for hold', '', 'Queue Hold');
+    openEdit(row, 'pending_hold', 'Queue for hold', 'catalogFound', 'Queue Hold');
+    return;
+  }
+  if (action.key === 'close') {
+    openEdit(row, 'closed', 'Close', 'close', 'Close');
     return;
   }
   if (action.key === 'undo') {
@@ -75,7 +97,7 @@ export async function runRowActionDescriptor(row, action, ctx, onRefresh = noopR
   if (action.key === 'edit') {
     const status = normalizeStatus(row.status);
     const title = status === 'suggestion' ? 'Edit suggestion' : 'Edit';
-    openEdit(row, row.status, title, '', 'Save');
+    openEdit(row, row.status, title, 'edit', 'Save');
     return;
   }
   if (action.key === 'delete') {
@@ -109,6 +131,20 @@ export async function runRowActionDescriptor(row, action, ctx, onRefresh = noopR
 
 export async function openAssignDialog(row, onRefresh = noopRefresh) {
   if (!['title_request', 'additional_copy'].includes(row?.type) || !String(row.id ?? '').trim()) return;
+  const generation = ++assignmentGeneration;
+  const accessGeneration = staffAccessGeneration;
+  const identity = requestIdentity(row);
+  const status = currentStatus;
+  const scope = currentWorkflowOrgScopeId;
+  const ownsRequest = () => {
+    const current = findWorkflowRow(identity, currentSuggestions, allSuggestions);
+    return generation === assignmentGeneration && staffAccessGeneration === accessGeneration &&
+      staffSession.authenticated && staffSession.accessAllowed && currentStatus === status &&
+      currentWorkflowOrgScopeId === scope && current?.type === identity.type &&
+      sameRequestIdentity(current, identity) && current.version === row.version &&
+      current.status === row.status;
+  };
+  if (!ownsRequest()) return;
   const dialog = document.getElementById('assign-dialog');
   const staffSelect = document.getElementById('assign-staff-select');
   const contextText = document.getElementById('assign-dialog-context');
@@ -117,20 +153,21 @@ export async function openAssignDialog(row, onRefresh = noopRefresh) {
 
   if (!dialog || !staffSelect || !contextText || !confirmBtn || !cancelBtn) return;
 
-  // Reset dialog state
+  if (dialog.open) dialog.close();
   confirmBtn.textContent = 'Assign';
   confirmBtn.disabled = true;
   contextText.textContent = `Assigning: ${row.title || 'Untitled suggestion'}`;
-  staffSelect.innerHTML = '<option value="">Loading staff members...</option>';
+  selectPlaceholder(staffSelect, 'Loading staff members...');
   staffSelect.value = '';
 
   try {
     const res = await authorizedJson(`/api/asap/staff/assignment-candidates?libraryOrgId=${encodeURIComponent(row.libraryOrgId)}`);
+    if (!ownsRequest()) return;
     const users = res.candidates || [];
 
-    staffSelect.innerHTML = '<option value="">Select staff member...</option>';
+    selectPlaceholder(staffSelect, 'Select staff member...');
     if (users.length === 0) {
-      staffSelect.innerHTML = '<option value="">No active staff members found</option>';
+      selectPlaceholder(staffSelect, 'No active staff members found');
     } else {
       users.forEach(u => {
         const opt = document.createElement('option');
@@ -140,25 +177,32 @@ export async function openAssignDialog(row, onRefresh = noopRefresh) {
       });
     }
   } catch (err) {
-    staffSelect.innerHTML = '<option value="">Error loading staff</option>';
+    if (!ownsRequest()) return;
+    selectPlaceholder(staffSelect, 'Error loading staff');
     console.error('Failed to load staff users', err);
   }
 
   staffSelect.onchange = () => {
+    if (!ownsRequest() || !dialog.open) return;
     confirmBtn.disabled = !staffSelect.value;
   };
 
   const cleanup = () => {
+    if (generation !== assignmentGeneration) return;
+    assignmentGeneration += 1;
     confirmBtn.onclick = null;
     cancelBtn.onclick = null;
     if (dialog.open) dialog.close();
   };
 
   cancelBtn.onclick = cleanup;
+  let submitting = false;
   confirmBtn.onclick = async () => {
+    if (!ownsRequest() || !dialog.open || submitting) return;
     const assigneeId = staffSelect.value;
     if (!assigneeId) return;
 
+    submitting = true;
     confirmBtn.disabled = true;
     confirmBtn.textContent = 'Assigning...';
 
@@ -166,33 +210,54 @@ export async function openAssignDialog(row, onRefresh = noopRefresh) {
       const endpointPrefix = row.type === 'additional_copy' ? 'additional-copies' : 'title-requests';
       await authorizedJson(`/api/asap/staff/${endpointPrefix}/${encodeURIComponent(row.id)}/assign`, {
         method: 'POST',
-        body: { assigneeId }
+        body: { assigneeId, version: row.version }
       });
+      if (!ownsRequest()) return;
       const typeLabel = row.type === 'additional_copy' ? 'Additional-copy task' : 'Claim';
       showToast(`${typeLabel} assigned.`, 'success');
       cleanup();
       await onRefresh();
     } catch (err) {
+      if (!ownsRequest()) return;
       const message = err && err.message ? err.message : 'Assignment failed.';
       await showAlert(message);
       confirmBtn.disabled = false;
       confirmBtn.textContent = 'Assign';
+      submitting = false;
     }
   };
 
-  dialog.showModal();
+  if (ownsRequest() && !dialog.open) dialog.showModal();
 }
 
 export async function closeAdditionalCopyRequest(identity, onRefresh = noopRefresh) {
   if (identity?.type !== 'additional_copy' || !String(identity.id ?? '').trim()) return;
+  const row = findWorkflowRow(identity, currentSuggestions, allSuggestions);
+  if (!row || row.type !== 'additional_copy' || normalizeStatus(row.status) === 'closed') return;
+  const generation = ++rowActionGeneration;
+  const accessGeneration = staffAccessGeneration;
+  const status = currentStatus;
+  const scope = currentWorkflowOrgScopeId;
+  const ownsRequest = () => {
+    const current = findWorkflowRow(row, currentSuggestions, allSuggestions);
+    return generation === rowActionGeneration && staffAccessGeneration === accessGeneration &&
+      staffSession.authenticated && staffSession.accessAllowed && currentStatus === status &&
+      currentWorkflowOrgScopeId === scope && current?.type === 'additional_copy' &&
+      sameRequestIdentity(current, row) && current.version === row.version && current.status === row.status;
+  };
   const confirmed = await showConfirm('Close additional-copy task?', 'Closing this task will not change the original patron suggestion.');
-  if (!confirmed) return;
-  await authorizedJson(`/api/asap/staff/additional-copies/${encodeURIComponent(String(identity.id))}/close`, {
-    method: 'POST',
-    body: {}
-  });
-  showToast('Additional-copy task closed.', 'success');
-  await onRefresh();
+  if (!confirmed || !ownsRequest()) return;
+  try {
+    await authorizedJson(`/api/asap/staff/additional-copies/${encodeURIComponent(String(identity.id))}/close`, {
+      method: 'POST',
+      body: { version: row.version }
+    });
+    if (!ownsRequest()) return;
+    showToast('Additional-copy task closed.', 'success');
+    await onRefresh();
+  } catch (error) {
+    if (ownsRequest()) throw error;
+  }
 }
 
 export function additionalCopyActionForRow(row) {
@@ -216,22 +281,43 @@ export function additionalCopyConfirmMessage(bibid, count) {
 
 export async function buyAnotherCopyForRow(row, ctx, onRefresh = noopRefresh) {
   if (row?.type !== 'title_request' || !String(row.id ?? '').trim()) return;
+  const generation = ++rowActionGeneration;
+  const accessGeneration = staffAccessGeneration;
+  const identity = requestIdentity(row);
+  const status = currentStatus;
+  const scope = currentWorkflowOrgScopeId;
+  const ownsRequest = () => {
+    const current = findWorkflowRow(identity, currentSuggestions, allSuggestions);
+    return generation === rowActionGeneration && staffAccessGeneration === accessGeneration &&
+      staffSession.authenticated && staffSession.accessAllowed && currentStatus === status &&
+      currentWorkflowOrgScopeId === scope && current?.type === 'title_request' &&
+      sameRequestIdentity(current, identity) && current.version === row.version &&
+      current.status === row.status && current.bibid === row.bibid;
+  };
+  if (!ownsRequest()) return;
   const id = String(row.id);
-  const preview = await authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(id)}/additional-copy`, { cache: 'no-store' });
-  const bibid = String(preview.bibid || row.bibid || '').trim();
-  const openCount = Number(preview.openCount || 0);
-  const confirmed = await confirmAdditionalCopyAction({ bibId: bibid }, {
-    message: additionalCopyConfirmMessage(bibid, openCount),
-    emailPurchaseReminderDefault: preview.emailPurchaseReminderDefault
-  });
-  if (!confirmed || !confirmed.confirmed) return;
-  const response = await authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(id)}/additional-copy`, {
-    method: 'POST',
-    body: { emailPurchaseReminder: confirmed.emailPurchaseReminder }
-  });
-  const afterCount = Number(response && response.openCountAfter || openCount + 1);
-  showToast(`Additional-copy task created. Open tasks for this BIB: ${afterCount}.`, 'success');
-  await onRefresh();
+  try {
+    const preview = await authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(id)}/additional-copy`, { cache: 'no-store' });
+    if (!ownsRequest()) return;
+    const bibid = String(preview.bibid || row.bibid || '').trim();
+    const openCount = Number(preview.openCount || 0);
+    const confirmed = await confirmAdditionalCopyAction({ bibId: bibid }, {
+      message: additionalCopyConfirmMessage(bibid, openCount),
+      emailPurchaseReminderDefault: preview.emailPurchaseReminderDefault,
+      isCurrent: ownsRequest
+    });
+    if (!ownsRequest() || !confirmed?.confirmed) return;
+    const response = await authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(id)}/additional-copy`, {
+      method: 'POST',
+      body: { emailPurchaseReminder: confirmed.emailPurchaseReminder, version: row.version }
+    });
+    if (!ownsRequest()) return;
+    const afterCount = Number(response && response.openCountAfter || openCount + 1);
+    showToast(`Additional-copy task created. Open tasks for this BIB: ${afterCount}.`, 'success');
+    await onRefresh();
+  } catch (error) {
+    if (ownsRequest()) throw error;
+  }
 }
 
 export function duplicateCloseActionForRow(row) {
@@ -267,18 +353,28 @@ export async function mutateRequestClaim(identity, action, successMessage, ctx, 
   const row = findWorkflowRow(identity, ctx.currentSuggestions, ctx.allSuggestions);
   if (!row || row.type !== identity.type) return;
   const requestId = row.id;
+  const accessGeneration = staffAccessGeneration;
+  const status = ctx.currentStatus;
+  const scope = currentWorkflowOrgScopeId;
+  const ownsRequest = () => {
+    const current = findWorkflowRow(identity, ctx.currentSuggestions, ctx.allSuggestions);
+    return staffAccessGeneration === accessGeneration && staffSession.authenticated &&
+      staffSession.accessAllowed && ctx.currentStatus === status && currentWorkflowOrgScopeId === scope &&
+      current?.type === row.type && current.version === row.version && current.status === row.status;
+  };
+  if (!ownsRequest()) return;
 
   try {
     const endpointPrefix = row.type === 'additional_copy' ? 'additional-copies' : 'title-requests';
     await authorizedJson(`/api/asap/staff/${endpointPrefix}/${encodeURIComponent(requestId)}/${action}`, {
       method: 'POST',
-      body: {}
+      body: { version: row.version }
     });
-    showToast(successMessage, 'success');
+    if (ownsRequest()) showToast(successMessage, 'success');
   } catch (err) {
-    await showAlert(err.message || 'Claim update failed.');
+    if (ownsRequest()) await showAlert(err.message || 'Claim update failed.');
   } finally {
-    await onRefresh();
+    if (ownsRequest()) await onRefresh();
   }
 }
 

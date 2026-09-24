@@ -573,7 +573,64 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.locator('#btn-submit-new').click();
     const created = await createdSuggestion;
     assert.equal(created.status(), 201, await created.text());
+    const rowActionId = String((await created.json()).id);
     await page.locator('#newSuggestionModal').waitFor({ state: 'hidden' });
+    const rowActionRow = () => page.locator(`#grid-container .asap-row-marker[data-suggestion-id="${rowActionId}"][data-request-type="title_request"]`)
+      .locator('xpath=ancestor::tr');
+    const persistedRowAction = async expected => {
+      const saved = await context.request.get(`${args.baseOrigin}/api/asap/staff/title-requests/${rowActionId}`);
+      assert.equal(saved.status(), 200);
+      const body = await saved.json();
+      assert.equal(body.status, expected);
+      return body;
+    };
+    await rowActionRow().waitFor();
+    await page.evaluate(id => {
+      const row = document.querySelector(`#grid-container .asap-row-marker[data-suggestion-id="${id}"][data-request-type="title_request"]`)?.closest('tr');
+      row?.querySelector('.row-action-menu-trigger')?.click();
+      [...document.querySelectorAll('#action-menu-layer [role="menuitem"]')]
+        .find(button => button.textContent?.trim() === 'Edit')?.click();
+    }, rowActionId);
+    await page.locator('#editModal[open]').waitFor();
+    await page.locator('#edit-title').fill('Staff row action edited');
+    const editAction = page.waitForResponse(response => response.url().endsWith(`/title-requests/${rowActionId}/action`) &&
+      response.request().method() === 'POST');
+    await page.locator('#edit-submit-btn').click();
+    const edited = await editAction;
+    if (edited.status() !== 200) {
+      throw new Error(`Edit row action failed: ${edited.status()} ${await edited.text()} ${JSON.stringify(edited.request().postDataJSON())}`);
+    }
+    assert.equal(edited.request().postDataJSON().action, 'edit');
+    assert.equal((await persistedRowAction('suggestion')).title, 'Staff row action edited');
+    await rowActionRow().locator('.row-action-primary').getByText('Purchase', { exact: true }).click();
+    await page.locator('#editModal[open]').waitFor();
+    const purchaseAction = page.waitForResponse(response => response.url().endsWith(`/title-requests/${rowActionId}/action`) &&
+      response.request().method() === 'POST');
+    await page.locator('#edit-submit-btn').click();
+    const purchased = await purchaseAction;
+    assert.equal(purchased.status(), 200, await purchased.text());
+    assert.equal(purchased.request().postDataJSON().action, 'purchase');
+    await persistedRowAction('outstanding_purchase');
+    await page.locator('[data-status="outstanding_purchase"]').click();
+    await rowActionRow().waitFor();
+    await rowActionRow().locator('.row-action-primary').getByText('Queue Hold', { exact: true }).click();
+    await page.locator('#editModal[open]').waitFor();
+    await page.locator('#edit-bibid').fill('9001');
+    const queueBibLookup = page.waitForResponse(response => response.url().endsWith('/staff/bib-lookup') &&
+      response.request().postDataJSON()?.bibId === '9001');
+    await page.locator('#btn-bib-lookup').click();
+    assert.equal((await queueBibLookup).status(), 200);
+    await page.locator('#edit-autohold').check();
+    const queueAction = page.waitForResponse(response => response.url().endsWith(`/title-requests/${rowActionId}/action`) &&
+      response.request().method() === 'POST');
+    await page.locator('#edit-submit-btn').click();
+    if (await page.locator('#confirm-dialog[open]').count()) await page.locator('#confirm-dialog-ok').click();
+    const queued = await queueAction;
+    assert.equal(queued.status(), 200, await queued.text());
+    assert.equal(queued.request().postDataJSON().action, 'catalogFound');
+    assert.equal((await persistedRowAction('pending_hold')).bibid, '9001');
+    report.rowActionJourney = { id: rowActionId, edit: 200, purchase: 200, queueHold: 200 };
+    await page.locator('[data-status="suggestion"]').click();
     const tabs = page.locator('#status-tabs [data-status]');
     assert.ok(await tabs.count() >= 8, 'Legacy status/settings navigation was not rendered');
     await page.locator('#grid-search-input').fill('no-result-browser-filter');
@@ -728,6 +785,80 @@ async function runSuperAdmin(browser, args, axeSource, report) {
       polarisSearches: true,
       additionalCopyBibLookup: true
     };
+
+    const closedTitleRow = () => page.locator(`#grid-container .asap-row-marker[data-suggestion-id="${args.collidingRequestId}"][data-request-type="title_request"]`)
+      .locator('xpath=ancestor::tr');
+    await closedTitleRow().locator('.row-action-primary').getByText('Undo', { exact: true }).click();
+    const titleReopen = page.waitForResponse(response => response.url().endsWith(`/title-requests/${args.collidingRequestId}/action`) &&
+      response.request().method() === 'POST');
+    await page.locator('#confirm-dialog-ok').click();
+    const reopenedTitle = await titleReopen;
+    assert.equal(reopenedTitle.status(), 200, await reopenedTitle.text());
+    assert.equal(reopenedTitle.request().postDataJSON().action, 'reopen');
+    const reopenedTitleState = await context.request.get(`${args.baseOrigin}/api/asap/staff/title-requests/${args.collidingRequestId}`);
+    assert.equal((await reopenedTitleState.json()).status, 'suggestion');
+    await page.locator('[data-status="suggestion"]').click();
+    const reopenedTitleRow = page.locator(`#grid-container .asap-row-marker[data-suggestion-id="${args.collidingRequestId}"][data-request-type="title_request"]`)
+      .locator('xpath=ancestor::tr');
+    await reopenedTitleRow.getByText('Reject', { exact: true }).click();
+    await page.locator('#editModal[open]').waitFor();
+    await page.locator('#edit-custom-field-binding').selectOption('hardback');
+    const titleClose = page.waitForResponse(response => response.url().endsWith(`/title-requests/${args.collidingRequestId}/action`) &&
+      response.request().method() === 'POST', { timeout: 5000 });
+    await page.locator('#edit-submit-btn').click();
+    let closedTitle;
+    try {
+      closedTitle = await titleClose;
+    } catch (error) {
+      const diagnostics = await page.evaluate(() => ({
+        action: document.getElementById('edit-action')?.value,
+        status: document.getElementById('edit-next-status')?.value,
+        modalOpen: document.getElementById('editModal')?.open,
+        invalid: [...document.querySelectorAll('#edit-form :invalid')].map(item => ({ id: item.id, value: item.value })),
+        alert: document.getElementById('alert-dialog-message')?.textContent,
+        toast: document.querySelector('#toast-container .asap-toast:last-child')?.textContent
+      }));
+      throw new Error(`Reject row action sent no request: ${JSON.stringify(diagnostics)}; ${error.message}`);
+    }
+    assert.equal(closedTitle.status(), 200, await closedTitle.text());
+    assert.equal(closedTitle.request().postDataJSON().action, 'reject');
+    const closedTitleState = await context.request.get(`${args.baseOrigin}/api/asap/staff/title-requests/${args.collidingRequestId}`);
+    assert.equal((await closedTitleState.json()).status, 'closed');
+
+    await page.goto(`${args.baseOrigin}/staff/?stage=additional_copies&request=${args.mobileCopyId}&requestType=additional_copy`,
+      { waitUntil: 'networkidle' });
+    await page.locator('#editModal[open]').waitFor();
+    await page.locator('#close-modal-x').click();
+    await page.locator('#grid-search-input').fill('Mobile browser additional copy');
+    const openCopyRow = page.locator(`#grid-container .asap-row-marker[data-suggestion-id="${args.mobileCopyId}"][data-request-type="additional_copy"]`)
+      .locator('xpath=ancestor::tr');
+    await openCopyRow.locator('.row-action-primary').getByText('Close', { exact: true }).click();
+    const copyClose = page.waitForResponse(response => response.url().endsWith(`/additional-copies/${args.mobileCopyId}/close`) &&
+      response.request().method() === 'POST');
+    await page.locator('#confirm-dialog-ok').click();
+    const closedCopy = await copyClose;
+    assert.equal(closedCopy.status(), 200, await closedCopy.text());
+    const closedCopyState = await context.request.get(`${args.baseOrigin}/api/asap/staff/additional-copies/${args.mobileCopyId}`);
+    assert.equal((await closedCopyState.json()).status, 'closed');
+    await page.goto(`${args.baseOrigin}/staff/?stage=closed&request=${args.mobileCopyId}&requestType=additional_copy`,
+      { waitUntil: 'networkidle' });
+    await page.locator('#editModal[open]').waitFor();
+    await page.locator('#close-modal-x').click();
+    await page.locator('#grid-search-input').fill('Mobile browser additional copy');
+    const closedCopyRow = page.locator(`#grid-container .asap-row-marker[data-suggestion-id="${args.mobileCopyId}"][data-request-type="additional_copy"]`)
+      .locator('xpath=ancestor::tr');
+    await closedCopyRow.locator('.row-action-primary').getByText('Undo', { exact: true }).click();
+    const copyReopen = page.waitForResponse(response => response.url().endsWith(`/additional-copies/${args.mobileCopyId}/reopen`) &&
+      response.request().method() === 'POST');
+    await page.locator('#confirm-dialog-ok').click();
+    const reopenedCopy = await copyReopen;
+    assert.equal(reopenedCopy.status(), 200, await reopenedCopy.text());
+    const reopenedCopyState = await context.request.get(`${args.baseOrigin}/api/asap/staff/additional-copies/${args.mobileCopyId}`);
+    assert.equal((await reopenedCopyState.json()).status, 'open');
+    report.rowActionJourney.titleReopen = reopenedTitle.status();
+    report.rowActionJourney.titleClose = closedTitle.status();
+    report.rowActionJourney.copyClose = closedCopy.status();
+    report.rowActionJourney.copyReopen = reopenedCopy.status();
 
     await page.locator('[data-status="settings"]').click();
     await page.locator('#settings-container').waitFor({ state: 'visible' });

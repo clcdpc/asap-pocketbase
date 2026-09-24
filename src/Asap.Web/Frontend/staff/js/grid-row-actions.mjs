@@ -11,6 +11,9 @@ function isClaimedByCurrentUser(row, currentStaffId) {
 
 function claimActionDescriptors(row, context = {}) {
   const actions = [];
+  if (normalizeStatus(row?.status) === 'closed') {
+    return actions;
+  }
   if (isUnclaimed(row)) {
     actions.push({ key: 'claim', label: 'Claim' });
   } else if (isClaimedByCurrentUser(row, context.currentStaffId)) {
@@ -48,7 +51,8 @@ function additionalCopyActionDescriptor(row) {
 }
 
 export function buildRowActions(row, context = {}) {
-  if (context.currentStatus === 'additional_copies') {
+  if (context.currentStatus === 'additional_copies' && row?.type === 'additional_copy' &&
+      normalizeStatus(row.status) !== 'closed') {
     return {
       primary: { key: 'closeAdditionalCopy', label: 'Close', className: 'btn-outline-secondary' },
       secondary: claimActionDescriptors(row, context)
@@ -56,6 +60,16 @@ export function buildRowActions(row, context = {}) {
   }
 
   const status = normalizeStatus(row?.status);
+
+  if (row?.type === 'additional_copy') {
+    if (status === 'closed') {
+      return {
+        primary: { key: 'undo', label: 'Undo', className: 'btn-outline-secondary' },
+        secondary: context.isAdmin ? [{ key: 'delete', label: 'Delete', className: 'danger' }] : []
+      };
+    }
+    return { primary: { key: 'closeAdditionalCopy', label: 'Close' }, secondary: claimActionDescriptors(row, context) };
+  }
 
   if (status === 'suggestion') {
     return {
@@ -79,8 +93,6 @@ export function buildRowActions(row, context = {}) {
       secondary: [
         ...(duplicateCloseAction ? [duplicateCloseAction] : []),
         ...claimActionDescriptors(row, context),
-        { key: 'silentClose', label: 'Silent close', className: 'danger' },
-        { key: 'undo', label: 'Undo' },
         { key: 'edit', label: 'Edit' }
       ]
     };
@@ -97,15 +109,18 @@ export function buildRowActions(row, context = {}) {
       secondary.push(additionalCopyAction);
     }
     claimActionDescriptors(row, context).forEach(action => secondary.push(action));
-    if (status !== 'closed') {
-      secondary.push({ key: 'silentClose', label: 'Silent close', className: 'danger' });
+    if (status !== 'pending_hold') {
+      secondary.push({ key: 'edit', label: 'Edit' });
     }
-    secondary.push({ key: 'edit', label: 'Edit' });
     if (status === 'closed' && context.isAdmin) {
       secondary.push({ key: 'delete', label: 'Delete', className: 'danger' });
     }
     return {
-      primary: { key: 'undo', label: 'Undo', className: 'btn-outline-secondary' },
+      primary: status === 'closed'
+        ? { key: 'undo', label: 'Undo', className: 'btn-outline-secondary' }
+        : status === 'hold_placed'
+          ? { key: 'close', label: 'Close', className: 'btn-outline-secondary' }
+          : { key: 'edit', label: 'Edit', className: 'btn-outline-secondary' },
       secondary
     };
   }

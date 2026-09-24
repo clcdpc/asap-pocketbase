@@ -1,11 +1,26 @@
-import { currentSuggestions, allSuggestions } from './state.js';
+import { currentSuggestions, allSuggestions, staffSession, staffAccessGeneration,
+  currentStatus, currentWorkflowOrgScopeId } from './state.js';
 import { authorizedJson } from './http.js';
 import { showToast, showAlert } from './dialogs.js';
 import { updateRecentSuggestion } from './recent-suggestions.js';
-import { editRequestIdentity, requestIdentity, sameRequestIdentity } from './request-identity.mjs';
+import { editRequestIdentity, editRequestGeneration, requestIdentity, sameRequestIdentity } from './request-identity.mjs';
 
 let editPickupContext = null;
 let editPickupRequestIdentity = requestIdentity({});
+let pickupLoadGeneration = 0;
+
+function pickupOwner(identity, generation = editRequestGeneration) {
+  const accessGeneration = staffAccessGeneration;
+  const status = currentStatus;
+  const scope = currentWorkflowOrgScopeId;
+  const editId = document.getElementById('edit-id');
+  return () => staffSession.authenticated && staffSession.accessAllowed &&
+    staffAccessGeneration === accessGeneration && editRequestGeneration === generation &&
+    currentStatus === status && currentWorkflowOrgScopeId === scope &&
+    document.getElementById('editModal')?.open &&
+    sameRequestIdentity(editPickupRequestIdentity, identity) &&
+    sameRequestIdentity(editRequestIdentity(editId), identity);
+}
 
 function pickupEls() {
   return {
@@ -52,12 +67,13 @@ async function fetchEditPickupOptions(id, options = {}) {
   });
 }
 
-async function saveEditPickupPreference(id, selectedId, atLoadId) {
+async function saveEditPickupPreference(id, selectedId, atLoadId, version) {
   return authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(id)}/pickup-preference`, {
     method: 'POST',
     body: {
       preferredPickupBranchId: selectedId,
-      currentPreferredPickupBranchIdAtLoad: atLoadId || ''
+      currentPreferredPickupBranchIdAtLoad: atLoadId || '',
+      version
     }
   });
 }
@@ -165,6 +181,7 @@ function renderEditPickupLoadError(err) {
 }
 
 export async function loadEditPickupForRequest(row, options = {}) {
+  const loadGeneration = ++pickupLoadGeneration;
   resetEditPickupUi();
   const els = pickupEls();
   const requestedIdentity = requestIdentity(row || {});
@@ -175,6 +192,8 @@ export async function loadEditPickupForRequest(row, options = {}) {
     return;
   }
   editPickupRequestIdentity = requestedIdentity;
+  const ownsDialog = pickupOwner(requestedIdentity);
+  const ownsLoad = () => loadGeneration === pickupLoadGeneration && ownsDialog();
   if (els.group) els.group.classList.remove('hidden');
 
   if (!requestedId) return;
@@ -183,15 +202,13 @@ export async function loadEditPickupForRequest(row, options = {}) {
 
   try {
     const context = await fetchEditPickupOptions(requestedId, options);
-    if (!sameRequestIdentity(editPickupRequestIdentity, requestedIdentity)) return;
-    if (!sameRequestIdentity(editRequestIdentity(document.getElementById('edit-id')), requestedIdentity)) return;
+    if (!ownsLoad()) return;
     renderEditPickupOptions(context || {});
   } catch (err) {
-    if (!sameRequestIdentity(editPickupRequestIdentity, requestedIdentity)) return;
-    if (!sameRequestIdentity(editRequestIdentity(document.getElementById('edit-id')), requestedIdentity)) return;
+    if (!ownsLoad()) return;
     renderEditPickupLoadError(err);
   } finally {
-    if (sameRequestIdentity(editPickupRequestIdentity, requestedIdentity) && els.refresh) {
+    if (ownsLoad() && els.refresh) {
       els.refresh.disabled = !!(editPickupContext && editPickupContext.readOnly);
     }
   }
@@ -202,6 +219,8 @@ async function handleEditPickupSave() {
   const activeIdentity = requestIdentity(editPickupRequestIdentity);
   const activeId = activeIdentity.id;
   if (!activeId || !els.select || !els.select.value) return;
+  const ownsDialog = pickupOwner(activeIdentity);
+  if (!ownsDialog()) return;
 
   if (els.save) {
     els.save.disabled = true;
@@ -212,29 +231,35 @@ async function handleEditPickupSave() {
     const result = await saveEditPickupPreference(
       activeId,
       els.select.value,
-      editPickupContext && editPickupContext.currentPreferredPickupBranchId
+      editPickupContext && editPickupContext.currentPreferredPickupBranchId,
+      document.getElementById('edit-id')?.dataset.requestVersion || undefined
     );
+    if (!ownsDialog()) return;
     const updated = result && result.request ? result.request : null;
     if (updated && updated.id) {
       updateRequestInMemory(updated);
       updateRecentSuggestion(updated);
+      if (updated.version) {
+        document.getElementById('edit-id').dataset.requestVersion = updated.version;
+      }
     }
     showToast(result && result.pickupChanged ? 'Pickup preference updated.' : 'Pickup preference saved.', 'success');
-    if (sameRequestIdentity(editPickupRequestIdentity, activeIdentity)) {
+    if (ownsDialog()) {
       await loadEditPickupForRequest(updated || { type: 'title_request', id: activeId });
     }
   } catch (err) {
+    if (!ownsDialog()) return;
     if (err.status === 409) {
       await showAlert(err.message || 'Pickup preference changed in Polaris. Reloading pickup options.');
-      if (sameRequestIdentity(editPickupRequestIdentity, activeIdentity)) {
+      if (ownsDialog()) {
         await loadEditPickupForRequest({ type: 'title_request', id: activeId });
       }
       return;
     }
     await showAlert(err.message || 'Could not save pickup preference.');
-    if (els.save) els.save.disabled = !els.select.value;
+    if (ownsDialog() && els.save) els.save.disabled = !els.select.value;
   } finally {
-    if (els.save) {
+    if (ownsDialog() && els.save) {
       els.save.textContent = 'Save pickup';
     }
   }
@@ -242,6 +267,9 @@ async function handleEditPickupSave() {
 
 async function handleEditPickupRefresh() {
   if (!editPickupRequestIdentity.id) return;
+  const identity = requestIdentity(editPickupRequestIdentity);
+  const ownsDialog = pickupOwner(identity);
+  if (!ownsDialog()) return;
 
   const els = pickupEls();
   if (els.refresh) {
@@ -250,9 +278,9 @@ async function handleEditPickupRefresh() {
   }
 
   try {
-    await loadEditPickupForRequest(editPickupRequestIdentity, { forceRefresh: true });
+    await loadEditPickupForRequest(identity, { forceRefresh: true });
   } finally {
-    if (els.refresh) {
+    if (ownsDialog() && els.refresh) {
       els.refresh.textContent = 'Refresh';
       els.refresh.disabled = !!(editPickupContext && editPickupContext.readOnly);
     }

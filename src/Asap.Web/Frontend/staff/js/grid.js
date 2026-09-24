@@ -60,6 +60,7 @@ import {
   openActionMenu as openActionMenuWithContext,
   positionActionMenu as positionActionMenuWithContext,
   closeActionMenu as closeActionMenuWithContext,
+  invalidatePendingRowAction,
   currentStaffId as currentStaffIdWithContext,
   isClaimedByCurrentUser as isClaimedByCurrentUserWithContext
 } from './grid-actions.js';
@@ -347,6 +348,7 @@ export function closeActionMenu() {
 setupGridEvents({
   gridContainer,
   openEdit,
+  invalidatePendingRowAction,
   get currentSuggestions() { return currentSuggestions; },
   get allSuggestions() { return allSuggestions; },
   get currentStatus() { return currentStatus; },

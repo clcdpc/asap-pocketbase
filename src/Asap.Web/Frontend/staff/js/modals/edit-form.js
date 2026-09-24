@@ -22,12 +22,16 @@ export function openEdit(identity, nextStatus, dialogTitle, actionStr, buttonLab
 
   ctx.modalLabel.textContent = dialogTitle;
   setEditRequestIdentity(ctx.id, requestIdentity(row));
+  ctx.id.dataset.requestVersion = row.version || '';
   ctx.nextStatus.value = nextStatus;
   ctx.action.value = actionStr;
   setBibIdRequirement(nextStatus, ctx);
 
   if (ctx.submitBtn) {
     ctx.submitBtn.textContent = buttonLabel || 'Save';
+    ctx.submitBtn.hidden = isAdditionalCopy;
+    ctx.submitBtn.classList.toggle('hidden', isAdditionalCopy);
+    ctx.submitBtn.disabled = isAdditionalCopy;
   }
 
   ctx.title.value = row.title || '';
@@ -63,6 +67,10 @@ export function openEdit(identity, nextStatus, dialogTitle, actionStr, buttonLab
     }
   }
   applyHoldPlacedBibLock(row, ctx);
+  for (const field of [ctx.title, ctx.author, ctx.identifier, ctx.bibid, ctx.format,
+    ctx.publication, ctx.exactPublicationDate, ctx.autohold, ctx.notes]) {
+    if (field) field.disabled = isAdditionalCopy || (field === ctx.bibid && row.status === 'hold_placed');
+  }
 
   renderEditPatronContext(row, ctx);
   renderEditWorkflowTags(row.workflowTags, row, ctx);

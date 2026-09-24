@@ -168,7 +168,7 @@ export async function submitEditForm(e, ctx, options = {}) {
     editRequestGeneration === dialogGeneration &&
     ctx.id?.dataset.requestType === 'title_request' &&
     sameRequestIdentity(editRequestIdentity(ctx.id), identity);
-  const nextStatus = ctx.nextStatus.value;
+  const actionValue = ctx.action.value || undefined;
   const row = findWorkflowRow(identity, ctx.currentSuggestions, ctx.allSuggestions);
   if (!row) {
     await showAlert('Could not find that request. Refresh and try again.');
@@ -179,10 +179,17 @@ export async function submitEditForm(e, ctx, options = {}) {
     return;
   }
   if (row.type !== 'title_request') return false;
+  if (ctx.id.dataset.requestVersion && row.version && row.version !== ctx.id.dataset.requestVersion) {
+    await showAlert('This request changed. Refresh and try again.');
+    return false;
+  }
   const bibInput = ctx.bibid;
   const bibid = row && row.status === 'hold_placed'
     ? String(row.bibid || '').trim()
     : bibInput.value.trim();
+  const nextStatus = actionValue === 'purchase'
+    ? (bibid ? 'pending_hold' : 'outstanding_purchase')
+    : ctx.nextStatus.value;
 
   if (row && row.status === 'outstanding_purchase' && bibid && !row.autohold) {
     const confirmed = await showConfirm('Do Not Auto Queue Hold', 'This request is marked Do Not Auto Queue Hold. Saving this BIB ID will close the request immediately and skip the hold-queueing workflow.');
@@ -216,8 +223,8 @@ export async function submitEditForm(e, ctx, options = {}) {
   }
   if (!ownsCurrentUi()) return false;
 
-  const actionValue = ctx.action.value || undefined;
   const payload = {
+    version: ctx.id.dataset.requestVersion || row.version,
     action: actionValue,
     status: nextStatus,
     title: ctx.title.value,
@@ -226,7 +233,7 @@ export async function submitEditForm(e, ctx, options = {}) {
     bibid: bibid,
     format: nextFormatValue,
     publication: ctx.publication.value,
-    exactPublicationDate: ctx.exactPublicationDate.value,
+    exactPublicationDate: ctx.exactPublicationDate.value || null,
     selectedPolarisBibId: ctx.selectedPolarisBibId?.value || '',
     selectedPolarisTitle: ctx.selectedPolarisTitle?.value || '',
     selectedPolarisAuthor: ctx.selectedPolarisAuthor?.value || '',

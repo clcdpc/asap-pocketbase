@@ -5,6 +5,9 @@ import { renderNoteActivity } from './note-activity.js';
 import { normalizeStatus } from './grid-policy.mjs';
 import { renderAdditionalCopySourceCell } from './grid-rendering.js';
 import { findWorkflowRow, requestIdentityFromElement } from './request-identity.mjs';
+import { staffSession, staffAccessGeneration } from './state.js';
+
+let recentSelectionGeneration = 0;
 
 function findSuggestion(identity, ctx) {
   return findWorkflowRow(identity, ctx.currentSuggestions, ctx.allSuggestions);
@@ -47,9 +50,10 @@ export function openSuggestionEditFromRow(identity, ctx) {
 
   const status = normalizeStatus(row.status);
   const isAdditionalCopy = row.type === 'additional_copy';
-  const defaultTitle = isAdditionalCopy ? 'Edit additional-copy task' : (status === 'suggestion' ? 'Edit suggestion' : 'Edit');
+  const defaultTitle = isAdditionalCopy ? 'Additional-copy task' : (status === 'suggestion' ? 'Edit suggestion' : 'Edit');
 
-  ctx.openEdit(row, status || ctx.currentStatus, defaultTitle, '', 'Save');
+  ctx.invalidatePendingRowAction();
+  ctx.openEdit(row, status || ctx.currentStatus, defaultTitle, 'edit', 'Save');
 }
 
 export function setupGridEvents(ctx) {
@@ -150,6 +154,7 @@ export function setupGridEvents(ctx) {
       const mode = polarisSearchBtn.getAttribute('data-polaris-search-mode') || 'title';
       const row = findSuggestion(identity, ctx);
       if (row) {
+        ctx.invalidatePendingRowAction();
         openPolarisSearch(row, mode);
       } else {
         showToast('Could not find that suggestion. Refresh and try again.', 'error');
@@ -205,7 +210,14 @@ export function setupGridEvents(ctx) {
 
   document.addEventListener('asap:recent-suggestion-selected', async event => {
     const { id, type, status } = event.detail || {};
-    await ctx.loadTab(status || 'suggestion');
+    const generation = ++recentSelectionGeneration;
+    const accessGeneration = staffAccessGeneration;
+    const selectedStatus = status || 'suggestion';
+    await ctx.loadTab(selectedStatus);
+    if (generation !== recentSelectionGeneration || accessGeneration !== staffAccessGeneration ||
+        !staffSession.authenticated || !staffSession.accessAllowed || ctx.currentStatus !== selectedStatus) {
+      return;
+    }
     openSuggestionEditFromRow({ id, type }, ctx);
   });
 }

@@ -985,6 +985,40 @@ async function settle() {
       `?stage=additional_copies&request=${id}&requestType=additional_copy`,
       'an old direct lookup must not rewrite a newer typed deep link');
     assert.equal(editModal.open, false, 'an old direct lookup must not open a stale edit modal');
+
+    // A search launched from Edit cannot apply to, or reopen, a replacement form.
+    state.setCurrentStatus('suggestion');
+    state.setCurrentSuggestions([title, copy]);
+    state.setAllSuggestions([title, copy]);
+    editIdentity.setEditRequestIdentity(editId, title);
+    editTitle.value = 'Original edit search';
+    editModal.showModal();
+    const staleEditSearchIndex = lookups.length;
+    search.launchEditPolarisSearch('title', document.getElementById('edit-title-polaris-search'),
+      'edit', { ...ctx, currentSuggestions: state.currentSuggestions, allSuggestions: state.allSuggestions });
+    await settle();
+    editIdentity.setEditRequestIdentity(editId, copy);
+    editTitle.value = 'Replacement copy form';
+    await completeSearch(staleEditSearchIndex, 'Old edit result');
+    assert.equal(editTitle.value, 'Replacement copy form');
+    assert.doesNotMatch(results().textContent, /Old edit result/);
+    dialog.close();
+    assert.equal(editModal.open, false, 'old search must not reopen a reused edit form');
+
+    // A current result cannot act on a title whose displayed RowVersion was replaced.
+    const versionedTitle = { ...title, version: 'original-version' };
+    state.setCurrentSuggestions([versionedTitle]);
+    state.setAllSuggestions([versionedTitle]);
+    const staleVersionSearchIndex = lookups.length;
+    const staleVersionSearch = open(versionedTitle);
+    await settle();
+    const changedTitle = { ...versionedTitle, version: 'new-version' };
+    state.setCurrentSuggestions([changedTitle]);
+    state.setAllSuggestions([changedTitle]);
+    await completeSearch(staleVersionSearchIndex, 'Stale version result');
+    await staleVersionSearch;
+    assert.doesNotMatch(results().textContent, /Stale version result/);
+    dialog.close();
   } finally {
     dom?.window.close();
     fs.rmSync(temporary, { recursive: true, force: true });

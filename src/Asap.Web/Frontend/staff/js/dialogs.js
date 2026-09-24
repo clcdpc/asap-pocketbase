@@ -30,13 +30,14 @@ export function showAlert(message) {
 
     let settled = false;
 
-    function cleanup() {
+    function cleanup(restoreFocus = true) {
       if (settled) return;
       settled = true;
       if (dialog.open) dialog.close();
       okBtn.removeEventListener('click', onOk);
       dialog.removeEventListener('cancel', onCancel);
-      if (previousFocus && typeof previousFocus.focus === 'function') {
+      dialog.removeEventListener('close', onClose);
+      if (restoreFocus && previousFocus && typeof previousFocus.focus === 'function') {
         previousFocus.focus();
       }
       resolve();
@@ -51,8 +52,13 @@ export function showAlert(message) {
       cleanup();
     }
 
+    function onClose() {
+      cleanup(false);
+    }
+
     okBtn.addEventListener('click', onOk);
     dialog.addEventListener('cancel', onCancel);
+    dialog.addEventListener('close', onClose);
     dialog.showModal();
     okBtn.focus();
   });
@@ -82,6 +88,7 @@ export function showConfirm(titleOrMessage, maybeMessage) {
       okBtn.removeEventListener('click', onOk);
       cancelBtn.removeEventListener('click', onCancel);
       dialog.removeEventListener('cancel', onDialogCancel);
+      dialog.removeEventListener('close', onDialogClose);
       if (previousFocus && typeof previousFocus.focus === 'function') {
         previousFocus.focus();
       }
@@ -101,9 +108,21 @@ export function showConfirm(titleOrMessage, maybeMessage) {
       cleanup(false);
     }
 
+    function onDialogClose() {
+      if (!settled) {
+        settled = true;
+        okBtn.removeEventListener('click', onOk);
+        cancelBtn.removeEventListener('click', onCancel);
+        dialog.removeEventListener('cancel', onDialogCancel);
+        dialog.removeEventListener('close', onDialogClose);
+        resolve(false);
+      }
+    }
+
     okBtn.addEventListener('click', onOk);
     cancelBtn.addEventListener('click', onCancel);
     dialog.addEventListener('cancel', onDialogCancel);
+    dialog.addEventListener('close', onDialogClose);
     dialog.showModal();
     cancelBtn.focus();
   });

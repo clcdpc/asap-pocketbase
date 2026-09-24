@@ -4,9 +4,11 @@ import { authorizedJson, isAbortError } from '../http.js';
 import { showToast, showAlert } from '../dialogs.js';
 import { applySelectedPolarisResultToEditForm } from '../settings-ui.js';
 import { escapeAttr } from '../grid-utils.js';
-import { staffSession, staffAccessGeneration, publicationOptions, currentWorkflowOrgScopeId } from '../state.js';
+import { staffSession, staffAccessGeneration, publicationOptions, currentWorkflowOrgScopeId,
+  currentStatus, currentSuggestions, allSuggestions } from '../state.js';
 import { submitTitleRequestAction } from './edit-submit.js';
-import { editRequestIdentity, findWorkflowRow, requestIdentity } from '../request-identity.mjs';
+import { editRequestIdentity, editRequestGeneration, findWorkflowRow, requestIdentity,
+  sameRequestIdentity } from '../request-identity.mjs';
 import { matchesRequestSelection } from '../app/url-utils.js';
 
 let holdingsLookupUnavailable = false;
@@ -202,6 +204,7 @@ function renderPolarisSearchResults(row, identity, mode, data, options = {}, ctx
         ? (row.publication || fallbackPubOptions[0] || '')
         : (result.publication || row.publication);
       return {
+        version: row.version,
         action: action,
         status: nextStatus,
         title: result.title || row.title,
@@ -394,6 +397,22 @@ export async function openPolarisSearch(row, mode, options = {}, ctx, onRefresh)
   const openedFromDeepLink = matchesRequestSelection(identity);
   const actionStaff = staffSession.staff;
   const accessGeneration = staffAccessGeneration;
+  const workflowStatus = currentStatus;
+  const workflowScope = currentWorkflowOrgScopeId;
+  const sourceEditGeneration = editRequestGeneration;
+  const sourceEditIdentity = options.source === 'edit'
+    ? editRequestIdentity(document.getElementById('edit-id')) : null;
+  const ownsSource = () => currentStatus === workflowStatus &&
+    currentWorkflowOrgScopeId === workflowScope &&
+    (options.source !== 'edit' ||
+      (editRequestGeneration === sourceEditGeneration &&
+        sameRequestIdentity(editRequestIdentity(document.getElementById('edit-id')), sourceEditIdentity)));
+  const ownsRow = () => {
+    if (!identity.id || !row.version) return true;
+    const current = findWorkflowRow(identity, currentSuggestions, allSuggestions);
+    return current && sameRequestIdentity(current, identity) &&
+      current.version === row.version && current.status === row.status;
+  };
   const context = { generation: 0, controller: null, returnAllowed: true, suppressReturnDialog: null };
   activeSearchContext = context;
   const sameStaff = () => staffSession.authenticated && staffSession.accessAllowed &&
@@ -401,8 +420,10 @@ export async function openPolarisSearch(row, mode, options = {}, ctx, onRefresh)
     staffSession.staff?.id === actionStaff?.id && staffSession.staff?.role === actionStaff?.role &&
     String(staffSession.staff?.organizationId) === String(actionStaff?.organizationId);
   context.isSessionCurrent = sameStaff;
-  context.ownsCurrentUi = () => activeSearchContext === context && els.dialog.open && sameStaff() &&
+  context.ownsCurrentUi = () => activeSearchContext === context && els.dialog.open &&
+    sameStaff() && ownsSource() && ownsRow() &&
     (!openedFromDeepLink || matchesRequestSelection(identity));
+  context.ownsRow = ownsRow;
 
   mode = String(mode || 'title').trim().toLowerCase();
   
@@ -433,7 +454,7 @@ export async function openPolarisSearch(row, mode, options = {}, ctx, onRefresh)
     context.controller = new AbortController();
     const generation = ++context.generation;
     const isCurrent = () => activeSearchContext === context && context.generation === generation &&
-      els.dialog.open && sameStaff();
+      els.dialog.open && sameStaff() && ownsSource() && ownsRow();
     const currentMode = els.modeSelect.value;
     const query = els.searchInput.value.trim();
     const author = els.authorInput.value.trim();
@@ -491,7 +512,8 @@ export async function openPolarisSearch(row, mode, options = {}, ctx, onRefresh)
       if (els.dialog.open || returnDialogListener !== reopenReturnDialog) return;
       els.dialog.removeEventListener('close', reopenReturnDialog);
       returnDialogListener = null;
-      if (context.returnAllowed && sameStaff() && returnDialog && !returnDialog.open) {
+      if (context.returnAllowed && sameStaff() &&
+          ownsSource() && ownsRow() && returnDialog && !returnDialog.open) {
         returnDialog.showModal();
         if (returnFocus && typeof returnFocus.focus === 'function') {
           returnFocus.focus();
@@ -512,7 +534,7 @@ export async function openPolarisSearch(row, mode, options = {}, ctx, onRefresh)
   }
 
   await runSearch();
-  if (activeSearchContext === context && els.dialog.open) {
+  if (activeSearchContext === context && els.dialog.open && sameStaff() && ownsSource() && ownsRow()) {
     els.searchInput.focus();
   }
 }
