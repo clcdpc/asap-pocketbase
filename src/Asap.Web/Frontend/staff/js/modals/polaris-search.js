@@ -255,7 +255,7 @@ function renderPolarisSearchResults(row, identity, mode, data, options = {}, ctx
       actionsDiv.appendChild(holdBtn);
     }
 
-    if (!launchedFromEditForm && identity.type === 'title_request') {
+    if (identity.type === 'title_request' && identity.id && options.source !== 'new') {
       additionalCopyBtn = document.createElement('button');
       additionalCopyBtn.type = 'button';
       additionalCopyBtn.id = 'polaris-additional-copy-action';

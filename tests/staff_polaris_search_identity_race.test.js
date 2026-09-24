@@ -232,6 +232,9 @@ async function settle() {
     await newFormOpen;
     assert.ok([...results().querySelectorAll('button')].some(button => button.textContent === 'Apply to Form'));
     assert.equal([...results().querySelectorAll('button')].some(button => button.textContent === 'Use BIB & Queue Now'), false);
+    await completeHoldings(17);
+    assert.equal(results().querySelector('#polaris-additional-copy-action'), null,
+      'qualifying holdings cannot create an immediate action for an unsaved suggestion');
     assert.equal(actions.length, 2, 'a new suggestion has no persisted title request to mutate');
 
     const oldTitleSearch = lookups.length;
@@ -241,7 +244,9 @@ async function settle() {
     await oldTitleOpen;
     const oldHoldings = lookups.length - 1;
     const detachedAction = [...results().querySelectorAll('button')].find(button => button.textContent === 'Use BIB & Queue Now');
+    const detachedAdditionalCopyAction = results().querySelector('#polaris-additional-copy-action');
     assert.ok(detachedAction && detachedAction.disabled);
+    assert.ok(detachedAdditionalCopyAction && detachedAdditionalCopyAction.disabled);
     const latestCopySearch = lookups.length;
     const latestCopyOpen = open(copy);
     await settle();
@@ -250,7 +255,10 @@ async function settle() {
     assert.equal(lookups[oldHoldings].signal.aborted, true, 'superseded holdings are aborted');
     await completeHoldings(oldHoldings); // Model a provider that completes despite abort.
     assert.equal(detachedAction.disabled, true, 'old holdings cannot enable a stale action');
+    assert.equal(detachedAdditionalCopyAction.disabled, true, 'old holdings cannot enable a stale additional-copy action');
+    assert.equal(detachedAdditionalCopyAction.classList.contains('hidden'), true);
     detachedAction.click();
+    detachedAdditionalCopyAction.dispatchEvent(new dom.window.Event('click'));
     await settle();
     assert.match(results().textContent, /Latest holdings copy/);
     assert.equal(actions.length, 2, 'a detached stale action cannot mutate the old request');
@@ -285,6 +293,84 @@ async function settle() {
     await settle();
     assert.equal(results().querySelectorAll('button').length, 0,
       'empty rerun clears actions from the preceding result set');
+
+    const unownedEditSearch = lookups.length;
+    const unownedEditOpen = search.openPolarisSearch(title, 'title', { source: 'edit' }, ctx);
+    await settle();
+    await completeSearch(unownedEditSearch, 'Unowned edit result');
+    await unownedEditOpen;
+    lookups[unownedEditSearch + 1].pending.resolve(response(200, {
+      holdingsSummary: { isHoldable: false, myLibraryCount: 0, otherLibraryCount: 0, consortiumCount: 0 }
+    }));
+    await settle();
+    const unownedEditAction = results().querySelector('#polaris-additional-copy-action');
+    assert.ok(unownedEditAction && unownedEditAction.disabled && unownedEditAction.classList.contains('hidden'),
+      'edit actions remain unavailable when the BIB has no consortium holdings');
+
+    const editSearch = lookups.length;
+    const editOpen = search.openPolarisSearch(title, 'title', { source: 'edit' }, ctx);
+    await settle();
+    await completeSearch(editSearch, 'Edit result');
+    await editOpen;
+    const editAction = results().querySelector('#polaris-additional-copy-action');
+    assert.ok(editAction, 'a persisted title request opened from edit retains the additional-copy action');
+    assert.equal(editAction.disabled, true);
+    assert.equal(editAction.classList.contains('hidden'), true);
+    assert.ok([...results().querySelectorAll('button')].some(button => button.textContent === 'Apply to Form'));
+    assert.equal([...results().querySelectorAll('button')].some(button => button.textContent === 'Use BIB & Queue Now'), false);
+    await completeHoldings(editSearch + 1);
+    assert.equal(editAction.disabled, false);
+    assert.equal(editAction.classList.contains('hidden'), false);
+    editAction.click();
+    await settle();
+    const confirmation = document.getElementById('confirm-additional-copy-reminder')?.closest('dialog');
+    assert.ok(confirmation, 'the edit action uses the existing confirmation flow');
+    document.getElementById('confirm-additional-copy-reminder').checked = true;
+    [...confirmation.querySelectorAll('button')].find(button => button.textContent === 'Confirm').click();
+    await settle();
+    assert.equal(actions.length, 3);
+    assert.equal(actions[2].url, `/api/asap/staff/title-requests/${id}/action`);
+    assert.equal(actions[2].body.action, 'additionalCopy');
+    assert.equal(actions[2].body.emailPurchaseReminder, true);
+    assert.equal(actions[2].body.title, 'Edit result');
+    assert.equal(persisted.copy, 'Collision copy');
+
+    const staleEditSearch = lookups.length;
+    const staleEditOpen = search.openPolarisSearch(title, 'title', { source: 'edit' }, ctx);
+    await settle();
+    await completeSearch(staleEditSearch, 'Stale edit result');
+    await staleEditOpen;
+    await completeHoldings(staleEditSearch + 1);
+    results().querySelector('#polaris-additional-copy-action').click();
+    await settle();
+    const staleConfirmation = document.getElementById('confirm-additional-copy-reminder')?.closest('dialog');
+    assert.ok(staleConfirmation);
+    const replacementSearch = lookups.length;
+    const replacementOpen = open(copy);
+    await settle();
+    await completeSearch(replacementSearch, 'Replacement copy result');
+    await replacementOpen;
+    await completeHoldings(replacementSearch + 1);
+    [...staleConfirmation.querySelectorAll('button')].find(button => button.textContent === 'Confirm').click();
+    await settle();
+    assert.equal(actions.length, 3, 'confirmation after dialog replacement cannot mutate the older title request');
+
+    for (const [row, options] of [
+      [{ type: 'additional_copy', id, title: 'Copy edit', libraryOrgId: '2' }, { source: 'edit' }],
+      [{ type: 'unknown', id, title: 'Unknown type', libraryOrgId: '2' }, {}],
+      [{ type: 'title_request', id: '  ', title: 'Unsaved title', libraryOrgId: '2' }, {}],
+      [title, { source: 'new' }]
+    ]) {
+      const searchIndex = lookups.length;
+      const pendingOpen = search.openPolarisSearch(row, 'title', options, ctx);
+      await settle();
+      await completeSearch(searchIndex, row.title);
+      await pendingOpen;
+      await completeHoldings(searchIndex + 1);
+      assert.equal(results().querySelector('#polaris-additional-copy-action'), null,
+        `invalid immediate-action context ${row.type}/${options.source || 'row'} must stay unavailable`);
+    }
+    assert.equal(actions.length, 3);
   } finally {
     dom?.window.close();
     fs.rmSync(temporary, { recursive: true, force: true });
