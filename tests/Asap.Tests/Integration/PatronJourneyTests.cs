@@ -363,6 +363,190 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task PolarisAdditionalCopyActionCommitsSourceTaskAndReminderTogether()
+    {
+        await using var scope = factory!.Services.CreateAsyncScope();
+        var contexts = scope.ServiceProvider.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var seed = await contexts.CreateDbContextAsync();
+        var admin = await seed.StaffUsers.SingleAsync(item => item.NormalizedUserPrincipalName == "ADMIN@EXAMPLE.ORG");
+        var formatId = await seed.MaterialFormats.Where(item => item.Code == "book")
+            .Select(item => item.Id).FirstAsync();
+        var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
+        var actor = new CurrentStaff(admin.Id, admin.NormalizedUserPrincipalName!, Guid.Parse(identity.TenantId!),
+            admin.UserPrincipalName, admin.DisplayName, admin.NotificationEmail, "super_admin", 1, "System", true,
+            false, null, false, false, false, admin.RowVersion);
+        TitleRequest NewSource(string title, string status = "suggestion") => new()
+        {
+            LibraryOrganizationId = 2,
+            LibraryNameSnapshot = "Test Library",
+            Barcode = $"200{Guid.NewGuid():N}"[..14],
+            Title = title,
+            Author = "Original author",
+            Publication = "Original publication timing",
+            MaterialFormatId = formatId,
+            Status = status,
+            CloseReason = status == "closed" ? "manual" : null,
+            AutoHold = false,
+            CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(-1),
+            UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(-1)
+        };
+        var source = NewSource("Additional copy integration source");
+        var invalid = NewSource("Invalid BIB source");
+        var closed = NewSource("Closed source", "closed");
+        var failed = NewSource("Creation failure source");
+        var blocked = NewSource("Incomplete hold source", "pending_hold");
+        blocked.BibId = "9001";
+        seed.TitleRequests.AddRange(source, invalid, closed, failed, blocked);
+        await seed.SaveChangesAsync();
+        seed.HoldPlacementOperations.Add(new HoldPlacementOperation
+        {
+            TitleRequestId = blocked.Id,
+            PatronBarcodeSnapshot = blocked.Barcode,
+            BibIdSnapshot = "9001",
+            AttemptNumber = 1,
+            ExecutionEpoch = 1,
+            State = "operator_required",
+            Phase = "create_started",
+            RequestStartedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(-1),
+            CreateStartedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddSeconds(-30),
+            CreateResponseObservedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddSeconds(-29),
+            OutcomeEvidenceKind = "create_transport_ambiguous",
+            LastErrorCode = "hold_identity_ambiguous"
+        });
+        await seed.SaveChangesAsync();
+        var originalVersion = source.RowVersion.ToArray();
+
+        // A copy with the same numeric ID must remain a separate typed record.
+        var existingCollision = await seed.AdditionalCopyRequests.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.Id == source.Id);
+        var collisionTitle = existingCollision?.Title ?? "Collision sentinel copy";
+        if (existingCollision is null)
+        {
+            await seed.Database.ExecuteSqlInterpolatedAsync($"""
+                SET IDENTITY_INSERT [asap].[AdditionalCopyRequest] ON;
+                INSERT INTO [asap].[AdditionalCopyRequest]
+                    ([Id], [LibraryOrganizationId], [BibId], [Title], [Status], [CreatedUtc], [UpdatedUtc])
+                VALUES ({source.Id}, 2, N'8999', N'Collision sentinel copy', N'open', SYSUTCDATETIME(), SYSUTCDATETIME());
+                SET IDENTITY_INSERT [asap].[AdditionalCopyRequest] OFF;
+                """);
+        }
+        var copyOnlyId = Math.Max(await seed.TitleRequests.MaxAsync(item => item.Id),
+            await seed.AdditionalCopyRequests.MaxAsync(item => item.Id)) + 1000;
+        await seed.Database.ExecuteSqlInterpolatedAsync($"""
+            SET IDENTITY_INSERT [asap].[AdditionalCopyRequest] ON;
+            INSERT INTO [asap].[AdditionalCopyRequest]
+                ([Id], [LibraryOrganizationId], [BibId], [Title], [Status], [CreatedUtc], [UpdatedUtc])
+            VALUES ({copyOnlyId}, 2, N'8998', N'Copy-only identity', N'open', SYSUTCDATETIME(), SYSUTCDATETIME());
+            SET IDENTITY_INSERT [asap].[AdditionalCopyRequest] OFF;
+            """);
+
+        var mutations = scope.ServiceProvider.GetRequiredService<TitleRequestMutationService>();
+        TitleRequestActionInput Action(TitleRequest request, string? bib = "9001") => new()
+        {
+            Version = StaffVersion.Encode(request.RowVersion),
+            Action = "additionalCopy",
+            Status = "pending_hold",
+            Bibid = bib is null ? default : JsonSerializer.SerializeToElement(bib),
+            Title = "Catalog title 9001",
+            Author = "Catalog author",
+            Identifier = JsonSerializer.SerializeToElement("9780000000001"),
+            Publication = "2020",
+            Format = "book",
+            Autohold = JsonSerializer.SerializeToElement(false),
+            EmailPurchaseReminder = true
+        };
+        var action = Action(source);
+        var created = await mutations.ActionAsync(actor, source.Id, action, CancellationToken.None);
+        Assert.AreEqual("updated", created.Code);
+        Assert.IsNotNull(created.AdditionalCopyRequestId);
+        Assert.IsTrue(created.ReminderRequested);
+        Assert.IsTrue(created.ReminderQueued);
+
+        await using (var verify = await contexts.CreateDbContextAsync())
+        {
+            var saved = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == source.Id);
+            Assert.AreEqual("9001", saved.BibId);
+            Assert.AreEqual("pending_hold", saved.Status);
+            Assert.IsTrue(saved.AutoHold);
+            Assert.AreEqual("Original publication timing", saved.Publication);
+            Assert.AreEqual("Catalog title 9001", saved.Title);
+            Assert.IsFalse(saved.RowVersion.SequenceEqual(originalVersion));
+            StringAssert.Contains(saved.Notes!, "Additional copy request created for BIB 9001");
+            var tasks = await verify.AdditionalCopyRequests.AsNoTracking()
+                .Where(item => item.SourceTitleRequestId == source.Id).ToListAsync();
+            Assert.HasCount(1, tasks);
+            Assert.AreEqual(created.AdditionalCopyRequestId, tasks[0].Id);
+            Assert.AreEqual(2, tasks[0].LibraryOrganizationId);
+            Assert.AreEqual("9001", tasks[0].BibId);
+            Assert.AreEqual("Catalog title 9001", tasks[0].Title);
+            Assert.AreEqual(admin.Id, tasks[0].ClaimedByStaffUserId);
+            Assert.AreEqual(collisionTitle,
+                (await verify.AdditionalCopyRequests.AsNoTracking().SingleAsync(item => item.Id == source.Id)).Title);
+            Assert.AreEqual(1, await verify.EmailOutbox.CountAsync(item =>
+                item.BusinessKey == $"additional-copy-reminder:{tasks[0].Id}" && item.Status == "pending"));
+            Assert.AreEqual(1, await verify.TitleRequestEvents.CountAsync(item =>
+                item.TitleRequestId == source.Id && item.EventType == "additional_copy_created"));
+        }
+        Assert.AreEqual("stale_version", (await mutations.ActionAsync(actor, source.Id, action, CancellationToken.None)).Code);
+        await using (var current = await contexts.CreateDbContextAsync())
+        {
+            var currentVersion = await current.TitleRequests.Where(item => item.Id == source.Id)
+                .Select(item => item.RowVersion).SingleAsync();
+            Assert.AreEqual("invalid_transition", (await mutations.ActionAsync(actor, source.Id,
+                new TitleRequestActionInput
+                {
+                    Version = StaffVersion.Encode(currentVersion), Action = "catalogFound", Status = "pending_hold",
+                    Bibid = JsonSerializer.SerializeToElement("9001")
+                }, CancellationToken.None)).Code);
+        }
+        Assert.AreEqual("bib_required", (await mutations.ActionAsync(actor, invalid.Id, Action(invalid, null), CancellationToken.None)).Code);
+        Assert.AreEqual("invalid_bib", (await mutations.ActionAsync(actor, invalid.Id, Action(invalid, "not-a-bib"), CancellationToken.None)).Code);
+        Assert.AreEqual("invalid_bib", (await mutations.ActionAsync(actor, invalid.Id, Action(invalid, "9999999999999999"), CancellationToken.None)).Code);
+        Assert.AreEqual("identifier_locked_by_stage", (await mutations.ActionAsync(actor, closed.Id, Action(closed), CancellationToken.None)).Code);
+        Assert.AreEqual("hold_operation_incomplete", (await mutations.ActionAsync(actor, blocked.Id,
+            new TitleRequestActionInput
+            {
+                Version = StaffVersion.Encode(blocked.RowVersion), Action = "additionalCopy", Status = "pending_hold",
+                Bibid = JsonSerializer.SerializeToElement("9001"), Autohold = JsonSerializer.SerializeToElement(false)
+            }, CancellationToken.None)).Code);
+        Assert.AreEqual("not_found", (await mutations.ActionAsync(actor with { Role = "staff", OrganizationId = 1 },
+            invalid.Id, Action(invalid), CancellationToken.None)).Code);
+        var copyOnly = await seed.AdditionalCopyRequests.AsNoTracking().SingleAsync(item => item.Id == copyOnlyId);
+        Assert.AreEqual("not_found", (await mutations.ActionAsync(actor, copyOnlyId,
+            new TitleRequestActionInput
+            {
+                Version = StaffVersion.Encode(copyOnly.RowVersion), Action = "additionalCopy", Status = "pending_hold",
+                Bibid = JsonSerializer.SerializeToElement("9001")
+            }, CancellationToken.None)).Code);
+        Assert.AreEqual("Copy-only identity",
+            (await seed.AdditionalCopyRequests.AsNoTracking().SingleAsync(item => item.Id == copyOnlyId)).Title);
+
+        await seed.Database.ExecuteSqlRawAsync("""
+            CREATE TRIGGER [asap].[AdditionalCopyActionFailureTest]
+            ON [asap].[AdditionalCopyRequest] AFTER INSERT AS
+            BEGIN
+                IF EXISTS (SELECT 1 FROM inserted WHERE [Title] = N'Catalog title 9001')
+                    THROW 51000, 'Injected additional-copy insert failure', 1;
+            END;
+            """);
+        try
+        {
+            await Assert.ThrowsAsync<DbUpdateException>(async () =>
+                await mutations.ActionAsync(actor, failed.Id, Action(failed), CancellationToken.None));
+        }
+        finally
+        {
+            await seed.Database.ExecuteSqlRawAsync("DROP TRIGGER [asap].[AdditionalCopyActionFailureTest];");
+        }
+        await using var afterFailure = await contexts.CreateDbContextAsync();
+        var unchanged = await afterFailure.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == failed.Id);
+        Assert.AreEqual("suggestion", unchanged.Status);
+        Assert.IsNull(unchanged.BibId);
+        Assert.IsTrue(unchanged.RowVersion.SequenceEqual(failed.RowVersion));
+        Assert.AreEqual(0, await afterFailure.AdditionalCopyRequests.CountAsync(item => item.SourceTitleRequestId == failed.Id));
+    }
+
+    [TestMethod]
     public async Task StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers()
     {
         factory!.UseKestrel(0);
@@ -420,6 +604,7 @@ public sealed partial class PatronJourneyTests
         startInfo.ArgumentList.Add(seeded.StaleCopyBId.ToString());
         startInfo.ArgumentList.Add(seeded.StaleCreateSourceId.ToString());
         startInfo.ArgumentList.Add(seeded.CollidingRequestId.ToString());
+        startInfo.ArgumentList.Add(seeded.PolarisActionRequestId.ToString());
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Could not start the staff browser runner.");
@@ -514,6 +699,8 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(collision.GetProperty("notes").GetBoolean());
             Assert.IsTrue(collision.GetProperty("polarisSearches").GetBoolean());
             Assert.IsTrue(collision.GetProperty("additionalCopyBibLookup").GetBoolean());
+            Assert.AreEqual(200, legacyReport.RootElement.GetProperty("polarisAdditionalCopyAction")
+                .GetProperty("status").GetInt32());
         }
 
         await settingsPoisoningJourney.SetSystemSuggestionLimitAsync(23);
@@ -537,7 +724,8 @@ public sealed partial class PatronJourneyTests
             UseShellExecute = false
         };
         nextStartInfo.ArgumentList.Add(Path.Combine(repositoryRoot, "tests", "browser", "staff-next.cjs"));
-        foreach (var argument in startInfo.ArgumentList.Skip(1))
+        // The new Polaris mutation fixture is used by the legacy browser journey only.
+        foreach (var argument in startInfo.ArgumentList.Skip(1).Take(26))
         {
             nextStartInfo.ArgumentList.Add(argument);
         }
@@ -8908,6 +9096,14 @@ public sealed partial class PatronJourneyTests
                  @formatId, N'suggestion', NULL, 101, N'Main Library', @superId, N'Initial Administrator',
                  SYSUTCDATETIME(), N'manual', N'not_found', SYSUTCDATETIME(), SYSUTCDATETIME());
             DECLARE @primaryId bigint = SCOPE_IDENTITY();
+            INSERT INTO [asap].[TitleRequest]
+                ([LibraryOrganizationId], [LibraryNameSnapshot], [Barcode], [Title], [Author], [Identifier],
+                 [Publication], [AutoHold], [MaterialFormatId], [Status], [CreatedUtc], [UpdatedUtc])
+            VALUES
+                (2, N'Browser Action Library', N'20000000002921', N'Polaris action source',
+                 N'Original author', N'9780000002921', N'Original publication timing', 0, @formatId,
+                 N'suggestion', SYSUTCDATETIME(), SYSUTCDATETIME());
+            DECLARE @polarisActionId bigint = SCOPE_IDENTITY();
             INSERT INTO [asap].[LegacyPocketBaseMapping] ([EntityType], [PocketBaseId], [NewId])
             VALUES (N'title_request', @legacyId, @primaryId);
 
@@ -9069,7 +9265,7 @@ public sealed partial class PatronJourneyTests
                    @copySourceId, @invalidClosedCopyId, @invalidClaimantId, @legacyRuleId, @mobileCopyId,
                    @foreignStaffId, @invalidTenantStaffId, @unboundStaffId,
                    @staleTitleAId, @staleTitleBId, @staleCopyAId, @staleCopyBId, @staleCreateSourceId,
-                   @collidingRequestId;
+                   @collidingRequestId, @polarisActionId;
             """;
         seed.Parameters.AddWithValue("@superObjectId", superObjectId);
         seed.Parameters.AddWithValue("@tenantId", tenantId);
@@ -9102,7 +9298,8 @@ public sealed partial class PatronJourneyTests
             result.GetInt64(16),
             result.GetInt64(17),
             result.GetInt64(18),
-            result.GetInt64(19));
+            result.GetInt64(19),
+            result.GetInt64(20));
     }
 
     private sealed record SeededStaffBrowserState(
@@ -9126,7 +9323,8 @@ public sealed partial class PatronJourneyTests
         long StaleCopyAId,
         long StaleCopyBId,
         long StaleCreateSourceId,
-        long CollidingRequestId);
+        long CollidingRequestId,
+        long PolarisActionRequestId);
 
     private static async Task SeedLibraryAsync()
     {

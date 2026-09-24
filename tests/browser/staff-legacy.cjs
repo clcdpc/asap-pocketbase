@@ -10,8 +10,8 @@ const {
 } = require('./legacy-accessibility-baseline.cjs');
 
 function parseArguments(argv) {
-  if (argv.length !== 26) {
-    throw new Error('Usage: node tests/browser/staff-legacy.cjs <baseURL> <artifactDirectory> <superId> <tenantId> <superEmail> <staffId> <staffEmail> <legacyRequestId> <primaryRequestId> <blockedRequestId> <resolutionRequestId> <otherRequestId> <copySourceRequestId> <invalidClosedCopyId> <invalidClaimantId> <legacyRuleId> <mobileCopyId> <foreignStaffId> <invalidTenantStaffId> <unboundStaffId> <staleTitleAId> <staleTitleBId> <staleCopyAId> <staleCopyBId> <staleCreateSourceId> <collidingRequestId>');
+  if (argv.length !== 27) {
+    throw new Error('Usage: node tests/browser/staff-legacy.cjs <baseURL> <artifactDirectory> <superId> <tenantId> <superEmail> <staffId> <staffEmail> <legacyRequestId> <primaryRequestId> <blockedRequestId> <resolutionRequestId> <otherRequestId> <copySourceRequestId> <invalidClosedCopyId> <invalidClaimantId> <legacyRuleId> <mobileCopyId> <foreignStaffId> <invalidTenantStaffId> <unboundStaffId> <staleTitleAId> <staleTitleBId> <staleCopyAId> <staleCopyBId> <staleCreateSourceId> <collidingRequestId> <polarisActionRequestId>');
   }
   const parsed = new URL(argv[0]);
   if (!['http:', 'https:'].includes(parsed.protocol) || parsed.pathname !== '/' ||
@@ -28,7 +28,8 @@ function parseArguments(argv) {
     otherRequestId: argv[11],
     mobileCopyId: argv[16],
     staleTitleBId: argv[21],
-    collidingRequestId: argv[25]
+    collidingRequestId: argv[25],
+    polarisActionRequestId: argv[26]
   };
 }
 
@@ -397,9 +398,47 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     report.polarisSearchModes = ['identifier', 'title', 'author', 'title_author'];
     await page.locator('#close-polaris-search-btn').click();
     await page.locator('#editModal[open]').waitFor();
-
     await page.locator('#close-modal-x').click();
     await page.locator('#editModal').waitFor({ state: 'hidden' });
+    await page.goto(`${args.baseOrigin}/staff/?request=${encodeURIComponent(args.polarisActionRequestId)}`, { waitUntil: 'networkidle' });
+    await page.locator('#editModal[open]').waitFor();
+    assert.equal(await page.locator('#edit-id').inputValue(), args.polarisActionRequestId);
+    const beforeActionResponse = await context.request.get(
+      `${args.baseOrigin}/api/asap/staff/title-requests/${args.polarisActionRequestId}`);
+    assert.equal(beforeActionResponse.status(), 200);
+    const beforeAction = await beforeActionResponse.json();
+    await page.locator('#edit-title-polaris-search').click();
+    await page.locator('#polarisSearchDialog[open]').waitFor();
+    await page.locator('#polaris-additional-copy-action:not([disabled])').waitFor();
+    await page.locator('#polaris-additional-copy-action').click();
+    await page.locator('label[for="confirm-additional-copy-reminder"]').click();
+    assert.equal(await page.locator('#confirm-additional-copy-reminder').isChecked(), true);
+    const actionResponse = page.waitForResponse(response =>
+      response.url().endsWith(`/api/asap/staff/title-requests/${args.polarisActionRequestId}/action`) &&
+      response.request().method() === 'POST');
+    await page.getByRole('button', { name: 'Confirm', exact: true }).click();
+    const action = await actionResponse;
+    assert.equal(action.status(), 200, await action.text());
+    const actionResult = await action.json();
+    assert.equal(actionResult.request.status, 'pending_hold');
+    assert.equal(actionResult.request.bibid, '9001');
+    assert.equal(actionResult.request.publication, 'Original publication timing');
+    assert.equal(actionResult.request.autohold, true);
+    assert.notEqual(actionResult.request.version, beforeAction.version);
+    assert.equal(actionResult.additionalCopyRequest.sourceTitleRequest, args.polarisActionRequestId);
+    assert.equal(actionResult.additionalCopyRequest.bibid, '9001');
+    assert.equal(actionResult.additionalCopyRequest.title, 'Catalog title 9001');
+    assert.equal(actionResult.purchaseReminderEmail.requested, true);
+    await page.locator('#polarisSearchDialog').waitFor({ state: 'hidden' });
+    await page.locator('#editModal').waitFor({ state: 'hidden' });
+    await page.getByText(/Additional-copy task created and request queued|Additional-copy task created, request queued/).waitFor();
+    const copyResponse = await context.request.get(
+      `${args.baseOrigin}/api/asap/staff/additional-copies/${actionResult.additionalCopyRequestId}`);
+    assert.equal(copyResponse.status(), 200);
+    assert.equal((await copyResponse.json()).sourceTitleRequest, args.polarisActionRequestId);
+    report.polarisAdditionalCopyAction = { status: action.status(), taskId: actionResult.additionalCopyRequestId };
+    await page.goto(`${args.baseOrigin}/staff/`, { waitUntil: 'networkidle' });
+    await page.locator('#app-container').waitFor({ state: 'visible' });
     const patronLookupResponse = await post(
       context,
       args.baseOrigin,

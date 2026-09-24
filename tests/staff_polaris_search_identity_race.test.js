@@ -67,8 +67,9 @@ async function settle() {
     const lookups = [];
     const actions = [];
     let failNextAction = false;
+    let deferNextAction = false;
     const id = '9007199254740993';
-    const title = { type: 'title_request', id, title: 'Collision title', libraryOrgId: '2' };
+    const title = { type: 'title_request', id, title: 'Collision title', status: 'suggestion', libraryOrgId: '2' };
     const copy = { type: 'additional_copy', id, title: 'Collision copy', libraryOrgId: '2' };
     const persisted = { title: 'Collision title', copy: 'Collision copy' };
     global.fetch = (url, options = {}) => {
@@ -82,9 +83,18 @@ async function settle() {
           failNextAction = false;
           return Promise.resolve(response(503, { message: 'Action temporarily unavailable.' }));
         }
-        actions.push({ url: String(url), body: JSON.parse(options.body) });
-        persisted.title = actions.at(-1).body.title;
-        return Promise.resolve(response(200, { type: 'title_request', id, title: persisted.title, status: 'pending_hold' }));
+        const action = { url: String(url), body: JSON.parse(options.body), pending: deferred() };
+        actions.push(action);
+        if (!deferNextAction) {
+          persisted.title = action.body.title;
+          action.pending.resolve(response(200, {
+            request: { type: 'title_request', id, title: persisted.title, status: 'pending_hold', version: `version-${actions.length}` },
+            additionalCopyRequestId: action.body.action === 'additionalCopy' ? `copy-${actions.length}` : null,
+            purchaseReminderEmail: { requested: !!action.body.emailPurchaseReminder, queued: !!action.body.emailPurchaseReminder }
+          }));
+        }
+        deferNextAction = false;
+        return action.pending.promise;
       }
       throw new Error(`Unexpected request: ${url}`);
     };
@@ -112,6 +122,15 @@ async function settle() {
     };
     const flushDialogCloseEvents = async () => {
       await new Promise(resolve => setTimeout(resolve, 10));
+      await settle();
+    };
+    const finishAction = async action => {
+      persisted.title = action.body.title;
+      action.pending.resolve(response(200, {
+        request: { type: 'title_request', id, title: persisted.title, status: 'pending_hold', version: `version-${actions.indexOf(action) + 1}` },
+        additionalCopyRequestId: `copy-${actions.indexOf(action) + 1}`,
+        purchaseReminderEmail: { requested: !!action.body.emailPurchaseReminder, queued: !!action.body.emailPurchaseReminder }
+      }));
       await settle();
     };
     const open = (row) => search.openPolarisSearch(row, 'title', {}, ctx);
@@ -458,6 +477,8 @@ async function settle() {
       [{ type: 'additional_copy', id, title: 'Copy edit', libraryOrgId: '2' }, { source: 'edit' }],
       [{ type: 'unknown', id, title: 'Unknown type', libraryOrgId: '2' }, {}],
       [{ type: 'title_request', id: '  ', title: 'Unsaved title', libraryOrgId: '2' }, {}],
+      [{ ...title, status: 'hold_placed' }, {}],
+      [{ ...title, status: 'closed' }, {}],
       [title, { source: 'new' }]
     ]) {
       const searchIndex = lookups.length;
@@ -470,6 +491,128 @@ async function settle() {
         `invalid immediate-action context ${row.type}/${options.source || 'row'} must stay unavailable`);
     }
     assert.equal(actions.length, 3);
+
+    search.closePolarisSearchDialog();
+    await flushDialogCloseEvents();
+    const { closeOpenDialogs } = await import(pathToFileURL(path.join(temporary, 'staff/js/dialogs.js')).href);
+    const openReadyEdit = async label => {
+      editId.value = id;
+      editId.dataset.requestType = 'title_request';
+      document.getElementById('edit-title').value = title.title;
+      if (!editModal.open) editModal.showModal();
+      const index = lookups.length;
+      launchEditSearch();
+      await settle();
+      await completeSearch(index, label);
+      await completeHoldings(index + 1);
+      return results().querySelector('#polaris-additional-copy-action');
+    };
+    const confirmPendingAction = async button => {
+      deferNextAction = true;
+      button.click();
+      await settle();
+      const confirmation = document.getElementById('confirm-additional-copy-reminder')?.closest('dialog');
+      assert.ok(confirmation);
+      [...confirmation.querySelectorAll('button')].find(item => item.textContent === 'Confirm').click();
+      await settle();
+      return actions.at(-1);
+    };
+
+    // A committed response after manual close still refreshes data but cannot close the returned edit form.
+    const manuallyClosedAction = await confirmPendingAction(await openReadyEdit('Manual pending action'));
+    assert.equal(dialog.open, true);
+    search.closePolarisSearchDialog();
+    await flushDialogCloseEvents();
+    assert.equal(editModal.open, true);
+    const refreshesBeforeManualCompletion = editRefreshes;
+    await finishAction(manuallyClosedAction);
+    assert.equal(editModal.open, true);
+    assert.equal(editRefreshes, refreshesBeforeManualCompletion + 1);
+    assert.match(document.getElementById('toast-container').textContent, /Additional-copy task created/);
+
+    // A newer Polaris invocation owns the reused dialog and its return listener.
+    const olderAction = await confirmPendingAction(await openReadyEdit('Older pending action'));
+    search.closePolarisSearchDialog();
+    await flushDialogCloseEvents();
+    const newerSearch = lookups.length;
+    launchEditSearch();
+    await settle();
+    await completeSearch(newerSearch, 'Newer Polaris invocation');
+    await finishAction(olderAction);
+    assert.equal(dialog.open, true, 'old success cannot close a newer Polaris invocation');
+    assert.match(results().textContent, /Newer Polaris invocation/);
+    search.closePolarisSearchDialog();
+    await flushDialogCloseEvents();
+    assert.equal(editModal.open, true, 'the newer return listener survives the old completion');
+
+    // Reusing the edit DOM for another request must not let an old completion close it.
+    const differentEditAction = await confirmPendingAction(await openReadyEdit('Different edit pending'));
+    search.closePolarisSearchDialog();
+    await flushDialogCloseEvents();
+    editId.value = '9007199254740996';
+    document.getElementById('edit-title').value = 'Different request B';
+    await finishAction(differentEditAction);
+    assert.equal(editModal.open, true);
+    assert.equal(editId.value, '9007199254740996');
+    assert.equal(document.getElementById('edit-title').value, 'Different request B');
+    editModal.close();
+    await flushDialogCloseEvents();
+
+    // A replacement session with the same staff ID still invalidates a pending action's UI ownership.
+    const oldSessionAction = await confirmPendingAction(await openReadyEdit('Old session pending'));
+    state.setStaffSession({ authenticated: false, antiforgeryToken: 'test-token' });
+    closeOpenDialogs();
+    await flushDialogCloseEvents();
+    assert.equal(editModal.open, false, 'access teardown cannot reopen the edit form');
+    state.setStaffSession({
+      authenticated: true, accessAllowed: true, antiforgeryToken: 'new-session-token',
+      staff: { id: '7', role: 'super_admin', organizationId: 1, userPrincipalName: 'staff@example.org' }
+    });
+    editModal.showModal();
+    editId.value = '9007199254740996';
+    const refreshesBeforeSessionCompletion = editRefreshes;
+    await finishAction(oldSessionAction);
+    assert.equal(editModal.open, true);
+    assert.equal(editId.value, '9007199254740996');
+    assert.equal(editRefreshes, refreshesBeforeSessionCompletion);
+    editModal.close();
+    await flushDialogCloseEvents();
+
+    // A late access failure from the old request cannot sign out the replacement session.
+    const oldUnauthorizedAction = await confirmPendingAction(await openReadyEdit('Old unauthorized action'));
+    state.setStaffSession({ authenticated: false, antiforgeryToken: 'new-session-token' });
+    closeOpenDialogs();
+    await flushDialogCloseEvents();
+    state.setStaffSession({
+      authenticated: true, accessAllowed: true, antiforgeryToken: 'replacement-token',
+      staff: { id: '7', role: 'super_admin', organizationId: 1, userPrincipalName: 'staff@example.org' }
+    });
+    oldUnauthorizedAction.pending.resolve(response(401, { code: 'staff_session_invalid', message: 'Old session ended.' }));
+    await settle();
+    assert.equal(state.staffSession.authenticated, true);
+    assert.equal(state.staffSession.antiforgeryToken, 'replacement-token');
+    assert.equal(dialog.open, false);
+    assert.equal(editModal.open, false);
+
+    // Model checkAuth's queued close event after 401 while edit-origin Polaris is open.
+    const accessLostButton = await openReadyEdit('Access lost while open');
+    accessLostButton.click();
+    await settle();
+    const accessLostConfirmation = document.getElementById('confirm-additional-copy-reminder')?.closest('dialog');
+    assert.ok(accessLostConfirmation?.open);
+    state.setStaffSession({ authenticated: false, antiforgeryToken: 'test-token', code: 'staff_session_invalid' });
+    closeOpenDialogs();
+    await flushDialogCloseEvents();
+    assert.equal(dialog.open, false);
+    assert.equal(document.body.contains(accessLostConfirmation), false,
+      'access teardown removes a pending confirmation without dispatching its action');
+    assert.equal(editModal.open, false, 'a queued close event cannot resurrect the parent after 401');
+    state.setStaffSession({
+      authenticated: true, accessAllowed: true, antiforgeryToken: 'next-session-token',
+      staff: { id: '7', role: 'super_admin', organizationId: 1, userPrincipalName: 'staff@example.org' }
+    });
+    await flushDialogCloseEvents();
+    assert.equal(editModal.open, false, 'a later same-staff session inherits no stale edit dialog');
   } finally {
     dom?.window.close();
     fs.rmSync(temporary, { recursive: true, force: true });

@@ -33,7 +33,10 @@ public sealed class TitleRequestActionInput
 public sealed record TitleRequestMutationResult(
     string Code,
     long? RequestId = null,
-    IReadOnlyList<long>? DispatchOutboxIds = null);
+    IReadOnlyList<long>? DispatchOutboxIds = null,
+    long? AdditionalCopyRequestId = null,
+    bool ReminderRequested = false,
+    bool ReminderQueued = false);
 
 public sealed class TitleRequestMutationService(
     IDbContextFactory<AsapDbContext> contextFactory,
@@ -42,6 +45,7 @@ public sealed class TitleRequestMutationService(
     RecipientDomainPolicy recipientDomainPolicy,
     IEmailOutboxDispatcher outboxDispatcher,
     IStaffPolarisProvider staffPolarisProvider,
+    AdditionalCopyService additionalCopies,
     IIdentifierLookupDispatcher identifierLookupDispatcher,
     ILogger<TitleRequestMutationService> logger)
 {
@@ -229,7 +233,9 @@ public sealed class TitleRequestMutationService(
         var bibChanged = bibSupplied &&
                          !string.Equals(Clean(proposedBib), Clean(request.BibId), StringComparison.Ordinal);
         var autoHoldSupplied = input.Autohold.ValueKind is JsonValueKind.True or JsonValueKind.False;
-        var proposedAutoHold = autoHoldSupplied ? input.Autohold.GetBoolean() : request.AutoHold;
+        var proposedAutoHold = input.Action == "additionalCopy"
+            ? true
+            : autoHoldSupplied ? input.Autohold.GetBoolean() : request.AutoHold;
         var targetStatus = ResolveStatus(input.Action, input.Status, request.Status, proposedBib);
         if (targetStatus is null)
         {
@@ -276,11 +282,24 @@ public sealed class TitleRequestMutationService(
 
         if (input.Title is not null) request.Title = input.Title.Trim();
         if (input.Author is not null) request.Author = Clean(input.Author);
-        if (input.Publication is not null) request.Publication = Clean(input.Publication);
+        if (input.Publication is not null && input.Action != "additionalCopy")
+        {
+            request.Publication = Clean(input.Publication);
+        }
         if (input.Notes is not null) request.Notes = input.Notes;
-        if (input.ExactPublicationDate.HasValue) request.ExactPublicationDate = input.ExactPublicationDate;
+        if (input.ExactPublicationDate.HasValue && input.Action != "additionalCopy")
+        {
+            request.ExactPublicationDate = input.ExactPublicationDate;
+        }
         if (input.CustomFields.ValueKind == JsonValueKind.Object) request.CustomFieldsJson = input.CustomFields.GetRawText();
-        if (autoHoldSupplied) request.AutoHold = proposedAutoHold;
+        if (input.Action == "additionalCopy")
+        {
+            request.AutoHold = true;
+        }
+        else if (autoHoldSupplied)
+        {
+            request.AutoHold = proposedAutoHold;
+        }
         if (!string.IsNullOrWhiteSpace(input.Format))
         {
             var formatId = await ResolveFormatIdAsync(context, request.LibraryOrganizationId, input.Format, cancellationToken);
@@ -313,6 +332,20 @@ public sealed class TitleRequestMutationService(
             $"Claim automatically set to {DisplayName(locked.Staff[actor.Id])} after staff action.");
 
         var outboxIds = new List<long>();
+        AdditionalCopyMutationResult? copyResult = null;
+        if (input.Action == "additionalCopy")
+        {
+            copyResult = await additionalCopies.CreateFromLockedSourceAsync(
+                context, request, locked.Staff[actor.Id], locked.Staff[actor.Id],
+                input.EmailPurchaseReminder, readiness.IsConfigured, cancellationToken);
+            AddEvent(context, request, actor, "additional_copy_created",
+                $"Additional-copy task {copyResult.RequestId} created for BIB {request.BibId}.",
+                new { additionalCopyRequestId = copyResult.RequestId, bibId = request.BibId });
+            if (copyResult.DispatchOutboxId.HasValue)
+            {
+                outboxIds.Add(copyResult.DispatchOutboxId.Value);
+            }
+        }
         if (input.EmailPurchaseReminder && input.Action == "purchase" && targetStatus == "outstanding_purchase")
         {
             var outbox = await AddStaffNotificationAsync(
@@ -329,8 +362,20 @@ public sealed class TitleRequestMutationService(
 
         await context.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        foreach (var outboxId in outboxIds) outboxDispatcher.Enqueue(outboxId);
-        return new TitleRequestMutationResult("updated", request.Id, outboxIds);
+        foreach (var outboxId in outboxIds)
+        {
+            try
+            {
+                outboxDispatcher.Enqueue(outboxId);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                logger.LogWarning(exception, "Committed reminder {OutboxId} remains pending for retry.", outboxId);
+            }
+        }
+        return new TitleRequestMutationResult("updated", request.Id, outboxIds,
+            copyResult?.RequestId, copyResult?.ReminderRequested ?? false,
+            copyResult?.DispatchOutboxId.HasValue ?? false);
     }
 
     private async Task<string?> PreflightExplicitBibAsync(
@@ -343,9 +388,13 @@ public sealed class TitleRequestMutationService(
         var bibSupplied = IsSupplied(input.Bibid);
         if (!bibSupplied)
         {
-            return null;
+            return input.Action == "additionalCopy" ? "bib_required" : null;
         }
         var proposedBib = Clean(ElementString(input.Bibid));
+        if (input.Action == "additionalCopy" && proposedBib is null)
+        {
+            return "bib_required";
+        }
         if (proposedBib is not null && !IsPositiveInteger(proposedBib))
         {
             return "invalid_bib";
@@ -374,7 +423,7 @@ public sealed class TitleRequestMutationService(
         var identifierChanged = identifierSupplied &&
                                 !string.Equals(proposedIdentifier, Clean(request.Identifier), StringComparison.Ordinal);
         var bibChanged = !string.Equals(proposedBib, Clean(request.BibId), StringComparison.Ordinal);
-        if (!bibChanged && !identifierChanged)
+        if (!bibChanged && !identifierChanged && input.Action != "additionalCopy")
         {
             return null;
         }
@@ -717,6 +766,8 @@ public sealed class TitleRequestMutationService(
             "alreadyOwn" when current == "suggestion" && !string.IsNullOrWhiteSpace(bib) => "pending_hold",
             "catalogFound" when current is "suggestion" or "outstanding_purchase" &&
                                 !string.IsNullOrWhiteSpace(bib) => "pending_hold",
+            "additionalCopy" when current is "suggestion" or "outstanding_purchase" or "pending_hold" &&
+                                  !string.IsNullOrWhiteSpace(bib) => "pending_hold",
             "reject" or "silentClose" when current == "suggestion" => "closed",
             "closeDuplicate" when current != "closed" => "closed",
             "close" when current == "hold_placed" => "closed",
@@ -738,7 +789,7 @@ public sealed class TitleRequestMutationService(
     private static string? ElementString(JsonElement value) => value.ValueKind == JsonValueKind.String
         ? value.GetString()
         : value.ToString();
-    private static bool IsPositiveInteger(string? value) => long.TryParse(value, out var result) && result > 0;
+    private static bool IsPositiveInteger(string? value) => int.TryParse(value, out var result) && result > 0;
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     private static string DisplayName(StaffUser value) =>
         Clean(value.DisplayName) ?? Clean(value.UserPrincipalName) ?? "Staff";

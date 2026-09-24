@@ -10,52 +10,88 @@ export async function submitTitleRequestAction(id, payload, options = {}) {
   const {
     onRefresh,
     beforeDialogsClose,
-    dialogsToClose = ['editModal']
+    dialogsToClose = ['editModal'],
+    ownsCurrentUi = () => true,
+    isSessionCurrent = () => true
   } = options;
 
+  let response;
   try {
-    const updatedRecord = await authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(id)}/action`, {
+    response = await authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(id)}/action`, {
       method: 'POST',
       body: payload
     });
+  } catch (err) {
+    console.error('submitTitleRequestAction failed:', err);
+    if (err.response) {
+      err.code = err.response.code || '';
+    }
+    if (err && err.code === 'duplicate_open_request') {
+      const confirmed = await confirmDuplicateOpenRequestClose(err, { type: 'title_request', id });
+      if (confirmed) {
+        if (typeof onRefresh === 'function' && isSessionCurrent()) onRefresh();
+        return false;
+      }
+    }
+    if (isSessionCurrent()) await showAlert(err.message || 'Error updating suggestion');
+    return false;
+  }
 
-    rememberRecentSuggestion(updatedRecord);
-    updateRecentSuggestion(updatedRecord);
-    renderRecentSuggestionsSwitcher();
-
-    if (typeof beforeDialogsClose === 'function') beforeDialogsClose();
-    dialogsToClose.forEach(dialogId => {
-      const el = document.getElementById(dialogId);
-      if (el) el.close();
-    });
-
+  // The write is committed. UI callbacks must never turn its success into a reported mutation failure.
+  try {
+    const updatedRecord = response?.request || response;
+    if (isSessionCurrent()) {
+      rememberRecentSuggestion(updatedRecord);
+      updateRecentSuggestion(updatedRecord);
+      renderRecentSuggestionsSwitcher();
+      let ownsUi = false;
+      try {
+        ownsUi = ownsCurrentUi();
+      } catch (error) {
+        console.error('Could not verify title-request dialog ownership:', error);
+      }
+      if (ownsUi) {
+        try {
+          if (typeof beforeDialogsClose === 'function') beforeDialogsClose();
+          dialogsToClose.forEach(dialogId => {
+            const el = document.getElementById(dialogId);
+            if (el?.open) el.close();
+          });
+        } catch (error) {
+          console.error('Could not close the originating title-request dialog:', error);
+        }
+      }
+    }
     const actionValue = payload.action;
     const nextStatus = payload.status;
-    const reminder = updatedRecord && updatedRecord.purchaseReminderEmail;
+    const reminder = response?.purchaseReminderEmail;
 
-    if (actionValue === 'purchase') {
-      if (reminder && reminder.requested && reminder.sent) {
-        showToast('Purchase saved and reminder email sent.', 'success');
-      } else if (reminder && reminder.requested) {
-        showToast(reminder.message || 'Purchase saved, but the reminder email could not be sent.', 'warning');
+    if (isSessionCurrent()) {
+      if (actionValue === 'purchase') {
+        if (reminder?.requested && reminder.sent) {
+          showToast('Purchase saved and reminder email sent.', 'success');
+        } else if (reminder?.requested) {
+          showToast(reminder.message || 'Purchase saved, but the reminder email could not be sent.', 'warning');
+        } else {
+          showToast('Purchase saved.', 'success');
+        }
+      } else if (actionValue === 'additionalCopy' && response?.additionalCopyRequestId) {
+        const message = reminder?.requested
+          ? reminder.queued
+            ? 'Additional-copy task created, request queued, and reminder email queued.'
+            : 'Additional-copy task created and request queued; reminder email was not queued.'
+          : 'Additional-copy task created and request queued.';
+        showToast(message, reminder?.requested && !reminder.queued ? 'warning' : 'success');
+      } else if (actionValue === 'additionalCopy') {
+        showToast('Request updated; additional-copy task was not confirmed. Refresh to verify.', 'warning');
+      } else if (nextStatus === 'pending_hold') {
+        showToast(`Request queued for hold (BIB ${payload.bibid || 'N/A'}).`, 'success');
       } else {
-        showToast('Purchase saved.', 'success');
+        showToast('Suggestion updated.', 'success');
       }
-    } else if (actionValue === 'additionalCopy') {
-      if (reminder && reminder.requested && reminder.sent) {
-        showToast('Additional-copy task created, request queued, and reminder email sent.', 'success');
-      } else if (reminder && reminder.requested) {
-        showToast(reminder.message || 'Additional-copy task created, but the reminder email could not be sent.', 'warning');
-      } else {
-        showToast('Additional-copy task created and request queued.', 'success');
-      }
-    } else if (nextStatus === 'pending_hold') {
-      showToast(`Request queued for hold (BIB ${payload.bibid || 'N/A'}).`, 'success');
-    } else {
-      showToast('Suggestion updated.', 'success');
     }
 
-    if (updatedRecord && updatedRecord.status && updatedRecord.status !== nextStatus) {
+    if (isSessionCurrent() && updatedRecord && updatedRecord.status && updatedRecord.status !== nextStatus) {
       const statusNames = {
         'outstanding_purchase': 'Pending purchase',
         'pending_hold': 'Pending hold',
@@ -73,21 +109,18 @@ export async function submitTitleRequestAction(id, payload, options = {}) {
       await showAlert(`Note: This suggestion moved directly to "${statusNames[updatedRecord.status] || updatedRecord.status}" because ${reason}.`);
     }
 
-    if (typeof onRefresh === 'function') onRefresh();
   } catch (err) {
-    console.error('submitTitleRequestAction failed:', err);
-    if (err.response) {
-      err.code = err.response.code || '';
-    }
-    if (err && err.code === 'duplicate_open_request') {
-      const confirmed = await confirmDuplicateOpenRequestClose(err, { type: 'title_request', id });
-      if (confirmed) {
-        if (typeof onRefresh === 'function') onRefresh();
-        return;
+    console.error('Committed title-request action could not update the staff view:', err);
+  } finally {
+    if (isSessionCurrent() && typeof onRefresh === 'function') {
+      try {
+        await onRefresh();
+      } catch (error) {
+        console.error('Could not refresh the staff view after a committed action:', error);
       }
     }
-    await showAlert(err.message || 'Error updating suggestion');
   }
+  return true;
 }
 
 export async function submitEditForm(e, ctx, options = {}) {

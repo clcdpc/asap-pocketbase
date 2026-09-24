@@ -312,8 +312,9 @@ public static class TitleRequestEndpoints
         TitleRequestActionInput input,
         TitleRequestMutationService mutations,
         TitleRequestViewService views,
+        AdditionalCopyService additionalCopies,
         CancellationToken cancellationToken) =>
-        MutateAndLoadAsync(context, id, mutations.ActionAsync(Current(context), id, input, cancellationToken), views, cancellationToken);
+        MutateAndLoadAsync(context, id, mutations.ActionAsync(Current(context), id, input, cancellationToken), views, cancellationToken, additionalCopies);
 
     private static Task<IResult> RetryIdentifierAsync(
         HttpContext context,
@@ -395,7 +396,8 @@ public static class TitleRequestEndpoints
         long id,
         Task<TitleRequestMutationResult> mutation,
         TitleRequestViewService views,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        AdditionalCopyService? additionalCopies = null)
     {
         var result = await mutation;
         if (result.Code != "updated")
@@ -403,7 +405,22 @@ public static class TitleRequestEndpoints
             return ToErrorOrSuccess(result, Results.NoContent());
         }
         var row = await views.GetAsync(Current(context), id.ToString(), cancellationToken);
-        return row is null ? Results.NotFound() : Results.Json(row);
+        if (row is null)
+        {
+            return Results.NotFound();
+        }
+        if (result.AdditionalCopyRequestId is not long copyId || additionalCopies is null)
+        {
+            return Results.Json(row);
+        }
+        var copy = await additionalCopies.GetAsync(Current(context), copyId.ToString(), null, cancellationToken);
+        return Results.Json(new
+        {
+            request = row,
+            additionalCopyRequest = copy,
+            additionalCopyRequestId = copyId.ToString(),
+            purchaseReminderEmail = new { requested = result.ReminderRequested, queued = result.ReminderQueued }
+        });
     }
 
     private static IResult ToErrorOrSuccess(TitleRequestMutationResult result, IResult success) => result.Code switch
