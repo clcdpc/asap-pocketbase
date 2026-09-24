@@ -149,6 +149,10 @@ export function effectiveWorkflowFlagsForRow(row, tags = row?.workflowTags) {
 export function getIsbnCheckLabel(row) {
   const status = typeof row?.isbnCheckStatus === 'string' ? row.isbnCheckStatus : '';
   if (status === 'not_found' &&
+      row?.isbnCheckResult === 'Identifier processing was not completed before this request left suggestions.') {
+    return 'Identifier check not completed';
+  }
+  if (status === 'not_found' &&
       row?.isbnCheckResult === 'Selected Polaris BIB has no catalog identifier; request identifier was not verified.') {
     return 'Identifier not verified on selected BIB';
   }

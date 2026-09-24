@@ -8,6 +8,7 @@ import { normalizeStatus } from './grid-policy.mjs';
 import { escapeAttr } from './grid-utils.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
 import { findWorkflowRow, requestIdentity, sameRequestIdentity } from './request-identity.mjs';
+import { staffSession, staffAccessGeneration } from './state.js';
 
 const tabLoads = createLatestLoad();
 
@@ -36,7 +37,7 @@ export async function loadTab(status, ctx, options = {}) {
     if (ctx.staffGridFilterBar) ctx.staffGridFilterBar.classList.add('hidden');
     await refreshAnalyticsView(ctx.gridContainer);
     if (guard.isCurrent()) {
-      await announceTabLoaded(status, ctx, options);
+      await announceTabLoaded(status, ctx, { ...options, isCurrent: guard.isCurrent, signal: guard.signal });
     }
     tabLoads.finish('tab', guard.token);
     return;
@@ -93,7 +94,7 @@ export async function loadTab(status, ctx, options = {}) {
     }
   } finally {
     if (guard.isCurrent()) {
-      await announceTabLoaded(status, ctx, options);
+      await announceTabLoaded(status, ctx, { ...options, isCurrent: guard.isCurrent, signal: guard.signal });
     }
     tabLoads.finish('tab', guard.token);
   }
@@ -386,11 +387,21 @@ export async function announceTabLoaded(status, ctx, options = {}) {
   if (requestId) {
     const expectedType = requestedRequestTypeFromUrl(status);
     const identity = requestIdentity({ id: requestId, type: expectedType });
+    const accessGeneration = staffAccessGeneration;
+    const ownsSelection = () => (!options.isCurrent || options.isCurrent()) &&
+      staffSession.authenticated && staffSession.accessAllowed &&
+      staffAccessGeneration === accessGeneration && ctx.currentStatus === status &&
+      requestedRequestIdFromUrl() === requestId &&
+      requestedRequestTypeFromUrl(status) === expectedType;
+    if (!ownsSelection()) return;
     let row = findWorkflowRow(identity, ctx.allSuggestions);
     if (!row) {
       try {
         const collection = expectedType === 'additional_copy' ? 'additional-copies' : 'title-requests';
-        row = await authorizedJson(`/api/asap/staff/${collection}/${encodeURIComponent(requestId)}`, { cache: 'no-store' });
+        row = await authorizedJson(`/api/asap/staff/${collection}/${encodeURIComponent(requestId)}`,
+          { cache: 'no-store', signal: options.signal });
+        if (!ownsSelection()) return;
+        if (row?.type !== expectedType) return;
         if (row?.id) {
           if (!ctx.allSuggestions.some(item => sameRequestIdentity(item, row))) {
             ctx.setAllSuggestions([...ctx.allSuggestions, row]);
@@ -398,7 +409,7 @@ export async function announceTabLoaded(status, ctx, options = {}) {
           replaceResolvedRequestId(row.id, requestIdentity(row).type);
         }
       } catch (error) {
-        if (!isAbortError(error)) {
+        if (!isAbortError(error) && ownsSelection()) {
           console.warn('The linked request could not be resolved.');
           const message = status === 'additional_copies'
             ? 'That additional-copy task is no longer available.'

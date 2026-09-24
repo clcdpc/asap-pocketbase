@@ -66,6 +66,7 @@ async function settle() {
 
     const lookups = [];
     const actions = [];
+    const directReads = [];
     const outbound = [];
     let failNextAction = false;
     let deferNextAction = false;
@@ -78,6 +79,11 @@ async function settle() {
       if (String(url).endsWith('/bib-lookup')) {
         const pending = deferred();
         lookups.push({ body: JSON.parse(options.body), pending, signal: options.signal });
+        return pending.promise;
+      }
+      if ((options.method || 'GET') === 'GET' && /\/title-requests\/[^/?]+$/.test(String(url))) {
+        const pending = deferred();
+        directReads.push({ url: String(url), pending });
         return pending.promise;
       }
       if (String(url).includes('/title-requests/') && String(url).endsWith('/action')) {
@@ -113,7 +119,10 @@ async function settle() {
     const rowActions = await import(pathToFileURL(path.join(temporary, 'staff/js/actions.js')).href);
     const gridActions = await import(pathToFileURL(path.join(temporary, 'staff/js/grid-actions.js')).href);
     const gridRendering = await import(pathToFileURL(path.join(temporary, 'staff/js/grid-rendering.js')).href);
+    const gridFilters = await import(pathToFileURL(path.join(temporary, 'staff/js/grid-filters.js')).href);
     const editPickup = await import(pathToFileURL(path.join(temporary, 'staff/js/edit-pickup.js')).href);
+    const bibLookup = await import(pathToFileURL(path.join(temporary, 'staff/js/settings/bib-lookup.js')).href);
+    const modalContext = await import(pathToFileURL(path.join(temporary, 'staff/js/modals/context.js')).href);
     state.setStaffSession({
       authenticated: true, accessAllowed: true, antiforgeryToken: 'test-token',
       staff: { id: '7', role: 'super_admin', organizationId: 1, userPrincipalName: 'staff@example.org' }
@@ -321,6 +330,14 @@ async function settle() {
     await assertNoMixedDispatch(() => editPickup.loadEditPickupForRequest({ type: 'unknown', id }));
     assert.match(gridRendering.rowMarker({ type: 'unknown', id }), /data-request-type="unknown"/,
       'rendered row identity must retain an unknown type for the event guard');
+    const unprocessedIdentifier = {
+      isbnCheckStatus: 'not_found',
+      isbnCheckResult: 'Identifier processing was not completed before this request left suggestions.',
+      workflowTags: []
+    };
+    const unprocessedBadge = gridFilters.getIsbnCheckBadgesHtml(unprocessedIdentifier, {});
+    assert.match(unprocessedBadge, /Identifier check not completed/);
+    assert.match(unprocessedBadge, /title="Identifier check was not completed before this request left suggestions\./);
 
     const newFormOpen = search.openPolarisSearch({ id: '', title: 'New suggestion', libraryOrgId: '2' }, 'title', { source: 'new' }, ctx);
     await settle();
@@ -858,6 +875,75 @@ async function settle() {
     assert.equal(document.activeElement, document.getElementById('edit-title'));
     editModal.close();
     await runMultiResultChecks();
+
+    state.setCurrentSuggestions([title, copy]);
+    state.setAllSuggestions([title, copy]);
+    editId.value = id;
+    editId.dataset.requestType = 'title_request';
+    const bibInput = document.getElementById('edit-bibid');
+    const editTitle = document.getElementById('edit-title');
+    bibInput.value = '9003';
+    editTitle.value = 'Title A';
+    editModal.showModal();
+    const staleBibLookup = bibLookup.lookupEditBibById();
+    await settle();
+    const pendingBibLookup = lookups.at(-1);
+    assert.equal(pendingBibLookup.body.requestType, 'title_request');
+    assert.equal(pendingBibLookup.body.requestId, id);
+    editId.dataset.requestType = 'additional_copy';
+    bibInput.value = '9004';
+    editTitle.value = 'Copy B';
+    state.setVerifiedBibId('9004');
+    pendingBibLookup.pending.resolve(response(200, { title: 'Catalog A', author: 'Writer A' }));
+    await staleBibLookup;
+    assert.equal(editTitle.value, 'Copy B', 'stale exact-BIB metadata must not attach to the replacement entity');
+    assert.equal(state.verifiedBibId, '9004', 'stale exact-BIB validation must not replace the active BIB');
+    editModal.close();
+
+    editId.dataset.requestType = 'title_request';
+    document.getElementById('edit-next-status').value = 'suggestion';
+    document.getElementById('edit-action').value = 'edit';
+    title.format = document.getElementById('edit-format').value;
+    bibInput.value = '';
+    editTitle.value = 'Edited title A';
+    editModal.showModal();
+    deferNextAction = true;
+    const ordinaryEditRefreshes = [];
+    const ordinaryEdit = editSubmit.submitEditForm({ preventDefault() {} }, modalContext.createModalContext(state), {
+      onRefresh: async options => { ordinaryEditRefreshes.push(options.silent); }
+    });
+    await settle();
+    const pendingOrdinaryEdit = actions.at(-1);
+    assert.equal(pendingOrdinaryEdit.body.title, 'Edited title A');
+    editModal.close();
+    editId.dataset.requestType = 'additional_copy';
+    editTitle.value = 'Copy B after submit';
+    editModal.showModal();
+    pendingOrdinaryEdit.pending.resolve(response(200, {
+      request: { ...title, title: 'Edited title A', version: 'ordinary-edit-version' }
+    }));
+    await ordinaryEdit;
+    assert.equal(editModal.open, true, 'an old edit completion must not close a replacement modal');
+    assert.equal(editTitle.value, 'Copy B after submit');
+    assert.deepEqual(ordinaryEditRefreshes, [true], 'the old completion must use a silent refresh');
+    editModal.close();
+
+    const gridData = await import(pathToFileURL(path.join(temporary, 'staff/js/grid-data.js')).href);
+    window.history.replaceState(null, '', `/staff/?stage=submitted&request=${id}&requestType=title_request`);
+    const linkedCtx = {
+      allSuggestions: [], currentStatus: 'suggestion',
+      setAllSuggestions(items) { this.allSuggestions = items; }
+    };
+    const staleLinkedRead = gridData.announceTabLoaded('suggestion', linkedCtx);
+    await settle();
+    assert.equal(directReads.at(-1).url, `/api/asap/staff/title-requests/${id}`);
+    window.history.replaceState(null, '', `/staff/?stage=additional_copies&request=${id}&requestType=additional_copy`);
+    directReads.at(-1).pending.resolve(response(200, { ...title, title: 'Stale deep link' }));
+    await staleLinkedRead;
+    assert.equal(window.location.search,
+      `?stage=additional_copies&request=${id}&requestType=additional_copy`,
+      'an old direct lookup must not rewrite a newer typed deep link');
+    assert.equal(editModal.open, false, 'an old direct lookup must not open a stale edit modal');
   } finally {
     dom?.window.close();
     fs.rmSync(temporary, { recursive: true, force: true });

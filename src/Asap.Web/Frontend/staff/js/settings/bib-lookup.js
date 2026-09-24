@@ -1,6 +1,8 @@
-import { currentSuggestions, allSuggestions, setVerifiedBibId } from '../state.js';
+import { currentSuggestions, allSuggestions, setVerifiedBibId, staffSession, staffAccessGeneration } from '../state.js';
 import { authorizedJson } from '../http.js';
-import { editRequestIdentity, findWorkflowRow, requestIdentity } from '../request-identity.mjs';
+import { editRequestIdentity, findWorkflowRow, requestIdentity, sameRequestIdentity } from '../request-identity.mjs';
+
+let editBibLookupSerial = 0;
 
 export async function lookupEditBibById(options = {}) {
   const bibInput = document.getElementById('edit-bibid');
@@ -13,6 +15,22 @@ export async function lookupEditBibById(options = {}) {
   const display = document.getElementById('bib-info-display');
   const text = document.getElementById('bib-info-text');
   const originalButtonText = btn ? btn.textContent : '';
+  const editId = document.getElementById('edit-id');
+  const identity = editRequestIdentity(editId);
+  const row = findWorkflowRow(identity, currentSuggestions, allSuggestions);
+  if (!['title_request', 'additional_copy'].includes(editId?.dataset.requestType) ||
+      !identity.id || !row || row.type !== identity.type) {
+    return null;
+  }
+  const accessGeneration = staffAccessGeneration;
+  const lookupSerial = ++editBibLookupSerial;
+  const ownsDialog = () => lookupSerial === editBibLookupSerial &&
+    staffSession.authenticated && staffSession.accessAllowed &&
+    staffAccessGeneration === accessGeneration &&
+    document.getElementById('editModal')?.open &&
+    editId.dataset.requestType === identity.type &&
+    sameRequestIdentity(editRequestIdentity(editId), identity);
+  const ownsResult = () => ownsDialog() && bibInput.value.trim() === bibId;
 
   if (!bibId) {
     display.classList.remove('hidden', 'alert-info');
@@ -28,20 +46,17 @@ export async function lookupEditBibById(options = {}) {
   display.classList.add('hidden');
 
   try {
-    const identity = editRequestIdentity(document.getElementById('edit-id'));
-    const row = findWorkflowRow(identity, currentSuggestions, allSuggestions);
-    const barcode = row ? row.barcode : '';
-
     const data = await authorizedJson('/api/asap/staff/bib-lookup', {
       method: 'POST',
       body: {
         bibId,
-        barcode,
-        requestId: row ? row.id : '',
-        requestType: row ? requestIdentity(row).type : '',
-        libraryOrgId: String(row ? row.libraryOrgId : '')
+        barcode: row.barcode || '',
+        requestId: row.id,
+        requestType: row.type,
+        libraryOrgId: String(row.libraryOrgId || '')
       }
     });
+    if (!ownsResult()) return null;
 
     display.classList.remove('hidden', 'alert-danger', 'alert-warning');
     display.classList.add('alert-info');
@@ -82,13 +97,15 @@ export async function lookupEditBibById(options = {}) {
     }));
     return data;
   } catch (err) {
-    display.classList.remove('hidden', 'alert-info');
-    display.classList.add('alert-danger');
-    text.textContent = 'Error: ' + err.message;
-    setVerifiedBibId('');
+    if (ownsResult()) {
+      display.classList.remove('hidden', 'alert-info');
+      display.classList.add('alert-danger');
+      text.textContent = 'Error: ' + err.message;
+      setVerifiedBibId('');
+    }
     return null;
   } finally {
-    if (btn) {
+    if (btn && ownsDialog()) {
       btn.disabled = false;
       btn.textContent = options.doneText || originalButtonText || 'Lookup BIB';
     }

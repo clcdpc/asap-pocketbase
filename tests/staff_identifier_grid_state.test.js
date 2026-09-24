@@ -12,6 +12,12 @@ const { pathToFileURL } = require('node:url');
     workflowTags: []
   };
   assert.equal(policy.getIsbnCheckLabel(row), 'Identifier not verified on selected BIB');
+  const unprocessed = {
+    isbnCheckStatus: 'not_found',
+    isbnCheckResult: 'Identifier processing was not completed before this request left suggestions.',
+    workflowTags: []
+  };
+  assert.equal(policy.getIsbnCheckLabel(unprocessed), 'Identifier check not completed');
   assert.deepEqual(policy.effectiveWorkflowFlagsForRow({ ...row, workflowTags: ['Identifier number not found'] }),
     ['Identifier number not found in system']);
   assert.deepEqual(policy.effectiveWorkflowFlagsForRow({ ...row, isbnCheckStatus: 'found',

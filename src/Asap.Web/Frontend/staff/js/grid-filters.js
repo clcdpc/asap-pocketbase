@@ -210,7 +210,9 @@ export function getIsbnCheckBadgesHtml(row, ctx) {
   const status = typeof row?.isbnCheckStatus === 'string' ? row.isbnCheckStatus : '';
   const tooltip = status === 'pending'
     ? 'Background identifier number processing is still running. This suggestion is already submitted.'
-    : 'Identifier number background processing result.';
+    : label === 'Identifier check not completed'
+      ? 'Identifier check was not completed before this request left suggestions.'
+      : 'Identifier number background processing result.';
   const display = getFlagDisplay(label);
 
   return ` <span class="flag-badge ${escapeAttr(display.className)} ${isActive ? 'active' : ''}" data-tag="${escapeAttr(normalized)}" role="button" title="${escapeAttr(isActive ? 'Clear filter' : tooltip)}">${escapeAttr(display.label)}</span>`;

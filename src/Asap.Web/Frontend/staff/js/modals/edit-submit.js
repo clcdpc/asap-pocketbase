@@ -4,8 +4,9 @@ import { actionErrorMessage } from './utils.js';
 import { confirmDuplicateOpenRequestClose } from './confirm-duplicate.js';
 import { rememberRecentSuggestion, updateRecentSuggestion, renderRecentSuggestionsSwitcher } from '../recent-suggestions.js';
 import { collectEditCustomFieldValues } from '../request-custom-fields.js';
-import { editRequestIdentity, findWorkflowRow } from '../request-identity.mjs';
+import { editRequestIdentity, findWorkflowRow, sameRequestIdentity } from '../request-identity.mjs';
 import { clearMatchingRequestSelection } from '../app/url-utils.js';
+import { staffSession, staffAccessGeneration } from '../state.js';
 
 export async function submitTitleRequestAction(identity, payload, options = {}) {
   if (identity?.type !== 'title_request' || !String(identity.id ?? '').trim()) return false;
@@ -71,7 +72,7 @@ export async function submitTitleRequestAction(identity, payload, options = {}) 
       }
       return false;
     }
-    if (isSessionCurrent()) await showAlert(err.message || 'Error updating suggestion');
+    if (ownsUiNow()) await showAlert(err.message || 'Error updating suggestion');
     return false;
   }
 
@@ -101,7 +102,7 @@ export async function submitTitleRequestAction(identity, payload, options = {}) 
     const nextStatus = payload.status;
     const reminder = response?.purchaseReminderEmail;
 
-    if (isSessionCurrent()) {
+    if (ownedAtCompletion) {
       if (actionValue === 'purchase') {
         if (reminder?.requested && reminder.sent) {
           showToast('Purchase saved and reminder email sent.', 'success');
@@ -126,7 +127,7 @@ export async function submitTitleRequestAction(identity, payload, options = {}) 
       }
     }
 
-    if (isSessionCurrent() && updatedRecord && updatedRecord.status && updatedRecord.status !== nextStatus) {
+    if (ownedAtCompletion && updatedRecord && updatedRecord.status && updatedRecord.status !== nextStatus) {
       const statusNames = {
         'outstanding_purchase': 'Pending purchase',
         'pending_hold': 'Pending hold',
@@ -159,6 +160,12 @@ export async function submitEditForm(e, ctx, options = {}) {
   const identity = editRequestIdentity(ctx.id);
   const id = identity.id;
   if (ctx.id?.dataset.requestType !== 'title_request' || !id) return false;
+  const accessGeneration = staffAccessGeneration;
+  const isSessionCurrent = () => staffSession.authenticated && staffSession.accessAllowed &&
+    staffAccessGeneration === accessGeneration;
+  const ownsCurrentUi = () => isSessionCurrent() && ctx.modal?.open &&
+    ctx.id?.dataset.requestType === 'title_request' &&
+    sameRequestIdentity(editRequestIdentity(ctx.id), identity);
   const nextStatus = ctx.nextStatus.value;
   const row = findWorkflowRow(identity, ctx.currentSuggestions, ctx.allSuggestions);
   if (!row) {
@@ -169,6 +176,7 @@ export async function submitEditForm(e, ctx, options = {}) {
     await showAlert('Use the additional-copy task controls to change this request.');
     return;
   }
+  if (row.type !== 'title_request') return false;
   const bibInput = ctx.bibid;
   const bibid = row && row.status === 'hold_placed'
     ? String(row.bibid || '').trim()
@@ -176,7 +184,7 @@ export async function submitEditForm(e, ctx, options = {}) {
 
   if (row && row.status === 'outstanding_purchase' && bibid && !row.autohold) {
     const confirmed = await showConfirm('Do Not Auto Queue Hold', 'This request is marked Do Not Auto Queue Hold. Saving this BIB ID will close the request immediately and skip the hold-queueing workflow.');
-    if (!confirmed) return;
+    if (!confirmed || !ownsCurrentUi()) return false;
   }
 
   const nextFormatValue = ctx.format.value;
@@ -188,9 +196,10 @@ export async function submitEditForm(e, ctx, options = {}) {
       warning = 'This suggestion was manually claimed. Changing the format will not change the current claim.';
     }
     const confirmed = await showConfirm('Format change may affect claim', warning);
-    if (!confirmed) return;
+    if (!confirmed || !ownsCurrentUi()) return false;
   }
 
+  if (!ownsCurrentUi()) return false;
   if (nextStatus === 'pending_hold') {
     if (!bibid) {
       await showAlert('BIB ID is required before moving this suggestion to Pending hold.');
@@ -203,6 +212,7 @@ export async function submitEditForm(e, ctx, options = {}) {
       return;
     }
   }
+  if (!ownsCurrentUi()) return false;
 
   const actionValue = ctx.action.value || undefined;
   const payload = {
@@ -236,8 +246,10 @@ export async function submitEditForm(e, ctx, options = {}) {
     payload.rejectionTemplateId = ctx.rejectionTemplate.value;
   }
 
-  await submitTitleRequestAction(identity, payload, {
+  return await submitTitleRequestAction(identity, payload, {
     onRefresh,
-    dialogsToClose: ['editModal']
+    dialogsToClose: ['editModal'],
+    ownsCurrentUi,
+    isSessionCurrent
   });
 }
