@@ -11,6 +11,7 @@ import { renderRejectionTemplateSelector } from './rejection-templates.js';
 import { renderEditPatronContext } from './patron-context.js';
 import { findWorkflowRow, requestIdentity, setEditRequestIdentity } from '../request-identity.mjs';
 import { invalidateRowActionOwnership } from '../row-action-ownership.mjs';
+import { renderRequestActivity } from '../note-activity.js';
 
 export function openEdit(identity, nextStatus, dialogTitle, actionStr, buttonLabel, ctx) {
   if (!['title_request', 'additional_copy'].includes(identity?.type) || !String(identity.id ?? '').trim()) return;
@@ -85,6 +86,10 @@ export function openEdit(identity, nextStatus, dialogTitle, actionStr, buttonLab
   renderEditCustomFieldsForCurrentFormat(row, ctx);
 
   ctx.notes.value = getExistingHistory(row);
+  const recordedActivity = document.getElementById('edit-recorded-activity');
+  if (recordedActivity) {
+    recordedActivity.replaceChildren(...(isAdditionalCopy ? [] : [renderRequestActivity(row.activity)]));
+  }
   renderPendingAuditPreview(row, nextStatus, actionStr, ctx);
 
   ctx.bibInfoDisplay.classList.add('hidden');

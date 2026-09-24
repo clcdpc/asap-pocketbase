@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const { JSDOM } = require('jsdom');
 
 const identityModule = path.join(
   __dirname,
@@ -53,6 +54,18 @@ const identityModule = path.join(
     assert.match(rendering.rowMarker(copy), /data-request-type="additional_copy"/);
     assert.match(utils.formatNote({ ...title, notes: 'Title note' }), /data-request-type="title_request"/);
     assert.match(utils.formatNote({ ...copy, notes: 'Copy note' }), /data-request-type="additional_copy"/);
+    assert.match(utils.formatNote({ ...title, notes: '', activity: [{ message: 'Committed' }] }),
+      /data-notes-action="true"/);
+    const dom = new JSDOM('<!doctype html><body></body>');
+    global.document = dom.window.document;
+    const activity = await import(pathToFileURL(path.join(temporary, 'js', 'note-activity.js')).href);
+    const history = activity.renderRequestActivity([{
+      eventType: 'status_changed', message: '<script>unsafe</script> Moved to closed.',
+      actorName: 'Staff', created: '2026-09-24T12:00:00Z'
+    }]);
+    assert.match(history.textContent, /Moved to closed/);
+    assert.match(history.textContent, /Staff/);
+    assert.equal(history.querySelector('script'), null);
     const searchButton = rendering.renderPolarisRowSearchButton(copy, 'title', {
       polarisSearchValueForRow: () => 'Collision copy',
       renderPolarisSearchButtonMarkup: (_mode, attrs) => JSON.stringify(attrs)

@@ -1,5 +1,6 @@
 using System.Data;
 using System.Globalization;
+using System.Net.Mail;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -32,6 +33,7 @@ public sealed class TitleRequestActionInput
     public string? Notes { get; init; }
     public string? Format { get; init; }
     public bool EmailPurchaseReminder { get; init; }
+    public string? RejectionTemplateId { get; init; }
 }
 
 public sealed record TitleRequestMutationResult(
@@ -49,6 +51,7 @@ public sealed class TitleRequestMutationService(
     RecipientDomainPolicy recipientDomainPolicy,
     IEmailOutboxDispatcher outboxDispatcher,
     IStaffPolarisProvider staffPolarisProvider,
+    PatronConfigurationService patronConfigurations,
     AdditionalCopyService additionalCopies,
     IIdentifierLookupDispatcher identifierLookupDispatcher,
     ILogger<TitleRequestMutationService> logger)
@@ -373,7 +376,6 @@ public sealed class TitleRequestMutationService(
         {
             request.ExactPublicationDate = exactPublicationDate;
         }
-        if (input.CustomFields.ValueKind == JsonValueKind.Object) request.CustomFieldsJson = input.CustomFields.GetRawText();
         if (input.Action == "additionalCopy")
         {
             request.AutoHold = true;
@@ -382,6 +384,7 @@ public sealed class TitleRequestMutationService(
         {
             request.AutoHold = proposedAutoHold;
         }
+        var originalFormatId = request.MaterialFormatId;
         if (!string.IsNullOrWhiteSpace(input.Format))
         {
             var formatId = await ResolveFormatIdAsync(context, request.LibraryOrganizationId, input.Format, cancellationToken);
@@ -390,6 +393,15 @@ public sealed class TitleRequestMutationService(
                 return new TitleRequestMutationResult("invalid_format");
             }
             request.MaterialFormatId = formatId.Value;
+        }
+        if (input.CustomFields.ValueKind == JsonValueKind.Object)
+        {
+            var customFields = await MergeCustomFieldsAsync(context, request, input.CustomFields, cancellationToken);
+            if (customFields.Error is not null)
+            {
+                return new TitleRequestMutationResult(customFields.Error);
+            }
+            request.CustomFieldsJson = customFields.Json;
         }
 
         var now = DateTime.UtcNow;
@@ -407,6 +419,10 @@ public sealed class TitleRequestMutationService(
                 action = Clean(input.Action)
             });
         }
+        if (input.Action == "edit")
+        {
+            AddEvent(context, request, actor, "request_edited", "Request details updated.");
+        }
         if (autoHoldOptOut)
         {
             AddEvent(context, request, actor, "autohold_opt_out",
@@ -414,15 +430,16 @@ public sealed class TitleRequestMutationService(
                     ? "Closed without hold because Already Own was selected and the patron opted out of automatic hold placement."
                     : "Closed without hold because a BIB ID was supplied and the patron opted out of automatic hold placement.");
         }
-        var previousClaimantId = request.ClaimedByStaffUserId;
-        SetManualClaim(request, locked.Staff[actor.Id]);
-        AddEvent(context, request, actor,
-            previousClaimantId.HasValue && previousClaimantId != actor.Id
-                ? "claim_manual_transferred"
-                : "claim_manual_assigned",
-            $"Claim automatically set to {DisplayName(locked.Staff[actor.Id])} after staff action.");
+        await ApplyActionClaimAsync(context, request, actor, locked.Staff[actor.Id],
+            originalFormatId != request.MaterialFormatId, cancellationToken);
 
         var outboxIds = new List<long>();
+        var patronEmail = await AddPatronActionEmailAsync(context, request, locked.OriginalStatus!,
+            input, expectedVersion, readiness.IsConfigured, cancellationToken);
+        if (patronEmail.Error is not null)
+        {
+            return new TitleRequestMutationResult(patronEmail.Error);
+        }
         AdditionalCopyMutationResult? copyResult = null;
         if (input.Action == "additionalCopy")
         {
@@ -437,7 +454,10 @@ public sealed class TitleRequestMutationService(
                 outboxIds.Add(copyResult.DispatchOutboxId.Value);
             }
         }
-        if (input.EmailPurchaseReminder && input.Action == "purchase" && targetStatus == "outstanding_purchase")
+        var reminderRequested = input.EmailPurchaseReminder && input.Action == "purchase" &&
+            targetStatus == "outstanding_purchase";
+        var reminderQueued = false;
+        if (reminderRequested)
         {
             var outbox = await AddStaffNotificationAsync(
                 context,
@@ -448,10 +468,18 @@ public sealed class TitleRequestMutationService(
                 $"Purchase requested for {request.Title}.",
                 readiness.IsConfigured,
                 cancellationToken);
-            if (outbox?.Status == "pending") outboxIds.Add(outbox.Id);
+            if (outbox?.Status == "pending")
+            {
+                outboxIds.Add(outbox.Id);
+                reminderQueued = true;
+            }
         }
 
         await context.SaveChangesAsync(cancellationToken);
+        if (patronEmail.Outbox?.Status == "pending")
+        {
+            outboxIds.Add(patronEmail.Outbox.Id);
+        }
         await transaction.CommitAsync(cancellationToken);
         foreach (var outboxId in outboxIds)
         {
@@ -465,8 +493,8 @@ public sealed class TitleRequestMutationService(
             }
         }
         return new TitleRequestMutationResult("updated", request.Id, outboxIds,
-            copyResult?.RequestId, copyResult?.ReminderRequested ?? false,
-            copyResult?.DispatchOutboxId.HasValue ?? false);
+            copyResult?.RequestId, copyResult?.ReminderRequested ?? reminderRequested,
+            copyResult?.DispatchOutboxId.HasValue ?? reminderQueued);
     }
 
     private async Task<ExplicitBibPreflight> PreflightExplicitBibAsync(
@@ -771,6 +799,59 @@ public sealed class TitleRequestMutationService(
         request.ClaimRuleId = null;
     }
 
+    private async Task ApplyActionClaimAsync(
+        AsapDbContext context,
+        TitleRequest request,
+        CurrentStaff actor,
+        StaffUser actingStaff,
+        bool formatChanged,
+        CancellationToken cancellationToken)
+    {
+        if (formatChanged && request.ClaimType == "automatic_format_rule")
+        {
+            var candidate = await context.FormatAutoClaimRules.AsNoTracking()
+                .Where(item => item.LibraryOrganizationId == request.LibraryOrganizationId &&
+                               item.MaterialFormatId == request.MaterialFormatId && item.IsActive &&
+                               item.StaffUserId != null)
+                .OrderBy(item => item.Id)
+                .Select(item => new { item.Id, StaffUserId = item.StaffUserId!.Value })
+                .FirstOrDefaultAsync(cancellationToken);
+            if (candidate is not null)
+            {
+                var assignee = await context.StaffUsers.AsNoTracking()
+                    .SingleOrDefaultAsync(item => item.Id == candidate.StaffUserId, cancellationToken);
+                if (assignee is not null && IsEligibleForLibrary(assignee, request.LibraryOrganizationId))
+                {
+                    request.ClaimedByStaffUserId = assignee.Id;
+                    request.ClaimedByDisplayName = DisplayName(assignee);
+                    request.ClaimedAtUtc = DateTime.UtcNow;
+                    request.ClaimType = "automatic_format_rule";
+                    request.ClaimRuleId = candidate.Id;
+                    AddEvent(context, request, actor, "claim_auto_assigned",
+                        $"Format rule reassigned this request to {DisplayName(assignee)}.");
+                    return;
+                }
+            }
+        }
+
+        if (request.ClaimedByStaffUserId == actor.Id && !formatChanged)
+        {
+            return;
+        }
+        if (request.ClaimedByStaffUserId == actor.Id && request.ClaimType == "manual")
+        {
+            return;
+        }
+
+        var previousClaimantId = request.ClaimedByStaffUserId;
+        SetManualClaim(request, actingStaff);
+        AddEvent(context, request, actor,
+            previousClaimantId.HasValue && previousClaimantId != actor.Id
+                ? "claim_manual_transferred"
+                : "claim_manual_assigned",
+            $"Claim set to {DisplayName(actingStaff)} after staff action.");
+    }
+
     private static void AddEvent(
         AsapDbContext context,
         TitleRequest request,
@@ -791,6 +872,152 @@ public sealed class TitleRequestMutationService(
             MetadataJson = metadata is null ? null : JsonSerializer.Serialize(metadata),
             CreatedUtc = DateTime.UtcNow
         });
+
+    private async Task<(string? Error, EmailOutbox? Outbox)> AddPatronActionEmailAsync(
+        AsapDbContext context,
+        TitleRequest request,
+        string previousStatus,
+        TitleRequestActionInput input,
+        byte[] expectedVersion,
+        bool transportConfigured,
+        CancellationToken cancellationToken)
+    {
+        var templateKey = input.Action switch
+        {
+            "reject" => "rejected",
+            "alreadyOwn" => "already_owned",
+            "purchase" when previousStatus != "outstanding_purchase" &&
+                request.Status == "outstanding_purchase" => "purchase_approved",
+            _ => null
+        };
+        if (templateKey is null)
+        {
+            return (null, null);
+        }
+
+        var templates = await context.EmailTemplates.AsNoTracking()
+            .Where(item => item.OrganizationId == 1 || item.OrganizationId == request.LibraryOrganizationId)
+            .ToListAsync(cancellationToken);
+        EmailTemplate? source;
+        EmailTemplate? overrideRow = null;
+        if (input.Action == "reject" && Clean(input.RejectionTemplateId) is { } selectedId)
+        {
+            if (!long.TryParse(selectedId, out var templateId))
+            {
+                return ("invalid_rejection_template", null);
+            }
+            var selected = templates.SingleOrDefault(item => item.Id == templateId);
+            if (selected is null || !selected.TemplateKey.StartsWith("rejection:", StringComparison.OrdinalIgnoreCase))
+            {
+                return ("invalid_rejection_template", null);
+            }
+            source = selected.OrganizationId == 1 ? selected :
+                templates.SingleOrDefault(item => item.Id == selected.SourceTemplateId && item.OrganizationId == 1);
+            if (selected.OrganizationId == request.LibraryOrganizationId && selected.IsCustom)
+            {
+                source = selected;
+            }
+            else if (selected != source)
+            {
+                overrideRow = selected;
+            }
+        }
+        else
+        {
+            source = templates.SingleOrDefault(item => item.OrganizationId == 1 && item.TemplateKey == templateKey);
+        }
+        if (source is not null && source.OrganizationId == 1 && overrideRow is null &&
+            request.LibraryOrganizationId != 1)
+        {
+            overrideRow = templates.SingleOrDefault(item => item.OrganizationId == request.LibraryOrganizationId &&
+                !item.IsCustom && item.SourceTemplateId == source.Id);
+        }
+        if (input.Action == "reject" && Clean(input.RejectionTemplateId) is not null &&
+            (source is null || source.IsHidden || overrideRow?.IsHidden == true ||
+             Clean(overrideRow?.SubjectTemplate) is null && Clean(source.SubjectTemplate) is null ||
+             Clean(overrideRow?.BodyTemplate) is null && Clean(source.BodyTemplate) is null))
+        {
+            return ("invalid_rejection_template", null);
+        }
+
+        var fallback = templateKey switch
+        {
+            "rejected" => new EffectiveEmailTemplate(templateKey,
+                "Update on your suggestion: {{title}}",
+                "Hello {{name}},\n\nWe are not able to add {{title}} to the collection at this time. Thank you for your suggestion."),
+            "already_owned" => new EffectiveEmailTemplate(templateKey,
+                "{{title}} is already available",
+                "Hello {{name}},\n\nThe library already owns {{title}} or has it on order. Thank you for your suggestion."),
+            _ => new EffectiveEmailTemplate(templateKey,
+                "Purchase approved: {{title}}",
+                "Hello {{name}},\n\nThe library approved {{title}} for purchase. We will update you when it is available.")
+        };
+        var template = new EffectiveEmailTemplate(templateKey,
+            Clean(overrideRow?.SubjectTemplate) ?? Clean(source?.SubjectTemplate) ?? fallback.SubjectTemplate,
+            Clean(overrideRow?.BodyTemplate) ?? Clean(source?.BodyTemplate) ?? fallback.BodyTemplate);
+        var patronConfiguration = await patronConfigurations.GetAsync(
+            context, request.LibraryOrganizationId, cancellationToken);
+        var formatLabel = patronConfiguration?.Formats
+            .FirstOrDefault(item => item.Id == request.MaterialFormatId)?.Label ??
+            await context.MaterialFormats.AsNoTracking()
+                .Where(item => item.Id == request.MaterialFormatId)
+                .Select(item => item.Label)
+                .SingleAsync(cancellationToken);
+        var patron = new PatronSnapshot(0, request.Barcode, request.Email, request.NameFirst,
+            request.NameLast, request.PatronCodeId, request.PatronCodeDescription,
+            request.PatronOrganizationId ?? 0, request.LibraryOrganizationId,
+            request.LibraryNameSnapshot ?? string.Empty, request.PreferredPickupBranchId);
+        var rendered = PatronEmailTemplateRenderer.Render(template, patron, request.Title,
+            request.Author, formatLabel, request.Barcode);
+        var systemEmail = await context.EmailSettings.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.OrganizationId == 1, cancellationToken);
+        var libraryEmail = await context.EmailSettings.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.OrganizationId == request.LibraryOrganizationId, cancellationToken);
+        var fromAddress = Clean(libraryEmail?.FromAddress) ?? Clean(systemEmail?.FromAddress);
+        var fromName = Clean(libraryEmail?.FromName) ?? Clean(systemEmail?.FromName);
+        var toAddress = Clean(request.Email);
+        string? suppressionReason = source?.IsHidden == true || overrideRow?.IsHidden == true
+            ? "template_hidden"
+            : null;
+        if (suppressionReason is null &&
+            (toAddress is null || !MailAddress.TryCreate(toAddress, out var parsedAddress) ||
+             parsedAddress.Address != toAddress))
+        {
+            suppressionReason = "recipient_invalid";
+        }
+        else if (suppressionReason is null && !recipientDomainPolicy.IsAllowed(toAddress!))
+        {
+            suppressionReason = "recipient_domain_not_allowed";
+        }
+        else if (suppressionReason is null && fromAddress is null)
+        {
+            suppressionReason = "sender_missing";
+        }
+        else if (suppressionReason is null && !transportConfigured)
+        {
+            suppressionReason = "mail_not_configured";
+        }
+        var now = DateTime.UtcNow;
+        var outbox = new EmailOutbox
+        {
+            OrganizationId = request.LibraryOrganizationId,
+            BusinessKey = $"staff-patron-action:{input.Action}:{request.Id}:{Convert.ToHexString(expectedVersion)}",
+            DeliveryClass = "business_event",
+            ToAddress = toAddress,
+            FromAddress = fromAddress,
+            FromName = fromName,
+            Subject = rendered.Subject,
+            BodyText = rendered.BodyText,
+            BodyHtml = rendered.BodyHtml,
+            Status = suppressionReason is null ? "pending" : "suppressed",
+            SuppressionReason = suppressionReason,
+            NextAttemptUtc = suppressionReason is null ? now : null,
+            CreatedUtc = now,
+            SuppressedUtc = suppressionReason is null ? null : now
+        };
+        context.EmailOutbox.Add(outbox);
+        return (null, outbox);
+    }
 
     private async Task<EmailOutbox?> AddStaffNotificationAsync(
         AsapDbContext context,
@@ -1016,6 +1243,101 @@ public sealed class TitleRequestMutationService(
         "closeDuplicate" => "duplicate_hold",
         _ => "manual"
     };
+
+    private async Task<(string? Error, string? Json)> MergeCustomFieldsAsync(
+        AsapDbContext context,
+        TitleRequest request,
+        JsonElement submitted,
+        CancellationToken cancellationToken)
+    {
+        var configuration = await patronConfigurations.GetAsync(
+            context, request.LibraryOrganizationId, cancellationToken);
+        var format = configuration?.Formats.FirstOrDefault(item => item.Id == request.MaterialFormatId);
+        if (format is null)
+        {
+            return submitted.EnumerateObject().Any()
+                ? ("invalid_custom_fields", null)
+                : (null, request.CustomFieldsJson);
+        }
+
+        Dictionary<string, JsonElement> merged;
+        try
+        {
+            merged = string.IsNullOrWhiteSpace(request.CustomFieldsJson)
+                ? new(StringComparer.Ordinal)
+                : JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(request.CustomFieldsJson)
+                  ?? new(StringComparer.Ordinal);
+        }
+        catch (JsonException)
+        {
+            merged = new(StringComparer.Ordinal);
+        }
+
+        foreach (var property in submitted.EnumerateObject())
+        {
+            var definition = configuration!.CustomFields.FirstOrDefault(item => item.Key == property.Name);
+            if (definition is null || !format.CustomFields.TryGetValue(property.Name, out var rule) ||
+                rule.Mode == "hidden")
+            {
+                continue;
+            }
+
+            if (property.Value.ValueKind is not (JsonValueKind.String or JsonValueKind.Null or JsonValueKind.Object) ||
+                property.Value.ValueKind == JsonValueKind.Object &&
+                (!property.Value.TryGetProperty("value", out var nestedValue) ||
+                 nestedValue.ValueKind is not (JsonValueKind.String or JsonValueKind.Null)))
+            {
+                return ("invalid_custom_fields", null);
+            }
+            var raw = property.Value.ValueKind switch
+            {
+                JsonValueKind.String => property.Value.GetString(),
+                JsonValueKind.Null => null,
+                JsonValueKind.Object when property.Value.TryGetProperty("value", out var element) &&
+                                          element.ValueKind == JsonValueKind.String => element.GetString(),
+                _ => null
+            };
+            var value = Clean(raw);
+            if (value is null)
+            {
+                if (rule.Mode == "required")
+                {
+                    return ("invalid_custom_fields", null);
+                }
+                merged.Remove(property.Name);
+                continue;
+            }
+
+            if (definition.Type == "select")
+            {
+                var option = definition.Options.FirstOrDefault(item =>
+                    item.Key == value || item.Label == value);
+                if (option is null)
+                {
+                    return ("invalid_custom_fields", null);
+                }
+                merged[property.Name] = JsonSerializer.SerializeToElement(new
+                {
+                    label = definition.Label,
+                    type = definition.Type,
+                    value = option.Key,
+                    displayValue = option.Label
+                });
+            }
+            else
+            {
+                var maxLength = definition.Type == "textarea" ? 2000 : 250;
+                merged[property.Name] = JsonSerializer.SerializeToElement(new
+                {
+                    label = definition.Label,
+                    type = definition.Type,
+                    value = value[..Math.Min(value.Length, maxLength)]
+                });
+            }
+        }
+
+        return (null, merged.Count == 0 ? null : JsonSerializer.Serialize(merged));
+    }
 
     private static bool IsSupplied(JsonElement value) => value.ValueKind != JsonValueKind.Undefined;
     private static string? ElementString(JsonElement value) => value.ValueKind == JsonValueKind.String

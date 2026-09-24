@@ -411,7 +411,13 @@ public static class TitleRequestEndpoints
         }
         if (result.AdditionalCopyRequestId is not long copyId || additionalCopies is null)
         {
-            return Results.Json(row);
+            return result.ReminderRequested
+                ? Results.Json(new
+                {
+                    request = row,
+                    purchaseReminderEmail = new { requested = true, queued = result.ReminderQueued }
+                })
+                : Results.Json(row);
         }
         var copy = await additionalCopies.GetAsync(Current(context), copyId.ToString(), null, cancellationToken);
         return Results.Json(new

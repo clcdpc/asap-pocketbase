@@ -186,3 +186,26 @@ export function renderNoteActivity(notes) {
 
   return container;
 }
+
+export function renderRequestActivity(events) {
+  const section = createElement('section', 'request-activity');
+  section.append(createElement('h6', '', 'Recorded activity'));
+  if (!Array.isArray(events) || events.length === 0) {
+    section.append(createElement('p', 'note-activity-empty', 'No recorded activity yet.'));
+    return section;
+  }
+  const list = createElement('ol', 'note-activity-list');
+  for (const event of events) {
+    const item = createElement('li', 'note-activity-item');
+    const body = createElement('div', 'note-activity-body');
+    body.append(createElement('div', 'note-activity-message', event.message || event.eventType || 'Activity'));
+    const date = event.created ? new Date(event.created) : null;
+    const when = date && !Number.isNaN(date.getTime()) ? date.toLocaleString() : '';
+    const actor = String(event.actorName || '').trim();
+    body.append(createElement('div', 'note-activity-meta', [when, actor].filter(Boolean).join(' | ')));
+    item.append(body);
+    list.append(item);
+  }
+  section.append(list);
+  return section;
+}

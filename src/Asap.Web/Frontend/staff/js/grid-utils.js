@@ -26,7 +26,7 @@ export function formatPublication(value) {
 export function formatNote(row) {
   const note = row?.notes;
   const text = String(note || '').trim();
-  if (!text) return '';
+  if (!text && !row?.activity?.length) return '';
   return gridjs.html(`<button type="button" class="truncate-note" data-note-record-id="${escapeAttr(row?.id || '')}" data-request-type="${escapeAttr(row?.type || '')}" data-notes-action="true" data-no-row-edit="true" title="View notes and activity" aria-label="View notes and activity"><i class="fa fa-commenting-o" aria-hidden="true"></i></button>`);
 }
 

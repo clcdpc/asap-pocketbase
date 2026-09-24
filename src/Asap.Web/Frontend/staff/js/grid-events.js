@@ -1,7 +1,7 @@
 import { openPolarisSearch } from './modals.js';
 import { openNewSuggestionForPatron } from './patron.js';
 import { showToast } from './dialogs.js';
-import { renderNoteActivity } from './note-activity.js';
+import { renderNoteActivity, renderRequestActivity } from './note-activity.js';
 import { normalizeStatus } from './grid-policy.mjs';
 import { renderAdditionalCopySourceCell } from './grid-rendering.js';
 import { findWorkflowRow, requestIdentityFromElement } from './request-identity.mjs';
@@ -94,6 +94,7 @@ export function setupGridEvents(ctx) {
         return;
       }
       content.replaceChildren(renderNoteActivity(row.notes));
+      if (row.type === 'title_request') content.append(renderRequestActivity(row.activity));
 
       if (row.type === 'additional_copy' && row.sourceTitleRequest) {
         const sourceWrapper = document.createElement('div');

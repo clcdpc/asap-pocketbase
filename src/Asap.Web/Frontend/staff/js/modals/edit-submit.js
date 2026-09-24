@@ -108,10 +108,10 @@ export async function submitTitleRequestAction(identity, payload, options = {}) 
 
     if (ownedAtCompletion) {
       if (actionValue === 'purchase') {
-        if (reminder?.requested && reminder.sent) {
-          showToast('Purchase saved and reminder email sent.', 'success');
+        if (reminder?.requested && reminder.queued) {
+          showToast('Purchase saved and reminder email queued.', 'success');
         } else if (reminder?.requested) {
-          showToast(reminder.message || 'Purchase saved, but the reminder email could not be sent.', 'warning');
+          showToast('Purchase saved, but the reminder email was not queued.', 'warning');
         } else {
           showToast('Purchase saved.', 'success');
         }

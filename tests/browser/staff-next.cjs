@@ -585,7 +585,7 @@ async function runStaleAssignmentCandidates(browser, args, report) {
       await page.keyboard.press('Escape');
       await page.locator('#request-dialog').waitFor({ state: 'hidden' });
       await page.locator(scenario.searchSelector).fill(scenario.searchValue);
-      await page.getByRole('button', { name: scenario.openLabel(scenario.bId) }).click();
+      await page.getByRole('button', { name: scenario.openLabel(scenario.bId), exact: true }).click();
       await page.locator('#request-dialog[open]').waitFor();
       await page.locator('#request-dialog-kicker').filter({ hasText: scenario.kicker(scenario.bId) }).waitFor();
       delayed.release();
@@ -742,7 +742,7 @@ async function runStaleMutationCompletions(browser, args, report) {
       await page.locator('#request-dialog').waitFor({ state: 'hidden' });
       await page.locator(target.claimFilter).selectOption('all');
       await page.locator(target.searchSelector).fill(target.searchValue);
-      await page.getByRole('button', { name: target.openLabel }).click();
+    await page.getByRole('button', { name: target.openLabel, exact: true }).click();
       await page.locator('#request-dialog-kicker').filter({ hasText: target.kicker }).waitFor();
       const beforeResponse = await context.request.get(`${args.baseOrigin}${target.apiPath}`);
       assert.equal(beforeResponse.status(), 200, await beforeResponse.text());

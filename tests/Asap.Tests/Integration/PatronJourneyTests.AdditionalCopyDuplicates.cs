@@ -14,6 +14,245 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
+    public async Task StaffActionEmailsUseSelectedTemplateAndCommittedHistory()
+    {
+        const int libraryId = 99041;
+        var actor = await ReadConfiguredSuperAdminAsync();
+        await using var scope = factory!.Services.CreateAsyncScope();
+        var contexts = scope.ServiceProvider.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var seed = await contexts.CreateDbContextAsync();
+        var formatId = await seed.MaterialFormats.Where(item => item.Code == "book")
+            .Select(item => item.Id).FirstAsync();
+        seed.Organizations.Add(new Organization
+        {
+            Id = libraryId, DisplayName = "Action email library", Abbreviation = "AEL", IsActive = true
+        });
+        await seed.SaveChangesAsync();
+        seed.EmailSettings.Add(new EmailSettings
+        {
+            OrganizationId = libraryId, FromAddress = "library@example.org", FromName = "Library"
+        });
+        var rejection = new EmailTemplate
+        {
+            OrganizationId = libraryId, TemplateKey = "rejection:staff_action_test",
+            DisplayName = "Selected rejection", SubjectTemplate = "Selected: {{title}}",
+            BodyTemplate = "Hello {{firstName}}, {{title}} was declined.", IsCustom = true
+        };
+        seed.EmailTemplates.Add(rejection);
+        var rejected = new TitleRequest
+        {
+            LibraryOrganizationId = libraryId, Barcode = $"2{Guid.NewGuid():N}"[..14],
+            Email = "patron@example.org", NameFirst = "Pat", Title = "Declined title",
+            MaterialFormatId = formatId, Status = "suggestion", AutoHold = true,
+            Notes = "Draft comment", CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow
+        };
+        var purchased = new TitleRequest
+        {
+            LibraryOrganizationId = libraryId, Barcode = $"2{Guid.NewGuid():N}"[..14],
+            Email = "patron@example.org", NameFirst = "Pat", Title = "Approved title",
+            MaterialFormatId = formatId, Status = "suggestion", AutoHold = true,
+            CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow
+        };
+        var alreadyOwned = new TitleRequest
+        {
+            LibraryOrganizationId = libraryId, Barcode = $"2{Guid.NewGuid():N}"[..14],
+            Email = "patron@example.org", NameFirst = "Pat", Title = "Owned title",
+            MaterialFormatId = formatId, Status = "suggestion", AutoHold = true,
+            CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow
+        };
+        seed.TitleRequests.AddRange(rejected, purchased, alreadyOwned);
+        await seed.SaveChangesAsync();
+
+        var mutations = scope.ServiceProvider.GetRequiredService<TitleRequestMutationService>();
+        var invalid = await mutations.ActionAsync(actor, rejected.Id, new TitleRequestActionInput
+        {
+            Version = Convert.ToBase64String(rejected.RowVersion), Action = "reject",
+            RejectionTemplateId = "999999999"
+        }, CancellationToken.None);
+        Assert.AreEqual("invalid_rejection_template", invalid.Code);
+        await using (var unchanged = await contexts.CreateDbContextAsync())
+        {
+            var row = await unchanged.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == rejected.Id);
+            Assert.AreEqual("suggestion", row.Status);
+            Assert.IsTrue(row.RowVersion.SequenceEqual(rejected.RowVersion));
+            Assert.IsFalse(await unchanged.EmailOutbox.AnyAsync(item =>
+                item.BusinessKey != null && item.BusinessKey.Contains($":{rejected.Id}:")));
+        }
+
+        var rejectedResult = await mutations.ActionAsync(actor, rejected.Id, new TitleRequestActionInput
+        {
+            Version = Convert.ToBase64String(rejected.RowVersion), Action = "reject",
+            RejectionTemplateId = rejection.Id.ToString()
+        }, CancellationToken.None);
+        Assert.AreEqual("updated", rejectedResult.Code);
+        var purchaseResult = await mutations.ActionAsync(actor, purchased.Id, new TitleRequestActionInput
+        {
+            Version = Convert.ToBase64String(purchased.RowVersion), Action = "purchase",
+            EmailPurchaseReminder = true
+        }, CancellationToken.None);
+        Assert.AreEqual("updated", purchaseResult.Code);
+        Assert.IsTrue(purchaseResult.ReminderRequested);
+        Assert.AreEqual("updated", (await mutations.ActionAsync(actor, alreadyOwned.Id,
+            new TitleRequestActionInput
+            {
+                Version = Convert.ToBase64String(alreadyOwned.RowVersion), Action = "alreadyOwn",
+                Bibid = JsonSerializer.SerializeToElement("9001")
+            }, CancellationToken.None)).Code);
+        await using var verify = await contexts.CreateDbContextAsync();
+        var email = await verify.EmailOutbox.AsNoTracking().SingleAsync(item =>
+            item.BusinessKey != null && item.BusinessKey.StartsWith($"staff-patron-action:reject:{rejected.Id}:"));
+        Assert.AreEqual("Selected: Declined title", email.Subject);
+        StringAssert.Contains(email.BodyText!, "Hello Pat, Declined title was declined.");
+        Assert.AreEqual("business_event", email.DeliveryClass);
+        Assert.IsTrue(await verify.EmailOutbox.AnyAsync(item =>
+            item.BusinessKey != null && item.BusinessKey.StartsWith($"staff-patron-action:purchase:{purchased.Id}:")));
+        Assert.IsTrue(await verify.EmailOutbox.AnyAsync(item =>
+            item.BusinessKey != null && item.BusinessKey.StartsWith($"staff-patron-action:alreadyOwn:{alreadyOwned.Id}:")));
+        var views = scope.ServiceProvider.GetRequiredService<TitleRequestViewService>();
+        var rowDto = await views.GetAsync(actor, rejected.Id.ToString(), CancellationToken.None);
+        Assert.IsNotNull(rowDto);
+        Assert.AreEqual("Draft comment", rowDto.Notes);
+        Assert.IsTrue(rowDto.Activity.Any(item => item.EventType == "status_changed" && item.Message.Contains("closed")));
+    }
+
+    [TestMethod]
+    public async Task StaffActionsPreserveAutomaticClaimAndReapplyChangedFormatRule()
+    {
+        const int libraryId = 99042;
+        var actor = await ReadConfiguredSuperAdminAsync();
+        await using var scope = factory!.Services.CreateAsyncScope();
+        var contexts = scope.ServiceProvider.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var seed = await contexts.CreateDbContextAsync();
+        var bookId = await seed.MaterialFormats.Where(item => item.Code == "book").Select(item => item.Id).FirstAsync();
+        var dvdId = await seed.MaterialFormats.Where(item => item.Code == "dvd").Select(item => item.Id).FirstAsync();
+        seed.Organizations.Add(new Organization
+        {
+            Id = libraryId, DisplayName = "Claim action library", Abbreviation = "CAL", IsActive = true
+        });
+        var assignee = new StaffUser
+        {
+            UserPrincipalName = "claim.action@example.org",
+            NormalizedUserPrincipalName = "CLAIM.ACTION@EXAMPLE.ORG",
+            Role = "staff", OrganizationId = libraryId, IsActive = true
+        };
+        seed.StaffUsers.Add(assignee);
+        await seed.SaveChangesAsync();
+        var bookRule = new FormatAutoClaimRule
+        {
+            LibraryOrganizationId = libraryId, MaterialFormatId = bookId,
+            StaffUserId = actor.Id, IsActive = true, CreatedUtc = DateTime.UtcNow
+        };
+        var dvdRule = new FormatAutoClaimRule
+        {
+            LibraryOrganizationId = libraryId, MaterialFormatId = dvdId,
+            StaffUserId = assignee.Id, IsActive = true, CreatedUtc = DateTime.UtcNow
+        };
+        seed.FormatAutoClaimRules.AddRange(bookRule, dvdRule);
+        await seed.SaveChangesAsync();
+        var request = new TitleRequest
+        {
+            LibraryOrganizationId = libraryId, Barcode = $"2{Guid.NewGuid():N}"[..14],
+            Title = "Auto claim", MaterialFormatId = bookId, Status = "suggestion", AutoHold = true,
+            ClaimedByStaffUserId = actor.Id, ClaimedByDisplayName = "Actor",
+            ClaimedAtUtc = DateTime.UtcNow, ClaimType = "automatic_format_rule", ClaimRuleId = bookRule.Id,
+            CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow
+        };
+        seed.TitleRequests.Add(request);
+        await seed.SaveChangesAsync();
+        var mutations = scope.ServiceProvider.GetRequiredService<TitleRequestMutationService>();
+        Assert.AreEqual("updated", (await mutations.ActionAsync(actor, request.Id, new TitleRequestActionInput
+        {
+            Version = Convert.ToBase64String(request.RowVersion), Action = "edit", Title = "Auto claim edited"
+        }, CancellationToken.None)).Code);
+        await using var afterTitle = await contexts.CreateDbContextAsync();
+        var preserved = await afterTitle.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == request.Id);
+        Assert.AreEqual("automatic_format_rule", preserved.ClaimType);
+        Assert.AreEqual(bookRule.Id, preserved.ClaimRuleId);
+        Assert.AreEqual(actor.Id, preserved.ClaimedByStaffUserId);
+        Assert.AreEqual("updated", (await mutations.ActionAsync(actor, request.Id, new TitleRequestActionInput
+        {
+            Version = Convert.ToBase64String(preserved.RowVersion), Action = "edit", Format = "dvd"
+        }, CancellationToken.None)).Code);
+        await using var afterFormat = await contexts.CreateDbContextAsync();
+        var reassigned = await afterFormat.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == request.Id);
+        Assert.AreEqual("automatic_format_rule", reassigned.ClaimType);
+        Assert.AreEqual(dvdRule.Id, reassigned.ClaimRuleId);
+        Assert.AreEqual(assignee.Id, reassigned.ClaimedByStaffUserId);
+        Assert.IsTrue(await afterFormat.TitleRequestEvents.AnyAsync(item =>
+            item.TitleRequestId == request.Id && item.EventType == "claim_auto_assigned"));
+    }
+
+    [TestMethod]
+    public async Task StaffEditCustomFieldsPreservesCanonicalValuesAndHistoricalFields()
+    {
+        const int libraryId = 99040;
+        var actor = await ReadConfiguredSuperAdminAsync();
+        await using var scope = factory!.Services.CreateAsyncScope();
+        var contexts = scope.ServiceProvider.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var seed = await contexts.CreateDbContextAsync();
+        var formatId = await seed.MaterialFormats.Where(item => item.Code == "book")
+            .Select(item => item.Id).FirstAsync();
+        seed.Organizations.Add(new Organization
+        {
+            Id = libraryId, DisplayName = "Staff custom field library", Abbreviation = "SCF", IsActive = true
+        });
+        var field = new PatronCustomField
+        {
+            LibraryOrganizationId = libraryId, FieldKey = "audience_note", FieldType = "text",
+            Label = "Audience note", IsEnabled = true, SortOrder = 1
+        };
+        seed.PatronCustomFields.Add(field);
+        await seed.SaveChangesAsync();
+        seed.MaterialFormatCustomFieldRules.Add(new MaterialFormatCustomFieldRule
+        {
+            LibraryOrganizationId = libraryId, MaterialFormatId = formatId,
+            PatronCustomFieldId = field.Id, Mode = "optional"
+        });
+        var request = new TitleRequest
+        {
+            LibraryOrganizationId = libraryId, Barcode = $"2{Guid.NewGuid():N}"[..14],
+            Title = "Custom field round trip", MaterialFormatId = formatId,
+            Status = "suggestion", AutoHold = true,
+            CustomFieldsJson = """
+                {"audience_note":{"label":"Audience note","type":"text","value":"Original"},
+                 "legacy_note":{"label":"Legacy note","type":"text","value":"Keep"}}
+                """,
+            CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow
+        };
+        seed.TitleRequests.Add(request);
+        await seed.SaveChangesAsync();
+
+        var mutations = scope.ServiceProvider.GetRequiredService<TitleRequestMutationService>();
+        foreach (var value in new[] { "Original", "Updated", "" })
+        {
+            await using var before = await contexts.CreateDbContextAsync();
+            var version = Convert.ToBase64String((await before.TitleRequests.AsNoTracking()
+                .SingleAsync(item => item.Id == request.Id)).RowVersion);
+            var result = await mutations.ActionAsync(actor, request.Id, new TitleRequestActionInput
+            {
+                Version = version, Action = "edit", Title = "Custom field round trip",
+                CustomFields = JsonSerializer.SerializeToElement(new { audience_note = value })
+            }, CancellationToken.None);
+            Assert.AreEqual("updated", result.Code);
+
+            await using var verify = await contexts.CreateDbContextAsync();
+            var current = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == request.Id);
+            using var customFields = JsonDocument.Parse(current.CustomFieldsJson!);
+            Assert.AreEqual("Keep", customFields.RootElement.GetProperty("legacy_note")
+                .GetProperty("value").GetString());
+            if (value.Length == 0)
+            {
+                Assert.IsFalse(customFields.RootElement.TryGetProperty("audience_note", out _));
+            }
+            else
+            {
+                Assert.AreEqual(value, customFields.RootElement.GetProperty("audience_note")
+                    .GetProperty("value").GetString());
+            }
+        }
+    }
+
+    [TestMethod]
     public async Task PurchasePromotionDoesNotCreateActiveSamePatronBibDuplicate()
     {
         const int libraryId = 99039;

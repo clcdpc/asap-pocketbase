@@ -140,6 +140,8 @@ public sealed partial class PatronJourneyTests
                 Version = StaffVersion.Encode(title.RowVersion), Action = "purchase", EmailPurchaseReminder = true
             }, CancellationToken.None);
             Assert.AreEqual("updated", purchased.Code);
+            Assert.IsTrue(purchased.ReminderRequested);
+            Assert.AreEqual(configured, purchased.ReminderQueued);
             var copies = scoped.Services.GetRequiredService<AdditionalCopyService>();
             var created = await copies.CreateAsync(actor, source.Id, new AdditionalCopyCreateInput(StaffVersion.Encode(source.RowVersion), true), CancellationToken.None);
             Assert.AreEqual("created", created.Code);
@@ -152,14 +154,16 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("updated", hold.Code);
             CollectionAssert.AreEqual(new[] { 2, 2, 2, 2, 2 }, sender.Organizations.ToArray());
             var outboxes = await context.EmailOutbox.AsNoTracking().Where(item => item.Id > beforeId).ToListAsync();
-            Assert.AreEqual(5, outboxes.Count);
+            Assert.AreEqual(6, outboxes.Count);
             foreach (var outbox in outboxes)
             {
                 Assert.AreEqual(2, outbox.OrganizationId);
                 if (outbox.AuthorizationOrganizationId.HasValue) Assert.AreEqual(2, outbox.AuthorizationOrganizationId);
                 Assert.AreEqual("library.sender@example.org", outbox.FromAddress);
-                Assert.AreEqual(configured ? "pending" : "suppressed", outbox.Status);
-                Assert.AreEqual(configured ? null : "mail_not_configured", outbox.SuppressionReason);
+                var patronAction = outbox.BusinessKey?.StartsWith("staff-patron-action:purchase:") == true;
+                Assert.AreEqual(patronAction ? "suppressed" : configured ? "pending" : "suppressed", outbox.Status);
+                Assert.AreEqual(patronAction ? "recipient_invalid" : configured ? null : "mail_not_configured",
+                    outbox.SuppressionReason);
             }
             Assert.AreEqual(configured ? 5 : 0, localDispatcher.EnqueuedIds.Count);
         }

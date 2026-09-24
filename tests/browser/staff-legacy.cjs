@@ -687,6 +687,8 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.goto(`${args.baseOrigin}/staff/?stage=closed&request=${optOutId}&requestType=title_request`,
       { waitUntil: 'networkidle' });
     await page.locator('#editModal[open]').waitFor();
+    assert.match(await page.locator('#edit-recorded-activity').textContent(), /Closed without hold/);
+    assert.doesNotMatch(await page.locator('#edit-notes').inputValue(), /Closed without hold/);
     assert.equal(await page.locator('#edit-identifier').isDisabled(), true);
     assert.equal(await page.locator('#edit-bibid').isDisabled(), true);
     assert.equal(await page.locator('#btn-bib-lookup').isDisabled(), true);

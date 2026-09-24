@@ -1104,7 +1104,9 @@ public sealed partial class PatronJourneyTests
                    r.[Publication],
                    JSON_VALUE(r.[CustomFieldsJson], '$.audience_note.value'),
                    JSON_VALUE(r.[CustomFieldsJson], '$.binding.value'),
-                   JSON_VALUE(r.[CustomFieldsJson], '$.retired.value')
+                   JSON_VALUE(r.[CustomFieldsJson], '$.retired.value'),
+                   (SELECT COUNT(*) FROM [asap].[TitleRequestEvent]
+                    WHERE [TitleRequestId] = @requestId AND [EventType] = N'request_edited')
             FROM [asap].[TitleRequest] r
             JOIN [asap].[StaffUser] s ON s.[Id] = @superId
             WHERE r.[Id] = @requestId;
@@ -1119,11 +1121,12 @@ public sealed partial class PatronJourneyTests
         Assert.IsTrue(verified.GetBoolean(3));
         Assert.AreEqual("browser-weekly@example.org", verified.GetString(4));
         Assert.IsTrue(verified.GetBoolean(5));
-        Assert.AreEqual(4, verified.GetInt32(6));
+        Assert.AreEqual(2, verified.GetInt32(6));
         Assert.AreEqual("Library backlist", verified.GetString(7));
         Assert.AreEqual("Edited audience", verified.GetString(8));
         Assert.AreEqual("hardback", verified.GetString(9));
         Assert.AreEqual("Keep me", verified.GetString(10));
+        Assert.IsGreaterThanOrEqualTo(1, verified.GetInt32(11));
         await verified.CloseAsync();
 
         await using var resolution = verify.CreateCommand();
