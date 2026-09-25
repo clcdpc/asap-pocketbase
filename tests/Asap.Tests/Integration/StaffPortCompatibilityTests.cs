@@ -1565,6 +1565,13 @@ public sealed partial class PatronJourneyTests
     private sealed class StaffPortPatronProvider : IPatronProvider, IStaffPolarisProvider
     {
         private readonly DeterministicTestingPatronProvider inner = new();
+        private readonly int localHomeLibraryOrganizationId;
+
+        public StaffPortPatronProvider(int localHomeLibraryOrganizationId = 91632)
+        {
+            this.localHomeLibraryOrganizationId = localHomeLibraryOrganizationId;
+        }
+
         public List<string> DirectLookups { get; } = [];
         public List<int> HoldingsOrganizationIds { get; } = [];
         public bool FailPatronLookup { get; init; }
@@ -1586,7 +1593,7 @@ public sealed partial class PatronJourneyTests
         private async Task<PatronSnapshot> SnapshotAsync(string barcode, CancellationToken cancellationToken) =>
             (await inner.RefreshAsync(barcode, cancellationToken)) with
             {
-                HomeLibraryOrganizationId = barcode == "port-foreign" ? 3 : 91632,
+                HomeLibraryOrganizationId = barcode == "port-foreign" ? 3 : localHomeLibraryOrganizationId,
                 PatronCodeId = barcode == "port-restricted" ? "3" : "1"
             };
         public async Task<IReadOnlyList<PatronSnapshot>> SearchPatronsAsync(string query, CancellationToken cancellationToken)

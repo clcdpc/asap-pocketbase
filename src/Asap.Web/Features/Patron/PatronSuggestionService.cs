@@ -117,13 +117,18 @@ public sealed partial class PatronSuggestionService(
         try
         {
             patron = await patronProvider.RefreshAsync(session.Barcode, cancellationToken);
-            if (staffActor is not null)
+            if (staffActor is null)
+            {
+                EnforcePatronCodeEligibility(configuration, patron);
+            }
+            else
             {
                 configuration = await GetCurrentParticipatingConfigurationAsync(
                     configuration.OrganizationId,
                     cancellationToken);
                 EnforceStaffPatronEligibility(configuration, patron);
             }
+
             pickupBranches = await patronProvider.GetPickupBranchesAsync(patron, cancellationToken);
         }
         catch (PolarisOperationalException exception)
@@ -134,7 +139,6 @@ public sealed partial class PatronSuggestionService(
                 innerException: exception);
         }
 
-        EnforcePatronCodeEligibility(configuration, patron);
         var selectedBranch = pickupBranches.SingleOrDefault(
             branch => branch.Id == input.PreferredPickupBranchId);
         if (selectedBranch is null)
@@ -142,16 +146,28 @@ public sealed partial class PatronSuggestionService(
             throw new PatronFlowException(400, "Choose a valid preferred pickup location.");
         }
 
+        var organizationId = configuration.OrganizationId;
+        configuration = await GetCurrentParticipatingConfigurationAsync(
+            organizationId,
+            cancellationToken);
+        if (staffActor is null)
+        {
+            EnforcePatronCodeEligibility(configuration, patron);
+        }
+        else
+        {
+            EnforceStaffPatronEligibility(configuration, patron);
+            await RequireCurrentStaffAsync(staffActor, organizationId, cancellationToken);
+
+            configuration = await GetCurrentParticipatingConfigurationAsync(
+                organizationId,
+                cancellationToken);
+            EnforceStaffPatronEligibility(configuration, patron);
+        }
+
+        var preProviderSuggestion = Validate(input, configuration);
         if (patron.PreferredPickupBranchId != selectedBranch.Id)
         {
-            if (staffActor is not null)
-            {
-                configuration = await GetCurrentParticipatingConfigurationAsync(
-                    configuration.OrganizationId,
-                    cancellationToken);
-                EnforceStaffPatronEligibility(configuration, patron);
-                await RequireCurrentStaffAsync(staffActor, configuration.OrganizationId, cancellationToken);
-            }
             try
             {
                 await patronProvider.UpdatePreferredPickupBranchAsync(
@@ -168,26 +184,28 @@ public sealed partial class PatronSuggestionService(
             }
         }
 
-        var suggestion = Validate(input, configuration);
         var emailTransportReadiness = await emailSender.CheckReadinessAsync(
             configuration.OrganizationId,
             cancellationToken);
         long requestId = 0;
         long? outboxId = null;
         byte[] expectedRowVersion = [];
+        var committedSuggestion = preProviderSuggestion;
+        var committedConfiguration = configuration;
         for (var attempt = 1; attempt <= 5; attempt++)
         {
             var autoClaimCandidate = await FindAutoClaimCandidateAsync(
                 configuration.OrganizationId,
-                suggestion.Format.Id,
+                preProviderSuggestion.Format.Id,
                 cancellationToken);
             try
             {
-                (requestId, outboxId, expectedRowVersion) = await InsertAsync(
+                (requestId, outboxId, expectedRowVersion, committedSuggestion, committedConfiguration) = await InsertAsync(
                     session,
                     patron,
                     selectedBranch,
-                    suggestion,
+                    input,
+                    preProviderSuggestion,
                     configuration,
                     autoClaimCandidate,
                     emailTransportReadiness,
@@ -223,27 +241,33 @@ public sealed partial class PatronSuggestionService(
             }
         }
 
-        if (suggestion.Identifier is not null)
+        if (committedSuggestion.Identifier is not null)
         {
             await ProcessIdentifierLookupAsync(
                 requestId,
-                suggestion.Identifier,
-                configuration.OrganizationId,
+                committedSuggestion.Identifier,
+                committedConfiguration.OrganizationId,
                 expectedRowVersion,
                 cancellationToken);
         }
 
         return new PatronSuggestionResult(
             requestId,
-            configuration.SuccessTitle,
-            configuration.SuccessMessage);
+            committedConfiguration.SuccessTitle,
+            committedConfiguration.SuccessMessage);
     }
 
-    private async Task<(long RequestId, long? OutboxId, byte[] RowVersion)> InsertAsync(
+    private async Task<(
+        long RequestId,
+        long? OutboxId,
+        byte[] RowVersion,
+        ValidatedSuggestion Suggestion,
+        EffectivePatronConfiguration Configuration)> InsertAsync(
         PatronSessionContext session,
         PatronSnapshot patron,
         PickupBranch selectedBranch,
-        ValidatedSuggestion suggestion,
+        PatronSuggestionInput input,
+        ValidatedSuggestion preProviderSuggestion,
         EffectivePatronConfiguration configuration,
         AutoClaimCandidate? autoClaimCandidate,
         EmailTransportReadiness emailTransportReadiness,
@@ -316,6 +340,12 @@ public sealed partial class PatronSuggestionService(
             EnforceStaffPatronEligibility(currentConfiguration, patron);
         }
 
+        var currentSuggestion = Validate(input, currentConfiguration);
+        if (currentSuggestion.Format.Id != preProviderSuggestion.Format.Id)
+        {
+            throw FormatChanged();
+        }
+
         var autoClaimTarget = await LockAutoClaimTargetAsync(
             connection,
             transaction,
@@ -326,7 +356,7 @@ public sealed partial class PatronSuggestionService(
             connection,
             transaction,
             currentConfiguration.OrganizationId,
-            suggestion,
+            currentSuggestion,
             cancellationToken);
         // The pinned staff-create workflow bypasses only the public submission count.
         if (staffActor is null)
@@ -342,7 +372,7 @@ public sealed partial class PatronSuggestionService(
             connection,
             transaction,
             session.Barcode,
-            suggestion,
+            currentSuggestion,
             currentConfiguration,
             cancellationToken);
 
@@ -377,18 +407,18 @@ public sealed partial class PatronSuggestionService(
             Add(insert, "@pickupBranchId", SqlDbType.Int, selectedBranch.Id);
             Add(insert, "@pickupBranchName", SqlDbType.NVarChar, selectedBranch.Label, 256);
             Add(insert, "@libraryName", SqlDbType.NVarChar, currentConfiguration.OrganizationName, 256);
-            Add(insert, "@title", SqlDbType.NVarChar, suggestion.Title, 500);
-            Add(insert, "@author", SqlDbType.NVarChar, suggestion.Author, 500);
-            Add(insert, "@identifier", SqlDbType.NVarChar, suggestion.Identifier, 100);
-            Add(insert, "@publication", SqlDbType.NVarChar, suggestion.Publication, 200);
-            Add(insert, "@customFieldsJson", SqlDbType.NVarChar, suggestion.CustomFieldsJson, -1);
-            Add(insert, "@autoHold", SqlDbType.Bit, suggestion.AutoHold);
-            Add(insert, "@materialFormatId", SqlDbType.BigInt, suggestion.Format.Id);
+            Add(insert, "@title", SqlDbType.NVarChar, currentSuggestion.Title, 500);
+            Add(insert, "@author", SqlDbType.NVarChar, currentSuggestion.Author, 500);
+            Add(insert, "@identifier", SqlDbType.NVarChar, currentSuggestion.Identifier, 100);
+            Add(insert, "@publication", SqlDbType.NVarChar, currentSuggestion.Publication, 200);
+            Add(insert, "@customFieldsJson", SqlDbType.NVarChar, currentSuggestion.CustomFieldsJson, -1);
+            Add(insert, "@autoHold", SqlDbType.Bit, currentSuggestion.AutoHold);
+            Add(insert, "@materialFormatId", SqlDbType.BigInt, currentSuggestion.Format.Id);
             Add(
                 insert,
                 "@isbnCheckStatus",
                 SqlDbType.NVarChar,
-                suggestion.Identifier is null ? "skipped_no_isbn" : "pending",
+                currentSuggestion.Identifier is null ? "skipped_no_isbn" : "pending",
                 32);
             requestId = Convert.ToInt64(await insert.ExecuteScalarAsync(cancellationToken));
         }
@@ -398,7 +428,7 @@ public sealed partial class PatronSuggestionService(
             transaction,
             requestId,
             currentConfiguration.OrganizationId,
-            suggestion.Format.Id,
+            currentSuggestion.Format.Id,
             autoClaimCandidate,
             autoClaimTarget,
             cancellationToken);
@@ -408,7 +438,7 @@ public sealed partial class PatronSuggestionService(
             requestId,
             session.Barcode,
             currentConfiguration.OrganizationId,
-            suggestion.Identifier,
+            currentSuggestion.Identifier,
             cancellationToken);
         await InsertCreationEventAsync(connection, transaction, requestId, cancellationToken);
         var outboxId = await InsertSubmissionEmailAsync(
@@ -416,7 +446,7 @@ public sealed partial class PatronSuggestionService(
             transaction,
             requestId,
             patron,
-            suggestion,
+            currentSuggestion,
             currentConfiguration,
             emailTransportReadiness,
             cancellationToken);
@@ -431,7 +461,7 @@ public sealed partial class PatronSuggestionService(
         }
 
         await databaseTransaction.CommitAsync(cancellationToken);
-        return (requestId, outboxId, rowVersion);
+        return (requestId, outboxId, rowVersion, currentSuggestion, currentConfiguration);
     }
 
     private async Task RequireCurrentStaffAsync(
