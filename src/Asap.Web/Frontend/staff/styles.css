@@ -295,6 +295,21 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 .edit-form label { display: grid; gap: 5px; font-weight: 700; }
 .edit-form .wide { grid-column: 1 / -1; }
 .edit-form .check-field { display: flex; }
+.research-section { border-top: 1px solid var(--line); padding-top: 16px; }
+.research-section h3 { margin: 0 0 10px; font-size: 1rem; }
+.research-links { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.research-links a { overflow-wrap: anywhere; }
+#polaris-dialog { width: min(700px, calc(100vw - 28px)); }
+.polaris-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); align-items: end; gap: 10px; }
+.polaris-form label { display: grid; gap: 5px; font-weight: 700; }
+.polaris-form input, .polaris-form select { width: 100%; min-width: 0; }
+.polaris-form button { grid-column: 1 / -1; justify-self: start; }
+#polaris-query-field[hidden] { display: none; }
+#polaris-pair-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+#polaris-pair-fields[hidden] { display: none; }
+.polaris-results { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 12px; }
+.polaris-result { border: 1px solid var(--line); border-radius: 4px; padding: 12px; min-width: 0; overflow-wrap: anywhere; }
+.polaris-result p { margin: 6px 0; }
 .blocked-callout, .hold-operation { padding: 12px 14px; border-left: 4px solid var(--warning); background: #fff5df; }
 .hold-operation { margin-top: 16px; }
 .hold-operation h3 { margin: 0 0 8px; font-size: 1rem; }
@@ -325,6 +340,7 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
   .compact-field select { min-width: 0; width: 100%; }
   .detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .edit-form, .resolution-form { grid-template-columns: 1fr; }
+  .polaris-form, #polaris-pair-fields { grid-template-columns: 1fr; }
   .edit-form .wide, .resolution-form .wide { grid-column: 1; }
   .settings-layout { grid-template-columns: 1fr; gap: 12px; }
   .settings-sidebar { position: static; overflow-x: auto; }

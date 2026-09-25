@@ -341,11 +341,13 @@ public sealed class TitleRequestMutationService(
         CancellationToken cancellationToken)
     {
         var bibSupplied = IsSupplied(input.Bibid);
-        if (!bibSupplied)
+        var mayEnterPendingHold = input.Action is "alreadyOwn" or "catalogFound" or "purchase" ||
+                                  input.Status == "pending_hold";
+        if (!bibSupplied && !mayEnterPendingHold)
         {
             return null;
         }
-        var proposedBib = Clean(ElementString(input.Bibid));
+        var proposedBib = bibSupplied ? Clean(ElementString(input.Bibid)) : null;
         if (proposedBib is not null && !IsPositiveInteger(proposedBib))
         {
             return "invalid_bib";
@@ -363,6 +365,15 @@ public sealed class TitleRequestMutationService(
             return "stale_version";
         }
 
+        if (!bibSupplied)
+        {
+            proposedBib = Clean(request.BibId);
+        }
+        if (proposedBib is not null && !IsPositiveInteger(proposedBib))
+        {
+            return "invalid_bib";
+        }
+
         if (!await context.Organizations.AsNoTracking()
                 .AnyAsync(item => item.Id == request.LibraryOrganizationId && item.IsActive, cancellationToken))
         {
@@ -374,7 +385,9 @@ public sealed class TitleRequestMutationService(
         var identifierChanged = identifierSupplied &&
                                 !string.Equals(proposedIdentifier, Clean(request.Identifier), StringComparison.Ordinal);
         var bibChanged = !string.Equals(proposedBib, Clean(request.BibId), StringComparison.Ordinal);
-        if (!bibChanged && !identifierChanged)
+        var targetStatus = ResolveStatus(input.Action, input.Status, request.Status, proposedBib);
+        var enteringPendingHold = targetStatus == "pending_hold" && request.Status != "pending_hold";
+        if (!bibChanged && !identifierChanged && !enteringPendingHold)
         {
             return null;
         }
@@ -398,7 +411,6 @@ public sealed class TitleRequestMutationService(
         {
             return capability.BlockingReason ?? "identifier_locked_by_stage";
         }
-        var targetStatus = ResolveStatus(input.Action, input.Status, request.Status, proposedBib);
         if (targetStatus is null)
         {
             return "invalid_transition";
@@ -738,7 +750,7 @@ public sealed class TitleRequestMutationService(
     private static string? ElementString(JsonElement value) => value.ValueKind == JsonValueKind.String
         ? value.GetString()
         : value.ToString();
-    private static bool IsPositiveInteger(string? value) => long.TryParse(value, out var result) && result > 0;
+    private static bool IsPositiveInteger(string? value) => int.TryParse(value, out var result) && result > 0;
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     private static string DisplayName(StaffUser value) =>
         Clean(value.DisplayName) ?? Clean(value.UserPrincipalName) ?? "Staff";

@@ -11,7 +11,7 @@ using Asap.Web.Features.Staff;
 
 namespace Asap.Web.Features.Patron;
 
-public sealed class PolarisPatronProvider(
+public sealed partial class PolarisPatronProvider(
     IDbContextFactory<AsapDbContext> contextFactory,
     IntegrationCredentialProtector credentialProtector,
     IHttpClientFactory httpClientFactory) : IPatronProvider, IStaffPolarisProvider, IPolarisReferenceProvider
@@ -433,7 +433,18 @@ public sealed class PolarisPatronProvider(
             {
                 return new BibValidationResult(false);
             }
-            return new BibValidationResult(true, Clean(data.Title), Clean(data.Author.FirstOrDefault()));
+            var publication = data.BibGetRows
+                .Where(row => string.Equals(row.Label, "Publication Date", StringComparison.OrdinalIgnoreCase))
+                .Select(row => Clean(row.Value))
+                .FirstOrDefault(value => value is not null);
+            return new BibValidationResult(
+                true,
+                Clean(data.Title),
+                Clean(data.Author.FirstOrDefault()),
+                publication,
+                Clean(data.Format),
+                Clean(data.ISBN) ?? Clean(data.ISSN) ?? Clean(data.UPC.FirstOrDefault()),
+                Clean(data.Publisher.FirstOrDefault()));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

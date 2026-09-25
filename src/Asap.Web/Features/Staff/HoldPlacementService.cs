@@ -1545,7 +1545,7 @@ public sealed class HoldPlacementService(
         };
     }
 
-    private static bool IsTerminal(string? status) =>
+    internal static bool IsTerminal(string? status) =>
         status?.Trim().ToLowerInvariant() is "unclaimed" or "cancelled" or "expired";
 
     private static string ResultCode(HoldProviderResult result) => result.Outcome switch

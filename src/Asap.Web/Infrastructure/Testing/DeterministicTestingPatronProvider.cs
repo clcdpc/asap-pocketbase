@@ -117,7 +117,27 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
     public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(new BibValidationResult(bibId > 0, $"Catalog title {bibId}", "Catalog author"));
+        return Task.FromResult(new BibValidationResult(bibId > 0, $"Catalog title {bibId}",
+            "Catalog author", "2026", "Book", "9780000000001", "Catalog publisher"));
+    }
+
+    public Task<StaffBibSearchResult> SearchBibsAsync(
+        string mode, string query, string title, string author, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var search = mode == "title_author" ? $"{title} {author}" : query;
+        var results = search.Contains("NO MATCH", StringComparison.OrdinalIgnoreCase)
+            ? []
+            : new[] { new StaffBibSearchRow("9001", "Catalog title 9001", "Catalog author",
+                "2026", "Book", "9780000000001") };
+        return Task.FromResult(new StaffBibSearchResult(results, results.Length));
+    }
+
+    public Task<StaffBibHoldingsSummary> GetBibHoldingsAsync(
+        int bibId, int organizationId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(new StaffBibHoldingsSummary(1, 2, 3, true, true));
     }
 
     public Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(

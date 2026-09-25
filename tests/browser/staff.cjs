@@ -327,6 +327,38 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     );
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'deep-link-detail');
 
+    const storedBibPage = await context.newPage();
+    const storedBibErrors = [];
+    let storedBibPurchasePosts = 0;
+    storedBibPage.on('pageerror', error => storedBibErrors.push(error.message));
+    storedBibPage.on('request', request => {
+      if (request.method() === 'POST' && request.url().endsWith(`/title-requests/${args.primaryRequestId}/action`)) {
+        storedBibPurchasePosts += 1;
+      }
+    });
+    await storedBibPage.route(`**/api/asap/staff/title-requests/${args.primaryRequestId}`, async route => {
+      const response = await route.fetch();
+      const request = await response.json();
+      await route.fulfill({ response, json: { ...request, bibid: '9001',
+        capabilities: { ...request.capabilities, canChangeBib: false } } });
+    });
+    await storedBibPage.goto(`${args.baseOrigin}/staff/?request=${args.primaryRequestId}`, { waitUntil: 'networkidle' });
+    await storedBibPage.locator('#request-dialog[open]').waitFor();
+    await storedBibPage.getByRole('button', { name: 'Purchase', exact: true }).click();
+    await storedBibPage.getByText(/Search Polaris, select the matching BIB/).waitFor();
+    assert.equal(storedBibPurchasePosts, 0, 'Purchase bypassed the verified-BIB gate');
+    await storedBibPage.getByRole('button', { name: 'Search Polaris catalog' }).click();
+    await storedBibPage.locator('#polaris-mode').selectOption('bib');
+    await storedBibPage.locator('#polaris-query').fill('9001');
+    await storedBibPage.locator('#polaris-form button[type=submit]').click();
+    const verifyLockedBib = storedBibPage.getByRole('button', { name: 'Use BIB 9001' });
+    await verifyLockedBib.waitFor();
+    assert.equal(await verifyLockedBib.isEnabled(), true, 'An unchanged locked BIB could not be verified');
+    await verifyLockedBib.click();
+    await storedBibPage.getByText(/Polaris BIB 9001 verified for this request/).waitFor();
+    assert.deepEqual(storedBibErrors, []);
+    await storedBibPage.close();
+
     await page.getByLabel('Title', { exact: true }).fill('Browser staff title edited');
     await publication.selectOption('Library backlist');
     await page.getByLabel('Audience note', { exact: true }).fill('Edited audience');
@@ -384,6 +416,116 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.locator('#request-dialog').waitFor({ state: 'hidden' });
     await page.waitForFunction(() => document.activeElement?.classList.contains('grid-open'));
     assert.equal(await page.evaluate(() => document.activeElement.classList.contains('grid-open')), true);
+
+    await open.click();
+    await page.locator('#request-dialog[open]').waitFor();
+    await page.getByRole('link', { name: 'Open patron in LEAP' }).waitFor();
+    assert.equal(await page.getByRole('link', { name: 'Open patron in LEAP' }).getAttribute('href'),
+      'https://leap.example.test/patron/7001');
+    const researchLabels = await page.locator('.research-links a').allTextContents();
+    assert.deepEqual(researchLabels, ['Open patron in LEAP', 'Browser vendor', 'Search WorldCat']);
+    assert.equal(await page.getByRole('link', { name: 'Search Goodreads' }).count(), 0);
+    assert.match(await page.getByRole('link', { name: 'Browser vendor' }).getAttribute('href'),
+      /q=Browser%20staff%20title%20edited/);
+
+    await page.getByLabel('BIB ID', { exact: true }).fill('9001');
+    await page.getByRole('button', { name: 'Ready for hold' }).click();
+    await page.getByText(/Search Polaris, select the matching BIB/).waitFor();
+    const searchCatalog = page.getByRole('button', { name: 'Search Polaris catalog' });
+    await searchCatalog.focus();
+    await page.keyboard.press('Enter');
+    await page.locator('#polaris-dialog[open]').waitFor();
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'polaris-query');
+    await page.keyboard.press('Escape');
+    await page.locator('#polaris-dialog').waitFor({ state: 'hidden' });
+    assert.equal(await page.evaluate(() => document.activeElement.textContent.includes('Search Polaris catalog')), true);
+
+    await searchCatalog.click();
+    for (const [mode, value] of [['identifier', '9780000000001'], ['title', 'Catalog title'], ['author', 'Catalog author']]) {
+      await page.locator('#polaris-mode').selectOption(mode);
+      await page.locator('#polaris-query').fill(value);
+      await page.locator('#polaris-form button[type=submit]').click();
+      await page.getByRole('button', { name: 'Use BIB 9001' }).waitFor();
+    }
+    await page.locator('#polaris-mode').selectOption('title_author');
+    await page.locator('#polaris-title').fill('Catalog title');
+    await page.locator('#polaris-author').fill('Catalog author');
+    await page.locator('#polaris-form button[type=submit]').click();
+    await page.getByRole('button', { name: 'Use BIB 9001' }).waitFor();
+
+    const firstSearch = deferred();
+    const releaseSearch = deferred();
+    const staleSearch = async route => {
+      const body = JSON.parse(route.request().postData() || '{}');
+      if (body.mode !== 'title' || body.query !== 'Older query') return route.continue();
+      firstSearch.resolve();
+      await releaseSearch.promise;
+      try {
+        await route.fulfill({ status: 200, contentType: 'application/json',
+          body: JSON.stringify({ status: 'found', totalMatches: 1,
+            results: [{ bibId: '9002', title: 'Older catalog result' }] }) });
+      } catch {
+        // The newer query may have aborted the old browser request.
+      }
+    };
+    await page.route('**/api/asap/staff/bib-lookup', staleSearch);
+    await page.locator('#polaris-mode').selectOption('title');
+    await page.locator('#polaris-query').fill('Older query');
+    await page.locator('#polaris-form button[type=submit]').click();
+    await firstSearch.promise;
+    await page.locator('#polaris-query').fill('Current query');
+    await page.locator('#polaris-form button[type=submit]').click();
+    await page.getByRole('button', { name: 'Use BIB 9001' }).waitFor();
+    releaseSearch.resolve();
+    assert.equal(await page.getByText('Older catalog result').count(), 0);
+    await page.unroute('**/api/asap/staff/bib-lookup', staleSearch);
+    await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'polaris-search');
+
+    const detailWithoutIdentifier = async route => {
+      const body = JSON.parse(route.request().postData() || '{}');
+      if (body.mode !== 'bib') return route.continue();
+      const response = await route.fetch();
+      const detail = await response.json();
+      await route.fulfill({ response, json: { ...detail, identifier: null } });
+    };
+    await page.route('**/api/asap/staff/bib-lookup', detailWithoutIdentifier);
+    await page.getByRole('button', { name: 'Use BIB 9001' }).click();
+    await page.locator('#polaris-dialog').waitFor({ state: 'hidden' });
+    await page.unroute('**/api/asap/staff/bib-lookup', detailWithoutIdentifier);
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('inputmode')), 'numeric');
+    assert.equal(await page.getByLabel('Identifier', { exact: true }).inputValue(), '9780000000001');
+    await page.getByText(/3 item|1 item\(s\) at this library/).waitFor();
+    await page.getByRole('link', { name: 'Open BIB in LEAP' }).waitFor();
+    assert.equal(await page.getByRole('link', { name: 'Open BIB in LEAP' }).getAttribute('href'),
+      'https://leap.example.test/bib/9001');
+    await page.getByRole('button', { name: 'Ready for hold' }).click();
+    await page.getByText('Save the current request edits before moving to Pending hold.').waitFor();
+    await page.getByLabel('BIB ID', { exact: true }).fill('9002');
+    await page.getByLabel('BIB ID', { exact: true }).fill('9001');
+    await page.getByRole('button', { name: 'Ready for hold' }).click();
+    await page.getByText(/Search Polaris, select the matching BIB/).waitFor();
+
+    await searchCatalog.click();
+    await page.locator('#polaris-mode').selectOption('bib');
+    await page.locator('#polaris-query').fill('9001');
+    await page.locator('#polaris-form button[type=submit]').click();
+    await page.getByText(/Publisher: Catalog publisher/).waitFor();
+    await page.getByText(/Format: Book/).waitFor();
+    await page.getByText(/Identifier: 9780000000001/).waitFor();
+    await page.getByRole('button', { name: 'Use BIB 9001' }).click();
+    await page.getByRole('button', { name: 'Save changes' }).click();
+    await page.getByText('Request changes saved.').waitFor();
+    await page.getByRole('button', { name: 'Ready for hold' }).click();
+    await page.locator('#request-dialog .status-badge').filter({ hasText: 'Pending hold' }).waitFor();
+
+    await page.getByRole('button', { name: 'Close request details' }).click();
+    const noConfig = async route => route.fulfill({ status: 200, contentType: 'application/json',
+      body: JSON.stringify({ externalSearchProviders: [], leapBibUrlPattern: '', leapPatronUrlPattern: '' }) });
+    await page.route('**/api/asap/staff/research-configuration?*', noConfig);
+    await page.goto(`${args.baseOrigin}/staff/?request=${args.primaryRequestId}`, { waitUntil: 'networkidle' });
+    await page.locator('#request-dialog[open]').waitFor();
+    assert.equal(await page.locator('.research-links a').count(), 0);
+    await page.unroute('**/api/asap/staff/research-configuration?*', noConfig);
     assert.deepEqual(errors, [], `Super-admin browser flow raised an error: ${errors.join('; ')}`);
     assert.equal(traffic.externalRequests, 0, 'Super-admin browser flow requested an external asset');
   } finally {
@@ -729,6 +871,9 @@ async function runStaleMutationCompletions(browser, args, report) {
       await page.locator(target.claimFilter).selectOption('all');
       await page.getByRole('button', { name: target.openLabel }).click();
       await page.locator('#request-dialog-kicker').filter({ hasText: target.kicker }).waitFor();
+      if (type === 'title_request') {
+        await page.getByRole('link', { name: 'Open patron in LEAP' }).waitFor();
+      }
       const beforeResponse = await context.request.get(`${args.baseOrigin}${target.apiPath}`);
       assert.equal(beforeResponse.status(), 200, await beforeResponse.text());
       const before = await beforeResponse.json();
@@ -1209,6 +1354,11 @@ async function runScopedBlocked(browser, args, axeSource, report) {
     );
     assert.equal(forbidden.status(), 404, 'Library staff could read another library request');
     await scan(page, axeSource, args.artifactRoot, report, 'mobile', 'scoped-blocked-recovery');
+    await page.getByRole('button', { name: 'Search Polaris catalog' }).click();
+    await page.locator('#polaris-dialog[open]').waitFor();
+    await scan(page, axeSource, args.artifactRoot, report, 'mobile', 'polaris-search-scoped');
+    await page.keyboard.press('Escape');
+    await page.locator('#polaris-dialog').waitFor({ state: 'hidden' });
     await page.getByRole('button', { name: 'Close request details' }).click();
     await page.locator('#request-dialog').waitFor({ state: 'hidden' });
     await assertReadableMobileQueue(page);
@@ -1454,7 +1604,7 @@ async function main() {
     await runAdditionalCopies(browser, args, axeSource, report);
     await runOperatorResolution(browser, args, axeSource, report);
     await runScopedBlocked(browser, args, axeSource, report);
-    assert.equal(report.states.length, 20, 'Expected twenty major staff browser states');
+    assert.equal(report.states.length, 22, 'Expected twenty-two major staff browser states');
     await fs.writeFile(
       path.join(args.artifactRoot, 'staff-browser-results.json'),
       JSON.stringify(report, null, 2),
