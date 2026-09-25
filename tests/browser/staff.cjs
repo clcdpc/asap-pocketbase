@@ -493,17 +493,35 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.unroute('**/api/asap/staff/bib-lookup', staleSearch);
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'polaris-search');
 
-    const detailWithoutIdentifier = async route => {
+    let applyFallbackDetail = false;
+    const searchWithFallbackMetadata = async route => {
       const body = JSON.parse(route.request().postData() || '{}');
-      if (body.mode !== 'bib') return route.continue();
+      if (body.mode === 'title' && body.query === 'Fallback metadata') {
+        const response = await route.fetch();
+        const result = await response.json();
+        applyFallbackDetail = true;
+        await route.fulfill({ response, json: { ...result, status: 'found', totalMatches: 1,
+          results: [{ bibId: '9001', title: 'Catalog title 9001', author: 'Catalog author',
+            publication: '2026', format: 'Book', identifier: '9780000000001' }] } });
+        return;
+      }
+      if (body.mode !== 'bib' || !applyFallbackDetail) return route.continue();
       const response = await route.fetch();
       const detail = await response.json();
-      await route.fulfill({ response, json: { ...detail, identifier: null, publication: '2026', format: 'Large Print' } });
+      applyFallbackDetail = false;
+      await route.fulfill({ response, json: { ...detail, identifier: null, publication: '', format: null,
+        holdingsSummary: { myLibraryCount: 3, otherLibraryCount: 4, consortiumCount: 7,
+          isHoldable: true, hasHoldableAtMyLibrary: true },
+        holdingsUnavailable: false, patronHasHold: true } });
     };
-    await page.route('**/api/asap/staff/bib-lookup', detailWithoutIdentifier);
+    await page.route('**/api/asap/staff/bib-lookup', searchWithFallbackMetadata);
+    await page.locator('#polaris-mode').selectOption('title');
+    await page.locator('#polaris-query').fill('Fallback metadata');
+    await page.locator('#polaris-form button[type=submit]').click();
+    await page.getByText(/Publication: 2026/).waitFor();
     await page.getByRole('button', { name: 'Use BIB 9001' }).click();
     await page.locator('#polaris-dialog').waitFor({ state: 'hidden' });
-    await page.unroute('**/api/asap/staff/bib-lookup', detailWithoutIdentifier);
+    await page.unroute('**/api/asap/staff/bib-lookup', searchWithFallbackMetadata);
     assert.equal(await page.evaluate(() => document.activeElement.getAttribute('inputmode')), 'numeric');
     assert.equal(await page.getByLabel('Title', { exact: true }).inputValue(),
       'Catalog title 9001 (Browser staff title edited)');
@@ -514,8 +532,9 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     assert.equal(await page.getByLabel('Format', { exact: true }).inputValue(), 'book');
     const selectedMetadataContext = await page.locator('.polaris-selection-context').textContent();
     assert.match(selectedMetadataContext, /Polaris publication: 2026/);
-    assert.match(selectedMetadataContext, /Polaris format: Large Print/);
-    await page.getByText(/3 item|1 item\(s\) at this library/).waitFor();
+    assert.match(selectedMetadataContext, /Polaris format: Book/);
+    assert.match(selectedMetadataContext, /3 item\(s\) at this library, 4 elsewhere; holdable/);
+    assert.match(selectedMetadataContext, /This patron already has a hold for this BIB/);
     await page.getByRole('link', { name: 'Open BIB in LEAP' }).waitFor();
     assert.equal(await page.getByRole('link', { name: 'Open BIB in LEAP' }).getAttribute('href'),
       'https://leap.example.test/bib/9001');

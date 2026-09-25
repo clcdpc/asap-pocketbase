@@ -4318,6 +4318,36 @@ public sealed partial class PatronJourneyTests
         using var get = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}");
         using var getBody = JsonDocument.Parse(await get.Content.ReadAsStringAsync());
         var version = getBody.RootElement.GetProperty("version").GetString();
+        string originalTitle;
+        string originalStatus;
+        string originalBib;
+        byte[] originalRowVersion;
+        int originalEventCount;
+        int originalOperationCount;
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var baselineCommand = connection.CreateCommand();
+            baselineCommand.CommandText =
+                """
+                SELECT r.[Title], r.[Status], r.[BibId], r.[RowVersion],
+                       (SELECT COUNT(*) FROM [asap].[TitleRequestEvent] e WHERE e.[TitleRequestId] = r.[Id]),
+                       (SELECT COUNT(*) FROM [asap].[HoldPlacementOperation] h WHERE h.[TitleRequestId] = r.[Id])
+                FROM [asap].[TitleRequest] r
+                WHERE r.[Id] = @id;
+                """;
+            baselineCommand.Parameters.AddWithValue("@id", requestId);
+            await using var baselineReader = await baselineCommand.ExecuteReaderAsync();
+            Assert.IsTrue(await baselineReader.ReadAsync());
+            originalTitle = baselineReader.GetString(0);
+            originalStatus = baselineReader.GetString(1);
+            originalBib = baselineReader.GetString(2);
+            originalRowVersion = (byte[])baselineReader[3];
+            originalEventCount = baselineReader.GetInt32(4);
+            originalOperationCount = baselineReader.GetInt32(5);
+        }
+        var originalDispatchCount = dispatcher!.EnqueuedIds.Count;
+
         using var update = await client.PostAsJsonAsync(
             $"/api/asap/staff/title-requests/{requestId}/action",
             new { version, action = "edit", status = "suggestion", bibid = "7777" });
@@ -4347,13 +4377,69 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(3, rejectingProvider.ValidationCount,
             "Purchase must validate an unchanged BIB when it resolves to Pending hold.");
 
+        rejectingProvider.OperationalFailure = true;
+        using var exactLookup = await client.PostAsJsonAsync(
+            "/api/asap/staff/bib-lookup",
+            new { requestId = requestId.ToString(), mode = "bib", bibId = "9001" });
+        Assert.AreEqual(HttpStatusCode.BadGateway, exactLookup.StatusCode,
+            await exactLookup.Content.ReadAsStringAsync());
+        using var exactLookupBody = JsonDocument.Parse(await exactLookup.Content.ReadAsStringAsync());
+        Assert.AreEqual("bib_validation_unavailable", exactLookupBody.RootElement.GetProperty("code").GetString());
+
+        foreach (var (action, status) in new[]
+                 {
+                     ("edit", "suggestion"),
+                     ("alreadyOwn", (string?)null),
+                     ("purchase", (string?)null)
+                 })
+        {
+            var input = new Dictionary<string, object?>
+            {
+                ["version"] = version,
+                ["action"] = action
+            };
+            if (status is not null)
+            {
+                input["status"] = status;
+            }
+            if (action == "edit")
+            {
+                input["bibid"] = "7777";
+            }
+
+            using var unavailable = await client.PostAsJsonAsync(
+                $"/api/asap/staff/title-requests/{requestId}/action",
+                input);
+            Assert.AreEqual(HttpStatusCode.ServiceUnavailable, unavailable.StatusCode,
+                await unavailable.Content.ReadAsStringAsync());
+            using var unavailableBody = JsonDocument.Parse(await unavailable.Content.ReadAsStringAsync());
+            Assert.AreEqual("bib_validation_unavailable", unavailableBody.RootElement.GetProperty("code").GetString());
+        }
+        Assert.AreEqual(7, rejectingProvider.ValidationCount);
+
         await using var verify = new SqlConnection(databaseConnectionString);
         await verify.OpenAsync();
         await using var command = new SqlCommand(
-            "SELECT [BibId] FROM [asap].[TitleRequest] WHERE [Id] = @id;",
+            """
+            SELECT r.[Title], r.[Status], r.[BibId], r.[RowVersion],
+                   (SELECT COUNT(*) FROM [asap].[TitleRequestEvent] e WHERE e.[TitleRequestId] = r.[Id]),
+                   (SELECT COUNT(*) FROM [asap].[HoldPlacementOperation] h WHERE h.[TitleRequestId] = r.[Id])
+            FROM [asap].[TitleRequest] r
+            WHERE r.[Id] = @id;
+            """,
             verify);
         command.Parameters.AddWithValue("@id", requestId);
-        Assert.AreEqual("9001", await command.ExecuteScalarAsync());
+        await using (var reader = await command.ExecuteReaderAsync())
+        {
+            Assert.IsTrue(await reader.ReadAsync());
+            Assert.AreEqual(originalTitle, reader.GetString(0));
+            Assert.AreEqual(originalStatus, reader.GetString(1));
+            Assert.AreEqual(originalBib, reader.GetString(2));
+            CollectionAssert.AreEqual(originalRowVersion, (byte[])reader[3]);
+            Assert.AreEqual(originalEventCount, reader.GetInt32(4));
+            Assert.AreEqual(originalOperationCount, reader.GetInt32(5));
+        }
+        Assert.AreEqual(originalDispatchCount, dispatcher.EnqueuedIds.Count);
     }
 
     [TestMethod]
@@ -6406,6 +6492,89 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("9780000000001", result.Identifier);
         Assert.AreEqual("Catalog publisher", result.Publisher);
         StringAssert.Contains(handler.RequestPaths[0], "/bib/9001");
+    }
+
+    [TestMethod]
+    public async Task PolarisExactBibClassifiesTheDocumentedInvalidBibResponseAsNotFound()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """
+            {"PAPIErrorCode":-1,"ErrorMessage":"Invalid BibID","BibGetRows":null}
+            """);
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var result = await provider.ValidateBibAsync(9001, CancellationToken.None);
+
+        Assert.IsFalse(result.IsValid);
+        Assert.AreEqual(1, handler.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task PolarisExactBibTreatsHttpFailureAsOperational()
+    {
+        var provider = await CreatePolarisProviderAsync(
+            new StaticResponseHandler(HttpStatusCode.ServiceUnavailable, "{}"));
+
+        await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await provider.ValidateBibAsync(9001, CancellationToken.None));
+    }
+
+    [TestMethod]
+    public async Task PolarisExactBibPreservesCancellationBeforeLocalInputChecks()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK, "{}");
+        var provider = await CreatePolarisProviderAsync(handler);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsExactlyAsync<OperationCanceledException>(async () =>
+            await provider.ValidateBibAsync(0, cancellation.Token));
+        Assert.AreEqual(0, handler.RequestCount);
+    }
+
+    [TestMethod]
+    [DataRow(-9, "SQL timeout")]
+    [DataRow(-1, "FAILURE - General")]
+    public async Task PolarisExactBibTreatsOperationalPapiFailuresAsUnavailable(
+        int papiErrorCode,
+        string errorMessage)
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            $$"""
+            {"PAPIErrorCode":{{papiErrorCode}},"ErrorMessage":"{{errorMessage}}","BibGetRows":null}
+            """);
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await provider.ValidateBibAsync(9001, CancellationToken.None));
+    }
+
+    [TestMethod]
+    [DataRow("not-json")]
+    [DataRow("{}")]
+    [DataRow("{\"PAPIErrorCode\":0}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibGetRows\":[]}")]
+    [DataRow("null")]
+    public async Task PolarisExactBibTreatsMalformedOrMissingProtocolDataAsUnavailable(string content)
+    {
+        var provider = await CreatePolarisProviderAsync(new StaticResponseHandler(HttpStatusCode.OK, content));
+
+        await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await provider.ValidateBibAsync(9001, CancellationToken.None));
+    }
+
+    [TestMethod]
+    public async Task PolarisExactBibRejectsInconsistentRawPapiCodesAsUnavailable()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """
+            {"PAPIErrorCode":0,"papierrorcode":-9,"BibGetRows":[{"Label":"Title","Value":"Catalog title"}]}
+            """);
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var failure = await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await provider.ValidateBibAsync(9001, CancellationToken.None));
+        Assert.AreEqual("polaris_bib_validation_protocol_failed", failure.Code);
     }
 
     [TestMethod]
@@ -9586,10 +9755,17 @@ public sealed partial class PatronJourneyTests
     {
         public int ValidationCount { get; private set; }
 
+        public bool OperationalFailure { get; set; }
+
         public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             ValidationCount++;
+            if (OperationalFailure)
+            {
+                throw new PolarisOperationalException("polaris_bib_validation_failed", "Polaris is unavailable.");
+            }
+
             return Task.FromResult(new BibValidationResult(false));
         }
 

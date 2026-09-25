@@ -123,10 +123,27 @@ const { JSDOM } = require('jsdom');
       bibId: '9001',
       title: 'Catalog Title',
       author: 'Alice Writer',
+      publication: '',
+      format: null,
+      identifier: '',
+      publisher: 'Exact Catalog Publisher',
+      holdingsSummary: {
+        myLibraryCount: 3,
+        otherLibraryCount: 4,
+        consortiumCount: 7,
+        isHoldable: true,
+        hasHoldableAtMyLibrary: true
+      },
+      holdingsUnavailable: false,
+      patronHasHold: true
+    };
+    const searchRow = {
+      bibId: '9001',
+      title: 'Search Row Title',
+      author: 'Search Row Author',
       publication: '2026',
-      format: 'Large Print',
-      identifier: '9782222222222',
-      publisher: 'Catalog Publisher'
+      format: 'Book',
+      identifier: '9780000000001'
     };
     const lookup = createPolarisLookup({
       authorizedJson: async (url, options) => {
@@ -136,7 +153,7 @@ const { JSDOM } = require('jsdom');
         return {
           status: 'found',
           totalMatches: 1,
-          results: [{ ...exactDetail, bibId: '9001' }]
+          results: [searchRow]
         };
       },
       isAbortError: () => false,
@@ -179,7 +196,7 @@ const { JSDOM } = require('jsdom');
       canApply: true,
       apply: (selected, detail) => {
         applyPolarisResultToControls(selected, editor);
-        verified = { requestId: '9007199254740993', bibId: selected.bibId, detail };
+        verified = { requestId: '9007199254740993', bibId: selected.bibId, selected, detail };
       }
     });
     document.querySelector('#polaris-form').dispatchEvent(new dom.window.Event('submit', {
@@ -197,10 +214,52 @@ const { JSDOM } = require('jsdom');
     assert.equal(editor.format.value, 'book');
     assert.equal(verified.requestId, '9007199254740993');
     assert.equal(verified.bibId, '9001');
-    assert.strictEqual(verified.detail, exactDetail);
+    assert.strictEqual(verified.detail, verified.selected);
     assert.equal(verified.detail.publication, '2026');
-    assert.equal(verified.detail.format, 'Large Print');
+    assert.equal(verified.detail.format, 'Book');
+    assert.equal(verified.detail.identifier, '9780000000001');
+    assert.equal(verified.detail.title, 'Catalog Title');
+    assert.equal(verified.detail.author, 'Alice Writer');
+    assert.equal(verified.detail.publisher, 'Exact Catalog Publisher');
+    assert.deepEqual(verified.detail.holdingsSummary, exactDetail.holdingsSummary);
+    assert.equal(verified.detail.holdingsUnavailable, false);
+    assert.equal(verified.detail.patronHasHold, true);
+    assert.equal(dialog.open, false);
     lookup.close();
+
+    let completeVerification;
+    const pendingVerification = new Promise(resolve => { completeVerification = resolve; });
+    let staleRequestIsCurrent = true;
+    let staleSelectionApplied = false;
+    const staleLookup = createPolarisLookup({
+      authorizedJson: async (url, options) => options.body.mode === 'bib'
+        ? pendingVerification
+        : { status: 'found', totalMatches: 1, results: [searchRow] },
+      isAbortError: () => false,
+      announce: () => {}
+    });
+    staleLookup.open({
+      requestId: '9007199254740994',
+      libraryOrgId: 2,
+      mode: 'title',
+      query: 'Stale verification',
+      isCurrent: () => staleRequestIsCurrent,
+      canApply: true,
+      apply: () => { staleSelectionApplied = true; }
+    });
+    document.querySelector('#polaris-form').dispatchEvent(new dom.window.Event('submit', {
+      bubbles: true,
+      cancelable: true
+    }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    document.querySelector('#polaris-results button').click();
+    staleRequestIsCurrent = false;
+    staleLookup.close();
+    completeVerification(exactDetail);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(staleSelectionApplied, false);
+    assert.equal(dialog.open, false);
+
     console.log('Staff research link contracts passed');
   } finally {
     dom.window.close();

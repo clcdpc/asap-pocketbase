@@ -416,6 +416,7 @@ public sealed partial class PolarisPatronProvider(
 
     public async Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (bibId <= 0)
         {
             return new BibValidationResult(false);
@@ -428,11 +429,43 @@ public sealed partial class PolarisPatronProvider(
                 : settings.OrganizationIdForRequests;
             var response = await client.BibGetAsync(bibId, branchId, cancellationToken);
             var data = response.Data;
-            if (response.Response?.IsSuccessStatusCode != true || data is null || data.PAPIErrorCode != 0 ||
-                data.BibGetRows.Count == 0)
+            if (response.Response?.IsSuccessStatusCode != true)
             {
-                return new BibValidationResult(false);
+                throw new PolarisOperationalException(
+                    "polaris_bib_validation_transport_failed",
+                    "Polaris BIB validation was unavailable.");
             }
+
+            var rawContent = response.Response.Content;
+            if (data is null ||
+                !TryReadPapiErrorCode(rawContent, out var papiErrorCode) ||
+                data.PAPIErrorCode != papiErrorCode)
+            {
+                throw new PolarisOperationalException(
+                    "polaris_bib_validation_protocol_failed",
+                    "Polaris returned an invalid BIB validation response.");
+            }
+
+            if (papiErrorCode < 0)
+            {
+                if (papiErrorCode == -1 && IsDefinitiveInvalidBibResponse(rawContent))
+                {
+                    return new BibValidationResult(false);
+                }
+
+                throw new PolarisOperationalException(
+                    "polaris_bib_validation_failed",
+                    "Polaris could not complete BIB validation.");
+            }
+
+            if (!TryReadUsableBibGetRows(rawContent, out var rawRowCount) ||
+                data.BibGetRows is null || data.BibGetRows.Count == 0 || data.BibGetRows.Count != rawRowCount)
+            {
+                throw new PolarisOperationalException(
+                    "polaris_bib_validation_protocol_failed",
+                    "Polaris returned an incomplete BIB validation response.");
+            }
+
             var publication = data.BibGetRows
                 .Where(row => string.Equals(row.Label, "Publication Date", StringComparison.OrdinalIgnoreCase))
                 .Select(row => Clean(row.Value))
@@ -1170,6 +1203,70 @@ public sealed partial class PolarisPatronProvider(
                    code.TryGetInt32(out papiErrorCode);
         }
         catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsDefinitiveInvalidBibResponse(string? content)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(content ?? string.Empty);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !TryGetProperty(root, "ErrorMessage", out var errorMessage) ||
+                errorMessage.ValueKind != JsonValueKind.String ||
+                !string.Equals(errorMessage.GetString()?.Trim(), "Invalid BibID", StringComparison.OrdinalIgnoreCase) ||
+                !TryGetProperty(root, "BibGetRows", out var rows))
+            {
+                return false;
+            }
+
+            return rows.ValueKind == JsonValueKind.Null ||
+                   rows.ValueKind == JsonValueKind.Array && rows.GetArrayLength() == 0;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryReadUsableBibGetRows(string? content, out int rowCount)
+    {
+        rowCount = 0;
+        try
+        {
+            using var document = JsonDocument.Parse(content ?? string.Empty);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !TryGetProperty(root, "BibGetRows", out var rows) ||
+                rows.ValueKind != JsonValueKind.Array || rows.GetArrayLength() == 0)
+            {
+                return false;
+            }
+
+            foreach (var row in rows.EnumerateArray())
+            {
+                if (row.ValueKind != JsonValueKind.Object)
+                {
+                    return false;
+                }
+
+                rowCount++;
+            }
+
+            return rowCount > 0;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
         {
             return false;
         }

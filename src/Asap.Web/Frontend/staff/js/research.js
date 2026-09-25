@@ -200,7 +200,7 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce }) 
         identifier: detail.identifier || row.identifier
       };
       // Keep catalog publication/format in verified detail; the editor fields store workflow timing and ASAP format codes.
-      current.apply(selected, detail);
+      current.apply(selected, selected);
       announce(`Verified Polaris BIB ${detail.bibId}. Save changes before changing the request status.`, 'success');
       close();
       current.editorFocus?.focus();
