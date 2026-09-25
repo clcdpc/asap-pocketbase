@@ -35,6 +35,7 @@ const legacyState = fs.readFileSync(path.join(legacyRoot, 'js', 'state.js'), 'ut
 const legacyGrid = fs.readFileSync(path.join(legacyRoot, 'js', 'grid-data.js'), 'utf8');
 const nextIndex = fs.readFileSync(path.join(nextRoot, 'index.html'), 'utf8');
 const nextApp = fs.readFileSync(path.join(nextRoot, 'app.js'), 'utf8');
+const nextSettings = fs.readFileSync(path.join(nextRoot, 'js', 'settings.js'), 'utf8');
 
 for (const asset of [
   '/vendor/bootstrap/4.1.3/css/bootstrap.min.css',
@@ -106,6 +107,8 @@ assert.doesNotMatch(auth, /enabled: true/);
 assert.match(auth, /guard\.isCurrent\(\)/);
 
 assert.match(nextApp, /createWorkflowApp/);
+assert.match(nextSettings, /\/api\/asap\/staff\/settings/);
+assert.doesNotMatch(nextSettings, /\/api\/asap\/staff\/legacy\/settings/);
 assert.match(nextIndex, /href="\/staff-next\/"/);
 assert.match(nextIndex, /returnUrl=%2Fstaff-next%2F/);
 

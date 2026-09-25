@@ -144,9 +144,11 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
         var uiText = CopyObject(source["ui_text"]);
         var emails = CopyObject(source["emails"]);
         var formats = Array(stored["formats"]);
-        var providers = Array(stored["providers"]);
+        var providers = Copy(stored["providers"]) as JsonArray ?? new JsonArray();
         var templates = Array(source["templateEditor"]);
         var orgId = Text(source["orgId"]) ?? "system";
+
+        EnsureLegacyFourthProviderSlot(providers);
 
         var creatorValues = Array(effective["commonCreators"]).Select(Text).Where(value => value is not null);
         workflow["commonAuthorsList"] = string.Join('\n', creatorValues);
@@ -362,6 +364,22 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
             });
         }
         return rows;
+    }
+
+    private static void EnsureLegacyFourthProviderSlot(JsonArray providers)
+    {
+        if (providers.OfType<JsonObject>().Any(provider => Text(provider["key"]) == "external_search_4"))
+        {
+            return;
+        }
+
+        providers.Add(new JsonObject
+        {
+            ["key"] = "external_search_4",
+            ["isEnabled"] = false,
+            ["label"] = "",
+            ["urlTemplate"] = ""
+        });
     }
 
     private static JsonArray ProjectFormats(JsonArray formats, string orgId)
@@ -793,14 +811,34 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
             {
                 continue;
             }
+
+            if (!sourceByKey.TryGetValue(key, out var storedProvider))
+            {
+                if (string.IsNullOrWhiteSpace(Text(provider["label"])) ||
+                    string.IsNullOrWhiteSpace(Text(provider["urlTemplate"])))
+                {
+                    throw new InvalidOperationException("A new provider requires a label and URL template.");
+                }
+
+                changes.Add(new JsonObject
+                {
+                    ["key"] = key,
+                    ["isEnabled"] = Copy(provider["isEnabled"]),
+                    ["label"] = Copy(provider["label"]),
+                    ["urlTemplate"] = Copy(provider["urlTemplate"]),
+                    ["sortOrder"] = (key[^1] - '0') * 10
+                });
+                continue;
+            }
+
             changes.Add(new JsonObject
             {
-                ["id"] = Text(sourceByKey[key]["id"]),
+                ["id"] = Text(storedProvider["id"]),
                 ["key"] = key,
                 ["isEnabled"] = Copy(provider["isEnabled"]),
                 ["label"] = Copy(provider["label"]),
                 ["urlTemplate"] = Copy(provider["urlTemplate"]),
-                ["sortOrder"] = Copy(sourceByKey[key]["sortOrder"])
+                ["sortOrder"] = Copy(storedProvider["sortOrder"])
             });
         }
         if (!current.Keys.All(seen.Contains))

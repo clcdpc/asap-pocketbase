@@ -2142,6 +2142,7 @@ public sealed class AdministrationService(
                 overridden = value is not null
             };
         })
+            .Where(provider => IsConfiguredProvider(provider.isEnabled, provider.label, provider.urlTemplate))
             .Cast<object>()
             .ToArray();
     }

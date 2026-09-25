@@ -167,6 +167,14 @@ async function runLegacySettingsNoEditRoundTrip(
     const { buildSettingsPayload } = await import('/staff/js/settings/serialize-save.js');
     return buildSettingsPayload();
   });
+  assert.equal(await page.locator('#duplicate-status-duplicate_hold').count(), 0,
+    'duplicate_hold must not appear as an editable legacy Settings control.');
+  const duplicateLabelsState = await page.evaluate(async () => {
+    const { serializeSettingsState } = await import('/staff/js/settings/serialize-save.js');
+    return serializeSettingsState().ui_text.duplicateStatusLabels;
+  });
+  assert.equal(Object.hasOwn(duplicateLabelsState || {}, 'duplicate_hold'), false,
+    'The legacy Settings serializer must not report duplicate_hold as writable.');
   if (orgId === 'system') {
     const participationDom = await page.evaluate(() => Array.from(
       document.querySelectorAll('#enabled-libraries-checkbox-container .lib-participation-cb')

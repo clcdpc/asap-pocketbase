@@ -1,3 +1,4 @@
+using System.Globalization;
 using Asap.Web.Features.Patron;
 using Asap.Web.Features.Staff;
 
@@ -16,6 +17,8 @@ public sealed record StaffSuggestionInput(
     string? PreferredPickupBranchId,
     bool? Autohold,
     string? LibraryOrgId);
+
+internal sealed record StaffSuggestionCreatedResponse(string Id, string SuccessTitle, string SuccessMessage);
 
 public static class StaffSuggestionCompatibilityEndpoints
 {
@@ -189,7 +192,7 @@ public static class StaffSuggestionCompatibilityEndpoints
                     null),
                 cancellationToken,
                 staffActor: actor);
-            return Results.Json(created, statusCode: StatusCodes.Status201Created);
+            return Results.Json(ProjectCreated(created), statusCode: StatusCodes.Status201Created);
         }
         catch (PatronFlowException exception)
         {
@@ -198,6 +201,11 @@ public static class StaffSuggestionCompatibilityEndpoints
                 statusCode: exception.StatusCode);
         }
     }
+
+    internal static StaffSuggestionCreatedResponse ProjectCreated(PatronSuggestionResult created) => new(
+        created.Id.ToString(CultureInfo.InvariantCulture),
+        created.SuccessTitle,
+        created.SuccessMessage);
 
     private static async Task<ScopeResult> ResolveScopeAsync(
         CurrentStaff actor,

@@ -550,12 +550,155 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(allowed ? HttpStatusCode.Created : HttpStatusCode.Forbidden, response.StatusCode,
             await response.Content.ReadAsStringAsync());
         Assert.AreEqual(allowed ? 1 : 0, provider.PickupUpdates);
+        if (allowed)
+        {
+            using var created = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.AreEqual(JsonValueKind.String, created.RootElement.GetProperty("id").ValueKind);
+        }
         if (!allowed)
         {
             using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
             Assert.AreEqual(barcode == "port-restricted" ? "patron_code_forbidden" : "patron_library_forbidden",
                 document.RootElement.GetProperty("code").GetString());
         }
+    }
+
+    [TestMethod]
+    public void StaffSuggestionCompatibilityProjectionPreservesBigintAboveJavaScriptSafeInteger()
+    {
+        const long id = 9_007_199_254_740_993L;
+        var projected = StaffSuggestionCompatibilityEndpoints.ProjectCreated(
+            new PatronSuggestionResult(id, "Submitted", "Suggestion saved."));
+        var json = JsonSerializer.Serialize(projected, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        using var document = JsonDocument.Parse(json);
+
+        var projectedId = document.RootElement.GetProperty("id");
+        Assert.AreEqual(JsonValueKind.String, projectedId.ValueKind);
+        Assert.AreEqual("9007199254740993", projectedId.GetString());
+        Assert.AreEqual("Submitted", document.RootElement.GetProperty("successTitle").GetString());
+    }
+
+    [TestMethod]
+    [DataRow("cross_library")]
+    [DataRow("patron_code")]
+    public async Task StaffPortCreationRevalidatesCurrentPatronPolicyBeforePickupMutation(string policy)
+    {
+        var barcode = policy == "cross_library" ? "port-foreign" : "port-restricted";
+        var provider = new GatedStaffPortPatronProvider(
+            homeLibraryOrganizationId: policy == "cross_library" ? 3 : 91632,
+            patronCodeId: policy == "patron_code" ? "3" : "1");
+        await using var app = WithStaffPortProviders(new StaffPortPatronProvider(), provider);
+        app.UseKestrel(0);
+        using var client = await StaffPortClientAsync(app);
+        var initiallyAllowedCodes = policy == "patron_code" ? new[] { "3" } : new[] { "1" };
+        await ConfigureStaffPortLibraryAsync(
+            client,
+            crossLibrary: policy == "cross_library",
+            allowedPatronCodeIds: initiallyAllowedCodes);
+
+        var input = StaffPortSuggestion(barcode);
+        var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var before = await ReadStaffSuggestionSideEffectsAsync(contexts);
+        var submission = client.PostAsJsonAsync("/api/asap/staff/suggestions", input);
+        try
+        {
+            await provider.Entered.WaitAsync(TimeSpan.FromSeconds(15));
+            using var settingsClient = await StaffPortClientAsync(app);
+            await ConfigureStaffPortLibraryAsync(
+                settingsClient,
+                crossLibrary: false,
+                allowedPatronCodeIds: ["1"]);
+        }
+        finally
+        {
+            provider.Release();
+        }
+
+        using var response = await submission.WaitAsync(TimeSpan.FromSeconds(15));
+        var responseText = await response.Content.ReadAsStringAsync();
+        Assert.AreEqual(HttpStatusCode.Forbidden, response.StatusCode, responseText);
+        using var body = JsonDocument.Parse(responseText);
+        Assert.AreEqual(policy == "cross_library" ? "patron_library_forbidden" : "patron_code_forbidden",
+            body.RootElement.GetProperty("code").GetString());
+        Assert.AreEqual(0, provider.PickupUpdates,
+            "A current patron-policy denial must occur before the preferred-pickup mutation.");
+        await AssertNoStaffSuggestionSideEffectsAsync(
+            contexts,
+            input.Title ?? throw new InvalidOperationException("The deterministic test title must be present."),
+            before);
+    }
+
+    [TestMethod]
+    public async Task StaffPortCreationRechecksCurrentPatronPolicyInsideInsertAfterPickupAndReadinessWait()
+    {
+        var provider = new StaffPortPatronProvider();
+        var email = new GatedReadinessEmailSender();
+        await using var app = WithStaffPortProviders(provider, provider, email);
+        app.UseKestrel(0);
+        using var client = await StaffPortClientAsync(app);
+        await ConfigureStaffPortLibraryAsync(client, crossLibrary: true);
+
+        var input = StaffPortSuggestion("port-foreign");
+        var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var before = await ReadStaffSuggestionSideEffectsAsync(contexts);
+        var submission = client.PostAsJsonAsync("/api/asap/staff/suggestions", input);
+        try
+        {
+            await email.Entered.WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.AreEqual(1, provider.PickupUpdates,
+                "The pickup mutation completed while the current policy still allowed this patron.");
+            using var settingsClient = await StaffPortClientAsync(app);
+            await ConfigureStaffPortLibraryAsync(settingsClient, crossLibrary: false);
+        }
+        finally
+        {
+            email.Release();
+        }
+
+        using var response = await submission.WaitAsync(TimeSpan.FromSeconds(15));
+        var responseText = await response.Content.ReadAsStringAsync();
+        Assert.AreEqual(HttpStatusCode.Forbidden, response.StatusCode, responseText);
+        using var body = JsonDocument.Parse(responseText);
+        Assert.AreEqual("patron_library_forbidden", body.RootElement.GetProperty("code").GetString());
+        Assert.AreEqual(1, provider.PickupUpdates,
+            "A provider mutation already completed under valid policy; the later database mutation must still be denied.");
+        await AssertNoStaffSuggestionSideEffectsAsync(
+            contexts,
+            input.Title ?? throw new InvalidOperationException("The deterministic test title must be present."),
+            before);
+    }
+
+    [TestMethod]
+    public async Task StaffPortCreationSucceedsWhenCurrentPatronPolicyIsUnchangedAtBothRechecks()
+    {
+        var provider = new StaffPortPatronProvider();
+        var email = new GatedReadinessEmailSender();
+        await using var app = WithStaffPortProviders(provider, provider, email);
+        app.UseKestrel(0);
+        using var client = await StaffPortClientAsync(app);
+        await ConfigureStaffPortLibraryAsync(client, crossLibrary: true);
+
+        var input = StaffPortSuggestion("port-foreign");
+        var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var before = await ReadStaffSuggestionSideEffectsAsync(contexts);
+        var submission = client.PostAsJsonAsync("/api/asap/staff/suggestions", input);
+        try
+        {
+            await email.Entered.WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.AreEqual(1, provider.PickupUpdates);
+        }
+        finally
+        {
+            email.Release();
+        }
+
+        using var response = await submission.WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.AreEqual(HttpStatusCode.Created, response.StatusCode, await response.Content.ReadAsStringAsync());
+        await using var after = await contexts.CreateDbContextAsync();
+        Assert.IsTrue(await after.TitleRequests.AnyAsync(item => item.Title == input.Title));
+        Assert.AreEqual(before.Requests + 1, await after.TitleRequests.CountAsync());
+        Assert.AreEqual(before.Events + 1, await after.TitleRequestEvents.CountAsync());
+        Assert.AreEqual(1, provider.PickupUpdates);
     }
 
     [TestMethod]
@@ -1320,7 +1463,8 @@ public sealed partial class PatronJourneyTests
     private static async Task ConfigureStaffPortLibraryAsync(
         HttpClient client,
         bool crossLibrary,
-        int organizationId = 91632)
+        int organizationId = 91632,
+        IReadOnlyCollection<string>? allowedPatronCodeIds = null)
     {
         await UpsertTestOrganizationAsync(organizationId, "Staff port tests", "SPT");
         var organizationIdText = organizationId.ToString();
@@ -1328,9 +1472,33 @@ public sealed partial class PatronJourneyTests
         using var saved = await SaveSettingsDocumentAsync(client, current.RootElement, organizationIdText, new Dictionary<string, object?>
         {
             ["workflow"] = new { suggestionLimit = 1, allowAnyRegisteredCardLogin = crossLibrary,
-                patronCodeEligibilityEnabled = true, allowedPatronCodeIds = new[] { "1" } }
+                patronCodeEligibilityEnabled = true, allowedPatronCodeIds = allowedPatronCodeIds ?? ["1"] }
         });
     }
+
+    private static async Task<StaffSuggestionSideEffects> ReadStaffSuggestionSideEffectsAsync(
+        IDbContextFactory<AsapDbContext> contexts)
+    {
+        await using var context = await contexts.CreateDbContextAsync();
+        return new StaffSuggestionSideEffects(
+            await context.TitleRequests.CountAsync(),
+            await context.TitleRequestEvents.CountAsync(),
+            await context.EmailOutbox.CountAsync());
+    }
+
+    private static async Task AssertNoStaffSuggestionSideEffectsAsync(
+        IDbContextFactory<AsapDbContext> contexts,
+        string title,
+        StaffSuggestionSideEffects before)
+    {
+        await using var context = await contexts.CreateDbContextAsync();
+        Assert.IsFalse(await context.TitleRequests.AnyAsync(item => item.Title == title));
+        Assert.AreEqual(before.Requests, await context.TitleRequests.CountAsync());
+        Assert.AreEqual(before.Events, await context.TitleRequestEvents.CountAsync());
+        Assert.AreEqual(before.Outbox, await context.EmailOutbox.CountAsync());
+    }
+
+    private sealed record StaffSuggestionSideEffects(int Requests, int Events, int Outbox);
 
     private static async Task<long> SeedCollidingBibLookupRequestsAsync()
     {
@@ -1397,6 +1565,13 @@ public sealed partial class PatronJourneyTests
     private sealed class StaffPortPatronProvider : IPatronProvider, IStaffPolarisProvider
     {
         private readonly DeterministicTestingPatronProvider inner = new();
+        private readonly int localHomeLibraryOrganizationId;
+
+        public StaffPortPatronProvider(int localHomeLibraryOrganizationId = 91632)
+        {
+            this.localHomeLibraryOrganizationId = localHomeLibraryOrganizationId;
+        }
+
         public List<string> DirectLookups { get; } = [];
         public List<int> HoldingsOrganizationIds { get; } = [];
         public bool FailPatronLookup { get; init; }
@@ -1418,7 +1593,7 @@ public sealed partial class PatronJourneyTests
         private async Task<PatronSnapshot> SnapshotAsync(string barcode, CancellationToken cancellationToken) =>
             (await inner.RefreshAsync(barcode, cancellationToken)) with
             {
-                HomeLibraryOrganizationId = barcode == "port-foreign" ? 3 : 91632,
+                HomeLibraryOrganizationId = barcode == "port-foreign" ? 3 : localHomeLibraryOrganizationId,
                 PatronCodeId = barcode == "port-restricted" ? "3" : "1"
             };
         public async Task<IReadOnlyList<PatronSnapshot>> SearchPatronsAsync(string query, CancellationToken cancellationToken)
@@ -1461,6 +1636,14 @@ public sealed partial class PatronJourneyTests
         private readonly TaskCompletionSource<bool> entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<bool> released = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int pickupUpdates;
+        private readonly int homeLibraryOrganizationId;
+        private readonly string patronCodeId;
+
+        public GatedStaffPortPatronProvider(int homeLibraryOrganizationId = 91632, string patronCodeId = "1")
+        {
+            this.homeLibraryOrganizationId = homeLibraryOrganizationId;
+            this.patronCodeId = patronCodeId;
+        }
 
         public Task Entered => entered.Task;
         public int PickupUpdates => pickupUpdates;
@@ -1469,15 +1652,21 @@ public sealed partial class PatronJourneyTests
         public async Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
         {
             var patron = await inner.RefreshAsync(barcode, cancellationToken);
-            entered.TrySetResult(true);
-            await released.Task.WaitAsync(cancellationToken);
-            return patron with { HomeLibraryOrganizationId = 91632, PatronCodeId = "1" };
+            return patron with
+            {
+                HomeLibraryOrganizationId = homeLibraryOrganizationId,
+                PatronCodeId = patronCodeId
+            };
         }
 
         public Task<PatronSnapshot> AuthenticateAsync(string barcode, string pin, CancellationToken token) =>
             inner.AuthenticateAsync(barcode, pin, token);
-        public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(PatronSnapshot patron, CancellationToken token) =>
-            inner.GetPickupBranchesAsync(patron, token);
+        public async Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(PatronSnapshot patron, CancellationToken token)
+        {
+            entered.TrySetResult(true);
+            await released.Task.WaitAsync(token);
+            return await inner.GetPickupBranchesAsync(patron, token);
+        }
         public Task UpdatePreferredPickupBranchAsync(string barcode, int pickupBranchId, CancellationToken token)
         {
             Interlocked.Increment(ref pickupUpdates);
