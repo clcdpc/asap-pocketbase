@@ -19,6 +19,20 @@ public sealed record StaffSuggestionInput(
     string? LibraryOrgId);
 
 internal sealed record StaffSuggestionCreatedResponse(string Id, string SuccessTitle, string SuccessMessage);
+internal sealed record StaffSuggestionDuplicateDetailsResponse(
+    string Id,
+    DateTime Created,
+    string Status,
+    string CloseReason,
+    string Title,
+    string Author,
+    string Format,
+    string MatchType);
+internal sealed record StaffSuggestionDuplicateConflictResponse(
+    string Message,
+    string ConflictTitle,
+    string ConflictMessage,
+    StaffSuggestionDuplicateDetailsResponse Duplicate);
 
 public static class StaffSuggestionCompatibilityEndpoints
 {
@@ -197,7 +211,7 @@ public static class StaffSuggestionCompatibilityEndpoints
         catch (PatronFlowException exception)
         {
             return Results.Json(
-                exception.Response ?? new { message = exception.Message },
+                ProjectConflictResponse(exception),
                 statusCode: exception.StatusCode);
         }
     }
@@ -206,6 +220,28 @@ public static class StaffSuggestionCompatibilityEndpoints
         created.Id.ToString(CultureInfo.InvariantCulture),
         created.SuccessTitle,
         created.SuccessMessage);
+
+    internal static object ProjectConflictResponse(PatronFlowException exception)
+    {
+        if (exception.Response is PatronSuggestionDuplicateConflict conflict)
+        {
+            return new StaffSuggestionDuplicateConflictResponse(
+                conflict.Message,
+                conflict.ConflictTitle,
+                conflict.ConflictMessage,
+                new StaffSuggestionDuplicateDetailsResponse(
+                    conflict.Duplicate.Id.ToString(CultureInfo.InvariantCulture),
+                    conflict.Duplicate.Created,
+                    conflict.Duplicate.Status,
+                    conflict.Duplicate.CloseReason,
+                    conflict.Duplicate.Title,
+                    conflict.Duplicate.Author,
+                    conflict.Duplicate.Format,
+                    conflict.Duplicate.MatchType));
+        }
+
+        return exception.Response ?? new { message = exception.Message };
+    }
 
     private static async Task<ScopeResult> ResolveScopeAsync(
         CurrentStaff actor,

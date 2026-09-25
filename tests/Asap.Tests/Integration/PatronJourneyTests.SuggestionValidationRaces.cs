@@ -238,6 +238,110 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    [DataRow("deactivate")]
+    [DataRow("move_out_of_scope")]
+    [DataRow("unchanged")]
+    public async Task StaffSuggestionUsesCoherentAuthorizationAndConfigurationBeforePickupMutation(string transition)
+    {
+        const int organizationId = 91806;
+        var superAdmin = await ReadConfiguredSuperAdminAsync();
+        using (var setupClient = await StaffPortClientAsync(factory!))
+        {
+            await ConfigureStaffPortLibraryAsync(setupClient, crossLibrary: false, organizationId);
+        }
+
+        var actorRow = await CreateCorrectiveStaffAsync(superAdmin, "admin", organizationId);
+        var actor = await ReadCorrectiveStaffAsync(actorRow);
+        var provider = new GatedStaffPortPatronProvider(homeLibraryOrganizationId: organizationId);
+        var gate = new StaffSuggestionOrganizationLockGate(organizationId);
+        await using var app = factory!.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<IStaffPolarisProvider>();
+            services.AddSingleton<IStaffPolarisProvider>(new StaffPortPatronProvider());
+            services.RemoveAll<IPatronProvider>();
+            services.AddSingleton<IPatronProvider>(provider);
+            services.RemoveAll<IDbContextFactory<AsapDbContext>>();
+            services.AddDbContextFactory<AsapDbContext>(options =>
+                options.UseSqlServer(databaseConnectionString).AddInterceptors(gate));
+        }));
+        app.UseKestrel(0);
+        using var client = await StaffPortClientAsync(app, actor);
+        var input = StaffPortSuggestion("pre-provider-gate-" + Guid.NewGuid().ToString("N")) with
+        {
+            LibraryOrgId = organizationId.ToString()
+        };
+        var contexts = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var before = await ReadStaffSuggestionSideEffectsAsync(contexts);
+        var submission = client.PostAsJsonAsync("/api/asap/staff/suggestions", input);
+        HttpResponseMessage? response = null;
+
+        try
+        {
+            await provider.Entered.WaitAsync(TimeSpan.FromSeconds(15));
+            gate.Arm();
+            provider.Release();
+            await gate.Entered.WaitAsync(TimeSpan.FromSeconds(15));
+
+            if (transition != "unchanged")
+            {
+                var lifecycle = factory.Services.GetRequiredService<StaffLifecycleService>();
+                var changed = transition switch
+                {
+                    "deactivate" => await lifecycle.DeactivateAsync(
+                        superAdmin,
+                        actorRow.Id,
+                        new StaffDeactivateInput(StaffVersion.Encode(actorRow.RowVersion)),
+                        CancellationToken.None),
+                    "move_out_of_scope" => await lifecycle.ChangeRoleAsync(
+                        superAdmin,
+                        actorRow.Id,
+                        new StaffRoleInput(StaffVersion.Encode(actorRow.RowVersion), "admin", 2),
+                        CancellationToken.None),
+                    _ => throw new InvalidOperationException($"Unknown actor transition {transition}.")
+                };
+                Assert.AreEqual("updated", changed.Code, transition);
+            }
+
+            gate.Release();
+            response = await submission.WaitAsync(TimeSpan.FromSeconds(15));
+            var responseText = await response.Content.ReadAsStringAsync();
+            if (transition == "unchanged")
+            {
+                Assert.AreEqual(HttpStatusCode.Created, response.StatusCode, responseText);
+                Assert.AreEqual(1, provider.PickupUpdates);
+                await using var after = await contexts.CreateDbContextAsync();
+                Assert.IsTrue(await after.TitleRequests.AnyAsync(item => item.Title == input.Title));
+                Assert.AreEqual(before.Requests + 1, await after.TitleRequests.CountAsync());
+                Assert.AreEqual(before.Events + 1, await after.TitleRequestEvents.CountAsync());
+                Assert.AreEqual(before.Outbox + 1, await after.EmailOutbox.CountAsync());
+            }
+            else
+            {
+                Assert.IsTrue(response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden,
+                    $"{transition}: {response.StatusCode} {responseText}");
+                using var body = JsonDocument.Parse(responseText);
+                Assert.IsTrue(body.RootElement.GetProperty("code").GetString() is
+                    "staff_session_invalid" or "staff_scope_forbidden");
+                Assert.AreEqual(0, provider.PickupUpdates,
+                    "A staff actor whose authority changed during the coherent database gate must not mutate Polaris.");
+                await AssertNoStaffSuggestionSideEffectsAsync(contexts, input.Title!, before);
+            }
+        }
+        finally
+        {
+            provider.Release();
+            gate.Release();
+            if (!submission.IsCompleted)
+            {
+                response = await submission.WaitAsync(TimeSpan.FromSeconds(15));
+            }
+            response?.Dispose();
+            await RestoreSuggestionRaceStaffAsync(actorRow.Id, organizationId);
+            await CleanupSuggestionRaceLibraryAsync(organizationId);
+        }
+    }
+
+    [TestMethod]
     public async Task AutoholdOptOutPolicyChangeWhileSubmissionWaitsUsesCurrentValue()
     {
         const int organizationId = 91802;
@@ -639,6 +743,55 @@ public sealed partial class PatronJourneyTests
 
             return result;
         }
+    }
+
+    private sealed class StaffSuggestionOrganizationLockGate(int organizationId) : DbCommandInterceptor
+    {
+        private readonly TaskCompletionSource<bool> entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int armed;
+
+        public Task Entered => entered.Task;
+
+        public void Arm() => Interlocked.Exchange(ref armed, 1);
+
+        public void Release() => released.TrySetResult(true);
+
+        public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            var isOrganizationLock = command.CommandText.Contains("[asap].[Organization]", StringComparison.Ordinal) &&
+                                     command.CommandText.Contains("UPDLOCK,HOLDLOCK", StringComparison.Ordinal) &&
+                                     command.Parameters.Cast<DbParameter>().Any(parameter =>
+                                         parameter.Value is not null and not DBNull &&
+                                         Convert.ToInt32(parameter.Value) == organizationId);
+            if (isOrganizationLock && Interlocked.Exchange(ref armed, 0) == 1)
+            {
+                entered.TrySetResult(true);
+                await released.Task.WaitAsync(cancellationToken);
+            }
+
+            return result;
+        }
+    }
+
+    private async Task RestoreSuggestionRaceStaffAsync(long staffUserId, int organizationId)
+    {
+        var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var context = await contexts.CreateDbContextAsync();
+        var staff = await context.StaffUsers.SingleOrDefaultAsync(item => item.Id == staffUserId);
+        if (staff is null)
+        {
+            return;
+        }
+
+        staff.OrganizationId = organizationId;
+        staff.Role = "admin";
+        staff.IsActive = true;
+        await context.SaveChangesAsync();
     }
 
     private async Task SetLibraryAutoholdOptOutAsync(int organizationId, bool allowed)

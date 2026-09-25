@@ -579,6 +579,52 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public void StaffSuggestionDuplicateCompatibilityProjectionPreservesBigintAndContext()
+    {
+        const long id = 9_007_199_254_740_993L;
+        var created = new DateTime(2026, 9, 25, 12, 30, 0, DateTimeKind.Utc);
+        var conflict = new PatronSuggestionDuplicateConflict(
+            "This patron already has this suggestion.",
+            "Already Submitted",
+            "The saved duplicate context remains intact.",
+            new PatronSuggestionDuplicateDetails(
+                id,
+                created,
+                "closed",
+                "rejected",
+                "Existing title",
+                "Existing author",
+                "book",
+                "title_format"));
+        var exception = new PatronFlowException(409, conflict.Message, conflict);
+
+        var projectedJson = JsonSerializer.Serialize(
+            StaffSuggestionCompatibilityEndpoints.ProjectConflictResponse(exception),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        using var projected = JsonDocument.Parse(projectedJson);
+        var root = projected.RootElement;
+        Assert.AreEqual("This patron already has this suggestion.", root.GetProperty("message").GetString());
+        Assert.AreEqual("Already Submitted", root.GetProperty("conflictTitle").GetString());
+        Assert.AreEqual("The saved duplicate context remains intact.", root.GetProperty("conflictMessage").GetString());
+        var duplicate = root.GetProperty("duplicate");
+        Assert.AreEqual(JsonValueKind.String, duplicate.GetProperty("id").ValueKind);
+        Assert.AreEqual("9007199254740993", duplicate.GetProperty("id").GetString());
+        Assert.AreEqual(created, duplicate.GetProperty("created").GetDateTime());
+        Assert.AreEqual("closed", duplicate.GetProperty("status").GetString());
+        Assert.AreEqual("rejected", duplicate.GetProperty("closeReason").GetString());
+        Assert.AreEqual("Existing title", duplicate.GetProperty("title").GetString());
+        Assert.AreEqual("Existing author", duplicate.GetProperty("author").GetString());
+        Assert.AreEqual("book", duplicate.GetProperty("format").GetString());
+        Assert.AreEqual("title_format", duplicate.GetProperty("matchType").GetString());
+
+        var patronJson = JsonSerializer.Serialize(conflict, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        using var patron = JsonDocument.Parse(patronJson);
+        Assert.AreEqual(JsonValueKind.Number,
+            patron.RootElement.GetProperty("duplicate").GetProperty("id").ValueKind,
+            "The normal patron response keeps its numeric domain identity contract.");
+    }
+
+    [TestMethod]
     [DataRow("cross_library")]
     [DataRow("patron_code")]
     public async Task StaffPortCreationRevalidatesCurrentPatronPolicyBeforePickupMutation(string policy)
@@ -858,7 +904,14 @@ public sealed partial class PatronJourneyTests
         using var staff = await client.PostAsJsonAsync("/api/asap/staff/suggestions", staffInput);
         Assert.AreEqual(HttpStatusCode.Created, staff.StatusCode, await staff.Content.ReadAsStringAsync());
         using var duplicate = await client.PostAsJsonAsync("/api/asap/staff/suggestions", staffInput);
-        Assert.AreEqual(HttpStatusCode.Conflict, duplicate.StatusCode, await duplicate.Content.ReadAsStringAsync());
+        var duplicateText = await duplicate.Content.ReadAsStringAsync();
+        Assert.AreEqual(HttpStatusCode.Conflict, duplicate.StatusCode, duplicateText);
+        using var duplicateBody = JsonDocument.Parse(duplicateText);
+        var duplicateDetails = duplicateBody.RootElement.GetProperty("duplicate");
+        Assert.AreEqual(JsonValueKind.String, duplicateDetails.GetProperty("id").ValueKind);
+        Assert.AreEqual("Already Submitted", duplicateBody.RootElement.GetProperty("conflictTitle").GetString());
+        Assert.AreEqual("suggestion", duplicateDetails.GetProperty("status").GetString());
+        Assert.AreEqual("title_format", duplicateDetails.GetProperty("matchType").GetString());
         using var invalid = await client.PostAsJsonAsync("/api/asap/staff/suggestions", staffInput with { Format = "not-a-format" });
         Assert.AreEqual(HttpStatusCode.BadRequest, invalid.StatusCode);
         using var pickup = await client.PostAsJsonAsync("/api/asap/staff/suggestions", staffInput with { PreferredPickupBranchId = "999" });

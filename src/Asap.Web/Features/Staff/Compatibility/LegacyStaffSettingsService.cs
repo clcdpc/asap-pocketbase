@@ -8,7 +8,15 @@ namespace Asap.Web.Features.Staff.Compatibility;
 // only owner of scope, settings versions, inheritance, writes, and transactions.
 public sealed class LegacyStaffSettingsService(AdministrationService administration)
 {
+    private const string LegacyFourthProviderKey = "external_search_4";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly HashSet<string> LegacyProviderKeys = new(StringComparer.Ordinal)
+    {
+        "external_search_1",
+        "external_search_2",
+        "external_search_3",
+        LegacyFourthProviderKey
+    };
     private static readonly string[] WorkflowFields =
     [
         "suggestionLimit", "suggestionLimitMessage", "outstandingTimeoutEnabled",
@@ -144,7 +152,7 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
         var uiText = CopyObject(source["ui_text"]);
         var emails = CopyObject(source["emails"]);
         var formats = Array(stored["formats"]);
-        var providers = Copy(stored["providers"]) as JsonArray ?? new JsonArray();
+        var providers = ProjectLegacyProviderSnapshot(Array(stored["providers"]));
         var templates = Array(source["templateEditor"]);
         var orgId = Text(source["orgId"]) ?? "system";
 
@@ -157,8 +165,7 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
         foreach (var provider in providers.OfType<JsonObject>())
         {
             var key = Text(provider["key"]);
-            if (key is null || !key.StartsWith("external_search_", StringComparison.Ordinal) ||
-                key.Length != "external_search_1".Length || key[^1] is < '1' or > '4')
+            if (key is null || !IsLegacyProviderKey(key))
             {
                 continue;
             }
@@ -356,6 +363,11 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
         var rows = new JsonArray();
         foreach (var provider in providers.OfType<JsonObject>())
         {
+            if (!IsLegacyProviderKey(Text(provider["key"])))
+            {
+                continue;
+            }
+
             rows.Add(new JsonObject
             {
                 ["key"] = Text(provider["key"]), ["isEnabled"] = Bool(provider["isEnabled"]),
@@ -368,14 +380,14 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
 
     private static void EnsureLegacyFourthProviderSlot(JsonArray providers)
     {
-        if (providers.OfType<JsonObject>().Any(provider => Text(provider["key"]) == "external_search_4"))
+        if (providers.OfType<JsonObject>().Any(provider => Text(provider["key"]) == LegacyFourthProviderKey))
         {
             return;
         }
 
         providers.Add(new JsonObject
         {
-            ["key"] = "external_search_4",
+            ["key"] = LegacyFourthProviderKey,
             ["isEnabled"] = false,
             ["label"] = "",
             ["urlTemplate"] = ""
@@ -763,9 +775,9 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
 
     private static JsonArray BuildProviderChanges(JsonArray edited, JsonArray canonical, JsonArray source)
     {
-        var current = canonical.OfType<JsonObject>().Where(row => Text(row["key"]) is not null)
+        var current = canonical.OfType<JsonObject>().Where(row => IsLegacyProviderKey(Text(row["key"])))
             .ToDictionary(row => Text(row["key"])!, StringComparer.Ordinal);
-        var sourceByKey = source.OfType<JsonObject>().Where(row => Text(row["key"]) is not null)
+        var sourceByKey = source.OfType<JsonObject>().Where(row => IsLegacyProviderKey(Text(row["key"])))
             .ToDictionary(row => Text(row["key"])!, StringComparer.Ordinal);
         var changes = new JsonArray();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -774,8 +786,7 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
             var provider = RequireObject(node, "provider");
             ValidateKeys(provider, ["key", "isEnabled", "label", "urlTemplate"]);
             var key = Text(provider["key"]);
-            if (key is null || key.Length != "external_search_1".Length ||
-                !key.StartsWith("external_search_", StringComparison.Ordinal) || key[^1] is < '1' or > '4' ||
+            if (key is null || !IsLegacyProviderKey(key) ||
                 !seen.Add(key) ||
                 !provider.ContainsKey("isEnabled") || !provider.ContainsKey("label") ||
                 !provider.ContainsKey("urlTemplate"))
@@ -1091,6 +1102,23 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
     private static JsonObject ToObject(object? value) =>
         JsonSerializer.SerializeToNode(value, JsonOptions) as JsonObject ??
         throw new InvalidOperationException("The authoritative settings snapshot is unavailable.");
+
+    private static JsonArray ProjectLegacyProviderSnapshot(JsonArray providers)
+    {
+        var rows = new JsonArray();
+        foreach (var provider in providers.OfType<JsonObject>())
+        {
+            if (IsLegacyProviderKey(Text(provider["key"])))
+            {
+                rows.Add(Copy(provider));
+            }
+        }
+
+        return rows;
+    }
+
+    private static bool IsLegacyProviderKey(string? key) =>
+        key is not null && LegacyProviderKeys.Contains(key);
 
     private static JsonObject Object(JsonNode? value) => value as JsonObject ?? new JsonObject();
     private static JsonObject CopyObject(JsonNode? value) => Copy(value) as JsonObject ?? new JsonObject();

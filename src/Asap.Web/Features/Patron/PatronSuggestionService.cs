@@ -26,6 +26,22 @@ public sealed record PatronSuggestionInput(
 
 public sealed record PatronSuggestionResult(long Id, string SuccessTitle, string SuccessMessage);
 
+internal sealed record PatronSuggestionDuplicateDetails(
+    long Id,
+    DateTime Created,
+    string Status,
+    string CloseReason,
+    string Title,
+    string Author,
+    string Format,
+    string MatchType);
+
+internal sealed record PatronSuggestionDuplicateConflict(
+    string Message,
+    string ConflictTitle,
+    string ConflictMessage,
+    PatronSuggestionDuplicateDetails Duplicate);
+
 public sealed class PatronFlowException(
     int statusCode,
     string message,
@@ -147,25 +163,25 @@ public sealed partial class PatronSuggestionService(
         }
 
         var organizationId = configuration.OrganizationId;
-        configuration = await GetCurrentParticipatingConfigurationAsync(
-            organizationId,
-            cancellationToken);
+        ValidatedSuggestion preProviderSuggestion;
         if (staffActor is null)
         {
-            EnforcePatronCodeEligibility(configuration, patron);
-        }
-        else
-        {
-            EnforceStaffPatronEligibility(configuration, patron);
-            await RequireCurrentStaffAsync(staffActor, organizationId, cancellationToken);
-
             configuration = await GetCurrentParticipatingConfigurationAsync(
                 organizationId,
                 cancellationToken);
-            EnforceStaffPatronEligibility(configuration, patron);
+            EnforcePatronCodeEligibility(configuration, patron);
+            preProviderSuggestion = Validate(input, configuration);
+        }
+        else
+        {
+            (configuration, preProviderSuggestion) = await PrepareStaffSuggestionMutationAsync(
+                staffActor,
+                organizationId,
+                patron,
+                input,
+                cancellationToken);
         }
 
-        var preProviderSuggestion = Validate(input, configuration);
         if (patron.PreferredPickupBranchId != selectedBranch.Id)
         {
             try
@@ -464,18 +480,55 @@ public sealed partial class PatronSuggestionService(
         return (requestId, outboxId, rowVersion, currentSuggestion, currentConfiguration);
     }
 
-    private async Task RequireCurrentStaffAsync(
+    private async Task<(EffectivePatronConfiguration Configuration, ValidatedSuggestion Suggestion)>
+        PrepareStaffSuggestionMutationAsync(
         CurrentStaff actor,
         int organizationId,
+        PatronSnapshot patron,
+        PatronSuggestionInput input,
         CancellationToken cancellationToken)
     {
-        var eligibility = await staffEligibility.EvaluateAsync(
-            new StaffIdentityEvidence(actor.Id, actor.AuthenticationEmail, actor.EntraTenantId),
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        await using var databaseTransaction = await context.Database.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+
+        var lockedOrganizationIds = new HashSet<int>();
+        foreach (var currentOrganizationId in new[] { organizationId, actor.OrganizationId }.Distinct().Order())
+        {
+            var organization = await context.Organizations.FromSqlInterpolated(
+                    $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {currentOrganizationId}")
+                .SingleOrDefaultAsync(cancellationToken);
+            if (organization is null ||
+                currentOrganizationId == organizationId && !organization.IsActive)
+            {
+                throw new PatronFlowException(403, "Your library could not be determined.");
+            }
+
+            lockedOrganizationIds.Add(currentOrganizationId);
+        }
+
+        var eligibility = await staffEligibility.RevalidateLockedAsync(
+            context,
+            actor,
             organizationId,
             StaffRoleRequirement.Any,
-            requireParticipation: true,
+            requireActorParticipation: true,
+            lockedOrganizationIds,
             cancellationToken);
         RequireCurrentStaff(eligibility);
+
+        var configuration = await configurationService.GetAsync(context, organizationId, cancellationToken)
+            ?? throw new PatronFlowException(403, "Your library could not be determined.");
+        if (!configuration.IsActive)
+        {
+            throw new PatronFlowException(403, configuration.SystemNotEnabledMessage);
+        }
+
+        EnforceStaffPatronEligibility(configuration, patron);
+        var suggestion = Validate(input, configuration);
+        await databaseTransaction.CommitAsync(cancellationToken);
+        return (configuration, suggestion);
     }
 
     private async Task<EffectivePatronConfiguration> GetCurrentParticipatingConfigurationAsync(
@@ -763,23 +816,19 @@ public sealed partial class PatronSuggestionService(
         throw new PatronFlowException(
             409,
             message,
-            new
-            {
+            new PatronSuggestionDuplicateConflict(
                 message,
-                conflictTitle = "Already Submitted",
+                "Already Submitted",
                 conflictMessage,
-                duplicate = new
-                {
+                new PatronSuggestionDuplicateDetails(
                     id,
                     created,
                     status,
-                    closeReason = closeReason ?? string.Empty,
+                    closeReason ?? string.Empty,
                     title,
                     author,
-                    format = formatCode,
-                    matchType
-                }
-            });
+                    formatCode,
+                    matchType)));
     }
 
     private async Task<AutoClaimCandidate?> FindAutoClaimCandidateAsync(

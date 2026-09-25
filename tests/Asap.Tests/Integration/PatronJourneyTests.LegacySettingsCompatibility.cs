@@ -425,6 +425,269 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task LegacySettingsPreservesNormalOnlyProviderAcrossScopedAndUnrelatedSaves()
+    {
+        const int libraryId = 92349;
+        var normalOnlyProvidersToCreate = new[]
+        {
+            new
+            {
+                Key = "provider_4",
+                Label = "Normal-only provider " + Guid.NewGuid().ToString("N"),
+                Url = "https://normal-only.example.org/search?q={query}",
+                SortOrder = 95
+            },
+            new
+            {
+                Key = "provider_custom_catalog",
+                Label = "Custom catalog provider " + Guid.NewGuid().ToString("N"),
+                Url = "https://catalog.example.org/search?q={query}",
+                SortOrder = 96
+            }
+        };
+        var changedLegacyProviderLabel = "Legacy slot two " + Guid.NewGuid().ToString("N");
+        factory!.UseKestrel(0);
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        using var client = factory.CreateClient();
+        var actor = await ReadConfiguredSuperAdminAsync();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+
+        long initialAuditId = 0;
+        var originalExternalSearchTwo = await ReadProviderSnapshotAsync("external_search_2");
+        var normalOnlyProviderSnapshots = new Dictionary<string, LegacyProviderSnapshot>(StringComparer.Ordinal);
+        try
+        {
+            await using (var seed = await contextFactory.CreateDbContextAsync())
+            {
+                initialAuditId = await seed.AdministrativeAudits.MaxAsync(item => (long?)item.Id) ?? 0;
+                foreach (var provider in normalOnlyProvidersToCreate)
+                {
+                    Assert.IsFalse(await seed.ExternalSearchProviders.AnyAsync(item => item.ProviderKey == provider.Key),
+                        $"The deterministic normal-only provider key {provider.Key} must be unused before this test.");
+                }
+
+                seed.Organizations.Add(new Organization
+                {
+                    Id = libraryId,
+                    DisplayName = "Normal-only provider preservation",
+                    IsActive = true
+                });
+                await seed.SaveChangesAsync();
+            }
+
+            using var initialNormalSettings = await ReadSettingsDocumentAsync(client, "system");
+            var initialNormalProviders = initialNormalSettings.RootElement.GetProperty("stored")
+                .GetProperty("providers").EnumerateArray().ToArray();
+            Assert.IsFalse(initialNormalProviders.Any(item => item.GetProperty("key").GetString() == "external_search_4"),
+                "A blank seeded fourth slot remains hidden from normal Settings.");
+
+            using var createNormalOnlyProvider = await SaveSettingsDocumentAsync(
+                client,
+                initialNormalSettings.RootElement,
+                "system",
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["providers"] = normalOnlyProvidersToCreate.Select(provider => new
+                        {
+                            key = provider.Key,
+                            isEnabled = true,
+                            label = provider.Label,
+                            urlTemplate = provider.Url,
+                            sortOrder = provider.SortOrder
+                        }).ToArray()
+                });
+            Assert.AreEqual("saved", createNormalOnlyProvider.RootElement.GetProperty("code").GetString());
+
+            foreach (var provider in normalOnlyProvidersToCreate)
+            {
+                normalOnlyProviderSnapshots.Add(provider.Key, await ReadProviderSnapshotAsync(provider.Key));
+            }
+
+            using (var normalSettingsWithProvider = await ReadSettingsDocumentAsync(client, "system"))
+            {
+                var providers = normalSettingsWithProvider.RootElement.GetProperty("stored").GetProperty("providers")
+                    .EnumerateArray().ToArray();
+                foreach (var snapshot in normalOnlyProviderSnapshots.Values)
+                {
+                    var row = providers.Single(item => item.GetProperty("key").GetString() == snapshot.Key);
+                    Assert.AreEqual(snapshot.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        row.GetProperty("id").GetString());
+                    Assert.AreEqual(snapshot.IsEnabled, row.GetProperty("isEnabled").GetBoolean());
+                    Assert.AreEqual(snapshot.Label, row.GetProperty("label").GetString());
+                    Assert.AreEqual(snapshot.UrlTemplate, row.GetProperty("urlTemplate").GetString());
+                    Assert.AreEqual(snapshot.SortOrder, row.GetProperty("sortOrder").GetInt32());
+                }
+            }
+
+            static string[] LegacyProviderKeys(JsonElement settings) => settings.GetProperty("providers")
+                .EnumerateArray().Select(item => item.GetProperty("key").GetString()!).ToArray();
+
+            static void AssertFixedLegacySlots(JsonElement settings)
+            {
+                Assert.AreEqual(4, settings.GetProperty("providers").GetArrayLength());
+                CollectionAssert.AreEquivalent(
+                    new[] { "external_search_1", "external_search_2", "external_search_3", "external_search_4" },
+                    LegacyProviderKeys(settings));
+            }
+
+            using var legacySystemBefore = await ReadLegacySettingsAsync(client, "system");
+            AssertFixedLegacySlots(legacySystemBefore.RootElement);
+            Assert.IsFalse(normalOnlyProviderSnapshots.Keys.Any(LegacyProviderKeys(legacySystemBefore.RootElement).Contains));
+            var systemNoEdit = LegacyNoEditPayload(legacySystemBefore.RootElement, system: true);
+            using var systemNoEditSaved = await SaveLegacySettingsAsync(client, systemNoEdit, HttpStatusCode.OK);
+            Assert.AreEqual("saved", systemNoEditSaved.RootElement.GetProperty("code").GetString());
+            await AssertNormalOnlyProvidersUnchangedAsync(
+                "A system-scope no-edit legacy save must preserve every normal-only provider and its RowVersion.");
+
+            using var legacyLibraryBefore = await ReadLegacySettingsAsync(client, libraryId.ToString());
+            AssertFixedLegacySlots(legacyLibraryBefore.RootElement);
+            Assert.IsFalse(normalOnlyProviderSnapshots.Keys.Any(LegacyProviderKeys(legacyLibraryBefore.RootElement).Contains));
+            var libraryNoEdit = LegacyNoEditPayload(legacyLibraryBefore.RootElement, system: false);
+            using var libraryNoEditSaved = await SaveLegacySettingsAsync(client, libraryNoEdit, HttpStatusCode.OK);
+            Assert.AreEqual("saved", libraryNoEditSaved.RootElement.GetProperty("code").GetString());
+            await AssertNormalOnlyProvidersUnchangedAsync(
+                "A library no-edit legacy save must preserve every normal-only provider and its RowVersion.");
+            await using (var noEditVerify = await contextFactory.CreateDbContextAsync())
+            {
+                foreach (var snapshot in normalOnlyProviderSnapshots.Values)
+                {
+                    Assert.IsFalse(await noEditVerify.ExternalSearchProviderOverrides.AnyAsync(item =>
+                        item.LibraryOrganizationId == libraryId &&
+                        item.ExternalSearchProviderId == snapshot.Id),
+                        $"A no-edit library save must not create an override for {snapshot.Key}.");
+                }
+            }
+
+            using var legacyLibraryForUnrelatedEdit = await ReadLegacySettingsAsync(client, libraryId.ToString());
+            var unrelatedEdit = LegacyNoEditPayload(legacyLibraryForUnrelatedEdit.RootElement, system: false);
+            ((JsonObject)unrelatedEdit["workflow"]!)["suggestionLimitMessage"] =
+                "Unrelated legacy workflow edit " + Guid.NewGuid().ToString("N");
+            using var unrelatedSave = await SaveLegacySettingsAsync(client, unrelatedEdit, HttpStatusCode.OK);
+            Assert.AreEqual("saved", unrelatedSave.RootElement.GetProperty("code").GetString());
+            await AssertNormalOnlyProvidersUnchangedAsync(
+                "An unrelated library workflow edit must preserve every normal-only provider and its RowVersion.");
+            await using (var unrelatedVerify = await contextFactory.CreateDbContextAsync())
+            {
+                foreach (var snapshot in normalOnlyProviderSnapshots.Values)
+                {
+                    Assert.IsFalse(await unrelatedVerify.ExternalSearchProviderOverrides.AnyAsync(item =>
+                        item.LibraryOrganizationId == libraryId &&
+                        item.ExternalSearchProviderId == snapshot.Id),
+                        $"An unrelated library edit must not create an override for {snapshot.Key}.");
+                }
+            }
+
+            var originalSearchOne = await ReadProviderSnapshotAsync("external_search_1");
+            var originalSearchThree = await ReadProviderSnapshotAsync("external_search_3");
+            var originalSearchFour = await ReadProviderSnapshotAsync("external_search_4");
+            using var legacySystemForProviderEdit = await ReadLegacySettingsAsync(client, "system");
+            var providerEdit = LegacyNoEditPayload(legacySystemForProviderEdit.RootElement, system: true);
+            var searchTwo = ((JsonArray)providerEdit["providers"]!).OfType<JsonObject>()
+                .Single(item => (string?)item["key"] == "external_search_2");
+            searchTwo["label"] = changedLegacyProviderLabel;
+            using var providerEditSaved = await SaveLegacySettingsAsync(client, providerEdit, HttpStatusCode.OK);
+            Assert.AreEqual("saved", providerEditSaved.RootElement.GetProperty("code").GetString());
+
+            var changedSearchTwo = await ReadProviderSnapshotAsync("external_search_2");
+            Assert.AreEqual(changedLegacyProviderLabel, changedSearchTwo.Label);
+            Assert.AreEqual(originalExternalSearchTwo.Id, changedSearchTwo.Id);
+            Assert.AreEqual(originalExternalSearchTwo.Key, changedSearchTwo.Key);
+            Assert.AreEqual(originalExternalSearchTwo.IsEnabled, changedSearchTwo.IsEnabled);
+            Assert.AreEqual(originalExternalSearchTwo.UrlTemplate, changedSearchTwo.UrlTemplate);
+            Assert.AreEqual(originalExternalSearchTwo.SortOrder, changedSearchTwo.SortOrder);
+            CollectionAssert.AreNotEqual(originalExternalSearchTwo.RowVersion, changedSearchTwo.RowVersion);
+            AssertProviderSnapshotEquals(originalSearchOne, await ReadProviderSnapshotAsync("external_search_1"),
+                "Editing external_search_2 must not rewrite external_search_1.");
+            AssertProviderSnapshotEquals(originalSearchThree, await ReadProviderSnapshotAsync("external_search_3"),
+                "Editing external_search_2 must not rewrite external_search_3.");
+            AssertProviderSnapshotEquals(originalSearchFour, await ReadProviderSnapshotAsync("external_search_4"),
+                "Editing external_search_2 must not rewrite the blank fixed fourth slot.");
+            await AssertNormalOnlyProvidersUnchangedAsync(
+                "Editing a legacy-owned provider must preserve every normal-only provider and its RowVersion.");
+
+            using var normalSettingsAfterLegacyEdit = await ReadSettingsDocumentAsync(client, "system");
+            var normalProvidersAfterLegacyEdit = normalSettingsAfterLegacyEdit.RootElement.GetProperty("stored")
+                .GetProperty("providers").EnumerateArray().ToArray();
+            foreach (var snapshot in normalOnlyProviderSnapshots.Values)
+            {
+                var row = normalProvidersAfterLegacyEdit.Single(item => item.GetProperty("key").GetString() == snapshot.Key);
+                Assert.AreEqual(snapshot.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    row.GetProperty("id").GetString());
+                Assert.AreEqual(snapshot.IsEnabled, row.GetProperty("isEnabled").GetBoolean());
+                Assert.AreEqual(snapshot.Label, row.GetProperty("label").GetString());
+                Assert.AreEqual(snapshot.UrlTemplate, row.GetProperty("urlTemplate").GetString());
+                Assert.AreEqual(snapshot.SortOrder, row.GetProperty("sortOrder").GetInt32());
+            }
+        }
+        finally
+        {
+            await CleanupSuggestionRaceLibraryAsync(libraryId);
+            await using var restore = await contextFactory.CreateDbContextAsync();
+            var providerTwo = await restore.ExternalSearchProviders.SingleAsync(item =>
+                item.ProviderKey == "external_search_2");
+            providerTwo.IsEnabled = originalExternalSearchTwo.IsEnabled;
+            providerTwo.Label = originalExternalSearchTwo.Label;
+            providerTwo.UrlTemplate = originalExternalSearchTwo.UrlTemplate;
+            providerTwo.SortOrder = originalExternalSearchTwo.SortOrder;
+
+            foreach (var provider in normalOnlyProvidersToCreate)
+            {
+                var providerToRemove = await restore.ExternalSearchProviders.SingleOrDefaultAsync(item =>
+                    item.ProviderKey == provider.Key && item.Label == provider.Label && item.UrlTemplate == provider.Url);
+                if (providerToRemove is not null)
+                {
+                    await restore.ExternalSearchProviderOverrides
+                        .Where(item => item.ExternalSearchProviderId == providerToRemove.Id)
+                        .ExecuteDeleteAsync();
+                    restore.ExternalSearchProviders.Remove(providerToRemove);
+                }
+            }
+
+            await restore.SaveChangesAsync();
+            await restore.AdministrativeAudits.Where(item => item.Id > initialAuditId &&
+                item.ActorStaffUserId == actor.Id && item.OrganizationId == 1).ExecuteDeleteAsync();
+        }
+
+        async Task<LegacyProviderSnapshot> ReadProviderSnapshotAsync(string key)
+        {
+            await using var context = await contextFactory.CreateDbContextAsync();
+            var row = await context.ExternalSearchProviders.AsNoTracking()
+                .SingleAsync(item => item.ProviderKey == key);
+            return new LegacyProviderSnapshot(
+                row.Id,
+                row.ProviderKey,
+                row.IsEnabled,
+                row.Label,
+                row.UrlTemplate,
+                row.SortOrder,
+                row.RowVersion.ToArray());
+        }
+
+        async Task AssertNormalOnlyProvidersUnchangedAsync(string message)
+        {
+            foreach (var expected in normalOnlyProviderSnapshots.Values)
+            {
+                AssertProviderSnapshotEquals(expected, await ReadProviderSnapshotAsync(expected.Key), message);
+            }
+        }
+
+        static void AssertProviderSnapshotEquals(
+            LegacyProviderSnapshot expected,
+            LegacyProviderSnapshot actual,
+            string message)
+        {
+            Assert.AreEqual(expected.Id, actual.Id, message);
+            Assert.AreEqual(expected.Key, actual.Key, message);
+            Assert.AreEqual(expected.IsEnabled, actual.IsEnabled, message);
+            Assert.AreEqual(expected.Label, actual.Label, message);
+            Assert.AreEqual(expected.UrlTemplate, actual.UrlTemplate, message);
+            Assert.AreEqual(expected.SortOrder, actual.SortOrder, message);
+            CollectionAssert.AreEqual(expected.RowVersion, actual.RowVersion, message);
+        }
+    }
+
+    [TestMethod]
     public async Task LegacySettingsPartialEditsPreserveSiblingProviderDisabledRuleAndTemplateInheritance()
     {
         const int libraryId = 92342;
@@ -977,4 +1240,13 @@ public sealed partial class PatronJourneyTests
         }
         return result;
     }
+
+    private sealed record LegacyProviderSnapshot(
+        long Id,
+        string Key,
+        bool IsEnabled,
+        string Label,
+        string UrlTemplate,
+        int SortOrder,
+        byte[] RowVersion);
 }
