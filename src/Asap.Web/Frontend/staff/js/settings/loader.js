@@ -1,7 +1,7 @@
 import { settingsContainer, settingsLoading, settingsDirty, settingsReloadRequired, settingsSaving, settingsSyncInProgress, settingsActionInProgress, libraryContextLoadSerial, currentLibraryContextOrgId, currentSettingsSection, setSettingsLoading, setSettingsSaving, setSettingsReloadRequired, setSettingsDirty, setInitialSettingsSnapshot, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId, setDeletedSettingsFormats, setAdditionalFieldDefinitions, setCurrentPatronFieldConfig, staffSession, staffAccessGeneration, setCurrentLibraryContextOrgId, workflowSettings, organizationsStatus } from '../state.js';
 import { setVisible, isSuperAdminStaff, activateSettingsSection, initSettingsNavigation, checkAuth, markSettingsClean, updateSaveBarState, setFieldValue, setFieldChecked, isRequestCanceledError } from '../api.js';
 import { updateSaveButtonText } from './save-ui.js';
-import { authorizedJson, loadStaffSession } from '../http.js';
+import { authorizedJson, isAbortError, loadStaffSession } from '../http.js';
 import { closeOpenDialogs } from '../dialogs.js';
 import { closeActionMenu } from '../grid.js';
 import { populateLibrarySelector, loadLibrarySettings, invalidateLibrarySettingsLoads } from './library-context.js';
@@ -249,6 +249,7 @@ export async function initStaffApp() {
   try {
     await loadStaffSession();
   } catch (error) {
+    if (isAbortError(error)) return;
     const expectedSessionFailure = error?.status === 401 ||
       (error?.status === 403 && error.response?.accessAllowed === false);
     if (!expectedSessionFailure) {

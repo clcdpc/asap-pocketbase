@@ -188,7 +188,7 @@ public static class StaffSuggestionCompatibilityEndpoints
                     input.Autohold,
                     null),
                 cancellationToken,
-                staffSubmission: true);
+                staffActor: actor);
             return Results.Json(created, statusCode: StatusCodes.Status201Created);
         }
         catch (PatronFlowException exception)

@@ -8,8 +8,10 @@ export const staffSession = {
   staff: null
 };
 export let staffAccessGeneration = 0;
+export let staffSessionEpoch = 0;
 
 export function setStaffSession(session) {
+  staffSessionEpoch += 1;
   const priorStaff = staffSession.staff;
   const nextStaff = session?.staff;
   const accessChanged = staffSession.authenticated !== !!session?.authenticated ||

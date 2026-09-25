@@ -4,8 +4,12 @@ using System.Net;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Asap.Web.Features.Email;
+using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Configuration;
+using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Security;
 
 namespace Asap.Web.Features.Patron;
@@ -59,7 +63,9 @@ public sealed partial class PatronSuggestionService(
     IEmailSender emailSender,
     RecipientDomainPolicy recipientDomainPolicy,
     TimeProvider timeProvider,
-    ILogger<PatronSuggestionService> logger)
+    ILogger<PatronSuggestionService> logger,
+    IDbContextFactory<AsapDbContext> contextFactory,
+    StaffEligibilityService staffEligibility)
 {
     private const string IdentifierMutationBarrierPredicate = """
               AND [Status] = N'suggestion'
@@ -95,7 +101,7 @@ public sealed partial class PatronSuggestionService(
         PatronSessionContext session,
         PatronSuggestionInput input,
         CancellationToken cancellationToken,
-        bool staffSubmission = false)
+        CurrentStaff? staffActor = null)
     {
         var configuration = await configurationService.GetAsync(
             session.EffectiveOrganizationId,
@@ -111,7 +117,7 @@ public sealed partial class PatronSuggestionService(
         try
         {
             patron = await patronProvider.RefreshAsync(session.Barcode, cancellationToken);
-            if (staffSubmission)
+            if (staffActor is not null)
             {
                 EnforceStaffPatronEligibility(configuration, patron);
             }
@@ -135,6 +141,10 @@ public sealed partial class PatronSuggestionService(
 
         if (patron.PreferredPickupBranchId != selectedBranch.Id)
         {
+            if (staffActor is not null)
+            {
+                await RequireCurrentStaffAsync(staffActor, configuration.OrganizationId, cancellationToken);
+            }
             try
             {
                 await patronProvider.UpdatePreferredPickupBranchAsync(
@@ -174,7 +184,7 @@ public sealed partial class PatronSuggestionService(
                     configuration,
                     autoClaimCandidate,
                     emailTransportReadiness,
-                    staffSubmission,
+                    staffActor,
                     cancellationToken);
                 break;
             }
@@ -230,20 +240,55 @@ public sealed partial class PatronSuggestionService(
         EffectivePatronConfiguration configuration,
         AutoClaimCandidate? autoClaimCandidate,
         EmailTransportReadiness emailTransportReadiness,
-        bool staffSubmission,
+        CurrentStaff? staffActor,
         CancellationToken cancellationToken)
     {
-        await using var connection = new SqlConnection(connectionString);
-        await connection.OpenAsync(cancellationToken);
-        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        await using var databaseTransaction = await context.Database.BeginTransactionAsync(
             IsolationLevel.Serializable,
             cancellationToken);
+        var connection = (SqlConnection)context.Database.GetDbConnection();
+        var transaction = (SqlTransaction)databaseTransaction.GetDbTransaction();
 
-        await LockAndValidateOrganizationAsync(
-            connection,
-            transaction,
-            configuration,
-            cancellationToken);
+        var organizationIds = staffActor is null
+            ? new[] { configuration.OrganizationId }
+            : new[] { configuration.OrganizationId, staffActor.OrganizationId };
+        var lockedOrganizationIds = new HashSet<int>();
+        foreach (var organizationId in organizationIds.Distinct().Order())
+        {
+            var organization = await context.Organizations.FromSqlInterpolated(
+                    $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {organizationId}")
+                .SingleOrDefaultAsync(cancellationToken);
+            if (organization is null ||
+                organizationId == configuration.OrganizationId && !organization.IsActive)
+            {
+                throw new PatronFlowException(403, configuration.SystemNotEnabledMessage);
+            }
+            lockedOrganizationIds.Add(organizationId);
+        }
+
+        var staffIds = staffActor is null
+            ? new[] { autoClaimCandidate?.StaffUserId }
+            : new[] { (long?)staffActor.Id, autoClaimCandidate?.StaffUserId };
+        foreach (var staffId in staffIds.Where(id => id.HasValue).Select(id => id!.Value).Distinct().Order())
+        {
+            await context.StaffUsers.FromSqlInterpolated(
+                    $"SELECT * FROM [asap].[StaffUser] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {staffId}")
+                .SingleOrDefaultAsync(cancellationToken);
+        }
+
+        if (staffActor is not null)
+        {
+            var eligibility = await staffEligibility.RevalidateLockedAsync(
+                context,
+                staffActor,
+                configuration.OrganizationId,
+                StaffRoleRequirement.Any,
+                requireActorParticipation: true,
+                lockedOrganizationIds,
+                cancellationToken);
+            RequireCurrentStaff(eligibility);
+        }
         var autoClaimTarget = await LockAutoClaimTargetAsync(
             connection,
             transaction,
@@ -257,7 +302,7 @@ public sealed partial class PatronSuggestionService(
             suggestion,
             cancellationToken);
         // The pinned staff-create workflow bypasses only the public submission count.
-        if (!staffSubmission)
+        if (staffActor is null)
         {
             await EnforceLimitAsync(
                 connection,
@@ -358,24 +403,32 @@ public sealed partial class PatronSuggestionService(
             rowVersion = (byte[])(await version.ExecuteScalarAsync(cancellationToken))!;
         }
 
-        await transaction.CommitAsync(cancellationToken);
+        await databaseTransaction.CommitAsync(cancellationToken);
         return (requestId, outboxId, rowVersion);
     }
 
-    private static async Task LockAndValidateOrganizationAsync(
-        SqlConnection connection,
-        SqlTransaction transaction,
-        EffectivePatronConfiguration configuration,
+    private async Task RequireCurrentStaffAsync(
+        CurrentStaff actor,
+        int organizationId,
         CancellationToken cancellationToken)
     {
-        await using var command = new SqlCommand(
-            "SELECT [IsActive] FROM [asap].[Organization] WITH (UPDLOCK, HOLDLOCK) WHERE [Id] = @id;",
-            connection,
-            transaction);
-        Add(command, "@id", SqlDbType.Int, configuration.OrganizationId);
-        if (await command.ExecuteScalarAsync(cancellationToken) is not true)
+        var eligibility = await staffEligibility.EvaluateAsync(
+            new StaffIdentityEvidence(actor.Id, actor.AuthenticationEmail, actor.EntraTenantId),
+            organizationId,
+            StaffRoleRequirement.Any,
+            requireParticipation: true,
+            cancellationToken);
+        RequireCurrentStaff(eligibility);
+    }
+
+    private static void RequireCurrentStaff(StaffEligibilityResult eligibility)
+    {
+        if (eligibility.Outcome != StaffEligibilityOutcome.Allowed)
         {
-            throw new PatronFlowException(403, configuration.SystemNotEnabledMessage);
+            throw new PatronFlowException(
+                eligibility.Outcome == StaffEligibilityOutcome.InvalidIdentity ? 401 : 403,
+                "Staff access is no longer available for this library.",
+                new { code = eligibility.Code, accessAllowed = false, operationPhase = "rejected" });
         }
     }
 

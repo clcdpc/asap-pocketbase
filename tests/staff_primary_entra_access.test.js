@@ -106,6 +106,13 @@ async function waitFor(predicate) {
     let resolveMetadataPatch;
     let mutationSessionResult = null;
     let sessionRequestCount = 0;
+    let queueSessionResponses = false;
+    const pendingSessionResponses = [];
+    let signOutRequests = 0;
+    let delaySignOut = false;
+    let releaseSignOut;
+    let staffUserReads = 0;
+    let bootstrapMutations = 0;
     let users = [
       {
         id: '9007199254740993',
@@ -137,6 +144,11 @@ async function waitFor(predicate) {
       }
       if (requestUrl === '/api/asap/staff/legacy/session') {
         sessionRequestCount += 1;
+        if (queueSessionResponses) {
+          return new Promise(resolve => {
+            pendingSessionResponses.push((status, body) => resolve(response(status, body)));
+          });
+        }
         if (startupSession === 'invalid') {
           return response(401, { code: 'staff_session_invalid' });
         }
@@ -214,6 +226,7 @@ async function waitFor(predicate) {
           ]);
       }
       if (requestUrl.startsWith('/api/asap/staff/users') && method === 'GET') {
+        staffUserReads += 1;
         if (requestUrl.includes('orgId=2') && delayLibraryTwoStaffUsers) {
           return new Promise(resolve => {
             resolveLibraryTwoStaffUsers = () => resolve(response(200, {
@@ -307,6 +320,22 @@ async function waitFor(predicate) {
           user: savedUser || users[0],
           cleanup: { rulesDeactivated: 1, openTitleClaimsCleared: 2, openAdditionalCopyClaimsCleared: 3 }
         });
+      }
+      if (requestUrl === '/api/asap/staff/sign-out' && method === 'POST') {
+        signOutRequests += 1;
+        if (delaySignOut) {
+          return new Promise(resolve => {
+            releaseSignOut = () => resolve(response(200, { signedOut: true }));
+          });
+        }
+        return response(200, { signedOut: true });
+      }
+      if (requestUrl === '/bootstrap-mutation' && method === 'POST') {
+        bootstrapMutations += 1;
+        return response(200, { saved: true });
+      }
+      if (requestUrl === '/api/asap/staff/legacy/profile' && method === 'POST') {
+        return response(200, { staff: { ...selfUser, displayName: 'Newest Profile' } });
       }
       throw new Error(`Unexpected request: ${method} ${requestUrl}`);
     };
@@ -890,6 +919,129 @@ async function waitFor(predicate) {
     assert.strictEqual(document.getElementById('app-container').classList.contains('hidden'), true);
     assert.match(document.getElementById('login-status').textContent,
       /change was saved.*could not be safely refreshed.*sign in again.*revalidate/i);
+
+    restoreSelfWorkspace();
+    mutationSessionResult = null;
+    queueSessionResponses = true;
+    const oldSession = { authenticated: true, accessAllowed: true,
+      antiforgeryToken: 'old-session-token', staff: { ...selfUser, displayName: 'Old Session' } };
+    selfRow = document.querySelector(`tr[data-staff-id="${selfId}"]`);
+    selfRow.querySelector('.staff-display-name').value = 'Saved Before Sign-Out';
+    selfRow.querySelector('.staff-metadata-save').click();
+    await waitFor(() => pendingSessionResponses.length === 1);
+    assert.strictEqual(state.staffSession.authenticated, false);
+    assert.strictEqual(state.staffSession.staff, null);
+    assert.strictEqual(document.getElementById('app-container').classList.contains('hidden'), true);
+    const revalidationAccessGeneration = state.staffAccessGeneration;
+    const revalidationEpoch = state.staffSessionEpoch;
+    const signOutRequestsBefore = signOutRequests;
+    document.getElementById('login-sign-out-btn').click();
+    await waitFor(() => signOutRequests === signOutRequestsBefore + 1);
+    assert.strictEqual(state.staffAccessGeneration, revalidationAccessGeneration,
+      'Signing out from an already false/null revalidation state does not change the access generation');
+    assert.ok(state.staffSessionEpoch > revalidationEpoch,
+      'The explicit sign-out still invalidates pending session responses');
+    const staffReadsAfterSignOut = staffUserReads;
+    pendingSessionResponses.shift()(200, oldSession);
+    await flush();
+    await flush();
+    assert.strictEqual(state.staffSession.authenticated, false);
+    assert.strictEqual(state.staffSession.staff, null);
+    assert.strictEqual(document.getElementById('app-container').classList.contains('hidden'), true,
+      'An old self-update session response must not reopen the signed-out workspace');
+    assert.strictEqual(staffUserReads, staffReadsAfterSignOut,
+      'Obsolete revalidation must not repopulate Staff Access');
+    assert.doesNotMatch(document.getElementById('login-status').textContent, /could not be safely refreshed/i,
+      'Superseded revalidation is not an error state');
+
+    for (const staleStatus of [200, 401, 403]) {
+      restoreSelfWorkspace();
+      const older = http.loadStaffSession();
+      await waitFor(() => pendingSessionResponses.length === 1);
+      const newer = http.loadStaffSession();
+      await waitFor(() => pendingSessionResponses.length === 2);
+      const latestSession = { ...oldSession, staff: { ...selfUser, displayName: `Latest ${staleStatus}` } };
+      pendingSessionResponses.splice(1, 1)[0](200, latestSession);
+      await newer;
+      pendingSessionResponses.shift()(staleStatus, staleStatus === 200 ? oldSession :
+        staleStatus === 401 ? { code: 'staff_session_invalid' } :
+          { code: 'staff_scope_forbidden', accessAllowed: false });
+      await assert.rejects(older, error => error.name === 'AbortError');
+      assert.strictEqual(state.staffSession.staff.displayName, `Latest ${staleStatus}`,
+        'Neither an older success nor an older access error may replace a newer session');
+      assert.strictEqual(state.staffSession.authenticated, true);
+      assert.strictEqual(state.staffSession.accessAllowed, true);
+    }
+
+    restoreSelfWorkspace();
+    const oldProfileSession = http.loadStaffSession();
+    await waitFor(() => pendingSessionResponses.length === 1);
+    document.getElementById('profile-btn').click();
+    document.getElementById('profile-form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await waitFor(() => state.staffSession.staff?.displayName === 'Newest Profile');
+    pendingSessionResponses.shift()(200, oldSession);
+    await assert.rejects(oldProfileSession, error => error.name === 'AbortError');
+    assert.strictEqual(state.staffSession.staff.displayName, 'Newest Profile',
+      'An older session read must not overwrite the successful profile update');
+
+    restoreSelfWorkspace();
+    delaySignOut = true;
+    const delayedSignOutBefore = signOutRequests;
+    document.getElementById('logout-btn').click();
+    await waitFor(() => signOutRequests === delayedSignOutBefore + 1 && !!releaseSignOut);
+    assert.strictEqual(state.staffSession.authenticated, false);
+    const replacement = { ...oldSession, antiforgeryToken: 'replacement-token',
+      staff: { ...selfUser, id: 'replacement', displayName: 'Replacement Staff' } };
+    state.setStaffSession(replacement);
+    auth.checkAuth();
+    releaseSignOut();
+    await flush();
+    assert.strictEqual(state.staffSession.staff.id, 'replacement',
+      'An older sign-out completion must not erase a newer owned session');
+    delaySignOut = false;
+    releaseSignOut = null;
+
+    restoreSelfWorkspace();
+    state.staffSession.antiforgeryToken = '';
+    const noTokenSignOutBefore = signOutRequests;
+    document.getElementById('logout-btn').click();
+    await waitFor(() => pendingSessionResponses.length === 1);
+    assert.strictEqual(state.staffSession.authenticated, false);
+    pendingSessionResponses.shift()(200, oldSession);
+    await waitFor(() => signOutRequests === noTokenSignOutBefore + 1);
+    assert.strictEqual(state.staffSession.authenticated, false,
+      'The token-only sign-out bootstrap must not reinstall an authenticated session');
+
+    restoreSelfWorkspace();
+    state.staffSession.antiforgeryToken = '';
+    const supersededSignOutBefore = signOutRequests;
+    document.getElementById('logout-btn').click();
+    await waitFor(() => pendingSessionResponses.length === 1);
+    state.setStaffSession(replacement);
+    pendingSessionResponses.shift()(200, oldSession);
+    await flush();
+    assert.strictEqual(state.staffSession.staff.id, 'replacement');
+    assert.strictEqual(signOutRequests, supersededSignOutBefore,
+      'A token bootstrap superseded by a newer session must not dispatch an old sign-out');
+
+    restoreSelfWorkspace();
+    state.staffSession.antiforgeryToken = '';
+    const staleBootstrap = http.authorizedJson('/bootstrap-mutation', { method: 'POST' });
+    await waitFor(() => pendingSessionResponses.length === 1);
+    state.setStaffSession(replacement);
+    pendingSessionResponses.shift()(200, oldSession);
+    await assert.rejects(staleBootstrap, error => error.name === 'AbortError');
+    assert.strictEqual(bootstrapMutations, 0,
+      'A superseded antiforgery bootstrap must not dispatch its mutation');
+
+    restoreSelfWorkspace();
+    state.staffSession.antiforgeryToken = '';
+    const changedBootstrap = http.authorizedJson('/bootstrap-mutation', { method: 'POST' });
+    await waitFor(() => pendingSessionResponses.length === 1);
+    pendingSessionResponses.shift()(200, replacement);
+    await assert.rejects(changedBootstrap, error => error.name === 'AbortError');
+    assert.strictEqual(bootstrapMutations, 0,
+      'A bootstrap that discovers a different identity must not dispatch the old mutation');
 
     console.log('Primary staff Entra session, metadata, concurrency, and lifecycle UI checks passed');
   } finally {

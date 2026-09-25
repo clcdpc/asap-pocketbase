@@ -1,5 +1,13 @@
-import { staffSession, staffAccessGeneration, setStaffSession } from './state.js';
+import { staffSession, staffAccessGeneration, staffSessionEpoch, setStaffSession } from './state.js';
 import { HttpError, requestJson, isAbortError } from '../../shared/http.js';
+
+let sessionLoadSerial = 0;
+
+function supersededSessionError() {
+  const error = new Error('Staff session request superseded.');
+  error.name = 'AbortError';
+  return error;
+}
 
 function applyStaffAccessFailure(error) {
   if (error?.status === 401) {
@@ -27,29 +35,34 @@ function applyStaffAccessFailure(error) {
 }
 
 export async function loadStaffSession(options = {}) {
+  const startingEpoch = staffSessionEpoch;
+  const serial = ++sessionLoadSerial;
+  const ownsSession = () => serial === sessionLoadSerial && startingEpoch === staffSessionEpoch;
   try {
     const session = await requestJson('/api/asap/staff/legacy/session', { cache: 'no-store', signal: options.signal });
-    setStaffSession(session);
+    if (!ownsSession()) throw supersededSessionError();
+    if (options.apply !== false) setStaffSession(session);
     return session;
   } catch (error) {
-    applyStaffAccessFailure(error);
+    if (!ownsSession()) throw supersededSessionError();
+    if (options.apply !== false) applyStaffAccessFailure(error);
     throw error;
   }
 }
 
 export async function authorizedJson(path, options = {}) {
-  let accessGeneration = staffAccessGeneration;
+  const accessGeneration = staffAccessGeneration;
   const method = String(options.method || 'GET').toUpperCase();
   const headers = { ...(options.headers || {}) };
   if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
-    if (!staffSession.antiforgeryToken) {
+    if (!headers['X-ASAP-Antiforgery'] && !staffSession.antiforgeryToken) {
       const session = await loadStaffSession({ signal: options.signal });
+      if (staffAccessGeneration !== accessGeneration) throw supersededSessionError();
       if (!session.authenticated) {
         throw new HttpError('Your staff session has ended.', 401, { code: 'staff_session_invalid' });
       }
-      accessGeneration = staffAccessGeneration;
     }
-    headers['X-ASAP-Antiforgery'] = staffSession.antiforgeryToken;
+    headers['X-ASAP-Antiforgery'] = headers['X-ASAP-Antiforgery'] || staffSession.antiforgeryToken;
   }
   try {
     const result = await requestJson(path, {

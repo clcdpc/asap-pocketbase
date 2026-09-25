@@ -1,8 +1,10 @@
 using System.Data;
 using Asap.Web.Features.Patron;
 using Asap.Web.Features.Staff;
+using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Jobs;
 using Microsoft.Data.SqlClient;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -83,7 +85,9 @@ public sealed partial class PatronJourneyTests
             new RecordingEmailSender(),
             new RecipientDomainPolicy(configuration),
             timeProvider!,
-            NullLogger<PatronSuggestionService>.Instance);
+            NullLogger<PatronSuggestionService>.Instance,
+            factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>(),
+            factory.Services.GetRequiredService<StaffEligibilityService>());
 
         var identifier = $"978{Random.Shared.NextInt64(1000000000, 9999999999)}";
         long requestId;

@@ -1185,6 +1185,86 @@ async function runSettingsDemotionDuringLoad(browser, args) {
   }
 }
 
+async function runSignOutDuringSessionRevalidation(browser, args) {
+  const { context, traffic } = await createContext(
+    browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity
+  );
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  let startDelayed;
+  let releaseDelayed;
+  let routeDone;
+  let releaseStarted = false;
+  let protectedRequestsAfterRelease = 0;
+  const delayed = new Promise(resolve => { startDelayed = resolve; });
+  const release = new Promise(resolve => { releaseDelayed = resolve; });
+  const completed = new Promise(resolve => { routeDone = resolve; });
+  let waitTimer;
+  try {
+    await page.goto(`${args.baseOrigin}/staff/?stage=settings#settings-staff`, { waitUntil: 'networkidle' });
+    await page.locator('#app-container').waitFor({ state: 'visible' });
+    await page.locator('#tab-staff').click();
+    const selfRow = page.locator(`#staff-users-table-body tr[data-staff-id="${args.superIdentity.staffId}"]`);
+    await selfRow.locator('.staff-metadata-save').waitFor();
+    await page.route(`**/api/asap/staff/users/${args.superIdentity.staffId}`, async route => {
+      if (route.request().method() !== 'PATCH') return route.continue();
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"code":"updated"}' });
+    });
+    await page.route('**/api/asap/staff/legacy/session', async route => {
+      try {
+        const upstream = await route.fetch();
+        const body = await upstream.json();
+        assert.equal(body.authenticated, true);
+        startDelayed();
+        await release;
+        await route.fulfill({ response: upstream, json: body });
+      } catch (error) {
+        if (!String(error.message).includes('intercept') && !String(error.message).includes('aborted')) {
+          throw error;
+        }
+      } finally {
+        routeDone();
+      }
+    });
+    page.on('request', request => {
+      if (releaseStarted && /\/api\/asap\/staff\/(?:legacy\/settings|users|email-status)/.test(request.url())) {
+        protectedRequestsAfterRelease += 1;
+      }
+    });
+    await selfRow.locator('.staff-display-name').fill('Saved before sign-out');
+    await selfRow.locator('.staff-metadata-save').click();
+    await Promise.race([
+      delayed,
+      new Promise((_, reject) => {
+        waitTimer = setTimeout(() => reject(new Error('Self-update session revalidation was not requested.')), 15000);
+      })
+    ]);
+    clearTimeout(waitTimer);
+    await page.locator('#login-sign-out-btn').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#app-container').isVisible(), false);
+    const signOutResponse = page.waitForResponse(response =>
+      response.url().endsWith('/api/asap/staff/sign-out') && response.request().method() === 'POST');
+    await page.locator('#login-sign-out-btn').click();
+    assert.equal((await signOutResponse).status(), 200);
+    releaseStarted = true;
+    releaseDelayed();
+    await completed;
+    await page.waitForTimeout(100);
+    assert.equal(await page.locator('#app-container').isVisible(), false,
+      'An old real session response must not reopen the signed-out workspace');
+    assert.equal(await page.locator('#login-container').isVisible(), true);
+    assert.equal(protectedRequestsAfterRelease, 0,
+      'Old revalidation must not start protected workspace requests after sign-out');
+    assert.deepEqual(errors, [], `Legacy session revalidation raised a browser error: ${errors.join('; ')}`);
+    assert.equal(traffic.externalRequests, 0, 'Legacy sign-out revalidation requested an external asset');
+  } finally {
+    clearTimeout(waitTimer);
+    releaseDelayed();
+    await context.close();
+  }
+}
+
 async function loadDependencies() {
   let chromium;
   try { ({ chromium } = require('playwright')); } catch {
@@ -1215,6 +1295,7 @@ async function main() {
     await runScopedStaff(browser, args, axeSource, report);
     await runSessionExpiry(browser, args);
     await runSettingsDemotionDuringLoad(browser, args);
+    await runSignOutDuringSessionRevalidation(browser, args);
     assert.equal(report.states.length, 11, 'Expected eleven primary legacy staff browser states');
     report.legacyAccessibilityBaseline = LEGACY_ACCESSIBILITY_BASELINE;
     report.unexpectedAccessibility = unexpectedLegacyAccessibilityFindings(report.states);

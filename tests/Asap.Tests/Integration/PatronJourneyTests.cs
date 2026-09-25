@@ -9844,7 +9844,9 @@ public sealed partial class PatronJourneyTests
             emailSender ?? new RecordingEmailSender(),
             new RecipientDomainPolicy(configuration),
             TimeProvider.System,
-            NullLogger<PatronSuggestionService>.Instance);
+            NullLogger<PatronSuggestionService>.Instance,
+            factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>(),
+            factory.Services.GetRequiredService<StaffEligibilityService>());
     }
 
     private static PatronSuggestionInput Suggestion(string title) =>

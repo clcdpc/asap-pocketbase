@@ -1,6 +1,6 @@
 import { currentLibraryContextOrgId, currentWorkflowOrgScopeId, staffSession, staffAccessGeneration } from './state.js';
 import { isAdminStaff, setInlineResult } from './api.js';
-import { authorizedJson, loadStaffSession } from './http.js';
+import { authorizedJson, isAbortError, loadStaffSession } from './http.js';
 import { collectSettingsPolaris, renderLibraryParticipationCheckboxes, collectEnabledLibraryIds } from './settings/polaris-fields.js';
 import { syncPolarisOrganizations } from './settings/polaris-sync.js';
 import { saveSettings } from './settings/save-controller.js';
@@ -128,7 +128,8 @@ document.getElementById('btn-run-workflow-now').addEventListener('click', async 
     if (err.status === 403 && err.response?.code === 'staff_scope_forbidden') {
       try {
         await loadStaffSession();
-      } catch {
+      } catch (error) {
+        if (isAbortError(error)) return;
         requireReload(`Workflow run for ${scopeLabel} was rejected, but your current staff scope could not be confirmed. Reload this page before another run.`);
         return;
       }

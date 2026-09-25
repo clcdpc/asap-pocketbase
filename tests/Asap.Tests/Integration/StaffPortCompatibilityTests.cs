@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Asap.Web.Features.Email;
 using Asap.Web.Features.Patron;
 using Asap.Web.Features.Staff;
 using Asap.Web.Features.Staff.Compatibility;
@@ -555,6 +556,135 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(barcode == "port-restricted" ? "patron_code_forbidden" : "patron_library_forbidden",
                 document.RootElement.GetProperty("code").GetString());
         }
+    }
+
+    [TestMethod]
+    [DataRow("deactivate")]
+    [DataRow("authentication_email")]
+    [DataRow("move_library")]
+    [DataRow("demote_super_admin")]
+    [DataRow("unchanged")]
+    public async Task StaffPortCreationRevalidatesInitiatingActorAfterProviderWait(string change)
+    {
+        var superAdmin = await ReadConfiguredSuperAdminAsync();
+        using (var setupClient = await StaffPortClientAsync(factory!))
+        {
+            await ConfigureStaffPortLibraryAsync(setupClient, false);
+        }
+        var initialRole = change == "demote_super_admin" ? "super_admin" : "admin";
+        var initialOrganizationId = initialRole == "super_admin" ? 1 : 91632;
+        var actorRow = await CreateCorrectiveStaffAsync(superAdmin, initialRole, initialOrganizationId);
+        var actor = await ReadCorrectiveStaffAsync(actorRow);
+        var provider = new GatedStaffPortPatronProvider();
+        await using var app = WithStaffPortProviders(new StaffPortPatronProvider(), provider);
+        app.UseKestrel(0);
+        using var client = await StaffPortClientAsync(app, actor);
+        var input = StaffPortSuggestion("actor-race-" + Guid.NewGuid().ToString("N"));
+        var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var before = await contexts.CreateDbContextAsync();
+        var beforeRequests = await before.TitleRequests.CountAsync();
+        var beforeEvents = await before.TitleRequestEvents.CountAsync();
+        var beforeOutbox = await before.EmailOutbox.CountAsync();
+
+        var submission = client.PostAsJsonAsync("/api/asap/staff/suggestions", input);
+        try
+        {
+            await provider.Entered.WaitAsync(TimeSpan.FromSeconds(15));
+            var lifecycle = factory.Services.GetRequiredService<StaffLifecycleService>();
+            StaffLifecycleResult? changed = change switch
+            {
+                "deactivate" => await lifecycle.DeactivateAsync(superAdmin, actorRow.Id,
+                    new StaffDeactivateInput(StaffVersion.Encode(actorRow.RowVersion)), CancellationToken.None),
+                "authentication_email" => await lifecycle.UpdateMetadataAsync(superAdmin, actorRow.Id,
+                    new StaffMetadataInput(StaffVersion.Encode(actorRow.RowVersion),
+                        $"changed.{Guid.NewGuid():N}@example.org", actorRow.DisplayName, actorRow.NotificationEmail),
+                    CancellationToken.None),
+                "move_library" or "demote_super_admin" => await lifecycle.ChangeRoleAsync(superAdmin, actorRow.Id,
+                    new StaffRoleInput(StaffVersion.Encode(actorRow.RowVersion), "admin", 2), CancellationToken.None),
+                "unchanged" => null,
+                _ => throw new InvalidOperationException($"Unknown actor transition {change}.")
+            };
+            if (changed is not null)
+            {
+                Assert.AreEqual("updated", changed.Code, change);
+            }
+        }
+        finally
+        {
+            provider.Release();
+        }
+
+        using var response = await submission.WaitAsync(TimeSpan.FromSeconds(15));
+        var responseText = await response.Content.ReadAsStringAsync();
+        if (change == "unchanged")
+        {
+            Assert.AreEqual(HttpStatusCode.Created, response.StatusCode, responseText);
+            Assert.AreEqual(1, provider.PickupUpdates);
+            await using var saved = await contexts.CreateDbContextAsync();
+            Assert.IsTrue(await saved.TitleRequests.AnyAsync(item => item.Title == input.Title));
+            return;
+        }
+
+        Assert.IsTrue(response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden,
+            $"{change}: {response.StatusCode} {responseText}");
+        using var body = JsonDocument.Parse(responseText);
+        Assert.IsTrue(body.RootElement.GetProperty("code").GetString() is "staff_session_invalid" or "staff_scope_forbidden");
+        Assert.AreEqual(0, provider.PickupUpdates,
+            "A revoked actor must be denied before the differing preferred-pickup provider mutation begins.");
+        await using var after = await contexts.CreateDbContextAsync();
+        Assert.IsFalse(await after.TitleRequests.AnyAsync(item => item.Title == input.Title));
+        Assert.AreEqual(beforeRequests, await after.TitleRequests.CountAsync());
+        Assert.AreEqual(beforeEvents, await after.TitleRequestEvents.CountAsync());
+        Assert.AreEqual(beforeOutbox, await after.EmailOutbox.CountAsync());
+    }
+
+    [TestMethod]
+    public async Task StaffPortCreationRechecksActorInsideInsertAfterPickupAndReadinessWait()
+    {
+        var superAdmin = await ReadConfiguredSuperAdminAsync();
+        using (var setupClient = await StaffPortClientAsync(factory!))
+        {
+            await ConfigureStaffPortLibraryAsync(setupClient, false);
+        }
+        var actorRow = await CreateCorrectiveStaffAsync(superAdmin, "admin", 91632);
+        var actor = await ReadCorrectiveStaffAsync(actorRow);
+        var provider = new StaffPortPatronProvider();
+        var email = new GatedReadinessEmailSender();
+        await using var app = WithStaffPortProviders(provider, provider, email);
+        app.UseKestrel(0);
+        using var client = await StaffPortClientAsync(app, actor);
+        var input = StaffPortSuggestion("insert-race-" + Guid.NewGuid().ToString("N"));
+        var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var before = await contexts.CreateDbContextAsync();
+        var beforeRequests = await before.TitleRequests.CountAsync();
+        var beforeEvents = await before.TitleRequestEvents.CountAsync();
+        var beforeOutbox = await before.EmailOutbox.CountAsync();
+
+        var submission = client.PostAsJsonAsync("/api/asap/staff/suggestions", input);
+        try
+        {
+            await email.Entered.WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.AreEqual(1, provider.PickupUpdates,
+                "The provider pickup update completes before this transaction-boundary gate.");
+            var changed = await factory.Services.GetRequiredService<StaffLifecycleService>().DeactivateAsync(
+                superAdmin, actorRow.Id, new StaffDeactivateInput(StaffVersion.Encode(actorRow.RowVersion)),
+                CancellationToken.None);
+            Assert.AreEqual("updated", changed.Code);
+        }
+        finally
+        {
+            email.Release();
+        }
+
+        using var response = await submission.WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.AreEqual(HttpStatusCode.Unauthorized, response.StatusCode, await response.Content.ReadAsStringAsync());
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.AreEqual("staff_session_invalid", body.RootElement.GetProperty("code").GetString());
+        await using var after = await contexts.CreateDbContextAsync();
+        Assert.IsFalse(await after.TitleRequests.AnyAsync(item => item.Title == input.Title));
+        Assert.AreEqual(beforeRequests, await after.TitleRequests.CountAsync());
+        Assert.AreEqual(beforeEvents, await after.TitleRequestEvents.CountAsync());
+        Assert.AreEqual(beforeOutbox, await after.EmailOutbox.CountAsync());
     }
 
     [TestMethod]
@@ -1156,7 +1286,10 @@ public sealed partial class PatronJourneyTests
         }
     }
 
-    private WebApplicationFactory<Program> WithStaffPortProviders(IStaffPolarisProvider staff, IPatronProvider? patron = null) =>
+    private WebApplicationFactory<Program> WithStaffPortProviders(
+        IStaffPolarisProvider staff,
+        IPatronProvider? patron = null,
+        IEmailSender? email = null) =>
         factory!.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
         {
             services.RemoveAll<IStaffPolarisProvider>();
@@ -1165,6 +1298,11 @@ public sealed partial class PatronJourneyTests
             {
                 services.RemoveAll<IPatronProvider>();
                 services.AddSingleton(patron);
+            }
+            if (email is not null)
+            {
+                services.RemoveAll<IEmailSender>();
+                services.AddSingleton(email);
             }
         }));
 
@@ -1315,5 +1453,68 @@ public sealed partial class PatronJourneyTests
                 : inner.GetPatronHoldsAsync(barcode, token);
         public Task<HoldProviderResult> CreateHoldAsync(HoldCreateCommand command, CancellationToken token) => inner.CreateHoldAsync(command, token);
         public Task<HoldProviderResult> ReplyToHoldAsync(HoldReplyCommand command, CancellationToken token) => inner.ReplyToHoldAsync(command, token);
+    }
+
+    private sealed class GatedStaffPortPatronProvider : IPatronProvider
+    {
+        private readonly DeterministicTestingPatronProvider inner = new();
+        private readonly TaskCompletionSource<bool> entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int pickupUpdates;
+
+        public Task Entered => entered.Task;
+        public int PickupUpdates => pickupUpdates;
+        public void Release() => released.TrySetResult(true);
+
+        public async Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
+        {
+            var patron = await inner.RefreshAsync(barcode, cancellationToken);
+            entered.TrySetResult(true);
+            await released.Task.WaitAsync(cancellationToken);
+            return patron with { HomeLibraryOrganizationId = 91632, PatronCodeId = "1" };
+        }
+
+        public Task<PatronSnapshot> AuthenticateAsync(string barcode, string pin, CancellationToken token) =>
+            inner.AuthenticateAsync(barcode, pin, token);
+        public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(PatronSnapshot patron, CancellationToken token) =>
+            inner.GetPickupBranchesAsync(patron, token);
+        public Task UpdatePreferredPickupBranchAsync(string barcode, int pickupBranchId, CancellationToken token)
+        {
+            Interlocked.Increment(ref pickupUpdates);
+            return inner.UpdatePreferredPickupBranchAsync(barcode, pickupBranchId, token);
+        }
+        public Task<IdentifierLookupResult> LookupIdentifierAsync(string identifier, CancellationToken token) =>
+            inner.LookupIdentifierAsync(identifier, token);
+        public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken token) =>
+            inner.ValidateBibAsync(bibId, token);
+        public Task<StaffBibHoldingsSummary> GetBibHoldingsAsync(int bibId, int organizationId, CancellationToken token) =>
+            inner.GetBibHoldingsAsync(bibId, organizationId, token);
+        public Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(string barcode, CancellationToken token) =>
+            inner.GetPatronHoldsAsync(barcode, token);
+        public Task<HoldProviderResult> CreateHoldAsync(HoldCreateCommand command, CancellationToken token) =>
+            inner.CreateHoldAsync(command, token);
+        public Task<HoldProviderResult> ReplyToHoldAsync(HoldReplyCommand command, CancellationToken token) =>
+            inner.ReplyToHoldAsync(command, token);
+    }
+
+    private sealed class GatedReadinessEmailSender : IEmailSender
+    {
+        private readonly TaskCompletionSource<bool> entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Entered => entered.Task;
+        public void Release() => released.TrySetResult(true);
+
+        public async Task<EmailTransportReadiness> CheckReadinessAsync(
+            int organizationId,
+            CancellationToken cancellationToken)
+        {
+            entered.TrySetResult(true);
+            await released.Task.WaitAsync(cancellationToken);
+            return EmailTransportReadiness.NotConfigured;
+        }
+
+        public Task<EmailSendResult> SendAsync(EmailEnvelope envelope, CancellationToken cancellationToken) =>
+            Task.FromResult(EmailSendResult.NotConfigured);
     }
 }

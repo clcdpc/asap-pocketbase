@@ -331,6 +331,7 @@ async function refreshCurrentSessionAfterMutation(targetStaffId) {
       return false;
     }
   } catch (error) {
+    if (isAbortError(error)) return false;
     const accessChanged = error?.status === 401 ||
       (error?.status === 403 && error.response?.accessAllowed === false);
     checkAuth();

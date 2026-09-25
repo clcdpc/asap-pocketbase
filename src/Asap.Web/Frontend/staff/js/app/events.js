@@ -1,7 +1,7 @@
-import { staffSession, staffAccessGeneration, setStaffSession, loginForm, logoutBtn, loginSignOutBtn, profileBtn, gridSearchInput, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, additionalCopyStatusFilterSelect, closedTypeFilterSelect, currentStatus, setCurrentStatus, setActiveTagFilter, setGridSearchKeyword, setCurrentClaimFilter, setCurrentSimilarRequestFilter, setCurrentAdditionalCopyStatus, setCurrentClosedTypeFilter } from '../state.js';
+import { staffSession, staffAccessGeneration, staffSessionEpoch, setStaffSession, loginForm, logoutBtn, loginSignOutBtn, profileBtn, gridSearchInput, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, additionalCopyStatusFilterSelect, closedTypeFilterSelect, currentStatus, setCurrentStatus, setActiveTagFilter, setGridSearchKeyword, setCurrentClaimFilter, setCurrentSimilarRequestFilter, setCurrentAdditionalCopyStatus, setCurrentClosedTypeFilter } from '../state.js';
 import { loadTab, renderCurrentGrid } from '../grid.js';
 import { showToast } from '../dialogs.js';
-import { authorizedJson } from '../http.js';
+import { authorizedJson, isAbortError, loadStaffSession } from '../http.js';
 import { initRecentSuggestionsDropdown } from '../recent-suggestions.js';
 import { getFieldChecked, getFieldValue } from './dom.js';
 import { checkAuth, openProfileDialog, currentProfileDialogGeneration, applyProfileClaimFilterDefault, clearAppliedProfileClaimFilterDefault } from './auth.js';
@@ -17,13 +17,26 @@ loginForm.addEventListener('submit', async (e) => {
 
 async function signOut(e) {
   e.preventDefault();
+  setStaffSession({ authenticated: false, antiforgeryToken: staffSession.antiforgeryToken });
+  const signOutEpoch = staffSessionEpoch;
+  clearAppliedProfileClaimFilterDefault();
+  setCurrentClaimFilter('all');
+  checkAuth();
   try {
-    await authorizedJson('/api/asap/staff/sign-out', { method: 'POST' });
-  } finally {
-    setStaffSession({ authenticated: false, antiforgeryToken: staffSession.antiforgeryToken });
-    clearAppliedProfileClaimFilterDefault();
-    setCurrentClaimFilter('all');
-    checkAuth();
+    let token = staffSession.antiforgeryToken;
+    if (!token) {
+      const session = await loadStaffSession({ apply: false });
+      if (staffSessionEpoch !== signOutEpoch) return;
+      token = session.antiforgeryToken;
+    }
+    if (!token) throw new Error('The sign-out request token could not be loaded.');
+    await authorizedJson('/api/asap/staff/sign-out', {
+      method: 'POST',
+      headers: { 'X-ASAP-Antiforgery': token }
+    });
+  } catch (error) {
+    if (isAbortError(error) || staffSessionEpoch !== signOutEpoch) return;
+    throw error;
   }
 }
 
@@ -93,7 +106,7 @@ if (profileForm) {
 
       if (!ownsProfile()) return;
 
-      staffSession.staff = updated.staff;
+      setStaffSession({ ...staffSession, staff: updated.staff });
       applyProfileClaimFilterDefault({ force: true });
       if (!['settings', 'analytics'].includes(currentStatus)) {
         renderCurrentGrid(currentStatus);
