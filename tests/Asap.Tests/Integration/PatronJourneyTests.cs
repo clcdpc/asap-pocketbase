@@ -383,12 +383,29 @@ public sealed partial class PatronJourneyTests
         using var researchSessionBody = JsonDocument.Parse(await researchSession.Content.ReadAsStringAsync());
         var researchToken = researchSessionBody.RootElement.GetProperty("antiforgeryToken").GetString();
         using var noToken = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup",
-            new { requestId = seeded.PrimaryRequestId, mode = "title", query = "catalog" });
+            new { requestId = seeded.PrimaryRequestId.ToString(), mode = "title", query = "catalog" });
         Assert.AreEqual(HttpStatusCode.BadRequest, noToken.StatusCode);
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", researchToken);
         using var foreignLookup = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup",
-            new { requestId = seeded.OtherRequestId, mode = "title", query = "catalog" });
+            new { requestId = seeded.OtherRequestId.ToString(), mode = "title", query = "catalog" });
         Assert.AreEqual(HttpStatusCode.NotFound, foreignLookup.StatusCode);
+        foreach (var requestId in new[] { "0", "-1", "not-a-number", "9223372036854775808" })
+        {
+            using var invalidRequestId = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup",
+                new { requestId, libraryOrgId = 2, mode = "title", query = "catalog" });
+            Assert.AreEqual(HttpStatusCode.BadRequest, invalidRequestId.StatusCode, requestId);
+        }
+        using var exactBigintLookup = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup",
+            new { requestId = "9007199254740993", mode = "title", query = "Browser staff title" });
+        Assert.AreEqual(HttpStatusCode.OK, exactBigintLookup.StatusCode,
+            await exactBigintLookup.Content.ReadAsStringAsync());
+        using var mismatchedRequestLibrary = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup",
+            new { requestId = "9007199254740993", libraryOrgId = 82, mode = "title", query = "catalog" });
+        Assert.AreEqual(HttpStatusCode.BadRequest, mismatchedRequestLibrary.StatusCode);
+        using var mismatchedRequestLibraryBody = JsonDocument.Parse(
+            await mismatchedRequestLibrary.Content.ReadAsStringAsync());
+        Assert.AreEqual("library_scope_mismatch",
+            mismatchedRequestLibraryBody.RootElement.GetProperty("code").GetString());
         using var foreignLibrarySearch = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup",
             new { libraryOrgId = 82, mode = "title", query = "catalog" });
         Assert.AreEqual(HttpStatusCode.Forbidden, foreignLibrarySearch.StatusCode);
@@ -508,7 +525,7 @@ public sealed partial class PatronJourneyTests
         command.Parameters.AddWithValue("@superId", seeded.SuperId);
         await using var verified = await command.ExecuteReaderAsync();
         Assert.IsTrue(await verified.ReadAsync());
-        Assert.AreEqual("Catalog title 9001", verified.GetString(0));
+        Assert.AreEqual("Catalog title 9001 (Browser staff title edited)", verified.GetString(0));
         Assert.AreEqual("pending_hold", verified.GetString(1));
         Assert.AreEqual(seeded.SuperId, verified.GetInt64(2));
         Assert.IsTrue(verified.GetBoolean(3));
@@ -8416,18 +8433,20 @@ public sealed partial class PatronJourneyTests
                 (2, @formatId, @audienceFieldId, N'optional'),
                 (2, @formatId, @bindingFieldId, N'required');
 
+            DECLARE @primaryId bigint = CONVERT(bigint, '9007199254740993');
+            SET IDENTITY_INSERT [asap].[TitleRequest] ON;
             INSERT INTO [asap].[TitleRequest]
-                ([LegacyId], [LibraryOrganizationId], [Barcode], [Email], [NameFirst], [NameLast], [Title],
+                ([Id], [LegacyId], [LibraryOrganizationId], [Barcode], [Email], [NameFirst], [NameLast], [Title],
                  [Author], [Identifier], [Publication], [CustomFieldsJson], [AutoHold], [MaterialFormatId], [Status], [BibId],
                  [PreferredPickupBranchId], [PreferredPickupBranchName], [ClaimedByStaffUserId],
                  [ClaimedByDisplayName], [ClaimedAtUtc], [ClaimType], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
             VALUES
-                (@legacyId, 2, N'20000000002901', N'browser.patron@example.org', N'Browser', N'Patron',
+                (@primaryId, @legacyId, 2, N'20000000002901', N'browser.patron@example.org', N'Browser', N'Patron',
                  N'Browser staff title', N'Browser Author', N'9780000002901', N'Historical browser publication',
                  N'{"audience_note":{"label":"Audience note","type":"text","value":"Historic audience"},"binding":{"label":"Binding","type":"select","value":"historic","displayValue":"Historic binding"},"retired":{"label":"Retired field","type":"text","value":"Keep me"}}', 1,
                  @formatId, N'suggestion', NULL, 101, N'Main Library', @superId, N'Initial Administrator',
                  SYSUTCDATETIME(), N'manual', N'not_found', SYSUTCDATETIME(), SYSUTCDATETIME());
-            DECLARE @primaryId bigint = SCOPE_IDENTITY();
+            SET IDENTITY_INSERT [asap].[TitleRequest] OFF;
             INSERT INTO [asap].[LegacyPocketBaseMapping] ([EntityType], [PocketBaseId], [NewId])
             VALUES (N'title_request', @legacyId, @primaryId);
 

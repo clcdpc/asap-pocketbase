@@ -1,5 +1,29 @@
 const supportedTokens = new Set(['title', 'identifier', 'bibid', 'patron-id', 'patronId']);
 
+export function mergeCatalogValue(catalogValue, existingValue) {
+  const catalog = String(catalogValue ?? '').trim();
+  const existing = String(existingValue ?? '').trim();
+  if (!catalog) return existing;
+  if (!existing || existing === catalog) return catalog;
+  if (existing.startsWith(`${catalog} (`)) return existing;
+
+  const existingBase = existing.replace(/\s+\([^()]*\)\s*$/, '').trim();
+  if (existingBase && (existingBase === catalog || existingBase.startsWith(catalog) || catalog.startsWith(existingBase))) {
+    return existing;
+  }
+  return `${catalog} (${existing})`;
+}
+
+export function applyPolarisResultToControls(selected, controls) {
+  controls.bib.value = String(selected.bibId);
+  controls.title.value = mergeCatalogValue(selected.title, controls.title.value);
+  controls.author.value = mergeCatalogValue(selected.author, controls.author.value);
+  if (!controls.identifier.disabled && !String(controls.identifier.value ?? '').trim()) {
+    const catalogIdentifier = String(selected.identifier ?? '').trim();
+    if (catalogIdentifier) controls.identifier.value = catalogIdentifier;
+  }
+}
+
 export function researchUrl(template, values, requiredToken = '') {
   const pattern = String(template || '').trim();
   if (!pattern || (requiredToken && !pattern.includes(`{{${requiredToken}}}`))) return '';
@@ -175,7 +199,8 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce }) 
         format: detail.format || row.format,
         identifier: detail.identifier || row.identifier
       };
-      current.apply(selected);
+      // Keep catalog publication/format in verified detail; the editor fields store workflow timing and ASAP format codes.
+      current.apply(selected, detail);
       announce(`Verified Polaris BIB ${detail.bibId}. Save changes before changing the request status.`, 'success');
       close();
       current.editorFocus?.focus();

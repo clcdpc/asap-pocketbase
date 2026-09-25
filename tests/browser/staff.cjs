@@ -286,6 +286,7 @@ async function runAnonymous(browser, args, axeSource, report) {
 }
 
 async function runSuperAdmin(browser, args, axeSource, report) {
+  assert.equal(args.primaryRequestId, '9007199254740993');
   const { context, traffic } = await createContext(
     browser,
     { width: 1280, height: 900 },
@@ -294,7 +295,13 @@ async function runSuperAdmin(browser, args, axeSource, report) {
   );
   const page = await context.newPage();
   const errors = [];
+  const bibLookupBodies = [];
   page.on('pageerror', error => errors.push(error.message));
+  page.on('request', request => {
+    if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/asap/staff/bib-lookup') {
+      bibLookupBodies.push(JSON.parse(request.postData() || '{}'));
+    }
+  });
   try {
     await page.goto(`${args.baseOrigin}/staff/?request=${encodeURIComponent(args.legacyRequestId)}`, { waitUntil: 'networkidle' });
     await page.locator('#workspace').waitFor({ state: 'visible' });
@@ -452,6 +459,11 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.locator('#polaris-author').fill('Catalog author');
     await page.locator('#polaris-form button[type=submit]').click();
     await page.getByRole('button', { name: 'Use BIB 9001' }).waitFor();
+    assert.ok(bibLookupBodies.length > 0, 'Polaris lookup should send a request body');
+    for (const body of bibLookupBodies) {
+      assert.equal(typeof body.requestId, 'string');
+      assert.equal(body.requestId, '9007199254740993');
+    }
 
     const firstSearch = deferred();
     const releaseSearch = deferred();
@@ -486,14 +498,23 @@ async function runSuperAdmin(browser, args, axeSource, report) {
       if (body.mode !== 'bib') return route.continue();
       const response = await route.fetch();
       const detail = await response.json();
-      await route.fulfill({ response, json: { ...detail, identifier: null } });
+      await route.fulfill({ response, json: { ...detail, identifier: null, publication: '2026', format: 'Large Print' } });
     };
     await page.route('**/api/asap/staff/bib-lookup', detailWithoutIdentifier);
     await page.getByRole('button', { name: 'Use BIB 9001' }).click();
     await page.locator('#polaris-dialog').waitFor({ state: 'hidden' });
     await page.unroute('**/api/asap/staff/bib-lookup', detailWithoutIdentifier);
     assert.equal(await page.evaluate(() => document.activeElement.getAttribute('inputmode')), 'numeric');
-    assert.equal(await page.getByLabel('Identifier', { exact: true }).inputValue(), '9780000000001');
+    assert.equal(await page.getByLabel('Title', { exact: true }).inputValue(),
+      'Catalog title 9001 (Browser staff title edited)');
+    assert.equal(await page.getByLabel('Author', { exact: true }).inputValue(),
+      'Catalog author (Browser Author)');
+    assert.equal(await page.getByLabel('Identifier', { exact: true }).inputValue(), '9780000002901');
+    assert.equal(await page.getByLabel('Publication timing', { exact: true }).inputValue(), 'Library backlist');
+    assert.equal(await page.getByLabel('Format', { exact: true }).inputValue(), 'book');
+    const selectedMetadataContext = await page.locator('.polaris-selection-context').textContent();
+    assert.match(selectedMetadataContext, /Polaris publication: 2026/);
+    assert.match(selectedMetadataContext, /Polaris format: Large Print/);
     await page.getByText(/3 item|1 item\(s\) at this library/).waitFor();
     await page.getByRole('link', { name: 'Open BIB in LEAP' }).waitFor();
     assert.equal(await page.getByRole('link', { name: 'Open BIB in LEAP' }).getAttribute('href'),
@@ -513,8 +534,21 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.getByText(/Format: Book/).waitFor();
     await page.getByText(/Identifier: 9780000000001/).waitFor();
     await page.getByRole('button', { name: 'Use BIB 9001' }).click();
+    await page.locator('.polaris-selection-context').filter({ hasText: 'Polaris format: Book' }).waitFor();
+    assert.equal(await page.getByLabel('Publication timing', { exact: true }).inputValue(), 'Library backlist');
+    assert.equal(await page.getByLabel('Format', { exact: true }).inputValue(), 'book');
     await page.getByRole('button', { name: 'Save changes' }).click();
     await page.getByText('Request changes saved.').waitFor();
+    const reconciledResponse = await context.request.get(
+      `${args.baseOrigin}/api/asap/staff/title-requests/${args.primaryRequestId}`
+    );
+    assert.equal(reconciledResponse.status(), 200);
+    const reconciledRequest = await reconciledResponse.json();
+    assert.equal(reconciledRequest.title, 'Catalog title 9001 (Browser staff title edited)');
+    assert.equal(reconciledRequest.author, 'Catalog author (Browser Author)');
+    assert.equal(reconciledRequest.identifier, '9780000002901');
+    assert.equal(reconciledRequest.publication, 'Library backlist');
+    assert.equal(reconciledRequest.format, 'book');
     await page.getByRole('button', { name: 'Ready for hold' }).click();
     await page.locator('#request-dialog .status-badge').filter({ hasText: 'Pending hold' }).waitFor();
 

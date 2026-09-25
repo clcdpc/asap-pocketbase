@@ -1,3 +1,4 @@
+using System.Globalization;
 using Asap.Web.Features.Patron;
 using Asap.Web.Infrastructure.Data;
 using Microsoft.AspNetCore.Mvc;
@@ -7,7 +8,7 @@ namespace Asap.Web.Features.Staff;
 
 public static class TitleRequestEndpoints
 {
-    public sealed record BibLookupInput(long? RequestId, int? LibraryOrgId, string? BibId,
+    public sealed record BibLookupInput(string? RequestId, int? LibraryOrgId, string? BibId,
         string? Mode, string? Query, string? Title, string? Author);
 
     public static IEndpointRouteBuilder MapTitleRequestEndpoints(this IEndpointRouteBuilder endpoints)
@@ -111,7 +112,15 @@ public static class TitleRequestEndpoints
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
-        var scope = await ResolveResearchScopeAsync(Current(context), input.RequestId, input.LibraryOrgId,
+        if (!TryParseRequestId(input.RequestId, out var requestId))
+        {
+            return Results.BadRequest(new
+            {
+                code = "invalid_request_id",
+                message = "Request ID must be a positive Int64 decimal value."
+            });
+        }
+        var scope = await ResolveResearchScopeAsync(Current(context), requestId, input.LibraryOrgId,
             views, eligibility, cancellationToken);
         if (scope.Error is not null)
         {
@@ -236,6 +245,22 @@ public static class TitleRequestEndpoints
                 statusCode: StatusCodes.Status403Forbidden));
         }
         return new ResearchScope(libraryOrgId.Value, request, null);
+    }
+
+    internal static bool TryParseRequestId(string? value, out long? requestId)
+    {
+        requestId = null;
+        if (value is null)
+        {
+            return true;
+        }
+        if (value.Length == 0 || value.Any(character => character is < '0' or > '9') ||
+            !long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) || parsed <= 0)
+        {
+            return false;
+        }
+        requestId = parsed;
+        return true;
     }
 
     private sealed record ResearchScope(int OrganizationId, TitleRequestDto? Request, IResult? Error);

@@ -7,7 +7,7 @@ import {
   onAccessUnavailable
 } from './http.js';
 import { createSettingsController } from './settings.js';
-import { createPolarisLookup, renderResearchLinks } from './research.js';
+import { applyPolarisResultToControls, createPolarisLookup, renderResearchLinks } from './research.js';
 import { loadAnalytics, resetAnalytics } from './analytics.js';
 import {
   requestedRequestIdFromUrl,
@@ -1245,7 +1245,7 @@ export function createWorkflowApp() {
     const selectedContext = element('p', { className: 'polaris-selection-context wide', role: 'status' });
     const searchButton = commandButton('Search Polaris catalog', 'search', () => {
       polarisLookup.open({
-        requestId: Number(request.id),
+        requestId: String(request.id),
         libraryOrgId: request.libraryOrgId,
         isCurrent: () => isCurrentDialogRequest(request, 'title_request') && form.isConnected,
         returnFocus: searchButton,
@@ -1255,12 +1255,13 @@ export function createWorkflowApp() {
         query: bib.value.trim() || identifier.value.trim() || title.value.trim(),
         title: title.value.trim(),
         author: author.value.trim(),
-        apply: selected => {
-          bib.value = String(selected.bibId);
-          if (selected.title) title.value = selected.title;
-          if (selected.author) author.value = selected.author;
-          if (selected.identifier && !identifier.disabled) identifier.value = selected.identifier;
-          state.verifiedBib = { requestId: String(request.id), bibId: String(selected.bibId), detail: selected };
+        apply: (selected, verifiedDetail) => {
+          applyPolarisResultToControls(selected, { bib, title, author, identifier });
+          state.verifiedBib = {
+            requestId: String(request.id),
+            bibId: String(selected.bibId),
+            detail: verifiedDetail
+          };
           state.editorDirty = true;
           updateResearchLinks();
           showSelectedContext();
@@ -1276,6 +1277,8 @@ export function createWorkflowApp() {
       const holdings = detail.holdingsSummary;
       selectedContext.textContent = [
         `Polaris BIB ${detail.bibId} verified for this request.`,
+        detail.publication ? `Polaris publication: ${detail.publication}.` : '',
+        detail.format ? `Polaris format: ${detail.format}.` : '',
         holdings ? `${holdings.myLibraryCount} item(s) at this library, ${holdings.otherLibraryCount} elsewhere; ${holdings.isHoldable ? 'holdable' : 'not holdable'}.` :
           detail.holdingsUnavailable ? 'Holdings are temporarily unavailable.' : '',
         detail.patronHasHold === true ? 'This patron already has a hold for this BIB.' :
