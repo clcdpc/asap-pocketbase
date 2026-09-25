@@ -32,8 +32,8 @@ window.addEventListener('asap:staff-access-changed', () => {
   setLastSavedLibrarySettingsSnapshot(null);
   setLastSavedLibrarySettingsOrgId(null);
   setDeletedSettingsFormats([]);
-  setSettingsReloadRequired(true);
   document.getElementById('settings-form')?.classList.add('hidden');
+  updateSaveBarState('clean');
 });
 
 function maybeSyncPolarisOrganizations(polaris) {
