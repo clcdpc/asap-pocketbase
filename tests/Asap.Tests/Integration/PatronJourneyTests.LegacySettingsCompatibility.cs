@@ -230,6 +230,65 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task LegacySupportedDuplicateStatusLabelsRoundTripWithoutDuplicateHoldSetting()
+    {
+        const int libraryId = 92348;
+        factory!.UseKestrel(0);
+        using var client = factory.CreateClient();
+        var actor = await ReadConfiguredSuperAdminAsync();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+        var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        long initialAuditId;
+        await using (var seed = await contextFactory.CreateDbContextAsync())
+        {
+            initialAuditId = await seed.AdministrativeAudits.MaxAsync(item => (long?)item.Id) ?? 0;
+            seed.Organizations.Add(new Organization
+            {
+                Id = libraryId,
+                DisplayName = "Legacy duplicate label tests",
+                IsActive = true
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        try
+        {
+            using var before = await ReadLegacySettingsAsync(client, libraryId.ToString());
+            var displayedLabels = before.RootElement.GetProperty("uiText").GetProperty("duplicateStatusLabels");
+            Assert.IsFalse(displayedLabels.TryGetProperty("duplicate_hold", out _),
+                "The compatibility settings snapshot must not advertise a writable duplicate-hold label.");
+            Assert.IsTrue(displayedLabels.TryGetProperty("suggestion", out _),
+                "Supported status labels remain available to edit.");
+
+            var payload = LegacyNoEditPayload(before.RootElement, system: false);
+            var submittedLabels = ((JsonObject)payload["ui_text"]!)["duplicateStatusLabels"]!.AsObject();
+            Assert.IsFalse(submittedLabels.ContainsKey("duplicate_hold"),
+                "The compatibility serializer must not claim duplicate_hold is writable.");
+            submittedLabels["suggestion"] = "Received by library staff";
+            using var saved = await SaveLegacySettingsAsync(client, payload, HttpStatusCode.OK);
+            Assert.AreEqual("saved", saved.RootElement.GetProperty("code").GetString());
+
+            using var after = await ReadLegacySettingsAsync(client, libraryId.ToString());
+            var reloadedLabels = after.RootElement.GetProperty("uiText").GetProperty("duplicateStatusLabels");
+            Assert.AreEqual("Received by library staff", reloadedLabels.GetProperty("suggestion").GetString());
+            Assert.IsFalse(reloadedLabels.TryGetProperty("duplicate_hold", out _));
+
+            await using var verify = await contextFactory.CreateDbContextAsync();
+            var patron = await verify.PatronSettings.AsNoTracking().SingleAsync(item => item.OrganizationId == libraryId);
+            Assert.AreEqual("Received by library staff", patron.SuggestionStatusLabel);
+        }
+        finally
+        {
+            await using var cleanup = await contextFactory.CreateDbContextAsync();
+            await cleanup.AdministrativeAudits.Where(item => item.Id > initialAuditId &&
+                item.ActorStaffUserId == actor.Id && item.OrganizationId == libraryId).ExecuteDeleteAsync();
+            await cleanup.PatronSettings.Where(item => item.OrganizationId == libraryId).ExecuteDeleteAsync();
+            await cleanup.Organizations.Where(item => item.Id == libraryId).ExecuteDeleteAsync();
+        }
+    }
+
+    [TestMethod]
     public async Task LegacySettingsConfiguresBlankFourthProviderAtSystemAndLibraryScopes()
     {
         const int libraryId = 92347;
@@ -242,6 +301,7 @@ public sealed partial class PatronJourneyTests
         bool originalEnabled;
         string originalLabel;
         string originalUrl;
+        byte[] originalVersion;
         long fourthId;
         long initialAuditId;
         await using (var seed = await contextFactory.CreateDbContextAsync())
@@ -252,6 +312,7 @@ public sealed partial class PatronJourneyTests
             originalEnabled = fourth.IsEnabled;
             originalLabel = fourth.Label;
             originalUrl = fourth.UrlTemplate;
+            originalVersion = fourth.RowVersion.ToArray();
             seed.Organizations.Add(new Organization { Id = libraryId, DisplayName = "Legacy fourth provider", IsActive = true });
             await seed.SaveChangesAsync();
         }
@@ -262,7 +323,56 @@ public sealed partial class PatronJourneyTests
             var blankFourth = systemBefore.RootElement.GetProperty("providers").EnumerateArray()
                 .Single(item => item.GetProperty("key").GetString() == "external_search_4");
             Assert.IsFalse(blankFourth.TryGetProperty("id", out _));
-            var systemPayload = LegacyNoEditPayload(systemBefore.RootElement, system: true);
+            Assert.IsFalse(blankFourth.GetProperty("isEnabled").GetBoolean());
+            Assert.AreEqual(string.Empty, blankFourth.GetProperty("label").GetString());
+            Assert.AreEqual(string.Empty, blankFourth.GetProperty("urlTemplate").GetString());
+
+            using var normalSystemBefore = await ReadSettingsDocumentAsync(client, "system");
+            Assert.IsFalse(normalSystemBefore.RootElement.GetProperty("stored").GetProperty("providers")
+                .EnumerateArray().Any(item => item.GetProperty("key").GetString() == "external_search_4"));
+            using var normalLibraryBefore = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            Assert.IsFalse(normalLibraryBefore.RootElement.GetProperty("stored").GetProperty("providers")
+                .EnumerateArray().Any(item => item.GetProperty("key").GetString() == "external_search_4"));
+
+            using var legacyLibraryBefore = await ReadLegacySettingsAsync(client, libraryId.ToString());
+            var blankLibraryFourth = legacyLibraryBefore.RootElement.GetProperty("providers").EnumerateArray()
+                .Single(item => item.GetProperty("key").GetString() == "external_search_4");
+            Assert.IsFalse(blankLibraryFourth.TryGetProperty("id", out _));
+            var libraryNoEdit = LegacyNoEditPayload(legacyLibraryBefore.RootElement, system: false);
+            using var libraryNoEditSaved = await SaveLegacySettingsAsync(client, libraryNoEdit, HttpStatusCode.OK);
+            Assert.AreEqual("saved", libraryNoEditSaved.RootElement.GetProperty("code").GetString());
+            await using (var libraryNoEditVerify = await contextFactory.CreateDbContextAsync())
+            {
+                Assert.IsFalse(await libraryNoEditVerify.ExternalSearchProviderOverrides.AnyAsync(item =>
+                    item.LibraryOrganizationId == libraryId && item.ExternalSearchProviderId == fourthId),
+                    "An unchanged blank slot must not create a library provider override.");
+            }
+            using var normalLibraryAfterNoEdit = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            Assert.IsFalse(normalLibraryAfterNoEdit.RootElement.GetProperty("stored").GetProperty("providers")
+                .EnumerateArray().Any(item => item.GetProperty("key").GetString() == "external_search_4"));
+
+            using var systemBeforeNoEdit = await ReadLegacySettingsAsync(client, "system");
+            var systemNoEdit = LegacyNoEditPayload(systemBeforeNoEdit.RootElement, system: true);
+            using var systemNoEditSaved = await SaveLegacySettingsAsync(client, systemNoEdit, HttpStatusCode.OK);
+            Assert.AreEqual("saved", systemNoEditSaved.RootElement.GetProperty("code").GetString());
+            await using (var noEditVerify = await contextFactory.CreateDbContextAsync())
+            {
+                var fourth = await noEditVerify.ExternalSearchProviders.AsNoTracking().SingleAsync(item => item.Id == fourthId);
+                Assert.IsFalse(fourth.IsEnabled);
+                Assert.AreEqual(string.Empty, fourth.Label);
+                Assert.AreEqual(string.Empty, fourth.UrlTemplate);
+                CollectionAssert.AreEqual(originalVersion, fourth.RowVersion,
+                    "An unchanged compatibility placeholder must not rewrite the seeded row.");
+                Assert.IsFalse(await noEditVerify.ExternalSearchProviderOverrides.AnyAsync(item =>
+                    item.LibraryOrganizationId == libraryId && item.ExternalSearchProviderId == fourthId),
+                    "An unchanged placeholder must not create a library override.");
+            }
+
+            using var normalSystemAfterNoEdit = await ReadSettingsDocumentAsync(client, "system");
+            Assert.IsFalse(normalSystemAfterNoEdit.RootElement.GetProperty("stored").GetProperty("providers")
+                .EnumerateArray().Any(item => item.GetProperty("key").GetString() == "external_search_4"));
+            using var systemAfterNoEdit = await ReadLegacySettingsAsync(client, "system");
+            var systemPayload = LegacyNoEditPayload(systemAfterNoEdit.RootElement, system: true);
             var systemFourth = ((JsonArray)systemPayload["providers"]!).OfType<JsonObject>()
                 .Single(item => (string?)item["key"] == "external_search_4");
             systemFourth["isEnabled"] = true;
@@ -271,7 +381,17 @@ public sealed partial class PatronJourneyTests
             using var systemSaved = await SaveLegacySettingsAsync(client, systemPayload, HttpStatusCode.OK);
             Assert.AreEqual("saved", systemSaved.RootElement.GetProperty("code").GetString());
 
+            using var normalSystemAfterEdit = await ReadSettingsDocumentAsync(client, "system");
+            var normalFourth = normalSystemAfterEdit.RootElement.GetProperty("stored").GetProperty("providers")
+                .EnumerateArray().Single(item => item.GetProperty("key").GetString() == "external_search_4");
+            Assert.IsTrue(normalFourth.GetProperty("isEnabled").GetBoolean());
+            Assert.AreEqual("Fourth catalog", normalFourth.GetProperty("label").GetString());
+            Assert.AreEqual("https://fourth.example.org/search?q={query}", normalFourth.GetProperty("urlTemplate").GetString());
+
             using var libraryBefore = await ReadLegacySettingsAsync(client, libraryId.ToString());
+            var inheritedFourth = libraryBefore.RootElement.GetProperty("providers").EnumerateArray()
+                .Single(item => item.GetProperty("key").GetString() == "external_search_4");
+            Assert.AreEqual("Fourth catalog", inheritedFourth.GetProperty("label").GetString());
             var libraryPayload = LegacyNoEditPayload(libraryBefore.RootElement, system: false);
             var libraryFourth = ((JsonArray)libraryPayload["providers"]!).OfType<JsonObject>()
                 .Single(item => (string?)item["key"] == "external_search_4");

@@ -297,12 +297,8 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(3, beforeProviders.Length);
             Assert.IsFalse(beforeProviders.Any(item => item.key == "external_search_4"));
             var storedProviders = before.GetProperty("stored").GetProperty("providers").EnumerateArray().ToArray();
-            Assert.AreEqual(4, storedProviders.Length);
-            var storedFourth = storedProviders.Single(item => item.GetProperty("key").GetString() == "external_search_4");
-            Assert.AreEqual(seededProviderFour.Id.ToString(), storedFourth.GetProperty("id").GetString());
-            Assert.IsFalse(storedFourth.GetProperty("isEnabled").GetBoolean());
-            Assert.AreEqual(string.Empty, storedFourth.GetProperty("label").GetString());
-            Assert.AreEqual(string.Empty, storedFourth.GetProperty("urlTemplate").GetString());
+            Assert.AreEqual(3, storedProviders.Length);
+            Assert.IsFalse(storedProviders.Any(item => item.GetProperty("key").GetString() == "external_search_4"));
             var configuredSystemProviders = before.GetProperty("stored").GetProperty("configuredSystem")
                 .GetProperty("providers").EnumerateArray().ToArray();
             Assert.AreEqual(3, configuredSystemProviders.Length);
@@ -332,7 +328,7 @@ public sealed partial class PatronJourneyTests
                 "optional", "Corrective creator", "required", "Corrective ISBN", "hidden");
             AssertFormatState(afterNoEdit, "dvd", "Corrective video discs", 17, false, "message", "Corrective video message",
                 "required", "Director/Actors/Producer", "hidden", "UPC", "required");
-            Assert.AreEqual(4, afterNoEdit.GetProperty("stored").GetProperty("providers").GetArrayLength());
+            Assert.AreEqual(3, afterNoEdit.GetProperty("stored").GetProperty("providers").GetArrayLength());
             Assert.AreEqual(3, afterNoEdit.GetProperty("effective").GetProperty("externalSearchProviders").GetArrayLength());
 
             var editedProviders = beforeProviders.Select(item => item.key == "external_search_2"
@@ -1138,14 +1134,11 @@ public sealed partial class PatronJourneyTests
             }
             var libraryStored = libraryBefore.GetProperty("stored");
             var libraryEffective = libraryBefore.GetProperty("effective");
-            Assert.AreEqual(4, libraryStored.GetProperty("providers").GetArrayLength());
+            Assert.AreEqual(3, libraryStored.GetProperty("providers").GetArrayLength());
             Assert.AreEqual(3, libraryEffective.GetProperty("externalSearchProviders").GetArrayLength());
-            var blankFourthProvider = libraryStored.GetProperty("providers").EnumerateArray()
-                .Single(item => item.GetProperty("key").GetString() == "external_search_4");
-            Assert.IsFalse(blankFourthProvider.GetProperty("isEnabled").GetBoolean());
-            Assert.IsFalse(blankFourthProvider.GetProperty("overridden").GetBoolean());
-            Assert.AreEqual(string.Empty, blankFourthProvider.GetProperty("label").GetString());
-            Assert.AreEqual(string.Empty, blankFourthProvider.GetProperty("urlTemplate").GetString());
+            Assert.IsFalse(libraryStored.GetProperty("providers").EnumerateArray()
+                .Any(item => item.GetProperty("key").GetString() == "external_search_4"),
+                "The normal Settings API must omit the blank legacy-only provider slot.");
             var noEditProviders = libraryStored.GetProperty("providers").EnumerateArray().Select(provider =>
             {
                 return (object)new

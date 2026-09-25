@@ -234,7 +234,10 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(HttpStatusCode.Created, submission.StatusCode, await submission.Content.ReadAsStringAsync());
 
         using var submissionDocument = JsonDocument.Parse(await submission.Content.ReadAsStringAsync());
-        var requestId = submissionDocument.RootElement.GetProperty("id").GetInt64();
+        var publicSuggestionId = submissionDocument.RootElement.GetProperty("id");
+        Assert.AreEqual(JsonValueKind.Number, publicSuggestionId.ValueKind,
+            "The normal patron API keeps its established numeric result contract.");
+        var requestId = publicSuggestionId.GetInt64();
         Assert.HasCount(1, dispatcher!.EnqueuedIds);
 
         await using (var connection = new SqlConnection(databaseConnectionString))

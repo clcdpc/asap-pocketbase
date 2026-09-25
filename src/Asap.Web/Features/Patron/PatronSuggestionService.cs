@@ -119,6 +119,9 @@ public sealed partial class PatronSuggestionService(
             patron = await patronProvider.RefreshAsync(session.Barcode, cancellationToken);
             if (staffActor is not null)
             {
+                configuration = await GetCurrentParticipatingConfigurationAsync(
+                    configuration.OrganizationId,
+                    cancellationToken);
                 EnforceStaffPatronEligibility(configuration, patron);
             }
             pickupBranches = await patronProvider.GetPickupBranchesAsync(patron, cancellationToken);
@@ -143,6 +146,10 @@ public sealed partial class PatronSuggestionService(
         {
             if (staffActor is not null)
             {
+                configuration = await GetCurrentParticipatingConfigurationAsync(
+                    configuration.OrganizationId,
+                    cancellationToken);
+                EnforceStaffPatronEligibility(configuration, patron);
                 await RequireCurrentStaffAsync(staffActor, configuration.OrganizationId, cancellationToken);
             }
             try
@@ -289,16 +296,36 @@ public sealed partial class PatronSuggestionService(
                 cancellationToken);
             RequireCurrentStaff(eligibility);
         }
+
+        var currentConfiguration = await configurationService.GetAsync(
+            context,
+            configuration.OrganizationId,
+            cancellationToken)
+            ?? throw new PatronFlowException(403, "Your library could not be determined.");
+        if (!currentConfiguration.IsActive)
+        {
+            throw new PatronFlowException(403, currentConfiguration.SystemNotEnabledMessage);
+        }
+
+        if (staffActor is null)
+        {
+            EnforcePatronCodeEligibility(currentConfiguration, patron);
+        }
+        else
+        {
+            EnforceStaffPatronEligibility(currentConfiguration, patron);
+        }
+
         var autoClaimTarget = await LockAutoClaimTargetAsync(
             connection,
             transaction,
             autoClaimCandidate,
-            configuration.OrganizationId,
+            currentConfiguration.OrganizationId,
             cancellationToken);
         await LockAndValidateFormatAsync(
             connection,
             transaction,
-            configuration.OrganizationId,
+            currentConfiguration.OrganizationId,
             suggestion,
             cancellationToken);
         // The pinned staff-create workflow bypasses only the public submission count.
@@ -308,7 +335,7 @@ public sealed partial class PatronSuggestionService(
                 connection,
                 transaction,
                 session.Barcode,
-                configuration,
+                currentConfiguration,
                 cancellationToken);
         }
         await EnforceDuplicateAsync(
@@ -316,7 +343,7 @@ public sealed partial class PatronSuggestionService(
             transaction,
             session.Barcode,
             suggestion,
-            configuration,
+            currentConfiguration,
             cancellationToken);
 
         long requestId;
@@ -339,7 +366,7 @@ public sealed partial class PatronSuggestionService(
             connection,
             transaction))
         {
-            Add(insert, "@libraryOrganizationId", SqlDbType.Int, configuration.OrganizationId);
+            Add(insert, "@libraryOrganizationId", SqlDbType.Int, currentConfiguration.OrganizationId);
             Add(insert, "@patronOrganizationId", SqlDbType.Int, patron.PatronOrganizationId);
             Add(insert, "@barcode", SqlDbType.NVarChar, session.Barcode, 50);
             Add(insert, "@email", SqlDbType.NVarChar, patron.Email, 320);
@@ -349,7 +376,7 @@ public sealed partial class PatronSuggestionService(
             Add(insert, "@patronCodeDescription", SqlDbType.NVarChar, patron.PatronCodeDescription, 256);
             Add(insert, "@pickupBranchId", SqlDbType.Int, selectedBranch.Id);
             Add(insert, "@pickupBranchName", SqlDbType.NVarChar, selectedBranch.Label, 256);
-            Add(insert, "@libraryName", SqlDbType.NVarChar, configuration.OrganizationName, 256);
+            Add(insert, "@libraryName", SqlDbType.NVarChar, currentConfiguration.OrganizationName, 256);
             Add(insert, "@title", SqlDbType.NVarChar, suggestion.Title, 500);
             Add(insert, "@author", SqlDbType.NVarChar, suggestion.Author, 500);
             Add(insert, "@identifier", SqlDbType.NVarChar, suggestion.Identifier, 100);
@@ -370,7 +397,7 @@ public sealed partial class PatronSuggestionService(
             connection,
             transaction,
             requestId,
-            configuration.OrganizationId,
+            currentConfiguration.OrganizationId,
             suggestion.Format.Id,
             autoClaimCandidate,
             autoClaimTarget,
@@ -380,7 +407,7 @@ public sealed partial class PatronSuggestionService(
             transaction,
             requestId,
             session.Barcode,
-            configuration.OrganizationId,
+            currentConfiguration.OrganizationId,
             suggestion.Identifier,
             cancellationToken);
         await InsertCreationEventAsync(connection, transaction, requestId, cancellationToken);
@@ -390,7 +417,7 @@ public sealed partial class PatronSuggestionService(
             requestId,
             patron,
             suggestion,
-            configuration,
+            currentConfiguration,
             emailTransportReadiness,
             cancellationToken);
         byte[] rowVersion;
@@ -419,6 +446,20 @@ public sealed partial class PatronSuggestionService(
             requireParticipation: true,
             cancellationToken);
         RequireCurrentStaff(eligibility);
+    }
+
+    private async Task<EffectivePatronConfiguration> GetCurrentParticipatingConfigurationAsync(
+        int organizationId,
+        CancellationToken cancellationToken)
+    {
+        var configuration = await configurationService.GetAsync(organizationId, cancellationToken)
+            ?? throw new PatronFlowException(403, "Your library could not be determined.");
+        if (!configuration.IsActive)
+        {
+            throw new PatronFlowException(403, configuration.SystemNotEnabledMessage);
+        }
+
+        return configuration;
     }
 
     private static void RequireCurrentStaff(StaffEligibilityResult eligibility)
