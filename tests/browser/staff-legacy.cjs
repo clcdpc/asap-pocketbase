@@ -115,9 +115,9 @@ async function runLegacySettingsNoEditRoundTrip(
   }
   await page.waitForFunction(async ({ expectedOrgId, expectedInput }) => {
     const { currentLibraryContextOrgId } = await import('/staff/js/state.js');
-    const { currentLegacySettingsFormModel } = await import('/staff/js/state.js');
+    const { currentLegacySettingsForm } = await import('/staff/js/state.js');
     return currentLibraryContextOrgId === expectedOrgId &&
-      currentLegacySettingsFormModel?.contextOrgId === expectedOrgId &&
+      currentLegacySettingsForm?.orgId === expectedOrgId &&
       document.getElementById('suggestion-limit')?.value === expectedInput;
   }, { expectedOrgId: orgId, expectedInput: expectedSuggestionLimitInput });
   await page.waitForFunction(() => !document.getElementById('select-library-context').disabled);
@@ -175,11 +175,11 @@ async function runLegacySettingsNoEditRoundTrip(
       const state = await import('/staff/js/state.js');
       return {
         currentLibraryContextOrgId: state.currentLibraryContextOrgId,
-        modelContextOrgId: state.currentLegacySettingsFormModel?.contextOrgId
+        modelContextOrgId: state.currentLegacySettingsForm?.orgId
       };
     });
-    assert.deepEqual((serialized.enabledLibraryOrgIds || []).map(String).sort(), participationBefore,
-      `System no-edit form must serialize the actual enabled organization IDs from the .NET DTO: ${JSON.stringify({
+    assert.deepEqual(participationDom.filter(item => item.checked).map(item => item.id).sort(), participationBefore,
+      `System participation controls must reflect the .NET DTO: ${JSON.stringify({
         dom: participationDom,
         serializedContext,
         serializedHasPolaris: Object.hasOwn(serialized, 'polaris'),
@@ -192,15 +192,15 @@ async function runLegacySettingsNoEditRoundTrip(
     assert.equal(actualSystemStaffUrl, systemSettings.staffUrl,
       `system staff URL must be populated from the real Settings DTO: ${JSON.stringify({ actualSystemStaffUrl, expected: systemSettings.staffUrl })}`);
     assert.equal(actualSystemNotEnabledMessage,
-      before.ui_text.systemNotEnabledMessage || '{{library}} does not currently participate in this suggestion service.',
-      `system participation text must use the effective DTO/default: ${JSON.stringify({ actualSystemNotEnabledMessage, expected: before.ui_text.systemNotEnabledMessage })}`);
+      systemSettings.systemNotEnabledMessage || '{{library}} does not currently participate in this suggestion service.',
+      'system participation editor must keep the unexpanded stored template');
     assert.equal(actualMisconfiguredMessage,
-      before.ui_text.misconfiguredMessage || 'The {{library}} suggestion system is currently misconfigured. Please contact staff.',
-      `system error text must use the effective DTO/default: ${JSON.stringify({ actualMisconfiguredMessage, expected: before.ui_text.misconfiguredMessage })}`);
-    assert.equal(serialized.staffUrl, actualSystemStaffUrl);
-    assert.equal(Object.hasOwn(serialized.ui_text, 'systemNotEnabledMessage'), false,
+      systemSettings.misconfiguredMessage || 'The {{library}} suggestion system is currently misconfigured. Please contact staff.',
+      'system error editor must keep the unexpanded stored template');
+    assert.equal(Object.hasOwn(serialized, 'staffUrl'), false);
+    assert.equal(Object.hasOwn(serialized.ui_text || {}, 'systemNotEnabledMessage'), false,
       'A no-edit system save must leave a null system participation message absent.');
-    assert.equal(Object.hasOwn(serialized.ui_text, 'misconfiguredMessage'), false,
+    assert.equal(Object.hasOwn(serialized.ui_text || {}, 'misconfiguredMessage'), false,
       'A no-edit system save must leave a null system misconfiguration message absent.');
   }
   const posted = {
@@ -259,7 +259,7 @@ async function runLegacySettingsNoEditRoundTrip(
         `${orgId} no-edit save must not materialize null system PatronSettings.${field}.`);
     }
   }
-  const saveResponse = await post(context, baseOrigin, '/api/asap/staff/settings/library', posted);
+  const saveResponse = await post(context, baseOrigin, '/api/asap/staff/legacy/settings', posted);
   assert.equal(saveResponse.status(), 200, `${orgId} no-edit Settings save failed: ${await saveResponse.text()}`);
   assert.equal(posted.orgId, orgId);
   assert.equal(posted.version, before.version);
@@ -267,14 +267,8 @@ async function runLegacySettingsNoEditRoundTrip(
   assert.deepEqual(Object.keys(posted.emails || {}).filter(key => standardTemplateKeys.includes(key) || key === 'rejection_templates'), [],
     `${orgId} no-edit save must not create or rewrite backend email templates from JavaScript defaults`);
 
-  if (orgId === 'system') {
-    assert.equal(posted.polaris.systemPolarisUserId, 731);
-    assert.equal(posted.polaris.organizationIdForRequests, 910);
-    assert.equal(posted.polaris.pickupOrganizationId, 4201);
-    assert.equal(Object.hasOwn(posted.polaris, 'userId'), false);
-    assert.equal(Object.hasOwn(posted.polaris, 'requestingOrgId'), false);
-    assert.equal(Object.hasOwn(posted.polaris, 'pickupOrgId'), false);
-  }
+  assert.equal(Object.hasOwn(posted, 'polaris'), false,
+    'A no-edit save must not submit unchanged Polaris settings or secrets.');
 
   const afterResponse = await context.request.get(
     `${baseOrigin}/api/asap/staff/settings/library?orgId=${encodeURIComponent(orgId)}`
@@ -488,7 +482,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
       return {
         selectedOrgId: document.getElementById('select-library-context').value,
         contextOrgId: state.currentLibraryContextOrgId,
-        modelOrgId: state.currentLegacySettingsFormModel?.contextOrgId,
+        modelOrgId: state.currentLegacySettingsForm?.orgId,
         settingsDirty: state.settingsDirty,
         selectorDisabled: document.getElementById('select-library-context').disabled
       };
@@ -506,7 +500,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
         return {
           selectedOrgId: document.getElementById('select-library-context').value,
           contextOrgId: state.currentLibraryContextOrgId,
-          modelOrgId: state.currentLegacySettingsFormModel?.contextOrgId,
+          modelOrgId: state.currentLegacySettingsForm?.orgId,
           settingsDirty: state.settingsDirty,
           settingsLoading: state.settingsLoading,
           settingsActionInProgress: state.settingsActionInProgress,
@@ -1018,7 +1012,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     assert.equal(await page.locator('#smtp-host, #smtp-port, #smtp-password').count(), 0);
     const beforeEmailSettings = await (await context.request.get(`${args.baseOrigin}/api/asap/staff/settings?orgId=2`)).json();
     const saveEmail = async () => {
-      const saved = page.waitForResponse(response => response.url().endsWith('/staff/settings/library') && response.request().method() === 'POST');
+      const saved = page.waitForResponse(response => response.url().endsWith('/staff/legacy/settings') && response.request().method() === 'POST');
       await page.locator('#settings-form button[type="submit"]').click();
       assert.equal((await saved).status(), 200);
       await page.waitForFunction(() => document.getElementById('postmark-token').value === '' &&
@@ -1098,6 +1092,179 @@ async function runScopedStaff(browser, args, axeSource, report) {
   }
 }
 
+async function runSessionExpiry(browser, args) {
+  const { context, traffic } = await createContext(
+    browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity
+  );
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    await page.goto(`${args.baseOrigin}/staff/`, { waitUntil: 'networkidle' });
+    await page.locator('#app-container').waitFor({ state: 'visible' });
+    await context.setExtraHTTPHeaders({});
+    const expired = page.waitForResponse(response =>
+      response.url().includes('/api/asap/staff/') && response.status() === 401);
+    await page.locator('[data-status="settings"]').click();
+    const response = await expired;
+    assert.match(response.headers()['content-type'] || '', /application\/json/);
+    assert.equal(response.headers().location, undefined);
+    await page.locator('#login-container').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#app-container').isVisible(), false);
+    assert.deepEqual(errors, [], `Legacy session expiry raised a browser error: ${errors.join('; ')}`);
+    assert.equal(traffic.externalRequests, 0, 'Legacy session expiry requested an external asset');
+  } finally {
+    await context.close();
+  }
+}
+
+async function runSettingsDemotionDuringLoad(browser, args) {
+  const { context, traffic } = await createContext(
+    browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity
+  );
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  let startDelayed;
+  let releaseDelayed;
+  let routeDone;
+  const delayed = new Promise(resolve => { startDelayed = resolve; });
+  const release = new Promise(resolve => { releaseDelayed = resolve; });
+  const completed = new Promise(resolve => { routeDone = resolve; });
+  const staleTitle = 'Title from superseded privileged response';
+  let waitTimer;
+  try {
+    await page.goto(`${args.baseOrigin}/staff/`, { waitUntil: 'networkidle' });
+    await page.locator('#app-container').waitFor({ state: 'visible' });
+    await page.route('**/api/asap/staff/legacy/settings?**', async route => {
+      try {
+        const upstream = await route.fetch();
+        const body = await upstream.json();
+        body.uiText.pageTitle = staleTitle;
+        startDelayed();
+        await release;
+        await route.fulfill({ response: upstream, json: body });
+      } catch (error) {
+        // The owner may abort the request on demotion before a delayed response can be fulfilled.
+        if (!String(error.message).includes('intercept') && !String(error.message).includes('aborted')) {
+          throw error;
+        }
+      } finally {
+        routeDone();
+      }
+    });
+    await page.locator('[data-status="settings"]').click();
+    await Promise.race([
+      delayed,
+      new Promise((_, reject) => {
+        waitTimer = setTimeout(() => reject(new Error('Delayed Settings response was not requested.')), 15000);
+      })
+    ]);
+    clearTimeout(waitTimer);
+    await page.evaluate(async () => {
+      const state = await import('/staff/js/state.js');
+      const settings = await import('/staff/js/settings.js');
+      state.setStaffSession({
+        ...state.staffSession,
+        staff: { ...state.staffSession.staff, role: 'staff' }
+      });
+      settings.showSettingsAccessDenied();
+    });
+    releaseDelayed();
+    await completed;
+    await page.waitForTimeout(100);
+    assert.equal(await page.locator('#settings-form').isVisible(), false);
+    assert.equal(await page.locator('#settings-error').isVisible(), true);
+    assert.notEqual(await page.locator('#ui-patron-page-title').inputValue(), staleTitle);
+    assert.deepEqual(errors, [], `Legacy Settings demotion raised a browser error: ${errors.join('; ')}`);
+    assert.equal(traffic.externalRequests, 0, 'Legacy Settings demotion requested an external asset');
+  } finally {
+    clearTimeout(waitTimer);
+    releaseDelayed();
+    await context.close();
+  }
+}
+
+async function runSignOutDuringSessionRevalidation(browser, args) {
+  const { context, traffic } = await createContext(
+    browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity
+  );
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  let startDelayed;
+  let releaseDelayed;
+  let routeDone;
+  let releaseStarted = false;
+  let protectedRequestsAfterRelease = 0;
+  const delayed = new Promise(resolve => { startDelayed = resolve; });
+  const release = new Promise(resolve => { releaseDelayed = resolve; });
+  const completed = new Promise(resolve => { routeDone = resolve; });
+  let waitTimer;
+  try {
+    await page.goto(`${args.baseOrigin}/staff/?stage=settings#settings-staff`, { waitUntil: 'networkidle' });
+    await page.locator('#app-container').waitFor({ state: 'visible' });
+    await page.locator('#tab-staff').click();
+    const selfRow = page.locator(`#staff-users-table-body tr[data-staff-id="${args.superIdentity.staffId}"]`);
+    await selfRow.locator('.staff-metadata-save').waitFor();
+    await page.route(`**/api/asap/staff/users/${args.superIdentity.staffId}`, async route => {
+      if (route.request().method() !== 'PATCH') return route.continue();
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"code":"updated"}' });
+    });
+    await page.route('**/api/asap/staff/legacy/session', async route => {
+      try {
+        const upstream = await route.fetch();
+        const body = await upstream.json();
+        assert.equal(body.authenticated, true);
+        startDelayed();
+        await release;
+        await route.fulfill({ response: upstream, json: body });
+      } catch (error) {
+        if (!String(error.message).includes('intercept') && !String(error.message).includes('aborted')) {
+          throw error;
+        }
+      } finally {
+        routeDone();
+      }
+    });
+    page.on('request', request => {
+      if (releaseStarted && /\/api\/asap\/staff\/(?:legacy\/settings|users|email-status)/.test(request.url())) {
+        protectedRequestsAfterRelease += 1;
+      }
+    });
+    await selfRow.locator('.staff-display-name').fill('Saved before sign-out');
+    await selfRow.locator('.staff-metadata-save').click();
+    await Promise.race([
+      delayed,
+      new Promise((_, reject) => {
+        waitTimer = setTimeout(() => reject(new Error('Self-update session revalidation was not requested.')), 15000);
+      })
+    ]);
+    clearTimeout(waitTimer);
+    await page.locator('#login-sign-out-btn').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#app-container').isVisible(), false);
+    const signOutResponse = page.waitForResponse(response =>
+      response.url().endsWith('/api/asap/staff/sign-out') && response.request().method() === 'POST');
+    await page.locator('#login-sign-out-btn').click();
+    assert.equal((await signOutResponse).status(), 200);
+    releaseStarted = true;
+    releaseDelayed();
+    await completed;
+    await page.waitForTimeout(100);
+    assert.equal(await page.locator('#app-container').isVisible(), false,
+      'An old real session response must not reopen the signed-out workspace');
+    assert.equal(await page.locator('#login-container').isVisible(), true);
+    assert.equal(protectedRequestsAfterRelease, 0,
+      'Old revalidation must not start protected workspace requests after sign-out');
+    assert.deepEqual(errors, [], `Legacy session revalidation raised a browser error: ${errors.join('; ')}`);
+    assert.equal(traffic.externalRequests, 0, 'Legacy sign-out revalidation requested an external asset');
+  } finally {
+    clearTimeout(waitTimer);
+    releaseDelayed();
+    await context.close();
+  }
+}
+
 async function loadDependencies() {
   let chromium;
   try { ({ chromium } = require('playwright')); } catch {
@@ -1126,6 +1293,9 @@ async function main() {
     await runAnonymous(browser, args, axeSource, report);
     await runSuperAdmin(browser, args, axeSource, report);
     await runScopedStaff(browser, args, axeSource, report);
+    await runSessionExpiry(browser, args);
+    await runSettingsDemotionDuringLoad(browser, args);
+    await runSignOutDuringSessionRevalidation(browser, args);
     assert.equal(report.states.length, 11, 'Expected eleven primary legacy staff browser states');
     report.legacyAccessibilityBaseline = LEGACY_ACCESSIBILITY_BASELINE;
     report.unexpectedAccessibility = unexpectedLegacyAccessibilityFindings(report.states);

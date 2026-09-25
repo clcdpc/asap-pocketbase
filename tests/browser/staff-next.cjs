@@ -286,6 +286,32 @@ async function runAnonymous(browser, args, axeSource, report) {
   }
 }
 
+async function runSessionExpiry(browser, args) {
+  const { context, traffic } = await createContext(
+    browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity
+  );
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    await page.goto(`${args.baseOrigin}/staff-next/`, { waitUntil: 'networkidle' });
+    await page.locator('#workspace').waitFor({ state: 'visible' });
+    await context.setExtraHTTPHeaders({});
+    const expired = page.waitForResponse(response =>
+      response.url().includes('/api/asap/staff/') && response.status() === 401);
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    const response = await expired;
+    assert.match(response.headers()['content-type'] || '', /application\/json/);
+    assert.equal(response.headers().location, undefined);
+    await page.locator('#signed-out').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#workspace').isVisible(), false);
+    assert.deepEqual(errors, [], `Staff session expiry raised a browser error: ${errors.join('; ')}`);
+    assert.equal(traffic.externalRequests, 0, 'Staff session expiry requested an external asset');
+  } finally {
+    await context.close();
+  }
+}
+
 async function runSuperAdmin(browser, args, axeSource, report) {
   const { context, traffic } = await createContext(
     browser,
@@ -1467,6 +1493,7 @@ async function main() {
   const report = { states: [] };
   try {
     await runAnonymous(browser, args, axeSource, report);
+    await runSessionExpiry(browser, args);
     await runSuperAdmin(browser, args, axeSource, report);
     await runAnalytics(browser, args, axeSource, report);
     await runStaleAssignmentCandidates(browser, args, report);

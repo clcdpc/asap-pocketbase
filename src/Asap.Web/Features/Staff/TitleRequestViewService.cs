@@ -65,6 +65,7 @@ public sealed record TitleRequestDto(
     string? ClaimRuleId,
     string? IsbnCheckStatus,
     string? IsbnCheckResult,
+    string? IdentifierPresentation,
     int IsbnCheckRetryCount,
     string? IsbnCheckLastErrorCode,
     DateTime? LastChecked,
@@ -327,6 +328,12 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
                 request.ClaimRuleId?.ToString(CultureInfo.InvariantCulture),
                 request.IsbnCheckStatus,
                 request.IsbnCheckResult,
+                request.IsbnCheckStatus == "not_found" ? request.IsbnCheckResult switch
+                {
+                    TitleRequestMutationService.InterruptedIdentifierResult => "not_completed",
+                    TitleRequestMutationService.UnverifiedSelectedBibIdentifierResult => "not_verified_on_bib",
+                    _ => null
+                } : null,
                 request.IsbnCheckRetryCount,
                 request.IsbnCheckLastErrorCode,
                 AsUtc(request.LastCheckedUtc),

@@ -1,10 +1,14 @@
-import { staffSession, setStaffSession, canAssignSuperAdmin, setCanAssignSuperAdmin, currentLibraryContextOrgId } from './state.js';
+import { staffSession, staffAccessGeneration, setStaffSession, canAssignSuperAdmin, setCanAssignSuperAdmin, currentLibraryContextOrgId } from './state.js';
 import { checkAuth, isSuperAdminStaff } from './api.js';
 import { authorizedJson, isAbortError, loadStaffSession } from './http.js';
 import { showAlert, showConfirm } from './dialogs.js';
 
 let staffOrganizations = [];
 let staffAccessLoadGeneration = 0;
+
+export function invalidateStaffAccessLoads() {
+  staffAccessLoadGeneration += 1;
+}
 
 function clean(value) {
   return String(value ?? '').trim();
@@ -105,10 +109,14 @@ export function beginStaffAccessLoad(options = {}) {
 
   const generation = ++staffAccessLoadGeneration;
   const parentIsCurrent = options.isCurrent;
+  const accessGeneration = staffAccessGeneration;
+  const staffId = staffSession.staff?.id;
   return {
     ...options,
     staffAccessLoadGeneration: generation,
     isCurrent: () => generation === staffAccessLoadGeneration &&
+      accessGeneration === staffAccessGeneration && staffId === staffSession.staff?.id &&
+      staffSession.authenticated && staffSession.accessAllowed &&
       (!parentIsCurrent || parentIsCurrent())
   };
 }
@@ -323,6 +331,7 @@ async function refreshCurrentSessionAfterMutation(targetStaffId) {
       return false;
     }
   } catch (error) {
+    if (isAbortError(error)) return false;
     const accessChanged = error?.status === 401 ||
       (error?.status === 403 && error.response?.accessAllowed === false);
     checkAuth();
@@ -440,7 +449,8 @@ staffUsersTableBody?.addEventListener('click', async event => {
         body: {
           email: persistedEmail,
           role,
-          organizationId
+          organizationId,
+          version
         }
       }
     ), id);
@@ -462,7 +472,7 @@ export async function populateStaffLibraryOptions(options = {}) {
   const me = staffSession.staff || {};
   const isSuper = isSuperAdminStaff();
   if (isSuper) {
-    const organizations = await authorizedJson('/api/asap/staff/organizations', { signal: loadOptions.signal });
+    const organizations = await authorizedJson('/api/asap/staff/legacy/organizations', { signal: loadOptions.signal });
     if (!isCurrentStaffLoad(loadOptions, contextOrgId)) return false;
     staffOrganizations = organizations;
     select.classList.remove('hidden');
@@ -510,7 +520,7 @@ addStaffButton?.addEventListener('click', async () => {
   const roleSelect = document.getElementById('staff-add-role');
   const email = clean(emailInput?.value);
   const role = clean(roleSelect?.value) || 'staff';
-  const organizationId = role === 'super_admin' ? 1 : Number(librarySelect?.value);
+  const organizationId = Number(librarySelect?.value);
   const contextOrgId = clean(currentLibraryContextOrgId) || 'system';
   const startingGeneration = staffAccessLoadGeneration;
   const completionIsCurrent = () => contextOrgId === (clean(currentLibraryContextOrgId) || 'system') &&

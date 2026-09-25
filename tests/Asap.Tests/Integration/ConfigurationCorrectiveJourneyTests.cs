@@ -247,7 +247,7 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task SettingsStructuredNoEditSavePreservesThreeProvidersAndNonDefaultFormats()
+    public async Task SettingsStructuredNoEditSavePreservesBlankFourthProviderAndNonDefaultFormats()
     {
         using var startup = factory!.CreateClient();
         await startup.GetAsync("/api/asap/staff/session");
@@ -257,13 +257,11 @@ public sealed partial class PatronJourneyTests
 
         await using var seed = await contextFactory.CreateDbContextAsync();
         var seededProviderFour = await seed.ExternalSearchProviders
-            .SingleOrDefaultAsync(item => item.ProviderKey == "external_search_4");
-        if (seededProviderFour is not null)
-        {
-            Assert.IsFalse(seededProviderFour.IsEnabled);
-            Assert.AreEqual(string.Empty, seededProviderFour.Label);
-            Assert.AreEqual(string.Empty, seededProviderFour.UrlTemplate);
-        }
+            .SingleAsync(item => item.ProviderKey == "external_search_4");
+        Assert.IsFalse(seededProviderFour.IsEnabled);
+        Assert.AreEqual(string.Empty, seededProviderFour.Label);
+        Assert.AreEqual(string.Empty, seededProviderFour.UrlTemplate);
+        var providerFourVersion = seededProviderFour.RowVersion.ToArray();
         var providers = await seed.ExternalSearchProviders.OrderBy(item => item.SortOrder).ToListAsync();
         Assert.AreEqual(3, providers.Count(item =>
             item.IsEnabled || !string.IsNullOrWhiteSpace(item.Label) || !string.IsNullOrWhiteSpace(item.UrlTemplate)));
@@ -298,7 +296,13 @@ public sealed partial class PatronJourneyTests
                 .EnumerateArray().Select(StructuredProvider).ToArray();
             Assert.AreEqual(3, beforeProviders.Length);
             Assert.IsFalse(beforeProviders.Any(item => item.key == "external_search_4"));
-            Assert.AreEqual(3, before.GetProperty("stored").GetProperty("providers").GetArrayLength());
+            var storedProviders = before.GetProperty("stored").GetProperty("providers").EnumerateArray().ToArray();
+            Assert.AreEqual(4, storedProviders.Length);
+            var storedFourth = storedProviders.Single(item => item.GetProperty("key").GetString() == "external_search_4");
+            Assert.AreEqual(seededProviderFour.Id.ToString(), storedFourth.GetProperty("id").GetString());
+            Assert.IsFalse(storedFourth.GetProperty("isEnabled").GetBoolean());
+            Assert.AreEqual(string.Empty, storedFourth.GetProperty("label").GetString());
+            Assert.AreEqual(string.Empty, storedFourth.GetProperty("urlTemplate").GetString());
             var configuredSystemProviders = before.GetProperty("stored").GetProperty("configuredSystem")
                 .GetProperty("providers").EnumerateArray().ToArray();
             Assert.AreEqual(3, configuredSystemProviders.Length);
@@ -328,7 +332,8 @@ public sealed partial class PatronJourneyTests
                 "optional", "Corrective creator", "required", "Corrective ISBN", "hidden");
             AssertFormatState(afterNoEdit, "dvd", "Corrective video discs", 17, false, "message", "Corrective video message",
                 "required", "Director/Actors/Producer", "hidden", "UPC", "required");
-            Assert.AreEqual(3, afterNoEdit.GetProperty("stored").GetProperty("providers").GetArrayLength());
+            Assert.AreEqual(4, afterNoEdit.GetProperty("stored").GetProperty("providers").GetArrayLength());
+            Assert.AreEqual(3, afterNoEdit.GetProperty("effective").GetProperty("externalSearchProviders").GetArrayLength());
 
             var editedProviders = beforeProviders.Select(item => item.key == "external_search_2"
                 ? item with { label = "Corrective edited research" }
@@ -349,18 +354,13 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("Corrective edited research", await verify.ExternalSearchProviders
                 .Where(item => item.ProviderKey == "external_search_2").Select(item => item.Label).SingleAsync());
             var verifiedProviderFour = await verify.ExternalSearchProviders
-                .SingleOrDefaultAsync(item => item.ProviderKey == "external_search_4");
-            if (seededProviderFour is null)
-            {
-                Assert.IsNull(verifiedProviderFour);
-            }
-            else
-            {
-                Assert.IsNotNull(verifiedProviderFour);
-                Assert.AreEqual(seededProviderFour.IsEnabled, verifiedProviderFour.IsEnabled);
-                Assert.AreEqual(seededProviderFour.Label, verifiedProviderFour.Label);
-                Assert.AreEqual(seededProviderFour.UrlTemplate, verifiedProviderFour.UrlTemplate);
-            }
+                .SingleAsync(item => item.ProviderKey == "external_search_4");
+            Assert.AreEqual(seededProviderFour.Id, verifiedProviderFour.Id);
+            Assert.AreEqual(seededProviderFour.IsEnabled, verifiedProviderFour.IsEnabled);
+            Assert.AreEqual(seededProviderFour.Label, verifiedProviderFour.Label);
+            Assert.AreEqual(seededProviderFour.UrlTemplate, verifiedProviderFour.UrlTemplate);
+            CollectionAssert.AreEqual(providerFourVersion, verifiedProviderFour.RowVersion,
+                "a no-edit or sibling-provider save must not rewrite the blank fourth provider");
             Assert.IsTrue(await verify.MaterialFormats.AnyAsync(item => item.IsEnabled),
                 "An unrelated settings save must not disable every material format.");
             var verifiedBook = await verify.MaterialFormats.SingleAsync(item => item.OwnerOrganizationId == 1 && item.Code == "book");
@@ -1021,8 +1021,10 @@ public sealed partial class PatronJourneyTests
             using var anonymous = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
             using var unauthorized = await anonymous.DeleteAsync(
                 $"/api/asap/staff/settings/formats/{referencedFormatId}?version={Uri.EscapeDataString(referencedVersion)}");
-            Assert.AreEqual(System.Net.HttpStatusCode.Redirect, unauthorized.StatusCode,
-                "the direct delete endpoint must remain behind staff authorization");
+            Assert.AreEqual(System.Net.HttpStatusCode.Unauthorized, unauthorized.StatusCode,
+                "protected staff APIs must return the JSON session contract");
+            using var unauthorizedBody = JsonDocument.Parse(await unauthorized.Content.ReadAsStringAsync());
+            Assert.AreEqual("staff_session_invalid", unauthorizedBody.RootElement.GetProperty("code").GetString());
         }
         finally
         {
@@ -1136,10 +1138,16 @@ public sealed partial class PatronJourneyTests
             }
             var libraryStored = libraryBefore.GetProperty("stored");
             var libraryEffective = libraryBefore.GetProperty("effective");
+            Assert.AreEqual(4, libraryStored.GetProperty("providers").GetArrayLength());
+            Assert.AreEqual(3, libraryEffective.GetProperty("externalSearchProviders").GetArrayLength());
+            var blankFourthProvider = libraryStored.GetProperty("providers").EnumerateArray()
+                .Single(item => item.GetProperty("key").GetString() == "external_search_4");
+            Assert.IsFalse(blankFourthProvider.GetProperty("isEnabled").GetBoolean());
+            Assert.IsFalse(blankFourthProvider.GetProperty("overridden").GetBoolean());
+            Assert.AreEqual(string.Empty, blankFourthProvider.GetProperty("label").GetString());
+            Assert.AreEqual(string.Empty, blankFourthProvider.GetProperty("urlTemplate").GetString());
             var noEditProviders = libraryStored.GetProperty("providers").EnumerateArray().Select(provider =>
             {
-                var resolved = libraryEffective.GetProperty("externalSearchProviders").EnumerateArray()
-                    .Single(item => item.GetProperty("key").GetString() == provider.GetProperty("key").GetString());
                 return (object)new
                 {
                     id = provider.GetProperty("id").GetString(),
@@ -1147,7 +1155,7 @@ public sealed partial class PatronJourneyTests
                     isEnabled = provider.GetProperty("isEnabled").GetBoolean(),
                     label = provider.GetProperty("label").GetString(),
                     urlTemplate = provider.GetProperty("urlTemplate").GetString(),
-                    sortOrder = resolved.GetProperty("sortOrder").GetInt32(),
+                    sortOrder = provider.GetProperty("sortOrder").GetInt32(),
                     overridden = provider.GetProperty("overridden").GetBoolean()
                 };
             }).ToArray();

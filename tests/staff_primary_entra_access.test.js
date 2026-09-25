@@ -19,15 +19,15 @@ function librarySettings(orgId, marker) {
     orgId,
     version: `settings-${orgId}-${marker}`,
     isOverride: true,
-    ui_text: { loginNote: marker },
+    uiText: { loginNote: marker },
     emails: {},
+    systemSettings: {},
     polaris: {},
     workflow: { suggestionLimit: orgId },
     formats: [],
-    formatClaimRules: [],
-    formatClaimStaffOptions: [],
-    publicationOptions: [],
-    customFields: [],
+    providers: [],
+    autoClaimRules: [],
+    autoClaimStaff: [],
     templates: []
   };
 }
@@ -106,6 +106,13 @@ async function waitFor(predicate) {
     let resolveMetadataPatch;
     let mutationSessionResult = null;
     let sessionRequestCount = 0;
+    let queueSessionResponses = false;
+    const pendingSessionResponses = [];
+    let signOutRequests = 0;
+    let delaySignOut = false;
+    let releaseSignOut;
+    let staffUserReads = 0;
+    let bootstrapMutations = 0;
     let users = [
       {
         id: '9007199254740993',
@@ -135,8 +142,13 @@ async function waitFor(predicate) {
       if (requestUrl === '/api/asap/config') {
         return response(200, {});
       }
-      if (requestUrl === '/api/asap/staff/session') {
+      if (requestUrl === '/api/asap/staff/legacy/session') {
         sessionRequestCount += 1;
+        if (queueSessionResponses) {
+          return new Promise(resolve => {
+            pendingSessionResponses.push((status, body) => resolve(response(status, body)));
+          });
+        }
         if (startupSession === 'invalid') {
           return response(401, { code: 'staff_session_invalid' });
         }
@@ -162,7 +174,7 @@ async function waitFor(predicate) {
         }
         throw new Error('Unexpected session request');
       }
-      if (requestUrl.startsWith('/api/asap/staff/settings/library?')) {
+      if (requestUrl.startsWith('/api/asap/staff/legacy/settings?')) {
         if (requestUrl.includes('orgId=2') && delayLibraryTwoSettings) {
           return new Promise(resolve => {
             resolveLibraryTwoSettings = () => resolve(response(200, librarySettings(2, 'stale-library-two-baseline')));
@@ -188,40 +200,33 @@ async function waitFor(predicate) {
       if (requestUrl.includes('/api/asap/staff/email-status')) {
         return response(200, { enabled: true });
       }
-      if (requestUrl.includes('/api/asap/staff/title-requests')) {
-        return response(200, { items: [], scope: '2', availableLibraries: [] });
+      if (requestUrl.includes('/api/asap/staff/legacy/title-requests')) {
+        return response(200, { items: [], scope: { superAdmin: true, mode: 'library', libraryOrgId: '2', label: 'Library Two' }, availableLibraries: [] });
       }
-      if (requestUrl.includes('/api/asap/staff/additional-copies')) {
-        return response(200, { items: [], scope: '2', availableLibraries: [] });
+      if (requestUrl.includes('/api/asap/staff/legacy/additional-copies')) {
+        return response(200, { items: [], scope: { superAdmin: true, mode: 'library', libraryOrgId: '2', label: 'Library Two' }, availableLibraries: [] });
       }
-      if (requestUrl === '/api/asap/staff/polaris/patron-codes') {
-        return response(200, { code: 'ok', data: [] });
+      if (requestUrl.startsWith('/api/asap/staff/legacy/patron-codes')) {
+        return response(200, []);
       }
-      if (requestUrl === '/api/asap/staff/organizations') {
+      if (requestUrl === '/api/asap/staff/legacy/organizations') {
         if (delayLibraryTwoOrganizations) {
           return new Promise(resolve => {
-            resolveLibraryTwoOrganizations = () => resolve(response(200, {
-              code: 'ok',
-              data: [{ id: 2, displayName: 'Stale Library Two', active: true }]
-            }));
+            resolveLibraryTwoOrganizations = () => resolve(response(200,
+              [{ id: 2, displayName: 'Stale Library Two', active: true }]));
           });
         }
         if (useLibraryThreeOrganizations) {
-          return response(200, {
-            code: 'ok',
-            data: [{ id: 3, displayName: 'Current Library Three', active: true }]
-          });
+          return response(200, [{ id: 3, displayName: 'Current Library Three', active: true }]);
         }
-        return response(200, {
-          code: 'ok',
-          data: [
+        return response(200, [
             { id: 1, displayName: 'System', active: true },
             { id: 2, displayName: 'Library Two', active: true },
             { id: 3, displayName: 'Library Three', active: true }
-          ]
-        });
+          ]);
       }
       if (requestUrl.startsWith('/api/asap/staff/users') && method === 'GET') {
+        staffUserReads += 1;
         if (requestUrl.includes('orgId=2') && delayLibraryTwoStaffUsers) {
           return new Promise(resolve => {
             resolveLibraryTwoStaffUsers = () => resolve(response(200, {
@@ -315,6 +320,22 @@ async function waitFor(predicate) {
           user: savedUser || users[0],
           cleanup: { rulesDeactivated: 1, openTitleClaimsCleared: 2, openAdditionalCopyClaimsCleared: 3 }
         });
+      }
+      if (requestUrl === '/api/asap/staff/sign-out' && method === 'POST') {
+        signOutRequests += 1;
+        if (delaySignOut) {
+          return new Promise(resolve => {
+            releaseSignOut = () => resolve(response(200, { signedOut: true }));
+          });
+        }
+        return response(200, { signedOut: true });
+      }
+      if (requestUrl === '/bootstrap-mutation' && method === 'POST') {
+        bootstrapMutations += 1;
+        return response(200, { saved: true });
+      }
+      if (requestUrl === '/api/asap/staff/legacy/profile' && method === 'POST') {
+        return response(200, { staff: { ...selfUser, displayName: 'Newest Profile' } });
       }
       throw new Error(`Unexpected request: ${method} ${requestUrl}`);
     };
@@ -561,13 +582,13 @@ async function waitFor(predicate) {
     await currentLibrarySettingsLoad;
     const currentBaseline = state.initialSettingsSnapshot;
     assert.strictEqual(state.lastSavedLibrarySettingsOrgId, '3');
-    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.ui_text.loginNote, 'current-library-three-baseline');
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.uiText.loginNote, 'current-library-three-baseline');
     assert.ok(currentBaseline, 'The current library settings load must capture its baseline');
     resolveLibraryTwoSettings();
     await staleLibrarySettingsLoad;
     assert.strictEqual(state.lastSavedLibrarySettingsOrgId, '3',
       'A delayed loadLibrarySettings response must not replace the current saved scope');
-    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.ui_text.loginNote, 'current-library-three-baseline');
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.uiText.loginNote, 'current-library-three-baseline');
     assert.strictEqual(state.initialSettingsSnapshot, currentBaseline,
       'A delayed loadLibrarySettings response must not overwrite the current settings baseline');
     delayLibraryTwoSettings = false;
@@ -672,7 +693,7 @@ async function waitFor(predicate) {
     await waitFor(() => writes.some(write => write.method === 'POST' && write.body.email === 'inactive@example.org'));
     assert.deepStrictEqual(
       writes.find(write => write.method === 'POST' && write.body.email === 'inactive@example.org').body,
-      { email: 'inactive@example.org', role: 'staff', organizationId: 2 }
+      { email: 'inactive@example.org', role: 'staff', organizationId: 2, version: 'version-inactive' }
     );
     assert.strictEqual(users.length, usersBeforeUnchangedReactivation,
       'Unchanged-email reactivation must reactivate the existing StaffUser rather than create another');
@@ -716,7 +737,7 @@ async function waitFor(predicate) {
       write.method === 'POST' && write.body.email === 'saved-inactive@example.org'));
     assert.deepStrictEqual(
       writes.find(write => write.method === 'POST' && write.body.email === 'saved-inactive@example.org').body,
-      { email: 'saved-inactive@example.org', role: 'staff', organizationId: 2 }
+      { email: 'saved-inactive@example.org', role: 'staff', organizationId: 2, version: 'version-persisted-inactive' }
     );
     assert.strictEqual(users.length, usersBeforeIdentitySequence,
       'Saving and then reactivating the persisted identity must not create a duplicate StaffUser');
@@ -898,6 +919,129 @@ async function waitFor(predicate) {
     assert.strictEqual(document.getElementById('app-container').classList.contains('hidden'), true);
     assert.match(document.getElementById('login-status').textContent,
       /change was saved.*could not be safely refreshed.*sign in again.*revalidate/i);
+
+    restoreSelfWorkspace();
+    mutationSessionResult = null;
+    queueSessionResponses = true;
+    const oldSession = { authenticated: true, accessAllowed: true,
+      antiforgeryToken: 'old-session-token', staff: { ...selfUser, displayName: 'Old Session' } };
+    selfRow = document.querySelector(`tr[data-staff-id="${selfId}"]`);
+    selfRow.querySelector('.staff-display-name').value = 'Saved Before Sign-Out';
+    selfRow.querySelector('.staff-metadata-save').click();
+    await waitFor(() => pendingSessionResponses.length === 1);
+    assert.strictEqual(state.staffSession.authenticated, false);
+    assert.strictEqual(state.staffSession.staff, null);
+    assert.strictEqual(document.getElementById('app-container').classList.contains('hidden'), true);
+    const revalidationAccessGeneration = state.staffAccessGeneration;
+    const revalidationEpoch = state.staffSessionEpoch;
+    const signOutRequestsBefore = signOutRequests;
+    document.getElementById('login-sign-out-btn').click();
+    await waitFor(() => signOutRequests === signOutRequestsBefore + 1);
+    assert.strictEqual(state.staffAccessGeneration, revalidationAccessGeneration,
+      'Signing out from an already false/null revalidation state does not change the access generation');
+    assert.ok(state.staffSessionEpoch > revalidationEpoch,
+      'The explicit sign-out still invalidates pending session responses');
+    const staffReadsAfterSignOut = staffUserReads;
+    pendingSessionResponses.shift()(200, oldSession);
+    await flush();
+    await flush();
+    assert.strictEqual(state.staffSession.authenticated, false);
+    assert.strictEqual(state.staffSession.staff, null);
+    assert.strictEqual(document.getElementById('app-container').classList.contains('hidden'), true,
+      'An old self-update session response must not reopen the signed-out workspace');
+    assert.strictEqual(staffUserReads, staffReadsAfterSignOut,
+      'Obsolete revalidation must not repopulate Staff Access');
+    assert.doesNotMatch(document.getElementById('login-status').textContent, /could not be safely refreshed/i,
+      'Superseded revalidation is not an error state');
+
+    for (const staleStatus of [200, 401, 403]) {
+      restoreSelfWorkspace();
+      const older = http.loadStaffSession();
+      await waitFor(() => pendingSessionResponses.length === 1);
+      const newer = http.loadStaffSession();
+      await waitFor(() => pendingSessionResponses.length === 2);
+      const latestSession = { ...oldSession, staff: { ...selfUser, displayName: `Latest ${staleStatus}` } };
+      pendingSessionResponses.splice(1, 1)[0](200, latestSession);
+      await newer;
+      pendingSessionResponses.shift()(staleStatus, staleStatus === 200 ? oldSession :
+        staleStatus === 401 ? { code: 'staff_session_invalid' } :
+          { code: 'staff_scope_forbidden', accessAllowed: false });
+      await assert.rejects(older, error => error.name === 'AbortError');
+      assert.strictEqual(state.staffSession.staff.displayName, `Latest ${staleStatus}`,
+        'Neither an older success nor an older access error may replace a newer session');
+      assert.strictEqual(state.staffSession.authenticated, true);
+      assert.strictEqual(state.staffSession.accessAllowed, true);
+    }
+
+    restoreSelfWorkspace();
+    const oldProfileSession = http.loadStaffSession();
+    await waitFor(() => pendingSessionResponses.length === 1);
+    document.getElementById('profile-btn').click();
+    document.getElementById('profile-form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await waitFor(() => state.staffSession.staff?.displayName === 'Newest Profile');
+    pendingSessionResponses.shift()(200, oldSession);
+    await assert.rejects(oldProfileSession, error => error.name === 'AbortError');
+    assert.strictEqual(state.staffSession.staff.displayName, 'Newest Profile',
+      'An older session read must not overwrite the successful profile update');
+
+    restoreSelfWorkspace();
+    delaySignOut = true;
+    const delayedSignOutBefore = signOutRequests;
+    document.getElementById('logout-btn').click();
+    await waitFor(() => signOutRequests === delayedSignOutBefore + 1 && !!releaseSignOut);
+    assert.strictEqual(state.staffSession.authenticated, false);
+    const replacement = { ...oldSession, antiforgeryToken: 'replacement-token',
+      staff: { ...selfUser, id: 'replacement', displayName: 'Replacement Staff' } };
+    state.setStaffSession(replacement);
+    auth.checkAuth();
+    releaseSignOut();
+    await flush();
+    assert.strictEqual(state.staffSession.staff.id, 'replacement',
+      'An older sign-out completion must not erase a newer owned session');
+    delaySignOut = false;
+    releaseSignOut = null;
+
+    restoreSelfWorkspace();
+    state.staffSession.antiforgeryToken = '';
+    const noTokenSignOutBefore = signOutRequests;
+    document.getElementById('logout-btn').click();
+    await waitFor(() => pendingSessionResponses.length === 1);
+    assert.strictEqual(state.staffSession.authenticated, false);
+    pendingSessionResponses.shift()(200, oldSession);
+    await waitFor(() => signOutRequests === noTokenSignOutBefore + 1);
+    assert.strictEqual(state.staffSession.authenticated, false,
+      'The token-only sign-out bootstrap must not reinstall an authenticated session');
+
+    restoreSelfWorkspace();
+    state.staffSession.antiforgeryToken = '';
+    const supersededSignOutBefore = signOutRequests;
+    document.getElementById('logout-btn').click();
+    await waitFor(() => pendingSessionResponses.length === 1);
+    state.setStaffSession(replacement);
+    pendingSessionResponses.shift()(200, oldSession);
+    await flush();
+    assert.strictEqual(state.staffSession.staff.id, 'replacement');
+    assert.strictEqual(signOutRequests, supersededSignOutBefore,
+      'A token bootstrap superseded by a newer session must not dispatch an old sign-out');
+
+    restoreSelfWorkspace();
+    state.staffSession.antiforgeryToken = '';
+    const staleBootstrap = http.authorizedJson('/bootstrap-mutation', { method: 'POST' });
+    await waitFor(() => pendingSessionResponses.length === 1);
+    state.setStaffSession(replacement);
+    pendingSessionResponses.shift()(200, oldSession);
+    await assert.rejects(staleBootstrap, error => error.name === 'AbortError');
+    assert.strictEqual(bootstrapMutations, 0,
+      'A superseded antiforgery bootstrap must not dispatch its mutation');
+
+    restoreSelfWorkspace();
+    state.staffSession.antiforgeryToken = '';
+    const changedBootstrap = http.authorizedJson('/bootstrap-mutation', { method: 'POST' });
+    await waitFor(() => pendingSessionResponses.length === 1);
+    pendingSessionResponses.shift()(200, replacement);
+    await assert.rejects(changedBootstrap, error => error.name === 'AbortError');
+    assert.strictEqual(bootstrapMutations, 0,
+      'A bootstrap that discovers a different identity must not dispatch the old mutation');
 
     console.log('Primary staff Entra session, metadata, concurrency, and lifecycle UI checks passed');
   } finally {

@@ -425,8 +425,8 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(StaffAuthenticationRegistration.CookieScheme, authenticate!.Name);
         Assert.AreEqual(typeof(CookieAuthenticationHandler), authenticate.HandlerType);
         var challengeScheme = await schemes.GetDefaultChallengeSchemeAsync();
-        Assert.AreEqual(StaffAuthenticationRegistration.EntraScheme, challengeScheme!.Name);
-        Assert.AreEqual(typeof(OpenIdConnectHandler), challengeScheme.HandlerType);
+        Assert.AreEqual(StaffAuthenticationRegistration.CookieScheme, challengeScheme!.Name);
+        Assert.AreEqual(typeof(CookieAuthenticationHandler), challengeScheme.HandlerType);
         var protectedCookie = ProtectStaffCookie(cookieApplication, staff.Id, superAdmin.EntraTenantId, staff.NormalizedUserPrincipalName!);
         client.DefaultRequestHeaders.Add("Cookie", $"__Host-ASAP.Staff={protectedCookie}");
         Assert.IsFalse(client.DefaultRequestHeaders.Any(header => header.Key.StartsWith("X-ASAP-Test-", StringComparison.OrdinalIgnoreCase)),
@@ -584,7 +584,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("updated", deactivated.Code);
         var reactivated = await service.CreateAsync(
             actor,
-            new StaffCreateInput(target.UserPrincipalName, "staff", 2),
+            new StaffCreateInput(target.UserPrincipalName, "staff", 2, StaffVersion.Encode(deactivated.User!.RowVersion)),
             CancellationToken.None);
         Assert.AreEqual("created", reactivated.Code);
         Assert.AreEqual(target.Id, reactivated.User!.Id);
@@ -644,12 +644,192 @@ public sealed partial class PatronJourneyTests
             Assert.IsFalse(inactiveEdit.User!.IsActive, "Editing role and library must not reactivate a historical account.");
 
             var readded = await service.CreateAsync(actor, new StaffCreateInput(
-                target.UserPrincipalName, "staff", 2), CancellationToken.None);
+                target.UserPrincipalName, "staff", 2, StaffVersion.Encode(inactiveEdit.User!.RowVersion)), CancellationToken.None);
             Assert.AreEqual("created", readded.Code);
             Assert.AreEqual(target.Id, readded.User!.Id);
             Assert.IsTrue(readded.User.IsActive);
             Assert.AreEqual(target.UserPrincipalName, readded.User.UserPrincipalName);
             Assert.AreEqual(target.NormalizedUserPrincipalName, readded.User.NormalizedUserPrincipalName);
+        }
+    }
+
+    [TestMethod]
+    public async Task StaffReactivationRequiresCurrentVersionAndFreshCreationRejectsOne()
+    {
+        using var startup = factory!.CreateClient();
+        await startup.GetAsync("/api/asap/staff/session");
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var service = factory.Services.GetRequiredService<StaffLifecycleService>();
+        var target = await CreateCorrectiveStaffAsync(actor, "staff", 2);
+        var staleVersion = StaffVersion.Encode(target.RowVersion);
+        var deactivated = await service.DeactivateAsync(actor, target.Id,
+            new StaffDeactivateInput(staleVersion), CancellationToken.None);
+        Assert.AreEqual("updated", deactivated.Code);
+        var currentVersion = StaffVersion.Encode(deactivated.User!.RowVersion);
+
+        Assert.AreEqual("invalid_staff_user", (await service.CreateAsync(actor,
+            new StaffCreateInput(target.UserPrincipalName, "staff", 2), CancellationToken.None)).Code);
+        Assert.AreEqual("invalid_staff_user", (await service.CreateAsync(actor,
+            new StaffCreateInput(target.UserPrincipalName, "staff", 2, "bad-version"), CancellationToken.None)).Code);
+        Assert.AreEqual("stale_version", (await service.CreateAsync(actor,
+            new StaffCreateInput(target.UserPrincipalName, "staff", 2, staleVersion), CancellationToken.None)).Code);
+
+        var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using (var verify = await contextFactory.CreateDbContextAsync())
+        {
+            var unchanged = await verify.StaffUsers.AsNoTracking().SingleAsync(item => item.Id == target.Id);
+            Assert.IsFalse(unchanged.IsActive);
+            CollectionAssert.AreEqual(deactivated.User.RowVersion, unchanged.RowVersion);
+            Assert.AreEqual(0, await verify.AdministrativeAudits.CountAsync(item =>
+                item.TargetId == target.Id.ToString() && item.Action == "staff_reactivated"));
+        }
+
+        var reactivated = await service.CreateAsync(actor,
+            new StaffCreateInput(target.UserPrincipalName, "staff", 2, currentVersion), CancellationToken.None);
+        Assert.AreEqual("created", reactivated.Code);
+        Assert.AreEqual(target.Id, reactivated.User!.Id);
+        Assert.IsTrue(reactivated.User.IsActive);
+
+        var newEmail = $"new.{Guid.NewGuid():N}@example.org";
+        Assert.AreEqual("stale_version", (await service.CreateAsync(actor,
+            new StaffCreateInput(newEmail, "staff", 2, currentVersion), CancellationToken.None)).Code);
+        await using var final = await contextFactory.CreateDbContextAsync();
+        Assert.AreEqual(0, await final.StaffUsers.CountAsync(item => item.NormalizedUserPrincipalName == newEmail.ToUpperInvariant()));
+        Assert.AreEqual(1, await final.AdministrativeAudits.CountAsync(item =>
+            item.TargetId == target.Id.ToString() && item.Action == "staff_reactivated"));
+    }
+
+    [TestMethod]
+    public async Task AdministrationSettingsReadProjectsCustomRulesAndTemplateEditorLineage()
+    {
+        using var startup = factory!.CreateClient();
+        await startup.GetAsync("/api/asap/staff/session");
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var suffix = Guid.NewGuid().ToString("N");
+        var fieldKey = $"projection_{suffix}";
+        var sourceKey = $"rejection:projection_{suffix}";
+        var customKey = $"rejection:local_projection_{suffix}";
+        var field = new PatronCustomField
+        {
+            LibraryOrganizationId = 2,
+            FieldKey = fieldKey,
+            FieldType = "text",
+            Label = "Projection field",
+            IsEnabled = true
+        };
+        var source = new EmailTemplate
+        {
+            OrganizationId = 1,
+            TemplateKey = sourceKey,
+            DisplayName = "System rejection",
+            SubjectTemplate = "System subject",
+            BodyTemplate = "System body",
+            SortOrder = 90
+        };
+        var custom = new EmailTemplate
+        {
+            OrganizationId = 2,
+            TemplateKey = customKey,
+            DisplayName = "Local rejection",
+            SubjectTemplate = "Local subject",
+            BodyTemplate = "Local body",
+            IsCustom = true,
+            SortOrder = 91
+        };
+
+        try
+        {
+            await using (var seed = await contextFactory.CreateDbContextAsync())
+            {
+                seed.PatronCustomFields.Add(field);
+                seed.EmailTemplates.AddRange(source, custom);
+                await seed.SaveChangesAsync();
+                var book = await seed.MaterialFormats.SingleAsync(item => item.OwnerOrganizationId == 1 && item.Code == "book");
+                seed.MaterialFormatCustomFieldRules.Add(new MaterialFormatCustomFieldRule
+                {
+                    LibraryOrganizationId = 2,
+                    MaterialFormatId = book.Id,
+                    PatronCustomFieldId = field.Id,
+                    Mode = "required",
+                    LabelOverride = "Local projection label"
+                });
+                seed.EmailTemplates.Add(new EmailTemplate
+                {
+                    OrganizationId = 2,
+                    SourceTemplateId = source.Id,
+                    TemplateKey = sourceKey,
+                    BodyTemplate = "Local body override",
+                    IsCustom = false,
+                    SortOrder = 90
+                });
+                await seed.SaveChangesAsync();
+            }
+
+            await using var verify = await contextFactory.CreateDbContextAsync();
+            var rule = await verify.MaterialFormatCustomFieldRules.AsNoTracking()
+                .SingleAsync(item => item.PatronCustomFieldId == field.Id);
+            var scoped = await verify.EmailTemplates.AsNoTracking()
+                .SingleAsync(item => item.OrganizationId == 2 && item.SourceTemplateId == source.Id);
+            var libraryResult = await factory.Services.GetRequiredService<AdministrationService>()
+                .GetSettingsAsync(actor, "2", CancellationToken.None);
+            Assert.AreEqual("ok", libraryResult.Code);
+            var library = JsonSerializer.SerializeToElement(libraryResult.Data);
+            var projectedRule = library.GetProperty("stored").GetProperty("customFieldRules")
+                .EnumerateArray().Single(item => item.GetProperty("id").GetString() == rule.Id.ToString());
+            Assert.AreEqual(rule.MaterialFormatId.ToString(), projectedRule.GetProperty("materialFormatId").GetString());
+            Assert.AreEqual("book", projectedRule.GetProperty("formatCode").GetString());
+            Assert.AreEqual(field.Id.ToString(), projectedRule.GetProperty("patronCustomFieldId").GetString());
+            Assert.AreEqual(fieldKey, projectedRule.GetProperty("fieldKey").GetString());
+            Assert.AreEqual("required", projectedRule.GetProperty("mode").GetString());
+            Assert.AreEqual("Local projection label", projectedRule.GetProperty("labelOverride").GetString());
+            Assert.AreEqual(StaffVersion.Encode(rule.RowVersion), projectedRule.GetProperty("version").GetString());
+
+            var editor = library.GetProperty("templateEditor");
+            var inherited = editor.EnumerateArray().Single(item => item.GetProperty("referenceId").GetString() == source.Id.ToString());
+            Assert.AreEqual(scoped.Id.ToString(), inherited.GetProperty("id").GetString());
+            Assert.AreEqual(sourceKey, inherited.GetProperty("templateKey").GetString());
+            Assert.AreEqual(source.Id.ToString(), inherited.GetProperty("sourceTemplateId").GetString());
+            Assert.AreEqual("2", inherited.GetProperty("organizationId").GetString());
+            Assert.IsFalse(inherited.GetProperty("isCustom").GetBoolean());
+            Assert.AreEqual("System rejection", inherited.GetProperty("displayName").GetString());
+            Assert.AreEqual("System subject", inherited.GetProperty("subject").GetString());
+            Assert.AreEqual("Local body override", inherited.GetProperty("body").GetString());
+            Assert.IsTrue(inherited.GetProperty("enabled").GetBoolean());
+            Assert.IsTrue(inherited.GetProperty("hasOverride").GetBoolean());
+            Assert.IsTrue(inherited.GetProperty("canReset").GetBoolean());
+            Assert.IsTrue(inherited.GetProperty("subjectInherited").GetBoolean());
+            Assert.IsFalse(inherited.GetProperty("bodyInherited").GetBoolean());
+            Assert.IsTrue(inherited.GetProperty("nameInherited").GetBoolean());
+            Assert.AreEqual(StaffVersion.Encode(source.RowVersion), inherited.GetProperty("sourceVersion").GetString());
+            Assert.AreEqual(StaffVersion.Encode(scoped.RowVersion), inherited.GetProperty("version").GetString());
+
+            var local = editor.EnumerateArray().Single(item => item.GetProperty("referenceId").GetString() == custom.Id.ToString());
+            Assert.AreEqual(custom.Id.ToString(), local.GetProperty("id").GetString());
+            Assert.AreEqual(customKey, local.GetProperty("templateKey").GetString());
+            Assert.IsTrue(local.GetProperty("isCustom").GetBoolean());
+            Assert.IsFalse(local.GetProperty("hasOverride").GetBoolean());
+            Assert.AreEqual("Local subject", local.GetProperty("subject").GetString());
+
+            var systemResult = await factory.Services.GetRequiredService<AdministrationService>()
+                .GetSettingsAsync(actor, "system", CancellationToken.None);
+            Assert.AreEqual("ok", systemResult.Code);
+            var system = JsonSerializer.SerializeToElement(systemResult.Data);
+            Assert.AreEqual(0, system.GetProperty("stored").GetProperty("customFieldRules").GetArrayLength());
+            var systemEditor = system.GetProperty("templateEditor").EnumerateArray()
+                .Single(item => item.GetProperty("referenceId").GetString() == source.Id.ToString());
+            Assert.AreEqual(source.Id.ToString(), systemEditor.GetProperty("id").GetString());
+            Assert.AreEqual("System body", systemEditor.GetProperty("body").GetString());
+            Assert.IsFalse(systemEditor.GetProperty("hasOverride").GetBoolean());
+        }
+        finally
+        {
+            await using var cleanup = await contextFactory.CreateDbContextAsync();
+            await cleanup.MaterialFormatCustomFieldRules.Where(item => item.PatronCustomFieldId == field.Id).ExecuteDeleteAsync();
+            await cleanup.PatronCustomFields.Where(item => item.LibraryOrganizationId == 2 && item.FieldKey == fieldKey).ExecuteDeleteAsync();
+            await cleanup.EmailTemplates.Where(item => item.OrganizationId == 2 && item.TemplateKey == sourceKey).ExecuteDeleteAsync();
+            await cleanup.EmailTemplates.Where(item => item.OrganizationId == 2 && item.TemplateKey == customKey).ExecuteDeleteAsync();
+            await cleanup.EmailTemplates.Where(item => item.OrganizationId == 1 && item.TemplateKey == sourceKey).ExecuteDeleteAsync();
         }
     }
 

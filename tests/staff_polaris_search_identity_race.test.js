@@ -334,6 +334,7 @@ async function settle() {
     const unprocessedIdentifier = {
       isbnCheckStatus: 'not_found',
       isbnCheckResult: 'Identifier processing was not completed before this request left suggestions.',
+      identifierPresentation: 'not_completed',
       workflowTags: []
     };
     const unprocessedBadge = gridFilters.getIsbnCheckBadgesHtml(unprocessedIdentifier, {});
@@ -812,6 +813,8 @@ async function settle() {
     await flushDialogCloseEvents();
 
     // The current duplicate confirmation closes using the existing title-request version.
+    state.setCurrentSuggestions([{ ...title, version: 'original-version' }]);
+    state.setAllSuggestions([{ ...title, version: 'original-version' }]);
     setLinkedUrl(id);
     const ownedDuplicate = await confirmPendingAction(await openReadyEdit('Owned duplicate action'));
     ownedDuplicate.pending.resolve(response(409, {

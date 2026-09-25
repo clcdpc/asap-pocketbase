@@ -60,8 +60,10 @@ public sealed class TitleRequestMutationService(
 {
     private static readonly string[] IdentifierDerivedTagCodes =
         ["polaris_bib_found", "polaris_bib_not_found", "polaris_multiple_matches"];
-    private const string InterruptedIdentifierResult =
+    internal const string InterruptedIdentifierResult =
         "Identifier processing was not completed before this request left suggestions.";
+    internal const string UnverifiedSelectedBibIdentifierResult =
+        "Selected Polaris BIB has no catalog identifier; request identifier was not verified.";
     private sealed record ExplicitBibPreflight(string? Error = null, BibValidationResult? ValidatedBib = null);
     private readonly HashSet<Guid> allowedTenantIds = configuration.Authentication.Entra.AllowedTenantIds!
         .Select(Guid.Parse)
@@ -1240,7 +1242,7 @@ public sealed class TitleRequestMutationService(
             // identifier, not_found is the least misleading terminal value; the
             // result explains that no identifier/BIB match was established.
             request.IsbnCheckStatus = "not_found";
-            request.IsbnCheckResult = "Selected Polaris BIB has no catalog identifier; request identifier was not verified.";
+            request.IsbnCheckResult = UnverifiedSelectedBibIdentifierResult;
             request.LastCheckedUtc = DateTime.UtcNow;
         }
         request.IsbnCheckRetryCount = 0;

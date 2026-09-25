@@ -61,7 +61,7 @@ async function main() {
       return document.getElementById('ui-ebook-msg')?.value === 'Library eBook override before reset' &&
         document.getElementById('ui-eaudiobook-msg')?.value === 'Library eAudiobook override before reset' &&
         state.currentLibraryContextOrgId === '92329' &&
-        state.currentLegacySettingsFormModel?.contextOrgId === '92329';
+        state.currentLegacySettingsForm?.orgId === '92329';
     });
 
     const beforeResponse = await context.request.get(
@@ -90,7 +90,7 @@ async function main() {
       const { buildSettingsPayload } = await import('/staff/js/settings/serialize-save.js');
       return {
         ebookValue: document.getElementById('ui-ebook-msg').value,
-        ebookOverride: state.currentLegacySettingsFormModel?.provenance?.patronOverride?.ebookMessage,
+        loadedEbook: state.currentLegacySettingsForm?.uiText?.ebookMessage,
         payload: buildSettingsPayload()
       };
     });
@@ -98,7 +98,7 @@ async function main() {
     assert.equal(currentSerializerState.payload.ui_text.ebookMessage, '',
       `The actual DOM serializer must preserve the cleared message: ${JSON.stringify(currentSerializerState)}`);
     const postResponse = page.waitForResponse(response =>
-      response.url().endsWith('/api/asap/staff/settings/library') && response.request().method() === 'POST');
+      response.url().endsWith('/api/asap/staff/legacy/settings') && response.request().method() === 'POST');
     await page.locator('#settings-save-btn').click();
     const saved = await postResponse;
     assert.equal(saved.status(), 200, await saved.text());
@@ -131,7 +131,7 @@ async function main() {
 
     await page.waitForFunction(async () => {
       const state = await import('/staff/js/state.js');
-      return state.currentLegacySettingsFormModel?.contextOrgId === '92329' &&
+      return state.currentLegacySettingsForm?.orgId === '92329' &&
         document.getElementById('ui-ebook-msg')?.value === 'Closure ebook message' &&
         document.getElementById('ui-eaudiobook-msg')?.value === 'Library eAudiobook override intentionally edited';
     });

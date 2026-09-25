@@ -55,7 +55,7 @@ async function settle() {
           failRun = reject;
         });
       }
-      if (String(url) === '/api/asap/staff/session') {
+      if (String(url) === '/api/asap/staff/legacy/session') {
         sessionFetchCount += 1;
         const current = sessionResponses.shift() || {
           authenticated: true, accessAllowed: true, antiforgeryToken: 'workflow-test-token',
@@ -119,10 +119,10 @@ async function settle() {
     state.setCurrentLibraryContextOrgId('system');
     state.setCurrentWorkflowOrgScopeId('all');
     document.getElementById('workflow-library-scope').value = 'all';
-    state.staffSession.staff = state.normalizeSessionStaff({
+    state.staffSession.staff = {
       ...state.staffSession.staff,
       displayName: 'Updated profile'
-    });
+    };
     completeRun(response(202, { code: 'queued', jobId: 'job-2', organizationId: 2 }));
     await settle();
     assert.match(document.getElementById('job-msg').textContent, /queued.*Library 2/i,
@@ -200,7 +200,7 @@ async function settle() {
     button.click();
     await settle();
     assert.equal(calls.filter(call => call.url.includes('/workflow/run-now')).length, 6);
-    completeRun(response(400, { code: 'antiforgery_failed', message: 'Invalid request token' }));
+    completeRun(response(400, { code: 'antiforgery_failed', message: 'Invalid request token', operationPhase: 'rejected' }));
     await settle();
     assert.doesNotMatch(document.getElementById('job-msg').textContent, /may have been queued/i);
     assert.equal(button.disabled, false, 'known antiforgery rejection happens before enqueue');

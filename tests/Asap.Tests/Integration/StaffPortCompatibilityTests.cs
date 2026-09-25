@@ -1,8 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Asap.Web.Features.Email;
 using Asap.Web.Features.Patron;
 using Asap.Web.Features.Staff;
+using Asap.Web.Features.Staff.Compatibility;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Security;
 using Asap.Web.Infrastructure.Testing;
@@ -109,6 +111,7 @@ public sealed partial class PatronJourneyTests
     public async Task StaffPortExactBibLookupIncludesLegacyMetadata()
     {
         using var startup = factory!.CreateClient();
+        var holdStatus = "Active";
         var handler = new StaffSearchResponseHandler(uri => uri.AbsolutePath.EndsWith("holdings", StringComparison.Ordinal)
             ? """
               {"PAPIErrorCode":0,"BibHoldingsGetRows":[
@@ -118,9 +121,9 @@ public sealed partial class PatronJourneyTests
             : uri.AbsolutePath.Contains("authenticator/staff", StringComparison.OrdinalIgnoreCase)
                 ? "{\"PAPIErrorCode\":0,\"AccessToken\":\"protected-token\",\"AccessSecret\":\"secret\",\"AuthExpDate\":\"2035-01-01T00:00:00Z\"}"
             : uri.AbsolutePath.Contains("holdrequests", StringComparison.OrdinalIgnoreCase)
-                ? """
+                ? $$"""
                   {"PAPIErrorCode":0,"PatronHoldRequestsGetRows":[
-                    {"HoldRequestID":1,"BibID":123,"StatusDescription":"Active"},
+                    {"HoldRequestID":1,"BibID":123,"StatusDescription":"{{holdStatus}}"},
                     {"HoldRequestID":2,"BibID":124,"StatusDescription":"Cancelled"}]}
                   """
             : uri.AbsolutePath.Contains("organizations", StringComparison.OrdinalIgnoreCase)
@@ -163,6 +166,22 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(HttpStatusCode.OK, withPatron.StatusCode, await withPatron.Content.ReadAsStringAsync());
         using var checkedPatron = JsonDocument.Parse(await withPatron.Content.ReadAsStringAsync());
         Assert.AreEqual(29, checkedPatron.RootElement.GetProperty("patronHoldCheck").GetProperty("statusValue").GetInt32());
+        foreach (var (status, expectedWarning) in new[]
+                 {
+                     ("unclaimed", 0), ("cancelled", 0), ("expired", 0),
+                     ("filled", 29), ("deleted", 29), ("Active", 29)
+                 })
+        {
+            holdStatus = status;
+            using var checkedResponse = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", new
+            {
+                bibId = "123", barcode = "port-local", libraryOrgId = "91632"
+            });
+            Assert.AreEqual(HttpStatusCode.OK, checkedResponse.StatusCode);
+            using var checkedBody = JsonDocument.Parse(await checkedResponse.Content.ReadAsStringAsync());
+            Assert.AreEqual(expectedWarning,
+                checkedBody.RootElement.GetProperty("patronHoldCheck").GetProperty("statusValue").GetInt32(), status);
+        }
         using var ineligibleCode = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", new
         {
             bibId = "123", barcode = "port-restricted", libraryOrgId = "91632"
@@ -184,6 +203,48 @@ public sealed partial class PatronJourneyTests
         using var canceled = new CancellationTokenSource();
         canceled.Cancel();
         await Assert.ThrowsAsync<OperationCanceledException>(() => provider.GetBibHoldingsAsync(123, 2, canceled.Token));
+    }
+
+    [TestMethod]
+    [DataRow("missing", 404)]
+    [DataRow("empty", 404)]
+    [DataRow("http", 503)]
+    [DataRow("papi", 503)]
+    [DataRow("malformed", 503)]
+    public async Task StaffPortExactBibLookupDistinguishesAbsenceFromProviderFailure(string scenario, int expectedStatus)
+    {
+        var handler = new StaffSearchResponseHandler(uri =>
+            uri.AbsolutePath.Contains("authenticator", StringComparison.OrdinalIgnoreCase)
+                ? "{\"PAPIErrorCode\":0,\"AccessToken\":\"protected-token\",\"AccessSecret\":\"secret\",\"AuthExpDate\":\"2035-01-01T00:00:00Z\"}"
+                : scenario switch
+                {
+                    "missing" => "{\"PAPIErrorCode\":-1}",
+                    "empty" => "{\"PAPIErrorCode\":0,\"BibGetRows\":[]}",
+                    "papi" => "{\"PAPIErrorCode\":-999,\"BibGetRows\":[]}",
+                    "malformed" => "{\"BibGetRows\":[]}",
+                    _ => "{\"PAPIErrorCode\":0,\"BibGetRows\":[]}"
+                }, uri => scenario == "http" && !uri.AbsolutePath.Contains("authenticator", StringComparison.OrdinalIgnoreCase)
+                    ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.OK);
+        var provider = await CreatePolarisProviderAsync(handler);
+        if (expectedStatus == 404)
+        {
+            Assert.IsFalse((await provider.ValidateBibAsync(123, CancellationToken.None)).IsValid);
+        }
+        else
+        {
+            await Assert.ThrowsAsync<PolarisOperationalException>(() => provider.ValidateBibAsync(123, CancellationToken.None));
+        }
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => provider.ValidateBibAsync(123, canceled.Token));
+
+        await using var app = WithStaffPortProviders(provider);
+        using var client = await StaffPortClientAsync(app);
+        using var response = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", new { bibId = "123" });
+        Assert.AreEqual((HttpStatusCode)expectedStatus, response.StatusCode, await response.Content.ReadAsStringAsync());
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.AreEqual(expectedStatus == 404 ? "bib_not_found" : "bib_validation_unavailable",
+            body.RootElement.GetProperty("code").GetString());
     }
 
     [TestMethod]
@@ -495,6 +556,135 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(barcode == "port-restricted" ? "patron_code_forbidden" : "patron_library_forbidden",
                 document.RootElement.GetProperty("code").GetString());
         }
+    }
+
+    [TestMethod]
+    [DataRow("deactivate")]
+    [DataRow("authentication_email")]
+    [DataRow("move_library")]
+    [DataRow("demote_super_admin")]
+    [DataRow("unchanged")]
+    public async Task StaffPortCreationRevalidatesInitiatingActorAfterProviderWait(string change)
+    {
+        var superAdmin = await ReadConfiguredSuperAdminAsync();
+        using (var setupClient = await StaffPortClientAsync(factory!))
+        {
+            await ConfigureStaffPortLibraryAsync(setupClient, false);
+        }
+        var initialRole = change == "demote_super_admin" ? "super_admin" : "admin";
+        var initialOrganizationId = initialRole == "super_admin" ? 1 : 91632;
+        var actorRow = await CreateCorrectiveStaffAsync(superAdmin, initialRole, initialOrganizationId);
+        var actor = await ReadCorrectiveStaffAsync(actorRow);
+        var provider = new GatedStaffPortPatronProvider();
+        await using var app = WithStaffPortProviders(new StaffPortPatronProvider(), provider);
+        app.UseKestrel(0);
+        using var client = await StaffPortClientAsync(app, actor);
+        var input = StaffPortSuggestion("actor-race-" + Guid.NewGuid().ToString("N"));
+        var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var before = await contexts.CreateDbContextAsync();
+        var beforeRequests = await before.TitleRequests.CountAsync();
+        var beforeEvents = await before.TitleRequestEvents.CountAsync();
+        var beforeOutbox = await before.EmailOutbox.CountAsync();
+
+        var submission = client.PostAsJsonAsync("/api/asap/staff/suggestions", input);
+        try
+        {
+            await provider.Entered.WaitAsync(TimeSpan.FromSeconds(15));
+            var lifecycle = factory.Services.GetRequiredService<StaffLifecycleService>();
+            StaffLifecycleResult? changed = change switch
+            {
+                "deactivate" => await lifecycle.DeactivateAsync(superAdmin, actorRow.Id,
+                    new StaffDeactivateInput(StaffVersion.Encode(actorRow.RowVersion)), CancellationToken.None),
+                "authentication_email" => await lifecycle.UpdateMetadataAsync(superAdmin, actorRow.Id,
+                    new StaffMetadataInput(StaffVersion.Encode(actorRow.RowVersion),
+                        $"changed.{Guid.NewGuid():N}@example.org", actorRow.DisplayName, actorRow.NotificationEmail),
+                    CancellationToken.None),
+                "move_library" or "demote_super_admin" => await lifecycle.ChangeRoleAsync(superAdmin, actorRow.Id,
+                    new StaffRoleInput(StaffVersion.Encode(actorRow.RowVersion), "admin", 2), CancellationToken.None),
+                "unchanged" => null,
+                _ => throw new InvalidOperationException($"Unknown actor transition {change}.")
+            };
+            if (changed is not null)
+            {
+                Assert.AreEqual("updated", changed.Code, change);
+            }
+        }
+        finally
+        {
+            provider.Release();
+        }
+
+        using var response = await submission.WaitAsync(TimeSpan.FromSeconds(15));
+        var responseText = await response.Content.ReadAsStringAsync();
+        if (change == "unchanged")
+        {
+            Assert.AreEqual(HttpStatusCode.Created, response.StatusCode, responseText);
+            Assert.AreEqual(1, provider.PickupUpdates);
+            await using var saved = await contexts.CreateDbContextAsync();
+            Assert.IsTrue(await saved.TitleRequests.AnyAsync(item => item.Title == input.Title));
+            return;
+        }
+
+        Assert.IsTrue(response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden,
+            $"{change}: {response.StatusCode} {responseText}");
+        using var body = JsonDocument.Parse(responseText);
+        Assert.IsTrue(body.RootElement.GetProperty("code").GetString() is "staff_session_invalid" or "staff_scope_forbidden");
+        Assert.AreEqual(0, provider.PickupUpdates,
+            "A revoked actor must be denied before the differing preferred-pickup provider mutation begins.");
+        await using var after = await contexts.CreateDbContextAsync();
+        Assert.IsFalse(await after.TitleRequests.AnyAsync(item => item.Title == input.Title));
+        Assert.AreEqual(beforeRequests, await after.TitleRequests.CountAsync());
+        Assert.AreEqual(beforeEvents, await after.TitleRequestEvents.CountAsync());
+        Assert.AreEqual(beforeOutbox, await after.EmailOutbox.CountAsync());
+    }
+
+    [TestMethod]
+    public async Task StaffPortCreationRechecksActorInsideInsertAfterPickupAndReadinessWait()
+    {
+        var superAdmin = await ReadConfiguredSuperAdminAsync();
+        using (var setupClient = await StaffPortClientAsync(factory!))
+        {
+            await ConfigureStaffPortLibraryAsync(setupClient, false);
+        }
+        var actorRow = await CreateCorrectiveStaffAsync(superAdmin, "admin", 91632);
+        var actor = await ReadCorrectiveStaffAsync(actorRow);
+        var provider = new StaffPortPatronProvider();
+        var email = new GatedReadinessEmailSender();
+        await using var app = WithStaffPortProviders(provider, provider, email);
+        app.UseKestrel(0);
+        using var client = await StaffPortClientAsync(app, actor);
+        var input = StaffPortSuggestion("insert-race-" + Guid.NewGuid().ToString("N"));
+        var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var before = await contexts.CreateDbContextAsync();
+        var beforeRequests = await before.TitleRequests.CountAsync();
+        var beforeEvents = await before.TitleRequestEvents.CountAsync();
+        var beforeOutbox = await before.EmailOutbox.CountAsync();
+
+        var submission = client.PostAsJsonAsync("/api/asap/staff/suggestions", input);
+        try
+        {
+            await email.Entered.WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.AreEqual(1, provider.PickupUpdates,
+                "The provider pickup update completes before this transaction-boundary gate.");
+            var changed = await factory.Services.GetRequiredService<StaffLifecycleService>().DeactivateAsync(
+                superAdmin, actorRow.Id, new StaffDeactivateInput(StaffVersion.Encode(actorRow.RowVersion)),
+                CancellationToken.None);
+            Assert.AreEqual("updated", changed.Code);
+        }
+        finally
+        {
+            email.Release();
+        }
+
+        using var response = await submission.WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.AreEqual(HttpStatusCode.Unauthorized, response.StatusCode, await response.Content.ReadAsStringAsync());
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.AreEqual("staff_session_invalid", body.RootElement.GetProperty("code").GetString());
+        await using var after = await contexts.CreateDbContextAsync();
+        Assert.IsFalse(await after.TitleRequests.AnyAsync(item => item.Title == input.Title));
+        Assert.AreEqual(beforeRequests, await after.TitleRequests.CountAsync());
+        Assert.AreEqual(beforeEvents, await after.TitleRequestEvents.CountAsync());
+        Assert.AreEqual(beforeOutbox, await after.EmailOutbox.CountAsync());
     }
 
     [TestMethod]
@@ -1096,7 +1286,10 @@ public sealed partial class PatronJourneyTests
         }
     }
 
-    private WebApplicationFactory<Program> WithStaffPortProviders(IStaffPolarisProvider staff, IPatronProvider? patron = null) =>
+    private WebApplicationFactory<Program> WithStaffPortProviders(
+        IStaffPolarisProvider staff,
+        IPatronProvider? patron = null,
+        IEmailSender? email = null) =>
         factory!.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
         {
             services.RemoveAll<IStaffPolarisProvider>();
@@ -1105,6 +1298,11 @@ public sealed partial class PatronJourneyTests
             {
                 services.RemoveAll<IPatronProvider>();
                 services.AddSingleton(patron);
+            }
+            if (email is not null)
+            {
+                services.RemoveAll<IEmailSender>();
+                services.AddSingleton(email);
             }
         }));
 
@@ -1180,14 +1378,16 @@ public sealed partial class PatronJourneyTests
     private static StaffSuggestionInput StaffPortSuggestion(string barcode) => new(
         barcode, "Staff port " + Guid.NewGuid().ToString("N"), "Port author", null, "book", "Coming soon", null, "102", true, "91632");
 
-    private sealed class StaffSearchResponseHandler(Func<Uri, string> respond) : HttpMessageHandler
+    private sealed class StaffSearchResponseHandler(
+        Func<Uri, string> respond,
+        Func<Uri, HttpStatusCode>? responseStatus = null) : HttpMessageHandler
     {
         public List<Uri> Requests { get; } = [];
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Requests.Add(request.RequestUri!);
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            return Task.FromResult(new HttpResponseMessage(responseStatus?.Invoke(request.RequestUri!) ?? HttpStatusCode.OK)
             {
                 Content = new StringContent(respond(request.RequestUri!)), RequestMessage = request
             });
@@ -1253,5 +1453,68 @@ public sealed partial class PatronJourneyTests
                 : inner.GetPatronHoldsAsync(barcode, token);
         public Task<HoldProviderResult> CreateHoldAsync(HoldCreateCommand command, CancellationToken token) => inner.CreateHoldAsync(command, token);
         public Task<HoldProviderResult> ReplyToHoldAsync(HoldReplyCommand command, CancellationToken token) => inner.ReplyToHoldAsync(command, token);
+    }
+
+    private sealed class GatedStaffPortPatronProvider : IPatronProvider
+    {
+        private readonly DeterministicTestingPatronProvider inner = new();
+        private readonly TaskCompletionSource<bool> entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int pickupUpdates;
+
+        public Task Entered => entered.Task;
+        public int PickupUpdates => pickupUpdates;
+        public void Release() => released.TrySetResult(true);
+
+        public async Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
+        {
+            var patron = await inner.RefreshAsync(barcode, cancellationToken);
+            entered.TrySetResult(true);
+            await released.Task.WaitAsync(cancellationToken);
+            return patron with { HomeLibraryOrganizationId = 91632, PatronCodeId = "1" };
+        }
+
+        public Task<PatronSnapshot> AuthenticateAsync(string barcode, string pin, CancellationToken token) =>
+            inner.AuthenticateAsync(barcode, pin, token);
+        public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(PatronSnapshot patron, CancellationToken token) =>
+            inner.GetPickupBranchesAsync(patron, token);
+        public Task UpdatePreferredPickupBranchAsync(string barcode, int pickupBranchId, CancellationToken token)
+        {
+            Interlocked.Increment(ref pickupUpdates);
+            return inner.UpdatePreferredPickupBranchAsync(barcode, pickupBranchId, token);
+        }
+        public Task<IdentifierLookupResult> LookupIdentifierAsync(string identifier, CancellationToken token) =>
+            inner.LookupIdentifierAsync(identifier, token);
+        public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken token) =>
+            inner.ValidateBibAsync(bibId, token);
+        public Task<StaffBibHoldingsSummary> GetBibHoldingsAsync(int bibId, int organizationId, CancellationToken token) =>
+            inner.GetBibHoldingsAsync(bibId, organizationId, token);
+        public Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(string barcode, CancellationToken token) =>
+            inner.GetPatronHoldsAsync(barcode, token);
+        public Task<HoldProviderResult> CreateHoldAsync(HoldCreateCommand command, CancellationToken token) =>
+            inner.CreateHoldAsync(command, token);
+        public Task<HoldProviderResult> ReplyToHoldAsync(HoldReplyCommand command, CancellationToken token) =>
+            inner.ReplyToHoldAsync(command, token);
+    }
+
+    private sealed class GatedReadinessEmailSender : IEmailSender
+    {
+        private readonly TaskCompletionSource<bool> entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Entered => entered.Task;
+        public void Release() => released.TrySetResult(true);
+
+        public async Task<EmailTransportReadiness> CheckReadinessAsync(
+            int organizationId,
+            CancellationToken cancellationToken)
+        {
+            entered.TrySetResult(true);
+            await released.Task.WaitAsync(cancellationToken);
+            return EmailTransportReadiness.NotConfigured;
+        }
+
+        public Task<EmailSendResult> SendAsync(EmailEnvelope envelope, CancellationToken cancellationToken) =>
+            Task.FromResult(EmailSendResult.NotConfigured);
     }
 }

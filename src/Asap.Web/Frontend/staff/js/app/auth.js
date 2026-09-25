@@ -12,6 +12,11 @@ import { createLatestLoad } from '../../../shared/latest-load.js';
 import { isAbortError } from '../../../shared/http.js';
 
 const emailStatusLoads = createLatestLoad();
+let profileDialogGeneration = 0;
+
+export function currentProfileDialogGeneration() {
+  return profileDialogGeneration;
+}
 
 export function staffRole() {
   return staffSession.staff ? String(staffSession.staff.role || '').toLowerCase() : '';
@@ -136,10 +141,13 @@ export function clearAppliedProfileClaimFilterDefault() {
 }
 
 export function openProfileDialog() {
+  profileDialogGeneration += 1;
   closeOpenDialogs();
   const dialog = document.getElementById('profile-dialog');
   if (!dialog) return;
   const msg = document.getElementById('profile-msg');
+  const saveButton = document.getElementById('profile-save');
+  if (saveButton) saveButton.disabled = false;
   if (msg) {
     msg.textContent = '';
     msg.className = 'mb-3 font-weight-bold';

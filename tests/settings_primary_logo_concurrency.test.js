@@ -4,6 +4,7 @@ const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { JSDOM } = require('jsdom');
+const { projectLegacySettingsFixture } = require('./helpers/legacy-settings-fixture.cjs');
 
 function response(status, body) {
   return {
@@ -23,7 +24,11 @@ function settingsData(version, altText) {
   result.stored.branding = { ...result.stored.branding, altText, version: `branding-${version}` };
   result.stored.libraryOverride.branding = { ...result.stored.libraryOverride.branding, altText, version: `branding-${version}` };
   result.effective.logoAltText = altText;
-  return result;
+  const form = projectLegacySettingsFixture(result);
+  form.uiText.logoAlt = altText;
+  form.uiText.logoUrl = result.effective.logoUrl;
+  form.uiText.brandingInherited = false;
+  return form;
 }
 
 async function flush() {
@@ -65,7 +70,7 @@ async function flush() {
       authenticated: true,
       accessAllowed: true,
       antiforgeryToken: 'test-token',
-      staff: { id: '27', role: 'admin', organizationId: '2', organizationName: 'Library Two', userPrincipalName: 'admin@example.org' }
+      staff: { id: '27', role: 'admin', libraryOrgId: '2', libraryName: 'Library Two', email: 'admin@example.org' }
     });
 
     let serverVersion = 'version-1';
@@ -86,7 +91,7 @@ async function flush() {
     let nextConfigReadFails = false;
     global.fetch = async (url, options = {}) => {
       const requestUrl = String(url);
-      if (requestUrl.includes('/api/asap/staff/settings/library?orgId=2')) {
+      if (requestUrl.includes('/api/asap/staff/legacy/settings?orgId=2')) {
         settingsReads++;
         if (deferNextLibrarySettingsRead) {
           deferNextLibrarySettingsRead = false;
@@ -100,7 +105,7 @@ async function flush() {
         }
         return response(200, settingsData(serverVersion, serverAltText));
       }
-      if (requestUrl.includes('/api/asap/staff/polaris/patron-codes')) return response(200, { code: 'ok', data: [] });
+      if (requestUrl.includes('/api/asap/staff/legacy/patron-codes')) return response(200, []);
       if (requestUrl.startsWith('/api/asap/staff/users')) return response(200, { users: [] });
       if (requestUrl === '/api/asap/config') {
         configReads++;
@@ -120,13 +125,13 @@ async function flush() {
           serverVersion = 'version-13';
           serverAltText = 'Authoritative alt after failed stale library reset';
           nextLibrarySettingsReadFails = true;
-          return response(409, { code: 'stale_version', message: 'These settings changed in another session.' });
+          return response(409, { code: 'stale_version', message: 'These settings changed in another session.', operationPhase: 'rejected' });
         }
         if (nextLibraryResetIsStale) {
           nextLibraryResetIsStale = false;
           serverVersion = 'version-6';
           serverAltText = 'Latest Settings after stale reset';
-          return response(409, { code: 'stale_version', message: 'These settings changed in another session.' });
+          return response(409, { code: 'stale_version', message: 'These settings changed in another session.', operationPhase: 'rejected' });
         }
         if (libraryResets.length === 3) {
           serverVersion = 'version-7';
@@ -158,14 +163,14 @@ async function flush() {
           serverVersion = 'version-11';
           serverAltText = 'Authoritative alt after failed stale upload';
           nextLibrarySettingsReadFails = true;
-          return response(409, { code: 'stale_version', message: 'These settings changed in another session.' });
+          return response(409, { code: 'stale_version', message: 'These settings changed in another session.', operationPhase: 'rejected' });
         }
         if (nextLogoResetStaleReadFails && method === 'DELETE') {
           nextLogoResetStaleReadFails = false;
           serverVersion = 'version-12';
           serverAltText = 'Authoritative alt after failed stale logo reset';
           nextLibrarySettingsReadFails = true;
-          return response(409, { code: 'stale_version', message: 'These settings changed in another session.' });
+          return response(409, { code: 'stale_version', message: 'These settings changed in another session.', operationPhase: 'rejected' });
         }
 
         if (method === 'POST' && logoMutations.length === 1) {
@@ -176,12 +181,12 @@ async function flush() {
         if (method === 'DELETE' && logoMutations.length === 2) {
           serverVersion = 'version-3';
           serverAltText = 'Library alt after another session';
-          return response(409, { code: 'stale_version', message: 'These settings changed in another session.' });
+          return response(409, { code: 'stale_version', message: 'These settings changed in another session.', operationPhase: 'rejected' });
         }
         if (method === 'POST' && logoMutations.length === 3) {
           serverVersion = 'version-4';
           serverAltText = 'Latest logo alt after the stale upload';
-          return response(409, { code: 'stale_version', message: 'These settings changed in another session.' });
+          return response(409, { code: 'stale_version', message: 'These settings changed in another session.', operationPhase: 'rejected' });
         }
         if (method === 'POST' && logoMutations.length === 4) {
           serverVersion = 'version-8';

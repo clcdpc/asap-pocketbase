@@ -39,7 +39,7 @@ export async function syncPolarisOrganizations(options = {}) {
     if (!contextIsCurrent()) return null;
     syncSucceeded = true;
     setSettingsReloadRequired(true);
-    const count = result.synced || 0;
+    const count = result.data?.changed || 0;
     updateOrganizationsStatusUi('loaded', `Polaris organizations loaded successfully. ${count} organization record${count === 1 ? '' : 's'} synced. Unchecked libraries do not participate.`);
     let settingsRefreshError = null;
     const refreshStartSerial = libraryContextLoadSerial;

@@ -1,4 +1,5 @@
-import { additionalFieldDefinitions, setAdditionalFieldDefinitions } from './state.js';
+import { additionalFieldDefinitions, currentAdditionalFieldDefinitions, currentFormatRules, setAdditionalFieldDefinitions } from './state.js';
+import { collectPatronFormatRules, renderPatronFormatRulesEditor } from './settings-ui.js';
 
 function option(value, label) {
   return new Option(label || value, value);
@@ -221,7 +222,20 @@ document.addEventListener('input', event => {
 
 document.addEventListener('change', event => {
   if (event.target.closest && event.target.closest('#additional-fields-editor')) {
+    const enabledField = event.target.classList.contains('additional-field-enabled-check')
+      ? event.target.closest('.additional-field-row')?.getAttribute('data-field-key') : null;
+    const wasDisabled = enabledField && currentAdditionalFieldDefinitions.find(field => field.key === enabledField)?.enabled === false;
+    const editedRules = enabledField ? collectPatronFormatRules() : null;
     syncFromDom();
+    if (enabledField) {
+      if (wasDisabled && additionalFieldDefinitions.find(field => field.key === enabledField)?.enabled !== false) {
+        Object.entries(editedRules).forEach(([format, rule]) => {
+          const preserved = currentFormatRules?.[format]?.customFields?.[enabledField];
+          if (preserved) rule.customFields[enabledField] = structuredClone(preserved);
+        });
+      }
+      renderPatronFormatRulesEditor(editedRules);
+    }
     if (event.target.classList.contains('additional-field-type-select')) {
       rerenderAndDirty();
     }

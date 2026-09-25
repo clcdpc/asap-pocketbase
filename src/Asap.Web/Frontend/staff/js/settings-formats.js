@@ -1,4 +1,4 @@
-import { formatMap, availableFormats, setAvailableFormats, currentFormatClaimRules, setCurrentFormatClaimRules, formatClaimStaffOptions, currentLibraryContextOrgId, currentLegacySettingsFormModel, addDeletedSettingsFormat } from './state.js';
+import { formatMap, availableFormats, setAvailableFormats, currentFormatClaimRules, setCurrentFormatClaimRules, formatClaimStaffOptions, currentLibraryContextOrgId, currentLegacySettingsForm, addDeletedSettingsFormat } from './state.js';
 
 import { setInlineStatus, markSettingsDirty } from './api.js';
 import { showConfirm, showToast } from './dialogs.js';
@@ -15,7 +15,7 @@ export function renderFormatSettings() {
   // Compute patron position for enabled formats
   let patronPos = 0;
   const patronPositions = {};
-  allKeys.forEach(key => {
+  allKeys.forEach((key, index) => {
     if (availableFormats.includes(key)) {
       patronPos++;
       patronPositions[key] = patronPos;
@@ -64,12 +64,15 @@ export function renderFormatSettings() {
   tbody.id = 'format-settings-body';
   const claimByFormat = formatClaimRulesByFormat();
 
-  allKeys.forEach(key => {
+  allKeys.forEach((key, index) => {
     const isEnabled = availableFormats.includes(key);
     const pos = patronPositions[key];
     const tr = document.createElement('tr');
     tr.className = `format-setting-row${isEnabled ? '' : ' text-muted'}`;
     tr.setAttribute('data-key', key);
+    const loaded = currentLegacySettingsForm?.formats?.find(format => format.code === key);
+    tr.setAttribute('data-original-index', String(index));
+    tr.setAttribute('data-sort-order', String(loaded?.sortOrder ?? (index + 1) * 10));
     tr.draggable = true;
 
     const dragTd = document.createElement('td');
@@ -116,8 +119,8 @@ export function renderFormatSettings() {
     input.className = 'form-control form-control-sm format-label-input w-100';
     input.value = formatMap[key] || key;
     labelWrap.appendChild(input);
-    const existing = currentLegacySettingsFormModel?.formats?.find(format => format.code === key);
-    const canRemove = !isSystem && (!existing || String(existing.ownerOrganizationId || '') === String(currentLibraryContextOrgId));
+    const existing = currentLegacySettingsForm?.formats?.find(format => format.code === key);
+    const canRemove = !isSystem && (!existing || existing.canDelete === true);
     if (canRemove && !['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'].includes(key)) {
       const remove = document.createElement('button');
       remove.type = 'button';
@@ -280,9 +283,6 @@ export function updateFormatClaimRuleState(format, staffUserId) {
 }
 
 export function collectFormatClaimRules() {
-  if (currentLegacySettingsFormModel && !currentLegacySettingsFormModel.autoClaimStateTrusted) {
-    return undefined;
-  }
   const byFormat = {};
 
   // Start with in-memory state so assignments made in the Staff tab are preserved.
@@ -310,15 +310,12 @@ export function collectFormatClaimRules() {
     }
   });
 
-  const formatIds = new Map((currentLegacySettingsFormModel?.formats || []).map(format => [format.code, String(format.id || '')]));
   return Object.keys(byFormat)
     .filter(format => byFormat[format].staffUserId)
     .map(format => ({
-      materialFormatId: String(byFormat[format].materialFormatId || formatIds.get(format) || ''),
-      staffUserId: String(byFormat[format].staffUserId),
-      active: true
-    }))
-    .filter(rule => rule.materialFormatId);
+      format,
+      staffUserId: String(byFormat[format].staffUserId)
+    }));
 }
 
 export function updateModalFormatDropdowns() {
@@ -427,13 +424,12 @@ if (formatSettingsContainer) {
     if (e.target.classList.contains('btn-remove-format')) {
       const row = e.target.closest('tr');
       const key = row.getAttribute('data-key');
-      const existing = currentLegacySettingsFormModel?.formats?.find(format => format.code === key);
-      const isLibraryCustom = currentLibraryContextOrgId !== 'system' && existing &&
-        String(existing.ownerOrganizationId || '') === String(currentLibraryContextOrgId);
+      const existing = currentLegacySettingsForm?.formats?.find(format => format.code === key);
+      const isLibraryCustom = currentLibraryContextOrgId !== 'system' && existing?.canDelete === true;
       if (!isLibraryCustom && existing) return;
       if (await showConfirm('Delete custom format', `Delete format "${key}"? Existing suggestions with this format will remain, but the custom format will be removed after you save.`)) {
-        if (isLibraryCustom && existing.id) {
-          addDeletedSettingsFormat({ id: String(existing.id), version: String(existing.version || '') });
+        if (isLibraryCustom) {
+          addDeletedSettingsFormat({ code: key, version: String(existing.version || '') });
         }
         delete formatMap[key];
         setAvailableFormats(availableFormats.filter(k => k !== key));

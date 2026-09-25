@@ -27,7 +27,7 @@ async function populateNewSuggestionLibrarySelector() {
   select.appendChild(placeholder);
 
   try {
-    const orgs = await authorizedJson('/api/asap/staff/organizations');
+    const orgs = await authorizedJson('/api/asap/staff/legacy/organizations');
 
     orgs.forEach(org => {
       const opt = document.createElement('option');

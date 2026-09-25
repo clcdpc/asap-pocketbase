@@ -4863,9 +4863,12 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task StaffExplicitBibChangeRequiresProviderValidationBeforeLocalMutation()
+    [DataRow(false, 400, "bib_not_found")]
+    [DataRow(true, 503, "bib_validation_unavailable")]
+    public async Task StaffExplicitBibChangeRequiresProviderValidationBeforeLocalMutation(
+        bool operationalFailure, int expectedStatus, string expectedCode)
     {
-        var rejectingProvider = new RejectingBibStaffProvider();
+        var rejectingProvider = new RejectingBibStaffProvider(operationalFailure);
         await using var rejectingFactory = factory!.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
             {
@@ -4920,10 +4923,15 @@ public sealed partial class PatronJourneyTests
             $"/api/asap/staff/title-requests/{requestId}/action",
             new { version, action = "edit", status = "suggestion", bibid = "7777" });
 
-        Assert.AreEqual(HttpStatusCode.BadRequest, update.StatusCode, await update.Content.ReadAsStringAsync());
+        Assert.AreEqual((HttpStatusCode)expectedStatus, update.StatusCode, await update.Content.ReadAsStringAsync());
         using var updateBody = JsonDocument.Parse(await update.Content.ReadAsStringAsync());
-        Assert.AreEqual("bib_not_found", updateBody.RootElement.GetProperty("code").GetString());
+        Assert.AreEqual(expectedCode, updateBody.RootElement.GetProperty("code").GetString());
         Assert.AreEqual(1, rejectingProvider.ValidationCount);
+
+        using var unchanged = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}");
+        using var unchangedBody = JsonDocument.Parse(await unchanged.Content.ReadAsStringAsync());
+        Assert.AreEqual(version, unchangedBody.RootElement.GetProperty("version").GetString(),
+            "rejected BIB validation must not update the request rowversion");
 
         await using var verify = new SqlConnection(databaseConnectionString);
         await verify.OpenAsync();
@@ -9836,7 +9844,9 @@ public sealed partial class PatronJourneyTests
             emailSender ?? new RecordingEmailSender(),
             new RecipientDomainPolicy(configuration),
             TimeProvider.System,
-            NullLogger<PatronSuggestionService>.Instance);
+            NullLogger<PatronSuggestionService>.Instance,
+            factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>(),
+            factory.Services.GetRequiredService<StaffEligibilityService>());
     }
 
     private static PatronSuggestionInput Suggestion(string title) =>
@@ -10624,7 +10634,7 @@ public sealed partial class PatronJourneyTests
             HoldReplyCommand command, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
-    private sealed class RejectingBibStaffProvider : IStaffPolarisProvider
+    private sealed class RejectingBibStaffProvider(bool operationalFailure = false) : IStaffPolarisProvider
     {
         public int ValidationCount { get; private set; }
 
@@ -10632,6 +10642,10 @@ public sealed partial class PatronJourneyTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             ValidationCount++;
+            if (operationalFailure)
+            {
+                throw new PolarisOperationalException("polaris_bib_validation_failed", "Provider unavailable");
+            }
             return Task.FromResult(new BibValidationResult(false));
         }
 

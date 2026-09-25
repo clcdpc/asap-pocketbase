@@ -54,6 +54,7 @@ function decodeByteArray(value) {
 export function normalizeOptionList(options, fallbackLabels) {
   const fallback = (fallbackLabels || []).map((label, index) => ({ id: optionIdFromLabel(label, `option_${index + 1}`), label, enabled: true, sortOrder: (index + 1) * 10 }));
   let raw = [];
+  let explicitList = Array.isArray(options);
   const decoded = decodeByteArray(options);
   if (decoded !== null) options = decoded;
   if (Array.isArray(options)) {
@@ -64,6 +65,7 @@ export function normalizeOptionList(options, fallbackLabels) {
       try {
         const parsed = JSON.parse(text);
         raw = Array.isArray(parsed) ? parsed : [];
+        explicitList = Array.isArray(parsed);
       } catch (err) {
         raw = [];
       }
@@ -87,7 +89,7 @@ export function normalizeOptionList(options, fallbackLabels) {
     normalized.push({ id, label, enabled: obj.enabled !== false, sortOrder: Number(obj.sortOrder || ((index + 1) * 10)) });
   });
   normalized.sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
-  return normalized.length ? normalized : fallback;
+  return normalized.length || explicitList ? normalized : fallback;
 }
 
 export function enabledOptionLabels(options, fallbackLabels) {
@@ -97,15 +99,18 @@ export function enabledOptionLabels(options, fallbackLabels) {
 export function updatePublicationOptionsUi(options) {
   const normalized = enabledOptionLabels(options, defaultPublicationOptions);
   document.querySelectorAll('.publication-options-select').forEach(select => {
-    const val = select.value || normalized[0];
-    select.innerHTML = '';
+    const val = select.value;
+    select.replaceChildren();
     normalized.forEach(opt => {
       const el = document.createElement('option');
       el.value = opt;
       el.textContent = opt;
       select.appendChild(el);
     });
-    select.value = normalized.includes(val) ? val : normalized[0];
+    if (val && !normalized.includes(val)) {
+      select.appendChild(new Option(val, val));
+    }
+    select.value = val || normalized[0] || '';
   });
 }
 
@@ -177,7 +182,7 @@ export function renderOptionListEditor(editorId, options, fallbackLabels) {
 
 export function collectOptionList(editorId, fallbackLabels) {
   const editor = document.getElementById(editorId);
-  if (!editor) return normalizeOptionList([], fallbackLabels);
+  if (!editor) return normalizeOptionList(undefined, fallbackLabels);
   const seen = new Set();
   const rows = Array.from(editor.querySelectorAll('.option-list-row'));
   const orderChanged = rows.some((row, index) => Number(row.getAttribute('data-original-index')) !== index);
@@ -196,7 +201,6 @@ export function collectOptionList(editorId, fallbackLabels) {
       sortOrder: orderChanged ? (index + 1) * 10 : Number(row.getAttribute('data-sort-order') || ((index + 1) * 10))
     };
   }).filter(Boolean);
-  if (!options.length) throw new Error('Each option list must include at least one label.');
   return options;
 }
 

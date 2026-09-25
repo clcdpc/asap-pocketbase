@@ -13,7 +13,7 @@ public sealed class StaffAntiforgeryFilter(IAntiforgery antiforgery) : IEndpoint
         catch (AntiforgeryValidationException)
         {
             return Results.Json(
-                new { code = "antiforgery_failed", message = "The request security token is missing or invalid." },
+                new { code = "antiforgery_failed", message = "The request security token is missing or invalid.", operationPhase = "rejected" },
                 statusCode: StatusCodes.Status400BadRequest);
         }
 

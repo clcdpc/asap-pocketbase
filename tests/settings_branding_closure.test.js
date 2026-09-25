@@ -4,6 +4,7 @@ const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { JSDOM } = require('jsdom');
+const { projectLegacySettingsFixture } = require('./helpers/legacy-settings-fixture.cjs');
 
 function response(status, body) {
   return { ok: status >= 200 && status < 300, status, statusText: status === 503 ? 'Unavailable' : 'OK', json: async () => body };
@@ -43,7 +44,7 @@ async function flush() {
       authenticated: true,
       accessAllowed: true,
       antiforgeryToken: 'test-token',
-      staff: { id: '27', role: 'admin', organizationId: '2', organizationName: 'Library Two', userPrincipalName: 'admin@example.org' }
+      staff: { id: '27', role: 'admin', libraryOrgId: '2', libraryName: 'Library Two', email: 'admin@example.org' }
     });
 
     const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'settings', 'canonical-library-settings-response.json'), 'utf8'));
@@ -75,19 +76,24 @@ async function flush() {
       data.effective.logoUrl = libraryHasLogo ? '/library-logo.png' : '/system-logo.png';
       data.effective.loginNote = loginNote;
       data.ui_text.loginNote = loginNote;
-      return data;
+      const form = projectLegacySettingsFixture(data);
+      form.uiText.logoAlt = libraryAlt ?? systemAlt;
+      form.uiText.logoUrl = data.effective.logoUrl;
+      form.uiText.brandingInherited = !libraryHasLogo && libraryAlt === null;
+      form.uiText.loginNote = loginNote;
+      return form;
     }
 
     global.fetch = async (url, options = {}) => {
       const requestUrl = String(url);
-      if (requestUrl.includes('/api/asap/staff/settings/library?orgId=2')) {
+      if (requestUrl.includes('/api/asap/staff/legacy/settings?orgId=2')) {
         if (nextSettingsReadFails) {
           nextSettingsReadFails = false;
           return response(503, { code: 'settings_unavailable', message: 'Settings unavailable.' });
         }
         return response(200, settingsData());
       }
-      if (requestUrl === '/api/asap/staff/settings/library' && options.method === 'POST') {
+      if (requestUrl === '/api/asap/staff/legacy/settings' && options.method === 'POST') {
         const payload = JSON.parse(options.body);
         settingsMutations.push(payload);
         loginNote = payload.ui_text.loginNote;
@@ -111,7 +117,7 @@ async function flush() {
           ? response(503, { code: 'config_unavailable', message: 'Config unavailable.' })
           : response(200, { logoUrl: '/app-logo.png', logoAlt: configAlt, publicationOptions: [] });
       }
-      if (requestUrl.includes('/api/asap/staff/polaris/patron-codes')) return response(200, { code: 'ok', data: [] });
+      if (requestUrl.includes('/api/asap/staff/legacy/patron-codes')) return response(200, []);
       if (requestUrl.startsWith('/api/asap/staff/users')) return response(200, { users: [] });
       throw new Error(`Unexpected request: ${requestUrl}`);
     };
@@ -124,7 +130,7 @@ async function flush() {
     const loginNoteInput = document.getElementById('ui-login-note');
     const saveButton = document.getElementById('settings-save-btn');
     assert.strictEqual(alt.value, systemAlt);
-    assert.strictEqual(state.currentLegacySettingsFormModel.provenance.libraryBranding.altText, null);
+    assert.strictEqual(state.currentLegacySettingsForm.uiText.brandingInherited, true);
 
     // JSDOM does not implement the file picker. Model its FileList, including native clearing via input.value = ''.
     let selectedFile = null;
@@ -272,7 +278,7 @@ async function flush() {
     await flush();
     assert.strictEqual(libraryAlt, null);
     assert.strictEqual(libraryHasLogo, false);
-    assert.strictEqual(state.currentLegacySettingsFormModel.provenance.libraryBranding.version, null);
+    assert.strictEqual(state.currentLegacySettingsForm.uiText.brandingInherited, true);
     assert.strictEqual(document.getElementById('ui-branding-status').textContent, 'System Default');
     assert.strictEqual(document.getElementById('btn-reset-logo').classList.contains('hidden'), true);
     assert.strictEqual(alt.value, systemAlt);

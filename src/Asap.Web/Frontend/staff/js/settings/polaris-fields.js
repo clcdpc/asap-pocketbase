@@ -181,7 +181,7 @@ export async function renderLibraryParticipationCheckboxes() {
   }
 
   try {
-    const values = await authorizedJson('/api/asap/staff/organizations');
+    const values = await authorizedJson('/api/asap/staff/legacy/organizations');
     if (renderSerial !== participationRenderSerial || statusSerial !== organizationsStatusSerial ||
         contextOrgId !== currentLibraryContextOrgId || contextSerial !== libraryContextLoadSerial) return;
     const activeOrganizationIds = new Set(values

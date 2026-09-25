@@ -1,5 +1,5 @@
 import { setFieldValue, setFieldChecked, setVisible, updateLibraryOverrideStatusVisibility, loadEmailStatus, updateOrganizationsStatusUi, activateSettingsSection, updateAutoRejectEmailControls } from '../api.js';
-import { currentLibraryContextOrgId, currentSettingsSection, settingsLoading, formatMap, availableFormats, setAvailableFormats, workflowSettings, defaultPublicationOptions, setCurrentFormatClaimRules, setFormatClaimStaffOptions, setLeapBibUrlPattern, setLeapPatronUrlPattern, leapBibUrlPattern, leapPatronUrlPattern, setAdditionalFieldDefinitions, setCurrentPatronFieldConfig, setCurrentLegacySettingsFormModel, setDeletedSettingsFormats } from '../state.js';
+import { currentLibraryContextOrgId, currentSettingsSection, settingsLoading, formatMap, availableFormats, setAvailableFormats, workflowSettings, defaultPublicationOptions, setCurrentFormatClaimRules, setFormatClaimStaffOptions, setLeapBibUrlPattern, setLeapPatronUrlPattern, leapBibUrlPattern, leapPatronUrlPattern, setAdditionalFieldDefinitions, setCurrentPatronFieldConfig, setCurrentLegacySettingsForm, setDeletedSettingsFormats } from '../state.js';
 import { toggleTimeoutGroup, toggleHoldPickupTimeoutGroup, togglePendingHoldTimeoutGroup, toggleAdditionalCopyTimeoutGroup, toggleCommonAuthorsGroup } from './toggles.js';
 import { renderFormatSettings, updateModalFormatDropdowns } from '../settings-formats.js';
 import { renderDuplicateStatusLabelSettings } from './duplicate-labels.js';
@@ -9,7 +9,7 @@ import { renderAdditionalFieldsEditor } from '../settings-additional-fields.js';
 import { populatePolarisSettingsForm, renderLibraryParticipationCheckboxes } from './polaris-fields.js';
 import { renderPatronCodeEligibilityOptions, setPatronCodeEligibilityMode, updatePatronCodesStatusUi } from './patron-codes.js';
 import { updateSaveButtonText } from './save-ui.js';
-import { buildLegacySettingsFormModel, patronFormDefaults, systemMessageFormDefaults } from './legacy-form-model.js';
+import { patronFormDefaults, systemMessageFormDefaults } from './form-defaults.js';
 
 function patronPortalUrl(orgId, embed) {
   const url = new URL('/patron/', window.location.origin);
@@ -65,14 +65,14 @@ function updatePatronEmbedSnippet(settings) {
 }
 
 export function buildWorkflowFormState(settings) {
-  return buildLegacySettingsFormModel(settings, currentLibraryContextOrgId).workflow;
+  return settings?.workflow || {};
 }
 
 export function applyLibrarySettingsToForm(settings) {
   settings = settings || {};
   let participationLoad = Promise.resolve();
-  const model = buildLegacySettingsFormModel(settings, currentLibraryContextOrgId);
-  setCurrentLegacySettingsFormModel(model);
+  const model = settings;
+  setCurrentLegacySettingsForm(model);
   setDeletedSettingsFormats([]);
   const isOverride = model.isOverride;
   const emails = model.emails;
@@ -238,17 +238,6 @@ export function populateWorkflowForms(wf, providers = []) {
   setFieldChecked('wf-external-search-4-enabled', !!wf.externalSearch4Enabled);
   setFieldValue('wf-external-search-4-label', wf.externalSearch4Label || '');
   setFieldValue('wf-external-search-4-url-template', wf.externalSearch4UrlTemplate || '');
-
-  const providerKeys = new Set(providers.map(provider => provider.key));
-  for (let index = 1; index <= 4; index++) {
-    const exists = providerKeys.has(`external_search_${index}`);
-    const enabled = document.getElementById(`wf-external-search-${index}-enabled`);
-    const label = document.getElementById(`wf-external-search-${index}-label`);
-    const url = document.getElementById(`wf-external-search-${index}-url-template`);
-    const row = enabled?.closest('.form-row');
-    if (row) row.classList.toggle('hidden', !exists);
-    [enabled, label, url].forEach(control => { if (control) control.disabled = !exists; });
-  }
 
   workflowSettings.externalSearch1Enabled = !!wf.externalSearch1Enabled;
   workflowSettings.externalSearch1Label = wf.externalSearch1Label || 'Search Amazon';

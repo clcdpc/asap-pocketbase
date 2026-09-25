@@ -1,10 +1,10 @@
-import { staffSession, setStaffSession, normalizeSessionStaff, loginForm, logoutBtn, loginSignOutBtn, profileBtn, gridSearchInput, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, additionalCopyStatusFilterSelect, closedTypeFilterSelect, currentStatus, setCurrentStatus, setActiveTagFilter, setGridSearchKeyword, setCurrentClaimFilter, setCurrentSimilarRequestFilter, setCurrentAdditionalCopyStatus, setCurrentClosedTypeFilter } from '../state.js';
+import { staffSession, staffAccessGeneration, staffSessionEpoch, setStaffSession, loginForm, logoutBtn, loginSignOutBtn, profileBtn, gridSearchInput, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, additionalCopyStatusFilterSelect, closedTypeFilterSelect, currentStatus, setCurrentStatus, setActiveTagFilter, setGridSearchKeyword, setCurrentClaimFilter, setCurrentSimilarRequestFilter, setCurrentAdditionalCopyStatus, setCurrentClosedTypeFilter } from '../state.js';
 import { loadTab, renderCurrentGrid } from '../grid.js';
 import { showToast } from '../dialogs.js';
-import { authorizedJson } from '../http.js';
+import { authorizedJson, isAbortError, loadStaffSession } from '../http.js';
 import { initRecentSuggestionsDropdown } from '../recent-suggestions.js';
 import { getFieldChecked, getFieldValue } from './dom.js';
-import { checkAuth, openProfileDialog, applyProfileClaimFilterDefault, clearAppliedProfileClaimFilterDefault } from './auth.js';
+import { checkAuth, openProfileDialog, currentProfileDialogGeneration, applyProfileClaimFilterDefault, clearAppliedProfileClaimFilterDefault } from './auth.js';
 import { postPolarisTest } from './misc.js';
 import { activateStatusTab } from './nav.js';
 import { updateStageQuery as updateStageQueryFromUrl } from './url-utils.js';
@@ -17,13 +17,26 @@ loginForm.addEventListener('submit', async (e) => {
 
 async function signOut(e) {
   e.preventDefault();
+  setStaffSession({ authenticated: false, antiforgeryToken: staffSession.antiforgeryToken });
+  const signOutEpoch = staffSessionEpoch;
+  clearAppliedProfileClaimFilterDefault();
+  setCurrentClaimFilter('all');
+  checkAuth();
   try {
-    await authorizedJson('/api/asap/staff/sign-out', { method: 'POST' });
-  } finally {
-    setStaffSession({ authenticated: false, antiforgeryToken: staffSession.antiforgeryToken });
-    clearAppliedProfileClaimFilterDefault();
-    setCurrentClaimFilter('all');
-    checkAuth();
+    let token = staffSession.antiforgeryToken;
+    if (!token) {
+      const session = await loadStaffSession({ apply: false });
+      if (staffSessionEpoch !== signOutEpoch) return;
+      token = session.antiforgeryToken;
+    }
+    if (!token) throw new Error('The sign-out request token could not be loaded.');
+    await authorizedJson('/api/asap/staff/sign-out', {
+      method: 'POST',
+      headers: { 'X-ASAP-Antiforgery': token }
+    });
+  } catch (error) {
+    if (isAbortError(error) || staffSessionEpoch !== signOutEpoch) return;
+    throw error;
   }
 }
 
@@ -53,9 +66,18 @@ if (profileCancelBtn) {
 }
 
 const profileForm = document.getElementById('profile-form');
+let profileSaveGeneration = 0;
 if (profileForm) {
   profileForm.addEventListener('submit', async (e) => {
     e.preventDefault();
+    const saveGeneration = ++profileSaveGeneration;
+    const accessGeneration = staffAccessGeneration;
+    const staffId = staffSession.staff?.id;
+    const dialogGeneration = currentProfileDialogGeneration();
+    const ownsProfile = () => saveGeneration === profileSaveGeneration &&
+      accessGeneration === staffAccessGeneration && staffId === staffSession.staff?.id &&
+      dialogGeneration === currentProfileDialogGeneration() &&
+      staffSession.authenticated && staffSession.accessAllowed;
     const msg = document.getElementById('profile-msg');
     const saveBtn = document.getElementById('profile-save');
     if (saveBtn) saveBtn.disabled = true;
@@ -69,9 +91,11 @@ if (profileForm) {
       const additionalCopyReminderDefault = getFieldChecked('profile-additional-copy-reminder-default');
       const mineUnclaimedDefault = getFieldChecked('profile-default-mine-unclaimed-filter');
       const email = getFieldValue('profile-weekly-action-summary-email').trim();
-      const updated = await authorizedJson('/api/asap/staff/profile', {
+      const version = staffSession.staff?.version;
+      const updated = await authorizedJson('/api/asap/staff/legacy/profile', {
         method: 'POST',
         body: {
+          version,
           weeklyActionSummaryEnabled: summaryEnabled,
           purchaseReminderDefault: reminderDefault,
           additionalCopyReminderDefault,
@@ -80,7 +104,9 @@ if (profileForm) {
         }
       });
 
-      staffSession.staff = normalizeSessionStaff(updated.staff);
+      if (!ownsProfile()) return;
+
+      setStaffSession({ ...staffSession, staff: updated.staff });
       applyProfileClaimFilterDefault({ force: true });
       if (!['settings', 'analytics'].includes(currentStatus)) {
         renderCurrentGrid(currentStatus);
@@ -91,16 +117,17 @@ if (profileForm) {
       }
       showToast('Profile preferences saved.', 'success');
       setTimeout(() => {
+        if (!ownsProfile()) return;
         const dialog = document.getElementById('profile-dialog');
         if (dialog && dialog.open) dialog.close();
       }, 700);
     } catch (err) {
-      if (msg) {
+      if (msg && ownsProfile()) {
         msg.textContent = err.message || 'Could not save your profile preferences. Please try again.';
         msg.className = 'mb-3 font-weight-bold text-danger';
       }
     } finally {
-      if (saveBtn) saveBtn.disabled = false;
+      if (saveBtn && ownsProfile()) saveBtn.disabled = false;
     }
   });
 }

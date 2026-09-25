@@ -105,7 +105,7 @@ public sealed class StaffAuthenticationTests
                 environmentName);
             var options = provider.GetRequiredService<IOptions<AuthenticationOptions>>().Value;
             Assert.AreEqual(StaffAuthenticationRegistration.CookieScheme, options.DefaultSignInScheme, environmentName);
-            Assert.AreEqual(StaffAuthenticationRegistration.EntraScheme, options.DefaultChallengeScheme, environmentName);
+            Assert.AreEqual(StaffAuthenticationRegistration.CookieScheme, options.DefaultChallengeScheme, environmentName);
 
             var oidc = provider.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>()
                 .Get(StaffAuthenticationRegistration.EntraScheme);

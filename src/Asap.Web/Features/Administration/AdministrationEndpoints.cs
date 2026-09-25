@@ -94,7 +94,7 @@ public static class AdministrationEndpoints
         }
         if (actor.Role != "super_admin" && organizationId != actor.OrganizationId)
         {
-            return Results.Json(new { code = "staff_scope_forbidden" }, statusCode: StatusCodes.Status403Forbidden);
+            return Results.Json(new { code = "staff_scope_forbidden", operationPhase = "rejected" }, statusCode: StatusCodes.Status403Forbidden);
         }
         var configuration = await configurations.GetAsync(organizationId, cancellationToken);
         if (configuration is null)
@@ -344,7 +344,7 @@ public static class AdministrationEndpoints
             actor.Role != "super_admin" && organizationId.HasValue && organizationId != actor.OrganizationId ||
             actor.Role != "super_admin" && actor.OrganizationId <= 1)
         {
-            return Results.Json(new { code = "staff_scope_forbidden" }, statusCode: StatusCodes.Status403Forbidden);
+            return Results.Json(new { code = "staff_scope_forbidden", operationPhase = "rejected" }, statusCode: StatusCodes.Status403Forbidden);
         }
         var effectiveScope = actor.Role == "super_admin" ? organizationId : actor.OrganizationId;
         var evidence = new StaffJobEvidence(actor.Id, actor.AuthenticationEmail, actor.EntraTenantId);
@@ -487,11 +487,15 @@ public static class AdministrationEndpoints
                 "polaris_connected" or "branding_saved" or "format_deleted" => StatusCodes.Status200OK,
             _ => StatusCodes.Status400BadRequest
         };
-        return Results.Json(new { code = result.Code, message = result.Message, data = result.Data }, statusCode: statusCode);
+        return Results.Json(new
+        {
+            code = result.Code, message = result.Message, data = result.Data,
+            operationPhase = statusCode is >= 200 and < 300 ? "complete" : "rejected"
+        }, statusCode: statusCode);
     }
 
     private static IResult Invalid(InvalidOperationException exception) =>
-        Results.BadRequest(new { code = "settings_invalid", message = exception.Message });
+        Results.BadRequest(new { code = "settings_invalid", message = exception.Message, operationPhase = "rejected" });
 
     private static async Task<byte[]> ReadFileAsync(IFormFile file, CancellationToken cancellationToken)
     {
