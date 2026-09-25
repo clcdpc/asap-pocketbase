@@ -425,8 +425,8 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(StaffAuthenticationRegistration.CookieScheme, authenticate!.Name);
         Assert.AreEqual(typeof(CookieAuthenticationHandler), authenticate.HandlerType);
         var challengeScheme = await schemes.GetDefaultChallengeSchemeAsync();
-        Assert.AreEqual(StaffAuthenticationRegistration.EntraScheme, challengeScheme!.Name);
-        Assert.AreEqual(typeof(OpenIdConnectHandler), challengeScheme.HandlerType);
+        Assert.AreEqual(StaffAuthenticationRegistration.CookieScheme, challengeScheme!.Name);
+        Assert.AreEqual(typeof(CookieAuthenticationHandler), challengeScheme.HandlerType);
         var protectedCookie = ProtectStaffCookie(cookieApplication, staff.Id, superAdmin.EntraTenantId, staff.NormalizedUserPrincipalName!);
         client.DefaultRequestHeaders.Add("Cookie", $"__Host-ASAP.Staff={protectedCookie}");
         Assert.IsFalse(client.DefaultRequestHeaders.Any(header => header.Key.StartsWith("X-ASAP-Test-", StringComparison.OrdinalIgnoreCase)),

@@ -23,9 +23,23 @@ public sealed partial class PatronJourneyTests
         {
             AllowAutoRedirect = false
         });
-        using var anonymousTitle = await anonymous.GetAsync(
-            $"/api/asap/staff/title-requests/{seeded.SharedLegacyId}");
-        Assert.AreEqual(HttpStatusCode.Redirect, anonymousTitle.StatusCode, $"Anonymous request returned {anonymousTitle.StatusCode}.");
+        foreach (var path in new[]
+                 {
+                     $"/api/asap/staff/title-requests/{seeded.SharedLegacyId}",
+                     $"/api/asap/staff/additional-copies/{seeded.SharedLegacyId}"
+                 })
+        {
+            using var denied = await anonymous.GetAsync(path);
+            Assert.AreEqual(HttpStatusCode.Unauthorized, denied.StatusCode, path);
+            Assert.IsNull(denied.Headers.Location, path);
+            var deniedText = await denied.Content.ReadAsStringAsync();
+            using var deniedBody = JsonDocument.Parse(deniedText);
+            Assert.AreEqual("staff_session_invalid", deniedBody.RootElement.GetProperty("code").GetString(), path);
+            Assert.AreEqual("rejected", deniedBody.RootElement.GetProperty("operationPhase").GetString(), path);
+            Assert.IsFalse(deniedText.Contains(seeded.SharedLegacyId, StringComparison.Ordinal), path);
+            Assert.IsFalse(deniedText.Contains("Legacy title target", StringComparison.Ordinal), path);
+            Assert.IsFalse(deniedText.Contains("Legacy additional-copy target", StringComparison.Ordinal), path);
+        }
 
         using var superAdmin = factory.CreateClient();
         AddTestingStaffHeaders(superAdmin, seeded.SuperId, tenantId, seeded.SuperAuthenticationEmail);
