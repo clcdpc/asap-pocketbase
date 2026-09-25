@@ -55,7 +55,7 @@ async function settle() {
           failRun = reject;
         });
       }
-      if (String(url) === '/api/asap/staff/session') {
+      if (String(url) === '/api/asap/staff/legacy/session') {
         sessionFetchCount += 1;
         const current = sessionResponses.shift() || {
           authenticated: true, accessAllowed: true, antiforgeryToken: 'workflow-test-token',
@@ -119,10 +119,10 @@ async function settle() {
     state.setCurrentLibraryContextOrgId('system');
     state.setCurrentWorkflowOrgScopeId('all');
     document.getElementById('workflow-library-scope').value = 'all';
-    state.staffSession.staff = state.normalizeSessionStaff({
+    state.staffSession.staff = {
       ...state.staffSession.staff,
       displayName: 'Updated profile'
-    });
+    };
     completeRun(response(202, { code: 'queued', jobId: 'job-2', organizationId: 2 }));
     await settle();
     assert.match(document.getElementById('job-msg').textContent, /queued.*Library 2/i,

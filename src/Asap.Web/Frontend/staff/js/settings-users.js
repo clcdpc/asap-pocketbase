@@ -440,7 +440,8 @@ staffUsersTableBody?.addEventListener('click', async event => {
         body: {
           email: persistedEmail,
           role,
-          organizationId
+          organizationId,
+          version
         }
       }
     ), id);
@@ -462,7 +463,7 @@ export async function populateStaffLibraryOptions(options = {}) {
   const me = staffSession.staff || {};
   const isSuper = isSuperAdminStaff();
   if (isSuper) {
-    const organizations = await authorizedJson('/api/asap/staff/organizations', { signal: loadOptions.signal });
+    const organizations = await authorizedJson('/api/asap/staff/legacy/organizations', { signal: loadOptions.signal });
     if (!isCurrentStaffLoad(loadOptions, contextOrgId)) return false;
     staffOrganizations = organizations;
     select.classList.remove('hidden');

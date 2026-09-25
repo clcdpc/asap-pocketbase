@@ -239,7 +239,7 @@ export async function fetchTitleRequests(signal, ctx) {
     params.set('scope', ctx.currentWorkflowOrgScopeId || 'all');
   }
   params.set('_', String(Date.now()));
-  return authorizedJson('/api/asap/staff/title-requests?' + params.toString(), { cache: 'no-store', signal });
+  return authorizedJson('/api/asap/staff/legacy/title-requests?' + params.toString(), { cache: 'no-store', signal });
 }
 
 export async function fetchAdditionalCopies(status = 'open', signal, ctx) {
@@ -249,7 +249,7 @@ export async function fetchAdditionalCopies(status = 'open', signal, ctx) {
   }
   params.set('status', status);
   params.set('_', String(Date.now()));
-  return authorizedJson('/api/asap/staff/additional-copies?' + params.toString(), { cache: 'no-store', signal });
+  return authorizedJson('/api/asap/staff/legacy/additional-copies?' + params.toString(), { cache: 'no-store', signal });
 }
 
 export async function safeFetchTitleRequests(signal, ctx) {

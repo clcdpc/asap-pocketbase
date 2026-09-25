@@ -40,6 +40,7 @@ public sealed class StaffCurrentUserMiddleware(RequestDelegate next)
         if (result.Outcome == StaffEligibilityOutcome.Forbidden)
         {
             if (context.Request.Path.Equals("/api/asap/staff/session", StringComparison.OrdinalIgnoreCase) ||
+                context.Request.Path.Equals("/api/asap/staff/legacy/session", StringComparison.OrdinalIgnoreCase) ||
                 context.Request.Path.Equals("/api/asap/staff/sign-in", StringComparison.OrdinalIgnoreCase) ||
                 context.Request.Path.Equals("/api/asap/staff/sign-out", StringComparison.OrdinalIgnoreCase))
             {

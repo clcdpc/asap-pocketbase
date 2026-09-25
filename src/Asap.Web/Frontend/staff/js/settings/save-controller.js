@@ -78,44 +78,15 @@ export async function saveSettings(options = {}) {
       ? { emails: buildEmailSettingsPayload({ includeTemplates: false, useSmtpFields: true }) }
       : buildSettingsPayload();
 
-    const isSystemSave = currentLibraryContextOrgId === 'system';
     const libraryPayload = {
       orgId: currentLibraryContextOrgId,
       version: lastSavedLibrarySettingsOrgId === currentLibraryContextOrgId
         ? lastSavedLibrarySettingsSnapshot?.version : null,
-      emails: payload.emails,
-      ...(isEmailSave ? {} : {
-        ui_text: payload.ui_text,
-        ...(!isSystemSave && Object.hasOwn(payload, 'formatClaimRules') ? { formatClaimRules: payload.formatClaimRules } : {}),
-        ...(Object.hasOwn(payload, 'providers') ? { providers: payload.providers } : {}),
-        ...(Object.hasOwn(payload, 'formats') ? { formats: payload.formats } : {}),
-        ...(Object.hasOwn(payload, 'customFields') ? { customFields: payload.customFields } : {}),
-        workflow: Object.fromEntries([
-          'suggestionLimit', 'suggestionLimitMessage', 'outstandingTimeoutEnabled', 'outstandingTimeoutDays',
-          'outstandingTimeoutSendEmail', 'outstandingTimeoutRejectionTemplateId', 'holdPickupTimeoutEnabled',
-          'holdPickupTimeoutDays', 'pendingHoldTimeoutEnabled', 'pendingHoldTimeoutDays',
-          'additionalCopyTimeoutEnabled', 'additionalCopyTimeoutDays', 'commonAuthorsEnabled',
-          'commonAuthorsLabel', 'commonAuthorsHelp', 'commonAuthorsList', 'commonAuthorsMessage',
-          'autoPromote', 'allowPatronAutoholdOptOut', 'allowAnyRegisteredCardLogin',
-          'patronCodeEligibilityEnabled', 'allowedPatronCodeIds', 'patronCodeEligibilityMessage'
-        ].filter(key => Object.hasOwn(payload, key)).map(key => [key, payload[key]]))
-      })
+      ...payload
     };
 
-    if (isSystemSave && !isEmailSave) {
-      libraryPayload.staffUrl = payload.staffUrl;
-      libraryPayload.leapBibUrlPattern = payload.leapBibUrlPattern;
-      libraryPayload.leapPatronUrlPattern = payload.leapPatronUrlPattern;
-      libraryPayload.formatIconUrlPattern = payload.formatIconUrlPattern;
-      libraryPayload.polaris = payload.polaris;
-      libraryPayload.patronEmbedAllowedOrigins = payload.patronEmbedAllowedOrigins;
-      if (Object.hasOwn(payload, 'enabledLibraryOrgIds')) {
-        libraryPayload.enabledLibraryOrgIds = payload.enabledLibraryOrgIds;
-      }
-    }
-
     mutationPending = true;
-    const libraryPromise = authorizedJson('/api/asap/staff/settings/library', {
+    const libraryPromise = authorizedJson('/api/asap/staff/legacy/settings', {
       method: 'POST',
       body: libraryPayload
     });

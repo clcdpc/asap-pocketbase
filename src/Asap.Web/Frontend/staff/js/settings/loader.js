@@ -21,8 +21,7 @@ function maybeSyncPolarisOrganizations(polaris) {
 }
 
 function updateWorkflowSettingsSummary(settings) {
-  const workflow = (currentLibraryContextOrgId === 'system' && settings && settings.stored && settings.stored.workflow) ||
-    (settings && settings.workflow) || {};
+  const workflow = settings?.workflow || {};
   workflowSettings.outstandingTimeoutEnabled = !!workflow.outstandingTimeoutEnabled;
   workflowSettings.outstandingTimeoutDays = parseInt(workflow.outstandingTimeoutDays || '30', 10) || 30;
   workflowSettings.additionalCopyTimeoutEnabled = !!workflow.additionalCopyTimeoutEnabled;
@@ -98,7 +97,7 @@ export function hideSettingsAccessDenied() {
 }
 
 function populateSystemSettingsForms(settings) {
-  const polaris = (settings && settings.stored && settings.stored.polaris) || (settings && settings.polaris) || {};
+  const polaris = settings?.polaris || {};
   const emails = (settings && settings.emails) || {};
 
   populatePostmarkSettingsForm(emails);
@@ -147,8 +146,7 @@ export async function loadSettings(options = {}) {
       return loadedLibrarySettings;
     }
 
-    const polaris = (loadedLibrarySettings && loadedLibrarySettings.stored && loadedLibrarySettings.stored.polaris) ||
-      (loadedLibrarySettings && loadedLibrarySettings.polaris) || {};
+    const polaris = loadedLibrarySettings?.polaris || {};
     if (!options.skipAutoSync) autoSyncPolaris = polaris;
     updateWorkflowSettingsSummary(loadedLibrarySettings);
 

@@ -1,6 +1,7 @@
 using Asap.Security;
 using Asap.Web.Features.Email;
 using Asap.Web.Features.Staff;
+using Asap.Web.Features.Staff.Compatibility;
 using Asap.Web.Infrastructure.Configuration;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Development;
@@ -116,6 +117,7 @@ if (externalConfiguration is not null)
     builder.Services.AddSingleton<StaffProfileService>();
     builder.Services.AddSingleton<StaffLifecycleService>();
     builder.Services.AddSingleton<AdministrationService>();
+    builder.Services.AddSingleton<LegacyStaffSettingsService>();
     builder.Services.AddSingleton<AnalyticsService>();
     builder.Services.AddSingleton<TitleRequestViewService>();
     builder.Services.AddSingleton<TitleRequestMutationService>();
@@ -201,6 +203,8 @@ if (externalConfiguration is not null)
     app.MapStaffAuthenticationEndpoints();
     app.MapStaffLifecycleEndpoints();
     app.MapAdministrationEndpoints();
+    app.MapLegacyStaffEndpoints();
+    app.MapLegacyStaffBibLookupEndpoints();
     app.MapTitleRequestEndpoints();
     app.MapStaffSuggestionCompatibilityEndpoints();
     app.MapAdditionalCopyEndpoints();

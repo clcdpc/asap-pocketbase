@@ -67,7 +67,7 @@ export async function populateLibrarySelector() {
 
   try {
     select.disabled = true;
-    const orgs = await authorizedJson('/api/asap/staff/organizations');
+    const orgs = await authorizedJson('/api/asap/staff/legacy/organizations');
     if (selectorLoadId !== librarySelectorLoadSerial ||
         startingContextOrgId !== currentLibraryContextOrgId || startingContextSerial !== libraryContextLoadSerial) {
       return;
@@ -214,7 +214,7 @@ export async function loadLibrarySettings(orgId, options = {}) {
   try {
     let settings = {};
 
-    const result = await authorizedJson(`/api/asap/staff/settings/library?orgId=${encodeURIComponent(requestedOrgId)}&_=${Date.now()}`, {
+    const result = await authorizedJson(`/api/asap/staff/legacy/settings?orgId=${encodeURIComponent(requestedOrgId)}&_=${Date.now()}`, {
       cache: 'no-store',
       signal: guard.signal
     });

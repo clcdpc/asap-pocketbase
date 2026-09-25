@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Asap.Web.Features.Patron;
 using Asap.Web.Features.Staff;
+using Asap.Web.Features.Staff.Compatibility;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Security;
 using Asap.Web.Infrastructure.Testing;

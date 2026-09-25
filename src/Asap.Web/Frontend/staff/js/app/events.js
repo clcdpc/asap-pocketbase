@@ -1,4 +1,4 @@
-import { staffSession, setStaffSession, normalizeSessionStaff, loginForm, logoutBtn, loginSignOutBtn, profileBtn, gridSearchInput, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, additionalCopyStatusFilterSelect, closedTypeFilterSelect, currentStatus, setCurrentStatus, setActiveTagFilter, setGridSearchKeyword, setCurrentClaimFilter, setCurrentSimilarRequestFilter, setCurrentAdditionalCopyStatus, setCurrentClosedTypeFilter } from '../state.js';
+import { staffSession, setStaffSession, loginForm, logoutBtn, loginSignOutBtn, profileBtn, gridSearchInput, tagFilterSelect, claimFilterSelect, similarRequestFilterSelect, additionalCopyStatusFilterSelect, closedTypeFilterSelect, currentStatus, setCurrentStatus, setActiveTagFilter, setGridSearchKeyword, setCurrentClaimFilter, setCurrentSimilarRequestFilter, setCurrentAdditionalCopyStatus, setCurrentClosedTypeFilter } from '../state.js';
 import { loadTab, renderCurrentGrid } from '../grid.js';
 import { showToast } from '../dialogs.js';
 import { authorizedJson } from '../http.js';
@@ -69,9 +69,11 @@ if (profileForm) {
       const additionalCopyReminderDefault = getFieldChecked('profile-additional-copy-reminder-default');
       const mineUnclaimedDefault = getFieldChecked('profile-default-mine-unclaimed-filter');
       const email = getFieldValue('profile-weekly-action-summary-email').trim();
-      const updated = await authorizedJson('/api/asap/staff/profile', {
+      const version = staffSession.staff?.version;
+      const updated = await authorizedJson('/api/asap/staff/legacy/profile', {
         method: 'POST',
         body: {
+          version,
           weeklyActionSummaryEnabled: summaryEnabled,
           purchaseReminderDefault: reminderDefault,
           additionalCopyReminderDefault,
@@ -80,7 +82,7 @@ if (profileForm) {
         }
       });
 
-      staffSession.staff = normalizeSessionStaff(updated.staff);
+      staffSession.staff = updated.staff;
       applyProfileClaimFilterDefault({ force: true });
       if (!['settings', 'analytics'].includes(currentStatus)) {
         renderCurrentGrid(currentStatus);

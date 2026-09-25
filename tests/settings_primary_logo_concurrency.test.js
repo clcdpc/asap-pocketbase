@@ -4,6 +4,7 @@ const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { JSDOM } = require('jsdom');
+const { projectLegacySettingsFixture } = require('./helpers/legacy-settings-fixture.cjs');
 
 function response(status, body) {
   return {
@@ -23,7 +24,11 @@ function settingsData(version, altText) {
   result.stored.branding = { ...result.stored.branding, altText, version: `branding-${version}` };
   result.stored.libraryOverride.branding = { ...result.stored.libraryOverride.branding, altText, version: `branding-${version}` };
   result.effective.logoAltText = altText;
-  return result;
+  const form = projectLegacySettingsFixture(result);
+  form.uiText.logoAlt = altText;
+  form.uiText.logoUrl = result.effective.logoUrl;
+  form.uiText.brandingInherited = false;
+  return form;
 }
 
 async function flush() {
@@ -65,7 +70,7 @@ async function flush() {
       authenticated: true,
       accessAllowed: true,
       antiforgeryToken: 'test-token',
-      staff: { id: '27', role: 'admin', organizationId: '2', organizationName: 'Library Two', userPrincipalName: 'admin@example.org' }
+      staff: { id: '27', role: 'admin', libraryOrgId: '2', libraryName: 'Library Two', email: 'admin@example.org' }
     });
 
     let serverVersion = 'version-1';
@@ -86,7 +91,7 @@ async function flush() {
     let nextConfigReadFails = false;
     global.fetch = async (url, options = {}) => {
       const requestUrl = String(url);
-      if (requestUrl.includes('/api/asap/staff/settings/library?orgId=2')) {
+      if (requestUrl.includes('/api/asap/staff/legacy/settings?orgId=2')) {
         settingsReads++;
         if (deferNextLibrarySettingsRead) {
           deferNextLibrarySettingsRead = false;
@@ -100,7 +105,7 @@ async function flush() {
         }
         return response(200, settingsData(serverVersion, serverAltText));
       }
-      if (requestUrl.includes('/api/asap/staff/polaris/patron-codes')) return response(200, { code: 'ok', data: [] });
+      if (requestUrl.includes('/api/asap/staff/legacy/patron-codes')) return response(200, []);
       if (requestUrl.startsWith('/api/asap/staff/users')) return response(200, { users: [] });
       if (requestUrl === '/api/asap/config') {
         configReads++;

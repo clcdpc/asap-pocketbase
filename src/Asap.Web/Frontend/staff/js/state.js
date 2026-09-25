@@ -9,22 +9,6 @@ export const staffSession = {
 };
 export let staffAccessGeneration = 0;
 
-export function normalizeSessionStaff(staff) {
-  if (!staff) return null;
-  return {
-    ...staff,
-    username: staff.userPrincipalName,
-    identityKey: staff.userPrincipalName,
-    libraryOrgId: staff.organizationId,
-    libraryOrgName: staff.organizationName,
-    weekly_action_summary_enabled: staff.weeklyActionSummaryEnabled,
-    weekly_action_summary_email: staff.weeklyActionSummaryEmail,
-    purchase_reminder_default: staff.purchaseReminderDefault,
-    additional_copy_reminder_default: staff.additionalCopyReminderDefault,
-    default_mine_unclaimed_filter: staff.defaultMineUnclaimedFilter
-  };
-}
-
 export function setStaffSession(session) {
   const priorStaff = staffSession.staff;
   const nextStaff = session?.staff;
@@ -39,7 +23,7 @@ export function setStaffSession(session) {
   staffSession.accessAllowed = session?.accessAllowed !== false;
   staffSession.antiforgeryToken = session?.antiforgeryToken || staffSession.antiforgeryToken || '';
   staffSession.code = session?.code || '';
-  staffSession.staff = normalizeSessionStaff(session?.staff || null);
+  staffSession.staff = session?.staff || null;
 }
 export const SETTINGS_RECORD_ID = 'settings0000001';
 export const loginContainer = document.getElementById('login-container');
@@ -68,8 +52,8 @@ export let currentFormatClaimRules = [];
 export function setCurrentFormatClaimRules(rules) { currentFormatClaimRules = Array.isArray(rules) ? rules : []; }
 export let formatClaimStaffOptions = [];
 export function setFormatClaimStaffOptions(options) { formatClaimStaffOptions = Array.isArray(options) ? options : []; }
-export let currentLegacySettingsFormModel = null;
-export function setCurrentLegacySettingsFormModel(model) { currentLegacySettingsFormModel = model || null; }
+export let currentLegacySettingsForm = null;
+export function setCurrentLegacySettingsForm(form) { currentLegacySettingsForm = form || null; }
 export const ageMap = { adult: 'Adult', teen: 'Teen', children: 'Children' };
 export let currentRejectionTemplates = [];
 export function setCurrentRejectionTemplates(templates) { currentRejectionTemplates = templates; }

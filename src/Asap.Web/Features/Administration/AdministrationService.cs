@@ -162,8 +162,11 @@ public sealed class AdministrationService(
         var customFields = organizationId == 1
             ? []
             : await LoadCustomFieldsAsync(context, organizationId, cancellationToken);
+        var customFieldRules = await LoadCustomFieldRuleSnapshotAsync(context, organizationId, cancellationToken);
         var templates = await LoadTemplatesAsync(context, organizationId, cancellationToken);
+        var templateEditor = await LoadTemplateEditorRowsAsync(context, organizationId, cancellationToken);
         var publicationOptions = await LoadPublicationOptionsAsync(context, organizationId, cancellationToken);
+        var publicationOptionsEditor = await LoadPublicationEditorRowsAsync(context, organizationId, cancellationToken);
         var commonCreators = await LoadCommonCreatorsAsync(context, organizationId, cancellationToken);
         var patronCodes = await LoadPatronCodesAsync(context, organizationId, cancellationToken);
         var autoClaimRules = organizationId == 1
@@ -192,6 +195,13 @@ public sealed class AdministrationService(
             : await context.Branding.AsNoTracking()
                 .SingleOrDefaultAsync(item => item.OrganizationId == 1, cancellationToken);
         var hasOverrides = organizationId != 1 && await HasLibraryOverridesAsync(context, organizationId, cancellationToken);
+        var enabledLibraryOrgIds = organizationId == 1
+            ? await context.Organizations.AsNoTracking()
+                .Where(item => item.Id != 1 && item.IsActive)
+                .OrderBy(item => item.Id)
+                .Select(item => item.Id)
+                .ToArrayAsync(cancellationToken)
+            : [];
         var version = await ComputeSettingsVersionAsync(context, organizationId, cancellationToken);
 
         var configuredSystem = new
@@ -238,6 +248,7 @@ public sealed class AdministrationService(
             providers,
             formats,
             customFields,
+            customFieldRules,
             templates,
             autoClaimRules,
             branding = ToBranding(branding)
@@ -260,7 +271,10 @@ public sealed class AdministrationService(
                 isOverride = hasOverrides,
                 hasOverrides,
                 version,
+                enabledLibraryOrgIds,
                 stored,
+                templateEditor,
+                publicationOptionsEditor,
                 effective = effectiveDto,
                 // These aliases preserve the shape used by the existing vanilla settings workflow.
                 workflow = ToWorkflow(effective, system: libraryWorkflow is null || organizationId == 1),
@@ -1072,6 +1086,14 @@ public sealed class AdministrationService(
         await ApplyWholeSetsAsync(context, organizationId, workflowSection, patronSection, cancellationToken);
         await ApplyProvidersAsync(context, organizationId, workflowSection, payload, cancellationToken);
         await ApplyFormatsAsync(context, organizationId, payload, patronSection, cancellationToken);
+        if (context.ChangeTracker.Entries<MaterialFormat>().Any(entry => entry.State == EntityState.Added) &&
+            (TryGetAny(payload, out _, "autoClaimRules", "formatClaimRules") ||
+             TryGetAny(payload, out _, "formatRules", "patronFormatRules")))
+        {
+            // New custom formats must acquire their IDs before rule sets are resolved.
+            // This is still inside the owning settings transaction and rolls back as one unit.
+            await context.SaveChangesAsync(cancellationToken);
+        }
         await ApplyCustomFieldsAsync(context, organizationId, patronSection, payload, cancellationToken);
         await ApplyAutoClaimRulesAsync(context, organizationId, payload, cancellationToken);
         await ApplyTemplatesAsync(context, organizationId, payload, cancellationToken);
@@ -2160,6 +2182,97 @@ public sealed class AdministrationService(
         }).ToArray();
     }
 
+    private static async Task<IReadOnlyList<object>> LoadCustomFieldRuleSnapshotAsync(
+        AsapDbContext context,
+        int organizationId,
+        CancellationToken cancellationToken)
+    {
+        if (organizationId == 1)
+        {
+            return [];
+        }
+
+        var rules = await context.MaterialFormatCustomFieldRules.AsNoTracking()
+            .Where(item => item.LibraryOrganizationId == organizationId)
+            .OrderBy(item => item.MaterialFormatId).ThenBy(item => item.PatronCustomFieldId)
+            .ToListAsync(cancellationToken);
+        var fields = await context.PatronCustomFields.AsNoTracking()
+            .Where(item => item.LibraryOrganizationId == organizationId)
+            .ToDictionaryAsync(item => item.Id, cancellationToken);
+        var formats = await context.MaterialFormats.AsNoTracking()
+            .Where(item => item.OwnerOrganizationId == 1 || item.OwnerOrganizationId == organizationId)
+            .ToDictionaryAsync(item => item.Id, cancellationToken);
+        return rules.Select(rule =>
+        {
+            if (!fields.TryGetValue(rule.PatronCustomFieldId, out var field) ||
+                !formats.TryGetValue(rule.MaterialFormatId, out var format))
+            {
+                throw new InvalidOperationException("A custom field rule references an out-of-scope definition or format.");
+            }
+            return (object)new
+            {
+                id = rule.Id.ToString(),
+                materialFormatId = rule.MaterialFormatId.ToString(),
+                formatCode = format.Code,
+                patronCustomFieldId = rule.PatronCustomFieldId.ToString(),
+                fieldKey = field.FieldKey,
+                mode = rule.Mode,
+                labelOverride = rule.LabelOverride,
+                version = StaffVersion.Encode(rule.RowVersion)
+            };
+        }).ToArray();
+    }
+
+    private static async Task<IReadOnlyList<object>> LoadTemplateEditorRowsAsync(
+        AsapDbContext context,
+        int organizationId,
+        CancellationToken cancellationToken)
+    {
+        var rows = await context.EmailTemplates.AsNoTracking()
+            .Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId)
+            .OrderBy(item => item.SortOrder).ThenBy(item => item.Id)
+            .ToListAsync(cancellationToken);
+        var sources = rows.Where(item => item.OrganizationId == 1).ToArray();
+        var libraryCustom = rows.Where(item => item.OrganizationId == organizationId && item.IsCustom).ToArray();
+        var projected = new List<object>();
+        foreach (var row in sources.Concat(libraryCustom))
+        {
+            var scoped = row.OrganizationId == 1 && organizationId != 1
+                ? rows.SingleOrDefault(item => item.OrganizationId == organizationId &&
+                    !item.IsCustom && item.SourceTemplateId == row.Id)
+                : null;
+            var effective = ResolveEffectiveTemplate(rows, row.Id, organizationId);
+            if (effective is null)
+            {
+                throw new InvalidOperationException("A template editor row could not be resolved in the selected scope.");
+            }
+            var current = scoped ?? row;
+            projected.Add(new
+            {
+                referenceId = row.Id.ToString(),
+                id = current.Id.ToString(),
+                templateKey = row.TemplateKey,
+                sourceTemplateId = scoped?.SourceTemplateId?.ToString() ??
+                    (row.OrganizationId == 1 ? row.Id.ToString() : null),
+                organizationId = current.OrganizationId.ToString(),
+                isCustom = row.IsCustom,
+                displayName = Clean(scoped?.DisplayName) ?? Clean(row.DisplayName) ?? row.TemplateKey,
+                subject = effective.Subject,
+                body = effective.Body,
+                enabled = !effective.IsHidden,
+                hasOverride = scoped is not null,
+                canReset = scoped is not null,
+                subjectInherited = scoped is null || Clean(scoped.SubjectTemplate) is null,
+                bodyInherited = scoped is null || Clean(scoped.BodyTemplate) is null,
+                nameInherited = scoped is null || Clean(scoped.DisplayName) is null,
+                sortOrder = current.SortOrder,
+                sourceVersion = StaffVersion.Encode(row.RowVersion),
+                version = StaffVersion.Encode(current.RowVersion)
+            });
+        }
+        return projected;
+    }
+
     private static async Task<IReadOnlyList<object>> LoadTemplatesAsync(AsapDbContext context, int organizationId, CancellationToken cancellationToken)
     {
         var system = await context.EmailTemplates.AsNoTracking()
@@ -2203,6 +2316,28 @@ public sealed class AdministrationService(
             enabled = item.IsEnabled,
             sortOrder = item.SortOrder
         }).ToArray();
+    }
+
+    private static async Task<IReadOnlyList<object>> LoadPublicationEditorRowsAsync(
+        AsapDbContext context,
+        int organizationId,
+        CancellationToken cancellationToken)
+    {
+        var ownerId = organizationId != 1 && await context.PublicationOptionSets.AsNoTracking()
+            .AnyAsync(item => item.OrganizationId == organizationId, cancellationToken)
+            ? organizationId : 1;
+        return await context.PublicationOptions.AsNoTracking()
+            .Where(item => item.OrganizationId == ownerId)
+            .OrderBy(item => item.SortOrder)
+            .ThenBy(item => item.Id)
+            .Select(item => (object)new
+            {
+                id = item.OptionKey,
+                label = item.Label,
+                enabled = item.IsEnabled,
+                sortOrder = item.SortOrder
+            })
+            .ToArrayAsync(cancellationToken);
     }
 
     private static async Task<IReadOnlyList<string>> LoadCommonCreatorsAsync(AsapDbContext context, int organizationId, CancellationToken cancellationToken)
@@ -2960,7 +3095,6 @@ public sealed class AdministrationService(
                 {
                     throw new InvalidOperationException("Custom field mode must be required, optional, or hidden.");
                 }
-                if (mode == "hidden") continue;
                 desiredRules.Add(new MaterialFormatCustomFieldRule
                 {
                     LibraryOrganizationId = organizationId,
@@ -2972,21 +3106,19 @@ public sealed class AdministrationService(
             }
         }
 
-        var existingRuleValues = currentRules
-            .Select(item => (item.MaterialFormatId, item.PatronCustomFieldId, item.Mode, item.LabelOverride))
-            .OrderBy(item => item.MaterialFormatId)
-            .ThenBy(item => item.PatronCustomFieldId)
-            .ToArray();
-        var desiredRuleValues = desiredRules
-            .Select(item => (item.MaterialFormatId, item.PatronCustomFieldId, item.Mode, item.LabelOverride))
-            .OrderBy(item => item.MaterialFormatId)
-            .ThenBy(item => item.PatronCustomFieldId)
-            .ToArray();
-        if (!existingRuleValues.SequenceEqual(desiredRuleValues))
+        var desiredByIdentity = desiredRules.ToDictionary(item =>
+            (item.MaterialFormatId, item.PatronCustomFieldId));
+        foreach (var existing in currentRules)
         {
-            context.MaterialFormatCustomFieldRules.RemoveRange(currentRules);
-            context.MaterialFormatCustomFieldRules.AddRange(desiredRules);
+            if (!desiredByIdentity.Remove((existing.MaterialFormatId, existing.PatronCustomFieldId), out var desired))
+            {
+                context.MaterialFormatCustomFieldRules.Remove(existing);
+                continue;
+            }
+            existing.Mode = desired.Mode;
+            existing.LabelOverride = desired.LabelOverride;
         }
+        context.MaterialFormatCustomFieldRules.AddRange(desiredByIdentity.Values);
     }
 
     private async Task ApplyAutoClaimRulesAsync(
@@ -3010,6 +3142,10 @@ public sealed class AdministrationService(
         {
             if (item.ValueKind != JsonValueKind.Object) continue;
             var formatId = GetLong(item, "materialFormatId") ?? GetLong(item, "formatId");
+            if (!formatId.HasValue && Clean(GetString(item, "formatCode")) is { } code)
+            {
+                formatId = formats.SingleOrDefault(format => format.Code == code)?.Id;
+            }
             if (!formatId.HasValue || formats.All(format => format.Id != formatId.Value))
             {
                 throw new InvalidOperationException("Each auto-claim rule must reference a format in the selected library scope.");

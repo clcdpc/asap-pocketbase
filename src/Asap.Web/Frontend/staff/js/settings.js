@@ -11,7 +11,7 @@ export * from './settings/save-controller.js';
 export * from './settings/save-ui.js';
 export * from './settings/polaris-sync.js';
 
-import { settingsForm, defaultPublicationOptions, verifiedBibId, setVerifiedBibId, currentLibraryContextOrgId, currentLegacySettingsFormModel, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, libraryContextLoadSerial, settingsReloadRequired, settingsSyncInProgress, settingsSaving, settingsLoading, settingsActionInProgress, setSettingsActionInProgress, setSettingsReloadRequired } from './state.js';
+import { settingsForm, defaultPublicationOptions, verifiedBibId, setVerifiedBibId, currentLibraryContextOrgId, currentLegacySettingsForm, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, libraryContextLoadSerial, settingsReloadRequired, settingsSyncInProgress, settingsSaving, settingsLoading, settingsActionInProgress, setSettingsActionInProgress, setSettingsReloadRequired } from './state.js';
 import { markSettingsDirty, updateAutoRejectEmailControls, updateSaveBarState } from './api.js';
 import { authorizedJson } from './http.js';
 import { showToast, showConfirm } from './dialogs.js';
@@ -248,11 +248,7 @@ document.getElementById('btn-upload-logo').addEventListener('click', async () =>
   const fileInput = document.getElementById('ui-logo-file');
   const altInput = document.getElementById('ui-logo-alt');
   const btn = document.getElementById('btn-upload-logo');
-  const model = currentLegacySettingsFormModel;
-  const storedAlt = model?.isSystem
-    ? model.provenance?.systemBranding?.altText
-    : model?.provenance?.libraryBranding?.altText;
-  const baselineAlt = String(storedAlt ?? model?.uiText?.logoAlt ?? '').trim();
+  const baselineAlt = String(currentLegacySettingsForm?.uiText?.logoAlt ?? '').trim();
   const altEdited = altInput.value.trim() !== baselineAlt;
   if (!fileInput.files.length && !altEdited) {
     showToast('No branding changes to save.', 'info');

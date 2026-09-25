@@ -812,6 +812,8 @@ async function settle() {
     await flushDialogCloseEvents();
 
     // The current duplicate confirmation closes using the existing title-request version.
+    state.setCurrentSuggestions([{ ...title, version: 'original-version' }]);
+    state.setAllSuggestions([{ ...title, version: 'original-version' }]);
     setLinkedUrl(id);
     const ownedDuplicate = await confirmPendingAction(await openReadyEdit('Owned duplicate action'));
     ownedDuplicate.pending.resolve(response(409, {

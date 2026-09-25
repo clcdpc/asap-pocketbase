@@ -9,16 +9,18 @@ Do not perform a broad API redesign or frontend rewrite simply because the backe
 ## 2. Frontend architecture
 
 The primary `/staff/` client is the PocketBase-style staff frontend from the
-authoritative source pin `150b30b776565194260cc327eeeffdfb46475e81`, with only
-the adaptations required to use the .NET session, antiforgery, API DTO,
-authorization, and concurrency contracts. Restoring that established
-production UX makes it the compatibility and acceptance client for validating
-the new backend before any replacement UI is considered.
+authoritative source pin `150b30b776565194260cc327eeeffdfb46475e81`.
+`Features/Staff/Compatibility` presents its legacy Settings form, session,
+reference lists, workflow-list scope, and lookup envelopes. Its Settings save
+compares the submitted form against a fresh versioned Administration snapshot
+and sends only explicit changes to `AdministrationService`. Current .NET
+services still own authorization, inheritance, rowversion checks, transactions,
+provider work, and domain mutations. The boundary exists only for `/staff/`
+and should be removed with that client; future clients use normal APIs.
 
-The newer .NET staff interface that previously occupied `/staff/` is preserved
-unchanged in structure and remains published at `/staff-next/` for comparison
-and possible future development. It is not the primary acceptance surface and
-does not require a duplicate backend implementation.
+The newer .NET staff interface that previously occupied `/staff/` remains
+published at `/staff-next/` on normal APIs for comparison and possible future
+development. It is not the primary acceptance surface.
 
 Preserve:
 
@@ -121,13 +123,14 @@ All PocketBase JavaScript SDK/authStore/direct collection reads are removed. Rem
 
 The .NET app serves only explicit DTOs; never expose EF entities directly.
 
-The restored staff client uses three deliberately narrow compatibility routes
+The restored staff client keeps three deliberately narrow compatibility routes
 where its existing controls had no prior .NET request surface:
 `POST /api/asap/staff/bib-lookup`, `POST /api/asap/staff/patron-lookup`, and
 `POST /api/asap/staff/suggestions`. They delegate to the current provider,
 configuration, and suggestion services, require the normal staff authorization
 and antiforgery checks, and enforce the selected/assigned library scope. They do
-not emulate PocketBase queries or introduce a second set of domain rules.
+not emulate PocketBase queries or introduce a second set of domain rules. Their
+handlers live with the disposable `/staff/` presentation boundary.
 
 ## 10. Deep links
 

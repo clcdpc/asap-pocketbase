@@ -1,6 +1,7 @@
 using Asap.Web.Features.Patron;
+using Asap.Web.Features.Staff;
 
-namespace Asap.Web.Features.Staff;
+namespace Asap.Web.Features.Staff.Compatibility;
 
 public sealed record StaffPatronLookupInput(string? Query, string? Barcode, string? LibraryOrgId);
 

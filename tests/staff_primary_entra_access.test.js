@@ -19,15 +19,15 @@ function librarySettings(orgId, marker) {
     orgId,
     version: `settings-${orgId}-${marker}`,
     isOverride: true,
-    ui_text: { loginNote: marker },
+    uiText: { loginNote: marker },
     emails: {},
+    systemSettings: {},
     polaris: {},
     workflow: { suggestionLimit: orgId },
     formats: [],
-    formatClaimRules: [],
-    formatClaimStaffOptions: [],
-    publicationOptions: [],
-    customFields: [],
+    providers: [],
+    autoClaimRules: [],
+    autoClaimStaff: [],
     templates: []
   };
 }
@@ -135,7 +135,7 @@ async function waitFor(predicate) {
       if (requestUrl === '/api/asap/config') {
         return response(200, {});
       }
-      if (requestUrl === '/api/asap/staff/session') {
+      if (requestUrl === '/api/asap/staff/legacy/session') {
         sessionRequestCount += 1;
         if (startupSession === 'invalid') {
           return response(401, { code: 'staff_session_invalid' });
@@ -162,7 +162,7 @@ async function waitFor(predicate) {
         }
         throw new Error('Unexpected session request');
       }
-      if (requestUrl.startsWith('/api/asap/staff/settings/library?')) {
+      if (requestUrl.startsWith('/api/asap/staff/legacy/settings?')) {
         if (requestUrl.includes('orgId=2') && delayLibraryTwoSettings) {
           return new Promise(resolve => {
             resolveLibraryTwoSettings = () => resolve(response(200, librarySettings(2, 'stale-library-two-baseline')));
@@ -188,38 +188,30 @@ async function waitFor(predicate) {
       if (requestUrl.includes('/api/asap/staff/email-status')) {
         return response(200, { enabled: true });
       }
-      if (requestUrl.includes('/api/asap/staff/title-requests')) {
-        return response(200, { items: [], scope: '2', availableLibraries: [] });
+      if (requestUrl.includes('/api/asap/staff/legacy/title-requests')) {
+        return response(200, { items: [], scope: { superAdmin: true, mode: 'library', libraryOrgId: '2', label: 'Library Two' }, availableLibraries: [] });
       }
-      if (requestUrl.includes('/api/asap/staff/additional-copies')) {
-        return response(200, { items: [], scope: '2', availableLibraries: [] });
+      if (requestUrl.includes('/api/asap/staff/legacy/additional-copies')) {
+        return response(200, { items: [], scope: { superAdmin: true, mode: 'library', libraryOrgId: '2', label: 'Library Two' }, availableLibraries: [] });
       }
-      if (requestUrl === '/api/asap/staff/polaris/patron-codes') {
-        return response(200, { code: 'ok', data: [] });
+      if (requestUrl.startsWith('/api/asap/staff/legacy/patron-codes')) {
+        return response(200, []);
       }
-      if (requestUrl === '/api/asap/staff/organizations') {
+      if (requestUrl === '/api/asap/staff/legacy/organizations') {
         if (delayLibraryTwoOrganizations) {
           return new Promise(resolve => {
-            resolveLibraryTwoOrganizations = () => resolve(response(200, {
-              code: 'ok',
-              data: [{ id: 2, displayName: 'Stale Library Two', active: true }]
-            }));
+            resolveLibraryTwoOrganizations = () => resolve(response(200,
+              [{ id: 2, displayName: 'Stale Library Two', active: true }]));
           });
         }
         if (useLibraryThreeOrganizations) {
-          return response(200, {
-            code: 'ok',
-            data: [{ id: 3, displayName: 'Current Library Three', active: true }]
-          });
+          return response(200, [{ id: 3, displayName: 'Current Library Three', active: true }]);
         }
-        return response(200, {
-          code: 'ok',
-          data: [
+        return response(200, [
             { id: 1, displayName: 'System', active: true },
             { id: 2, displayName: 'Library Two', active: true },
             { id: 3, displayName: 'Library Three', active: true }
-          ]
-        });
+          ]);
       }
       if (requestUrl.startsWith('/api/asap/staff/users') && method === 'GET') {
         if (requestUrl.includes('orgId=2') && delayLibraryTwoStaffUsers) {
@@ -561,13 +553,13 @@ async function waitFor(predicate) {
     await currentLibrarySettingsLoad;
     const currentBaseline = state.initialSettingsSnapshot;
     assert.strictEqual(state.lastSavedLibrarySettingsOrgId, '3');
-    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.ui_text.loginNote, 'current-library-three-baseline');
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.uiText.loginNote, 'current-library-three-baseline');
     assert.ok(currentBaseline, 'The current library settings load must capture its baseline');
     resolveLibraryTwoSettings();
     await staleLibrarySettingsLoad;
     assert.strictEqual(state.lastSavedLibrarySettingsOrgId, '3',
       'A delayed loadLibrarySettings response must not replace the current saved scope');
-    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.ui_text.loginNote, 'current-library-three-baseline');
+    assert.strictEqual(state.lastSavedLibrarySettingsSnapshot.uiText.loginNote, 'current-library-three-baseline');
     assert.strictEqual(state.initialSettingsSnapshot, currentBaseline,
       'A delayed loadLibrarySettings response must not overwrite the current settings baseline');
     delayLibraryTwoSettings = false;
@@ -672,7 +664,7 @@ async function waitFor(predicate) {
     await waitFor(() => writes.some(write => write.method === 'POST' && write.body.email === 'inactive@example.org'));
     assert.deepStrictEqual(
       writes.find(write => write.method === 'POST' && write.body.email === 'inactive@example.org').body,
-      { email: 'inactive@example.org', role: 'staff', organizationId: 2 }
+      { email: 'inactive@example.org', role: 'staff', organizationId: 2, version: 'version-inactive' }
     );
     assert.strictEqual(users.length, usersBeforeUnchangedReactivation,
       'Unchanged-email reactivation must reactivate the existing StaffUser rather than create another');
@@ -716,7 +708,7 @@ async function waitFor(predicate) {
       write.method === 'POST' && write.body.email === 'saved-inactive@example.org'));
     assert.deepStrictEqual(
       writes.find(write => write.method === 'POST' && write.body.email === 'saved-inactive@example.org').body,
-      { email: 'saved-inactive@example.org', role: 'staff', organizationId: 2 }
+      { email: 'saved-inactive@example.org', role: 'staff', organizationId: 2, version: 'version-persisted-inactive' }
     );
     assert.strictEqual(users.length, usersBeforeIdentitySequence,
       'Saving and then reactivating the persisted identity must not create a duplicate StaffUser');

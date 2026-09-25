@@ -214,7 +214,7 @@ export async function renderPatronCodeEligibilityOptions(allowedIds) {
   }
 
   try {
-    const values = await authorizedJson('/api/asap/staff/polaris/patron-codes');
+    const values = await authorizedJson('/api/asap/staff/legacy/patron-codes');
     if (renderSerial !== patronCodeRenderSerial || contextOrgId !== currentLibraryContextOrgId || contextSerial !== libraryContextLoadSerial) return;
     const rows = values.map(item => ({ patronCodeId: item.id, description: item.description }));
     if (!rows.length) {

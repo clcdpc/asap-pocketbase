@@ -115,9 +115,9 @@ async function runLegacySettingsNoEditRoundTrip(
   }
   await page.waitForFunction(async ({ expectedOrgId, expectedInput }) => {
     const { currentLibraryContextOrgId } = await import('/staff/js/state.js');
-    const { currentLegacySettingsFormModel } = await import('/staff/js/state.js');
+    const { currentLegacySettingsForm } = await import('/staff/js/state.js');
     return currentLibraryContextOrgId === expectedOrgId &&
-      currentLegacySettingsFormModel?.contextOrgId === expectedOrgId &&
+      currentLegacySettingsForm?.orgId === expectedOrgId &&
       document.getElementById('suggestion-limit')?.value === expectedInput;
   }, { expectedOrgId: orgId, expectedInput: expectedSuggestionLimitInput });
   await page.waitForFunction(() => !document.getElementById('select-library-context').disabled);
@@ -175,11 +175,11 @@ async function runLegacySettingsNoEditRoundTrip(
       const state = await import('/staff/js/state.js');
       return {
         currentLibraryContextOrgId: state.currentLibraryContextOrgId,
-        modelContextOrgId: state.currentLegacySettingsFormModel?.contextOrgId
+        modelContextOrgId: state.currentLegacySettingsForm?.orgId
       };
     });
-    assert.deepEqual((serialized.enabledLibraryOrgIds || []).map(String).sort(), participationBefore,
-      `System no-edit form must serialize the actual enabled organization IDs from the .NET DTO: ${JSON.stringify({
+    assert.deepEqual(participationDom.filter(item => item.checked).map(item => item.id).sort(), participationBefore,
+      `System participation controls must reflect the .NET DTO: ${JSON.stringify({
         dom: participationDom,
         serializedContext,
         serializedHasPolaris: Object.hasOwn(serialized, 'polaris'),
@@ -192,15 +192,15 @@ async function runLegacySettingsNoEditRoundTrip(
     assert.equal(actualSystemStaffUrl, systemSettings.staffUrl,
       `system staff URL must be populated from the real Settings DTO: ${JSON.stringify({ actualSystemStaffUrl, expected: systemSettings.staffUrl })}`);
     assert.equal(actualSystemNotEnabledMessage,
-      before.ui_text.systemNotEnabledMessage || '{{library}} does not currently participate in this suggestion service.',
-      `system participation text must use the effective DTO/default: ${JSON.stringify({ actualSystemNotEnabledMessage, expected: before.ui_text.systemNotEnabledMessage })}`);
+      systemSettings.systemNotEnabledMessage || '{{library}} does not currently participate in this suggestion service.',
+      'system participation editor must keep the unexpanded stored template');
     assert.equal(actualMisconfiguredMessage,
-      before.ui_text.misconfiguredMessage || 'The {{library}} suggestion system is currently misconfigured. Please contact staff.',
-      `system error text must use the effective DTO/default: ${JSON.stringify({ actualMisconfiguredMessage, expected: before.ui_text.misconfiguredMessage })}`);
-    assert.equal(serialized.staffUrl, actualSystemStaffUrl);
-    assert.equal(Object.hasOwn(serialized.ui_text, 'systemNotEnabledMessage'), false,
+      systemSettings.misconfiguredMessage || 'The {{library}} suggestion system is currently misconfigured. Please contact staff.',
+      'system error editor must keep the unexpanded stored template');
+    assert.equal(Object.hasOwn(serialized, 'staffUrl'), false);
+    assert.equal(Object.hasOwn(serialized.ui_text || {}, 'systemNotEnabledMessage'), false,
       'A no-edit system save must leave a null system participation message absent.');
-    assert.equal(Object.hasOwn(serialized.ui_text, 'misconfiguredMessage'), false,
+    assert.equal(Object.hasOwn(serialized.ui_text || {}, 'misconfiguredMessage'), false,
       'A no-edit system save must leave a null system misconfiguration message absent.');
   }
   const posted = {
@@ -259,7 +259,7 @@ async function runLegacySettingsNoEditRoundTrip(
         `${orgId} no-edit save must not materialize null system PatronSettings.${field}.`);
     }
   }
-  const saveResponse = await post(context, baseOrigin, '/api/asap/staff/settings/library', posted);
+  const saveResponse = await post(context, baseOrigin, '/api/asap/staff/legacy/settings', posted);
   assert.equal(saveResponse.status(), 200, `${orgId} no-edit Settings save failed: ${await saveResponse.text()}`);
   assert.equal(posted.orgId, orgId);
   assert.equal(posted.version, before.version);
@@ -267,14 +267,8 @@ async function runLegacySettingsNoEditRoundTrip(
   assert.deepEqual(Object.keys(posted.emails || {}).filter(key => standardTemplateKeys.includes(key) || key === 'rejection_templates'), [],
     `${orgId} no-edit save must not create or rewrite backend email templates from JavaScript defaults`);
 
-  if (orgId === 'system') {
-    assert.equal(posted.polaris.systemPolarisUserId, 731);
-    assert.equal(posted.polaris.organizationIdForRequests, 910);
-    assert.equal(posted.polaris.pickupOrganizationId, 4201);
-    assert.equal(Object.hasOwn(posted.polaris, 'userId'), false);
-    assert.equal(Object.hasOwn(posted.polaris, 'requestingOrgId'), false);
-    assert.equal(Object.hasOwn(posted.polaris, 'pickupOrgId'), false);
-  }
+  assert.equal(Object.hasOwn(posted, 'polaris'), false,
+    'A no-edit save must not submit unchanged Polaris settings or secrets.');
 
   const afterResponse = await context.request.get(
     `${baseOrigin}/api/asap/staff/settings/library?orgId=${encodeURIComponent(orgId)}`
@@ -488,7 +482,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
       return {
         selectedOrgId: document.getElementById('select-library-context').value,
         contextOrgId: state.currentLibraryContextOrgId,
-        modelOrgId: state.currentLegacySettingsFormModel?.contextOrgId,
+        modelOrgId: state.currentLegacySettingsForm?.orgId,
         settingsDirty: state.settingsDirty,
         selectorDisabled: document.getElementById('select-library-context').disabled
       };
@@ -506,7 +500,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
         return {
           selectedOrgId: document.getElementById('select-library-context').value,
           contextOrgId: state.currentLibraryContextOrgId,
-          modelOrgId: state.currentLegacySettingsFormModel?.contextOrgId,
+          modelOrgId: state.currentLegacySettingsForm?.orgId,
           settingsDirty: state.settingsDirty,
           settingsLoading: state.settingsLoading,
           settingsActionInProgress: state.settingsActionInProgress,
@@ -1018,7 +1012,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     assert.equal(await page.locator('#smtp-host, #smtp-port, #smtp-password').count(), 0);
     const beforeEmailSettings = await (await context.request.get(`${args.baseOrigin}/api/asap/staff/settings?orgId=2`)).json();
     const saveEmail = async () => {
-      const saved = page.waitForResponse(response => response.url().endsWith('/staff/settings/library') && response.request().method() === 'POST');
+      const saved = page.waitForResponse(response => response.url().endsWith('/staff/legacy/settings') && response.request().method() === 'POST');
       await page.locator('#settings-form button[type="submit"]').click();
       assert.equal((await saved).status(), 200);
       await page.waitForFunction(() => document.getElementById('postmark-token').value === '' &&

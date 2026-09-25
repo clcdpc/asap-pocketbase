@@ -4,6 +4,7 @@ const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { JSDOM } = require('jsdom');
+const { projectLegacySettingsFixture } = require('./helpers/legacy-settings-fixture.cjs');
 
 const response = (status, body) => ({ ok: status >= 200 && status < 300, status, statusText: 'Response', json: async () => body });
 const flush = async () => { await new Promise(resolve => setImmediate(resolve)); await Promise.resolve(); };
@@ -43,7 +44,7 @@ const flush = async () => { await new Promise(resolve => setImmediate(resolve));
     assert.strictEqual(outcome.isAmbiguousMutationError({ status: 0 }), true);
     assert.strictEqual(outcome.isAmbiguousMutationError(new dom.window.DOMException('Aborted', 'AbortError')), true);
     state.setStaffSession({ authenticated: true, accessAllowed: true, antiforgeryToken: 'test-token',
-      staff: { id: '27', role: 'admin', organizationId: '2', organizationName: 'Library Two', userPrincipalName: 'admin@example.org' } });
+      staff: { id: '27', role: 'admin', libraryOrgId: '2', libraryName: 'Library Two', email: 'admin@example.org' } });
 
     const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'settings', 'canonical-library-settings-response.json'), 'utf8'));
     let versionNumber = 1;
@@ -80,12 +81,17 @@ const flush = async () => { await new Promise(resolve => setImmediate(resolve));
       result.stored.branding = { ...result.stored.libraryOverride.branding };
       result.effective.logoAltText = libraryAlt ?? 'System alt';
       result.effective.logoUrl = libraryImage ? '/library-logo.png' : '/system-logo.png';
-      return result;
+      const form = projectLegacySettingsFixture(result);
+      form.uiText.loginNote = loginNote;
+      form.uiText.logoAlt = libraryAlt ?? 'System alt';
+      form.uiText.logoUrl = result.effective.logoUrl;
+      form.uiText.brandingInherited = !libraryImage && libraryAlt === null;
+      return form;
     };
     global.fetch = async (url, options = {}) => {
       const requestUrl = String(url);
       const method = String(options.method || 'GET').toUpperCase();
-      if (requestUrl.includes('/api/asap/staff/settings/library?orgId=2')) {
+      if (requestUrl.includes('/api/asap/staff/legacy/settings?orgId=2')) {
         if (failNextSettingsGet) {
           failNextSettingsGet = false;
           return response(503, {});
@@ -101,16 +107,16 @@ const flush = async () => { await new Promise(resolve => setImmediate(resolve));
         }
         return response(200, { publicationOptions: [] });
       }
-      if (requestUrl.includes('/api/asap/staff/polaris/patron-codes')) {
+      if (requestUrl.includes('/api/asap/staff/legacy/patron-codes')) {
         patronCodeGets++;
         if (deferNextPatronCodeGet) {
           deferNextPatronCodeGet = false;
-          const body = { code: 'ok', data: [{ id: '7', description: patronCodeName }] };
+          const body = [{ id: '7', description: patronCodeName }];
           return new Promise(resolve => { releaseDeferredPatronCodeGet = () => resolve(response(200, body)); });
         }
-        return response(200, { code: 'ok', data: [{ id: '7', description: patronCodeName }] });
+        return response(200, [{ id: '7', description: patronCodeName }]);
       }
-      if (requestUrl === '/api/asap/staff/organizations') {
+      if (requestUrl === '/api/asap/staff/legacy/organizations') {
         organizationGets++;
         if (failNextOrganizationGet) {
           failNextOrganizationGet = false;
@@ -118,14 +124,15 @@ const flush = async () => { await new Promise(resolve => setImmediate(resolve));
         }
         if (deferNextOrganizationGet) {
           deferNextOrganizationGet = false;
-          const body = { code: 'ok', data: [{ id: 2, displayName: organizationName, isActive: true }] };
+          const body = [{ id: 2, displayName: organizationName, isActive: true }];
           return new Promise(resolve => { releaseDeferredOrganizationGet = () => resolve(response(200, body)); });
         }
-        return response(200, { code: 'ok', data: [{ id: 2, displayName: organizationName, isActive: true }] });
+        return response(200, [{ id: 2, displayName: organizationName, isActive: true }]);
       }
       if (requestUrl.startsWith('/api/asap/staff/users')) return response(200, { users: [] });
       let family;
-      if (requestUrl === '/api/asap/staff/settings/library' && method === 'POST') {
+      if ((requestUrl === '/api/asap/staff/settings/library' ||
+          requestUrl === '/api/asap/staff/legacy/settings') && method === 'POST') {
         const body = JSON.parse(options.body);
         family = body.action === 'reset' ? 'library-reset' : 'settings-save';
         mutations.push({ family, version: body.version });

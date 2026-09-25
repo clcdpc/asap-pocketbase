@@ -1089,7 +1089,8 @@ export function createSettingsController({
       body: {
         email: clean(property(user, 'userPrincipalName')),
         role,
-        organizationId: role === 'super_admin' ? 1 : Number(organizationId)
+        organizationId: role === 'super_admin' ? 1 : Number(organizationId),
+        version: stringValue(property(user, 'version'))
       }
     }, 'Staff user reactivated.', property(user, 'id'));
   }

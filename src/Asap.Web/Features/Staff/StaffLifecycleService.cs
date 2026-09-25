@@ -10,7 +10,8 @@ namespace Asap.Web.Features.Staff;
 public sealed record StaffCreateInput(
     string? Email,
     string? Role,
-    int? OrganizationId);
+    int? OrganizationId,
+    string? Version = null);
 
 public sealed record StaffMetadataInput(
     string? Version,
@@ -179,6 +180,14 @@ public sealed class StaffLifecycleService(
             {
                 return new StaffLifecycleResult("staff_scope_forbidden");
             }
+            if (!StaffVersion.TryDecode(input.Version, out var expectedVersion))
+            {
+                return new StaffLifecycleResult("invalid_staff_user");
+            }
+            if (!existing.RowVersion.SequenceEqual(expectedVersion))
+            {
+                return new StaffLifecycleResult("stale_version");
+            }
 
             existing.IsActive = true;
             existing.Role = role;
@@ -189,6 +198,11 @@ public sealed class StaffLifecycleService(
             await context.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return new StaffLifecycleResult("created", existing);
+        }
+
+        if (input.Version is not null)
+        {
+            return new StaffLifecycleResult("stale_version");
         }
 
         var user = new StaffUser
