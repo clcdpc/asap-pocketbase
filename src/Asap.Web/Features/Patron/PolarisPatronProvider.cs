@@ -459,7 +459,8 @@ public sealed partial class PolarisPatronProvider(
             }
 
             if (!TryReadUsableBibGetRows(rawContent, out var rawRowCount) ||
-                data.BibGetRows is null || data.BibGetRows.Count == 0 || data.BibGetRows.Count != rawRowCount)
+                data.BibGetRows is null || data.BibGetRows.Count == 0 || data.BibGetRows.Count != rawRowCount ||
+                data.BibGetRows.Any(row => row is null || row.ElementID <= 0 || row.Value is null))
             {
                 throw new PolarisOperationalException(
                     "polaris_bib_validation_protocol_failed",
@@ -473,11 +474,11 @@ public sealed partial class PolarisPatronProvider(
             return new BibValidationResult(
                 true,
                 Clean(data.Title),
-                Clean(data.Author.FirstOrDefault()),
+                Clean(data.Author?.FirstOrDefault()),
                 publication,
                 Clean(data.Format),
-                Clean(data.ISBN) ?? Clean(data.ISSN) ?? Clean(data.UPC.FirstOrDefault()),
-                Clean(data.Publisher.FirstOrDefault()));
+                Clean(data.ISBN) ?? Clean(data.ISSN) ?? Clean(data.UPC?.FirstOrDefault()),
+                Clean(data.Publisher?.FirstOrDefault()));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1199,7 +1200,7 @@ public sealed partial class PolarisPatronProvider(
         try
         {
             using var document = JsonDocument.Parse(content ?? string.Empty);
-            return TryGetProperty(document.RootElement, "PAPIErrorCode", out var code) &&
+            return TryGetUniqueProperty(document.RootElement, "PAPIErrorCode", out var code) &&
                    code.TryGetInt32(out papiErrorCode);
         }
         catch (JsonException)
@@ -1215,10 +1216,10 @@ public sealed partial class PolarisPatronProvider(
             using var document = JsonDocument.Parse(content ?? string.Empty);
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object ||
-                !TryGetProperty(root, "ErrorMessage", out var errorMessage) ||
+                !TryGetUniqueProperty(root, "ErrorMessage", out var errorMessage) ||
                 errorMessage.ValueKind != JsonValueKind.String ||
                 !string.Equals(errorMessage.GetString()?.Trim(), "Invalid BibID", StringComparison.OrdinalIgnoreCase) ||
-                !TryGetProperty(root, "BibGetRows", out var rows))
+                !TryGetUniqueProperty(root, "BibGetRows", out var rows))
             {
                 return false;
             }
@@ -1244,7 +1245,7 @@ public sealed partial class PolarisPatronProvider(
             using var document = JsonDocument.Parse(content ?? string.Empty);
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object ||
-                !TryGetProperty(root, "BibGetRows", out var rows) ||
+                !TryGetUniqueProperty(root, "BibGetRows", out var rows) ||
                 rows.ValueKind != JsonValueKind.Array || rows.GetArrayLength() == 0)
             {
                 return false;
@@ -1252,7 +1253,12 @@ public sealed partial class PolarisPatronProvider(
 
             foreach (var row in rows.EnumerateArray())
             {
-                if (row.ValueKind != JsonValueKind.Object)
+                if (row.ValueKind != JsonValueKind.Object ||
+                    !TryGetUniqueProperty(row, "ElementID", out var elementId) ||
+                    elementId.ValueKind != JsonValueKind.Number ||
+                    !elementId.TryGetInt32(out var numericElementId) || numericElementId <= 0 ||
+                    !TryGetUniqueProperty(row, "Value", out var value) ||
+                    value.ValueKind != JsonValueKind.String)
                 {
                     return false;
                 }
@@ -1270,6 +1276,38 @@ public sealed partial class PolarisPatronProvider(
         {
             return false;
         }
+    }
+
+    private static bool TryGetUniqueProperty(
+        JsonElement element,
+        string name,
+        out JsonElement value)
+    {
+        value = default;
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        var found = false;
+        foreach (var property in element.EnumerateObject())
+        {
+            if (!string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (found)
+            {
+                value = default;
+                return false;
+            }
+
+            value = property.Value;
+            found = true;
+        }
+
+        return found;
     }
 
     private static int? ResolvePreferredPickupId(
