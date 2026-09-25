@@ -80,7 +80,7 @@ const { projectLegacySettingsFixture } = require('./helpers/legacy-settings-fixt
           server.version = 'newer-system-version';
           server.workflow.suggestionLimit = 19;
           return { ok: false, status: 409, statusText: 'Conflict', json: async () => ({
-            code: 'stale_version', message: 'Settings changed in another session.'
+            code: 'stale_version', message: 'Settings changed in another session.', operationPhase: 'rejected'
           }) };
         }
         assert.strictEqual(body.orgId, 'system');
@@ -127,7 +127,7 @@ const { projectLegacySettingsFixture } = require('./helpers/legacy-settings-fixt
     assert.strictEqual(document.getElementById('polaris-api-key').value, '');
     assert.strictEqual(document.getElementById('polaris-admin-pass').value, '');
     assert.strictEqual(document.getElementById('wf-external-search-2-label').value, 'Research Index');
-    assert.strictEqual(document.getElementById('wf-external-search-4-label').disabled, true);
+    assert.strictEqual(document.getElementById('wf-external-search-4-label').disabled, false);
     assert.deepStrictEqual([...document.querySelectorAll('.lib-participation-cb:checked')].map(node => node.value), ['2']);
     assert.strictEqual(Object.hasOwn(serializer.buildSettingsPayload().workflow || {}, 'suggestionLimit'), false);
     assert.strictEqual(Object.hasOwn(serializer.buildSettingsPayload().polaris || {}, 'apiKey'), false);

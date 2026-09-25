@@ -195,17 +195,112 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(0, await verify.CommonCreatorTerms.CountAsync(item => item.OrganizationId == libraryId));
             Assert.AreEqual(0, await verify.PatronCodeEligibilityMembers.CountAsync(item => item.OrganizationId == libraryId));
             Assert.AreEqual(0, await verify.PublicationOptions.CountAsync(item => item.OrganizationId == libraryId));
+
+            using var current = await ReadLegacySettingsAsync(client, libraryId.ToString());
+            var firstOption = LegacyNoEditPayload(current.RootElement, system: false);
+            ((JsonObject)firstOption["ui_text"]!)["publicationOptions"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["id"] = "first_choice", ["label"] = "First choice",
+                    ["enabled"] = true, ["sortOrder"] = 10
+                }
+            };
+            using var added = await SaveLegacySettingsAsync(client, firstOption, HttpStatusCode.OK);
+            Assert.AreEqual("saved", added.RootElement.GetProperty("code").GetString());
+            await using var persisted = await contextFactory.CreateDbContextAsync();
+            var choices = await persisted.PublicationOptions.AsNoTracking()
+                .Where(item => item.OrganizationId == libraryId).ToListAsync();
+            Assert.HasCount(1, choices);
+            Assert.AreEqual("First choice", choices[0].Label);
+            Assert.AreEqual("first_choice", choices[0].OptionKey);
         }
         finally
         {
             await using var cleanup = await contextFactory.CreateDbContextAsync();
             cleanup.CommonCreatorSets.RemoveRange(await cleanup.CommonCreatorSets.Where(item => item.OrganizationId == libraryId).ToListAsync());
             cleanup.PatronCodeEligibilitySets.RemoveRange(await cleanup.PatronCodeEligibilitySets.Where(item => item.OrganizationId == libraryId).ToListAsync());
+            cleanup.PublicationOptions.RemoveRange(await cleanup.PublicationOptions.Where(item => item.OrganizationId == libraryId).ToListAsync());
             cleanup.PublicationOptionSets.RemoveRange(await cleanup.PublicationOptionSets.Where(item => item.OrganizationId == libraryId).ToListAsync());
             cleanup.AdministrativeAudits.RemoveRange(await cleanup.AdministrativeAudits.Where(item => item.OrganizationId == libraryId).ToListAsync());
             await cleanup.SaveChangesAsync();
             cleanup.Organizations.RemoveRange(await cleanup.Organizations.Where(item => item.Id == libraryId).ToListAsync());
             await cleanup.SaveChangesAsync();
+        }
+    }
+
+    [TestMethod]
+    public async Task LegacySettingsConfiguresBlankFourthProviderAtSystemAndLibraryScopes()
+    {
+        const int libraryId = 92347;
+        factory!.UseKestrel(0);
+        using var client = factory.CreateClient();
+        var actor = await ReadConfiguredSuperAdminAsync();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+        var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        bool originalEnabled;
+        string originalLabel;
+        string originalUrl;
+        long fourthId;
+        long initialAuditId;
+        await using (var seed = await contextFactory.CreateDbContextAsync())
+        {
+            initialAuditId = await seed.AdministrativeAudits.MaxAsync(item => (long?)item.Id) ?? 0;
+            var fourth = await seed.ExternalSearchProviders.SingleAsync(item => item.ProviderKey == "external_search_4");
+            fourthId = fourth.Id;
+            originalEnabled = fourth.IsEnabled;
+            originalLabel = fourth.Label;
+            originalUrl = fourth.UrlTemplate;
+            seed.Organizations.Add(new Organization { Id = libraryId, DisplayName = "Legacy fourth provider", IsActive = true });
+            await seed.SaveChangesAsync();
+        }
+
+        try
+        {
+            using var systemBefore = await ReadLegacySettingsAsync(client, "system");
+            var blankFourth = systemBefore.RootElement.GetProperty("providers").EnumerateArray()
+                .Single(item => item.GetProperty("key").GetString() == "external_search_4");
+            Assert.IsFalse(blankFourth.TryGetProperty("id", out _));
+            var systemPayload = LegacyNoEditPayload(systemBefore.RootElement, system: true);
+            var systemFourth = ((JsonArray)systemPayload["providers"]!).OfType<JsonObject>()
+                .Single(item => (string?)item["key"] == "external_search_4");
+            systemFourth["isEnabled"] = true;
+            systemFourth["label"] = "Fourth catalog";
+            systemFourth["urlTemplate"] = "https://fourth.example.org/search?q={query}";
+            using var systemSaved = await SaveLegacySettingsAsync(client, systemPayload, HttpStatusCode.OK);
+            Assert.AreEqual("saved", systemSaved.RootElement.GetProperty("code").GetString());
+
+            using var libraryBefore = await ReadLegacySettingsAsync(client, libraryId.ToString());
+            var libraryPayload = LegacyNoEditPayload(libraryBefore.RootElement, system: false);
+            var libraryFourth = ((JsonArray)libraryPayload["providers"]!).OfType<JsonObject>()
+                .Single(item => (string?)item["key"] == "external_search_4");
+            libraryFourth["label"] = "Library fourth catalog";
+            using var librarySaved = await SaveLegacySettingsAsync(client, libraryPayload, HttpStatusCode.OK);
+            Assert.AreEqual("saved", librarySaved.RootElement.GetProperty("code").GetString());
+
+            await using var verify = await contextFactory.CreateDbContextAsync();
+            var systemFourthRow = await verify.ExternalSearchProviders.AsNoTracking().SingleAsync(item => item.Id == fourthId);
+            Assert.IsTrue(systemFourthRow.IsEnabled);
+            Assert.AreEqual("Fourth catalog", systemFourthRow.Label);
+            Assert.AreEqual("https://fourth.example.org/search?q={query}", systemFourthRow.UrlTemplate);
+            var overrideRow = await verify.ExternalSearchProviderOverrides.AsNoTracking().SingleAsync(item =>
+                item.LibraryOrganizationId == libraryId && item.ExternalSearchProviderId == fourthId);
+            Assert.AreEqual("Library fourth catalog", overrideRow.Label);
+            Assert.IsNull(overrideRow.UrlTemplate);
+        }
+        finally
+        {
+            await using var cleanup = await contextFactory.CreateDbContextAsync();
+            var fourth = await cleanup.ExternalSearchProviders.SingleAsync(item => item.Id == fourthId);
+            fourth.IsEnabled = originalEnabled;
+            fourth.Label = originalLabel;
+            fourth.UrlTemplate = originalUrl;
+            await cleanup.ExternalSearchProviderOverrides.Where(item => item.LibraryOrganizationId == libraryId).ExecuteDeleteAsync();
+            await cleanup.AdministrativeAudits.Where(item => item.Id > initialAuditId &&
+                item.ActorStaffUserId == actor.Id && (item.OrganizationId == libraryId || item.OrganizationId == 1)).ExecuteDeleteAsync();
+            await cleanup.SaveChangesAsync();
+            await cleanup.Organizations.Where(item => item.Id == libraryId).ExecuteDeleteAsync();
         }
     }
 
@@ -261,7 +356,7 @@ public sealed partial class PatronJourneyTests
                 var seededDisabledRule = new MaterialFormatCustomFieldRule
                 {
                     LibraryOrganizationId = libraryId, MaterialFormatId = book.Id,
-                    PatronCustomFieldId = disabledField.Id, Mode = "hidden", LabelOverride = "Preserve hidden"
+                    PatronCustomFieldId = disabledField.Id, Mode = "required", LabelOverride = "Preserve required dormant"
                 };
                 seed.MaterialFormatCustomFieldRules.AddRange(
                     new MaterialFormatCustomFieldRule
@@ -295,6 +390,17 @@ public sealed partial class PatronJourneyTests
             }
 
             using var before = await ReadLegacySettingsAsync(client, libraryId.ToString());
+            var editor = before.RootElement;
+            var bookEditor = editor.GetProperty("formats").EnumerateArray()
+                .Single(item => item.GetProperty("code").GetString() == "book");
+            Assert.IsFalse(bookEditor.TryGetProperty("ownerOrganizationId", out _));
+            Assert.IsFalse(bookEditor.TryGetProperty("id", out _));
+            Assert.IsFalse(editor.GetProperty("providers")[0].TryGetProperty("id", out _));
+            var templateEditor = editor.GetProperty("templates").EnumerateArray()
+                .Single(item => item.GetProperty("templateKey").GetString() == templateKey);
+            Assert.IsFalse(templateEditor.TryGetProperty("sourceTemplateId", out _));
+            Assert.IsFalse(templateEditor.TryGetProperty("organizationId", out _));
+            Assert.IsTrue(templateEditor.GetProperty("canReset").GetBoolean());
             var payload = LegacyNoEditPayload(before.RootElement, system: false);
             ((JsonObject)payload["workflow"]!)["suggestionLimit"] = 14;
             var providers = (JsonArray)payload["providers"]!;
@@ -319,8 +425,8 @@ public sealed partial class PatronJourneyTests
             var disabledRule = await verify.MaterialFormatCustomFieldRules.AsNoTracking().SingleAsync(item => item.PatronCustomFieldId == disabledFieldId);
             Assert.AreEqual("optional", activeRule.Mode);
             Assert.AreEqual(disabledRuleId, disabledRule.Id);
-            Assert.AreEqual("hidden", disabledRule.Mode);
-            Assert.AreEqual("Preserve hidden", disabledRule.LabelOverride);
+            Assert.AreEqual("required", disabledRule.Mode);
+            Assert.AreEqual("Preserve required dormant", disabledRule.LabelOverride);
             CollectionAssert.AreEqual(disabledVersion, disabledRule.RowVersion);
             var firstOverride = await verify.ExternalSearchProviderOverrides.AsNoTracking().SingleAsync(item =>
                 item.LibraryOrganizationId == libraryId && item.ExternalSearchProviderId == firstProviderId);
@@ -339,6 +445,22 @@ public sealed partial class PatronJourneyTests
                 item.GetProperty("templateKey").GetString() == templateKey);
             Assert.AreEqual("System subject", displayed.GetProperty("subject").GetString());
             Assert.AreEqual("System body", displayed.GetProperty("body").GetString());
+
+            var enablePayload = LegacyNoEditPayload(after.RootElement, system: false);
+            var definitions = JsonNode.Parse(after.RootElement.GetProperty("uiText")
+                .GetProperty("additionalFieldDefinitions").GetRawText())!.AsArray();
+            definitions.OfType<JsonObject>().Single(item => (string?)item["key"] == disabledKey)["enabled"] = true;
+            enablePayload["customFields"] = definitions;
+            var enableBookRules = (JsonObject)((JsonObject)enablePayload["formatRules"]!)["book"]!;
+            ((JsonObject)((JsonObject)enableBookRules["customFields"]!)[activeKey]!)["mode"] = "required";
+            using var enabled = await SaveLegacySettingsAsync(client, enablePayload, HttpStatusCode.OK);
+            Assert.AreEqual("saved", enabled.RootElement.GetProperty("code").GetString());
+            await using var enabledState = await contextFactory.CreateDbContextAsync();
+            var enabledField = await enabledState.PatronCustomFields.AsNoTracking().SingleAsync(item => item.Id == disabledFieldId);
+            Assert.IsTrue(enabledField.IsEnabled);
+            var restoredRule = await enabledState.MaterialFormatCustomFieldRules.AsNoTracking().SingleAsync(item => item.Id == disabledRuleId);
+            Assert.AreEqual("required", restoredRule.Mode);
+            Assert.AreEqual("Preserve required dormant", restoredRule.LabelOverride);
         }
         finally
         {
@@ -349,6 +471,194 @@ public sealed partial class PatronJourneyTests
             await cleanup.WorkflowSettings.Where(item => item.OrganizationId == libraryId).ExecuteDeleteAsync();
             await cleanup.EmailTemplates.Where(item => item.OrganizationId == libraryId && item.TemplateKey == templateKey).ExecuteDeleteAsync();
             await cleanup.EmailTemplates.Where(item => item.OrganizationId == 1 && item.TemplateKey == templateKey).ExecuteDeleteAsync();
+            await cleanup.AdministrativeAudits.Where(item => item.OrganizationId == libraryId).ExecuteDeleteAsync();
+            await cleanup.Organizations.Where(item => item.Id == libraryId).ExecuteDeleteAsync();
+        }
+    }
+
+    [TestMethod]
+    public async Task LegacySettingsCreatesFormatFieldRulesAndAutoClaimTogether()
+    {
+        const int libraryId = 92345;
+        factory!.UseKestrel(0);
+        using var client = factory.CreateClient();
+        var actor = await ReadConfiguredSuperAdminAsync();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+        var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var suffix = Guid.NewGuid().ToString("N")[..12];
+        var formatCode = $"legacy_{suffix}";
+        var fieldKey = $"field_{suffix}";
+        var dormantKey = $"dormant_{suffix}";
+        long dormantRuleId;
+        byte[] dormantRuleVersion;
+
+        await using (var seed = await contextFactory.CreateDbContextAsync())
+        {
+            seed.Organizations.Add(new Organization { Id = libraryId, DisplayName = "Legacy combined format", IsActive = true });
+            var dormant = new PatronCustomField
+            {
+                LibraryOrganizationId = libraryId, FieldKey = dormantKey, FieldType = "text",
+                Label = "Dormant", IsEnabled = false, SortOrder = 10
+            };
+            seed.PatronCustomFields.Add(dormant);
+            await seed.SaveChangesAsync();
+            var book = await seed.MaterialFormats.SingleAsync(item => item.OwnerOrganizationId == 1 && item.Code == "book");
+            var dormantRule = new MaterialFormatCustomFieldRule
+            {
+                LibraryOrganizationId = libraryId, MaterialFormatId = book.Id,
+                PatronCustomFieldId = dormant.Id, Mode = "required", LabelOverride = "Keep dormant label"
+            };
+            seed.MaterialFormatCustomFieldRules.Add(dormantRule);
+            await seed.SaveChangesAsync();
+            dormantRuleId = dormantRule.Id;
+            dormantRuleVersion = dormantRule.RowVersion.ToArray();
+        }
+
+        try
+        {
+            using var before = await ReadLegacySettingsAsync(client, libraryId.ToString());
+            var payload = LegacyNoEditPayload(before.RootElement, system: false);
+            ((JsonArray)payload["formats"]!).Add(new JsonObject
+            {
+                ["code"] = formatCode, ["label"] = "New combined format",
+                ["sortOrder"] = 990, ["isEnabled"] = true
+            });
+            var definitions = JsonNode.Parse(before.RootElement.GetProperty("uiText")
+                .GetProperty("additionalFieldDefinitions").GetRawText())!.AsArray();
+            definitions.Add(new JsonObject
+            {
+                ["key"] = fieldKey, ["label"] = "New field", ["type"] = "text",
+                ["helpText"] = null, ["enabled"] = true, ["sortOrder"] = 20,
+                ["options"] = new JsonArray()
+            });
+            payload["customFields"] = definitions;
+            var rules = (JsonObject)payload["formatRules"]!;
+            rules[formatCode] = new JsonObject
+            {
+                ["messageBehavior"] = "none",
+                ["customFields"] = new JsonObject
+                {
+                    [fieldKey] = new JsonObject { ["mode"] = "required", ["labelOverride"] = "Format field label" }
+                }
+            };
+            ((JsonObject)rules["book"]!)["customFields"]!.AsObject()[fieldKey] = new JsonObject
+            {
+                ["mode"] = "optional", ["labelOverride"] = "Book field label"
+            };
+            ((JsonArray)payload["formatClaimRules"]!).Add(new JsonObject
+            {
+                ["format"] = formatCode, ["staffUserId"] = actor.Id.ToString()
+            });
+            using var saved = await SaveLegacySettingsAsync(client, payload, HttpStatusCode.OK);
+            Assert.AreEqual("saved", saved.RootElement.GetProperty("code").GetString());
+
+            await using var verify = await contextFactory.CreateDbContextAsync();
+            var format = await verify.MaterialFormats.AsNoTracking().SingleAsync(item => item.Code == formatCode);
+            var field = await verify.PatronCustomFields.AsNoTracking().SingleAsync(item => item.FieldKey == fieldKey);
+            Assert.AreEqual(libraryId, format.OwnerOrganizationId);
+            Assert.AreEqual(libraryId, field.LibraryOrganizationId);
+            var newRule = await verify.MaterialFormatCustomFieldRules.AsNoTracking()
+                .SingleAsync(item => item.MaterialFormatId == format.Id && item.PatronCustomFieldId == field.Id);
+            Assert.AreEqual("required", newRule.Mode);
+            Assert.AreEqual("Format field label", newRule.LabelOverride);
+            var bookFormat = await verify.MaterialFormats.AsNoTracking().SingleAsync(item => item.Code == "book" && item.OwnerOrganizationId == 1);
+            var bookRule = await verify.MaterialFormatCustomFieldRules.AsNoTracking()
+                .SingleAsync(item => item.MaterialFormatId == bookFormat.Id && item.PatronCustomFieldId == field.Id);
+            Assert.AreEqual("optional", bookRule.Mode);
+            var claim = await verify.FormatAutoClaimRules.AsNoTracking().SingleAsync(item =>
+                item.LibraryOrganizationId == libraryId && item.MaterialFormatId == format.Id && item.IsActive);
+            Assert.AreEqual(actor.Id, claim.StaffUserId);
+            var dormant = await verify.MaterialFormatCustomFieldRules.AsNoTracking().SingleAsync(item => item.Id == dormantRuleId);
+            Assert.AreEqual("required", dormant.Mode);
+            Assert.AreEqual("Keep dormant label", dormant.LabelOverride);
+            CollectionAssert.AreEqual(dormantRuleVersion, dormant.RowVersion);
+        }
+        finally
+        {
+            await using var cleanup = await contextFactory.CreateDbContextAsync();
+            await cleanup.FormatAutoClaimRules.Where(item => item.LibraryOrganizationId == libraryId).ExecuteDeleteAsync();
+            await cleanup.MaterialFormatCustomFieldRules.Where(item => item.LibraryOrganizationId == libraryId).ExecuteDeleteAsync();
+            await cleanup.PatronCustomFields.Where(item => item.LibraryOrganizationId == libraryId).ExecuteDeleteAsync();
+            await cleanup.MaterialFormats.Where(item => item.OwnerOrganizationId == libraryId).ExecuteDeleteAsync();
+            await cleanup.AdministrativeAudits.Where(item => item.OrganizationId == libraryId).ExecuteDeleteAsync();
+            await cleanup.Organizations.Where(item => item.Id == libraryId).ExecuteDeleteAsync();
+        }
+    }
+
+    [TestMethod]
+    public async Task LegacySettingsSaveReportsCommittedPartialFormatRemoval()
+    {
+        const int libraryId = 92346;
+        factory!.UseKestrel(0);
+        using var client = factory.CreateClient();
+        var actor = await ReadConfiguredSuperAdminAsync();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+        var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        const string removableCode = "legacy_batch_removable";
+        const string referencedCode = "legacy_batch_referenced";
+        long referencedId;
+        byte[] referencedVersion;
+        await using (var seed = await contextFactory.CreateDbContextAsync())
+        {
+            seed.Organizations.Add(new Organization { Id = libraryId, DisplayName = "Legacy partial removal", IsActive = true });
+            await seed.SaveChangesAsync();
+            var now = DateTime.UtcNow;
+            var removable = new MaterialFormat
+            {
+                OwnerOrganizationId = libraryId, Code = removableCode, Label = "Removable",
+                SortOrder = 980, IsEnabled = true, CreatedUtc = now, UpdatedUtc = now
+            };
+            var referenced = new MaterialFormat
+            {
+                OwnerOrganizationId = libraryId, Code = referencedCode, Label = "Referenced",
+                SortOrder = 990, IsEnabled = true, CreatedUtc = now, UpdatedUtc = now
+            };
+            seed.MaterialFormats.AddRange(removable, referenced);
+            await seed.SaveChangesAsync();
+            seed.FormatAutoClaimRules.Add(new FormatAutoClaimRule
+            {
+                LibraryOrganizationId = libraryId, MaterialFormatId = referenced.Id,
+                IsActive = false, CreatedUtc = now
+            });
+            await seed.SaveChangesAsync();
+            referencedId = referenced.Id;
+            referencedVersion = referenced.RowVersion.ToArray();
+        }
+        try
+        {
+            using var before = await ReadLegacySettingsAsync(client, libraryId.ToString());
+            var formats = before.RootElement.GetProperty("formats").EnumerateArray().ToDictionary(
+                item => item.GetProperty("code").GetString()!);
+            Assert.IsTrue(formats[removableCode].GetProperty("canDelete").GetBoolean());
+            var payload = LegacyNoEditPayload(before.RootElement, system: false);
+            ((JsonObject)payload["workflow"]!)["suggestionLimit"] = 11;
+            payload["deletedFormats"] = new JsonArray
+            {
+                new JsonObject { ["code"] = removableCode, ["version"] = formats[removableCode].GetProperty("version").GetString() },
+                new JsonObject { ["code"] = referencedCode, ["version"] = formats[referencedCode].GetProperty("version").GetString() }
+            };
+            using var saved = await SaveLegacySettingsAsync(client, payload, HttpStatusCode.OK);
+            var result = saved.RootElement;
+            Assert.AreEqual("partial", result.GetProperty("code").GetString());
+            Assert.AreEqual("partial", result.GetProperty("operationPhase").GetString());
+            Assert.AreEqual(removableCode, result.GetProperty("data").GetProperty("deletedFormats")[0].GetString());
+            Assert.AreEqual(referencedCode, result.GetProperty("data").GetProperty("failedFormat").GetString());
+            Assert.AreEqual("format_referenced", result.GetProperty("data").GetProperty("failureCode").GetString());
+            await using var verify = await contextFactory.CreateDbContextAsync();
+            Assert.IsFalse(await verify.MaterialFormats.AnyAsync(item => item.Code == removableCode));
+            var surviving = await verify.MaterialFormats.AsNoTracking().SingleAsync(item => item.Id == referencedId);
+            CollectionAssert.AreEqual(referencedVersion, surviving.RowVersion);
+            Assert.AreEqual(11, (await verify.WorkflowSettings.SingleAsync(item => item.OrganizationId == libraryId)).SuggestionLimit);
+        }
+        finally
+        {
+            await using var cleanup = await contextFactory.CreateDbContextAsync();
+            await cleanup.FormatAutoClaimRules.Where(item => item.LibraryOrganizationId == libraryId).ExecuteDeleteAsync();
+            await cleanup.MaterialFormatCustomFieldRules.Where(item => item.LibraryOrganizationId == libraryId).ExecuteDeleteAsync();
+            await cleanup.MaterialFormats.Where(item => item.OwnerOrganizationId == libraryId).ExecuteDeleteAsync();
+            await cleanup.WorkflowSettings.Where(item => item.OrganizationId == libraryId).ExecuteDeleteAsync();
             await cleanup.AdministrativeAudits.Where(item => item.OrganizationId == libraryId).ExecuteDeleteAsync();
             await cleanup.Organizations.Where(item => item.Id == libraryId).ExecuteDeleteAsync();
         }
@@ -390,6 +700,15 @@ public sealed partial class PatronJourneyTests
             var systemOnly = (JsonObject)valid.DeepClone();
             systemOnly["polaris"] = new JsonObject { ["host"] = "forbidden.example.org" };
             using (var rejected = await SaveLegacySettingsAsync(client, systemOnly, HttpStatusCode.BadRequest))
+            {
+                Assert.AreEqual("invalid_input", rejected.RootElement.GetProperty("code").GetString());
+            }
+            var unknownRemoval = (JsonObject)valid.DeepClone();
+            unknownRemoval["deletedFormats"] = new JsonArray
+            {
+                new JsonObject { ["code"] = "not_a_scoped_format", ["version"] = "original-token" }
+            };
+            using (var rejected = await SaveLegacySettingsAsync(client, unknownRemoval, HttpStatusCode.BadRequest))
             {
                 Assert.AreEqual("invalid_input", rejected.RootElement.GetProperty("code").GetString());
             }

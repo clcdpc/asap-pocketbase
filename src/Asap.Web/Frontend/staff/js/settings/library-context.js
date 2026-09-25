@@ -1,4 +1,4 @@
-import { currentLibraryContextOrgId, libraryContextLoadSerial, librarySelectorBound, organizationsStatus, organizationsStatusMessage, currentSettingsSection, settingsDirty, settingsSyncInProgress, settingsSaving, settingsLoading, settingsActionInProgress, workflowSettings, libraryOverridesSummary, setCurrentLibraryContextOrgId, setLibrarySelectorBound, setLibraryOverridesSummary, incrementLibraryContextLoadSerial, setOrganizationsStatus, setSettingsReloadRequired, setSettingsActionInProgress } from '../state.js';
+import { currentLibraryContextOrgId, libraryContextLoadSerial, librarySelectorBound, organizationsStatus, organizationsStatusMessage, currentSettingsSection, settingsDirty, settingsSyncInProgress, settingsSaving, settingsLoading, settingsActionInProgress, workflowSettings, libraryOverridesSummary, staffSession, staffAccessGeneration, setCurrentLibraryContextOrgId, setLibrarySelectorBound, setLibraryOverridesSummary, incrementLibraryContextLoadSerial, setOrganizationsStatus, setSettingsReloadRequired, setSettingsActionInProgress } from '../state.js';
 import { isSuperAdminStaff, isRequestCanceledError, setVisible, activateSettingsSection, markSettingsClean } from '../api.js';
 import { authorizedJson, isAbortError } from '../http.js';
 import { showConfirm, showToast } from '../dialogs.js';
@@ -11,6 +11,20 @@ import { createLatestLoad } from '../../../shared/latest-load.js';
 const SUPER_ADMIN_LIBRARY_CONTEXT_STORAGE_KEY = 'asap.superAdmin.settings.libraryContextOrgId';
 const librarySettingsLoads = createLatestLoad();
 let librarySelectorLoadSerial = 0;
+let activeLibrarySettingsGuard = null;
+
+export function invalidateLibrarySettingsLoads() {
+  activeLibrarySettingsGuard?.abort();
+  activeLibrarySettingsGuard = null;
+  librarySelectorLoadSerial += 1;
+  incrementLibraryContextLoadSerial();
+}
+
+function ownsSettingsAccess(generation, staffId) {
+  return generation === staffAccessGeneration && staffId === staffSession.staff?.id &&
+    staffSession.authenticated && staffSession.accessAllowed &&
+    ['admin', 'super_admin'].includes(staffSession.staff?.role);
+}
 
 function readSavedSuperAdminLibraryContext() {
   try {
@@ -64,11 +78,13 @@ export async function populateLibrarySelector() {
   const selectorLoadId = ++librarySelectorLoadSerial;
   const startingContextOrgId = currentLibraryContextOrgId;
   const startingContextSerial = libraryContextLoadSerial;
+  const accessGeneration = staffAccessGeneration;
+  const staffId = staffSession.staff?.id;
 
   try {
     select.disabled = true;
     const orgs = await authorizedJson('/api/asap/staff/legacy/organizations');
-    if (selectorLoadId !== librarySelectorLoadSerial ||
+    if (!ownsSettingsAccess(accessGeneration, staffId) || selectorLoadId !== librarySelectorLoadSerial ||
         startingContextOrgId !== currentLibraryContextOrgId || startingContextSerial !== libraryContextLoadSerial) {
       return;
     }
@@ -94,7 +110,7 @@ export async function populateLibrarySelector() {
       refreshLibrarySelectorIndicators();
     }
 
-    if (selectorLoadId !== librarySelectorLoadSerial ||
+    if (!ownsSettingsAccess(accessGeneration, staffId) || selectorLoadId !== librarySelectorLoadSerial ||
         startingContextOrgId !== currentLibraryContextOrgId || startingContextSerial !== libraryContextLoadSerial) {
       return;
     }
@@ -118,7 +134,7 @@ export async function populateLibrarySelector() {
       console.error('Failed to populate library selector', err);
     }
   } finally {
-    if (selectorLoadId === librarySelectorLoadSerial) {
+    if (ownsSettingsAccess(accessGeneration, staffId) && selectorLoadId === librarySelectorLoadSerial) {
       select.disabled = settingsLoading || settingsSaving || settingsSyncInProgress || settingsActionInProgress;
     }
   }
@@ -205,10 +221,14 @@ export async function handleLibraryContextSwitch(orgId) {
 export async function loadLibrarySettings(orgId, options = {}) {
   const requestedOrgId = orgId || 'system';
   const guard = librarySettingsLoads.begin('library-settings');
+  activeLibrarySettingsGuard = guard;
+  const accessGeneration = staffAccessGeneration;
+  const staffId = staffSession.staff?.id;
+  const guardCurrent = () => guard.isCurrent() && ownsSettingsAccess(accessGeneration, staffId);
   incrementLibraryContextLoadSerial();
   const requestId = libraryContextLoadSerial;
   setCurrentLibraryContextOrgId(requestedOrgId);
-  showStaffAccessLoading({ contextOrgId: requestedOrgId, isCurrent: guard.isCurrent });
+  showStaffAccessLoading({ contextOrgId: requestedOrgId, isCurrent: guardCurrent });
   let applyingSettings = false;
 
   try {
@@ -218,7 +238,7 @@ export async function loadLibrarySettings(orgId, options = {}) {
       cache: 'no-store',
       signal: guard.signal
     });
-    if (!guard.isCurrent() || requestId !== libraryContextLoadSerial || requestedOrgId !== currentLibraryContextOrgId) {
+    if (!guardCurrent() || requestId !== libraryContextLoadSerial || requestedOrgId !== currentLibraryContextOrgId) {
       return;
     }
 
@@ -229,7 +249,7 @@ export async function loadLibrarySettings(orgId, options = {}) {
     settings = result;
     applyingSettings = true;
     await applyLibrarySettingsToForm(settings);
-    if (!guard.isCurrent() || requestId !== libraryContextLoadSerial || requestedOrgId !== currentLibraryContextOrgId) {
+    if (!guardCurrent() || requestId !== libraryContextLoadSerial || requestedOrgId !== currentLibraryContextOrgId) {
       return;
     }
     captureSettingsBaseline();
@@ -242,15 +262,15 @@ export async function loadLibrarySettings(orgId, options = {}) {
       await loadStaffAccessSettings({
         contextOrgId: requestedOrgId,
         signal: guard.signal,
-        isCurrent: guard.isCurrent
+        isCurrent: guardCurrent
       });
     } catch (accessError) {
-      if (guard.isCurrent() && requestedOrgId === currentLibraryContextOrgId) {
+      if (guardCurrent() && requestedOrgId === currentLibraryContextOrgId) {
         console.error('Staff Access could not be refreshed after Settings loaded.', accessError);
         showToast('Settings loaded, but Staff Access could not be refreshed.', 'error', 'settings-save-toast');
       }
     }
-    if (!guard.isCurrent() || requestId !== libraryContextLoadSerial || requestedOrgId !== currentLibraryContextOrgId) {
+    if (!guardCurrent() || requestId !== libraryContextLoadSerial || requestedOrgId !== currentLibraryContextOrgId) {
       return;
     }
     return settings;
@@ -262,7 +282,7 @@ export async function loadLibrarySettings(orgId, options = {}) {
     if (isRequestCanceledError(err)) {
       return;
     }
-    if (applyingSettings && guard.isCurrent() && requestId === libraryContextLoadSerial && requestedOrgId === currentLibraryContextOrgId) {
+    if (applyingSettings && guardCurrent() && requestId === libraryContextLoadSerial && requestedOrgId === currentLibraryContextOrgId) {
       setSettingsReloadRequired(true);
     }
     console.error('Error loading library settings:', err);
@@ -270,5 +290,6 @@ export async function loadLibrarySettings(orgId, options = {}) {
     if (options.throwOnError) throw err;
   } finally {
     librarySettingsLoads.finish('library-settings', guard.token);
+    if (activeLibrarySettingsGuard === guard) activeLibrarySettingsGuard = null;
   }
 }

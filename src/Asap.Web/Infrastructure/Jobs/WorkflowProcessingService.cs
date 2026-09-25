@@ -1897,7 +1897,7 @@ public sealed class WorkflowProcessingService(
         TimeoutFamily.HoldPickupTimeout => "hold_placed",
         _ => ""
     };
-    private static bool IsTerminal(string? status) => status?.Trim().ToLowerInvariant() is "unclaimed" or "cancelled" or "expired";
+    private static bool IsTerminal(string? status) => StaffHoldStatus.IsTerminal(status);
     private static string TerminalReason(string? status) => status?.Trim().ToLowerInvariant() switch
     {
         "cancelled" => "hold_cancelled",

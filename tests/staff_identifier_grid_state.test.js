@@ -8,13 +8,13 @@ const { pathToFileURL } = require('node:url');
   const row = {
     bibid: '9002',
     isbnCheckStatus: 'not_found',
-    isbnCheckResult: 'Selected Polaris BIB has no catalog identifier; request identifier was not verified.',
+    identifierPresentation: 'not_verified_on_bib',
     workflowTags: []
   };
   assert.equal(policy.getIsbnCheckLabel(row), 'Identifier not verified on selected BIB');
   const unprocessed = {
     isbnCheckStatus: 'not_found',
-    isbnCheckResult: 'Identifier processing was not completed before this request left suggestions.',
+    identifierPresentation: 'not_completed',
     workflowTags: []
   };
   assert.equal(policy.getIsbnCheckLabel(unprocessed), 'Identifier check not completed');

@@ -1,10 +1,11 @@
-import { settingsContainer, settingsLoading, settingsDirty, settingsReloadRequired, settingsSaving, settingsSyncInProgress, settingsActionInProgress, libraryContextLoadSerial, currentLibraryContextOrgId, currentSettingsSection, setSettingsLoading, setSettingsReloadRequired, setAdditionalFieldDefinitions, setCurrentPatronFieldConfig, staffSession, setCurrentLibraryContextOrgId, workflowSettings, organizationsStatus } from '../state.js';
+import { settingsContainer, settingsLoading, settingsDirty, settingsReloadRequired, settingsSaving, settingsSyncInProgress, settingsActionInProgress, libraryContextLoadSerial, currentLibraryContextOrgId, currentSettingsSection, setSettingsLoading, setSettingsSaving, setSettingsReloadRequired, setSettingsDirty, setInitialSettingsSnapshot, setLastSavedLibrarySettingsSnapshot, setLastSavedLibrarySettingsOrgId, setDeletedSettingsFormats, setAdditionalFieldDefinitions, setCurrentPatronFieldConfig, staffSession, staffAccessGeneration, setCurrentLibraryContextOrgId, workflowSettings, organizationsStatus } from '../state.js';
 import { setVisible, isSuperAdminStaff, activateSettingsSection, initSettingsNavigation, checkAuth, markSettingsClean, updateSaveBarState, setFieldValue, setFieldChecked, isRequestCanceledError } from '../api.js';
 import { updateSaveButtonText } from './save-ui.js';
 import { authorizedJson, loadStaffSession } from '../http.js';
 import { closeOpenDialogs } from '../dialogs.js';
 import { closeActionMenu } from '../grid.js';
-import { populateLibrarySelector, loadLibrarySettings } from './library-context.js';
+import { populateLibrarySelector, loadLibrarySettings, invalidateLibrarySettingsLoads } from './library-context.js';
+import { invalidateStaffAccessLoads } from '../settings-users.js';
 import { updatePublicationOptionsUi } from '../settings-ui.js';
 import { syncPolarisOrganizations } from './polaris-sync.js';
 import { registerSettingsRefreshHandlers } from './refresh.js';
@@ -13,6 +14,27 @@ import { isPolarisConfigured, populatePolarisSettingsForm } from './polaris-fiel
 
 const adminSettingsSections = ['start', 'smtp', 'staff', 'templates', 'workflow', 'patron'];
 const settingsLoads = createLatestLoad();
+let activeSettingsGuard = null;
+
+export function invalidateSettingsWork() {
+  activeSettingsGuard?.abort();
+  activeSettingsGuard = null;
+  invalidateLibrarySettingsLoads();
+  invalidateStaffAccessLoads();
+  setSettingsLoading(false);
+  setSettingsSaving(false);
+}
+
+window.addEventListener('asap:staff-access-changed', () => {
+  invalidateSettingsWork();
+  setSettingsDirty(false);
+  setInitialSettingsSnapshot(null);
+  setLastSavedLibrarySettingsSnapshot(null);
+  setLastSavedLibrarySettingsOrgId(null);
+  setDeletedSettingsFormats([]);
+  setSettingsReloadRequired(true);
+  document.getElementById('settings-form')?.classList.add('hidden');
+});
 
 function maybeSyncPolarisOrganizations(polaris) {
   if (isPolarisConfigured(polaris) && (organizationsStatus === 'not_loaded' || organizationsStatus === 'error')) {
@@ -86,6 +108,7 @@ function handleLoadSettingsError(err, showErrors) {
 }
 
 export function showSettingsAccessDenied() {
+  invalidateSettingsWork();
   settingsContainer.classList.remove('hidden');
   setVisible('settings-error', true);
   const formEl = document.getElementById('settings-form');
@@ -122,6 +145,12 @@ export async function loadSettings(options = {}) {
   const isSuper = isSuperAdminStaff();
   const showErrors = options.showErrors !== false;
   const guard = settingsLoads.begin('settings');
+  activeSettingsGuard = guard;
+  const accessGeneration = staffAccessGeneration;
+  const staffId = staffSession.staff?.id;
+  const ownsAccess = () => guard.isCurrent() && staffAccessGeneration === accessGeneration &&
+    staffSession.staff?.id === staffId && staffSession.authenticated && staffSession.accessAllowed &&
+    ['admin', 'super_admin'].includes(staffSession.staff?.role);
   let loadFailed = false;
   let settingsLoaded = false;
   let autoSyncPolaris = null;
@@ -131,14 +160,14 @@ export async function loadSettings(options = {}) {
     updateSettingsSidebar(isSuper);
     ensureAllowedSettingsSection(isSuper);
     await loadLibraryContext(isSuper);
-    if (!guard.isCurrent() || startingContextSerial !== libraryContextLoadSerial) return;
+    if (!ownsAccess() || startingContextSerial !== libraryContextLoadSerial) return;
 
     const requestedContextOrgId = currentLibraryContextOrgId;
     const loadedLibrarySettings = await loadLibrarySettings(requestedContextOrgId, {
       throwOnError: options.throwOnError === true,
       preserveReloadRequired: options.preserveReloadRequired === true
     });
-    if (!guard.isCurrent() || loadedLibrarySettings === undefined || requestedContextOrgId !== currentLibraryContextOrgId) return;
+    if (!ownsAccess() || loadedLibrarySettings === undefined || requestedContextOrgId !== currentLibraryContextOrgId) return;
     settingsLoaded = !!loadedLibrarySettings?.version;
 
     if (!isSuper) {
@@ -151,13 +180,13 @@ export async function loadSettings(options = {}) {
     updateWorkflowSettingsSummary(loadedLibrarySettings);
 
     populateSystemSettingsForms(loadedLibrarySettings);
-    if (!guard.isCurrent() || requestedContextOrgId !== currentLibraryContextOrgId) return;
+    if (!ownsAccess() || requestedContextOrgId !== currentLibraryContextOrgId) return;
     showSettingsForm();
     return loadedLibrarySettings;
 
   } catch (err) {
     loadFailed = true;
-    if (guard.isCurrent()) {
+    if (ownsAccess()) {
       if (settingsLoaded) {
         setSettingsReloadRequired(true);
         updateSaveBarState('reload');
@@ -166,12 +195,13 @@ export async function loadSettings(options = {}) {
     }
     if (options.throwOnError === true) throw err;
   } finally {
-    if (guard.isCurrent()) {
+    if (ownsAccess()) {
       setSettingsLoading(false);
       if (!loadFailed && settingsLoaded) markSettingsClean('clean');
       if (!loadFailed && settingsLoaded && autoSyncPolaris) maybeSyncPolarisOrganizations(autoSyncPolaris);
     }
     settingsLoads.finish('settings', guard.token);
+    if (activeSettingsGuard === guard) activeSettingsGuard = null;
   }
 }
 
@@ -182,9 +212,12 @@ export function refreshSettingsView(options = {}) {
 export async function loadStaffConfig() {
   const contextOrgId = currentLibraryContextOrgId;
   const contextSerial = libraryContextLoadSerial;
+  const accessGeneration = staffAccessGeneration;
+  const staffId = staffSession.staff?.id;
   try {
     const config = await authorizedJson('/api/asap/config');
-    if (contextOrgId !== currentLibraryContextOrgId || contextSerial !== libraryContextLoadSerial) return false;
+    if (contextOrgId !== currentLibraryContextOrgId || contextSerial !== libraryContextLoadSerial ||
+        accessGeneration !== staffAccessGeneration || staffId !== staffSession.staff?.id) return false;
     if (config) {
       if (config.logoUrl) {
         document.getElementById('app-icon').href = config.logoUrl;

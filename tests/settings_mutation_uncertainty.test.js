@@ -29,14 +29,11 @@ const flush = async () => { await new Promise(resolve => setImmediate(resolve));
     const settings = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings.js')).href);
     const patronCodes = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'patron-codes.js')).href);
     const outcome = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings', 'mutation-outcome.js')).href);
-    assert.strictEqual(outcome.classifyMutationOutcome({ status: 400, response: { code: 'logo_invalid' } }), 'definite_failure');
-    assert.strictEqual(outcome.classifyMutationOutcome({ status: 400, response: { code: 'settings_invalid' } }), 'definite_failure');
-    assert.strictEqual(outcome.isAmbiguousMutationError({ status: 400, response: { code: 'settings_invalid' } }), false);
-    assert.strictEqual(outcome.isAmbiguousMutationError({ status: 409, response: { code: 'stale_version' } }), false);
+    assert.strictEqual(outcome.classifyMutationOutcome({ status: 400, response: { operationPhase: 'rejected' } }), 'definite_failure');
+    assert.strictEqual(outcome.isAmbiguousMutationError({ status: 409, response: { operationPhase: 'rejected' } }), false);
     assert.strictEqual(outcome.isAmbiguousMutationError({ status: 403, response: { code: 'staff_scope_forbidden' } }), false);
-    assert.strictEqual(outcome.isAmbiguousMutationError({ status: 502, response: { code: 'polaris_unavailable' } }), false);
-    assert.strictEqual(outcome.isAmbiguousMutationError({ status: 502, response: { code: 'patron_codes_unavailable' } }), false);
-    assert.strictEqual(outcome.isAmbiguousMutationError({ status: 400, response: { code: 'patron_code_unknown' } }), false);
+    assert.strictEqual(outcome.isAmbiguousMutationError({ status: 502, response: { operationPhase: 'rejected' } }), false);
+    assert.strictEqual(outcome.isAmbiguousMutationError({ status: 400, response: { operationPhase: 'rejected' } }), false);
     for (const status of [400, 408, 422, 500, 502, 503, 504]) {
       assert.strictEqual(outcome.isAmbiguousMutationError({ status }), true, `unrecognized HTTP ${status}`);
     }
@@ -175,7 +172,7 @@ const flush = async () => { await new Promise(resolve => setImmediate(resolve));
         }
         if (failedRequest.status) {
           return response(failedRequest.status, failedRequest.code
-            ? { code: failedRequest.code, message: failedRequest.message } : {});
+            ? { code: failedRequest.code, message: failedRequest.message, operationPhase: 'rejected' } : {});
         }
         throw new TypeError('Connection lost');
       }

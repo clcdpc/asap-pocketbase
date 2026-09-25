@@ -25,7 +25,7 @@ public static class StaffAuthenticationRegistration
         {
             options.DefaultAuthenticateScheme = SelectorScheme;
             options.DefaultSignInScheme = CookieScheme;
-            options.DefaultChallengeScheme = EntraScheme;
+            options.DefaultChallengeScheme = CookieScheme;
         });
 
         authentication.AddPolicyScheme(SelectorScheme, SelectorScheme, options =>
@@ -176,6 +176,6 @@ public static class StaffAuthenticationRegistration
     private static Task JsonStatus(RedirectContext<CookieAuthenticationOptions> context, int status, string code)
     {
         context.Response.StatusCode = status;
-        return context.Response.WriteAsJsonAsync(new { code, message = status == 401 ? "Authentication is required." : "Access is denied." });
+        return context.Response.WriteAsJsonAsync(new { code, message = status == 401 ? "Authentication is required." : "Access is denied.", operationPhase = "rejected" });
     }
 }

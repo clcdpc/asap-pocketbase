@@ -72,9 +72,11 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
 
         var displayed = Project(source);
         JsonObject patch;
+        IReadOnlyList<CustomFormatRemoval> removals;
         try
         {
             patch = BuildPatch(submitted, displayed, source);
+            removals = ResolveFormatRemovals(submitted, source, orgId);
         }
         catch (InvalidOperationException error)
         {
@@ -83,7 +85,53 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
         patch["orgId"] = orgId;
         patch["version"] = version;
         using var document = JsonDocument.Parse(patch.ToJsonString());
-        return await administration.SaveSettingsAsync(actor, document.RootElement, cancellationToken);
+        var operation = await administration.SaveSettingsWithFormatRemovalsAsync(
+            actor, document.RootElement, removals, cancellationToken);
+        if (!operation.SaveCommitted)
+        {
+            return operation.Settings;
+        }
+        if (operation.DeletionFailure is not null)
+        {
+            return new AdministrationResult("partial", new
+            {
+                deletedFormats = operation.DeletedFormatCodes,
+                failedFormat = operation.FailedFormatCode,
+                failureCode = operation.DeletionFailure.Code,
+                failureMessage = operation.DeletionFailure.Message
+            });
+        }
+        return new AdministrationResult("saved", new { deletedFormats = operation.DeletedFormatCodes });
+    }
+
+    private static IReadOnlyList<CustomFormatRemoval> ResolveFormatRemovals(
+        JsonObject submitted, JsonObject source, string orgId)
+    {
+        if (!submitted.ContainsKey("deletedFormats"))
+        {
+            return [];
+        }
+        var formats = Array(Object(source["stored"])["formats"]).OfType<JsonObject>()
+            .Where(row => Text(row["code"]) is not null)
+            .ToDictionary(row => Text(row["code"])!, StringComparer.Ordinal);
+        var removals = new List<CustomFormatRemoval>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var node in RequireArray(submitted["deletedFormats"], "deletedFormats"))
+        {
+            var removal = RequireObject(node, "deleted format");
+            ValidateKeys(removal, ["code", "version"]);
+            var code = Text(removal["code"]);
+            var version = Text(removal["version"]);
+            if (string.IsNullOrWhiteSpace(code) || string.IsNullOrWhiteSpace(version) ||
+                !seen.Add(code) || !formats.TryGetValue(code, out var row) ||
+                Text(row["ownerOrganizationId"]) != orgId ||
+                !long.TryParse(Text(row["id"]), out var id))
+            {
+                throw new InvalidOperationException("A custom format removal is incomplete or out of scope.");
+            }
+            removals.Add(new CustomFormatRemoval(id, code, version));
+        }
+        return removals;
     }
 
     private static JsonObject Project(JsonObject source)
@@ -99,7 +147,6 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
         var providers = Array(stored["providers"]);
         var templates = Array(source["templateEditor"]);
         var orgId = Text(source["orgId"]) ?? "system";
-        system["enabledLibraryOrgIds"] = Copy(source["enabledLibraryOrgIds"]) ?? new JsonArray();
 
         var creatorValues = Array(effective["commonCreators"]).Select(Text).Where(value => value is not null);
         workflow["commonAuthorsList"] = string.Join('\n', creatorValues);
@@ -169,7 +216,27 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
         uiText["formatOrder"] = order;
         uiText["availableFormats"] = available;
         uiText["formatRules"] = rules;
-        uiText["additionalFieldDefinitions"] = Copy(stored["customFields"]) ?? new JsonArray();
+        var fieldRows = new JsonArray();
+        foreach (var field in Array(stored["customFields"]).OfType<JsonObject>())
+        {
+            var options = new JsonArray();
+            foreach (var option in Array(field["options"]).OfType<JsonObject>())
+            {
+                options.Add(new JsonObject
+                {
+                    ["id"] = Text(option["id"]), ["label"] = Text(option["label"]),
+                    ["enabled"] = Bool(option["enabled"]), ["sortOrder"] = Copy(option["sortOrder"])
+                });
+            }
+            fieldRows.Add(new JsonObject
+            {
+                ["id"] = Text(field["id"]), ["key"] = Text(field["key"]),
+                ["label"] = Text(field["label"]), ["type"] = Text(field["type"]),
+                ["helpText"] = Copy(field["helpText"]), ["enabled"] = Bool(field["enabled"]),
+                ["sortOrder"] = Copy(field["sortOrder"]), ["options"] = options
+            });
+        }
+        uiText["additionalFieldDefinitions"] = fieldRows;
         uiText["publicationOptions"] = Copy(source["publicationOptionsEditor"]) ?? new JsonArray();
         uiText["logoAlt"] = Text(Object(stored["branding"])["altText"]) ??
             Text(effective["logoAltText"]) ?? "";
@@ -203,8 +270,7 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
             claims.Add(new JsonObject
             {
                 ["format"] = code,
-                ["staffUserId"] = Text(claim["staffUserId"]),
-                ["materialFormatId"] = formatId
+                ["staffUserId"] = Text(claim["staffUserId"])
             });
         }
         var staffOptions = new JsonArray();
@@ -221,12 +287,16 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
         var templateRows = new JsonArray();
         foreach (var template in templates.OfType<JsonObject>())
         {
-            var row = CopyObject(template);
-            row["name"] = Text(template["displayName"]) ?? "";
-            row["overridden"] = Bool(template["hasOverride"]);
-            row["hadOverride"] = Bool(template["hasOverride"]);
-            row["subject"] = Text(template["subject"]) ?? "";
-            row["body"] = Text(template["body"]) ?? "";
+            var row = new JsonObject
+            {
+                ["id"] = Text(template["id"]),
+                ["templateKey"] = Text(template["templateKey"]),
+                ["name"] = Text(template["displayName"]) ?? "",
+                ["subject"] = Text(template["subject"]) ?? "",
+                ["body"] = Text(template["body"]) ?? "",
+                ["enabled"] = Bool(template["enabled"]),
+                ["canReset"] = orgId != "system" && (Bool(template["hasOverride"]) || Bool(template["isCustom"]))
+            };
             templateRows.Add(row);
             var key = Text(template["templateKey"]);
             if (key is not null && StandardTemplateKeys.Contains(key, StringComparer.Ordinal))
@@ -243,14 +313,72 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
             ["workflow"] = workflow,
             ["uiText"] = uiText,
             ["emails"] = emails,
-            ["systemSettings"] = CopyObject(system),
-            ["polaris"] = CopyObject(polaris),
-            ["providers"] = Copy(providers),
-            ["formats"] = Copy(formats),
+            ["systemSettings"] = ProjectSystemSettings(system, source),
+            ["polaris"] = ProjectPolaris(polaris),
+            ["providers"] = ProjectProviders(providers),
+            ["formats"] = ProjectFormats(formats, orgId),
             ["templates"] = templateRows,
             ["autoClaimRules"] = claims,
             ["autoClaimStaff"] = staffOptions
         };
+    }
+
+    private static JsonObject ProjectSystemSettings(JsonObject system, JsonObject source) => new()
+    {
+        ["staffUrl"] = Copy(system["staffUrl"]),
+        ["leapBibUrlPattern"] = Copy(system["leapBibUrlPattern"]),
+        ["leapPatronUrlPattern"] = Copy(system["leapPatronUrlPattern"]),
+        ["formatIconUrlPattern"] = Copy(system["formatIconUrlPattern"]),
+        ["systemNotEnabledMessage"] = Copy(system["systemNotEnabledMessage"]),
+        ["misconfiguredMessage"] = Copy(system["misconfiguredMessage"]),
+        ["patronEmbedAllowedOrigins"] = Copy(system["patronEmbedAllowedOrigins"]) ?? new JsonArray(),
+        ["enabledLibraryOrgIds"] = Copy(source["enabledLibraryOrgIds"]) ?? new JsonArray()
+    };
+
+    private static JsonObject ProjectPolaris(JsonObject polaris) => new()
+    {
+        ["host"] = Copy(polaris["host"]),
+        ["accessId"] = Copy(polaris["accessId"]),
+        ["staffDomain"] = Copy(polaris["staffDomain"]),
+        ["adminUser"] = Copy(polaris["adminUser"]),
+        ["workstationId"] = Copy(polaris["workstationId"]),
+        ["systemPolarisUserId"] = Copy(polaris["systemPolarisUserId"]),
+        ["organizationIdForRequests"] = Copy(polaris["organizationIdForRequests"]),
+        ["pickupOrganizationId"] = Copy(polaris["pickupOrganizationId"]),
+        ["hasApiKey"] = Bool(polaris["hasApiKey"]),
+        ["hasAdminPassword"] = Bool(polaris["hasAdminPassword"])
+    };
+
+    private static JsonArray ProjectProviders(JsonArray providers)
+    {
+        var rows = new JsonArray();
+        foreach (var provider in providers.OfType<JsonObject>())
+        {
+            rows.Add(new JsonObject
+            {
+                ["key"] = Text(provider["key"]), ["isEnabled"] = Bool(provider["isEnabled"]),
+                ["label"] = Text(provider["label"]) ?? "",
+                ["urlTemplate"] = Text(provider["urlTemplate"]) ?? ""
+            });
+        }
+        return rows;
+    }
+
+    private static JsonArray ProjectFormats(JsonArray formats, string orgId)
+    {
+        var rows = new JsonArray();
+        foreach (var format in formats.OfType<JsonObject>())
+        {
+            rows.Add(new JsonObject
+            {
+                ["code"] = Text(format["code"]), ["label"] = Text(format["label"]),
+                ["sortOrder"] = Copy(format["sortOrder"]),
+                ["isEnabled"] = Bool(format["isEnabled"]),
+                ["version"] = Text(format["version"]),
+                ["canDelete"] = orgId != "system" && Text(format["ownerOrganizationId"]) == orgId
+            });
+        }
+        return rows;
     }
 
     private static JsonObject Field(JsonObject format, string name, string defaultMode, string defaultLabel)
@@ -270,7 +398,7 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
             "orgId", "version", "workflow", "ui_text", "emails", "providers", "formats",
             "formatRules", "customFields", "formatClaimRules", "polaris", "staffUrl",
             "leapBibUrlPattern", "leapPatronUrlPattern", "formatIconUrlPattern",
-            "patronEmbedAllowedOrigins", "enabledLibraryOrgIds"
+            "patronEmbedAllowedOrigins", "enabledLibraryOrgIds", "deletedFormats"
         };
         if (submitted.Any(property => !allowed.Contains(property.Key)))
         {
@@ -348,7 +476,7 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
             {
                 changed["clearPostmarkToken"] = true;
             }
-            var templateChanges = BuildTemplateChanges(edited, displayed, isSystem);
+            var templateChanges = BuildTemplateChanges(edited, displayed, source, isSystem);
             foreach (var (key, value) in templateChanges)
             {
                 changed[key] = Copy(value);
@@ -363,7 +491,7 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
         {
             patch["providers"] = BuildProviderChanges(
                 RequireArray(submitted["providers"], "providers"),
-                Array(displayed["providers"]));
+                Array(displayed["providers"]), Array(Object(source["stored"])["providers"]));
             if (Array(patch["providers"]).Count == 0)
             {
                 patch.Remove("providers");
@@ -394,8 +522,8 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
             }
             var claims = RequireArray(submitted["formatClaimRules"], "formatClaimRules");
             var canonical = Array(displayed["autoClaimRules"]);
-            var desired = MapClaimRules(claims, Array(displayed["formats"]));
-            if (!SameClaimRules(desired, canonical))
+            var desired = MapClaimRules(claims, Array(Object(source["stored"])["formats"]));
+            if (!SameClaimRules(claims, canonical))
             {
                 patch["formatClaimRules"] = desired;
             }
@@ -506,10 +634,11 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
     private static bool Same(JsonNode? left, JsonNode? right) =>
         JsonNode.DeepEquals(left, right);
 
-    private static JsonObject BuildTemplateChanges(JsonObject edited, JsonObject displayed, bool isSystem)
+    private static JsonObject BuildTemplateChanges(JsonObject edited, JsonObject displayed, JsonObject source, bool isSystem)
     {
         var result = new JsonObject();
         var rows = Array(displayed["templates"]).OfType<JsonObject>().ToArray();
+        var sourceRows = Array(source["templateEditor"]).OfType<JsonObject>().ToArray();
         foreach (var key in StandardTemplateKeys)
         {
             if (!edited.ContainsKey(key))
@@ -519,7 +648,8 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
             var value = RequireObject(edited[key], key);
             ValidateKeys(value, ["subject", "body"]);
             var row = rows.SingleOrDefault(item => Text(item["templateKey"]) == key && !Bool(item["isCustom"]));
-            var content = BuildTemplateContent(value, row, key, isSystem);
+            var sourceRow = sourceRows.SingleOrDefault(item => Text(item["templateKey"]) == key);
+            var content = BuildTemplateContent(value, row, sourceRow, key, isSystem);
             if (content is not null)
             {
                 result[key] = content;
@@ -548,7 +678,8 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
                 {
                     throw new InvalidOperationException("An unknown system rejection template cannot be edited in library context.");
                 }
-                var content = BuildTemplateContent(value, row, key, isSystem);
+                var sourceRow = sourceRows.SingleOrDefault(item => Text(item["templateKey"]) == key);
+                var content = BuildTemplateContent(value, row, sourceRow, key, isSystem);
                 if (content is not null)
                 {
                     changes.Add(content);
@@ -562,22 +693,23 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
         return result;
     }
 
-    private static JsonObject? BuildTemplateContent(JsonObject edited, JsonObject? row, string key, bool isSystem)
+    private static JsonObject? BuildTemplateContent(
+        JsonObject edited, JsonObject? row, JsonObject? sourceRow, string key, bool isSystem)
     {
         if (row is null && !isSystem && !key.StartsWith("rejection:custom_", StringComparison.Ordinal))
         {
             throw new InvalidOperationException($"The system has no {key} template to inherit.");
         }
         var content = new JsonObject { ["templateKey"] = key };
-        if (!isSystem && row is not null)
+        if (!isSystem && sourceRow is not null)
         {
-            if (Bool(row["isCustom"]))
+            if (Bool(sourceRow["isCustom"]))
             {
                 content["isCustom"] = true;
             }
             else
             {
-                content["sourceTemplateId"] = Text(row["sourceTemplateId"]);
+                content["sourceTemplateId"] = Text(sourceRow["sourceTemplateId"]);
             }
         }
         if (!isSystem && row is null)
@@ -611,9 +743,11 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
         return content.Count > (isSystem ? 1 : 2) ? content : null;
     }
 
-    private static JsonArray BuildProviderChanges(JsonArray edited, JsonArray canonical)
+    private static JsonArray BuildProviderChanges(JsonArray edited, JsonArray canonical, JsonArray source)
     {
         var current = canonical.OfType<JsonObject>().Where(row => Text(row["key"]) is not null)
+            .ToDictionary(row => Text(row["key"])!, StringComparer.Ordinal);
+        var sourceByKey = source.OfType<JsonObject>().Where(row => Text(row["key"]) is not null)
             .ToDictionary(row => Text(row["key"])!, StringComparer.Ordinal);
         var changes = new JsonArray();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -661,12 +795,12 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
             }
             changes.Add(new JsonObject
             {
-                ["id"] = Text(baseline["id"]),
+                ["id"] = Text(sourceByKey[key]["id"]),
                 ["key"] = key,
                 ["isEnabled"] = Copy(provider["isEnabled"]),
                 ["label"] = Copy(provider["label"]),
                 ["urlTemplate"] = Copy(provider["urlTemplate"]),
-                ["sortOrder"] = Copy(baseline["sortOrder"])
+                ["sortOrder"] = Copy(sourceByKey[key]["sortOrder"])
             });
         }
         if (!current.Keys.All(seen.Contains))
@@ -733,7 +867,7 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
     private static bool SameClaimRules(JsonArray mapped, JsonArray canonical)
     {
         static string Key(JsonObject value) =>
-            $"{Text(value["materialFormatId"])}:{Text(value["formatCode"])}:{Text(value["staffUserId"])}";
+            $"{Text(value["format"])}:{Text(value["staffUserId"])}";
         return mapped.OfType<JsonObject>().Select(Key).Order(StringComparer.Ordinal)
             .SequenceEqual(canonical.OfType<JsonObject>().Select(Key).Order(StringComparer.Ordinal));
     }
@@ -745,7 +879,7 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
         JsonObject patch,
         bool isSystem)
     {
-        var canonicalFormats = Array(displayed["formats"]).OfType<JsonObject>()
+        var canonicalFormats = Array(Object(source["stored"])["formats"]).OfType<JsonObject>()
             .Where(item => Text(item["code"]) is not null)
             .ToDictionary(item => Text(item["code"])!, StringComparer.Ordinal);
         var desiredFormats = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
@@ -811,6 +945,13 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
                 .Select(item => Text(item["key"])).Where(key => key is not null)
                 .ToHashSet(StringComparer.Ordinal);
             var fullMatrix = CopyObject(baselineRules);
+            foreach (var code in desiredFormats.Keys)
+            {
+                if (!fullMatrix.ContainsKey(code))
+                {
+                    fullMatrix[code] = new JsonObject { ["customFields"] = new JsonObject() };
+                }
+            }
             var matrixChanged = false;
             foreach (var (code, node) in editedRules)
             {
@@ -861,7 +1002,7 @@ public sealed class LegacyStaffSettingsService(AdministrationService administrat
                 }
                 var editedCustom = RequireObject(edited["customFields"], "custom field rules");
                 var currentCustom = Object(canonical["customFields"]);
-                var fullCustom = Object(Object(fullMatrix[code])["customFields"]);
+                var fullCustom = RequireObject(Object(fullMatrix[code])["customFields"], "custom field rules");
                 foreach (var (key, ruleNode) in editedCustom)
                 {
                     if (!enabledKeys.Contains(key))

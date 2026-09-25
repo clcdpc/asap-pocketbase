@@ -1458,13 +1458,20 @@ public sealed partial class PatronSuggestionService(
         EffectivePatronConfiguration configuration,
         PatronSnapshot patron)
     {
+        EnforceStaffPatronLibrary(configuration, patron);
+        EnforcePatronCodeEligibility(configuration, patron);
+    }
+
+    internal static void EnforceStaffPatronLibrary(
+        EffectivePatronConfiguration configuration,
+        PatronSnapshot patron)
+    {
         if (!configuration.AllowAnyRegisteredCardLogin &&
             patron.HomeLibraryOrganizationId != configuration.OrganizationId)
         {
             throw new PatronFlowException(403, "That patron is not registered at the selected library.",
                 new { code = "patron_library_forbidden", message = "That patron is not registered at the selected library." });
         }
-        EnforcePatronCodeEligibility(configuration, patron);
     }
 
     private static void EnforcePatronCodeEligibility(

@@ -110,6 +110,7 @@ public sealed partial class PatronJourneyTests
     public async Task StaffPortExactBibLookupIncludesLegacyMetadata()
     {
         using var startup = factory!.CreateClient();
+        var holdStatus = "Active";
         var handler = new StaffSearchResponseHandler(uri => uri.AbsolutePath.EndsWith("holdings", StringComparison.Ordinal)
             ? """
               {"PAPIErrorCode":0,"BibHoldingsGetRows":[
@@ -119,9 +120,9 @@ public sealed partial class PatronJourneyTests
             : uri.AbsolutePath.Contains("authenticator/staff", StringComparison.OrdinalIgnoreCase)
                 ? "{\"PAPIErrorCode\":0,\"AccessToken\":\"protected-token\",\"AccessSecret\":\"secret\",\"AuthExpDate\":\"2035-01-01T00:00:00Z\"}"
             : uri.AbsolutePath.Contains("holdrequests", StringComparison.OrdinalIgnoreCase)
-                ? """
+                ? $$"""
                   {"PAPIErrorCode":0,"PatronHoldRequestsGetRows":[
-                    {"HoldRequestID":1,"BibID":123,"StatusDescription":"Active"},
+                    {"HoldRequestID":1,"BibID":123,"StatusDescription":"{{holdStatus}}"},
                     {"HoldRequestID":2,"BibID":124,"StatusDescription":"Cancelled"}]}
                   """
             : uri.AbsolutePath.Contains("organizations", StringComparison.OrdinalIgnoreCase)
@@ -164,6 +165,22 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(HttpStatusCode.OK, withPatron.StatusCode, await withPatron.Content.ReadAsStringAsync());
         using var checkedPatron = JsonDocument.Parse(await withPatron.Content.ReadAsStringAsync());
         Assert.AreEqual(29, checkedPatron.RootElement.GetProperty("patronHoldCheck").GetProperty("statusValue").GetInt32());
+        foreach (var (status, expectedWarning) in new[]
+                 {
+                     ("unclaimed", 0), ("cancelled", 0), ("expired", 0),
+                     ("filled", 29), ("deleted", 29), ("Active", 29)
+                 })
+        {
+            holdStatus = status;
+            using var checkedResponse = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", new
+            {
+                bibId = "123", barcode = "port-local", libraryOrgId = "91632"
+            });
+            Assert.AreEqual(HttpStatusCode.OK, checkedResponse.StatusCode);
+            using var checkedBody = JsonDocument.Parse(await checkedResponse.Content.ReadAsStringAsync());
+            Assert.AreEqual(expectedWarning,
+                checkedBody.RootElement.GetProperty("patronHoldCheck").GetProperty("statusValue").GetInt32(), status);
+        }
         using var ineligibleCode = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", new
         {
             bibId = "123", barcode = "port-restricted", libraryOrgId = "91632"
@@ -185,6 +202,48 @@ public sealed partial class PatronJourneyTests
         using var canceled = new CancellationTokenSource();
         canceled.Cancel();
         await Assert.ThrowsAsync<OperationCanceledException>(() => provider.GetBibHoldingsAsync(123, 2, canceled.Token));
+    }
+
+    [TestMethod]
+    [DataRow("missing", 404)]
+    [DataRow("empty", 404)]
+    [DataRow("http", 503)]
+    [DataRow("papi", 503)]
+    [DataRow("malformed", 503)]
+    public async Task StaffPortExactBibLookupDistinguishesAbsenceFromProviderFailure(string scenario, int expectedStatus)
+    {
+        var handler = new StaffSearchResponseHandler(uri =>
+            uri.AbsolutePath.Contains("authenticator", StringComparison.OrdinalIgnoreCase)
+                ? "{\"PAPIErrorCode\":0,\"AccessToken\":\"protected-token\",\"AccessSecret\":\"secret\",\"AuthExpDate\":\"2035-01-01T00:00:00Z\"}"
+                : scenario switch
+                {
+                    "missing" => "{\"PAPIErrorCode\":-1}",
+                    "empty" => "{\"PAPIErrorCode\":0,\"BibGetRows\":[]}",
+                    "papi" => "{\"PAPIErrorCode\":-999,\"BibGetRows\":[]}",
+                    "malformed" => "{\"BibGetRows\":[]}",
+                    _ => "{\"PAPIErrorCode\":0,\"BibGetRows\":[]}"
+                }, uri => scenario == "http" && !uri.AbsolutePath.Contains("authenticator", StringComparison.OrdinalIgnoreCase)
+                    ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.OK);
+        var provider = await CreatePolarisProviderAsync(handler);
+        if (expectedStatus == 404)
+        {
+            Assert.IsFalse((await provider.ValidateBibAsync(123, CancellationToken.None)).IsValid);
+        }
+        else
+        {
+            await Assert.ThrowsAsync<PolarisOperationalException>(() => provider.ValidateBibAsync(123, CancellationToken.None));
+        }
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => provider.ValidateBibAsync(123, canceled.Token));
+
+        await using var app = WithStaffPortProviders(provider);
+        using var client = await StaffPortClientAsync(app);
+        using var response = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", new { bibId = "123" });
+        Assert.AreEqual((HttpStatusCode)expectedStatus, response.StatusCode, await response.Content.ReadAsStringAsync());
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.AreEqual(expectedStatus == 404 ? "bib_not_found" : "bib_validation_unavailable",
+            body.RootElement.GetProperty("code").GetString());
     }
 
     [TestMethod]
@@ -1181,14 +1240,16 @@ public sealed partial class PatronJourneyTests
     private static StaffSuggestionInput StaffPortSuggestion(string barcode) => new(
         barcode, "Staff port " + Guid.NewGuid().ToString("N"), "Port author", null, "book", "Coming soon", null, "102", true, "91632");
 
-    private sealed class StaffSearchResponseHandler(Func<Uri, string> respond) : HttpMessageHandler
+    private sealed class StaffSearchResponseHandler(
+        Func<Uri, string> respond,
+        Func<Uri, HttpStatusCode>? responseStatus = null) : HttpMessageHandler
     {
         public List<Uri> Requests { get; } = [];
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Requests.Add(request.RequestUri!);
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            return Task.FromResult(new HttpResponseMessage(responseStatus?.Invoke(request.RequestUri!) ?? HttpStatusCode.OK)
             {
                 Content = new StringContent(respond(request.RequestUri!)), RequestMessage = request
             });

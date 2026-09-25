@@ -239,17 +239,6 @@ export function populateWorkflowForms(wf, providers = []) {
   setFieldValue('wf-external-search-4-label', wf.externalSearch4Label || '');
   setFieldValue('wf-external-search-4-url-template', wf.externalSearch4UrlTemplate || '');
 
-  const providerKeys = new Set(providers.map(provider => provider.key));
-  for (let index = 1; index <= 4; index++) {
-    const exists = providerKeys.has(`external_search_${index}`);
-    const enabled = document.getElementById(`wf-external-search-${index}-enabled`);
-    const label = document.getElementById(`wf-external-search-${index}-label`);
-    const url = document.getElementById(`wf-external-search-${index}-url-template`);
-    const row = enabled?.closest('.form-row');
-    if (row) row.classList.toggle('hidden', !exists);
-    [enabled, label, url].forEach(control => { if (control) control.disabled = !exists; });
-  }
-
   workflowSettings.externalSearch1Enabled = !!wf.externalSearch1Enabled;
   workflowSettings.externalSearch1Label = wf.externalSearch1Label || 'Search Amazon';
   workflowSettings.externalSearch1UrlTemplate = wf.externalSearch1UrlTemplate || 'https://www.amazon.com/s?k={{title}}';

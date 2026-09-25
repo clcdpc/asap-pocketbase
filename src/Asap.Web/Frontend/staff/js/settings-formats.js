@@ -120,7 +120,7 @@ export function renderFormatSettings() {
     input.value = formatMap[key] || key;
     labelWrap.appendChild(input);
     const existing = currentLegacySettingsForm?.formats?.find(format => format.code === key);
-    const canRemove = !isSystem && (!existing || String(existing.ownerOrganizationId || '') === String(currentLibraryContextOrgId));
+    const canRemove = !isSystem && (!existing || existing.canDelete === true);
     if (canRemove && !['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'].includes(key)) {
       const remove = document.createElement('button');
       remove.type = 'button';
@@ -425,12 +425,11 @@ if (formatSettingsContainer) {
       const row = e.target.closest('tr');
       const key = row.getAttribute('data-key');
       const existing = currentLegacySettingsForm?.formats?.find(format => format.code === key);
-      const isLibraryCustom = currentLibraryContextOrgId !== 'system' && existing &&
-        String(existing.ownerOrganizationId || '') === String(currentLibraryContextOrgId);
+      const isLibraryCustom = currentLibraryContextOrgId !== 'system' && existing?.canDelete === true;
       if (!isLibraryCustom && existing) return;
       if (await showConfirm('Delete custom format', `Delete format "${key}"? Existing suggestions with this format will remain, but the custom format will be removed after you save.`)) {
-        if (isLibraryCustom && existing.id) {
-          addDeletedSettingsFormat({ id: String(existing.id), version: String(existing.version || '') });
+        if (isLibraryCustom) {
+          addDeletedSettingsFormat({ code: key, version: String(existing.version || '') });
         }
         delete formatMap[key];
         setAvailableFormats(availableFormats.filter(k => k !== key));

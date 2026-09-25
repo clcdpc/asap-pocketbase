@@ -1,12 +1,11 @@
 import { isRequestCanceledError, updateSaveBarState, markSettingsClean, getFieldValue, getFieldChecked } from '../api.js';
 import { authorizedJson } from '../http.js';
 import { showToast } from '../dialogs.js';
-import { settingsForm, currentLibraryContextOrgId, currentSettingsSection, initialSettingsSnapshot, settingsDirty, settingsReloadRequired, settingsSyncInProgress, settingsSaving, settingsLoading, settingsActionInProgress, setSettingsReloadRequired, setSettingsSaving, setSettingsLoading, setInitialSettingsSnapshot, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, libraryContextLoadSerial, deletedSettingsFormats, setDeletedSettingsFormats } from '../state.js';
+import { settingsForm, currentLibraryContextOrgId, currentSettingsSection, initialSettingsSnapshot, settingsDirty, settingsReloadRequired, settingsSyncInProgress, settingsSaving, settingsLoading, settingsActionInProgress, staffSession, staffAccessGeneration, setSettingsReloadRequired, setSettingsSaving, setSettingsLoading, setInitialSettingsSnapshot, lastSavedLibrarySettingsSnapshot, lastSavedLibrarySettingsOrgId, libraryContextLoadSerial, deletedSettingsFormats } from '../state.js';
 import { refreshSettingsView, loadStaffConfig } from './refresh.js';
 import { loadStaffUsers } from '../settings-users.js';
 import { cloneLibrarySettingsSnapshot, captureSettingsBaseline, serializeSettingsState, buildSettingsPayload, buildEmailSettingsPayload } from './serialize-save.js';
 import { applyLibrarySettingsToForm } from './form-population.js';
-import { deleteSettingsFormatsSequentially } from './delete-formats.js';
 import { isAmbiguousMutationError, markAmbiguousSettingsMutation } from './mutation-outcome.js';
 
 export async function saveSettings(options = {}) {
@@ -40,6 +39,10 @@ export async function saveSettings(options = {}) {
   let mutationPending = false;
   const saveContextOrgId = currentLibraryContextOrgId;
   const saveContextSerial = libraryContextLoadSerial;
+  const saveAccessGeneration = staffAccessGeneration;
+  const saveStaffId = staffSession.staff?.id;
+  const ownsSession = () => staffAccessGeneration === saveAccessGeneration &&
+    staffSession.staff?.id === saveStaffId && staffSession.authenticated && staffSession.accessAllowed;
   const saveContextVersion = lastSavedLibrarySettingsOrgId === saveContextOrgId
     ? lastSavedLibrarySettingsSnapshot?.version
     : null;
@@ -58,20 +61,6 @@ export async function saveSettings(options = {}) {
   msg.textContent = options.pendingText || 'Saving...';
   msg.className = 'mt-2 font-weight-bold text-info';
 
-  async function deletePendingFormats() {
-    const pending = [...deletedSettingsFormats];
-    await deleteSettingsFormatsSequentially(pending, async format => {
-      if (!format.id || !format.version) {
-        throw new Error('The custom format version is unavailable. Reload settings before deleting it.');
-      }
-      await authorizedJson(`/api/asap/staff/settings/formats/${encodeURIComponent(String(format.id))}?version=${encodeURIComponent(String(format.version))}`, {
-        method: 'DELETE'
-      });
-    }, deleted => {
-      setDeletedSettingsFormats(deletedSettingsFormats.filter(format => String(format.id) !== String(deleted.id)));
-    }, () => saveContextOrgId === currentLibraryContextOrgId && saveContextSerial === libraryContextLoadSerial);
-  }
-
   try {
     const isEmailSave = currentSettingsSection === 'smtp';
     const payload = isEmailSave
@@ -82,7 +71,10 @@ export async function saveSettings(options = {}) {
       orgId: currentLibraryContextOrgId,
       version: lastSavedLibrarySettingsOrgId === currentLibraryContextOrgId
         ? lastSavedLibrarySettingsSnapshot?.version : null,
-      ...payload
+      ...payload,
+      ...(deletedSettingsFormats.length ? { deletedFormats: deletedSettingsFormats.map(format => ({
+        code: format.code, version: format.version
+      })) } : {})
     };
 
     mutationPending = true;
@@ -91,21 +83,19 @@ export async function saveSettings(options = {}) {
       body: libraryPayload
     });
 
-    await libraryPromise;
+    const saveResult = await libraryPromise;
     mutationPending = false;
     saveSucceeded = true;
-    if (saveContextOrgId !== currentLibraryContextOrgId || saveContextSerial !== libraryContextLoadSerial) {
+    if (!ownsSession() || saveContextOrgId !== currentLibraryContextOrgId || saveContextSerial !== libraryContextLoadSerial) {
       saveSuperseded = true;
       return false;
     }
-    if (deletedSettingsFormats.length > 0) {
-      try {
-        await deletePendingFormats();
-      } catch (error) {
-        formatDeletionError = error;
-      }
+    if (saveResult.code === 'partial') {
+      formatDeletionError = new Error(saveResult.data?.failureMessage ||
+        `Format ${saveResult.data?.failedFormat || ''} could not be removed.`);
+      formatDeletionError.definitePartial = true;
     }
-    if (saveContextOrgId !== currentLibraryContextOrgId || saveContextSerial !== libraryContextLoadSerial) {
+    if (!ownsSession() || saveContextOrgId !== currentLibraryContextOrgId || saveContextSerial !== libraryContextLoadSerial) {
       saveSuperseded = true;
       return false;
     }
@@ -119,7 +109,7 @@ export async function saveSettings(options = {}) {
       if (!settings?.version) {
         throw new Error('The current Settings version was not returned.');
       }
-      if (saveContextOrgId === currentLibraryContextOrgId && libraryContextLoadSerial <= refreshStartSerial + 1) {
+      if (ownsSession() && saveContextOrgId === currentLibraryContextOrgId && libraryContextLoadSerial <= refreshStartSerial + 1) {
         setSettingsReloadRequired(false);
       }
     } catch (error) {
@@ -128,13 +118,13 @@ export async function saveSettings(options = {}) {
         console.error('Settings were saved, but the refreshed values could not be loaded.', error);
       }
     }
-    if (saveContextOrgId !== currentLibraryContextOrgId || libraryContextLoadSerial > refreshStartSerial + 1) {
+    if (!ownsSession() || saveContextOrgId !== currentLibraryContextOrgId || libraryContextLoadSerial > refreshStartSerial + 1) {
       saveSuperseded = true;
       return false;
     }
     if (formatDeletionError) {
       saveHadError = true;
-      if (isAmbiguousMutationError(formatDeletionError)) {
+      if (!formatDeletionError.definitePartial && isAmbiguousMutationError(formatDeletionError)) {
         const message = refreshError
           ? 'Settings were saved, but the custom format removal result could not be confirmed. Reload Settings before further changes.'
           : 'Settings were saved, but the custom format removal result could not be confirmed. Review the reloaded format list before continuing.';
@@ -159,6 +149,7 @@ export async function saveSettings(options = {}) {
     }
     captureSettingsBaseline();
     await loadStaffConfig();
+    if (!ownsSession()) return false;
     loadStaffUsers();
     msg.textContent = options.successText || 'Settings saved.';
     msg.className = 'mt-2 font-weight-bold text-success';
@@ -170,12 +161,12 @@ export async function saveSettings(options = {}) {
   } catch (err) {
     saveHadError = true;
     console.error(err);
-    if (saveContextOrgId !== currentLibraryContextOrgId || saveContextSerial !== libraryContextLoadSerial) {
+    if (!ownsSession() || saveContextOrgId !== currentLibraryContextOrgId || saveContextSerial !== libraryContextLoadSerial) {
       saveSuperseded = true;
       return false;
     }
     if (mutationPending && markAmbiguousSettingsMutation(err, () =>
-      saveContextOrgId === currentLibraryContextOrgId && saveContextSerial === libraryContextLoadSerial)) {
+      ownsSession() && saveContextOrgId === currentLibraryContextOrgId && saveContextSerial === libraryContextLoadSerial)) {
       return false;
     }
     let message = err.message || 'Failed to save settings.';
@@ -194,13 +185,14 @@ export async function saveSettings(options = {}) {
           console.error('Settings changed in another session, but current values could not be reloaded.', refreshErr);
         }
       }
-      if (saveContextOrgId !== currentLibraryContextOrgId || libraryContextLoadSerial > refreshStartSerial + 1) {
+      if (!ownsSession() || saveContextOrgId !== currentLibraryContextOrgId || libraryContextLoadSerial > refreshStartSerial + 1) {
         saveSuperseded = true;
         return false;
       }
       if (refreshed) {
         setSettingsReloadRequired(false);
         await loadStaffConfig();
+        if (!ownsSession()) return false;
         loadStaffUsers();
       }
       message = refreshed
@@ -213,12 +205,14 @@ export async function saveSettings(options = {}) {
     updateSaveBarState('error');
     return false;
   } finally {
-    setSettingsSaving(false);
-    buttons.forEach(button => {
-      button.disabled = false;
-    });
-    if (!saveSuperseded) {
-      updateSaveBarState(settingsReloadRequired ? 'reload' : (saveHadError ? 'error' : (saveSucceeded ? 'saved' : (settingsDirty ? 'dirty' : 'clean'))));
+    if (ownsSession()) {
+      setSettingsSaving(false);
+      buttons.forEach(button => {
+        button.disabled = false;
+      });
+      if (!saveSuperseded) {
+        updateSaveBarState(settingsReloadRequired ? 'reload' : (saveHadError ? 'error' : (saveSucceeded ? 'saved' : (settingsDirty ? 'dirty' : 'clean'))));
+      }
     }
   }
 }

@@ -200,7 +200,7 @@ async function settle() {
     button.click();
     await settle();
     assert.equal(calls.filter(call => call.url.includes('/workflow/run-now')).length, 6);
-    completeRun(response(400, { code: 'antiforgery_failed', message: 'Invalid request token' }));
+    completeRun(response(400, { code: 'antiforgery_failed', message: 'Invalid request token', operationPhase: 'rejected' }));
     await settle();
     assert.doesNotMatch(document.getElementById('job-msg').textContent, /may have been queued/i);
     assert.equal(button.disabled, false, 'known antiforgery rejection happens before enqueue');

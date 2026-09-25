@@ -13,6 +13,15 @@ namespace Asap.Web.Features.Administration;
 
 public sealed record AdministrationResult(string Code, object? Data = null, string? Message = null);
 
+public sealed record CustomFormatRemoval(long Id, string Code, string Version);
+
+public sealed record SettingsSaveOperationResult(
+    AdministrationResult Settings,
+    bool SaveCommitted,
+    IReadOnlyList<string> DeletedFormatCodes,
+    string? FailedFormatCode = null,
+    AdministrationResult? DeletionFailure = null);
+
 public sealed record OrganizationSummary(
     int Id,
     string Name,
@@ -388,6 +397,34 @@ public sealed class AdministrationService(
                 orgId = organizationId == 1 ? "system" : organizationId.ToString(),
                 version = savedVersion
             });
+    }
+
+    // One editor action can contain several independently versioned format removals.
+    // Each existing writer retains its own transaction and authorization checks.
+    public async Task<SettingsSaveOperationResult> SaveSettingsWithFormatRemovalsAsync(
+        CurrentStaff actor,
+        JsonElement payload,
+        IReadOnlyList<CustomFormatRemoval> removals,
+        CancellationToken cancellationToken)
+    {
+        var settings = await SaveSettingsAsync(actor, payload, cancellationToken);
+        if (settings.Code != "saved")
+        {
+            return new SettingsSaveOperationResult(settings, false, []);
+        }
+
+        var deleted = new List<string>();
+        foreach (var removal in removals)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var result = await DeleteCustomFormatAsync(actor, removal.Id, removal.Version, cancellationToken);
+            if (result.Code != "format_deleted")
+            {
+                return new SettingsSaveOperationResult(settings, true, deleted, removal.Code, result);
+            }
+            deleted.Add(removal.Code);
+        }
+        return new SettingsSaveOperationResult(settings, true, deleted);
     }
 
     public async Task<AdministrationResult> ResetLibrarySettingsAsync(
@@ -2100,11 +2137,11 @@ public sealed class AdministrationService(
                 isEnabled = value?.IsEnabled ?? provider.IsEnabled,
                 label = value?.Label ?? provider.Label,
                 urlTemplate = value?.UrlTemplate ?? provider.UrlTemplate,
+                sortOrder = provider.SortOrder,
                 system = new { provider.IsEnabled, provider.Label, provider.UrlTemplate },
                 overridden = value is not null
             };
         })
-            .Where(provider => IsConfiguredProvider(provider.isEnabled, provider.label, provider.urlTemplate))
             .Cast<object>()
             .ToArray();
     }

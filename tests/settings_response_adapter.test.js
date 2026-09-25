@@ -35,9 +35,9 @@ const { projectLegacySettingsFixture } = require('./helpers/legacy-settings-fixt
     };
 
     const moduleAt = name => import(pathToFileURL(path.join(temporary, 'staff', 'js', name)).href);
-    const [state, form, serializer] = await Promise.all([
+    const [state, form, serializer, options] = await Promise.all([
       moduleAt('state.js'), moduleAt('settings/form-population.js'),
-      moduleAt('settings/serialize-save.js')
+      moduleAt('settings/serialize-save.js'), moduleAt('settings/option-list.js')
     ]);
     state.setStaffSession({
       authenticated: true, accessAllowed: true, antiforgeryToken: 'test-token',
@@ -107,6 +107,40 @@ const { projectLegacySettingsFixture } = require('./helpers/legacy-settings-fixt
     assert.strictEqual(Object.hasOwn(ruleChange, 'formats'), false,
       'a custom field rule edit does not rewrite the format ownership list');
 
+    const dormant = structuredClone(library);
+    dormant.uiText.additionalFieldDefinitions.push({
+      id: '9007199254741999', key: 'dormant_note', label: 'Dormant note', type: 'text',
+      helpText: null, enabled: false, sortOrder: 90, options: []
+    });
+    dormant.uiText.formatRules.zine.customFields.dormant_note = {
+      mode: 'required', labelOverride: 'Preserved dormant label'
+    };
+    await render(dormant);
+    const dormantMode = document.querySelector('.format-rule-custom-field-mode[data-format="zine"][data-field="dormant_note"]');
+    const dormantLabel = document.querySelector('.format-rule-custom-field-label[data-format="zine"][data-field="dormant_note"]');
+    assert.strictEqual(dormantMode.disabled, true);
+    assert.strictEqual(dormantLabel.disabled, true);
+    assert.match(dormantMode.parentElement.textContent, /saved rule is preserved/i);
+    const dormantToggle = document.querySelector('.additional-field-row[data-field-key="dormant_note"] .additional-field-enabled-check');
+    dormantToggle.checked = true;
+    dormantToggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    const enabledMode = document.querySelector('.format-rule-custom-field-mode[data-format="zine"][data-field="dormant_note"]');
+    const enabledLabel = document.querySelector('.format-rule-custom-field-label[data-format="zine"][data-field="dormant_note"]');
+    assert.strictEqual(enabledMode.disabled, false);
+    assert.strictEqual(enabledMode.value, 'required');
+    assert.strictEqual(enabledLabel.value, 'Preserved dormant label');
+
+    const emptyPublication = structuredClone(library);
+    emptyPublication.uiText.publicationOptions = [];
+    await render(emptyPublication);
+    assert.strictEqual(document.querySelectorAll('#ui-publication-options-editor .option-list-row').length, 0);
+    assert.deepStrictEqual(serializer.buildSettingsPayload(), {}, 'an explicit empty set remains unchanged on a no-edit save');
+    assert.deepStrictEqual(options.collectOptionList('ui-publication-options-editor', state.defaultPublicationOptions), []);
+    options.addOptionListRow('ui-publication-options-editor', state.defaultPublicationOptions);
+    const firstPublication = serializer.buildSettingsPayload().ui_text.publicationOptions;
+    assert.strictEqual(firstPublication.length, 1);
+    assert.strictEqual(firstPublication[0].label, 'New option');
+
     const nullable = structuredClone(library);
     nullable.workflow.suggestionLimit = null;
     nullable.workflow.outstandingTimeoutDays = null;
@@ -122,8 +156,14 @@ const { projectLegacySettingsFixture } = require('./helpers/legacy-settings-fixt
       systemRaw.stored.systemSettings.systemNotEnabledMessage);
     assert.strictEqual(document.getElementById('ui-misconfigured-msg').value,
       systemRaw.stored.systemSettings.misconfiguredMessage);
-    assert.strictEqual(document.getElementById('wf-external-search-4-label').disabled, true,
-      'the unconfigured fourth provider slot is disabled');
+    assert.strictEqual(document.getElementById('wf-external-search-4-label').disabled, false,
+      'the blank fourth provider slot must be configurable');
+    assert.strictEqual(document.getElementById('wf-external-search-4-label').closest('.form-row').classList.contains('hidden'), false);
+    document.getElementById('wf-external-search-4-label').value = 'Library catalog';
+    document.getElementById('wf-external-search-4-url-template').value = 'https://catalog.example/?q={{title}}';
+    document.getElementById('wf-external-search-4-enabled').checked = true;
+    assert.strictEqual(serializer.collectExternalSearchProviders().find(row => row.key === 'external_search_4').label,
+      'Library catalog');
 
     console.log('Flat settings response and direct form projection checks passed');
   } finally {

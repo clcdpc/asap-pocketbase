@@ -334,6 +334,7 @@ async function settle() {
     const unprocessedIdentifier = {
       isbnCheckStatus: 'not_found',
       isbnCheckResult: 'Identifier processing was not completed before this request left suggestions.',
+      identifierPresentation: 'not_completed',
       workflowTags: []
     };
     const unprocessedBadge = gridFilters.getIsbnCheckBadgesHtml(unprocessedIdentifier, {});

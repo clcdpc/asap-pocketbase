@@ -244,7 +244,7 @@ export async function removeRejectionTemplate(index) {
   const templateName = template.name || template.subject || 'this rejection template';
 
   const isLibrary = currentLibraryContextOrgId !== 'system';
-  const canReset = isLibrary && (template.isCustom === true || template.overridden === true || template.hadOverride === true);
+  const canReset = isLibrary && (template.canReset === true || template.isNew === true);
   if (!canReset) {
     await showAlert('System rejection templates cannot be deleted here. Edit the template or disable the workflow that uses it.');
     return;
@@ -262,13 +262,10 @@ export async function removeRejectionTemplate(index) {
   const confirmed = await showConfirm('Delete template?', `Delete "${templateName}"? This cannot be undone after you save these settings.`);
   if (!confirmed) return;
 
-  if (template.id || template.sourceTemplateId || template.templateKey) {
+  if (!template.isNew && template.templateKey) {
     addDeletedSettingsTemplate({
       templateKey: template.templateKey,
-      sourceTemplateId: template.sourceTemplateId || undefined,
-      isCustom: template.isCustom === true,
-      reset: true,
-      id: template.id || undefined
+      reset: true
     });
   }
   currentRejectionTemplates.splice(index, 1);

@@ -1524,7 +1524,7 @@ public sealed class HoldPlacementService(
     private static List<PolarisHoldSnapshot> ActiveSameBibHolds(
         IReadOnlyList<PolarisHoldSnapshot> holds,
         string bibId) =>
-        holds.Where(item => item.BibId.ToString() == bibId && !IsTerminal(item.StatusDescription)).ToList();
+        holds.Where(item => int.TryParse(bibId, out var id) && StaffHoldStatus.IsActiveSameBib(item, id)).ToList();
 
     private static async Task<WorkflowSettings> EffectiveWorkflowAsync(
         AsapDbContext context,
@@ -1545,8 +1545,6 @@ public sealed class HoldPlacementService(
         };
     }
 
-    private static bool IsTerminal(string? status) =>
-        status?.Trim().ToLowerInvariant() is "unclaimed" or "cancelled" or "expired";
 
     private static string ResultCode(HoldProviderResult result) => result.Outcome switch
     {

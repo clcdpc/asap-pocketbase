@@ -125,13 +125,13 @@ async function flush() {
           serverVersion = 'version-13';
           serverAltText = 'Authoritative alt after failed stale library reset';
           nextLibrarySettingsReadFails = true;
-          return response(409, { code: 'stale_version', message: 'These settings changed in another session.' });
+          return response(409, { code: 'stale_version', message: 'These settings changed in another session.', operationPhase: 'rejected' });
         }
         if (nextLibraryResetIsStale) {
           nextLibraryResetIsStale = false;
           serverVersion = 'version-6';
           serverAltText = 'Latest Settings after stale reset';
-          return response(409, { code: 'stale_version', message: 'These settings changed in another session.' });
+          return response(409, { code: 'stale_version', message: 'These settings changed in another session.', operationPhase: 'rejected' });
         }
         if (libraryResets.length === 3) {
           serverVersion = 'version-7';
@@ -163,14 +163,14 @@ async function flush() {
           serverVersion = 'version-11';
           serverAltText = 'Authoritative alt after failed stale upload';
           nextLibrarySettingsReadFails = true;
-          return response(409, { code: 'stale_version', message: 'These settings changed in another session.' });
+          return response(409, { code: 'stale_version', message: 'These settings changed in another session.', operationPhase: 'rejected' });
         }
         if (nextLogoResetStaleReadFails && method === 'DELETE') {
           nextLogoResetStaleReadFails = false;
           serverVersion = 'version-12';
           serverAltText = 'Authoritative alt after failed stale logo reset';
           nextLibrarySettingsReadFails = true;
-          return response(409, { code: 'stale_version', message: 'These settings changed in another session.' });
+          return response(409, { code: 'stale_version', message: 'These settings changed in another session.', operationPhase: 'rejected' });
         }
 
         if (method === 'POST' && logoMutations.length === 1) {
@@ -181,12 +181,12 @@ async function flush() {
         if (method === 'DELETE' && logoMutations.length === 2) {
           serverVersion = 'version-3';
           serverAltText = 'Library alt after another session';
-          return response(409, { code: 'stale_version', message: 'These settings changed in another session.' });
+          return response(409, { code: 'stale_version', message: 'These settings changed in another session.', operationPhase: 'rejected' });
         }
         if (method === 'POST' && logoMutations.length === 3) {
           serverVersion = 'version-4';
           serverAltText = 'Latest logo alt after the stale upload';
-          return response(409, { code: 'stale_version', message: 'These settings changed in another session.' });
+          return response(409, { code: 'stale_version', message: 'These settings changed in another session.', operationPhase: 'rejected' });
         }
         if (method === 'POST' && logoMutations.length === 4) {
           serverVersion = 'version-8';

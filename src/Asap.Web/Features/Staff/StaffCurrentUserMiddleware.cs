@@ -49,7 +49,7 @@ public sealed class StaffCurrentUserMiddleware(RequestDelegate next)
                 return;
             }
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
-            await context.Response.WriteAsJsonAsync(new { code = result.Code, accessAllowed = false, message = "Access is not currently available." }, context.RequestAborted);
+            await context.Response.WriteAsJsonAsync(new { code = result.Code, accessAllowed = false, message = "Access is not currently available.", operationPhase = "rejected" }, context.RequestAborted);
             return;
         }
 
@@ -60,6 +60,6 @@ public sealed class StaffCurrentUserMiddleware(RequestDelegate next)
     private static async Task RejectAsync(HttpContext context, string code)
     {
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-        await context.Response.WriteAsJsonAsync(new { code, message = "Your staff session is no longer valid." }, context.RequestAborted);
+        await context.Response.WriteAsJsonAsync(new { code, message = "Your staff session is no longer valid.", operationPhase = "rejected" }, context.RequestAborted);
     }
 }

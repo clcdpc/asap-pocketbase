@@ -56,12 +56,7 @@ if (syncOrganizationsBtn) {
 }
 
 function workflowRunWasRejectedBeforeEnqueue(err) {
-  // These exact responses leave the auth middleware, endpoint scope guard, or
-  // antiforgery filter before AdministrationEndpoints calls jobs.Enqueue.
-  const code = err.response?.code;
-  return (err.status === 401 && code === 'staff_session_invalid') ||
-    (err.status === 403 && code === 'staff_scope_forbidden') ||
-    (err.status === 400 && code === 'antiforgery_failed');
+  return err.response?.operationPhase === 'rejected' || [401, 403].includes(err.status);
 }
 
 document.getElementById('btn-run-workflow-now').addEventListener('click', async (event) => {

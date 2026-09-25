@@ -12,11 +12,12 @@ export let staffAccessGeneration = 0;
 export function setStaffSession(session) {
   const priorStaff = staffSession.staff;
   const nextStaff = session?.staff;
-  if (staffSession.authenticated !== !!session?.authenticated ||
+  const accessChanged = staffSession.authenticated !== !!session?.authenticated ||
       staffSession.accessAllowed !== (session?.accessAllowed !== false) ||
       String(priorStaff?.id) !== String(nextStaff?.id) ||
       priorStaff?.role !== nextStaff?.role ||
-      String(priorStaff?.organizationId) !== String(nextStaff?.organizationId)) {
+      String(priorStaff?.organizationId) !== String(nextStaff?.organizationId);
+  if (accessChanged) {
     staffAccessGeneration += 1;
   }
   staffSession.authenticated = !!session?.authenticated;
@@ -24,6 +25,9 @@ export function setStaffSession(session) {
   staffSession.antiforgeryToken = session?.antiforgeryToken || staffSession.antiforgeryToken || '';
   staffSession.code = session?.code || '';
   staffSession.staff = session?.staff || null;
+  if (accessChanged) {
+    window.dispatchEvent(new Event('asap:staff-access-changed'));
+  }
 }
 export const SETTINGS_RECORD_ID = 'settings0000001';
 export const loginContainer = document.getElementById('login-container');

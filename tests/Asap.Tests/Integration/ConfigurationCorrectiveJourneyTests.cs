@@ -1021,8 +1021,10 @@ public sealed partial class PatronJourneyTests
             using var anonymous = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
             using var unauthorized = await anonymous.DeleteAsync(
                 $"/api/asap/staff/settings/formats/{referencedFormatId}?version={Uri.EscapeDataString(referencedVersion)}");
-            Assert.AreEqual(System.Net.HttpStatusCode.Redirect, unauthorized.StatusCode,
-                "the direct delete endpoint must remain behind staff authorization");
+            Assert.AreEqual(System.Net.HttpStatusCode.Unauthorized, unauthorized.StatusCode,
+                "protected staff APIs must return the JSON session contract");
+            using var unauthorizedBody = JsonDocument.Parse(await unauthorized.Content.ReadAsStringAsync());
+            Assert.AreEqual("staff_session_invalid", unauthorizedBody.RootElement.GetProperty("code").GetString());
         }
         finally
         {

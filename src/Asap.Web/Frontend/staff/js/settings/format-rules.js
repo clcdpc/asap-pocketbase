@@ -289,7 +289,14 @@ export function renderPatronFormatRulesEditor(rules) {
       select.setAttribute('data-field', def.key);
       ['required', 'optional', 'hidden'].forEach(mode => select.appendChild(new Option(mode.charAt(0).toUpperCase() + mode.slice(1), mode)));
       select.value = (customFieldRules[def.key] && customFieldRules[def.key].mode) || 'hidden';
+      select.disabled = def.enabled === false;
       modeTd.appendChild(select);
+      if (def.enabled === false) {
+        const note = document.createElement('div');
+        note.className = 'small text-muted';
+        note.textContent = 'Disabled field; saved rule is preserved.';
+        modeTd.appendChild(note);
+      }
 
       const labelTd = document.createElement('td');
       const labelInput = document.createElement('input');
@@ -302,6 +309,7 @@ export function renderPatronFormatRulesEditor(rules) {
       labelInput.value = labelOverride ?? def.label ?? '';
       labelInput.dataset.baseLabel = def.label || '';
       labelInput.dataset.initialLabelOverride = labelOverride ?? '';
+      labelInput.disabled = def.enabled === false;
       labelTd.appendChild(labelInput);
       tr.append(nameTd, modeTd, labelTd);
       tbody.appendChild(tr);

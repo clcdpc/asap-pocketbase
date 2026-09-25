@@ -232,9 +232,15 @@ public static class LegacyStaffEndpoints
             "staff_session_invalid" => StatusCodes.Status401Unauthorized,
             "organization_not_found" => StatusCodes.Status404NotFound,
             "stale_version" => StatusCodes.Status409Conflict,
-            "saved" => StatusCodes.Status200OK,
+            "saved" or "partial" => StatusCodes.Status200OK,
             _ => StatusCodes.Status400BadRequest
         };
-        return Results.Json(new { code = result.Code, message = result.Message, data = result.Data }, statusCode: status);
+        var operationPhase = result.Code switch
+        {
+            "saved" => "complete",
+            "partial" => "partial",
+            _ => "rejected"
+        };
+        return Results.Json(new { code = result.Code, message = result.Message, data = result.Data, operationPhase }, statusCode: status);
     }
 }

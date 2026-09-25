@@ -416,6 +416,7 @@ public sealed partial class PolarisPatronProvider(
 
     public async Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (bibId <= 0)
         {
             return new BibValidationResult(false);
@@ -428,8 +429,13 @@ public sealed partial class PolarisPatronProvider(
                 : settings.OrganizationIdForRequests;
             var response = await client.BibGetAsync(bibId, branchId, cancellationToken);
             var data = response.Data;
-            if (response.Response?.IsSuccessStatusCode != true || data is null || data.PAPIErrorCode != 0 ||
-                data.BibGetRows.Count == 0)
+            if (response.Response?.IsSuccessStatusCode != true || data is null ||
+                !TryReadPapiErrorCode(response.Response.Content, out var errorCode) ||
+                errorCode != data.PAPIErrorCode || errorCode < -1)
+            {
+                throw new PolarisOperationalException("polaris_bib_validation_failed", "Polaris BIB validation was unavailable.");
+            }
+            if (errorCode == -1 || data.BibGetRows.Count == 0)
             {
                 return new BibValidationResult(false);
             }

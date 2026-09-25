@@ -86,21 +86,9 @@ public static class LegacyStaffBibLookupEndpoints
                 try
                 {
                     var patron = await patrons.RefreshAsync(barcode, cancellationToken);
-                    if (!configuration.AllowAnyRegisteredCardLogin &&
-                        patron.HomeLibraryOrganizationId != scope.OrganizationId)
-                    {
-                        return Results.Json(
-                            new
-                            {
-                                code = "patron_library_forbidden",
-                                message = "This patron belongs to a different library."
-                            },
-                            statusCode: StatusCodes.Status403Forbidden);
-                    }
+                    PatronSuggestionService.EnforceStaffPatronLibrary(configuration, patron);
                     var holds = await provider.GetPatronHoldsAsync(patron.Barcode, cancellationToken);
-                    var hasHold = holds.Any(hold => hold.BibId == bibId &&
-                        !new[] { "cancel", "expire", "filled", "deleted" }.Any(terminal =>
-                            (hold.StatusDescription ?? string.Empty).Contains(terminal, StringComparison.OrdinalIgnoreCase)));
+                    var hasHold = holds.Any(hold => StaffHoldStatus.IsActiveSameBib(hold, bibId));
                     patronHoldCheck = new { ok = true, statusValue = hasHold ? 29 : 0, readOnly = true };
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -126,7 +114,7 @@ public static class LegacyStaffBibLookupEndpoints
         {
             return Results.Json(
                 new { code = "bib_validation_unavailable", message = "Catalog validation is temporarily unavailable." },
-                statusCode: StatusCodes.Status502BadGateway);
+                statusCode: StatusCodes.Status503ServiceUnavailable);
         }
         catch (PatronFlowException exception)
         {

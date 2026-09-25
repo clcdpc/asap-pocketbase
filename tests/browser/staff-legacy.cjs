@@ -1092,6 +1092,99 @@ async function runScopedStaff(browser, args, axeSource, report) {
   }
 }
 
+async function runSessionExpiry(browser, args) {
+  const { context, traffic } = await createContext(
+    browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity
+  );
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    await page.goto(`${args.baseOrigin}/staff/`, { waitUntil: 'networkidle' });
+    await page.locator('#app-container').waitFor({ state: 'visible' });
+    await context.setExtraHTTPHeaders({});
+    const expired = page.waitForResponse(response =>
+      response.url().includes('/api/asap/staff/') && response.status() === 401);
+    await page.locator('[data-status="settings"]').click();
+    const response = await expired;
+    assert.match(response.headers()['content-type'] || '', /application\/json/);
+    assert.equal(response.headers().location, undefined);
+    await page.locator('#login-container').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#app-container').isVisible(), false);
+    assert.deepEqual(errors, [], `Legacy session expiry raised a browser error: ${errors.join('; ')}`);
+    assert.equal(traffic.externalRequests, 0, 'Legacy session expiry requested an external asset');
+  } finally {
+    await context.close();
+  }
+}
+
+async function runSettingsDemotionDuringLoad(browser, args) {
+  const { context, traffic } = await createContext(
+    browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity
+  );
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  let startDelayed;
+  let releaseDelayed;
+  let routeDone;
+  const delayed = new Promise(resolve => { startDelayed = resolve; });
+  const release = new Promise(resolve => { releaseDelayed = resolve; });
+  const completed = new Promise(resolve => { routeDone = resolve; });
+  const staleTitle = 'Title from superseded privileged response';
+  let waitTimer;
+  try {
+    await page.goto(`${args.baseOrigin}/staff/`, { waitUntil: 'networkidle' });
+    await page.locator('#app-container').waitFor({ state: 'visible' });
+    await page.route('**/api/asap/staff/legacy/settings?**', async route => {
+      try {
+        const upstream = await route.fetch();
+        const body = await upstream.json();
+        body.uiText.pageTitle = staleTitle;
+        startDelayed();
+        await release;
+        await route.fulfill({ response: upstream, json: body });
+      } catch (error) {
+        // The owner may abort the request on demotion before a delayed response can be fulfilled.
+        if (!String(error.message).includes('intercept') && !String(error.message).includes('aborted')) {
+          throw error;
+        }
+      } finally {
+        routeDone();
+      }
+    });
+    await page.locator('[data-status="settings"]').click();
+    await Promise.race([
+      delayed,
+      new Promise((_, reject) => {
+        waitTimer = setTimeout(() => reject(new Error('Delayed Settings response was not requested.')), 15000);
+      })
+    ]);
+    clearTimeout(waitTimer);
+    await page.evaluate(async () => {
+      const state = await import('/staff/js/state.js');
+      const settings = await import('/staff/js/settings.js');
+      state.setStaffSession({
+        ...state.staffSession,
+        staff: { ...state.staffSession.staff, role: 'staff' }
+      });
+      settings.showSettingsAccessDenied();
+    });
+    releaseDelayed();
+    await completed;
+    await page.waitForTimeout(100);
+    assert.equal(await page.locator('#settings-form').isVisible(), false);
+    assert.equal(await page.locator('#settings-error').isVisible(), true);
+    assert.notEqual(await page.locator('#ui-patron-page-title').inputValue(), staleTitle);
+    assert.deepEqual(errors, [], `Legacy Settings demotion raised a browser error: ${errors.join('; ')}`);
+    assert.equal(traffic.externalRequests, 0, 'Legacy Settings demotion requested an external asset');
+  } finally {
+    clearTimeout(waitTimer);
+    releaseDelayed();
+    await context.close();
+  }
+}
+
 async function loadDependencies() {
   let chromium;
   try { ({ chromium } = require('playwright')); } catch {
@@ -1120,6 +1213,8 @@ async function main() {
     await runAnonymous(browser, args, axeSource, report);
     await runSuperAdmin(browser, args, axeSource, report);
     await runScopedStaff(browser, args, axeSource, report);
+    await runSessionExpiry(browser, args);
+    await runSettingsDemotionDuringLoad(browser, args);
     assert.equal(report.states.length, 11, 'Expected eleven primary legacy staff browser states');
     report.legacyAccessibilityBaseline = LEGACY_ACCESSIBILITY_BASELINE;
     report.unexpectedAccessibility = unexpectedLegacyAccessibilityFindings(report.states);
