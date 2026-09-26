@@ -234,13 +234,13 @@ public sealed class TitleRequestMutationService(
             : null;
         var staffSelectedBib = selectedBibId is not null &&
                                string.Equals(selectedBibId, proposedBib, StringComparison.Ordinal);
-        var clearsAutomationBib = identifierChanged &&
-                                  !request.BibIdStaffVerified &&
-                                  !staffSelectedBib &&
-                                  !bibChanged;
+        var explicitlySuppliedBib = bibChanged || staffSelectedBib;
+        var bibAfterMutation = identifierChanged
+            ? explicitlySuppliedBib ? proposedBib : null
+            : proposedBib;
         var autoHoldSupplied = input.Autohold.ValueKind is JsonValueKind.True or JsonValueKind.False;
         var proposedAutoHold = autoHoldSupplied ? input.Autohold.GetBoolean() : request.AutoHold;
-        var targetStatus = ResolveStatus(input.Action, input.Status, request.Status, proposedBib);
+        var targetStatus = ResolveStatus(input.Action, input.Status, request.Status, bibAfterMutation);
         if (targetStatus is null)
         {
             return new TitleRequestMutationResult("invalid_transition");
@@ -259,8 +259,7 @@ public sealed class TitleRequestMutationService(
         {
             return new TitleRequestMutationResult("identifier_locked_by_stage");
         }
-        if (targetStatus == "pending_hold" &&
-            (string.IsNullOrWhiteSpace(proposedBib) || statusChanged && clearsAutomationBib))
+        if (targetStatus == "pending_hold" && statusChanged && string.IsNullOrWhiteSpace(bibAfterMutation))
         {
             return new TitleRequestMutationResult("bib_required");
         }
@@ -272,16 +271,12 @@ public sealed class TitleRequestMutationService(
         if (identifierChanged)
         {
             request.Identifier = Clean(proposedIdentifier);
-            if (!request.BibIdStaffVerified && !staffSelectedBib && !bibChanged)
-            {
-                request.BibId = null;
-                request.BibIdStaffVerified = false;
-            }
-            request.IsbnCheckResult = null;
-            request.IsbnCheckRetryCount = 0;
-            request.IsbnCheckLastErrorCode = null;
-            request.LastCheckedUtc = null;
-            request.IsbnCheckStatus = request.Identifier is null ? "skipped_no_isbn" : "pending";
+        }
+        if (identifierChanged || bibChanged)
+        {
+            request.BibId = null;
+            request.BibIdStaffVerified = false;
+            InvalidateIdentifierCheckState(request);
             await RemoveIdentifierTagsAsync(context, request.Id, cancellationToken);
         }
         if (bibChanged || staffSelectedBib)
@@ -414,13 +409,13 @@ public sealed class TitleRequestMutationService(
         var identifierChanged = identifierSupplied &&
                                 !string.Equals(proposedIdentifier, Clean(request.Identifier), StringComparison.Ordinal);
         var bibChanged = !string.Equals(proposedBib, Clean(request.BibId), StringComparison.Ordinal);
-        var targetStatus = ResolveStatus(input.Action, input.Status, request.Status, proposedBib);
+        var explicitlySuppliedBib = bibChanged || selectedBibId is not null;
+        var bibAfterMutation = identifierChanged
+            ? explicitlySuppliedBib ? proposedBib : null
+            : proposedBib;
+        var targetStatus = ResolveStatus(input.Action, input.Status, request.Status, bibAfterMutation);
         var enteringPendingHold = targetStatus == "pending_hold" && request.Status != "pending_hold";
         var staffSelectedBib = selectedBibId is not null;
-        var clearsAutomationBib = identifierChanged &&
-                                  !request.BibIdStaffVerified &&
-                                  !staffSelectedBib &&
-                                  !bibChanged;
         if (!bibChanged && !identifierChanged && !enteringPendingHold && !staffSelectedBib)
         {
             return null;
@@ -449,7 +444,7 @@ public sealed class TitleRequestMutationService(
         {
             return "invalid_transition";
         }
-        if (targetStatus == "pending_hold" && enteringPendingHold && clearsAutomationBib)
+        if (targetStatus == "pending_hold" && enteringPendingHold && string.IsNullOrWhiteSpace(bibAfterMutation))
         {
             return "bib_required";
         }
@@ -747,6 +742,15 @@ public sealed class TitleRequestMutationService(
         context.TitleRequestWorkflowTags.RemoveRange(links);
     }
 
+    private static void InvalidateIdentifierCheckState(TitleRequest request)
+    {
+        request.IsbnCheckResult = null;
+        request.IsbnCheckRetryCount = 0;
+        request.IsbnCheckLastErrorCode = null;
+        request.LastCheckedUtc = null;
+        request.IsbnCheckStatus = request.Identifier is null ? "skipped_no_isbn" : "pending";
+    }
+
     private static async Task<long?> ResolveFormatIdAsync(
         AsapDbContext context,
         int libraryOrganizationId,
@@ -768,9 +772,8 @@ public sealed class TitleRequestMutationService(
             "edit" when requested is null || requested == current => current,
             "purchase" when current == "suggestion" =>
                 string.IsNullOrWhiteSpace(bib) ? "outstanding_purchase" : "pending_hold",
-            "alreadyOwn" when current == "suggestion" && !string.IsNullOrWhiteSpace(bib) => "pending_hold",
-            "catalogFound" when current is "suggestion" or "outstanding_purchase" &&
-                                !string.IsNullOrWhiteSpace(bib) => "pending_hold",
+            "alreadyOwn" when current == "suggestion" => "pending_hold",
+            "catalogFound" when current is "suggestion" or "outstanding_purchase" => "pending_hold",
             "reject" or "silentClose" when current == "suggestion" => "closed",
             "closeDuplicate" when current != "closed" => "closed",
             "close" when current == "hold_placed" => "closed",
