@@ -181,7 +181,7 @@ public static class TitleRequestEndpoints
                 {
                     var holds = await polaris.GetPatronHoldsAsync(request.Barcode, cancellationToken);
                     patronHasHold = holds.Any(hold => hold.BibId == bibId &&
-                        !HoldPlacementService.IsTerminal(hold.StatusDescription));
+                        !HoldPlacementService.IsTerminal(hold.StatusId));
                 }
                 catch (PolarisOperationalException exception)
                 {

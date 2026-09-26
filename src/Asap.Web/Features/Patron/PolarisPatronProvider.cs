@@ -562,7 +562,25 @@ public sealed partial class PolarisPatronProvider(
         {
             var model = data.PatronHoldRequestsGetRows[rowIndex++];
             if (row.ValueKind != JsonValueKind.Object || model is null ||
-                !TryGetUniqueProperty(row, "HoldRequestID", out var holdRequestIdElement) ||
+                !TryGetUniqueProperty(row, "StatusID", out var statusIdElement) ||
+                !TryReadPositiveInt32(statusIdElement, out var statusId) ||
+                !IsPolarisHoldStatusId(statusId) ||
+                statusId != model.StatusID ||
+                !TryGetUniqueProperty(row, "StatusDescription", out var statusDescriptionElement) ||
+                statusDescriptionElement.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            var statusDescription = Clean(statusDescriptionElement.GetString());
+            var modelStatusDescription = Clean(model.StatusDescription);
+            if (statusDescription is null || modelStatusDescription is null ||
+                !string.Equals(statusDescription, modelStatusDescription, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (!TryGetUniqueProperty(row, "HoldRequestID", out var holdRequestIdElement) ||
                 !TryReadPositiveInt32(holdRequestIdElement, out var holdRequestId) ||
                 holdRequestId != model.HoldRequestID ||
                 !TryGetUniqueProperty(row, "BibID", out var bibIdElement) ||
@@ -575,6 +593,10 @@ public sealed partial class PolarisPatronProvider(
 
         return true;
     }
+
+    // PatronHoldRequestsGet documents these status IDs; zero and all unlisted values are invalid.
+    private static bool IsPolarisHoldStatusId(int statusId) =>
+        statusId is 1 or 3 or 4 or 5 or 6 or 7 or 8 or 9 or 16;
 
     public async Task<IReadOnlyList<PolarisCheckoutSnapshot>> GetPatronCheckoutsAsync(
         string barcode,
@@ -1179,6 +1201,10 @@ public sealed partial class PolarisPatronProvider(
                 codeElement.ValueKind != JsonValueKind.Number ||
                 !codeElement.TryGetInt32(out var code) ||
                 code < -1 || data.PAPIErrorCode != code ||
+                !TryGetUniqueProperty(root, "TotalRecordsFound", out var totalElement) ||
+                totalElement.ValueKind != JsonValueKind.Number ||
+                !totalElement.TryGetInt32(out var totalRecordsFound) ||
+                totalRecordsFound < 0 || data.TotalRecordsFound != totalRecordsFound ||
                 !TryGetUniqueProperty(root, "BibSearchRows", out var rowsElement) ||
                 rowsElement.ValueKind != JsonValueKind.Array ||
                 data.BibSearchRows is null || data.BibSearchRows.Count != rowsElement.GetArrayLength())
@@ -1188,12 +1214,8 @@ public sealed partial class PolarisPatronProvider(
 
             if (rowsElement.GetArrayLength() == 0)
             {
-                if (code is not (0 or -1) ||
-                    !TryGetUniqueProperty(root, "TotalRecordsFound", out var totalElement) ||
-                    totalElement.ValueKind != JsonValueKind.Number ||
-                    !totalElement.TryGetInt32(out var totalRecordsFound) ||
-                    totalRecordsFound != 0 || data.TotalRecordsFound != totalRecordsFound ||
-                    !HasNoSearchErrorMessage(root))
+                if (totalRecordsFound != 0 ||
+                    code != 0 && (code != -1 || !HasNoSearchErrorMessage(root)))
                 {
                     return SearchAttempt.Operational;
                 }
@@ -1209,12 +1231,27 @@ public sealed partial class PolarisPatronProvider(
                 return SearchAttempt.Operational;
             }
 
+            if (totalRecordsFound < rowsElement.GetArrayLength() ||
+                code > 0 && code != rowsElement.GetArrayLength())
+            {
+                return SearchAttempt.Operational;
+            }
+
             primaryTomByControlNumber = new Dictionary<int, string>();
+            var rowIndex = 0;
             foreach (var row in rowsElement.EnumerateArray())
             {
-                if (TryGetProperty(row, "ControlNumber", out var control) &&
-                    control.TryGetInt32(out var controlNumber) &&
-                    TryGetProperty(row, "PrimaryTypeOfMaterial", out var tom))
+                var model = data.BibSearchRows[rowIndex++];
+                if (row.ValueKind != JsonValueKind.Object || model is null ||
+                    !TryGetUniqueProperty(row, "ControlNumber", out var control) ||
+                    !TryReadPositiveInt32(control, out var controlNumber) ||
+                    controlNumber != model.ControlNumber ||
+                    HasUndocumentedBibIdentityAlias(row))
+                {
+                    return SearchAttempt.Operational;
+                }
+
+                if (TryGetUniqueProperty(row, "PrimaryTypeOfMaterial", out var tom))
                 {
                     primaryTomByControlNumber[controlNumber] = tom.ToString().Trim();
                 }
@@ -1226,6 +1263,20 @@ public sealed partial class PolarisPatronProvider(
         }
 
         return new SearchAttempt(null, response.Data, primaryTomByControlNumber);
+    }
+
+    private static bool HasUndocumentedBibIdentityAlias(JsonElement row)
+    {
+        foreach (var property in row.EnumerateObject())
+        {
+            if (string.Equals(property.Name, "BibID", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(property.Name, "BibliographicRecordID", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool TryGetProperty(

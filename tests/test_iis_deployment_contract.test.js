@@ -45,7 +45,7 @@ assert.ok(!workflow.includes('\n    concurrency:'), 'build-test-package must not
 assert.ok(workflow.includes('Generate ephemeral SQL test credentials'), 'CI SQL credentials should be generated per run');
 assert.ok(!workflow.includes('Asap_Slice0_SQL_2026'), 'CI must not retain the historical hard-coded SQL password');
 assert.ok(workflow.includes('ref: ${{ github.sha }}'), 'the hosted job should check out the exact event SHA');
-assert.ok(workflow.includes('--minimum-expected-tests 436'), 'the non-browser real-SQL partition must retain its test-count guard');
+assert.ok(workflow.includes('--minimum-expected-tests 475'), 'the non-browser real-SQL partition must retain its test-count guard');
 assert.ok(workflow.includes('run: npm test'), 'the frontend test gate must remain');
 assert.ok(workflow.includes('dotnet publish src/Asap.Web/Asap.Web.csproj'), 'Web publish must remain a hosted check');
 assert.ok(workflow.includes('dotnet publish src/Asap.Migration/Asap.Migration.csproj'), 'native migration publish check must remain');

@@ -1,4 +1,5 @@
 using System.Data;
+using System.Net;
 using Asap.Web.Features.Patron;
 using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Jobs;
@@ -66,6 +67,164 @@ public sealed partial class PatronJourneyTests
             "SELECT [Status] FROM [asap].[TitleRequest] WHERE [Id] = @id;",
             "@id",
             requestId));
+    }
+
+    [TestMethod]
+    public async Task MalformedPatronHoldReadFailsPrecheckWithoutAdoptionOrCreation()
+    {
+        var provider = ScriptedHoldProvider.AmbiguousCreate();
+        provider.HoldReadException = new PolarisOperationalException(
+            "polaris_hold_read_failed",
+            "The hold response did not contain trustworthy status evidence.");
+        await using var holdFactory = factory!.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IPatronProvider>();
+                services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IPatronProvider>(provider);
+                services.AddSingleton<IStaffPolarisProvider>(provider);
+            }));
+        var (requestId, requestVersion) = await SeedPendingHoldRequestAsync("malformed-hold-precheck");
+
+        try
+        {
+            var placement = holdFactory.Services.GetRequiredService<HoldPlacementService>();
+            var result = await placement.PlaceBackgroundAsync(requestId, requestVersion, CancellationToken.None);
+
+            Assert.AreEqual("hold_provider_error", result.Code);
+            Assert.AreEqual(1, provider.HoldReadCount);
+            Assert.AreEqual(0, provider.CreateCount);
+            Assert.AreEqual(0, provider.ReplyCount);
+
+            await using var connection = new SqlConnection(databaseConnectionString);
+            await connection.OpenAsync();
+            await using var command = new SqlCommand(
+                """
+                SELECT request.[Status], operation.[State], operation.[Phase], operation.[ResultCode],
+                       operation.[PolarisHoldId], operation.[CreateStartedUtc], operation.[ReplyStartedUtc],
+                       operation.[CompletedUtc],
+                       (SELECT COUNT(*) FROM [asap].[TitleRequestEvent]
+                        WHERE [TitleRequestId] = request.[Id] AND [EventType] = N'hold_placed'),
+                       (SELECT COUNT(*) FROM [asap].[EmailOutbox]
+                        WHERE [BusinessKey] LIKE N'title-hold-placed:' + CONVERT(nvarchar(30), request.[Id]) + N':%')
+                FROM [asap].[TitleRequest] request
+                JOIN [asap].[HoldPlacementOperation] operation ON operation.[TitleRequestId] = request.[Id]
+                WHERE request.[Id] = @requestId;
+                """,
+                connection);
+            command.Parameters.AddWithValue("@requestId", requestId);
+            await using var row = await command.ExecuteReaderAsync();
+            Assert.IsTrue(await row.ReadAsync());
+            Assert.AreEqual("pending_hold", row.GetString(0));
+            Assert.AreEqual("failed", row.GetString(1));
+            Assert.AreEqual("acquired", row.GetString(2));
+            Assert.AreEqual("provider_precheck_failed", row.GetString(3));
+            Assert.IsTrue(row.IsDBNull(4));
+            Assert.IsTrue(row.IsDBNull(5));
+            Assert.IsTrue(row.IsDBNull(6));
+            Assert.IsFalse(row.IsDBNull(7));
+            Assert.AreEqual(0, row.GetInt32(8));
+            Assert.AreEqual(0, row.GetInt32(9));
+        }
+        finally
+        {
+            await DeleteRequestAsync(requestId);
+        }
+    }
+
+    [TestMethod]
+    public async Task MalformedIdentifierSearchCannotPersistCatalogMatchOrMetadata()
+    {
+        var identifier = $"978{Random.Shared.NextInt64(1000000000, 9999999999)}";
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """{"PAPIErrorCode":2,"TotalRecordsFound":2,"BibSearchRows":[{"ControlNumber":9001,"Title":"Wrong catalog title","Author":"Wrong catalog author"},{"ControlNumber":"bad"}]}""");
+        var provider = await CreatePolarisProviderAsync(handler);
+        var configuration = TestConfigurationFactory.Create(allowedDomains: ["example.org"]);
+        configuration.ConnectionStrings.AsapDatabase = databaseConnectionString;
+        configuration.ConnectionStrings.HangfireDatabase = databaseConnectionString;
+        var suggestionService = new PatronSuggestionService(
+            configuration,
+            factory!.Services.GetRequiredService<PatronConfigurationService>(),
+            provider,
+            dispatcher!,
+            new RecordingEmailSender(),
+            new RecipientDomainPolicy(configuration),
+            timeProvider!,
+            NullLogger<PatronSuggestionService>.Instance);
+
+        long requestId;
+        byte[] requestVersion;
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
+                INSERT INTO [asap].[TitleRequest]
+                    ([LibraryOrganizationId], [Barcode], [Title], [Author], [Identifier], [AutoHold],
+                     [MaterialFormatId], [Status], [IsbnCheckStatus], [IsbnCheckRetryCount], [Notes],
+                     [CreatedUtc], [UpdatedUtc])
+                VALUES (2, @barcode, N'Original title', N'Original author', @identifier, 1, @formatId,
+                        N'suggestion', N'pending', 2, N'Original notes', SYSUTCDATETIME(), SYSUTCDATETIME());
+                SELECT CAST(SCOPE_IDENTITY() AS bigint), [RowVersion]
+                FROM [asap].[TitleRequest] WHERE [Id] = SCOPE_IDENTITY();
+                """;
+            command.Parameters.AddWithValue("@barcode", $"2000000000{Random.Shared.Next(100000, 999999)}");
+            command.Parameters.AddWithValue("@identifier", identifier);
+            await using var row = await command.ExecuteReaderAsync();
+            Assert.IsTrue(await row.ReadAsync());
+            requestId = row.GetInt64(0);
+            requestVersion = (byte[])row[1];
+        }
+
+        try
+        {
+            var outcome = await suggestionService.ProcessIdentifierLookupAsync(
+                requestId,
+                identifier,
+                2,
+                requestVersion,
+                CancellationToken.None);
+
+            Assert.AreEqual(IdentifierLookupOutcome.OperationalFailure, outcome);
+            Assert.AreEqual(1, handler.RequestCount);
+            await using var connection = new SqlConnection(databaseConnectionString);
+            await connection.OpenAsync();
+            await using var command = new SqlCommand(
+                """
+                SELECT request.[Title], request.[Author], request.[BibId], request.[IsbnCheckStatus],
+                       request.[IsbnCheckRetryCount], request.[IsbnCheckResult], request.[IsbnCheckLastErrorCode],
+                       request.[Notes],
+                       (SELECT COUNT(*) FROM [asap].[TitleRequestWorkflowTag] WHERE [TitleRequestId] = request.[Id]),
+                       (SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [TitleRequestId] = request.[Id]),
+                       (SELECT COUNT(*) FROM [asap].[EmailOutbox]
+                        WHERE [BusinessKey] LIKE N'title-hold-placed:' + CONVERT(nvarchar(30), request.[Id]) + N':'),
+                       (SELECT COUNT(*) FROM [asap].[HoldPlacementOperation] WHERE [TitleRequestId] = request.[Id])
+                FROM [asap].[TitleRequest] request
+                WHERE request.[Id] = @requestId;
+                """,
+                connection);
+            command.Parameters.AddWithValue("@requestId", requestId);
+            await using var result = await command.ExecuteReaderAsync();
+            Assert.IsTrue(await result.ReadAsync());
+            Assert.AreEqual("Original title", result.GetString(0));
+            Assert.AreEqual("Original author", result.GetString(1));
+            Assert.IsTrue(result.IsDBNull(2));
+            Assert.AreEqual("pending", result.GetString(3));
+            Assert.AreEqual(2, result.GetInt32(4));
+            Assert.IsTrue(result.IsDBNull(5));
+            Assert.AreEqual("polaris_search_operational_failure", result.GetString(6));
+            Assert.AreEqual("Original notes", result.GetString(7));
+            Assert.AreEqual(0, result.GetInt32(8));
+            Assert.AreEqual(0, result.GetInt32(9));
+            Assert.AreEqual(0, result.GetInt32(10));
+            Assert.AreEqual(0, result.GetInt32(11));
+        }
+        finally
+        {
+            await DeleteRequestAsync(requestId);
+        }
     }
 
     [TestMethod]
