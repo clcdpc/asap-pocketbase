@@ -13,8 +13,15 @@ const { JSDOM } = require('jsdom');
       path.join(temporary, 'research.js'));
     fs.writeFileSync(path.join(temporary, 'package.json'), '{"type":"module"}');
     global.document = dom.window.document;
-    const { applyPolarisResultToControls, createPolarisLookup, mergeCatalogValue,
+    const { applyPolarisResultToControls, createPolarisLookup, mergeCatalogValue, selectedStaffBibId,
       researchUrl, renderResearchLinks } = await import(pathToFileURL(path.join(temporary, 'research.js')).href);
+    assert.equal(selectedStaffBibId({ requestId: '9007199254740993', bibId: '9001' },
+      '9007199254740993', '9001'), '9001');
+    assert.equal(selectedStaffBibId(null, '9007199254740993', '9001'), null);
+    assert.equal(selectedStaffBibId({ requestId: 'stale', bibId: '9001' },
+      '9007199254740993', '9001'), null);
+    assert.equal(selectedStaffBibId({ requestId: '9007199254740993', bibId: '9001' },
+      '9007199254740993', '9002'), null);
     assert.equal(researchUrl('https://leap.example.test/bib/{{bibid}}', { bibid: '90/01' }, 'bibid'),
       'https://leap.example.test/bib/90%2F01');
     assert.equal(researchUrl('http://search.example.test/?q={{title}}', { title: 'A & B' }),

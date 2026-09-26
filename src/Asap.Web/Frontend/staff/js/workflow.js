@@ -7,7 +7,7 @@ import {
   onAccessUnavailable
 } from './http.js';
 import { createSettingsController } from './settings.js';
-import { applyPolarisResultToControls, createPolarisLookup, renderResearchLinks } from './research.js';
+import { applyPolarisResultToControls, createPolarisLookup, renderResearchLinks, selectedStaffBibId } from './research.js';
 import { loadAnalytics, resetAnalytics } from './analytics.js';
 import {
   requestedRequestIdFromUrl,
@@ -1343,6 +1343,9 @@ export function createWorkflowApp() {
         author: author.value,
         identifier: identifier.disabled ? request.identifier : identifier.value.trim() || null,
         bibid: bib.disabled ? request.bibid : bib.value.trim() || null,
+        ...(selectedStaffBibId(state.verifiedBib, request.id, bib.value)
+          ? { staffSelectedBibId: selectedStaffBibId(state.verifiedBib, request.id, bib.value) }
+          : {}),
         publication: publication.value,
         exactPublicationDate: exactDate.value || null,
         format: format.value,

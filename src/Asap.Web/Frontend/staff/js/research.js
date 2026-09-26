@@ -24,6 +24,13 @@ export function applyPolarisResultToControls(selected, controls) {
   }
 }
 
+export function selectedStaffBibId(selection, requestId, bibId) {
+  const selectedId = String(selection?.bibId ?? '').trim();
+  if (!selectedId || selection?.requestId !== String(requestId) ||
+      selectedId !== String(bibId ?? '').trim()) return null;
+  return selectedId;
+}
+
 export function researchUrl(template, values, requiredToken = '') {
   const pattern = String(template || '').trim();
   if (!pattern || (requiredToken && !pattern.includes(`{{${requiredToken}}}`))) return '';

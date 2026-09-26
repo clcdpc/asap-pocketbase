@@ -98,16 +98,24 @@ public sealed partial class PolarisPatronProvider
                     seen.Add(bibId);
                     results.Add(row);
                 }
-                if (results.Count >= 10)
-                {
-                    break;
-                }
             }
             if (results.Count == 0 && failed)
             {
                 throw new PolarisOperationalException("polaris_bib_search_failed", "Polaris BIB search was unavailable.");
             }
-            return new StaffBibSearchResult(results.Take(10).ToArray(), Math.Max(totalMatches, results.Count));
+            var rankedResults = results
+                .Select((row, index) => new
+                {
+                    Row = row,
+                    Order = index,
+                    Score = ScoreStaffBib(row, query, title, author)
+                })
+                .OrderByDescending(item => item.Score)
+                .ThenBy(item => item.Order)
+                .Take(10)
+                .Select(item => item.Row)
+                .ToArray();
+            return new StaffBibSearchResult(rankedResults, Math.Max(totalMatches, results.Count));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -463,6 +471,56 @@ public sealed partial class PolarisPatronProvider
     }
 
     private static string CleanSearch(string? value) => Regex.Replace(value ?? string.Empty, "\\s+", " ").Trim();
+
+    private static double ScoreStaffBib(StaffBibSearchRow result, string query, string title, string author)
+    {
+        var score = 0d;
+        var targetTitle = NormalizeLabel(title.Length > 0 ? title : query);
+        var targetAuthor = NormalizeLabel(author);
+        var targetIdentifier = NormalizeIdentifier(query);
+        var rowTitle = NormalizeLabel(result.Title);
+        var rowAuthor = NormalizeLabel(result.Author);
+        var rowIdentifier = NormalizeIdentifier(result.Identifier ?? string.Empty);
+
+        if (targetIdentifier.Length > 0 && rowIdentifier.Contains(targetIdentifier, StringComparison.Ordinal))
+        {
+            score += 200;
+        }
+
+        if (targetTitle.Length > 0 && rowTitle == targetTitle)
+        {
+            score += 100;
+        }
+        else if (targetTitle.Length > 0 && rowTitle.StartsWith(targetTitle, StringComparison.Ordinal))
+        {
+            score += 40;
+        }
+
+        if (targetAuthor.Length > 0 && rowAuthor.Contains(targetAuthor, StringComparison.Ordinal))
+        {
+            score += 30;
+        }
+
+        var publicationDigits = Regex.Replace(result.Publication ?? string.Empty, "\\D", string.Empty);
+        if (publicationDigits.Length >= 4 &&
+            int.TryParse(publicationDigits.AsSpan(0, 4), NumberStyles.None, CultureInfo.InvariantCulture, out var year) &&
+            year > 1900 && year <= DateTime.UtcNow.Year)
+        {
+            score += Math.Min(5d, (year - 1900) / 20d);
+        }
+
+        return score;
+    }
+
+    private static string NormalizeLabel(string? value)
+    {
+        var normalized = (value ?? string.Empty).Trim();
+        if (normalized.EndsWith(':'))
+        {
+            normalized = normalized[..^1];
+        }
+        return normalized.Trim().ToLowerInvariant();
+    }
 
     private static string NormalizeIdentifier(string value) =>
         Regex.Replace(value, "[\\s\\-_.:/]+", string.Empty).ToUpperInvariant();
