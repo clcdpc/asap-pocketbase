@@ -193,6 +193,60 @@ public sealed partial class PolarisPatronProvider(
         }
     }
 
+    public async Task<int?> GetPatronIdAsync(string barcode, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var (client, _) = await CreateClientAsync(cancellationToken);
+            var response = await client.PatronBasicDataGetAsync(
+                barcode,
+                string.Empty,
+                cancellationToken: cancellationToken);
+            var rawContent = response.Response?.Content ?? string.Empty;
+            var result = response.Data;
+            if (response.Response?.IsSuccessStatusCode != true)
+            {
+                throw new PolarisOperationalException(
+                    "polaris_patron_id_transport_failed",
+                    "Polaris patron data was unavailable.");
+            }
+
+            if (!TryReadPapiErrorCode(rawContent, out var papiErrorCode) ||
+                result is null || result.PAPIErrorCode != papiErrorCode || papiErrorCode != 0)
+            {
+                throw new PolarisOperationalException(
+                    "polaris_patron_id_protocol_failed",
+                    "Polaris returned an invalid patron response.");
+            }
+
+            using var document = JsonDocument.Parse(rawContent);
+            var root = document.RootElement;
+            if (!TryGetUniqueProperty(root, "PatronBasicData", out var rawPatron) ||
+                !TryGetUniqueProperty(rawPatron, "PatronID", out var rawPatronId) ||
+                !TryReadPositiveInt32(rawPatronId, out var patronId) ||
+                result.PatronBasicData is null || result.PatronBasicData.PatronID != patronId)
+            {
+                throw new PolarisOperationalException(
+                    "polaris_patron_id_protocol_failed",
+                    "Polaris returned an incomplete patron identity.");
+            }
+
+            return patronId;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (PolarisOperationalException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw Operational("polaris_patron_id_failed", exception);
+        }
+    }
+
     public async Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(
         PatronSnapshot patron,
         CancellationToken cancellationToken)

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 using Asap.Web.Features.Patron;
 using Asap.Web.Infrastructure.Data;
 using Microsoft.AspNetCore.Mvc;
@@ -8,6 +9,9 @@ namespace Asap.Web.Features.Staff;
 
 public static class TitleRequestEndpoints
 {
+    private static readonly HashSet<string> SupportedResearchTokens =
+        ["title", "identifier", "bibid", "patron-id", "patronId"];
+
     public sealed record BibLookupInput(string? RequestId, int? LibraryOrgId, string? BibId,
         string? Mode, string? Query, string? Title, string? Author);
 
@@ -72,14 +76,15 @@ public static class TitleRequestEndpoints
         var system = await db.SystemSettings.AsNoTracking()
             .SingleAsync(item => item.OrganizationId == 1, cancellationToken);
         int? patronId = null;
-        if (scope.Request is { Barcode.Length: > 0 } request)
+        if (scope.Request is { Barcode.Length: > 0 } request &&
+            HasUsablePatronResearchUrl(system.LeapPatronUrlPattern))
         {
             try
             {
-                var patron = await patrons.RefreshAsync(request.Barcode, cancellationToken);
-                if (patron.PatronId > 0)
+                var resolvedPatronId = await patrons.GetPatronIdAsync(request.Barcode, cancellationToken);
+                if (resolvedPatronId is > 0)
                 {
-                    patronId = patron.PatronId;
+                    patronId = resolvedPatronId;
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -264,6 +269,37 @@ public static class TitleRequestEndpoints
     }
 
     private sealed record ResearchScope(int OrganizationId, TitleRequestDto? Request, IResult? Error);
+
+    private static bool HasUsablePatronResearchUrl(string? pattern)
+    {
+        var value = pattern?.Trim();
+        if (string.IsNullOrWhiteSpace(value) ||
+            !value.Contains("{{patron-id}}", StringComparison.Ordinal) &&
+            !value.Contains("{{patronId}}", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var hasUnsupportedToken = false;
+        var candidate = Regex.Replace(value, "\\{\\{([^{}]+)\\}\\}", match =>
+        {
+            if (!SupportedResearchTokens.Contains(match.Groups[1].Value))
+            {
+                hasUnsupportedToken = true;
+                return string.Empty;
+            }
+            return "1";
+        });
+        if (hasUnsupportedToken || candidate.Contains("{{", StringComparison.Ordinal) ||
+            candidate.Contains("}}", StringComparison.Ordinal) ||
+            !Uri.TryCreate(candidate, UriKind.Absolute, out var url))
+        {
+            return false;
+        }
+
+        return (url.Scheme == Uri.UriSchemeHttp || url.Scheme == Uri.UriSchemeHttps) &&
+               string.IsNullOrEmpty(url.UserInfo);
+    }
 
     private static async Task<IResult> ListAsync(
         HttpContext context,

@@ -66,6 +66,12 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
         return Task.FromResult(CreatePatron(barcode));
     }
 
+    public Task<int?> GetPatronIdAsync(string barcode, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<int?>(CreatePatron(barcode).PatronId);
+    }
+
     public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(
         PatronSnapshot patron,
         CancellationToken cancellationToken)

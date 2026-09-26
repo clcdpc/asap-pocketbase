@@ -832,7 +832,10 @@ public sealed class WorkflowProcessingService(
                     where link.TitleRequestId == request!.Id && IdentifierDerivedTagCodes.Contains(tag.Code)
                     select link).ToListAsync(cancellationToken);
                 context.TitleRequestWorkflowTags.RemoveRange(derivedTags);
-                request!.BibId = null;
+                if (!request!.BibIdStaffVerified)
+                {
+                    request.BibId = null;
+                }
                 request!.IsbnCheckStatus = "skipped_no_isbn";
                 request.IsbnCheckRetryCount = 0;
                 request.IsbnCheckResult = null;
