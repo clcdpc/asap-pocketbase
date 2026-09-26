@@ -10,6 +10,8 @@ namespace Asap.Web.Features.Patron;
 
 public sealed partial class PolarisPatronProvider
 {
+    private const int StaffBibSearchLimit = 10;
+
     public async Task<StaffBibSearchResult> SearchBibsAsync(
         string mode, string query, string title, string author, CancellationToken cancellationToken)
     {
@@ -51,7 +53,7 @@ public sealed partial class PolarisPatronProvider
                 request.BlockStaffOverride = true;
                 request.QueryParameters.Add("q", search.Query);
                 request.QueryParameters.Add("sortby", search.Sort);
-                request.QueryParameters.Add("bibsperpage", 10);
+                request.QueryParameters.Add("bibsperpage", StaffBibSearchLimit);
                 request.QueryParameters.Add("page", 1);
                 request.QueryParameters.Add("notran", 1);
                 StaffSearchAttempt inspected;
@@ -98,6 +100,11 @@ public sealed partial class PolarisPatronProvider
                     seen.Add(bibId);
                     results.Add(row);
                 }
+
+                if (results.Count >= StaffBibSearchLimit)
+                {
+                    break;
+                }
             }
             if (results.Count == 0 && failed)
             {
@@ -112,7 +119,7 @@ public sealed partial class PolarisPatronProvider
                 })
                 .OrderByDescending(item => item.Score)
                 .ThenBy(item => item.Order)
-                .Take(10)
+                .Take(StaffBibSearchLimit)
                 .Select(item => item.Row)
                 .ToArray();
             return new StaffBibSearchResult(rankedResults, Math.Max(totalMatches, results.Count));

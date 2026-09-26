@@ -515,6 +515,7 @@ MaterialFormatId bigint NOT NULL FK MaterialFormat
 Status nvarchar(...) NOT NULL CHECK (...)
 CloseReason nvarchar(...) NULL CHECK (...)
 BibId nvarchar(...) NULL
+BibIdStaffVerified bit NOT NULL DEFAULT (0) CHECK (BibIdStaffVerified = 0 OR NULLIF(LTRIM(RTRIM(BibId)), N'') IS NOT NULL)
 Notes nvarchar(max) NULL
 
 ClaimedByStaffUserId bigint NULL FK StaffUser
@@ -536,6 +537,8 @@ RowVersion rowversion
 ```
 
 `LegacyId` is provenance/business-history data and is not the PocketBase mapping key used by migration. Keep a separate migration mapping table.
+
+`BibIdStaffVerified` is set only when the target staff workflow deliberately establishes and validates the current BIB. Identifier reconciliation may replace or clear a BIB only while this flag is false; identifier edits clear the old BIB and reset the flag before processing the new identifier. Migration follows the pinned-source authority classification and blocker rules in `04-MIGRATION-CUTOVER.md`; it explicitly inserts the flag and reconciles it instead of relying on the database default. The default supports ordinary new rows only. Adding the column to a nonempty pre-cutover target is unsupported because a default cannot recover legacy BIB provenance.
 
 Use indexes for library/status, claim state, format, created/updated, background-job selection fields, and any currently frequent duplicate/identifier lookups. Normalize blank `BibId` to null and add a CHECK equivalent to `IsbnCheckStatus <> 'found' OR NULLIF(LTRIM(RTRIM(BibId)), '') IS NOT NULL` so SQL cannot contain a canonical `found` row without supporting BIB state. The application/migration additionally keeps the identifier-found workflow tag coherent with that state.
 
