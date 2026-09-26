@@ -65,6 +65,7 @@ public static class MigrationImporter
         var claimTransformations = new List<ClaimTransformation>();
         var additionalCopyClaimTransformations = new List<ClaimTransformation>();
         var placementTransformations = new List<PlacementTransformation>();
+        var bibAuthorityTransformations = new List<BibAuthorityTransformation>();
         MigrationSemanticReconciliation semanticReconciliation;
         transformations.AddRange(ValidateConfigurationSourceFields(package));
         transformations.Add(new
@@ -240,6 +241,13 @@ public static class MigrationImporter
                 importedCounts,
                 transformations,
                 placementTransformations);
+            ReconcileBibAuthorityCutover(
+                titleRequestRows,
+                requestStatuses,
+                placementTransformations,
+                importedCounts,
+                transformations,
+                bibAuthorityTransformations);
             ImportHistoricalEmailDeliveryEvents(
                 connection,
                 transaction,
@@ -283,6 +291,9 @@ public static class MigrationImporter
         }
 
         var targetCounts = ReconcileTarget(options.ConnectionString, importedCounts, options.AllowedTenantIds);
+        targetCounts["title_request_bibs_automation_derived"] = bibAuthorityTransformations.Count(item => item.Classification == "automation_derived");
+        targetCounts["title_request_bibs_ambiguous_unverified"] = bibAuthorityTransformations.Count(item => item.Classification.StartsWith("ambiguous_", StringComparison.Ordinal));
+        targetCounts["title_request_bibs_staff_authoritative"] = bibAuthorityTransformations.Count(item => item.BibIdStaffVerified);
         var targetFingerprint = MigrationReconciler.ComputeTargetFingerprint(options.ConnectionString);
         var packageIdentity = MigrationPackageValidator.ComputePackageIdentitySha256(package);
         WriteReport(
@@ -296,6 +307,7 @@ public static class MigrationImporter
             claimTransformations,
             additionalCopyClaimTransformations,
             placementTransformations,
+            bibAuthorityTransformations,
             semanticReconciliation);
         return new MigrationImportResult(importedCounts, true);
     }
@@ -1423,7 +1435,7 @@ public static class MigrationImporter
                      [Barcode], [Email], [NameFirst], [NameLast], [PatronCodeId], [PatronCodeDescription],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [LibraryNameSnapshot],
                      [Title], [Author], [Identifier], [Publication], [ExactPublicationDate], [CustomFieldsJson],
-                     [AutoHold], [MaterialFormatId], [Status], [CloseReason], [BibId], [Notes],
+                     [AutoHold], [MaterialFormatId], [Status], [CloseReason], [BibId], [BibIdStaffVerified], [Notes],
                      [ClaimedByStaffUserId], [ClaimedByDisplayName], [ClaimedAtUtc], [ClaimType], [ClaimRuleId],
                      [LastPromoterCheckUtc], [IsbnCheckStatus], [IsbnCheckResult], [IsbnCheckRetryCount],
                      [IsbnCheckLastErrorCode], [LastCheckedUtc], [CreatedUtc], [UpdatedUtc])
@@ -1433,7 +1445,7 @@ public static class MigrationImporter
                      @barcode, @email, @nameFirst, @nameLast, @patronCodeId, @patronCodeDescription,
                      @pickupId, @pickupName, @libraryName,
                      @title, @author, @identifier, @publication, @exactPublicationDate, @customFields,
-                     @autoHold, @formatId, @status, @closeReason, @bibId, @notes,
+                     @autoHold, @formatId, @status, @closeReason, @bibId, @bibIdStaffVerified, @notes,
                      @claimedById, @claimedDisplay, @claimedAt, @claimType, @claimRuleId,
                      @lastPromoterCheck, @isbnStatus, @isbnResult, @retryCount,
                      @lastErrorCode, @lastChecked, @createdUtc, @updatedUtc);
@@ -1464,6 +1476,7 @@ public static class MigrationImporter
             command.Parameters.AddWithValue("@status", status);
             command.Parameters.AddWithValue("@closeReason", DbString(closeReason));
             command.Parameters.AddWithValue("@bibId", DbString(bibId));
+            command.Parameters.AddWithValue("@bibIdStaffVerified", false);
             command.Parameters.AddWithValue("@notes", DbString(row.Text("notes")));
             command.Parameters.AddWithValue("@claimedById", DbValue(claim.StaffUserId));
             command.Parameters.AddWithValue("@claimedDisplay", DbString(claim.DisplayName));
@@ -2322,6 +2335,98 @@ public static class MigrationImporter
         return candidates.Distinct().ToArray();
     }
 
+    private static void ReconcileBibAuthorityCutover(
+        IReadOnlyList<SourceRow> titleRequests,
+        IReadOnlyDictionary<string, string> requestStatuses,
+        IReadOnlyList<PlacementTransformation> placementTransformations,
+        IDictionary<string, int> importedCounts,
+        ICollection<object> transformations,
+        ICollection<BibAuthorityTransformation> bibAuthorityTransformations)
+    {
+        var placedProtectedRequests = placementTransformations
+            .Where(item => item.Action == "inserted")
+            .Select(item => item.SourceId)
+            .ToHashSet(StringComparer.Ordinal);
+        var automationDerivedCount = 0;
+        var ambiguousSafeCount = 0;
+
+        foreach (var row in titleRequests.OrderBy(item => item.RequiredString("id"), StringComparer.Ordinal))
+        {
+            var bibId = row.String("bibid");
+            if (string.IsNullOrWhiteSpace(bibId))
+            {
+                continue;
+            }
+
+            var sourceId = row.RequiredString("id");
+            var requestStatus = ResolveRequestStatus(row, requestStatuses);
+            var isbnStatus = NormalizeIsbnStatus(
+                sourceId,
+                row.String("isbnCheckStatus"),
+                row.String("identifier"),
+                bibId);
+            var placedProtected = placedProtectedRequests.Contains(sourceId);
+            var retryableIdentifierState = isbnStatus is "pending" or "error_max_retries";
+            var canEnterSuggestionIdentifierQueue = requestStatus is "suggestion" or "closed";
+            if (canEnterSuggestionIdentifierQueue && retryableIdentifierState && !placedProtected)
+            {
+                transformations.Add(new
+                {
+                    entity = "title_request_bib_authority",
+                    sourceId,
+                    bibId,
+                    requestStatus,
+                    sourceIsbnCheckStatus = row.String("isbnCheckStatus"),
+                    classification = "ambiguous_risky",
+                    bibIdStaffVerified = false,
+                    outcome = "blocked_source_correction_required"
+                });
+                throw new MigrationOperationException(
+                    "bib_authority_ambiguous",
+                    $"Title request {sourceId} has a BIB ID with retryable identifier state '{isbnStatus}' and no placed-history protection; source evidence cannot establish BIB authority, so source correction is required.");
+            }
+
+            var lastChecked = row.UtcDateTime("lastChecked");
+            var updated = row.UtcDateTime("updated");
+            var automationDerived = isbnStatus == "found" &&
+                                    !string.IsNullOrWhiteSpace(row.String("identifier")) &&
+                                    lastChecked.HasValue &&
+                                    lastChecked == updated;
+            var classification = automationDerived
+                ? "automation_derived"
+                : placedProtected
+                    ? "ambiguous_protected_by_placed_history"
+                    : "ambiguous_noneligible_identifier_state";
+            var authority = new BibAuthorityTransformation(sourceId, bibId, classification, false);
+            bibAuthorityTransformations.Add(authority);
+            if (automationDerived)
+            {
+                automationDerivedCount++;
+            }
+            else
+            {
+                ambiguousSafeCount++;
+            }
+
+            transformations.Add(new
+            {
+                entity = "title_request_bib_authority",
+                sourceId,
+                bibId,
+                requestStatus,
+                sourceIsbnCheckStatus = row.String("isbnCheckStatus"),
+                classification,
+                bibIdStaffVerified = false,
+                placedHistoryProtected = placedProtected,
+                outcome = "imported_without_staff_authority"
+            });
+        }
+
+        importedCounts["title_request_bib_authority_automation_derived"] = automationDerivedCount;
+        importedCounts["title_request_bib_authority_ambiguous_safe"] = ambiguousSafeCount;
+        importedCounts["title_request_bib_authority_staff_authoritative"] = 0;
+    }
+
     private static void ImportHistoricalEmailDeliveryEvents(
         SqlConnection connection,
         SqlTransaction transaction,
@@ -2694,7 +2799,7 @@ public static class MigrationImporter
                        r.[LastPromoterCheckUtc], r.[IsbnCheckStatus], r.[IsbnCheckResult], r.[IsbnCheckRetryCount],
                        r.[IsbnCheckLastErrorCode], r.[LastCheckedUtc], r.[CreatedUtc], r.[UpdatedUtc],
                        r.[ClaimedByStaffUserId], r.[ClaimedByDisplayName], r.[ClaimedAtUtc], r.[ClaimType], r.[ClaimRuleId],
-                       r.[LegacyId], r.[Notes]
+                       r.[LegacyId], r.[Notes], r.[BibIdStaffVerified]
                 FROM [asap].[LegacyPocketBaseMapping] m
                 JOIN [asap].[TitleRequest] r ON r.[Id] = m.[NewId]
                 WHERE m.[EntityType] = N'title_request' AND m.[PocketBaseId] = @sourceId;
@@ -2742,7 +2847,8 @@ public static class MigrationImporter
                  StringEquals(reader, 34, expectedClaim.ClaimType) &&
                  LongEquals(reader, 35, expectedClaim.ClaimRuleId) &&
                  StringEquals(reader, 36, row.String("legacyId")) &&
-                 StringEquals(reader, 37, row.Text("notes")),
+                 StringEquals(reader, 37, row.Text("notes")) &&
+                 !reader.GetBoolean(38),
                 "title request");
         }
 
@@ -3494,13 +3600,14 @@ public static class MigrationImporter
         IReadOnlyCollection<ClaimTransformation> claimTransformations,
         IReadOnlyCollection<ClaimTransformation> additionalCopyClaimTransformations,
         IReadOnlyCollection<PlacementTransformation> placementTransformations,
+        IReadOnlyCollection<BibAuthorityTransformation> bibAuthorityTransformations,
         MigrationSemanticReconciliation semanticReconciliation)
     {
         var directory = Path.GetDirectoryName(Path.GetFullPath(path));
         if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
         var json = JsonSerializer.Serialize(new
         {
-            reportVersion = 4,
+            reportVersion = 5,
             sourceGitSha = package.Manifest.PocketBaseSourceGitSha,
             sourceSchemaVersion = package.Manifest.PocketBaseSourceSchemaVersion,
             exportedAtUtc = package.Manifest.ExportedAtUtc,
@@ -3597,6 +3704,18 @@ public static class MigrationImporter
                                 (item.Kind is "terminal_close_reason" or "event_terminal_reason") &&
                                 item.Value == reason)
                     })
+            },
+            bibAuthorityReconciliation = new
+            {
+                sourceRequestsWithBibId = bibAuthorityTransformations.Count,
+                automationDerivedBibs = bibAuthorityTransformations.Count(item => item.Classification == "automation_derived"),
+                staffAuthoritativeBibs = bibAuthorityTransformations.Count(item => item.BibIdStaffVerified),
+                ambiguousBibsImportedWithoutStaffAuthority = bibAuthorityTransformations.Count(item => item.Classification.StartsWith("ambiguous_", StringComparison.Ordinal)),
+                blockedRiskBibs = 0,
+                byClassification = bibAuthorityTransformations
+                    .GroupBy(item => item.Classification)
+                    .OrderBy(group => group.Key, StringComparer.Ordinal)
+                    .Select(group => new { classification = group.Key, count = group.Count() })
             },
             sourceToTargetReconciliation = semanticReconciliation,
             reconciliationPassed = true
@@ -4295,6 +4414,12 @@ public static class MigrationImporter
         IReadOnlyList<PlacementBibSource> BibSources,
         string Action,
         IReadOnlyList<PlacementEvidence> Hints);
+
+    private sealed record BibAuthorityTransformation(
+        string SourceId,
+        string BibId,
+        string Classification,
+        bool BibIdStaffVerified);
 
     private sealed record ConfigurationSourceFields(
         string File,

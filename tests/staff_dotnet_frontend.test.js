@@ -33,6 +33,10 @@ assert.doesNotMatch(workflow, /Format code/, 'staff editor should present the co
 assert.match(workflow, /canChangeWorkflowState/, 'workflow controls should honor backend operation capabilities');
 assert.match(styles, /table\.gridjs-table\s*\{[^}]*min-width:\s*\d+px/s, 'queue table should retain readable mobile columns inside its scroll wrapper');
 assert.match(app, /createWorkflowApp/);
+assert.match(workflow, /requestId: String\(request\.id\)/,
+  'Polaris lookup request IDs should stay strings');
+assert.doesNotMatch(workflow, /requestId:\s*Number\(request\.id\)/,
+  'Polaris lookup must not coerce a title-request identity to Number');
 assert.match(http, /X-ASAP-Antiforgery/);
 assert.match(http, /createLatestLoad/);
 assert.match(workflow, /requestedRequestIdFromUrl/);

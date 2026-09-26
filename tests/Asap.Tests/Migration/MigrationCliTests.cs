@@ -1140,6 +1140,7 @@ public sealed class MigrationCliTests
     {
         var root = Path.Combine(Path.GetTempPath(), $"asap-migration-request-{Guid.NewGuid():N}");
         var databaseName = $"AsapMigrationRequest_{Guid.NewGuid():N}";
+        var secondDatabaseName = $"AsapMigrationRequest_{Guid.NewGuid():N}";
         var master = new SqlConnectionStringBuilder(
             Environment.GetEnvironmentVariable("ASAP_TEST_SQL_CONNECTION_STRING") ??
             "Server=localhost;Database=master;Integrated Security=True;TrustServerCertificate=True")
@@ -1147,7 +1148,9 @@ public sealed class MigrationCliTests
             InitialCatalog = "master"
         }.ConnectionString;
         var target = new SqlConnectionStringBuilder(master) { InitialCatalog = databaseName }.ConnectionString;
+        var secondTarget = new SqlConnectionStringBuilder(master) { InitialCatalog = secondDatabaseName }.ConnectionString;
         var connectionEnvironmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        var secondConnectionEnvironmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
         Directory.CreateDirectory(root);
         try
         {
@@ -1461,9 +1464,12 @@ public sealed class MigrationCliTests
                 });
             var tenantId = Guid.Parse("00000000-0000-0000-0000-000000000002");
             var report = Path.Combine(root, "import-report.json");
+            var secondReport = Path.Combine(root, "second-import-report.json");
             DeployDacpac(master, databaseName);
+            DeployDacpac(master, secondDatabaseName);
 
             Environment.SetEnvironmentVariable(connectionEnvironmentName, target);
+            Environment.SetEnvironmentVariable(secondConnectionEnvironmentName, secondTarget);
             using var error = new StringWriter();
             var exitCode = MigrationCli.Run(
                 [
@@ -1477,6 +1483,22 @@ public sealed class MigrationCliTests
                 error);
             Assert.AreEqual(0, exitCode, error.ToString());
 
+            using var secondError = new StringWriter();
+            Assert.AreEqual(0, MigrationCli.Run(
+                [
+                    "import", "--package", package,
+                    "--connection-string-env", secondConnectionEnvironmentName,
+                    "--allowed-tenant-ids", tenantId.ToString(),
+                    "--report", secondReport,
+                    "--external-config", ExternalConfigurationPath(package)
+                ],
+                TextWriter.Null,
+                secondError), secondError.ToString());
+            Assert.AreEqual(
+                await File.ReadAllTextAsync(report),
+                await File.ReadAllTextAsync(secondReport),
+                "Equivalent fresh targets must produce the same BIB-authority classification and report.");
+
             await using var connection = new SqlConnection(target);
             await connection.OpenAsync();
             Assert.AreEqual(1, await ScalarAsync(
@@ -1485,6 +1507,21 @@ public sealed class MigrationCliTests
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
                 "SELECT COUNT(*) FROM [asap].[TitleRequest] r JOIN [asap].[LegacyPocketBaseMapping] m ON m.[EntityType] = N'title_request' AND m.[PocketBaseId] = N'pb-request-1' AND m.[NewId] = r.[Id] WHERE r.[LegacyId] IS NULL AND r.[LibraryOrganizationId] = 2 AND r.[Status] = N'suggestion' AND r.[IsbnCheckStatus] = N'found' AND r.[BibId] = N'BIB-9001' AND r.[Title] = N'The Found Book';"));
+            Assert.AreEqual(1, await ScalarAsync(
+                connection,
+                "SELECT COUNT(*) FROM [asap].[TitleRequest] WHERE [BibId] = N'BIB-9001' AND [BibIdStaffVerified] = 0;"));
+            using (var authorityReport = JsonDocument.Parse(await File.ReadAllTextAsync(report)))
+            {
+                var authority = authorityReport.RootElement.GetProperty("bibAuthorityReconciliation");
+                Assert.AreEqual(1, authority.GetProperty("sourceRequestsWithBibId").GetInt32());
+                Assert.AreEqual(1, authority.GetProperty("automationDerivedBibs").GetInt32());
+                Assert.AreEqual(0, authority.GetProperty("staffAuthoritativeBibs").GetInt32());
+                Assert.AreEqual(0, authority.GetProperty("ambiguousBibsImportedWithoutStaffAuthority").GetInt32());
+                var authorityTransform = authorityReport.RootElement.GetProperty("transformations").EnumerateArray().Single(item =>
+                    item.GetProperty("entity").GetString() == "title_request_bib_authority");
+                Assert.AreEqual("automation_derived", authorityTransform.GetProperty("classification").GetString());
+                Assert.IsFalse(authorityTransform.GetProperty("bibIdStaffVerified").GetBoolean());
+            }
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
                 "SELECT COUNT(*) FROM [asap].[TitleRequestWorkflowTag] j JOIN [asap].[WorkflowTag] t ON t.[Id] = j.[WorkflowTagId] WHERE t.[Code] = N'polaris_bib_found';"));
@@ -1540,11 +1577,30 @@ public sealed class MigrationCliTests
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
                 "SELECT COUNT(*) FROM [asap].[Branding] WHERE [OrganizationId] = 1 AND [LogoContentType] = N'image/png' AND [LogoFileName] = N'migration_logo.png' AND DATALENGTH([LogoData]) > 1000 AND [LogoAltText] = N'Consortium logo';"));
+
+            await using (var wrongAuthority = connection.CreateCommand())
+            {
+                wrongAuthority.CommandText = "UPDATE [asap].[TitleRequest] SET [BibIdStaffVerified] = 1 WHERE [BibId] = N'BIB-9001';";
+                await wrongAuthority.ExecuteNonQueryAsync();
+            }
+            using var authorityDriftError = new StringWriter();
+            Assert.AreEqual(1, MigrationCli.Run(
+                [
+                    "reconcile", "--package", package,
+                    "--connection-string-env", connectionEnvironmentName,
+                    "--report", report,
+                    "--external-config", ExternalConfigurationPath(package)
+                ],
+                TextWriter.Null,
+                authorityDriftError));
+            StringAssert.Contains(authorityDriftError.ToString(), "Target SQL state changed after the successful import reconciliation.");
         }
         finally
         {
             Environment.SetEnvironmentVariable(connectionEnvironmentName, null);
+            Environment.SetEnvironmentVariable(secondConnectionEnvironmentName, null);
             await DropDatabaseAsync(master, databaseName);
+            await DropDatabaseAsync(master, secondDatabaseName);
             Directory.Delete(root, recursive: true);
         }
     }
@@ -1571,10 +1627,13 @@ public sealed class MigrationCliTests
 
             var invalidCases = new[]
             {
-                (Name: "found_without_bib", Status: "found", Identifier: "9780000000001", Bib: "NULL", Error: "identifier_found_without_bib"),
-                (Name: "alias_without_bib", Status: "found_in_polaris", Identifier: "9780000000002", Bib: "NULL", Error: "identifier_found_without_bib"),
-                (Name: "ambiguous_error", Status: "error", Identifier: "9780000000003", Bib: "NULL", Error: "identifier_error_ambiguous"),
-                (Name: "unknown", Status: "mystery", Identifier: "NULL", Bib: "NULL", Error: "identifier_status_invalid")
+                (Name: "found_without_bib", RequestStatus: "suggestion", CloseReason: "NULL", Status: "found", Identifier: "9780000000001", Bib: "NULL", Error: "identifier_found_without_bib"),
+                (Name: "alias_without_bib", RequestStatus: "suggestion", CloseReason: "NULL", Status: "found_in_polaris", Identifier: "9780000000002", Bib: "NULL", Error: "identifier_found_without_bib"),
+                (Name: "ambiguous_error", RequestStatus: "suggestion", CloseReason: "NULL", Status: "error", Identifier: "9780000000003", Bib: "NULL", Error: "identifier_error_ambiguous"),
+                (Name: "ambiguous_pending_bib_authority", RequestStatus: "suggestion", CloseReason: "NULL", Status: "pending", Identifier: "9780000000004", Bib: "'BIB-9004'", Error: "bib_authority_ambiguous"),
+                (Name: "ambiguous_retryable_bib_authority", RequestStatus: "suggestion", CloseReason: "NULL", Status: "error_max_retries", Identifier: "9780000000005", Bib: "'BIB-9005'", Error: "bib_authority_ambiguous"),
+                (Name: "ambiguous_closed_reopen_bib_authority", RequestStatus: "closed", CloseReason: "'rejected'", Status: "pending", Identifier: "9780000000006", Bib: "'BIB-9006'", Error: "bib_authority_ambiguous"),
+                (Name: "unknown", RequestStatus: "suggestion", CloseReason: "NULL", Status: "mystery", Identifier: "NULL", Bib: "NULL", Error: "identifier_status_invalid")
             };
             foreach (var item in invalidCases)
             {
@@ -1595,13 +1654,13 @@ public sealed class MigrationCliTests
                     (
                         [id] TEXT NOT NULL PRIMARY KEY, [libraryOrgId] TEXT NOT NULL,
                         [formatRef] TEXT, [barcode] TEXT NOT NULL, [title] TEXT NOT NULL,
-                        [autohold] INTEGER NOT NULL, [status] TEXT NOT NULL, [identifier] TEXT,
+                        [autohold] INTEGER NOT NULL, [status] TEXT NOT NULL, [closeReason] TEXT, [identifier] TEXT,
                         [bibid] TEXT, [isbnCheckStatus] TEXT, [isbnCheckRetryCount] INTEGER,
                         [created] TEXT NOT NULL, [updated] TEXT NOT NULL
                     );
                     INSERT INTO [title_requests] VALUES
                         ('request-1', '2', 'fmt-book', 'A20000000000001', 'Invalid identifier state',
-                         0, 'suggestion', {{identifier}}, {{item.Bib}}, '{{item.Status}}', 3,
+                         0, '{{item.RequestStatus}}', {{item.CloseReason}}, {{identifier}}, {{item.Bib}}, '{{item.Status}}', 3,
                          '2029-01-01T00:00:00Z', '2029-01-02T00:00:00Z');
                     """);
                 using var error = new StringWriter();
@@ -2419,7 +2478,7 @@ public sealed class MigrationCliTests
             await reader.DisposeAsync();
 
             using var reportDocument = JsonDocument.Parse(await File.ReadAllTextAsync(report));
-            Assert.AreEqual(4, reportDocument.RootElement.GetProperty("reportVersion").GetInt32());
+            Assert.AreEqual(5, reportDocument.RootElement.GetProperty("reportVersion").GetInt32());
             Assert.AreEqual(1, reportDocument.RootElement.GetProperty("importedCounts")
                 .GetProperty("additional_copy_requests").GetInt32());
             Assert.IsTrue(reportDocument.RootElement.GetProperty("transformations").EnumerateArray().Any(item =>

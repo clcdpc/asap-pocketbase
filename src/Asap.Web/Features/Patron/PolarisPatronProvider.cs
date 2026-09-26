@@ -11,7 +11,7 @@ using Asap.Web.Features.Staff;
 
 namespace Asap.Web.Features.Patron;
 
-public sealed class PolarisPatronProvider(
+public sealed partial class PolarisPatronProvider(
     IDbContextFactory<AsapDbContext> contextFactory,
     IntegrationCredentialProtector credentialProtector,
     IHttpClientFactory httpClientFactory) : IPatronProvider, IStaffPolarisProvider, IPolarisReferenceProvider
@@ -190,6 +190,60 @@ public sealed class PolarisPatronProvider(
         catch (Exception exception)
         {
             throw Operational("polaris_patron_refresh_failed", exception);
+        }
+    }
+
+    public async Task<int?> GetPatronIdAsync(string barcode, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var (client, _) = await CreateClientAsync(cancellationToken);
+            var response = await client.PatronBasicDataGetAsync(
+                barcode,
+                string.Empty,
+                cancellationToken: cancellationToken);
+            var rawContent = response.Response?.Content ?? string.Empty;
+            var result = response.Data;
+            if (response.Response?.IsSuccessStatusCode != true)
+            {
+                throw new PolarisOperationalException(
+                    "polaris_patron_id_transport_failed",
+                    "Polaris patron data was unavailable.");
+            }
+
+            if (!TryReadPapiErrorCode(rawContent, out var papiErrorCode) ||
+                result is null || result.PAPIErrorCode != papiErrorCode || papiErrorCode != 0)
+            {
+                throw new PolarisOperationalException(
+                    "polaris_patron_id_protocol_failed",
+                    "Polaris returned an invalid patron response.");
+            }
+
+            using var document = JsonDocument.Parse(rawContent);
+            var root = document.RootElement;
+            if (!TryGetUniqueProperty(root, "PatronBasicData", out var rawPatron) ||
+                !TryGetUniqueProperty(rawPatron, "PatronID", out var rawPatronId) ||
+                !TryReadPositiveInt32(rawPatronId, out var patronId) ||
+                result.PatronBasicData is null || result.PatronBasicData.PatronID != patronId)
+            {
+                throw new PolarisOperationalException(
+                    "polaris_patron_id_protocol_failed",
+                    "Polaris returned an incomplete patron identity.");
+            }
+
+            return patronId;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (PolarisOperationalException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw Operational("polaris_patron_id_failed", exception);
         }
     }
 
@@ -416,6 +470,7 @@ public sealed class PolarisPatronProvider(
 
     public async Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (bibId <= 0)
         {
             return new BibValidationResult(false);
@@ -428,12 +483,56 @@ public sealed class PolarisPatronProvider(
                 : settings.OrganizationIdForRequests;
             var response = await client.BibGetAsync(bibId, branchId, cancellationToken);
             var data = response.Data;
-            if (response.Response?.IsSuccessStatusCode != true || data is null || data.PAPIErrorCode != 0 ||
-                data.BibGetRows.Count == 0)
+            if (response.Response?.IsSuccessStatusCode != true)
             {
-                return new BibValidationResult(false);
+                throw new PolarisOperationalException(
+                    "polaris_bib_validation_transport_failed",
+                    "Polaris BIB validation was unavailable.");
             }
-            return new BibValidationResult(true, Clean(data.Title), Clean(data.Author.FirstOrDefault()));
+
+            var rawContent = response.Response.Content;
+            if (data is null ||
+                !TryReadPapiErrorCode(rawContent, out var papiErrorCode) ||
+                data.PAPIErrorCode != papiErrorCode)
+            {
+                throw new PolarisOperationalException(
+                    "polaris_bib_validation_protocol_failed",
+                    "Polaris returned an invalid BIB validation response.");
+            }
+
+            if (papiErrorCode < 0)
+            {
+                if (papiErrorCode == -1 && IsDefinitiveInvalidBibResponse(rawContent))
+                {
+                    return new BibValidationResult(false);
+                }
+
+                throw new PolarisOperationalException(
+                    "polaris_bib_validation_failed",
+                    "Polaris could not complete BIB validation.");
+            }
+
+            if (!TryReadUsableBibGetRows(rawContent, out var rawRowCount) ||
+                data.BibGetRows is null || data.BibGetRows.Count == 0 || data.BibGetRows.Count != rawRowCount ||
+                data.BibGetRows.Any(row => row is null || row.ElementID <= 0 || row.Value is null))
+            {
+                throw new PolarisOperationalException(
+                    "polaris_bib_validation_protocol_failed",
+                    "Polaris returned an incomplete BIB validation response.");
+            }
+
+            var publication = data.BibGetRows
+                .Where(row => string.Equals(row.Label, "Publication Date", StringComparison.OrdinalIgnoreCase))
+                .Select(row => Clean(row.Value))
+                .FirstOrDefault(value => value is not null);
+            return new BibValidationResult(
+                true,
+                Clean(data.Title),
+                Clean(data.Author?.FirstOrDefault()),
+                publication,
+                Clean(data.Format),
+                Clean(data.ISBN) ?? Clean(data.ISSN) ?? Clean(data.UPC?.FirstOrDefault()),
+                Clean(data.Publisher?.FirstOrDefault()));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -458,15 +557,17 @@ public sealed class PolarisPatronProvider(
                 password: string.Empty,
                 cancellationToken);
             var data = response.Data;
-            if (response.Response?.IsSuccessStatusCode != true || data is null || data.PAPIErrorCode != 0)
+            if (response.Response?.IsSuccessStatusCode != true || data is null)
             {
                 throw new PolarisOperationalException("polaris_hold_read_failed", "Polaris hold data was unavailable.");
             }
-            if (data.PatronHoldRequestsGetRows.Any(item => item.HoldRequestID <= 0 || item.BibID <= 0))
+
+            using var document = JsonDocument.Parse(response.Response.Content ?? string.Empty);
+            if (!TryValidatePatronHoldResponse(document.RootElement, data))
             {
                 throw new PolarisOperationalException(
                     "polaris_hold_read_failed",
-                    "Polaris returned an incomplete hold row.");
+                    "Polaris returned an incomplete hold response.");
             }
 
             return data.PatronHoldRequestsGetRows
@@ -492,6 +593,64 @@ public sealed class PolarisPatronProvider(
             throw Operational("polaris_hold_read_failed", exception);
         }
     }
+
+    private static bool TryValidatePatronHoldResponse(
+        JsonElement root,
+        PatronHoldRequestsGetResult data)
+    {
+        if (root.ValueKind != JsonValueKind.Object ||
+            !TryGetUniqueProperty(root, "PAPIErrorCode", out var codeElement) ||
+            codeElement.ValueKind != JsonValueKind.Number ||
+            !codeElement.TryGetInt32(out var code) ||
+            code != 0 || data.PAPIErrorCode != code ||
+            !TryGetUniqueProperty(root, "PatronHoldRequestsGetRows", out var rows) ||
+            rows.ValueKind != JsonValueKind.Array ||
+            data.PatronHoldRequestsGetRows is null ||
+            data.PatronHoldRequestsGetRows.Count != rows.GetArrayLength())
+        {
+            return false;
+        }
+
+        var rowIndex = 0;
+        foreach (var row in rows.EnumerateArray())
+        {
+            var model = data.PatronHoldRequestsGetRows[rowIndex++];
+            if (row.ValueKind != JsonValueKind.Object || model is null ||
+                !TryGetUniqueProperty(row, "StatusID", out var statusIdElement) ||
+                !TryReadPositiveInt32(statusIdElement, out var statusId) ||
+                !IsPolarisHoldStatusId(statusId) ||
+                statusId != model.StatusID ||
+                !TryGetUniqueProperty(row, "StatusDescription", out var statusDescriptionElement) ||
+                statusDescriptionElement.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            var statusDescription = Clean(statusDescriptionElement.GetString());
+            var modelStatusDescription = Clean(model.StatusDescription);
+            if (statusDescription is null || modelStatusDescription is null ||
+                !string.Equals(statusDescription, modelStatusDescription, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (!TryGetUniqueProperty(row, "HoldRequestID", out var holdRequestIdElement) ||
+                !TryReadPositiveInt32(holdRequestIdElement, out var holdRequestId) ||
+                holdRequestId != model.HoldRequestID ||
+                !TryGetUniqueProperty(row, "BibID", out var bibIdElement) ||
+                !TryReadPositiveInt32(bibIdElement, out var bibId) ||
+                bibId != model.BibID)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // PatronHoldRequestsGet documents these status IDs; zero and all unlisted values are invalid.
+    private static bool IsPolarisHoldStatusId(int statusId) =>
+        statusId is 1 or 3 or 4 or 5 or 6 or 7 or 8 or 9 or 16;
 
     public async Task<IReadOnlyList<PolarisCheckoutSnapshot>> GetPatronCheckoutsAsync(
         string barcode,
@@ -1090,34 +1249,63 @@ public sealed class PolarisPatronProvider(
         {
             using var document = JsonDocument.Parse(content);
             var root = document.RootElement;
-            if (!TryGetProperty(root, "PAPIErrorCode", out var codeElement) ||
+            var data = response.Data;
+            if (root.ValueKind != JsonValueKind.Object || data is null ||
+                !TryGetUniqueProperty(root, "PAPIErrorCode", out var codeElement) ||
+                codeElement.ValueKind != JsonValueKind.Number ||
                 !codeElement.TryGetInt32(out var code) ||
-                code < -1)
+                code < -1 || data.PAPIErrorCode != code ||
+                !TryGetUniqueProperty(root, "TotalRecordsFound", out var totalElement) ||
+                totalElement.ValueKind != JsonValueKind.Number ||
+                !totalElement.TryGetInt32(out var totalRecordsFound) ||
+                totalRecordsFound < 0 || data.TotalRecordsFound != totalRecordsFound ||
+                !TryGetUniqueProperty(root, "BibSearchRows", out var rowsElement) ||
+                rowsElement.ValueKind != JsonValueKind.Array ||
+                data.BibSearchRows is null || data.BibSearchRows.Count != rowsElement.GetArrayLength())
             {
                 return SearchAttempt.Operational;
             }
 
-            if (code == -1)
+            if (rowsElement.GetArrayLength() == 0)
             {
+                if (totalRecordsFound != 0 ||
+                    code != 0 && (code != -1 || !HasNoSearchErrorMessage(root)))
+                {
+                    return SearchAttempt.Operational;
+                }
+
                 return new SearchAttempt(
                     null,
-                    response.Data ?? new BibSearchResult { PAPIErrorCode = -1 },
+                    data,
                     new Dictionary<int, string>());
             }
 
-            if (!TryGetProperty(root, "BibSearchRows", out var rowsElement) ||
-                rowsElement.ValueKind != JsonValueKind.Array ||
-                response.Data is null)
+            if (code < 0)
+            {
+                return SearchAttempt.Operational;
+            }
+
+            if (totalRecordsFound < rowsElement.GetArrayLength() ||
+                code > 0 && code != rowsElement.GetArrayLength())
             {
                 return SearchAttempt.Operational;
             }
 
             primaryTomByControlNumber = new Dictionary<int, string>();
+            var rowIndex = 0;
             foreach (var row in rowsElement.EnumerateArray())
             {
-                if (TryGetProperty(row, "ControlNumber", out var control) &&
-                    control.TryGetInt32(out var controlNumber) &&
-                    TryGetProperty(row, "PrimaryTypeOfMaterial", out var tom))
+                var model = data.BibSearchRows[rowIndex++];
+                if (row.ValueKind != JsonValueKind.Object || model is null ||
+                    !TryGetUniqueProperty(row, "ControlNumber", out var control) ||
+                    !TryReadPositiveInt32(control, out var controlNumber) ||
+                    controlNumber != model.ControlNumber ||
+                    HasUndocumentedBibIdentityAlias(row))
+                {
+                    return SearchAttempt.Operational;
+                }
+
+                if (TryGetUniqueProperty(row, "PrimaryTypeOfMaterial", out var tom))
                 {
                     primaryTomByControlNumber[controlNumber] = tom.ToString().Trim();
                 }
@@ -1129,6 +1317,20 @@ public sealed class PolarisPatronProvider(
         }
 
         return new SearchAttempt(null, response.Data, primaryTomByControlNumber);
+    }
+
+    private static bool HasUndocumentedBibIdentityAlias(JsonElement row)
+    {
+        foreach (var property in row.EnumerateObject())
+        {
+            if (string.Equals(property.Name, "BibID", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(property.Name, "BibliographicRecordID", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool TryGetProperty(
@@ -1155,13 +1357,114 @@ public sealed class PolarisPatronProvider(
         try
         {
             using var document = JsonDocument.Parse(content ?? string.Empty);
-            return TryGetProperty(document.RootElement, "PAPIErrorCode", out var code) &&
+            return TryGetUniqueProperty(document.RootElement, "PAPIErrorCode", out var code) &&
                    code.TryGetInt32(out papiErrorCode);
         }
         catch (JsonException)
         {
             return false;
         }
+    }
+
+    private static bool IsDefinitiveInvalidBibResponse(string? content)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(content ?? string.Empty);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !TryGetUniqueProperty(root, "ErrorMessage", out var errorMessage) ||
+                errorMessage.ValueKind != JsonValueKind.String ||
+                !string.Equals(errorMessage.GetString()?.Trim(), "Invalid BibID", StringComparison.OrdinalIgnoreCase) ||
+                !TryGetUniqueProperty(root, "BibGetRows", out var rows))
+            {
+                return false;
+            }
+
+            return rows.ValueKind == JsonValueKind.Null ||
+                   rows.ValueKind == JsonValueKind.Array && rows.GetArrayLength() == 0;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryReadUsableBibGetRows(string? content, out int rowCount)
+    {
+        rowCount = 0;
+        try
+        {
+            using var document = JsonDocument.Parse(content ?? string.Empty);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !TryGetUniqueProperty(root, "BibGetRows", out var rows) ||
+                rows.ValueKind != JsonValueKind.Array || rows.GetArrayLength() == 0)
+            {
+                return false;
+            }
+
+            foreach (var row in rows.EnumerateArray())
+            {
+                if (row.ValueKind != JsonValueKind.Object ||
+                    !TryGetUniqueProperty(row, "ElementID", out var elementId) ||
+                    elementId.ValueKind != JsonValueKind.Number ||
+                    !elementId.TryGetInt32(out var numericElementId) || numericElementId <= 0 ||
+                    !TryGetUniqueProperty(row, "Value", out var value) ||
+                    value.ValueKind != JsonValueKind.String)
+                {
+                    return false;
+                }
+
+                rowCount++;
+            }
+
+            return rowCount > 0;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryGetUniqueProperty(
+        JsonElement element,
+        string name,
+        out JsonElement value)
+    {
+        value = default;
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        var found = false;
+        foreach (var property in element.EnumerateObject())
+        {
+            if (!string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (found)
+            {
+                value = default;
+                return false;
+            }
+
+            value = property.Value;
+            found = true;
+        }
+
+        return found;
     }
 
     private static int? ResolvePreferredPickupId(
