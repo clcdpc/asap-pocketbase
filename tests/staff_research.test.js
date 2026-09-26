@@ -227,6 +227,26 @@ const { JSDOM } = require('jsdom');
     assert.equal(dialog.open, false);
     lookup.close();
 
+    exactDetail.patronHasHold = null;
+    lookup.open({
+      requestId: '9007199254740993',
+      libraryOrgId: 2,
+      mode: 'bib',
+      query: '9001',
+      isCurrent: () => true,
+      canApply: false,
+      apply: () => assert.fail('An exact BIB lookup should not be applied in the null-context assertion')
+    });
+    document.querySelector('#polaris-form').dispatchEvent(new dom.window.Event('submit', {
+      bubbles: true,
+      cancelable: true
+    }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const nullHoldContext = [...document.querySelectorAll('.polaris-result p')]
+      .map(paragraph => paragraph.textContent).join(' ');
+    assert.doesNotMatch(nullHoldContext, /This patron already has a hold|No existing patron hold was found/);
+    lookup.close();
+
     let completeVerification;
     const pendingVerification = new Promise(resolve => { completeVerification = resolve; });
     let staleRequestIsCurrent = true;

@@ -62,7 +62,7 @@ The Node suite discovers the retained frontend regression files under
 Polaris/Postmark boundaries:
 
 ```powershell
-dotnet test --project tests/Asap.Tests/Asap.Tests.csproj --configuration Release --minimum-expected-tests 400
+dotnet test --project tests/Asap.Tests/Asap.Tests.csproj --configuration Release --minimum-expected-tests 439
 ```
 
 Set `ASAP_TEST_SQL_CONNECTION_STRING` when the local SQL connection is not the

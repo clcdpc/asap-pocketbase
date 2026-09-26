@@ -503,15 +503,17 @@ public sealed partial class PolarisPatronProvider(
                 password: string.Empty,
                 cancellationToken);
             var data = response.Data;
-            if (response.Response?.IsSuccessStatusCode != true || data is null || data.PAPIErrorCode != 0)
+            if (response.Response?.IsSuccessStatusCode != true || data is null)
             {
                 throw new PolarisOperationalException("polaris_hold_read_failed", "Polaris hold data was unavailable.");
             }
-            if (data.PatronHoldRequestsGetRows.Any(item => item.HoldRequestID <= 0 || item.BibID <= 0))
+
+            using var document = JsonDocument.Parse(response.Response.Content ?? string.Empty);
+            if (!TryValidatePatronHoldResponse(document.RootElement, data))
             {
                 throw new PolarisOperationalException(
                     "polaris_hold_read_failed",
-                    "Polaris returned an incomplete hold row.");
+                    "Polaris returned an incomplete hold response.");
             }
 
             return data.PatronHoldRequestsGetRows
@@ -536,6 +538,42 @@ public sealed partial class PolarisPatronProvider(
         {
             throw Operational("polaris_hold_read_failed", exception);
         }
+    }
+
+    private static bool TryValidatePatronHoldResponse(
+        JsonElement root,
+        PatronHoldRequestsGetResult data)
+    {
+        if (root.ValueKind != JsonValueKind.Object ||
+            !TryGetUniqueProperty(root, "PAPIErrorCode", out var codeElement) ||
+            codeElement.ValueKind != JsonValueKind.Number ||
+            !codeElement.TryGetInt32(out var code) ||
+            code != 0 || data.PAPIErrorCode != code ||
+            !TryGetUniqueProperty(root, "PatronHoldRequestsGetRows", out var rows) ||
+            rows.ValueKind != JsonValueKind.Array ||
+            data.PatronHoldRequestsGetRows is null ||
+            data.PatronHoldRequestsGetRows.Count != rows.GetArrayLength())
+        {
+            return false;
+        }
+
+        var rowIndex = 0;
+        foreach (var row in rows.EnumerateArray())
+        {
+            var model = data.PatronHoldRequestsGetRows[rowIndex++];
+            if (row.ValueKind != JsonValueKind.Object || model is null ||
+                !TryGetUniqueProperty(row, "HoldRequestID", out var holdRequestIdElement) ||
+                !TryReadPositiveInt32(holdRequestIdElement, out var holdRequestId) ||
+                holdRequestId != model.HoldRequestID ||
+                !TryGetUniqueProperty(row, "BibID", out var bibIdElement) ||
+                !TryReadPositiveInt32(bibIdElement, out var bibId) ||
+                bibId != model.BibID)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     public async Task<IReadOnlyList<PolarisCheckoutSnapshot>> GetPatronCheckoutsAsync(
@@ -1135,24 +1173,38 @@ public sealed partial class PolarisPatronProvider(
         {
             using var document = JsonDocument.Parse(content);
             var root = document.RootElement;
-            if (!TryGetProperty(root, "PAPIErrorCode", out var codeElement) ||
+            var data = response.Data;
+            if (root.ValueKind != JsonValueKind.Object || data is null ||
+                !TryGetUniqueProperty(root, "PAPIErrorCode", out var codeElement) ||
+                codeElement.ValueKind != JsonValueKind.Number ||
                 !codeElement.TryGetInt32(out var code) ||
-                code < -1)
+                code < -1 || data.PAPIErrorCode != code ||
+                !TryGetUniqueProperty(root, "BibSearchRows", out var rowsElement) ||
+                rowsElement.ValueKind != JsonValueKind.Array ||
+                data.BibSearchRows is null || data.BibSearchRows.Count != rowsElement.GetArrayLength())
             {
                 return SearchAttempt.Operational;
             }
 
-            if (code == -1)
+            if (rowsElement.GetArrayLength() == 0)
             {
+                if (code is not (0 or -1) ||
+                    !TryGetUniqueProperty(root, "TotalRecordsFound", out var totalElement) ||
+                    totalElement.ValueKind != JsonValueKind.Number ||
+                    !totalElement.TryGetInt32(out var totalRecordsFound) ||
+                    totalRecordsFound != 0 || data.TotalRecordsFound != totalRecordsFound ||
+                    !HasNoSearchErrorMessage(root))
+                {
+                    return SearchAttempt.Operational;
+                }
+
                 return new SearchAttempt(
                     null,
-                    response.Data ?? new BibSearchResult { PAPIErrorCode = -1 },
+                    data,
                     new Dictionary<int, string>());
             }
 
-            if (!TryGetProperty(root, "BibSearchRows", out var rowsElement) ||
-                rowsElement.ValueKind != JsonValueKind.Array ||
-                response.Data is null)
+            if (code < 0)
             {
                 return SearchAttempt.Operational;
             }

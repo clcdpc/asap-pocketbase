@@ -70,11 +70,17 @@ public sealed partial class PolarisPatronProvider
                     continue;
                 }
 
-                if (inspected.Data is null)
+                if (inspected.Kind == StaffSearchAttemptKind.Operational)
                 {
                     failed = true;
                     continue;
                 }
+
+                if (inspected.Kind == StaffSearchAttemptKind.DefinitiveEmpty)
+                {
+                    continue;
+                }
+
                 totalMatches = Math.Max(totalMatches, inspected.Data!.TotalRecordsFound);
                 foreach (var candidate in inspected.StaffRows!)
                 {
@@ -133,7 +139,7 @@ public sealed partial class PolarisPatronProvider
                 !TryGetUniqueProperty(root, "PAPIErrorCode", out var codeElement) ||
                 codeElement.ValueKind != JsonValueKind.Number ||
                 !codeElement.TryGetInt32(out var code) ||
-                code < 0 || response.Data.PAPIErrorCode != code ||
+                response.Data.PAPIErrorCode != code ||
                 !TryGetUniqueProperty(root, "TotalRecordsFound", out var totalElement) ||
                 totalElement.ValueKind != JsonValueKind.Number ||
                 !totalElement.TryGetInt32(out var totalRecordsFound) ||
@@ -142,18 +148,52 @@ public sealed partial class PolarisPatronProvider
                 rows.ValueKind != JsonValueKind.Array ||
                 (rows.GetArrayLength() == 0 && totalRecordsFound != 0) ||
                 (rows.GetArrayLength() > 0 && totalRecordsFound < rows.GetArrayLength()) ||
+                code < -1 ||
                 (code > 0 && code != rows.GetArrayLength()) ||
                 !TryReadStaffSearchRows(rows, response.Data, out var staffRows))
             {
                 return StaffSearchAttempt.Operational;
             }
 
-            return new StaffSearchAttempt(response.Data, staffRows);
+            if (code == -1)
+            {
+                // Preserve Polaris' established -1 empty-search response only for its coherent zero-row shape.
+                return totalRecordsFound == 0 && rows.GetArrayLength() == 0 &&
+                       HasNoSearchErrorMessage(root)
+                    ? StaffSearchAttempt.DefinitiveEmpty(response.Data)
+                    : StaffSearchAttempt.Operational;
+            }
+
+            return rows.GetArrayLength() == 0
+                ? StaffSearchAttempt.DefinitiveEmpty(response.Data)
+                : StaffSearchAttempt.WithRows(response.Data, staffRows);
         }
         catch (JsonException)
         {
             return StaffSearchAttempt.Operational;
         }
+    }
+
+    private static bool HasNoSearchErrorMessage(JsonElement root)
+    {
+        var found = false;
+        foreach (var property in root.EnumerateObject())
+        {
+            if (!string.Equals(property.Name, "ErrorMessage", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (found || property.Value.ValueKind != JsonValueKind.String ||
+                !string.IsNullOrWhiteSpace(property.Value.GetString()))
+            {
+                return false;
+            }
+
+            found = true;
+        }
+
+        return true;
     }
 
     private static bool TryReadStaffSearchRows(
@@ -398,11 +438,28 @@ public sealed partial class PolarisPatronProvider
         }
     }
 
+    private enum StaffSearchAttemptKind
+    {
+        Operational,
+        DefinitiveEmpty,
+        WithRows
+    }
+
     private sealed record StaffSearchAttempt(
+        StaffSearchAttemptKind Kind,
         BibSearchResult? Data,
         IReadOnlyList<StaffBibSearchCandidate>? StaffRows)
     {
-        public static StaffSearchAttempt Operational { get; } = new(null, null);
+        public static StaffSearchAttempt Operational { get; } =
+            new(StaffSearchAttemptKind.Operational, null, null);
+
+        public static StaffSearchAttempt DefinitiveEmpty(BibSearchResult data) =>
+            new(StaffSearchAttemptKind.DefinitiveEmpty, data, []);
+
+        public static StaffSearchAttempt WithRows(
+            BibSearchResult data,
+            IReadOnlyList<StaffBibSearchCandidate> staffRows) =>
+            new(StaffSearchAttemptKind.WithRows, data, staffRows);
     }
 
     private static string CleanSearch(string? value) => Regex.Replace(value ?? string.Empty, "\\s+", " ").Trim();
