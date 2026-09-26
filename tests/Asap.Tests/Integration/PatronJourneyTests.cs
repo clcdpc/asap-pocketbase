@@ -6584,6 +6584,328 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task PolarisStaffSearchAcceptsSparseRowsWithAValidBIBIdentity()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """{"PAPIErrorCode":0,"TotalRecordsFound":1,"BibSearchRows":[{"BibID":9001}]}""");
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var result = await provider.SearchBibsAsync("title", "A title", "", "", CancellationToken.None);
+
+        Assert.AreEqual(1, result.Results.Count);
+        Assert.AreEqual("9001", result.Results[0].BibId);
+        Assert.IsNull(result.Results[0].Title);
+        Assert.AreEqual(1, result.TotalMatches);
+    }
+
+    [TestMethod]
+    [DataRow("{\"ControlNumber\":9001}")]
+    [DataRow("{\"BibID\":9001}")]
+    [DataRow("{\"BibliographicRecordID\":9001}")]
+    public async Task PolarisStaffSearchPreservesSupportedSparseBIBIdentityAliases(string row)
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            $$"""{"PAPIErrorCode":0,"TotalRecordsFound":1,"BibSearchRows":[{{row}}]}""");
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var result = await provider.SearchBibsAsync("title", "A title", "", "", CancellationToken.None);
+
+        Assert.AreEqual("9001", result.Results.Single().BibId);
+    }
+
+    [TestMethod]
+    public async Task PolarisStaffSearchAcceptsOnlyAWellFormedNonnegativeEmptyResponseAsNotFound()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[],"ErrorMessage":""}""");
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var result = await provider.SearchBibsAsync("title", "A title", "", "", CancellationToken.None);
+
+        Assert.AreEqual(0, result.Results.Count);
+        Assert.AreEqual(0, result.TotalMatches);
+        Assert.AreEqual(1, handler.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task PolarisStaffSearchAcceptsPapiRowCountAndInformationalMessage()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """{"PAPIErrorCode":1,"ErrorMessage":"Search terms normalized","TotalRecordsFound":1,"BibSearchRows":[{"ControlNumber":9001}]}""");
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var result = await provider.SearchBibsAsync("title", "A title", "", "", CancellationToken.None);
+
+        Assert.AreEqual("9001", result.Results.Single().BibId);
+    }
+
+    [TestMethod]
+    public async Task PolarisStaffSearchFiltersKnownMaterialTypesAfterValidatingTheirRows()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """{"PAPIErrorCode":0,"TotalRecordsFound":1,"BibSearchRows":[{"ControlNumber":9001,"PrimaryTypeOfMaterial":36}]}""");
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var result = await provider.SearchBibsAsync("title", "A title", "", "", CancellationToken.None);
+
+        Assert.AreEqual(0, result.Results.Count);
+        Assert.AreEqual(1, result.TotalMatches);
+    }
+
+    [TestMethod]
+    [DataRow(503, "{}")]
+    [DataRow(200, "not-json")]
+    [DataRow(200, "{}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"BibSearchRows\":[]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[{}]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":-1,\"ErrorMessage\":\"General failure\",\"TotalRecordsFound\":0,\"BibSearchRows\":[]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":-9,\"ErrorMessage\":\"SQL timeout\",\"TotalRecordsFound\":0,\"BibSearchRows\":[]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[{\"ControlNumber\":0}]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[{\"ControlNumber\":-1}]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[{\"ControlNumber\":\"not-a-number\"}]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[{\"ControlNumber\":9001,\"BibID\":9002}]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[{\"ControlNumber\":9001,\"controlnumber\":9001}]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"papierrorcode\":-9,\"TotalRecordsFound\":0,\"BibSearchRows\":[]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":0,\"BibSearchRows\":[],\"bibsearchrows\":[]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":2,\"totalrecordsfound\":2,\"BibSearchRows\":[{\"ControlNumber\":9001}]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":2,\"BibSearchRows\":[{\"ControlNumber\":9001},{}]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":0,\"BibSearchRows\":[{\"ControlNumber\":9001}]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":2,\"TotalRecordsFound\":2,\"BibSearchRows\":[{\"ControlNumber\":9001}]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"BibSearchRows\":[{\"ControlNumber\":0,\"PrimaryTypeOfMaterial\":36}]}")]
+    public async Task PolarisStaffSearchTreatsTransportAndMalformedResponsesAsUnavailable(
+        int statusCode,
+        string content)
+    {
+        var handler = new StaticResponseHandler((HttpStatusCode)statusCode, content);
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var failure = await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await provider.SearchBibsAsync("title", "A title", "", "", CancellationToken.None));
+
+        Assert.AreEqual("polaris_bib_search_failed", failure.Code);
+        Assert.AreEqual(1, handler.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task PolarisIdentifierSearchKeepsTrustworthyPartialResultsAndFailsWhenEveryAttemptFails()
+    {
+        var valid = """{"PAPIErrorCode":0,"TotalRecordsFound":1,"BibSearchRows":[{"ControlNumber":9001,"Title":"Catalog title"}]}""";
+        var first = new SequenceResponseHandler(
+            (HttpStatusCode.OK, valid),
+            (HttpStatusCode.ServiceUnavailable, "{}"),
+            (HttpStatusCode.InternalServerError, "{}"));
+        var firstProvider = await CreatePolarisProviderAsync(first);
+        var firstResult = await firstProvider.SearchBibsAsync("identifier", "9780000000001", "", "", CancellationToken.None);
+        Assert.AreEqual("9001", firstResult.Results.Single().BibId);
+        Assert.AreEqual(3, first.RequestCount);
+
+        var partial = new SequenceResponseHandler(
+            (HttpStatusCode.ServiceUnavailable, "{}"),
+            (HttpStatusCode.OK, valid),
+            (HttpStatusCode.ServiceUnavailable, "{}"));
+        var partialProvider = await CreatePolarisProviderAsync(partial);
+
+        var result = await partialProvider.SearchBibsAsync("identifier", "9780000000001", "", "", CancellationToken.None);
+
+        Assert.AreEqual(1, result.Results.Count);
+        Assert.AreEqual("9001", result.Results[0].BibId);
+        Assert.AreEqual(3, partial.RequestCount);
+
+        var last = new SequenceResponseHandler(
+            (HttpStatusCode.ServiceUnavailable, "{}"),
+            (HttpStatusCode.InternalServerError, "{}"),
+            (HttpStatusCode.OK, valid));
+        var lastProvider = await CreatePolarisProviderAsync(last);
+        var lastResult = await lastProvider.SearchBibsAsync("identifier", "9780000000001", "", "", CancellationToken.None);
+        Assert.AreEqual("9001", lastResult.Results.Single().BibId);
+        Assert.AreEqual(3, last.RequestCount);
+
+        var failed = new SequenceResponseHandler(
+            (HttpStatusCode.ServiceUnavailable, "{}"),
+            (HttpStatusCode.InternalServerError, "{}"),
+            (HttpStatusCode.BadGateway, "{}"));
+        var failedProvider = await CreatePolarisProviderAsync(failed);
+        await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await failedProvider.SearchBibsAsync("identifier", "9780000000001", "", "", CancellationToken.None));
+        Assert.AreEqual(3, failed.RequestCount);
+
+        var empty = """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[]}""";
+        var allEmpty = new SequenceResponseHandler(
+            (HttpStatusCode.OK, empty),
+            (HttpStatusCode.OK, empty),
+            (HttpStatusCode.OK, empty));
+        var emptyProvider = await CreatePolarisProviderAsync(allEmpty);
+        var noMatches = await emptyProvider.SearchBibsAsync("identifier", "9780000000001", "", "", CancellationToken.None);
+        Assert.AreEqual(0, noMatches.Results.Count);
+        Assert.AreEqual(3, allEmpty.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task PolarisTitleAuthorSearchCanUseAValidFallbackAfterPrimaryFailure()
+    {
+        var handler = new SequenceResponseHandler(
+            (HttpStatusCode.ServiceUnavailable, "{}"),
+            (HttpStatusCode.OK,
+             """{"PAPIErrorCode":0,"TotalRecordsFound":1,"BibSearchRows":[{"ControlNumber":9002,"Title":"Fallback title","Author":"An author"}]}"""));
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var result = await provider.SearchBibsAsync("title_author", "", "A title", "An author", CancellationToken.None);
+
+        Assert.AreEqual(1, result.Results.Count);
+        Assert.AreEqual("9002", result.Results[0].BibId);
+        Assert.AreEqual(2, handler.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task PolarisStaffSearchPreservesCancellationBeforeTheProviderRequest()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[]}""");
+        var provider = await CreatePolarisProviderAsync(handler);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        var canceled = false;
+        try
+        {
+            await provider.SearchBibsAsync("title", "A title", "", "", cancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            canceled = true;
+        }
+
+        Assert.IsTrue(canceled);
+        Assert.IsTrue(cancellation.IsCancellationRequested);
+        Assert.AreEqual(0, handler.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task StaffBibSearchEndpointReturnsUnavailableForProviderFailureAndNotFoundForDefinitiveEmpty()
+    {
+        using var bootstrapClient = factory!.CreateClient();
+        using var bootstrapResponse = await bootstrapClient.GetAsync("/api/asap/staff/session");
+        var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
+        var seeded = await SeedStaffBibLookupStateAsync(Guid.Parse(identity.TenantId!));
+        var handler = new SequenceResponseHandler(
+            (HttpStatusCode.OK,
+             """{"PAPIErrorCode":-1,"ErrorMessage":"SQL timeout","TotalRecordsFound":0,"BibSearchRows":[]}"""),
+            (HttpStatusCode.OK,
+             """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[]}"""));
+        var provider = await CreatePolarisProviderAsync(handler);
+        await using var searchFactory = factory!.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IStaffPolarisProvider>(provider);
+            }));
+        using var client = searchFactory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", seeded.StaffId.ToString());
+        client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
+        client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Email", seeded.Email);
+
+        using var session = await client.GetAsync("/api/asap/staff/session");
+        Assert.AreEqual(HttpStatusCode.OK, session.StatusCode);
+        using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
+        client.DefaultRequestHeaders.Add(
+            "X-ASAP-Antiforgery",
+            sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
+
+        var input = new { requestId = seeded.RequestId.ToString(), mode = "title", query = "boundary" };
+        using var unavailable = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", input);
+        Assert.AreEqual(HttpStatusCode.BadGateway, unavailable.StatusCode);
+        using var unavailableBody = JsonDocument.Parse(await unavailable.Content.ReadAsStringAsync());
+        Assert.AreEqual("bib_validation_unavailable", unavailableBody.RootElement.GetProperty("code").GetString());
+
+        using var empty = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", input);
+        Assert.AreEqual(HttpStatusCode.OK, empty.StatusCode);
+        using var emptyBody = JsonDocument.Parse(await empty.Content.ReadAsStringAsync());
+        Assert.AreEqual("not_found", emptyBody.RootElement.GetProperty("status").GetString());
+        Assert.AreEqual(0, emptyBody.RootElement.GetProperty("results").GetArrayLength());
+        Assert.AreEqual(2, handler.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task StaffBibLookupReturnsVerifiedDetailWhenHoldingsFailAndStillReadsPatronHolds()
+    {
+        using var bootstrapClient = factory!.CreateClient();
+        using var bootstrapResponse = await bootstrapClient.GetAsync("/api/asap/staff/session");
+        var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
+        var seeded = await SeedStaffBibLookupStateAsync(Guid.Parse(identity.TenantId!));
+        var handler = new ProtectedSequenceResponseHandler(
+            (HttpStatusCode.OK,
+             """{"PAPIErrorCode":0,"BibGetRows":[{"ElementID":35,"Label":"Title","Value":"Verified title"}],"Title":"Verified title"}"""),
+            (HttpStatusCode.OK,
+             """{"PAPIErrorCode":-1,"ErrorMessage":"Invalid BibID","BibHoldingsGetRows":null}"""),
+            (HttpStatusCode.OK,
+             """{"PAPIErrorCode":0,"PatronHoldRequestsGetRows":[]}"""));
+        var provider = await CreatePolarisProviderAsync(handler);
+        await using var lookupFactory = factory!.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IStaffPolarisProvider>(provider);
+            }));
+        using var client = lookupFactory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", seeded.StaffId.ToString());
+        client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
+        client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Email", seeded.Email);
+
+        async Task<(string Title, string Status, string? BibId, byte[] RowVersion, int EventCount)> ReadRequestStateAsync()
+        {
+            await using var connection = new SqlConnection(databaseConnectionString);
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT r.[Title], r.[Status], r.[BibId], r.[RowVersion],
+                       (SELECT COUNT(*) FROM [asap].[TitleRequestEvent] e WHERE e.[TitleRequestId] = r.[Id])
+                FROM [asap].[TitleRequest] r WHERE r.[Id] = @id;
+                """;
+            command.Parameters.AddWithValue("@id", seeded.RequestId);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.IsTrue(await reader.ReadAsync());
+            return (
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                (byte[])reader[3],
+                reader.GetInt32(4));
+        }
+
+        var before = await ReadRequestStateAsync();
+        using var session = await client.GetAsync("/api/asap/staff/session");
+        Assert.AreEqual(HttpStatusCode.OK, session.StatusCode);
+        using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
+        client.DefaultRequestHeaders.Add(
+            "X-ASAP-Antiforgery",
+            sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
+
+        using var response = await client.PostAsJsonAsync(
+            "/api/asap/staff/bib-lookup",
+            new { requestId = seeded.RequestId.ToString(), mode = "bib", bibId = "9001" });
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode, await response.Content.ReadAsStringAsync());
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.AreEqual("9001", body.RootElement.GetProperty("bibId").GetString());
+        Assert.AreEqual("Verified title", body.RootElement.GetProperty("title").GetString());
+        Assert.IsTrue(body.RootElement.GetProperty("holdingsUnavailable").GetBoolean());
+        Assert.AreEqual(JsonValueKind.Null, body.RootElement.GetProperty("holdingsSummary").ValueKind);
+        Assert.IsFalse(body.RootElement.GetProperty("patronHasHold").GetBoolean());
+        Assert.AreEqual(4, handler.RequestCount);
+        Assert.IsTrue(handler.RequestUris.Any(uri => uri.AbsolutePath.Contains("/holdrequests/", StringComparison.Ordinal)));
+
+        var after = await ReadRequestStateAsync();
+        Assert.AreEqual(before.Title, after.Title);
+        Assert.AreEqual(before.Status, after.Status);
+        Assert.AreEqual(before.BibId, after.BibId);
+        CollectionAssert.AreEqual(before.RowVersion, after.RowVersion);
+        Assert.AreEqual(before.EventCount, after.EventCount);
+    }
+
+    [TestMethod]
     public async Task PolarisExactBibCarriesCatalogDetailsWithoutChangingRequestOptionSemantics()
     {
         var handler = new StaticResponseHandler(HttpStatusCode.OK,
@@ -6784,6 +7106,54 @@ public sealed partial class PatronJourneyTests
         var failed = await CreatePolarisProviderAsync(new StaticResponseHandler(HttpStatusCode.ServiceUnavailable, "{}"));
         await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
             await failed.GetBibHoldingsAsync(9001, 2, CancellationToken.None));
+    }
+
+    [TestMethod]
+    public async Task PolarisStaffHoldingsTreatsOnlyAWellFormedSuccessWithNoRowsAsZero()
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            """{"PAPIErrorCode":0,"ErrorMessage":"","BibHoldingsGetRows":[]}""");
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        var result = await provider.GetBibHoldingsAsync(9001, 2, CancellationToken.None);
+
+        Assert.AreEqual(0, result.MyLibraryCount);
+        Assert.AreEqual(0, result.OtherLibraryCount);
+        Assert.AreEqual(0, result.ConsortiumCount);
+        Assert.IsFalse(result.IsHoldable);
+        Assert.IsFalse(result.HasHoldableAtMyLibrary);
+        Assert.AreEqual(1, handler.RequestCount);
+    }
+
+    [TestMethod]
+    [DataRow("{\"PAPIErrorCode\":-1,\"ErrorMessage\":\"SQL timeout\",\"BibHoldingsGetRows\":[]}")]
+    [DataRow("{\"PAPIErrorCode\":-1,\"ErrorMessage\":\"Invalid BibID\",\"BibHoldingsGetRows\":null}")]
+    public async Task PolarisStaffHoldingsTreatsEveryNegativePapiCodeAsUnavailable(string content)
+    {
+        var provider = await CreatePolarisProviderAsync(new StaticResponseHandler(HttpStatusCode.OK, content));
+
+        await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await provider.GetBibHoldingsAsync(9001, 2, CancellationToken.None));
+    }
+
+    [TestMethod]
+    [DataRow("{}")]
+    [DataRow("not-json")]
+    [DataRow("{\"PAPIErrorCode\":0}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibHoldingsGetRows\":null}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"papierrorcode\":-9,\"BibHoldingsGetRows\":[]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibHoldingsGetRows\":[],\"bibholdingsgetrows\":[]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibHoldingsGetRows\":[{}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibHoldingsGetRows\":[{\"LocationID\":\"bad\",\"Holdable\":\"true\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibHoldingsGetRows\":[{\"LocationID\":\"201\",\"Holdable\":\"unknown\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibHoldingsGetRows\":[{\"LocationID\":\"201\",\"locationid\":\"202\",\"Holdable\":\"true\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibHoldingsGetRows\":[{\"LocationID\":\"201\",\"Holdable\":\"true\",\"holdable\":\"false\"}]}")]
+    public async Task PolarisStaffHoldingsRejectsMalformedSuccessAsUnavailable(string content)
+    {
+        var provider = await CreatePolarisProviderAsync(new StaticResponseHandler(HttpStatusCode.OK, content));
+
+        await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await provider.GetBibHoldingsAsync(9001, 2, CancellationToken.None));
     }
 
     [TestMethod]
@@ -8657,6 +9027,46 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(expectLifecycleAudit ? 1 : 0, reader.GetInt32(7));
     }
 
+    private static async Task<SeededStaffBibLookupState> SeedStaffBibLookupStateAsync(Guid tenantId)
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var email = $"bib.lookup.{suffix}@example.org";
+        var barcode = $"20000000{suffix[..8]}";
+        var objectId = Guid.NewGuid();
+        await using var connection = new SqlConnection(databaseConnectionString);
+        await connection.OpenAsync();
+        await using var seed = connection.CreateCommand();
+        seed.CommandText =
+            """
+            DECLARE @formatId bigint = (
+                SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
+            INSERT INTO [asap].[StaffUser]
+                ([EntraTenantId], [EntraObjectId], [UserPrincipalName], [NormalizedUserPrincipalName],
+                 [DisplayName], [NotificationEmail], [Role], [OrganizationId], [IsActive],
+                 [WeeklyActionSummaryEnabled], [PurchaseReminderDefault], [AdditionalCopyReminderDefault],
+                 [DefaultMineUnclaimedFilter])
+            VALUES
+                (@tenantId, @objectId, @email, UPPER(@email), N'BIB Lookup Test Staff', @email, N'staff', 2, 1,
+                 0, 0, 0, 0);
+            DECLARE @staffId bigint = SCOPE_IDENTITY();
+
+            INSERT INTO [asap].[TitleRequest]
+                ([LibraryOrganizationId], [Barcode], [Title], [Identifier], [AutoHold], [MaterialFormatId],
+                 [Status], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
+            VALUES
+                (2, @barcode, N'BIB lookup boundary test', N'9780000000091', 1, @formatId,
+                 N'suggestion', N'not_found', SYSUTCDATETIME(), SYSUTCDATETIME());
+            SELECT @staffId, CONVERT(bigint, SCOPE_IDENTITY());
+            """;
+        seed.Parameters.AddWithValue("@tenantId", tenantId);
+        seed.Parameters.AddWithValue("@objectId", objectId);
+        seed.Parameters.AddWithValue("@email", email);
+        seed.Parameters.AddWithValue("@barcode", barcode);
+        await using var reader = await seed.ExecuteReaderAsync();
+        Assert.IsTrue(await reader.ReadAsync());
+        return new SeededStaffBibLookupState(reader.GetInt64(0), reader.GetInt64(1), email);
+    }
+
     private static async Task<SeededStaffBrowserState> SeedStaffBrowserStateAsync(
         Guid tenantId,
         Guid superObjectId,
@@ -8952,6 +9362,8 @@ public sealed partial class PatronJourneyTests
             result.GetInt64(17),
             result.GetInt64(18));
     }
+
+    private sealed record SeededStaffBibLookupState(long StaffId, long RequestId, string Email);
 
     private sealed record SeededStaffBrowserState(
         long SuperId,
@@ -10081,6 +10493,48 @@ public sealed partial class PatronJourneyTests
             cancellationToken.ThrowIfCancellationRequested();
             RequestCount++;
             RequestUris.Add(request.RequestUri!);
+            if (!remaining.TryDequeue(out var response))
+            {
+                throw new InvalidOperationException("No fake Polaris response remains for this request.");
+            }
+
+            return Task.FromResult(new HttpResponseMessage(response.StatusCode)
+            {
+                Content = new StringContent(response.Content),
+                RequestMessage = request
+            });
+        }
+    }
+
+    private sealed class ProtectedSequenceResponseHandler(
+        params (HttpStatusCode StatusCode, string Content)[] responses) : HttpMessageHandler
+    {
+        private const string ProtectedTokenContent =
+            "{\"PAPIErrorCode\":0,\"AccessToken\":\"protected-token\",\"AccessSecret\":\"protected-secret\",\"AuthExpDate\":\"2030-01-01T00:00:00Z\"}";
+        private readonly Queue<(HttpStatusCode StatusCode, string Content)> remaining = new(responses);
+
+        public int RequestCount { get; private set; }
+        public List<Uri> RequestUris { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            RequestCount++;
+            RequestUris.Add(request.RequestUri!);
+            var isAuthentication = request.RequestUri!.AbsolutePath.Contains(
+                "/authenticator/staff",
+                StringComparison.OrdinalIgnoreCase);
+            if (isAuthentication)
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(ProtectedTokenContent),
+                    RequestMessage = request
+                });
+            }
+
             if (!remaining.TryDequeue(out var response))
             {
                 throw new InvalidOperationException("No fake Polaris response remains for this request.");
