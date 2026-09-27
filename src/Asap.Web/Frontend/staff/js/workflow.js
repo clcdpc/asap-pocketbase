@@ -1903,6 +1903,7 @@ export function createWorkflowApp() {
     const customFields = element('div', { className: 'custom-fields wide' });
     let customFieldControls = renderCustomFieldEditor(customFields, request, configuration, format.value);
     const pendingPreview = element('p', { className: 'pending-audit-preview wide', role: 'status' });
+    const save = element('button', { type: 'submit', className: 'primary-button' }, [icon('save'), 'Save changes']);
     function updatePreview() {
       const changed = [];
       const identifierChanged = !identifier.disabled && identifier.value.trim() !== (request.identifier || '').trim();
@@ -1923,9 +1924,13 @@ export function createWorkflowApp() {
       if (notes.value !== (request.notes || '')) changed.push('notes');
       if (stableJson(collectCustomFields(request, customFieldControls)) !==
           stableJson(request.customFields || {})) changed.push('custom fields');
+      const claimantId = request.claimedByStaffUserId == null ? null : String(request.claimedByStaffUserId);
+      const actorId = state.staff?.id == null ? null : String(state.staff.id);
+      if (actorId && claimantId !== actorId) changed.push(claimantId ? 'claim transfer' : 'staff claim');
       pendingPreview.textContent = changed.length
         ? `Pending changes (not saved): ${changed.join(', ')}.`
         : 'No pending changes.';
+      save.disabled = changed.length === 0;
     }
     format.addEventListener('change', () => {
       customFieldControls = renderCustomFieldEditor(customFields, request, configuration, format.value);
@@ -1946,13 +1951,12 @@ export function createWorkflowApp() {
       element('label', { className: 'check-field' }, [autohold, element('span', { text: 'Automatically place hold' })]),
       labeledInput('Notes', notes, 'wide'),
       pendingPreview,
-      element('div', { className: 'form-actions wide' }, [
-        element('button', { type: 'submit', className: 'primary-button' }, [icon('save'), 'Save changes'])
-      ])
+      element('div', { className: 'form-actions wide' }, [save])
     );
     updatePreview();
     form.addEventListener('submit', async event => {
       event.preventDefault();
+      if (save.disabled) return;
       await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/action`, {
         version: request.version,
         action: 'edit',

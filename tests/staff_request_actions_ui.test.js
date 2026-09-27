@@ -59,6 +59,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       status: 'suggestion', format: 'book', formatLabel: 'Book', identifier: null,
       bibid: scenarioOptions.verifyBib || scenarioOptions.verificationInvalidation ? '9001' : null,
       bibidStaffVerified: Boolean(scenarioOptions.verificationInvalidation),
+      claimedByStaffUserId: scenarioOptions.unclaimedPreview ? null : staff.id,
       publication: null, exactPublicationDate: '2026-01-02',
       notes: 'Editable note', autohold: false,
       customFields: { shelf: { value: 'Reference', type: 'text', label: 'Shelf' } },
@@ -145,7 +146,16 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     assert.equal(document.querySelector('.request-activity svg'), null);
     assert.equal(document.querySelector('.request-activity img'), null);
     assert.equal(document.querySelector('.edit-form textarea').value, 'Editable note');
+    if (scenarioOptions.unclaimedPreview) {
+      assert.match(document.querySelector('.pending-audit-preview').textContent, /staff claim/);
+      assert.equal(document.querySelector('.edit-form button[type="submit"]').disabled, false);
+      return;
+    }
     assert.match(document.querySelector('.pending-audit-preview').textContent, /No pending changes/);
+    assert.equal(document.querySelector('.edit-form button[type="submit"]').disabled, true);
+    document.querySelector('.edit-form').dispatchEvent(
+      new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+    assert.equal(payload, null, 'unchanged edit must not generate a claim event');
 
     const title = document.querySelector('.edit-form input');
     title.value = 'Changed title';
@@ -278,5 +288,6 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
   await scenario('purchase', false, true, { staleMutation: true });
   await scenario('reject', false, false, { verifyBib: true });
   await scenario('reject', false, false, { verificationInvalidation: true });
+  await scenario('reject', false, false, { unclaimedPreview: true });
   console.log('Staff request action choice, preview, activity, safe text, and exact ID UI checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
