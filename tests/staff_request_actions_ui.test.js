@@ -44,7 +44,8 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
     dom.window.gridjs = require(path.join(frontend, 'vendor/gridjs/6.2.0/gridjs.umd.js'));
     const staff = {
-      id: '20', role: 'staff', organizationId: 2, organizationName: 'Library',
+      id: '20', role: scenarioOptions.supersededFollowup ? 'super_admin' : 'staff',
+      organizationId: 2, organizationName: 'Library',
       displayName: 'Staff', userPrincipalName: 'staff@example.org',
       purchaseReminderDefault: profileDefault, defaultMineUnclaimedFilter: false
     };
@@ -88,13 +89,17 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       if (url.includes('/title-requests?')) {
         if (committed && (scenarioOptions.laterUnrelated401 || scenarioOptions.laterUnrelated403)) {
           postCommitQueueLoads += 1;
-          if (postCommitQueueLoads > 1) {
+          if (postCommitQueueLoads > (scenarioOptions.supersededFollowup ? 2 : 1)) {
             return scenarioOptions.laterUnrelated403
               ? response(403, { code: 'staff_scope_forbidden', accessAllowed: false })
               : response(401, { code: 'staff_session_invalid' });
           }
-          if (scenarioOptions.closeDuringFollowup) {
+          if (postCommitQueueLoads === 1 &&
+              (scenarioOptions.closeDuringFollowup || scenarioOptions.supersededFollowup)) {
             return new Promise(resolve => { releaseFollowupQueue = resolve; });
+          }
+          if (postCommitQueueLoads === 1 && scenarioOptions.followupDependencyAbort) {
+            throw Object.assign(new Error('Queue dependency aborted'), { name: 'AbortError' });
           }
         }
         if (committed && scenarioOptions.queue401) {
@@ -103,7 +108,8 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         if (committed && scenarioOptions.queue403) {
           return response(403, { code: 'staff_scope_forbidden', accessAllowed: false });
         }
-        return response(200, { scope: '2', organizations: [],
+        return response(200, { scope: scenarioOptions.supersededFollowup && !url.includes('scope=2') ? 'all' : '2',
+          organizations: scenarioOptions.supersededFollowup ? [{ id: 2, name: 'Library' }] : [],
           items: scenarioOptions.staleChoice || scenarioOptions.staleMutation
             ? [currentRequest, otherRequest] : [currentRequest] });
       }
@@ -280,15 +286,33 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         await until(() => releaseFollowupQueue, 'delayed follow-up queue load starts');
         document.querySelector('#close-request').click();
         releaseFollowupQueue(response(200, { scope: '2', organizations: [], items: [currentRequest] }));
+      } else if (scenarioOptions.supersededFollowup) {
+        await until(() => releaseFollowupQueue, 'delayed follow-up queue load starts');
+        const scope = document.querySelector('#library-scope');
+        scope.value = '2';
+        scope.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+        await until(() => postCommitQueueLoads === 2 && !document.querySelector('#refresh-queue').disabled,
+          'newer scope queue load completes');
+        releaseFollowupQueue(response(200, { scope: 'all', organizations: [], items: [currentRequest] }));
+        await new Promise(resolve => setTimeout(resolve, 20));
+        assert.doesNotMatch(document.querySelector('#app-status').textContent, /queue could not refresh/);
       }
       await until(() => !document.querySelector('#refresh-queue').disabled,
         'committed follow-up queue load completes');
+      if (scenarioOptions.followupDependencyAbort) {
+        await until(() => /queue could not refresh/.test(document.querySelector('#app-status').textContent),
+          'uncancelled dependency abort is reported as a refresh failure');
+      }
       document.querySelector('#refresh-queue').click();
       await until(() => !document.querySelector('#signed-out').hidden,
         'later unrelated session failure displays sign-out');
-      assert.match(document.querySelector('#signed-out-message').textContent,
-        /session ended|access is not currently available/);
-      assert.doesNotMatch(document.querySelector('#signed-out-message').textContent, /Final state:/);
+      if (scenarioOptions.detailRefreshFails || scenarioOptions.followupDependencyAbort) {
+        assert.match(document.querySelector('#signed-out-message').textContent, /Final state: Outstanding purchase/);
+      } else {
+        assert.match(document.querySelector('#signed-out-message').textContent,
+          /session ended|access is not currently available/);
+        assert.doesNotMatch(document.querySelector('#signed-out-message').textContent, /Final state:/);
+      }
     } else if (scenarioOptions.detailRefreshFails) {
       await until(() => /Details and activity could not refresh/.test(document.querySelector('#app-status').textContent),
         'committed outcome survives detail refresh failure');
@@ -313,7 +337,10 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
   await scenario('purchase', false, true, { queue403: true });
   await scenario('purchase', false, true, { laterUnrelated401: true });
   await scenario('purchase', false, true, { laterUnrelated401: true, closeDuringFollowup: true });
+  await scenario('purchase', false, true, { laterUnrelated401: true, supersededFollowup: true });
   await scenario('purchase', false, true, { laterUnrelated403: true });
+  await scenario('purchase', false, false, { detailRefreshFails: true, laterUnrelated401: true });
+  await scenario('purchase', false, true, { laterUnrelated401: true, followupDependencyAbort: true });
   await scenario('purchase', false, false, { detailRefreshFails: true });
   await scenario('reject', false, false, { staleChoice: true });
   await scenario('purchase', false, true, { staleMutation: true });
