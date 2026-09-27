@@ -6,6 +6,14 @@ public interface IPatronProvider
 
     Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken);
 
+    Task<int?> GetPatronIdAsync(string barcode, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromException<int?>(new PolarisOperationalException(
+            "patron_id_read_unimplemented",
+            "The selected patron provider does not implement a patron-ID read."));
+    }
+
     Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(
         PatronSnapshot patron,
         CancellationToken cancellationToken);

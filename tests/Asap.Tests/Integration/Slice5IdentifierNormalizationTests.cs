@@ -8,12 +8,13 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
-    public async Task EmptyIdentifierClearsStaleBibAndDerivedTagsWithQueueCheckpoint()
+    public async Task EmptyIdentifierClearsAutomationBibButPreservesStaffVerifiedBibAndDerivedTags()
     {
         var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         var scope = Slice5IsolatedLibraryId;
         await EnsureSlice5IsolatedLibraryAsync(contextFactory, scope);
         long requestId;
+        long staffVerifiedRequestId;
         var seedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(-1);
         await using (var seed = await contextFactory.CreateDbContextAsync())
         {
@@ -36,6 +37,25 @@ public sealed partial class PatronJourneyTests
             seed.TitleRequests.Add(request);
             await seed.SaveChangesAsync();
             requestId = request.Id;
+
+            var staffVerifiedRequest = new TitleRequest
+            {
+                LibraryOrganizationId = scope,
+                Barcode = $"slice5-staff-bib-{Guid.NewGuid():N}",
+                Title = "Staff verified BIB with empty identifier",
+                Identifier = null,
+                BibId = "staff-bib-9002",
+                BibIdStaffVerified = true,
+                MaterialFormatId = bookFormat.Id,
+                Status = "suggestion",
+                IsbnCheckStatus = "pending",
+                AutoHold = false,
+                CreatedUtc = seedUtc,
+                UpdatedUtc = seedUtc
+            };
+            seed.TitleRequests.Add(staffVerifiedRequest);
+            await seed.SaveChangesAsync();
+            staffVerifiedRequestId = staffVerifiedRequest.Id;
 
             var codes = new[] { "polaris_bib_found", "polaris_bib_not_found", "polaris_multiple_matches", "slice5-unrelated" };
             foreach (var code in codes)
@@ -65,6 +85,7 @@ public sealed partial class PatronJourneyTests
             await using var verify = await contextFactory.CreateDbContextAsync();
             var request = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == requestId);
             Assert.IsNull(request.BibId);
+            Assert.IsFalse(request.BibIdStaffVerified);
             Assert.AreEqual("skipped_no_isbn", request.IsbnCheckStatus);
             Assert.AreEqual(0, request.IsbnCheckRetryCount);
             Assert.IsNull(request.IsbnCheckLastErrorCode);
@@ -74,17 +95,23 @@ public sealed partial class PatronJourneyTests
                 where link.TitleRequestId == requestId
                 select tag.Code).ToListAsync();
             CollectionAssert.AreEquivalent(new[] { "slice5-unrelated" }, tags);
+            var staffVerifiedRequest = await verify.TitleRequests.AsNoTracking()
+                .SingleAsync(item => item.Id == staffVerifiedRequestId);
+            Assert.AreEqual("staff-bib-9002", staffVerifiedRequest.BibId);
+            Assert.IsTrue(staffVerifiedRequest.BibIdStaffVerified);
+            Assert.AreEqual("skipped_no_isbn", staffVerifiedRequest.IsbnCheckStatus);
             var progress = await verify.QueueProgress.AsNoTracking().SingleAsync(item =>
                 item.QueueName == QueueNames.IdentifierProcessing && item.ScopeOrganizationId == scope);
             Assert.IsNull(progress.LastItemId);
-            Assert.AreEqual(requestId, progress.LastOutcomeItemId);
+            Assert.AreEqual(staffVerifiedRequestId, progress.LastOutcomeItemId);
             Assert.AreEqual("cycle_complete", progress.LastOutcomeCode);
         }
         finally
         {
             await ExecuteNonQueryAsync(
-                "DELETE FROM [asap].[TitleRequestWorkflowTag] WHERE [TitleRequestId] = @id; DELETE FROM [asap].[TitleRequest] WHERE [Id] = @id;",
-                ("@id", requestId));
+                "DELETE FROM [asap].[TitleRequestWorkflowTag] WHERE [TitleRequestId] IN (@id, @staffId); DELETE FROM [asap].[TitleRequest] WHERE [Id] IN (@id, @staffId);",
+                ("@id", requestId),
+                ("@staffId", staffVerifiedRequestId));
             await ExecuteNonQueryAsync(
                 "DELETE FROM [asap].[WorkflowTag] WHERE [Code] = N'slice5-unrelated' AND NOT EXISTS (SELECT 1 FROM [asap].[TitleRequestWorkflowTag] WHERE [WorkflowTagId] = [asap].[WorkflowTag].[Id]);");
         }

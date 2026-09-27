@@ -7,6 +7,7 @@ import {
   onAccessUnavailable
 } from './http.js';
 import { createSettingsController } from './settings.js';
+import { applyPolarisResultToControls, createPolarisLookup, renderResearchLinks, selectedStaffBibId } from './research.js';
 import { loadAnalytics, resetAnalytics } from './analytics.js';
 import {
   requestedRequestIdFromUrl,
@@ -162,12 +163,50 @@ export function createWorkflowApp() {
     operationsLoaded: false,
     createCopyRequest: null,
     createCopyReturnFocus: null,
-    configurations: new Map()
+    configurations: new Map(),
+    research: null,
+    currentRequest: null,
+    editControls: null,
+    editorDirty: false,
+    verifiedBib: null
   };
 
   function announce(message, kind = '') {
     dom.status.textContent = message || '';
     dom.status.className = `status-message${kind ? ` ${kind}` : ''}`;
+  }
+
+  const polarisLookup = createPolarisLookup({ authorizedJson, isAbortError, announce });
+
+  function isVerifiedDraft(request) {
+    return state.verifiedBib?.requestId === String(request.id) &&
+      state.editControls?.bib.value.trim() === state.verifiedBib.bibId;
+  }
+
+  function updateResearchLinks() {
+    const container = dom.dialogBody.querySelector('.research-section');
+    if (!container || !state.currentRequest) return;
+    renderResearchLinks(container, state.currentRequest, state.research, {
+      title: state.editControls?.title.value,
+      identifier: state.editControls?.identifier.value,
+      bibId: state.editControls?.bib.value
+    });
+  }
+
+  async function loadResearchConfiguration(request) {
+    const load = latestLoads.begin('research-configuration');
+    try {
+      const data = await authorizedJson(
+        `/api/asap/staff/research-configuration?requestId=${encodeURIComponent(request.id)}`,
+        { signal: load.signal });
+      if (!load.isCurrent() || !isCurrentDialogRequest(request, 'title_request')) return;
+      state.research = data;
+      updateResearchLinks();
+    } catch (error) {
+      if (isAbortError(error) || error.status === 401) return;
+    } finally {
+      latestLoads.finish('research-configuration', load.token);
+    }
   }
 
   const settingsController = createSettingsController({
@@ -223,6 +262,10 @@ export function createWorkflowApp() {
   }
 
   function showSignedOut(message) {
+    polarisLookup.close();
+    latestLoads.begin('research-configuration').abort();
+    state.verifiedBib = null;
+    state.research = null;
     cancelDialogFocusReturn();
     cancelAssignmentCandidateLoad();
     cancelDialogMutationCompletion();
@@ -720,6 +763,12 @@ export function createWorkflowApp() {
 
   async function openAdditionalCopy(id, returnFocus) {
     if (!state.staff) return;
+    polarisLookup.close();
+    latestLoads.begin('research-configuration').abort();
+    state.research = null;
+    state.verifiedBib = null;
+    state.currentRequest = null;
+    state.editControls = null;
     cancelDialogFocusReturn();
     cancelAssignmentCandidateLoad();
     cancelDialogMutationCompletion();
@@ -911,6 +960,12 @@ export function createWorkflowApp() {
 
   async function openRequest(id, returnFocus) {
     if (!state.staff) return;
+    polarisLookup.close();
+    latestLoads.begin('research-configuration').abort();
+    state.research = null;
+    if (String(state.selectedRequestId) !== String(id) || state.selectedRequestType !== 'title_request') {
+      state.verifiedBib = null;
+    }
     cancelDialogFocusReturn();
     cancelAssignmentCandidateLoad();
     cancelDialogMutationCompletion();
@@ -935,6 +990,7 @@ export function createWorkflowApp() {
       if (!dom.dialog.open) dom.dialog.showModal();
       dom.closeDialog.focus();
       announce(`Opened ${request.title}.`);
+      loadResearchConfiguration(request);
     } catch (error) {
       if (!isAbortError(error) && error.status !== 401) {
         announce(error.status === 404 ? 'That request is no longer available.' : error.message, 'error');
@@ -968,6 +1024,11 @@ export function createWorkflowApp() {
     if (!preserveDialogMutation) cancelDialogMutationCompletion();
     if (state.selectedRequestType === 'title_request' && String(state.selectedRequestId) === String(request.id)) {
       state.selectedRequestVersion = request.version;
+    }
+    state.currentRequest = request;
+    if (state.verifiedBib && (state.verifiedBib.requestId !== String(request.id) ||
+        state.verifiedBib.bibId !== String(request.bibid || '').trim())) {
+      state.verifiedBib = null;
     }
     dom.dialogTitle.textContent = request.title;
     dom.dialogKicker.textContent = `${request.libraryOrgName} · Request ${request.id}`;
@@ -1006,8 +1067,10 @@ export function createWorkflowApp() {
       body.append(tags);
     }
     body.append(buildEditForm(request, configuration));
+    body.append(element('section', { className: 'research-section', hidden: 'hidden' }));
     if (request.holdOperation) body.append(buildHoldOperation(request, request.holdOperation));
     dom.dialogBody.replaceChildren(body);
+    updateResearchLinks();
   }
 
   function buildActionBar(request) {
@@ -1024,18 +1087,13 @@ export function createWorkflowApp() {
     if (request.status === 'suggestion') {
       bar.append(
         commandButton('Purchase', 'shopping-cart', () => runAction(request, 'purchase'), 'primary-button', workflowBlocked),
-        commandButton('Already own', 'book', () => {
-          if (request.bibid) runAction(request, 'alreadyOwn');
-          else announce('Add and verify a BIB ID before choosing Already own.', 'error');
-        }, 'secondary-button', workflowBlocked),
+        commandButton('Already own', 'book', () => runAction(request, 'alreadyOwn'), 'secondary-button', workflowBlocked),
         commandButton('Reject', 'ban', () => runAction(request, 'reject'), 'danger-button', workflowBlocked),
         commandButton('Close silently', 'archive', () => runAction(request, 'silentClose'), 'secondary-button', workflowBlocked)
       );
     } else if (request.status === 'outstanding_purchase') {
-      bar.append(commandButton('Ready for hold', 'arrow-right', () => {
-        if (request.bibid) runAction(request, 'catalogFound');
-        else announce('Add and verify a BIB ID before moving this request to Pending hold.', 'error');
-      }, 'primary-button', workflowBlocked));
+      bar.append(commandButton('Ready for hold', 'arrow-right', () => runAction(request, 'catalogFound'),
+        'primary-button', workflowBlocked));
     } else if (request.status === 'pending_hold') {
       bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, event.currentTarget), 'secondary-button', !request.bibid));
       bar.append(commandButton('Pickup', 'map-marker', () => showPickup(request), 'secondary-button', workflowBlocked));
@@ -1168,6 +1226,7 @@ export function createWorkflowApp() {
 
   function buildEditForm(request, configuration) {
     const form = element('form', { className: 'edit-form' });
+    state.editorDirty = false;
     const title = element('input', { value: request.title, required: 'required', maxlength: '500' });
     const author = element('input', { value: request.author || '', maxlength: '500' });
     const identifier = element('input', {
@@ -1182,6 +1241,66 @@ export function createWorkflowApp() {
       maxlength: '100',
       disabled: !request.capabilities.canChangeBib
     });
+    state.editControls = { title, author, identifier, bib };
+    const selectedContext = element('p', { className: 'polaris-selection-context wide', role: 'status' });
+    const searchButton = commandButton('Search Polaris catalog', 'search', () => {
+      polarisLookup.open({
+        requestId: String(request.id),
+        libraryOrgId: request.libraryOrgId,
+        isCurrent: () => isCurrentDialogRequest(request, 'title_request') && form.isConnected,
+        returnFocus: searchButton,
+        editorFocus: bib,
+        canApply: row => !bib.disabled || String(row.bibId) === bib.value.trim(),
+        mode: bib.value.trim() ? 'bib' : identifier.value.trim() ? 'identifier' : 'title',
+        query: bib.value.trim() || identifier.value.trim() || title.value.trim(),
+        title: title.value.trim(),
+        author: author.value.trim(),
+        apply: (selected, verifiedDetail) => {
+          applyPolarisResultToControls(selected, { bib, title, author, identifier });
+          state.verifiedBib = {
+            requestId: String(request.id),
+            bibId: String(selected.bibId),
+            detail: verifiedDetail
+          };
+          state.editorDirty = true;
+          updateResearchLinks();
+          showSelectedContext();
+        }
+      });
+    });
+    function showSelectedContext() {
+      const detail = state.verifiedBib?.detail;
+      if (!detail || state.verifiedBib.requestId !== String(request.id)) {
+        selectedContext.textContent = '';
+        return;
+      }
+      const holdings = detail.holdingsSummary;
+      selectedContext.textContent = [
+        `Polaris BIB ${detail.bibId} verified for this request.`,
+        detail.publication ? `Polaris publication: ${detail.publication}.` : '',
+        detail.format ? `Polaris format: ${detail.format}.` : '',
+        holdings ? `${holdings.myLibraryCount} item(s) at this library, ${holdings.otherLibraryCount} elsewhere; ${holdings.isHoldable ? 'holdable' : 'not holdable'}.` :
+          detail.holdingsUnavailable ? 'Holdings are temporarily unavailable.' : '',
+        detail.patronHasHold === true ? 'This patron already has a hold for this BIB.' :
+          detail.patronHasHold === false ? 'No existing patron hold was found for this BIB.' : ''
+      ].filter(Boolean).join(' ');
+    }
+    showSelectedContext();
+    bib.addEventListener('input', () => {
+      state.verifiedBib = null;
+      polarisLookup.invalidate();
+      showSelectedContext();
+      updateResearchLinks();
+    });
+    identifier.addEventListener('input', () => {
+      state.verifiedBib = null;
+      polarisLookup.invalidate();
+      showSelectedContext();
+      updateResearchLinks();
+    });
+    title.addEventListener('input', updateResearchLinks);
+    form.addEventListener('input', () => { state.editorDirty = true; });
+    form.addEventListener('change', () => { state.editorDirty = true; });
     const publication = selectWithHistorical(configuration.publicationOptions, request.publication);
     publication.setAttribute('aria-label', 'Publication timing');
     const exactDate = element('input', { type: 'date', value: request.exactPublicationDate || '' });
@@ -1204,6 +1323,7 @@ export function createWorkflowApp() {
       labeledInput('Author', author),
       labeledInput('Identifier', identifier),
       labeledInput('BIB ID', bib),
+      element('div', { className: 'wide polaris-edit-tools' }, [searchButton, selectedContext]),
       labeledInput('Publication timing', publication),
       labeledInput('Exact publication date', exactDate),
       labeledInput('Format', format),
@@ -1223,6 +1343,9 @@ export function createWorkflowApp() {
         author: author.value,
         identifier: identifier.disabled ? request.identifier : identifier.value.trim() || null,
         bibid: bib.disabled ? request.bibid : bib.value.trim() || null,
+        ...(selectedStaffBibId(state.verifiedBib, request.id, bib.value)
+          ? { staffSelectedBibId: selectedStaffBibId(state.verifiedBib, request.id, bib.value) }
+          : {}),
         publication: publication.value,
         exactPublicationDate: exactDate.value || null,
         format: format.value,
@@ -1244,6 +1367,18 @@ export function createWorkflowApp() {
   }
 
   async function runAction(request, action, targetStatus) {
+    const entersPendingHold = action === 'catalogFound' || action === 'alreadyOwn' ||
+      targetStatus === 'pending_hold' || action === 'purchase' && Boolean(request.bibid);
+    if (entersPendingHold) {
+      if (!isVerifiedDraft(request)) {
+        announce('Search Polaris, select the matching BIB, and save it before moving to Pending hold.', 'error');
+        return;
+      }
+      if (state.editorDirty || state.verifiedBib.bibId !== String(request.bibid || '').trim()) {
+        announce('Save the current request edits before moving to Pending hold.', 'error');
+        return;
+      }
+    }
     const terminal = action === 'reject' || action === 'silentClose' || action === 'closeDuplicate' || targetStatus === 'closed';
     if (terminal && !window.confirm('Apply this final workflow action?')) return;
     await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/action`, {
@@ -1669,6 +1804,12 @@ export function createWorkflowApp() {
   }
 
   function closeDialog() {
+    polarisLookup.close();
+    latestLoads.begin('research-configuration').abort();
+    state.verifiedBib = null;
+    state.research = null;
+    state.currentRequest = null;
+    state.editControls = null;
     cancelDialogFocusReturn();
     cancelAssignmentCandidateLoad();
     cancelDialogMutationCompletion();

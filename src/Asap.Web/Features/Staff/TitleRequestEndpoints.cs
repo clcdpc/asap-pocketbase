@@ -1,14 +1,30 @@
+using System.Globalization;
+using System.Text.RegularExpressions;
+using Asap.Web.Features.Patron;
+using Asap.Web.Infrastructure.Data;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace Asap.Web.Features.Staff;
 
 public static class TitleRequestEndpoints
 {
+    private static readonly HashSet<string> SupportedResearchTokens =
+        ["title", "identifier", "bibid", "patron-id", "patronId"];
+
+    public sealed record BibLookupInput(string? RequestId, int? LibraryOrgId, string? BibId,
+        string? Mode, string? Query, string? Title, string? Author);
+
     public static IEndpointRouteBuilder MapTitleRequestEndpoints(this IEndpointRouteBuilder endpoints)
     {
         var group = endpoints.MapGroup("/api/asap/staff/title-requests").RequireAuthorization();
         group.MapGet("", ListAsync);
         group.MapGet("/{id}", GetAsync);
+        endpoints.MapGet("/api/asap/staff/research-configuration", ResearchConfigurationAsync)
+            .RequireAuthorization();
+        endpoints.MapPost("/api/asap/staff/bib-lookup", BibLookupAsync)
+            .RequireAuthorization()
+            .AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/claim", ClaimAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/unclaim", UnclaimAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/assign", AssignAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
@@ -31,6 +47,258 @@ public static class TitleRequestEndpoints
             .RequireAuthorization()
             .AddEndpointFilter<StaffAntiforgeryFilter>();
         return endpoints;
+    }
+
+    private static async Task<IResult> ResearchConfigurationAsync(
+        HttpContext context,
+        long? requestId,
+        int? libraryOrgId,
+        TitleRequestViewService views,
+        StaffEligibilityService eligibility,
+        PatronConfigurationService configurations,
+        IPatronProvider patrons,
+        IDbContextFactory<AsapDbContext> contextFactory,
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken)
+    {
+        var scope = await ResolveResearchScopeAsync(Current(context), requestId, libraryOrgId,
+            views, eligibility, cancellationToken);
+        if (scope.Error is not null)
+        {
+            return scope.Error;
+        }
+        var configuration = await configurations.GetAsync(scope.OrganizationId, cancellationToken);
+        if (configuration is null)
+        {
+            return Results.NotFound(new { code = "organization_not_found" });
+        }
+        await using var db = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var system = await db.SystemSettings.AsNoTracking()
+            .SingleAsync(item => item.OrganizationId == 1, cancellationToken);
+        int? patronId = null;
+        if (scope.Request is { Barcode.Length: > 0 } request &&
+            HasUsablePatronResearchUrl(system.LeapPatronUrlPattern))
+        {
+            try
+            {
+                var resolvedPatronId = await patrons.GetPatronIdAsync(request.Barcode, cancellationToken);
+                if (resolvedPatronId is > 0)
+                {
+                    patronId = resolvedPatronId;
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                loggerFactory.CreateLogger("Asap.Web.Features.Staff.TitleRequestEndpoints")
+                    .LogWarning(exception, "Patron ID was unavailable for request research links");
+            }
+        }
+        return Results.Json(new
+        {
+            system.LeapBibUrlPattern,
+            system.LeapPatronUrlPattern,
+            patronId,
+            externalSearchProviders = configuration.ExternalSearchProviders
+                .Where(item => item.IsEnabled)
+                .Select(item => new { item.Key, item.Label, item.UrlTemplate, item.SortOrder })
+        });
+    }
+
+    private static async Task<IResult> BibLookupAsync(
+        HttpContext context,
+        BibLookupInput input,
+        TitleRequestViewService views,
+        StaffEligibilityService eligibility,
+        IStaffPolarisProvider polaris,
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken)
+    {
+        if (!TryParseRequestId(input.RequestId, out var requestId))
+        {
+            return Results.BadRequest(new
+            {
+                code = "invalid_request_id",
+                message = "Request ID must be a positive Int64 decimal value."
+            });
+        }
+        var scope = await ResolveResearchScopeAsync(Current(context), requestId, input.LibraryOrgId,
+            views, eligibility, cancellationToken);
+        if (scope.Error is not null)
+        {
+            return scope.Error;
+        }
+        var mode = input.Mode?.Trim().ToLowerInvariant();
+        var bibText = input.BibId?.Trim();
+        if (mode is not null && mode != "bib" &&
+            mode is not ("identifier" or "title" or "author" or "title_author"))
+        {
+            return Results.BadRequest(new { code = "invalid_search_mode", message = "Choose a supported Polaris search mode." });
+        }
+        var exact = mode == "bib" || !string.IsNullOrEmpty(bibText);
+        if (exact && (!int.TryParse(bibText, out var parsedBibId) || parsedBibId <= 0))
+        {
+            return Results.BadRequest(new { code = "invalid_bib", message = "Enter a positive Polaris BIB ID." });
+        }
+        var query = input.Query?.Trim() ?? string.Empty;
+        var title = input.Title?.Trim() ?? string.Empty;
+        var author = input.Author?.Trim() ?? string.Empty;
+        if (!exact && (mode is null || mode == "title_author" && (title.Length == 0 || author.Length == 0) ||
+                       mode != "title_author" && query.Length == 0))
+        {
+            return Results.BadRequest(new { code = "search_query_required", message = "Enter the catalog search text." });
+        }
+        if (query.Length > 250 || title.Length > 250 || author.Length > 250)
+        {
+            return Results.BadRequest(new { code = "search_query_too_long", message = "Catalog search text is too long." });
+        }
+        try
+        {
+            if (!exact)
+            {
+                var search = await polaris.SearchBibsAsync(mode!, query, title, author, cancellationToken);
+                return Results.Json(new { status = search.Results.Count == 0 ? "not_found" : "found",
+                    search.TotalMatches, results = search.Results.Take(10) });
+            }
+            var bibId = int.Parse(bibText!);
+            var bib = await polaris.ValidateBibAsync(bibId, cancellationToken);
+            if (!bib.IsValid)
+            {
+                return Results.NotFound(new { code = "bib_not_found", message = "The Polaris BIB was not found." });
+            }
+            StaffBibHoldingsSummary? holdings = null;
+            var holdingsUnavailable = false;
+            try
+            {
+                holdings = await polaris.GetBibHoldingsAsync(bibId, scope.OrganizationId, cancellationToken);
+            }
+            catch (PolarisOperationalException)
+            {
+                holdingsUnavailable = true;
+            }
+            bool? patronHasHold = null;
+            if (scope.Request is { Barcode.Length: > 0 } request)
+            {
+                try
+                {
+                    var holds = await polaris.GetPatronHoldsAsync(request.Barcode, cancellationToken);
+                    patronHasHold = holds.Any(hold => hold.BibId == bibId &&
+                        !HoldPlacementService.IsTerminal(hold.StatusId));
+                }
+                catch (PolarisOperationalException exception)
+                {
+                    loggerFactory.CreateLogger("Asap.Web.Features.Staff.TitleRequestEndpoints")
+                        .LogWarning(exception, "Patron hold context was unavailable during BIB lookup");
+                }
+            }
+            return Results.Json(new { bibId = bibId.ToString(), bib.Title, bib.Author,
+                bib.Publication, bib.Format, bib.Identifier, bib.Publisher,
+                holdingsSummary = holdings, holdingsUnavailable, patronHasHold });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (PolarisOperationalException)
+        {
+            return Results.Json(new { code = "bib_validation_unavailable",
+                message = "Catalog lookup is temporarily unavailable." },
+                statusCode: StatusCodes.Status502BadGateway);
+        }
+    }
+
+    private static async Task<ResearchScope> ResolveResearchScopeAsync(
+        CurrentStaff actor,
+        long? requestId,
+        int? libraryOrgId,
+        TitleRequestViewService views,
+        StaffEligibilityService eligibility,
+        CancellationToken cancellationToken)
+    {
+        TitleRequestDto? request = null;
+        if (requestId.HasValue)
+        {
+            request = await views.GetAsync(actor, requestId.Value.ToString(), cancellationToken);
+            if (request is null)
+            {
+                return new ResearchScope(0, null, Results.NotFound(new { code = "request_not_found" }));
+            }
+            if (libraryOrgId.HasValue && libraryOrgId.Value != request.LibraryOrgId)
+            {
+                return new ResearchScope(0, null, Results.BadRequest(new { code = "library_scope_mismatch" }));
+            }
+            libraryOrgId = request.LibraryOrgId;
+        }
+        if (libraryOrgId is null or <= 1)
+        {
+            return new ResearchScope(0, null, Results.BadRequest(new { code = "library_scope_required" }));
+        }
+        var result = await eligibility.EvaluateAsync(
+            new StaffIdentityEvidence(actor.Id, actor.AuthenticationEmail, actor.EntraTenantId),
+            libraryOrgId.Value, StaffRoleRequirement.Any, requireParticipation: true, cancellationToken);
+        if (result.Outcome == StaffEligibilityOutcome.InvalidIdentity)
+        {
+            return new ResearchScope(0, null, Results.Json(new { code = "staff_session_invalid" },
+                statusCode: StatusCodes.Status401Unauthorized));
+        }
+        if (result.Outcome != StaffEligibilityOutcome.Allowed)
+        {
+            return new ResearchScope(0, null, Results.Json(new { code = "staff_scope_forbidden" },
+                statusCode: StatusCodes.Status403Forbidden));
+        }
+        return new ResearchScope(libraryOrgId.Value, request, null);
+    }
+
+    internal static bool TryParseRequestId(string? value, out long? requestId)
+    {
+        requestId = null;
+        if (value is null)
+        {
+            return true;
+        }
+        if (value.Length == 0 || value.Any(character => character is < '0' or > '9') ||
+            !long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) || parsed <= 0)
+        {
+            return false;
+        }
+        requestId = parsed;
+        return true;
+    }
+
+    private sealed record ResearchScope(int OrganizationId, TitleRequestDto? Request, IResult? Error);
+
+    private static bool HasUsablePatronResearchUrl(string? pattern)
+    {
+        var value = pattern?.Trim();
+        if (string.IsNullOrWhiteSpace(value) ||
+            !value.Contains("{{patron-id}}", StringComparison.Ordinal) &&
+            !value.Contains("{{patronId}}", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var hasUnsupportedToken = false;
+        var candidate = Regex.Replace(value, "\\{\\{([^{}]+)\\}\\}", match =>
+        {
+            if (!SupportedResearchTokens.Contains(match.Groups[1].Value))
+            {
+                hasUnsupportedToken = true;
+                return string.Empty;
+            }
+            return "1";
+        });
+        if (hasUnsupportedToken || candidate.Contains("{{", StringComparison.Ordinal) ||
+            candidate.Contains("}}", StringComparison.Ordinal) ||
+            !Uri.TryCreate(candidate, UriKind.Absolute, out var url))
+        {
+            return false;
+        }
+
+        return (url.Scheme == Uri.UriSchemeHttp || url.Scheme == Uri.UriSchemeHttps) &&
+               string.IsNullOrEmpty(url.UserInfo);
     }
 
     private static async Task<IResult> ListAsync(

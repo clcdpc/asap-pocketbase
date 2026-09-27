@@ -1078,10 +1078,12 @@ public sealed partial class PatronSuggestionService(
 
         string currentTitle = null!;
         string? currentAuthor = null;
+        string? currentBibId = null;
+        var bibIdStaffVerified = false;
         var requestFound = false;
         await using (var request = new SqlCommand(
             $"""
-            SELECT request.[Title], request.[Author]
+            SELECT request.[Title], request.[Author], request.[BibId], request.[BibIdStaffVerified]
             FROM [asap].[TitleRequest] AS request WITH (UPDLOCK, HOLDLOCK)
             WHERE request.[Id] = @requestId
               AND request.[LibraryOrganizationId] = @organizationId
@@ -1103,6 +1105,8 @@ public sealed partial class PatronSuggestionService(
                 requestFound = true;
                 currentTitle = reader.GetString(0);
                 currentAuthor = reader.IsDBNull(1) ? null : reader.GetString(1);
+                currentBibId = reader.IsDBNull(2) ? null : reader.GetString(2);
+                bibIdStaffVerified = reader.GetBoolean(3);
             }
         }
         if (!requestFound)
@@ -1136,14 +1140,16 @@ public sealed partial class PatronSuggestionService(
             _ => null
         };
         var retryIncrement = result.Outcome == IdentifierLookupOutcome.TransientFailure ? 1 : 0;
-        var reconciledTitle = status == "found"
+        var reconciledTitle = status == "found" && !bibIdStaffVerified
             ? MergeCatalogValue(result.CatalogTitle, currentTitle)
             : currentTitle;
-        var reconciledAuthor = status == "found"
+        var reconciledAuthor = status == "found" && !bibIdStaffVerified
             ? MergeCatalogValue(result.CatalogAuthor, currentAuthor)
             : currentAuthor;
         var note = status switch
         {
+            "found" when bibIdStaffVerified =>
+                $"Identifier number verification found a Polaris bibliographic match (BIB ID {result.BibId}); staff-selected BIB ID {currentBibId} was retained.",
             "found" => $"Identifier number verification found a Polaris bibliographic match (BIB ID {result.BibId}).",
             "not_found" when result.FilteredByMaterialType =>
                 $"Identifier number verification completed: only e-materials found matching identifier {identifier}; these cannot be placed on hold in Polaris.",
@@ -1154,7 +1160,9 @@ public sealed partial class PatronSuggestionService(
         {
             note = JoinNote(
                 note,
-                "Identifier number search found multiple Polaris matches; ASAP used the first result by publication date descending.");
+                bibIdStaffVerified
+                    ? "Identifier number search found multiple Polaris matches; the staff-selected BIB was retained."
+                    : "Identifier number search found multiple Polaris matches; ASAP used the first result by publication date descending.");
         }
 
         var affected = 0;
@@ -1167,7 +1175,11 @@ public sealed partial class PatronSuggestionService(
                         WHEN @retryIncrement = 1 AND [IsbnCheckRetryCount] + 1 >= 5 THEN N'error_max_retries'
                         ELSE @status
                     END,
-                [BibId] = CASE WHEN @status IN (N'found', N'not_found') THEN @bibId ELSE [BibId] END,
+                [BibId] = CASE
+                              WHEN @status IN (N'found', N'not_found') AND request.[BibIdStaffVerified] = 0
+                                  THEN @bibId
+                              ELSE request.[BibId]
+                          END,
                 [Title] = CASE WHEN @status = N'found' THEN @title ELSE [Title] END,
                 [Author] = CASE WHEN @status = N'found' THEN @author ELSE [Author] END,
                 [IsbnCheckResult] =

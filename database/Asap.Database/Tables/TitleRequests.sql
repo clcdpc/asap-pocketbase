@@ -25,6 +25,7 @@ CREATE TABLE [asap].[TitleRequest]
     [Status] nvarchar(32) NOT NULL,
     [CloseReason] nvarchar(64) NULL,
     [BibId] nvarchar(100) NULL,
+    [BibIdStaffVerified] bit NOT NULL CONSTRAINT [DF_TitleRequest_BibIdStaffVerified] DEFAULT (0),
     [Notes] nvarchar(max) NULL,
     [ClaimedByStaffUserId] bigint NULL,
     [ClaimedByDisplayName] nvarchar(256) NULL,
@@ -59,6 +60,7 @@ CREATE TABLE [asap].[TitleRequest]
     CONSTRAINT [CK_TitleRequest_AutomaticClaimRule] CHECK ([ClaimType] <> N'automatic_format_rule' OR ([ClaimedByStaffUserId] IS NOT NULL AND [ClaimRuleId] IS NOT NULL)),
     CONSTRAINT [CK_TitleRequest_IsbnCheckStatus] CHECK ([IsbnCheckStatus] IS NULL OR [IsbnCheckStatus] IN (N'pending', N'found', N'not_found', N'skipped_no_isbn', N'error_max_retries')),
     CONSTRAINT [CK_TitleRequest_IsbnRetryCount] CHECK ([IsbnCheckRetryCount] >= 0),
+    CONSTRAINT [CK_TitleRequest_StaffVerifiedBib] CHECK ([BibIdStaffVerified] = 0 OR NULLIF(LTRIM(RTRIM([BibId])), N'') IS NOT NULL),
     CONSTRAINT [CK_TitleRequest_FoundHasBib] CHECK ([IsbnCheckStatus] <> N'found' OR NULLIF(LTRIM(RTRIM([BibId])), N'') IS NOT NULL),
     CONSTRAINT [CK_TitleRequest_Timestamps] CHECK ([UpdatedUtc] >= [CreatedUtc])
 );

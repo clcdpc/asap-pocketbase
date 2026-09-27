@@ -566,7 +566,41 @@
       </header>
       <div id="request-dialog-body" class="dialog-body"></div>
     </div>
-  </dialog>
+    </dialog>
+
+    <dialog id="polaris-dialog" aria-labelledby="polaris-dialog-title">
+      <div class="dialog-shell compact-dialog-shell">
+        <header class="dialog-header">
+          <h2 id="polaris-dialog-title">Search Polaris catalog</h2>
+          <button id="close-polaris" class="icon-button" type="button" aria-label="Close Polaris search">
+            <i class="fa fa-times" aria-hidden="true"></i>
+          </button>
+        </header>
+        <div class="dialog-body">
+          <form id="polaris-form" class="polaris-form">
+            <label>Search by
+              <select id="polaris-mode">
+                <option value="bib">Exact BIB ID</option>
+                <option value="identifier">Identifier</option>
+                <option value="title">Title</option>
+                <option value="author">Author</option>
+                <option value="title_author">Title and author</option>
+              </select>
+            </label>
+            <label id="polaris-query-field"><span id="polaris-query-label">Catalog title</span>
+              <input id="polaris-query" maxlength="250" required>
+            </label>
+            <div id="polaris-pair-fields" hidden>
+              <label>Catalog title <input id="polaris-title" maxlength="250"></label>
+              <label>Catalog author <input id="polaris-author" maxlength="250"></label>
+            </div>
+            <button class="primary-button" type="submit">Search Polaris</button>
+          </form>
+          <p id="polaris-status" role="status" aria-live="polite"></p>
+          <ul id="polaris-results" class="polaris-results"></ul>
+        </div>
+      </div>
+    </dialog>
 
   <dialog id="additional-copy-create-dialog" aria-labelledby="additional-copy-create-title">
     <div class="dialog-shell compact-dialog-shell">
