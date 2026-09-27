@@ -10406,6 +10406,8 @@ public sealed partial class PatronJourneyTests
         public int UpdateCount { get; private set; }
         public bool FailUpdate { get; set; }
         public Action? AfterUpdate { get; set; }
+        public Action? BeforePickupBranchesReturn { get; set; }
+        public Action? BeforeIdentifierLookup { get; set; }
 
         public Task<PatronSnapshot> AuthenticateAsync(
             string barcode,
@@ -10435,6 +10437,7 @@ public sealed partial class PatronJourneyTests
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            BeforePickupBranchesReturn?.Invoke();
             return Task.FromResult<IReadOnlyList<PickupBranch>>(IncludeEastBranch
                 ? [new PickupBranch(101, "Main Library"), new PickupBranch(102, "North Branch"),
                    new PickupBranch(103, "East Branch")]
@@ -10459,8 +10462,12 @@ public sealed partial class PatronJourneyTests
 
         public Task<IdentifierLookupResult> LookupIdentifierAsync(
             string identifier,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new IdentifierLookupResult(IdentifierLookupOutcome.NotFound));
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            BeforeIdentifierLookup?.Invoke();
+            return Task.FromResult(new IdentifierLookupResult(IdentifierLookupOutcome.NotFound));
+        }
     }
 
     private sealed class ScriptedHoldProvider : IPatronProvider, IStaffPolarisProvider

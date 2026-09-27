@@ -449,12 +449,26 @@ public sealed partial class PatronSuggestionService(
 
         if (persistedIdentifier is not null)
         {
-            await ProcessIdentifierLookupAsync(
-                requestId,
-                persistedIdentifier,
-                organizationId,
-                expectedRowVersion,
-                cancellationToken);
+            try
+            {
+                await ProcessIdentifierLookupAsync(
+                    requestId,
+                    persistedIdentifier,
+                    organizationId,
+                    expectedRowVersion,
+                    cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(
+                    exception,
+                    "Staff-created suggestion {TitleRequestId} was saved, but immediate identifier processing did not complete.",
+                    requestId);
+            }
         }
 
         return new PatronSuggestionResult(
@@ -2146,7 +2160,7 @@ public sealed partial class PatronSuggestionService(
             publication,
             forcedAutoHold ?? (configuration.AllowPatronAutoholdOptOut ? input.Autohold ?? true : true),
             customFields,
-            exactPublicationDate,
+            format.Publication.Mode == "hidden" ? null : exactPublicationDate,
             cleanedNotes,
             verifiedBibId);
     }

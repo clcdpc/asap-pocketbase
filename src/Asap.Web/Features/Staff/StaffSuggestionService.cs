@@ -69,7 +69,7 @@ public sealed class StaffSuggestionService(
             // target configuration before exposing eligibility or form context.
             scope = await ResolveScopeAsync(actor, input.LibraryOrgId, cancellationToken);
             await EnsurePatronScopeAsync(direct, scope.Configuration, cancellationToken);
-            return await VerifiedResultAsync(scope, direct, cancellationToken);
+            return await VerifiedResultAsync(actor, input.LibraryOrgId, scope, direct, cancellationToken);
         }
 
         IReadOnlyList<PatronSnapshot> candidates;
@@ -159,7 +159,7 @@ public sealed class StaffSuggestionService(
         var selected = await RefreshAsync(matches[0].Barcode, cancellationToken);
         scope = await ResolveScopeAsync(actor, input.LibraryOrgId, cancellationToken);
         await EnsurePatronScopeAsync(selected, scope.Configuration, cancellationToken);
-        return await VerifiedResultAsync(scope, selected, cancellationToken);
+        return await VerifiedResultAsync(actor, input.LibraryOrgId, scope, selected, cancellationToken);
     }
 
     public async Task<PatronSuggestionResult> CreateAsync(
@@ -378,11 +378,15 @@ public sealed class StaffSuggestionService(
     }
 
     private async Task<StaffPatronLookupResult> VerifiedResultAsync(
+        CurrentStaff actor,
+        int? requestedOrganizationId,
         (int OrganizationId, EffectivePatronConfiguration Configuration) scope,
         PatronSnapshot patron,
         CancellationToken cancellationToken)
     {
         var branches = await GetPickupBranchesAsync(patron, cancellationToken);
+        scope = await ResolveScopeAsync(actor, requestedOrganizationId, cancellationToken);
+        await EnsurePatronScopeAsync(patron, scope.Configuration, cancellationToken);
         var current = branches.SingleOrDefault(item => item.Id == patron.PreferredPickupBranchId);
         var warning = current is null ? "Choose an eligible preferred pickup location." : null;
         var context = new StaffPatronContext(

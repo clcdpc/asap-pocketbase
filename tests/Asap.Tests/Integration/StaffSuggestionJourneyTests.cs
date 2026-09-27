@@ -110,6 +110,62 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task StaffDeactivatedDuringPickupBranchLookupCannotReceivePatronContext()
+    {
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var provider = new ControllablePickupPatronProvider();
+        var branchReadReached = false;
+        bool wasActive;
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using (var context = await contextFactory.CreateDbContextAsync())
+        {
+            wasActive = await context.StaffUsers.Where(item => item.Id == actor.Id)
+                .Select(item => item.IsActive).SingleAsync();
+        }
+
+        provider.BeforePickupBranchesReturn = () =>
+        {
+            branchReadReached = true;
+            using var connection = new SqlConnection(databaseConnectionString);
+            connection.Open();
+            using var update = connection.CreateCommand();
+            update.CommandText = "UPDATE [asap].[StaffUser] SET [IsActive] = 0 WHERE [Id] = @id;";
+            update.Parameters.AddWithValue("@id", actor.Id);
+            update.ExecuteNonQuery();
+        };
+
+        try
+        {
+            await using var scopedFactory = factory.WithWebHostBuilder(builder =>
+                builder.ConfigureServices(services =>
+                {
+                    services.RemoveAll<IPatronProvider>();
+                    services.AddSingleton<IPatronProvider>(provider);
+                }));
+            using var client = scopedFactory.CreateClient();
+            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+            client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+            using var response = await client.PostAsJsonAsync("/api/asap/staff/patron-lookup", new
+            {
+                query = (string?)null,
+                barcode = "20000000001335",
+                libraryOrgId = 2
+            });
+            Assert.AreEqual(HttpStatusCode.Unauthorized, response.StatusCode,
+                await response.Content.ReadAsStringAsync());
+            Assert.IsTrue(branchReadReached);
+            Assert.IsFalse((await response.Content.ReadAsStringAsync()).Contains("20000000001335", StringComparison.Ordinal));
+        }
+        finally
+        {
+            await using var restore = await contextFactory.CreateDbContextAsync();
+            var staff = await restore.StaffUsers.SingleAsync(item => item.Id == actor.Id);
+            staff.IsActive = wasActive;
+            await restore.SaveChangesAsync();
+        }
+    }
+
+    [TestMethod]
     public async Task AlphabeticBarcodeGetsExactPatronRefreshBeforeNameSearch()
     {
         var actor = await ReadConfiguredSuperAdminAsync();
@@ -636,6 +692,62 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task StaffHiddenPublicationRuleDoesNotPersistExactDate()
+    {
+        const string barcode = "20000000001336";
+        var title = $"Hidden publication date {Guid.NewGuid():N}";
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        string? previousMode;
+        await using (var setup = await contextFactory.CreateDbContextAsync())
+        {
+            var format = await setup.MaterialFormats.SingleAsync(item =>
+                item.OwnerOrganizationId == 1 && item.Code == "book");
+            previousMode = format.PublicationMode;
+            format.PublicationMode = "hidden";
+            await setup.SaveChangesAsync();
+        }
+
+        try
+        {
+            using var client = factory.CreateClient();
+            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+            client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+            using var response = await client.PostAsJsonAsync("/api/asap/staff/suggestions", new
+            {
+                libraryOrgId = 2,
+                barcode,
+                format = "book",
+                title,
+                author = "Staff author",
+                publication = "Coming soon",
+                exactPublicationDate = "2026-12-01",
+                preferredPickupBranchId = 101,
+                currentPreferredPickupBranchIdAtLoad = 101,
+                currentPreferredPickupBranchObservedAtLoad = true,
+                autohold = true,
+                emailPatronConfirmation = false,
+                customFields = new Dictionary<string, string?>()
+            });
+            Assert.AreEqual(HttpStatusCode.Created, response.StatusCode, await response.Content.ReadAsStringAsync());
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            var id = long.Parse(body.RootElement.GetProperty("id").GetString()!);
+            await using var verify = await contextFactory.CreateDbContextAsync();
+            var request = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == id);
+            Assert.IsNull(request.Publication);
+            Assert.IsNull(request.ExactPublicationDate);
+        }
+        finally
+        {
+            await using var restore = await contextFactory.CreateDbContextAsync();
+            var format = await restore.MaterialFormats.SingleAsync(item =>
+                item.OwnerOrganizationId == 1 && item.Code == "book");
+            format.PublicationMode = previousMode;
+            await restore.SaveChangesAsync();
+        }
+    }
+
+    [TestMethod]
     public async Task StaffSuggestionBypassesOnlyPublicSubmissionCountLimit()
     {
         const string barcode = "20000000009991";
@@ -1000,6 +1112,84 @@ public sealed partial class PatronJourneyTests
                 workflow.SuggestionLimitMessage = previousLimitMessage;
                 await restore.SaveChangesAsync();
             }
+        }
+    }
+
+    [TestMethod]
+    public async Task StaffCreationReportsSuccessWhenPostCommitIdentifierSqlTimesOut()
+    {
+        const string barcode = "20000000001337";
+        const string identifier = "9780000013337";
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var provider = new ControllablePickupPatronProvider();
+        SqlConnection? lockConnection = null;
+        SqlTransaction? lockTransaction = null;
+        var identifierLookupReached = false;
+        provider.BeforeIdentifierLookup = () =>
+        {
+            identifierLookupReached = true;
+            lockConnection = new SqlConnection(databaseConnectionString);
+            lockConnection.Open();
+            lockTransaction = lockConnection.BeginTransaction();
+            using var hold = new SqlCommand(
+                "SELECT [Id] FROM [asap].[Organization] WITH (XLOCK, HOLDLOCK) WHERE [Id] = 2;",
+                lockConnection,
+                lockTransaction);
+            Assert.AreEqual(2, Convert.ToInt32(hold.ExecuteScalar()));
+        };
+
+        try
+        {
+            await using var scopedFactory = factory!.WithWebHostBuilder(builder =>
+                builder.ConfigureServices(services =>
+                {
+                    services.RemoveAll<IPatronProvider>();
+                    services.AddSingleton<IPatronProvider>(provider);
+                }));
+            using var client = scopedFactory.CreateClient();
+            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+            client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+            using var response = await client.PostAsJsonAsync("/api/asap/staff/suggestions", new
+            {
+                libraryOrgId = 2,
+                barcode,
+                format = "book",
+                title = $"Post-commit identifier failure {Guid.NewGuid():N}",
+                author = "Staff author",
+                identifier,
+                publication = "Coming soon",
+                preferredPickupBranchId = 101,
+                currentPreferredPickupBranchIdAtLoad = 101,
+                currentPreferredPickupBranchObservedAtLoad = true,
+                autohold = true,
+                emailPatronConfirmation = false,
+                customFields = new Dictionary<string, string?>()
+            });
+
+            Assert.AreEqual(HttpStatusCode.Created, response.StatusCode, await response.Content.ReadAsStringAsync());
+            Assert.IsTrue(identifierLookupReached);
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.AreEqual(JsonValueKind.String, body.RootElement.GetProperty("id").ValueKind);
+            Assert.AreEqual("not_requested", body.RootElement.GetProperty("notificationStatus").GetString());
+            var id = long.Parse(body.RootElement.GetProperty("id").GetString()!);
+            lockTransaction?.Rollback();
+            lockTransaction = null;
+            lockConnection?.Dispose();
+            lockConnection = null;
+
+            await using var context = await factory.Services
+                .GetRequiredService<IDbContextFactory<AsapDbContext>>()
+                .CreateDbContextAsync();
+            var saved = await context.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == id);
+            Assert.AreEqual(identifier, saved.Identifier);
+            Assert.AreEqual("pending", saved.IsbnCheckStatus);
+            Assert.AreEqual(1, await context.TitleRequestEvents.CountAsync(item =>
+                item.TitleRequestId == id && item.EventType == "created"));
+        }
+        finally
+        {
+            lockTransaction?.Rollback();
+            lockConnection?.Dispose();
         }
     }
 
