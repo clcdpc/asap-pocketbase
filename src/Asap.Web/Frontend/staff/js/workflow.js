@@ -174,6 +174,7 @@ export function createWorkflowApp() {
     staffSuggestion: null,
     staffSuggestionReturnFocus: null,
     partialSessionFailureMessage: null,
+    partialSessionFailureOwner: null,
     configurations: new Map(),
     research: null,
     currentRequest: null,
@@ -357,6 +358,7 @@ export function createWorkflowApp() {
 
   function showWorkspace(staff) {
     state.partialSessionFailureMessage = null;
+    state.partialSessionFailureOwner = null;
     state.staff = staff;
     state.scope = staff.role === 'super_admin' ? 'all' : String(staff.organizationId);
     dom.signedOut.hidden = true;
@@ -2166,9 +2168,11 @@ export function createWorkflowApp() {
           ? ` (${result.notificationReason.replaceAll('_', ' ')})` : ''}.`
         : '';
       let message = `${successMessage}${status}${notification}`;
-      state.partialSessionFailureMessage = committed
+      const sessionFailureMessage = committed
         ? `${message} Sign in again to review the committed request.`
         : null;
+      state.partialSessionFailureMessage = sessionFailureMessage;
+      state.partialSessionFailureOwner = committed ? mutation.token : null;
       if (!current && committed) {
         try {
           current = await authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(request.id)}`,
@@ -2192,9 +2196,11 @@ export function createWorkflowApp() {
       const refreshed = await loadQueue({ skipDeepLink: true, silent: true });
       if (mutation.isCurrent() && isCurrentDialogSelection(request, 'title_request')) {
         announce(refreshed === false ? `${message} The queue could not refresh.` : message, 'success');
-        if (refreshed === true && current && !['suppressed', 'dispatch_failed'].includes(result.notificationStatus)) {
-          state.partialSessionFailureMessage = null;
-        }
+      }
+      if (refreshed === true && current && state.staff &&
+          state.partialSessionFailureOwner === mutation.token) {
+        state.partialSessionFailureMessage = null;
+        state.partialSessionFailureOwner = null;
       }
     } catch (error) {
       if (error.status === 409 || error.response?.code === 'request_outcome_unconfirmed') {
@@ -2589,6 +2595,7 @@ export function createWorkflowApp() {
           ? error.response.message
           : "The suggestion was not created, but the patron's preferred pickup location was changed successfully.";
         state.partialSessionFailureMessage = `${detail} Sign in again to restore staff access before continuing.`;
+        state.partialSessionFailureOwner = null;
       }
       showSignedOut(state.partialSessionFailureMessage ||
         'Your staff session ended or no longer has access. Sign in again.');

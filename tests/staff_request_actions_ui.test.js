@@ -77,13 +77,26 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     const otherRequest = { ...request, id: otherId, title: 'Other request', activity: [] };
     let payload = null;
     let committed = false;
+    let postCommitQueueLoads = 0;
     let releaseTemplate = null;
     let releaseMutation = null;
+    let releaseFollowupQueue = null;
     global.fetch = async (url, options = {}) => {
       if (url.endsWith('/session')) {
         return response(200, { authenticated: true, accessAllowed: true, antiforgeryToken: 'token', staff });
       }
       if (url.includes('/title-requests?')) {
+        if (committed && (scenarioOptions.laterUnrelated401 || scenarioOptions.laterUnrelated403)) {
+          postCommitQueueLoads += 1;
+          if (postCommitQueueLoads > 1) {
+            return scenarioOptions.laterUnrelated403
+              ? response(403, { code: 'staff_scope_forbidden', accessAllowed: false })
+              : response(401, { code: 'staff_session_invalid' });
+          }
+          if (scenarioOptions.closeDuringFollowup) {
+            return new Promise(resolve => { releaseFollowupQueue = resolve; });
+          }
+        }
         if (committed && scenarioOptions.queue401) {
           return response(401, { code: 'staff_session_invalid' });
         }
@@ -261,6 +274,21 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       await until(() => !document.querySelector('#signed-out').hidden, 'session transition displays result');
       assert.match(document.querySelector('#signed-out-message').textContent, /Final state: Outstanding purchase/);
       assert.match(document.querySelector('#signed-out-message').textContent, /Notification suppressed/);
+    } else if (scenarioOptions.laterUnrelated401 || scenarioOptions.laterUnrelated403) {
+      await until(() => postCommitQueueLoads === 1, 'committed follow-up queue load starts');
+      if (scenarioOptions.closeDuringFollowup) {
+        await until(() => releaseFollowupQueue, 'delayed follow-up queue load starts');
+        document.querySelector('#close-request').click();
+        releaseFollowupQueue(response(200, { scope: '2', organizations: [], items: [currentRequest] }));
+      }
+      await until(() => !document.querySelector('#refresh-queue').disabled,
+        'committed follow-up queue load completes');
+      document.querySelector('#refresh-queue').click();
+      await until(() => !document.querySelector('#signed-out').hidden,
+        'later unrelated session failure displays sign-out');
+      assert.match(document.querySelector('#signed-out-message').textContent,
+        /session ended|access is not currently available/);
+      assert.doesNotMatch(document.querySelector('#signed-out-message').textContent, /Final state:/);
     } else if (scenarioOptions.detailRefreshFails) {
       await until(() => /Details and activity could not refresh/.test(document.querySelector('#app-status').textContent),
         'committed outcome survives detail refresh failure');
@@ -283,6 +311,9 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
   await scenario('reject', false, true);
   await scenario('purchase', false, true, { queue401: true });
   await scenario('purchase', false, true, { queue403: true });
+  await scenario('purchase', false, true, { laterUnrelated401: true });
+  await scenario('purchase', false, true, { laterUnrelated401: true, closeDuringFollowup: true });
+  await scenario('purchase', false, true, { laterUnrelated403: true });
   await scenario('purchase', false, false, { detailRefreshFails: true });
   await scenario('reject', false, false, { staleChoice: true });
   await scenario('purchase', false, true, { staleMutation: true });
