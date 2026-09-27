@@ -57,8 +57,10 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     const request = {
       id, version: 'v1', type: 'title_request', title: 'Original title', author: null,
       libraryOrgId: 2, libraryOrgName: 'Library', barcode: '20000000000001',
-      status: 'suggestion', format: 'book', formatLabel: 'Book', identifier: null,
-      bibid: scenarioOptions.verifyBib || scenarioOptions.verificationInvalidation ? '9001' : null,
+      status: scenarioOptions.pickupWrappedResponse || scenarioOptions.stalePickup ? 'pending_hold' : 'suggestion',
+      format: 'book', formatLabel: 'Book', identifier: null,
+      bibid: scenarioOptions.verifyBib || scenarioOptions.verificationInvalidation ||
+        scenarioOptions.pickupWrappedResponse || scenarioOptions.stalePickup ? '9001' : null,
       bibidStaffVerified: Boolean(scenarioOptions.verificationInvalidation),
       claimedByStaffUserId: scenarioOptions.unclaimedPreview ? null : staff.id,
       publication: null, exactPublicationDate: '2026-01-02',
@@ -75,11 +77,13 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       ]
     };
     let currentRequest = request;
-    const otherRequest = { ...request, id: otherId, title: 'Other request', activity: [] };
+    const otherRequest = { ...request, id: otherId, title: 'Other request',
+      status: scenarioOptions.stalePickup ? 'suggestion' : request.status, activity: [] };
     let payload = null;
     let committed = false;
     let postCommitQueueLoads = 0;
     let releaseTemplate = null;
+    let releasePickup = null;
     let releaseMutation = null;
     let releaseFollowupQueue = null;
     global.fetch = async (url, options = {}) => {
@@ -111,6 +115,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         return response(200, { scope: scenarioOptions.supersededFollowup && !url.includes('scope=2') ? 'all' : '2',
           organizations: scenarioOptions.supersededFollowup ? [{ id: 2, name: 'Library' }] : [],
           items: scenarioOptions.staleChoice || scenarioOptions.staleMutation
+            || scenarioOptions.stalePickup
             ? [currentRequest, otherRequest] : [currentRequest] });
       }
       if (url.endsWith(`/title-requests/${id}`)) {
@@ -119,12 +124,32 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
           : response(200, currentRequest);
       }
       if (url.endsWith(`/title-requests/${otherId}`)) return response(200, otherRequest);
+      if (url.endsWith(`/title-requests/${id}/pickup-options`)) {
+        if (scenarioOptions.stalePickup) {
+          return new Promise(resolve => { releasePickup = resolve; });
+        }
+        return response(200, { pickupBranches: [{ id: 10, name: 'Main' }],
+          selectedPickupBranchId: 10, currentPreferredPickupBranchId: 10,
+          version: 'v1', readOnly: false });
+      }
+      if (url.endsWith(`/title-requests/${id}/pickup-preference`) && options.method === 'POST') {
+        payload = JSON.parse(options.body);
+        currentRequest = { ...currentRequest, version: 'v2', activity: [...currentRequest.activity, {
+          id: '9007199254741000', eventType: 'pickup_changed', actorType: 'staff',
+          actorName: 'Staff', message: 'Pickup changed', created: '2026-01-02T00:00:00Z'
+        }] };
+        committed = true;
+        return response(200, { request: currentRequest, pickupChanged: true, snapshotChanged: false });
+      }
       if (url.endsWith('/bib-lookup') && options.method === 'POST') {
         return response(200, { bibId: '9001', title: 'Original title', author: null });
       }
       if (url.includes('/api/asap/config?')) return response(200, configuration);
       if (url.includes('/research-configuration')) return response(200, { externalSearchProviders: [] });
       if (url.endsWith(`/title-requests/${id}/rejection-templates`)) {
+        if (scenarioOptions.templateDependencyAbort) {
+          throw Object.assign(new Error('Template dependency aborted'), { name: 'AbortError' });
+        }
         if (scenarioOptions.staleChoice) {
           return new Promise(resolve => { releaseTemplate = resolve; });
         }
@@ -137,6 +162,9 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       }
       if (url.endsWith(`/title-requests/${id}/action`) && options.method === 'POST') {
         payload = JSON.parse(options.body);
+        if (scenarioOptions.mutationDependencyAbort) {
+          throw Object.assign(new Error('Dependency aborted'), { name: 'AbortError' });
+        }
         const finalStatus = action === 'reject' ? 'closed' : 'outstanding_purchase';
         currentRequest = { ...currentRequest, version: 'v2', status: finalStatus,
           activity: [...currentRequest.activity, {
@@ -223,6 +251,33 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         'other detail opens');
     }
 
+    if (scenarioOptions.pickupWrappedResponse || scenarioOptions.stalePickup) {
+      [...document.querySelectorAll('.action-bar button')]
+        .find(item => item.textContent.includes('Pickup')).click();
+      if (scenarioOptions.stalePickup) {
+        await until(() => releasePickup, 'first pickup request starts');
+        await openOtherRequest();
+        releasePickup(response(200, { pickupBranches: [{ id: 10, name: 'Main' }],
+          selectedPickupBranchId: 10, currentPreferredPickupBranchId: 10,
+          version: 'v1', readOnly: false }));
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(document.querySelector('.inline-form'), null,
+          'stale pickup choices must not appear in another request');
+        assert.equal(payload, null, 'stale pickup choices must not submit');
+      } else {
+        await until(() => document.querySelector('.inline-form select[aria-label="Preferred pickup branch"]'),
+          'pickup choices load');
+        document.querySelector('.inline-form').dispatchEvent(
+          new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+        await until(() => payload !== null, 'pickup preference submits');
+        await until(() => document.querySelector('.request-activity [data-event-id="9007199254741000"]'),
+          'wrapped pickup response renders authoritative detail');
+        assert.equal(document.querySelector('#request-dialog-title').textContent, 'Original title');
+        assert.doesNotMatch(document.querySelector('#app-status').textContent, /could not be updated/);
+      }
+      return;
+    }
+
     if (scenarioOptions.staleChoice) {
       [...document.querySelectorAll('.action-bar button')].find(item => item.textContent.includes('Reject')).click();
       await until(() => releaseTemplate, 'first template request starts');
@@ -253,6 +308,13 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       choice = document.querySelector('.action-choice');
     }
     if (action === 'reject') {
+      if (scenarioOptions.templateDependencyAbort) {
+        await until(() => /Template dependency aborted/.test(document.querySelector('#app-status').textContent),
+          'uncancelled template dependency abort is announced');
+        assert.equal(choice.querySelector('button[type="submit"]').disabled, true);
+        assert.equal(payload, null);
+        return;
+      }
       await until(() => !choice.querySelector('button[type="submit"]').disabled, 'templates load');
       const select = choice.querySelector('select');
       assert.equal(select.options[1].value, templateId);
@@ -273,6 +335,12 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       releaseMutation();
       await new Promise(resolve => setImmediate(resolve));
       assert.equal(document.querySelector('#request-dialog-title').textContent, 'Other request');
+      assert.equal(document.querySelector('#request-dialog .status-badge').textContent, 'Suggestion');
+      return;
+    }
+    if (scenarioOptions.mutationDependencyAbort) {
+      await until(() => /outcome could not be confirmed/.test(document.querySelector('#app-status').textContent),
+        'uncancelled mutation dependency abort reports unconfirmed outcome');
       assert.equal(document.querySelector('#request-dialog .status-badge').textContent, 'Suggestion');
       return;
     }
@@ -344,8 +412,12 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
   await scenario('purchase', false, false, { detailRefreshFails: true });
   await scenario('reject', false, false, { staleChoice: true });
   await scenario('purchase', false, true, { staleMutation: true });
+  await scenario('reject', false, false, { mutationDependencyAbort: true });
+  await scenario('reject', false, false, { templateDependencyAbort: true });
   await scenario('reject', false, false, { verifyBib: true });
   await scenario('reject', false, false, { verificationInvalidation: true });
   await scenario('reject', false, false, { unclaimedPreview: true });
+  await scenario('purchase', false, false, { pickupWrappedResponse: true });
+  await scenario('purchase', false, false, { stalePickup: true });
   console.log('Staff request action choice, preview, activity, safe text, and exact ID UI checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

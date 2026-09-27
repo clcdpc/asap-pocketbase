@@ -277,6 +277,16 @@ public sealed partial class PatronJourneyTests
                 Assert.AreEqual("notification_dependency_unavailable",
                     timeoutResult.RootElement.GetProperty("code").GetString());
 
+                using var assignTimeout = await timeoutClient.PostAsJsonAsync(
+                    $"/api/asap/staff/title-requests/{requestIds[4]}/assign",
+                    new { version = timeoutDetail.RootElement.GetProperty("version").GetString(),
+                        assigneeId = actorId });
+                Assert.AreEqual(HttpStatusCode.ServiceUnavailable, assignTimeout.StatusCode,
+                    await assignTimeout.Content.ReadAsStringAsync());
+                using var assignTimeoutResult = JsonDocument.Parse(await assignTimeout.Content.ReadAsStringAsync());
+                Assert.AreEqual("notification_dependency_unavailable",
+                    assignTimeoutResult.RootElement.GetProperty("code").GetString());
+
                 using var pendingDetail = await Detail(requestIds[6]);
                 using var pendingPurchase = await timeoutClient.PostAsJsonAsync(
                     $"/api/asap/staff/title-requests/{requestIds[6]}/action",
@@ -342,6 +352,18 @@ public sealed partial class PatronJourneyTests
                     dispatchResult.RootElement.GetProperty("finalStatus").GetString());
                 Assert.AreEqual("dispatch_failed",
                     dispatchResult.RootElement.GetProperty("notificationStatus").GetString());
+                using var assign = await dispatchClient.PostAsJsonAsync(
+                    $"/api/asap/staff/title-requests/{requestIds[4]}/assign",
+                    new { version = dispatchResult.RootElement.GetProperty("version").GetString(),
+                        assigneeId = actorId });
+                Assert.AreEqual(HttpStatusCode.OK, assign.StatusCode,
+                    await assign.Content.ReadAsStringAsync());
+                using var assignResult = JsonDocument.Parse(await assign.Content.ReadAsStringAsync());
+                Assert.IsTrue(assignResult.RootElement.GetProperty("committed").GetBoolean());
+                Assert.AreEqual("dispatch_failed",
+                    assignResult.RootElement.GetProperty("notificationStatus").GetString());
+                Assert.AreEqual(actorId.ToString(),
+                    assignResult.RootElement.GetProperty("claimedByStaffUserId").GetString());
             }
             using var afterDispatch = await Detail(requestIds[4]);
             Assert.AreEqual("outstanding_purchase", afterDispatch.RootElement.GetProperty("status").GetString());

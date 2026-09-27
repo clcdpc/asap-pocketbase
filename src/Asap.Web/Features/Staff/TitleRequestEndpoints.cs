@@ -486,8 +486,10 @@ public static class TitleRequestEndpoints
         VersionInput input,
         TitleRequestMutationService mutations,
         TitleRequestViewService views,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken) =>
-        MutateAndLoadAsync(context, id, mutations.ClaimAsync(Current(context), id, input, false, cancellationToken), views, cancellationToken);
+        MutateAndLoadAsync(context, id, mutations.ClaimAsync(Current(context), id, input, false, cancellationToken),
+            views, loggerFactory, cancellationToken);
 
     private static Task<IResult> UnclaimAsync(
         HttpContext context,
@@ -495,8 +497,10 @@ public static class TitleRequestEndpoints
         VersionInput input,
         TitleRequestMutationService mutations,
         TitleRequestViewService views,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken) =>
-        MutateAndLoadAsync(context, id, mutations.ClaimAsync(Current(context), id, input, true, cancellationToken), views, cancellationToken);
+        MutateAndLoadAsync(context, id, mutations.ClaimAsync(Current(context), id, input, true, cancellationToken),
+            views, loggerFactory, cancellationToken);
 
     private static Task<IResult> AssignAsync(
         HttpContext context,
@@ -504,8 +508,10 @@ public static class TitleRequestEndpoints
         AssignTitleRequestInput input,
         TitleRequestMutationService mutations,
         TitleRequestViewService views,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken) =>
-        MutateAndLoadAsync(context, id, mutations.AssignAsync(Current(context), id, input, cancellationToken), views, cancellationToken);
+        MutateAndLoadAsync(context, id, mutations.AssignAsync(Current(context), id, input, cancellationToken),
+            views, loggerFactory, cancellationToken);
 
     private static async Task<IResult> ActionAsync(
         HttpContext context,
@@ -568,8 +574,10 @@ public static class TitleRequestEndpoints
         VersionInput input,
         TitleRequestMutationService mutations,
         TitleRequestViewService views,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken) =>
-        MutateAndLoadAsync(context, id, mutations.RetryIdentifierAsync(Current(context), id, input, cancellationToken), views, cancellationToken);
+        MutateAndLoadAsync(context, id, mutations.RetryIdentifierAsync(Current(context), id, input, cancellationToken),
+            views, loggerFactory, cancellationToken);
 
     private static async Task<IResult> PickupOptionsAsync(
         HttpContext context,
@@ -588,14 +596,24 @@ public static class TitleRequestEndpoints
         PickupPreferenceInput input,
         StaffPickupService pickup,
         TitleRequestViewService views,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         var result = await pickup.UpdateAsync(Current(context), id, input, cancellationToken);
-        if (result.Code != "updated") return PickupError(result.Code);
-        var row = await views.GetAsync(Current(context), id.ToString(), cancellationToken);
-        return row is null
-            ? Results.NotFound()
-            : Results.Json(new { request = row, result.PickupChanged, result.SnapshotChanged });
+        if (result.Code != "updated")
+        {
+            return PickupError(result.Code);
+        }
+        var row = await TryLoadCommittedAsync(context, id, views, loggerFactory, cancellationToken);
+        return Results.Json(new
+        {
+            committed = true,
+            request = row,
+            finalStatus = row?.Status,
+            result.PickupChanged,
+            result.SnapshotChanged,
+            refreshUnavailable = row is null
+        });
     }
 
     private static async Task<IResult> PlaceHoldAsync(
@@ -604,12 +622,19 @@ public static class TitleRequestEndpoints
         VersionInput input,
         HoldPlacementService holds,
         TitleRequestViewService views,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         var result = await holds.PlaceAsync(Current(context), id, input, cancellationToken);
-        if (result.Code != "updated") return HoldError(result.Code);
-        var row = await views.GetAsync(Current(context), id.ToString(), cancellationToken);
-        return row is null ? Results.NotFound() : Results.Json(row);
+        if (result.Code != "updated")
+        {
+            return HoldError(result.Code);
+        }
+        var row = await TryLoadCommittedAsync(context, id, views, loggerFactory, cancellationToken);
+        return row is null
+            ? Results.Json(new { committed = true, request = (TitleRequestDto?)null,
+                finalStatus = (string?)null, refreshUnavailable = true })
+            : Results.Json(row with { Committed = true, FinalStatus = row.Status });
     }
 
     private static async Task<IResult> ReconcileHoldAsync(
@@ -642,15 +667,51 @@ public static class TitleRequestEndpoints
         long id,
         Task<TitleRequestMutationResult> mutation,
         TitleRequestViewService views,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
-        var result = await mutation;
+        TitleRequestMutationResult result;
+        try
+        {
+            result = await mutation;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return Results.Json(new { code = "request_outcome_unconfirmed",
+                message = "The request outcome could not be confirmed. Reload before trying again." },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
         if (result.Code != "updated")
         {
             return ToErrorOrSuccess(result, Results.NoContent());
         }
-        var row = await views.GetAsync(Current(context), id.ToString(), cancellationToken);
-        return row is null ? Results.NotFound() : Results.Json(row);
+        var row = await TryLoadCommittedAsync(context, id, views, loggerFactory, cancellationToken);
+        return row is null
+            ? Results.Json(new { committed = true, request = (TitleRequestDto?)null,
+                finalStatus = result.FinalStatus, notificationStatus = result.NotificationStatus,
+                notificationReason = result.NotificationReason, refreshUnavailable = true })
+            : Results.Json(row with { Committed = true, FinalStatus = result.FinalStatus ?? row.Status,
+                NotificationStatus = result.NotificationStatus, NotificationReason = result.NotificationReason });
+    }
+
+    private static async Task<TitleRequestDto?> TryLoadCommittedAsync(
+        HttpContext context,
+        long id,
+        TitleRequestViewService views,
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await views.GetAsync(Current(context), id.ToString(CultureInfo.InvariantCulture), cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            loggerFactory.CreateLogger("Asap.Web.Features.Staff.TitleRequestEndpoints")
+                .LogError(exception, "Request detail refresh failed after mutation {RequestId} committed", id);
+            return null;
+        }
     }
 
     private static IResult ToErrorOrSuccess(TitleRequestMutationResult result, IResult success) => result.Code switch

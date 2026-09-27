@@ -236,6 +236,10 @@ export function createWorkflowApp() {
     latestLoads.begin('assignment-candidates').abort();
   }
 
+  function cancelPickupOptionsLoad() {
+    latestLoads.begin('pickup-options').abort();
+  }
+
   function cancelDialogMutationCompletion() {
     latestLoads.begin('dialog-mutation').abort();
   }
@@ -327,6 +331,7 @@ export function createWorkflowApp() {
     state.research = null;
     cancelDialogFocusReturn();
     cancelAssignmentCandidateLoad();
+    cancelPickupOptionsLoad();
     cancelDialogMutationCompletion();
     cancelActionChoiceLoad();
     cancelAdditionalCopyCreationCompletion();
@@ -851,6 +856,7 @@ export function createWorkflowApp() {
     state.editControls = null;
     cancelDialogFocusReturn();
     cancelAssignmentCandidateLoad();
+    cancelPickupOptionsLoad();
     cancelDialogMutationCompletion();
     cancelActionChoiceLoad();
     cancelAdditionalCopyPreviewLoad();
@@ -873,7 +879,9 @@ export function createWorkflowApp() {
       dom.closeDialog.focus();
       announce(`Opened additional-copy task ${request.id}.`);
     } catch (error) {
-      if (!isAbortError(error) && error.status !== 401) {
+      if (load.isCurrent() && state.selectedRequestId === String(id) &&
+          state.selectedRequestType === 'additional_copy' &&
+          !(isAbortError(error) && load.signal.aborted) && error.status !== 401) {
         announce(error.status === 404 ? 'That additional-copy task is no longer available.' : error.message, 'error');
       }
     } finally {
@@ -883,6 +891,7 @@ export function createWorkflowApp() {
 
   function renderAdditionalCopy(request, { preserveDialogMutation = false } = {}) {
     cancelAssignmentCandidateLoad();
+    cancelPickupOptionsLoad();
     cancelAdditionalCopyPreviewLoad();
     cancelAdditionalCopyCreationCompletion();
     if (!preserveDialogMutation) cancelDialogMutationCompletion();
@@ -1049,6 +1058,7 @@ export function createWorkflowApp() {
     }
     cancelDialogFocusReturn();
     cancelAssignmentCandidateLoad();
+    cancelPickupOptionsLoad();
     cancelDialogMutationCompletion();
     cancelAdditionalCopyPreviewLoad();
     cancelAdditionalCopyCreationCompletion();
@@ -1073,7 +1083,9 @@ export function createWorkflowApp() {
       announce(`Opened ${request.title}.`);
       loadResearchConfiguration(request);
     } catch (error) {
-      if (!isAbortError(error) && error.status !== 401) {
+      if (load.isCurrent() && state.selectedRequestId === String(id) &&
+          state.selectedRequestType === 'title_request' &&
+          !(isAbortError(error) && load.signal.aborted) && error.status !== 401) {
         announce(error.status === 404 ? 'That request is no longer available.' : error.message, 'error');
       }
     } finally {
@@ -1590,6 +1602,7 @@ export function createWorkflowApp() {
 
   function renderRequest(request, configuration, { preserveDialogMutation = false } = {}) {
     cancelAssignmentCandidateLoad();
+    cancelPickupOptionsLoad();
     cancelAdditionalCopyPreviewLoad();
     cancelAdditionalCopyCreationCompletion();
     if (!preserveDialogMutation) cancelDialogMutationCompletion();
@@ -2055,7 +2068,7 @@ export function createWorkflowApp() {
       })
       .catch(error => {
         if (load.isCurrent() && state.actionChoice === choice &&
-            !isAbortError(error) && error.status !== 401) {
+            !(isAbortError(error) && load.signal.aborted) && error.status !== 401) {
           announce(error.message || 'Rejection templates could not be loaded.', 'error');
         }
       })
@@ -2103,7 +2116,8 @@ export function createWorkflowApp() {
       dom.cancelCreateCopy.focus();
       announce('Review the additional-copy task before creating it.');
     } catch (error) {
-      if (!isAbortError(error) && error.status !== 401) {
+      if (load.isCurrent() && isCurrentDialogRequest(request, 'title_request') &&
+          !(isAbortError(error) && load.signal.aborted) && error.status !== 401) {
         announce(error.message || 'The additional-copy preview could not be loaded.', 'error');
       }
     } finally {
@@ -2173,11 +2187,11 @@ export function createWorkflowApp() {
     const mutation = latestLoads.begin('dialog-mutation');
     announce('Saving request...');
     try {
-      const result = await authorizedJson(path, { method: 'POST', body });
+      const result = await authorizedJson(path, { method: 'POST', body, signal: mutation.signal });
       if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
       const committed = result?.committed === true;
-      let current = committed ? (result.request || (result.id ? result : null)) : result;
-      const status = committed ? ` Final state: ${statusLabel(result.finalStatus)}.` : '';
+      let current = result?.request || (committed ? (result.id ? result : null) : result);
+      const status = committed && result.finalStatus ? ` Final state: ${statusLabel(result.finalStatus)}.` : '';
       const notification = committed && result.notificationStatus
         ? ` Notification ${result.notificationStatus.replaceAll('_', ' ')}${result.notificationReason
           ? ` (${result.notificationReason.replaceAll('_', ' ')})` : ''}.`
@@ -2218,8 +2232,11 @@ export function createWorkflowApp() {
         announce(refreshed === false ? `${message} The queue could not refresh.` : message, 'success');
       }
     } catch (error) {
-      if (error.status === 409 || error.response?.code === 'request_outcome_unconfirmed') {
-        const message = error.message || 'The request changed. Review the refreshed version before trying again.';
+      const dependencyAbort = isAbortError(error) && !mutation.signal.aborted;
+      if (error.status === 409 || error.response?.code === 'request_outcome_unconfirmed' || dependencyAbort) {
+        const message = dependencyAbort
+          ? 'The request outcome could not be confirmed. Reload before trying again.'
+          : error.message || 'The request changed. Review the refreshed version before trying again.';
         await loadQueue({ skipDeepLink: true, silent: true });
         if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
         await openRequest(request.id);
@@ -2266,7 +2283,7 @@ export function createWorkflowApp() {
       announce(candidates.length ? 'Choose an assignee.' : 'No eligible staff are available.');
     } catch (error) {
       if (load.isCurrent() && isCurrentDialogRequest(request, 'title_request') &&
-          error.status !== 401 && !isAbortError(error)) {
+          error.status !== 401 && !(isAbortError(error) && load.signal.aborted)) {
         announce(error.message || 'Assignable staff could not be loaded.', 'error');
       }
     } finally {
@@ -2275,12 +2292,15 @@ export function createWorkflowApp() {
   }
 
   async function showPickup(request) {
+    const load = latestLoads.begin('pickup-options');
     announce('Loading current pickup preference...');
     try {
       const options = await authorizedJson(`/api/asap/staff/title-requests/${request.id}/pickup-options`, {
         method: 'POST',
-        body: { forceRefresh: false }
+        body: { forceRefresh: false },
+        signal: load.signal
       });
+      if (!load.isCurrent() || !isCurrentDialogRequest(request, 'title_request')) return;
       const select = element('select', { 'aria-label': 'Preferred pickup branch' });
       for (const branch of options.pickupBranches || []) {
         select.append(element('option', { value: branch.id, text: branch.name }));
@@ -2293,6 +2313,7 @@ export function createWorkflowApp() {
       if (options.pickupBranchWarning) form.append(element('p', { className: 'wide', text: options.pickupBranchWarning }));
       form.addEventListener('submit', async event => {
         event.preventDefault();
+        if (!form.isConnected || !isCurrentDialogRequest(request, 'title_request')) return;
         await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/pickup-preference`, {
           version: options.version,
           preferredPickupBranchId: Number(select.value),
@@ -2303,7 +2324,12 @@ export function createWorkflowApp() {
       select.focus();
       announce('Current pickup preference loaded.');
     } catch (error) {
-      if (error.status !== 401) announce(error.message || 'Pickup choices could not be loaded.', 'error');
+      if (load.isCurrent() && isCurrentDialogRequest(request, 'title_request') &&
+          error.status !== 401 && !(isAbortError(error) && load.signal.aborted)) {
+        announce(error.message || 'Pickup choices could not be loaded.', 'error');
+      }
+    } finally {
+      latestLoads.finish('pickup-options', load.token);
     }
   }
 
@@ -2547,6 +2573,7 @@ export function createWorkflowApp() {
     state.editControls = null;
     cancelDialogFocusReturn();
     cancelAssignmentCandidateLoad();
+    cancelPickupOptionsLoad();
     cancelDialogMutationCompletion();
     cancelActionChoiceLoad();
     cancelAdditionalCopyPreviewLoad();

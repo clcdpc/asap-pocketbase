@@ -133,7 +133,15 @@ public sealed class TitleRequestMutationService(
             .Select(item => (int?)item.LibraryOrganizationId).SingleOrDefaultAsync(cancellationToken);
         if (!notificationOrganizationId.HasValue || !TitleRequestViewService.CanAccess(actor, notificationOrganizationId.Value))
             return new TitleRequestMutationResult("not_found");
-        var readiness = await emailSender.CheckReadinessAsync(notificationOrganizationId.Value, cancellationToken);
+        EmailTransportReadiness readiness;
+        try
+        {
+            readiness = await emailSender.CheckReadinessAsync(notificationOrganizationId.Value, cancellationToken);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new TitleRequestMutationResult("notification_dependency_unavailable");
+        }
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         var staffIds = new[] { actor.Id, input.AssigneeId.Value }.Distinct().Order().ToArray();
         var locked = await LockForMutationAsync(context, actor, requestId, staffIds, cancellationToken);
@@ -170,8 +178,24 @@ public sealed class TitleRequestMutationService(
             cancellationToken);
         await context.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        Dispatch(outbox);
-        return new TitleRequestMutationResult("updated", request.Id, outbox is null ? [] : [outbox.Id]);
+        var notificationStatus = outbox?.Status == "pending" ? "queued" : "suppressed";
+        var notificationReason = outbox?.SuppressionReason ?? (outbox is null ? "recipient_missing" : null);
+        try
+        {
+            Dispatch(outbox);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Assignment notification dispatch failed after request {RequestId} committed", request.Id);
+            notificationStatus = "dispatch_failed";
+            notificationReason = "queue_unavailable";
+        }
+        return new TitleRequestMutationResult("updated", request.Id, outbox is null ? [] : [outbox.Id],
+            NotificationStatus: notificationStatus, NotificationReason: notificationReason);
     }
 
     public async Task<TitleRequestMutationResult> ActionAsync(
@@ -765,6 +789,10 @@ public sealed class TitleRequestMutationService(
         try
         {
             identifierLookupDispatcher.Enqueue(request.Id, identifier, organizationId, processingVersion);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception exception)
         {
