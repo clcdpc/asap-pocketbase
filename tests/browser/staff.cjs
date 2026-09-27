@@ -1758,7 +1758,8 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
 
     await format.selectOption('ebook');
     await desktopPage.locator('.staff-format-notice').waitFor({ state: 'visible' });
-    assert.equal(await desktopPage.getByRole('button', { name: 'Create suggestion', exact: true }).isDisabled(), true);
+    assert.match(await desktopPage.locator('.staff-format-notice').textContent(), /help\.libbyapp\.com/);
+    assert.equal(await desktopPage.getByRole('button', { name: 'Create suggestion', exact: true }).isDisabled(), false);
     await format.selectOption('book');
     assert.equal(await audience.isVisible(), true);
     await audience.fill('Created by the staff browser journey.');

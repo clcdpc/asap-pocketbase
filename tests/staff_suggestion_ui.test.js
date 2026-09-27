@@ -55,8 +55,8 @@ async function until(predicate, message) {
     };
     const organizations = [{ id: 2, name: 'Test Library' }];
     const configuration = {
-      availableFormats: ['book', 'comic'],
-      formatLabels: { book: 'Book', comic: 'Comic' },
+      availableFormats: ['book', 'comic', 'ebook'],
+      formatLabels: { book: 'Book', comic: 'Comic', ebook: 'eBook' },
       formatRules: {
         book: {
           messageBehavior: 'none',
@@ -77,6 +77,16 @@ async function until(predicate, message) {
             publication: { mode: 'optional', label: 'Publication timing' }
           },
           customFields: {}
+        },
+        ebook: {
+          messageBehavior: 'ebookMessage',
+          fields: {
+            title: { mode: 'required', label: 'eBook title' },
+            author: { mode: 'required', label: 'eBook author' },
+            identifier: { mode: 'optional', label: 'Identifier' },
+            publication: { mode: 'optional', label: 'Publication timing' }
+          },
+          customFields: { audience: { mode: 'required', label: 'Who is it for?' } }
         }
       },
       publicationOptions: ['not_published', 'published'],
@@ -85,7 +95,7 @@ async function until(predicate, message) {
         options: [{ id: 'adult', label: 'Adult', enabled: true }]
       }],
       allowPatronAutoholdOptOut: false,
-      ebookMessage: '',
+      ebookMessage: 'Use the library eBook collection.',
       eaudiobookMessage: ''
     };
     const createdRequest = {
@@ -98,7 +108,9 @@ async function until(predicate, message) {
     let created = false;
     let suggestionRequests = 0;
     let duplicateNextSuggestion = false;
+    let partialDuplicateNextSuggestion = false;
     let expireNextSuggestion = false;
+    let currentPickupAtLookup = 101;
     let staleLookupResolve = null;
     global.fetch = async (url, options = {}) => {
       requests.push({ url, options });
@@ -150,7 +162,7 @@ async function until(predicate, message) {
               barcode: body.barcode, name: 'Alex Example', patronOrganizationId: 2,
               homeLibraryOrganizationId: 2, homeLibraryOrganizationName: 'Test Library'
             },
-            email: 'alex@example.org', currentPreferredPickupBranchId: 101,
+            email: 'alex@example.org', currentPreferredPickupBranchId: currentPickupAtLookup,
             currentPreferredPickupBranchName: 'Main Library',
             pickupBranches: [{ id: 101, label: 'Main Library' }, { id: 102, label: 'North Branch' }],
             pickupWarning: null, pickupOptionsUnavailable: false, libraryOrgId: 2,
@@ -173,6 +185,8 @@ async function until(predicate, message) {
         const body = JSON.parse(options.body);
         assert.equal(body.libraryOrgId, 2);
         assert.equal(body.barcode, '20000000000001');
+        assert.equal(body.currentPreferredPickupBranchObservedAtLoad, true);
+        assert.equal(body.currentPreferredPickupBranchIdAtLoad, currentPickupAtLookup);
         assert.equal(body.customFields.audience, 'adult');
         assert.equal(body.verifiedBibId, null);
         assert.equal(body.emailPatronConfirmation, false);
@@ -182,6 +196,17 @@ async function until(predicate, message) {
           return response(409, {
             message: 'This patron already has a suggestion for this catalog BIB.',
             duplicate: { id: '9007199254740995', matchType: 'bibid' }
+          });
+        }
+        if (partialDuplicateNextSuggestion) {
+          partialDuplicateNextSuggestion = false;
+          return response(409, {
+            code: 'request_not_created_pickup_changed',
+            pickupPreferenceChanged: true,
+            message: 'The suggestion was not created, but the patron\'s preferred pickup location was changed successfully. An existing suggestion was found.',
+            conflictTitle: 'Already Submitted',
+            conflictMessage: 'An existing suggestion was found.',
+            duplicate: { id: '9007199254740993', matchType: 'title_format', requestUrl: '/staff/?request=9007199254740993' }
           });
         }
         created = true;
@@ -236,6 +261,14 @@ async function until(predicate, message) {
     format.dispatchEvent(new dom.window.Event('change'));
     assert.ok([...document.querySelectorAll('#staff-suggestion-body label')]
       .some(label => label.textContent.includes('Who is it for?')));
+    format.value = 'ebook';
+    format.dispatchEvent(new dom.window.Event('change'));
+    assert.match(document.querySelector('.staff-format-notice').textContent, /Use the library eBook collection/);
+    assert.equal(document.querySelector('#staff-suggestion-actions button[type="submit"]').disabled, false,
+      'informational eBook format must remain available for staff creation');
+    assert.equal(document.querySelector('.staff-suggestion-fields input[maxlength="500"]').required, true);
+    format.value = 'book';
+    format.dispatchEvent(new dom.window.Event('change'));
     assert.ok([...document.querySelectorAll('#staff-suggestion-body button')]
       .some(button => button.textContent.includes('Search Polaris catalog')));
     const autohold = [...document.querySelectorAll('.staff-suggestion-fields label')]
@@ -261,6 +294,7 @@ async function until(predicate, message) {
     assert.equal(requests.filter(item => item.url.endsWith('/catalog-search')).length, 0);
 
     document.getElementById('new-suggestion').click();
+    currentPickupAtLookup = null;
     await until(() => document.getElementById('staff-suggestion-dialog').open, 'session-expiry suggestion dialog must open');
     const expiryScope = document.querySelector('#staff-suggestion-body select[aria-label="Servicing library"]');
     expiryScope.value = '2';
@@ -272,6 +306,8 @@ async function until(predicate, message) {
       'session-expiry lookup must render the current patron candidates');
     document.querySelector('.staff-suggestion-candidate').click();
     await until(() => document.querySelector('.staff-suggestion-fields'), 'session-expiry form must render before submit');
+    const pickup = document.querySelector('.staff-suggestion-fields select[aria-label="Preferred pickup location"]');
+    pickup.value = '101';
     const expiryTitle = document.querySelector('.staff-suggestion-fields input[maxlength="500"]');
     expiryTitle.value = 'Session expiry suggestion';
     const expiryAudience = [...document.querySelectorAll('.staff-suggestion-fields select')]
@@ -281,6 +317,31 @@ async function until(predicate, message) {
     document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
     await until(() => document.querySelector('.staff-suggestion-conflict'), 'BIB duplicate must render a conflict');
     assert.match(document.querySelector('.staff-suggestion-conflict').textContent, /catalog BIB/);
+    partialDuplicateNextSuggestion = true;
+    document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await until(() => document.querySelector('.staff-suggestion-conflict')?.textContent.includes('Pickup changed'),
+      'post-pickup duplicate must render the partial warning');
+    assert.match(document.getElementById('staff-suggestion-status').textContent, /not created.*changed successfully/);
+    assert.match(document.querySelector('.staff-suggestion-conflict').textContent, /9007199254740993/);
+    document.querySelector('.staff-suggestion-conflict button').click();
+    await until(() => requests.some(item => item.url.endsWith('/title-requests/9007199254740993')),
+      'exact bigint duplicate action must open the existing request');
+
+    document.getElementById('new-suggestion').click();
+    const sessionScope = document.querySelector('#staff-suggestion-body select[aria-label="Servicing library"]');
+    sessionScope.value = '2';
+    sessionScope.dispatchEvent(new dom.window.Event('change'));
+    const sessionQuery = document.querySelector('#staff-suggestion-body input[type="search"]');
+    sessionQuery.value = '20000000000001';
+    document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await until(() => document.querySelectorAll('.staff-suggestion-candidate').length === 2,
+      'session-expiry lookup must render patron candidates');
+    document.querySelector('.staff-suggestion-candidate').click();
+    await until(() => document.querySelector('.staff-suggestion-fields'), 'session-expiry form must render');
+    document.querySelector('.staff-suggestion-fields select[aria-label="Preferred pickup location"]').value = '101';
+    document.querySelector('.staff-suggestion-fields input[maxlength="500"]').value = 'Session expiry suggestion';
+    [...document.querySelectorAll('.staff-suggestion-fields select')]
+      .find(control => control.getAttribute('aria-label')?.startsWith('Who is it for?')).value = 'adult';
     expireNextSuggestion = true;
     document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
     await until(() => document.getElementById('workspace').hidden, 'session expiry must hide the staff workspace');

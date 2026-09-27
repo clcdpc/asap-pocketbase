@@ -196,7 +196,9 @@ public sealed class StaffSuggestionService(
         {
             throw new StaffSuggestionException(
                 exception.StatusCode,
-                exception.Response is { } response &&
+                exception.Response is PatronSuggestionPickupChangedFailure partial
+                    ? partial.Code
+                    : exception.Response is { } response &&
                     response.GetType().GetProperty("code")?.GetValue(response) is string code
                         ? code
                         : "staff_suggestion_invalid",

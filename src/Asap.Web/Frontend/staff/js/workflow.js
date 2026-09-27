@@ -1356,7 +1356,7 @@ export function createWorkflowApp() {
         : behavior === 'eaudiobookMessage' ? configuration.eaudiobookMessage : formatRule?.message;
       formatNotice.textContent = message || '';
       formatNotice.hidden = !message;
-      if (submitButton) submitButton.disabled = branches.length === 0 || behavior !== 'none';
+      if (submitButton) submitButton.disabled = branches.length === 0;
     };
     format.addEventListener('change', updateFormat);
 
@@ -1443,6 +1443,7 @@ export function createWorkflowApp() {
           notes: controls.notes.value,
           preferredPickupBranchId: Number(controls.pickup.value) || null,
           currentPreferredPickupBranchIdAtLoad: result.patron.currentPreferredPickupBranchId,
+          currentPreferredPickupBranchObservedAtLoad: true,
           autohold: controls.autohold.checked,
           emailPatronConfirmation: controls.emailConfirmation.checked,
           customFields: collectStaffCustomFields(controls.customFieldControls),
@@ -1478,26 +1479,29 @@ export function createWorkflowApp() {
       announce(`Suggestion ${id} created on behalf of the patron. ${notification}`, 'success');
     } catch (error) {
       if (!mutation.isCurrent() || isAbortError(error) || error.status === 401) return;
+      dom.staffSuggestionBody.querySelector('.staff-suggestion-conflict')?.remove();
       const duplicateId = error.response?.duplicate?.id;
-      if (error.status === 409 && duplicateId) {
+      const partialPickupChange = error.response?.code === 'request_not_created_pickup_changed' &&
+        error.response?.pickupPreferenceChanged === true;
+      if (error.status === 409 && typeof duplicateId === 'string' && /^\d+$/.test(duplicateId)) {
         const matchDescription = {
           bibid: 'catalog BIB',
           identifier: 'identifier',
           title_format: 'title and format'
         }[error.response?.duplicate?.matchType] || 'request details';
         dom.staffSuggestionBody.append(element('div', { className: 'staff-suggestion-conflict' }, [
-          element('strong', { text: 'Existing suggestion found' }),
-          element('span', { text: `Request ${String(duplicateId)} already matches this patron by ${matchDescription}.` }),
+          element('strong', { text: partialPickupChange ? 'Pickup changed; existing suggestion found' : 'Existing suggestion found' }),
+          element('span', { text: `Request ${duplicateId} already matches this patron by ${matchDescription}.` }),
           element('button', {
             type: 'button',
             className: 'secondary-button',
             onclick: async () => {
               closeStaffSuggestion({ focusButton: false });
-              await openRequest(String(duplicateId));
+              await openRequest(duplicateId);
             }
           }, 'Open existing request')
         ]));
-        setStaffSuggestionStatus(error.message || 'This patron already has this suggestion.', 'error');
+        setStaffSuggestionStatus(error.response?.message || error.message || 'This patron already has this suggestion.', 'error');
       } else {
         setStaffSuggestionStatus(error.response?.message || error.message || 'The suggestion could not be created.', 'error');
       }

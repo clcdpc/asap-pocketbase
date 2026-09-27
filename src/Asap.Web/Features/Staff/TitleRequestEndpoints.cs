@@ -140,18 +140,25 @@ public static class TitleRequestEndpoints
                     conflict.Message,
                     conflictTitle = conflict.ConflictTitle,
                     conflictMessage = conflict.ConflictMessage,
-                    duplicate = new
-                    {
-                        id = conflict.Duplicate.Id.ToString(CultureInfo.InvariantCulture),
-                        conflict.Duplicate.Created,
-                        conflict.Duplicate.Status,
-                        closeReason = conflict.Duplicate.CloseReason,
-                        conflict.Duplicate.Title,
-                        conflict.Duplicate.Author,
-                        format = conflict.Duplicate.Format,
-                        matchType = conflict.Duplicate.MatchType,
-                        requestUrl = $"/staff/?request={Uri.EscapeDataString(conflict.Duplicate.Id.ToString(CultureInfo.InvariantCulture))}"
-                    }
+                    duplicate = DuplicatePayload(conflict.Duplicate)
+                },
+                statusCode: exception.StatusCode);
+        }
+
+        if (exception.Response is PatronSuggestionPickupChangedFailure partial)
+        {
+            return Results.Json(
+                new
+                {
+                    code = partial.Code,
+                    partial.Message,
+                    partial.PickupPreferenceChanged,
+                    conflictTitle = partial.DuplicateConflict?.ConflictTitle,
+                    conflictMessage = partial.DuplicateConflict?.ConflictMessage,
+                    duplicateMessage = partial.DuplicateConflict?.Message,
+                    duplicate = partial.DuplicateConflict is { } partialConflict
+                        ? DuplicatePayload(partialConflict.Duplicate)
+                        : null
                 },
                 statusCode: exception.StatusCode);
         }
@@ -159,6 +166,23 @@ public static class TitleRequestEndpoints
         return Results.Json(
             exception.Response ?? new { code = exception.Code, message = exception.Message },
             statusCode: exception.StatusCode);
+    }
+
+    private static object DuplicatePayload(PatronSuggestionDuplicate duplicate)
+    {
+        var id = duplicate.Id.ToString(CultureInfo.InvariantCulture);
+        return new
+        {
+            id,
+            duplicate.Created,
+            duplicate.Status,
+            closeReason = duplicate.CloseReason,
+            duplicate.Title,
+            duplicate.Author,
+            format = duplicate.Format,
+            matchType = duplicate.MatchType,
+            requestUrl = $"/staff/?request={Uri.EscapeDataString(id)}"
+        };
     }
 
     private static async Task<IResult> ResearchConfigurationAsync(

@@ -10400,7 +10400,7 @@ public sealed partial class PatronJourneyTests
 
     private sealed class ControllablePickupPatronProvider : IPatronProvider
     {
-        public int CurrentPickupBranchId { get; set; } = 101;
+        public int? CurrentPickupBranchId { get; set; } = 101;
         public bool IncludeEastBranch { get; set; }
         public int RefreshCount { get; private set; }
         public int UpdateCount { get; private set; }

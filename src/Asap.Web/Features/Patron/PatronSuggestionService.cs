@@ -47,6 +47,14 @@ public sealed record PatronSuggestionDuplicateConflict(
     string ConflictMessage,
     PatronSuggestionDuplicate Duplicate);
 
+public sealed record PatronSuggestionPickupChangedFailure(
+    string Message,
+    PatronSuggestionDuplicateConflict? DuplicateConflict = null)
+{
+    public string Code => "request_not_created_pickup_changed";
+    public bool PickupPreferenceChanged => true;
+}
+
 public sealed class PatronFlowException(
     int statusCode,
     string message,
@@ -299,7 +307,8 @@ public sealed partial class PatronSuggestionService(
             throw new PatronFlowException(400, "Choose a valid preferred pickup location.");
         }
 
-        if (input.CurrentPreferredPickupBranchIdAtLoad.HasValue &&
+        if ((input.CurrentPreferredPickupBranchObservedAtLoad == true ||
+             input.CurrentPreferredPickupBranchIdAtLoad.HasValue) &&
             input.CurrentPreferredPickupBranchIdAtLoad != patron.PreferredPickupBranchId &&
             selectedBranch.Id != patron.PreferredPickupBranchId)
         {
@@ -322,6 +331,7 @@ public sealed partial class PatronSuggestionService(
         var pickupUpdated = false;
         long requestId = 0;
         long? outboxId = null;
+        string? persistedIdentifier = null;
         var notificationStatus = input.EmailPatronConfirmation ? "suppressed" : "not_requested";
         byte[] expectedRowVersion = [];
         try
@@ -380,7 +390,7 @@ public sealed partial class PatronSuggestionService(
                     cancellationToken);
                 try
                 {
-                    (requestId, outboxId, notificationStatus, expectedRowVersion) = await InsertStaffAsync(
+                    (requestId, outboxId, notificationStatus, expectedRowVersion, persistedIdentifier) = await InsertStaffAsync(
                         actor,
                         barcode,
                         patron,
@@ -416,12 +426,9 @@ public sealed partial class PatronSuggestionService(
             throw new PatronFlowException(
                 flowException?.StatusCode ?? 502,
                 partialMessage,
-                new
-                {
-                    code = "request_not_created_pickup_changed",
-                    message = partialMessage,
-                    originalResponse = flowException?.Response
-                },
+                new PatronSuggestionPickupChangedFailure(
+                    partialMessage,
+                    flowException?.Response as PatronSuggestionDuplicateConflict),
                 exception);
         }
 
@@ -440,11 +447,11 @@ public sealed partial class PatronSuggestionService(
             }
         }
 
-        if (prepared.Suggestion.Identifier is not null)
+        if (persistedIdentifier is not null)
         {
             await ProcessIdentifierLookupAsync(
                 requestId,
-                prepared.Suggestion.Identifier,
+                persistedIdentifier,
                 organizationId,
                 expectedRowVersion,
                 cancellationToken);
@@ -594,7 +601,7 @@ public sealed partial class PatronSuggestionService(
             cancellationToken);
         var lockedOrganizationIds = new HashSet<int>();
         foreach (var currentOrganizationId in new[]
-                     { organizationId, actor.OrganizationId, patron.HomeLibraryOrganizationId }
+                     { organizationId, actor.OrganizationId, patron.PatronOrganizationId, patron.HomeLibraryOrganizationId }
                      .Where(item => item > 0)
                      .Distinct()
                      .Order())
@@ -603,6 +610,7 @@ public sealed partial class PatronSuggestionService(
                     $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {currentOrganizationId}")
                 .SingleOrDefaultAsync(cancellationToken);
             var isTargetOrganization = currentOrganizationId == organizationId;
+            var isPatronOrganization = currentOrganizationId == patron.PatronOrganizationId;
             var isPatronHomeOrganization = currentOrganizationId == patron.HomeLibraryOrganizationId;
             if (organization is null ||
                 isTargetOrganization && !organization.IsActive ||
@@ -610,12 +618,16 @@ public sealed partial class PatronSuggestionService(
             {
                 throw new PatronFlowException(
                     409,
-                    isPatronHomeOrganization && !isTargetOrganization
+                    isPatronOrganization && organization is null
+                        ? "The patron's registered organization is no longer available."
+                        : isPatronHomeOrganization && !isTargetOrganization
                         ? "The patron's home library is no longer participating."
                         : "The selected servicing library is not participating.",
                     new
                     {
-                        code = isPatronHomeOrganization && !isTargetOrganization
+                        code = isPatronOrganization && organization is null
+                            ? "patron_organization_missing"
+                            : isPatronHomeOrganization && !isTargetOrganization
                             ? "patron_home_library_inactive"
                             : "organization_inactive"
                     });
@@ -653,6 +665,7 @@ public sealed partial class PatronSuggestionService(
                 input.Autohold,
                 input.CustomFields),
             configuration,
+            allowInformationalMessage: true,
             forcedAutoHold: input.Autohold ?? true,
             exactPublicationDate: input.ExactPublicationDate,
             notes: input.Notes,
@@ -665,11 +678,18 @@ public sealed partial class PatronSuggestionService(
             configuration.OrganizationId,
             suggestion,
             cancellationToken);
+        await EnforceDuplicateAsync(
+            connection,
+            transaction,
+            barcode,
+            suggestion,
+            configuration,
+            cancellationToken);
         await databaseTransaction.CommitAsync(cancellationToken);
         return (configuration, suggestion);
     }
 
-    private async Task<(long RequestId, long? OutboxId, string EmailStatus, byte[] RowVersion)> InsertStaffAsync(
+    private async Task<(long RequestId, long? OutboxId, string EmailStatus, byte[] RowVersion, string? Identifier)> InsertStaffAsync(
         CurrentStaff actor,
         string barcode,
         PatronSnapshot patron,
@@ -695,7 +715,7 @@ public sealed partial class PatronSuggestionService(
         var transaction = (SqlTransaction)databaseTransaction.GetDbTransaction();
         var lockedOrganizationIds = new HashSet<int>();
         foreach (var currentOrganizationId in new[]
-                     { configuration.OrganizationId, actor.OrganizationId, patron.HomeLibraryOrganizationId }
+                     { configuration.OrganizationId, actor.OrganizationId, patron.PatronOrganizationId, patron.HomeLibraryOrganizationId }
                      .Where(item => item > 0)
                      .Distinct()
                      .Order())
@@ -704,6 +724,7 @@ public sealed partial class PatronSuggestionService(
                     $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {currentOrganizationId}")
                 .SingleOrDefaultAsync(cancellationToken);
             var isTargetOrganization = currentOrganizationId == configuration.OrganizationId;
+            var isPatronOrganization = currentOrganizationId == patron.PatronOrganizationId;
             var isPatronHomeOrganization = currentOrganizationId == patron.HomeLibraryOrganizationId;
             if (organization is null ||
                 isTargetOrganization && !organization.IsActive ||
@@ -711,12 +732,16 @@ public sealed partial class PatronSuggestionService(
             {
                 throw new PatronFlowException(
                     409,
-                    isPatronHomeOrganization && !isTargetOrganization
+                    isPatronOrganization && organization is null
+                        ? "The patron's registered organization is no longer available."
+                        : isPatronHomeOrganization && !isTargetOrganization
                         ? "The patron's home library is no longer participating."
                         : configuration.SystemNotEnabledMessage,
                     new
                     {
-                        code = isPatronHomeOrganization && !isTargetOrganization
+                        code = isPatronOrganization && organization is null
+                            ? "patron_organization_missing"
+                            : isPatronHomeOrganization && !isTargetOrganization
                             ? "patron_home_library_inactive"
                             : "organization_inactive"
                     });
@@ -756,6 +781,7 @@ public sealed partial class PatronSuggestionService(
                 input.Autohold,
                 input.CustomFields),
             currentConfiguration,
+            allowInformationalMessage: true,
             forcedAutoHold: input.Autohold ?? true,
             exactPublicationDate: input.ExactPublicationDate,
             notes: input.Notes,
@@ -880,7 +906,7 @@ public sealed partial class PatronSuggestionService(
         }
 
         await databaseTransaction.CommitAsync(cancellationToken);
-        return (requestId, email.OutboxId, email.Status, rowVersion);
+        return (requestId, email.OutboxId, email.Status, rowVersion, currentSuggestion.Identifier);
     }
 
     private static void RequireCurrentStaff(StaffEligibilityResult result)

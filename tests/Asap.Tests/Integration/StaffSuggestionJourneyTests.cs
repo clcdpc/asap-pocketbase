@@ -453,6 +453,189 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task StaffSuggestionPickupObservedSnapshotHandlesNullAndThreeWayRaces()
+    {
+        const string barcode = "20000000001331";
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var provider = new ControllablePickupPatronProvider { IncludeEastBranch = true };
+        await using var scopedFactory = factory!.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IPatronProvider>();
+                services.AddSingleton<IPatronProvider>(provider);
+            }));
+        using var client = scopedFactory.CreateClient();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+
+        async Task CheckAsync(int? observed, int? live, int selected, HttpStatusCode expected, int writes)
+        {
+            provider.CurrentPickupBranchId = live;
+            var beforeUpdates = provider.UpdateCount;
+            using var response = await client.PostAsJsonAsync("/api/asap/staff/suggestions", new
+            {
+                libraryOrgId = 2,
+                barcode,
+                format = "book",
+                title = $"Observed pickup {Guid.NewGuid():N}",
+                author = "Pickup author",
+                publication = "Coming soon",
+                preferredPickupBranchId = selected,
+                currentPreferredPickupBranchIdAtLoad = observed,
+                currentPreferredPickupBranchObservedAtLoad = true,
+                autohold = true,
+                emailPatronConfirmation = false,
+                customFields = new Dictionary<string, string?>()
+            });
+            Assert.AreEqual(expected, response.StatusCode, await response.Content.ReadAsStringAsync());
+            Assert.AreEqual(writes, provider.UpdateCount - beforeUpdates);
+            if (expected == HttpStatusCode.Conflict)
+            {
+                using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                Assert.AreEqual("pickup_changed_since_load", body.RootElement.GetProperty("code").GetString());
+            }
+        }
+
+        await CheckAsync(101, 101, 103, HttpStatusCode.Created, 1);
+        await CheckAsync(101, 102, 101, HttpStatusCode.Conflict, 0);
+        await CheckAsync(101, 102, 103, HttpStatusCode.Conflict, 0);
+        await CheckAsync(101, 102, 102, HttpStatusCode.Created, 0);
+        await CheckAsync(null, null, 103, HttpStatusCode.Created, 1);
+        await CheckAsync(null, 102, 103, HttpStatusCode.Conflict, 0);
+        await CheckAsync(null, 102, 102, HttpStatusCode.Created, 0);
+    }
+
+    [TestMethod]
+    public async Task ExistingDuplicateIsRejectedBeforePickupMutation()
+    {
+        const string barcode = "20000000001332";
+        var title = $"Preflight duplicate {Guid.NewGuid():N}";
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var provider = new ControllablePickupPatronProvider();
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        long duplicateId;
+        int beforeOutbox;
+        await using (var seed = await contextFactory.CreateDbContextAsync())
+        {
+            var formatId = await seed.MaterialFormats.Where(item => item.OwnerOrganizationId == 1 && item.Code == "book")
+                .Select(item => item.Id).SingleAsync();
+            var existing = new TitleRequest
+            {
+                LibraryOrganizationId = 2,
+                PatronOrganizationId = 101,
+                Barcode = barcode,
+                Title = title,
+                MaterialFormatId = formatId,
+                AutoHold = true,
+                Status = "closed",
+                CloseReason = "rejected",
+                CreatedUtc = DateTime.UtcNow,
+                UpdatedUtc = DateTime.UtcNow
+            };
+            seed.TitleRequests.Add(existing);
+            await seed.SaveChangesAsync();
+            duplicateId = existing.Id;
+            beforeOutbox = await seed.EmailOutbox.CountAsync();
+        }
+
+        try
+        {
+            await using var scopedFactory = factory.WithWebHostBuilder(builder =>
+                builder.ConfigureServices(services =>
+                {
+                    services.RemoveAll<IPatronProvider>();
+                    services.AddSingleton<IPatronProvider>(provider);
+                }));
+            using var client = scopedFactory.CreateClient();
+            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+            client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+            using var response = await client.PostAsJsonAsync("/api/asap/staff/suggestions", new
+            {
+                libraryOrgId = 2,
+                barcode,
+                format = "book",
+                title,
+                author = "Duplicate author",
+                publication = "Coming soon",
+                preferredPickupBranchId = 102,
+                currentPreferredPickupBranchIdAtLoad = 101,
+                currentPreferredPickupBranchObservedAtLoad = true,
+                autohold = true,
+                emailPatronConfirmation = true,
+                customFields = new Dictionary<string, string?>()
+            });
+            Assert.AreEqual(HttpStatusCode.Conflict, response.StatusCode, await response.Content.ReadAsStringAsync());
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.AreEqual("duplicate", body.RootElement.GetProperty("code").GetString());
+            var duplicate = body.RootElement.GetProperty("duplicate");
+            Assert.AreEqual(duplicateId.ToString(), duplicate.GetProperty("id").GetString());
+            Assert.AreEqual("title_format", duplicate.GetProperty("matchType").GetString());
+            Assert.AreEqual($"/staff/?request={duplicateId}", duplicate.GetProperty("requestUrl").GetString());
+            Assert.AreEqual(0, provider.UpdateCount);
+            await using var verify = await contextFactory.CreateDbContextAsync();
+            Assert.AreEqual(1, await verify.TitleRequests.CountAsync(item => item.Barcode == barcode && item.Title == title));
+            Assert.AreEqual(0, await verify.TitleRequestEvents.CountAsync(item => item.TitleRequestId == duplicateId));
+            Assert.AreEqual(beforeOutbox, await verify.EmailOutbox.CountAsync());
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync("DELETE FROM [asap].[TitleRequest] WHERE [Id] = @id;", ("@id", duplicateId));
+        }
+    }
+
+    [TestMethod]
+    public async Task StaffMayCreateInformationalEbookWhilePatronFormStillRejectsIt()
+    {
+        const string barcode = "20000000001333";
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var title = $"Staff informational ebook {Guid.NewGuid():N}";
+        using var client = factory!.CreateClient();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+
+        object Input(string? author) => new
+        {
+            libraryOrgId = 2,
+            barcode,
+            format = "ebook",
+            title,
+            author,
+            publication = "Coming soon",
+            preferredPickupBranchId = 101,
+            currentPreferredPickupBranchIdAtLoad = 101,
+            currentPreferredPickupBranchObservedAtLoad = true,
+            autohold = true,
+            emailPatronConfirmation = false,
+            customFields = new Dictionary<string, string?>()
+        };
+
+        using (var invalid = await client.PostAsJsonAsync("/api/asap/staff/suggestions", Input(null)))
+        {
+            Assert.AreEqual(HttpStatusCode.BadRequest, invalid.StatusCode, await invalid.Content.ReadAsStringAsync());
+            StringAssert.Contains(await invalid.Content.ReadAsStringAsync(), "Author is required");
+        }
+
+        using (var created = await client.PostAsJsonAsync("/api/asap/staff/suggestions", Input("Staff author")))
+        {
+            Assert.AreEqual(HttpStatusCode.Created, created.StatusCode, await created.Content.ReadAsStringAsync());
+            using var body = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+            Assert.AreEqual(JsonValueKind.String, body.RootElement.GetProperty("id").ValueKind);
+        }
+
+        var publicService = CreatePatronSuggestionService(["example.org"], new RecordingOutboxDispatcher());
+        var rejected = await Assert.ThrowsExactlyAsync<PatronFlowException>(async () =>
+            await publicService.CreateAsync(
+                new PatronSessionContext(7004, barcode, 2, 2, 2, DateTime.UtcNow.AddHours(1)),
+                Suggestion($"Patron informational ebook {Guid.NewGuid():N}") with
+                {
+                    Format = "ebook",
+                    Author = "Patron author"
+                },
+                CancellationToken.None));
+        Assert.AreEqual(400, rejected.StatusCode);
+    }
+
+    [TestMethod]
     public async Task StaffSuggestionBypassesOnlyPublicSubmissionCountLimit()
     {
         const string barcode = "20000000009991";
@@ -948,6 +1131,116 @@ public sealed partial class PatronJourneyTests
                 workflow.SuggestionLimitMessage = previousLimitMessage;
                 await restore.SaveChangesAsync();
             }
+        }
+    }
+
+    [TestMethod]
+    public async Task DuplicateRacingAfterPickupUpdateReturnsStructuredPartialFailureWithExactBigintId()
+    {
+        const long duplicateId = 9007199254740993;
+        const string barcode = "20000000001334";
+        var title = $"Post-pickup duplicate {Guid.NewGuid():N}";
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var provider = new ControllablePickupPatronProvider();
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        long previousIdentity;
+        long formatId;
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var identity = connection.CreateCommand();
+            identity.CommandText = "SELECT CONVERT(bigint, IDENT_CURRENT(N'[asap].[TitleRequest]'));";
+            previousIdentity = Convert.ToInt64(await identity.ExecuteScalarAsync());
+        }
+
+        await using (var context = await contextFactory.CreateDbContextAsync())
+        {
+            formatId = await context.MaterialFormats
+                .Where(item => item.OwnerOrganizationId == 1 && item.Code == "book")
+                .Select(item => item.Id).SingleAsync();
+        }
+
+        provider.AfterUpdate = () =>
+        {
+            using var connection = new SqlConnection(databaseConnectionString);
+            connection.Open();
+            using var insert = connection.CreateCommand();
+            insert.CommandText =
+                """
+                SET IDENTITY_INSERT [asap].[TitleRequest] ON;
+                INSERT INTO [asap].[TitleRequest]
+                    ([Id], [LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Title], [Author],
+                     [AutoHold], [MaterialFormatId], [Status], [CloseReason], [CreatedUtc], [UpdatedUtc])
+                VALUES (@id, 2, 101, @barcode, @title, N'Existing author',
+                        1, @formatId, N'closed', N'rejected', SYSUTCDATETIME(), SYSUTCDATETIME());
+                SET IDENTITY_INSERT [asap].[TitleRequest] OFF;
+                """;
+            insert.Parameters.AddWithValue("@id", duplicateId);
+            insert.Parameters.AddWithValue("@barcode", barcode);
+            insert.Parameters.AddWithValue("@title", title);
+            insert.Parameters.AddWithValue("@formatId", formatId);
+            insert.ExecuteNonQuery();
+        };
+
+        try
+        {
+            await using var scopedFactory = factory.WithWebHostBuilder(builder =>
+                builder.ConfigureServices(services =>
+                {
+                    services.RemoveAll<IPatronProvider>();
+                    services.AddSingleton<IPatronProvider>(provider);
+                }));
+            using var client = scopedFactory.CreateClient();
+            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+            client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+            using var response = await client.PostAsJsonAsync("/api/asap/staff/suggestions", new
+            {
+                libraryOrgId = 2,
+                barcode,
+                format = "book",
+                title,
+                author = "Staff author",
+                publication = "Coming soon",
+                preferredPickupBranchId = 102,
+                currentPreferredPickupBranchIdAtLoad = 101,
+                currentPreferredPickupBranchObservedAtLoad = true,
+                autohold = true,
+                emailPatronConfirmation = false,
+                customFields = new Dictionary<string, string?>()
+            });
+
+            var raw = await response.Content.ReadAsStringAsync();
+            Assert.AreEqual(HttpStatusCode.Conflict, response.StatusCode, raw);
+            Assert.AreEqual(1, provider.UpdateCount);
+            using var body = JsonDocument.Parse(raw);
+            Assert.AreEqual("request_not_created_pickup_changed", body.RootElement.GetProperty("code").GetString());
+            Assert.IsTrue(body.RootElement.GetProperty("pickupPreferenceChanged").GetBoolean());
+            StringAssert.Contains(body.RootElement.GetProperty("message").GetString(),
+                "preferred pickup location was changed successfully");
+            Assert.AreEqual("Already Submitted", body.RootElement.GetProperty("conflictTitle").GetString());
+            Assert.IsFalse(string.IsNullOrWhiteSpace(body.RootElement.GetProperty("conflictMessage").GetString()));
+            var duplicate = body.RootElement.GetProperty("duplicate");
+            Assert.AreEqual(JsonValueKind.String, duplicate.GetProperty("id").ValueKind);
+            Assert.AreEqual("9007199254740993", duplicate.GetProperty("id").GetString());
+            Assert.AreEqual("title_format", duplicate.GetProperty("matchType").GetString());
+            Assert.AreEqual("closed", duplicate.GetProperty("status").GetString());
+            Assert.AreEqual("rejected", duplicate.GetProperty("closeReason").GetString());
+            Assert.AreEqual(title, duplicate.GetProperty("title").GetString());
+            Assert.AreEqual("Existing author", duplicate.GetProperty("author").GetString());
+            Assert.AreEqual("book", duplicate.GetProperty("format").GetString());
+            Assert.AreEqual("/staff/?request=9007199254740993", duplicate.GetProperty("requestUrl").GetString());
+            Assert.IsFalse(raw.Contains(":9007199254740993", StringComparison.Ordinal));
+            await using var verify = await contextFactory.CreateDbContextAsync();
+            Assert.AreEqual(1, await verify.TitleRequests.CountAsync(item => item.Barcode == barcode && item.Title == title));
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync("DELETE FROM [asap].[TitleRequest] WHERE [Id] = @id;", ("@id", duplicateId));
+            await using var connection = new SqlConnection(databaseConnectionString);
+            await connection.OpenAsync();
+            await using var reset = connection.CreateCommand();
+            reset.CommandText = $"DBCC CHECKIDENT ('[asap].[TitleRequest]', RESEED, {previousIdentity});";
+            await reset.ExecuteNonQueryAsync();
         }
     }
 
