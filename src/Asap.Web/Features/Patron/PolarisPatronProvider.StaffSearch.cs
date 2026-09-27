@@ -21,6 +21,7 @@ public sealed partial class PolarisPatronProvider
             request.QueryParameters.Add("patronsperpage", 10);
             request.QueryParameters.Add("page", 1);
             var response = await client.ExecutePapiAsync<PatronSearchResult>(request, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             var data = response.Data;
             if (response.Response?.IsSuccessStatusCode != true || data is null ||
                 !IsCoherentPatronSearchResponse(response.Response.Content, data))
@@ -50,20 +51,28 @@ public sealed partial class PolarisPatronProvider
                 catch (PolarisOperationalException exception) when (
                     exception.Code == "polaris_patron_not_found")
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     // Search rows can become stale; a definitive missing patron is not selectable.
                     // Other provider/data-integrity failures must remain failures rather than
                     // becoming an ordinary no-match result.
                 }
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             return results;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            throw;
+        }
+        catch (PolarisOperationalException) when (cancellationToken.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             throw;
         }
         catch (Exception exception) when (exception is not PolarisOperationalException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             throw Operational("polaris_patron_search_failed", exception);
         }
     }

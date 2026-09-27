@@ -81,7 +81,11 @@ public sealed class StaffSuggestionService(
         {
             throw ProviderFailure(exception);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException && !cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
         {
             throw new StaffSuggestionException(
                 StatusCodes.Status502BadGateway,
@@ -313,7 +317,11 @@ public sealed class StaffSuggestionService(
 
             throw ProviderFailure(exception);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException && !cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
         {
             throw new StaffSuggestionException(
                 StatusCodes.Status502BadGateway,
@@ -426,7 +434,11 @@ public sealed class StaffSuggestionService(
                 "Eligible pickup locations could not be loaded from Polaris.",
                 innerException: exception);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException && !cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
         {
             throw new StaffSuggestionException(
                 StatusCodes.Status502BadGateway,

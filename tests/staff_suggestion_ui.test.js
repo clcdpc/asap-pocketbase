@@ -364,6 +364,9 @@ async function until(predicate, message) {
     await until(() => document.getElementById('workspace').hidden, 'session expiry must hide the staff workspace');
     assert.equal(document.getElementById('staff-suggestion-dialog').open, false,
       'session expiry must close an in-flight suggestion dialog');
+    assert.equal(document.getElementById('signed-out').hidden, false);
+    assert.equal(document.getElementById('signed-out-message').textContent,
+      'Your staff session ended or no longer has access. Sign in again.');
     console.log('Staff suggestion UI workflow, explicit scope, Polaris reuse, and double-submit checks passed');
   } finally {
     dom?.window.close();

@@ -173,6 +173,7 @@ export function createWorkflowApp() {
     createCopyReturnFocus: null,
     staffSuggestion: null,
     staffSuggestionReturnFocus: null,
+    partialSessionFailureMessage: null,
     configurations: new Map(),
     research: null,
     currentRequest: null,
@@ -339,6 +340,7 @@ export function createWorkflowApp() {
   }
 
   function showWorkspace(staff) {
+    state.partialSessionFailureMessage = null;
     state.staff = staff;
     state.scope = staff.role === 'super_admin' ? 'all' : String(staff.organizationId);
     dom.signedOut.hidden = true;
@@ -2400,7 +2402,18 @@ export function createWorkflowApp() {
   }
 
   function bindEvents() {
-    onSessionInvalid(() => showSignedOut('Your staff session ended or no longer has access. Sign in again.'));
+    onSessionInvalid(error => {
+      const pickupChanged = error.response?.code === 'request_not_created_pickup_changed' &&
+        error.response?.pickupPreferenceChanged === true;
+      if (pickupChanged) {
+        const detail = typeof error.response.message === 'string' && error.response.message.trim()
+          ? error.response.message
+          : "The suggestion was not created, but the patron's preferred pickup location was changed successfully.";
+        state.partialSessionFailureMessage = `${detail} Sign in again to restore staff access before continuing.`;
+      }
+      showSignedOut(state.partialSessionFailureMessage ||
+        'Your staff session ended or no longer has access. Sign in again.');
+    });
     onAccessUnavailable(showAccessUnavailable);
     settingsController.bind();
     dom.newSuggestion.addEventListener('click', event => openStaffSuggestion(event.currentTarget));

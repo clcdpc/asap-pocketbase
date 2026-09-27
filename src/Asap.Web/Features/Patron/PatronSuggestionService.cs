@@ -345,7 +345,11 @@ public sealed partial class PatronSuggestionService(
                         selectedBranch.Id,
                         cancellationToken);
                 }
-                catch (Exception exception) when (exception is not OperationCanceledException)
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
                 {
                     throw new PatronFlowException(
                         502,
@@ -417,7 +421,11 @@ public sealed partial class PatronSuggestionService(
                 }
             }
         }
-        catch (Exception exception) when (pickupUpdated && exception is not OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (pickupUpdated && !cancellationToken.IsCancellationRequested)
         {
             var flowException = exception as PatronFlowException;
             var detail = flowException?.Message ?? "The suggestion could not be created.";
@@ -458,7 +466,7 @@ public sealed partial class PatronSuggestionService(
                     expectedRowVersion,
                     cancellationToken);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
@@ -504,7 +512,11 @@ public sealed partial class PatronSuggestionService(
                 new { code = "polaris_unavailable" },
                 exception);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException && !cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
             throw new PatronFlowException(
                 502,
@@ -530,7 +542,11 @@ public sealed partial class PatronSuggestionService(
                 new { code = "pickup_branches_unavailable" },
                 exception);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException && !cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
             throw new PatronFlowException(
                 502,
@@ -576,7 +592,7 @@ public sealed partial class PatronSuggestionService(
                 new { code = "bib_validation_unavailable" },
                 exception);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
@@ -1820,7 +1836,7 @@ public sealed partial class PatronSuggestionService(
         {
             result = await patronProvider.LookupIdentifierAsync(identifier, cancellationToken);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }

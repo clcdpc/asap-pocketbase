@@ -29,17 +29,37 @@ public sealed partial class PatronJourneyTests
             "9001", HttpStatusCode.BadGateway, "bib_validation_unavailable", 1, operationalFailure: true);
 
     [TestMethod]
+    public async Task StaffSuggestionBibProviderTimeoutReturnsUnavailableBeforeMutation() =>
+        await AssertStaffBibFailureAsync(
+            "9001", HttpStatusCode.BadGateway, "bib_validation_unavailable", 1,
+            providerFailure: new OperationCanceledException("Polaris timed out."));
+
+    [TestMethod]
+    public async Task StaffSuggestionBibTaskCancellationWithoutCallerCancellationReturnsUnavailable() =>
+        await AssertStaffBibFailureAsync(
+            "9001", HttpStatusCode.BadGateway, "bib_validation_unavailable", 1,
+            providerFailure: new TaskCanceledException("Polaris timed out."));
+
+    [TestMethod]
     public async Task StaffSuggestionBibValidationCancellationPropagates()
     {
         var actor = await ReadConfiguredSuperAdminAsync();
         var pickup = new ControllablePickupPatronProvider();
-        var bib = new RejectingBibStaffProvider { CancelValidation = true };
+        using var cancellation = new CancellationTokenSource();
+        var bib = new RejectingBibStaffProvider
+        {
+            BeforeValidation = token =>
+            {
+                Assert.AreEqual(cancellation.Token, token);
+                cancellation.Cancel();
+            }
+        };
         await using var scopedFactory = CreateStaffBibFailureFactory(pickup, bib);
         var service = scopedFactory.Services.GetRequiredService<StaffSuggestionService>();
         var title = $"Canceled BIB {Guid.NewGuid():N}";
 
         await Assert.ThrowsExactlyAsync<OperationCanceledException>(async () =>
-            await service.CreateAsync(actor, StaffBibInput(title, "9001"), CancellationToken.None));
+            await service.CreateAsync(actor, StaffBibInput(title, "9001"), cancellation.Token));
 
         Assert.AreEqual(1, bib.ValidationCount);
         Assert.AreEqual(0, pickup.UpdateCount);
@@ -51,14 +71,68 @@ public sealed partial class PatronJourneyTests
     {
         var actor = await ReadConfiguredSuperAdminAsync();
         var pickup = new ControllablePickupPatronProvider();
-        var bib = new RejectingBibStaffProvider { CancelSearch = true };
+        using var cancellation = new CancellationTokenSource();
+        var bib = new RejectingBibStaffProvider
+        {
+            BeforeSearch = token =>
+            {
+                Assert.AreEqual(cancellation.Token, token);
+                cancellation.Cancel();
+            }
+        };
         await using var scopedFactory = CreateStaffBibFailureFactory(pickup, bib);
         var service = scopedFactory.Services.GetRequiredService<StaffSuggestionService>();
 
         await Assert.ThrowsExactlyAsync<OperationCanceledException>(async () =>
             await service.LookupAsync(actor, new StaffPatronLookupInput("Alex Example", null, 2),
-                CancellationToken.None));
+                cancellation.Token));
 
+        Assert.AreEqual(1, bib.SearchCount);
+        Assert.AreEqual(0, pickup.UpdateCount);
+    }
+
+    [TestMethod]
+    public async Task StaffSuggestionPatronSearchProviderTimeoutReturnsUnavailable()
+    {
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var pickup = new ControllablePickupPatronProvider();
+        var bib = new RejectingBibStaffProvider
+        {
+            SearchException = new OperationCanceledException("Polaris search timed out.")
+        };
+        await using var scopedFactory = CreateStaffBibFailureFactory(pickup, bib);
+        using var client = scopedFactory.CreateClient();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+
+        using var response = await client.PostAsJsonAsync("/api/asap/staff/patron-lookup",
+            new { query = "Alex Example", barcode = (string?)null, libraryOrgId = 2 });
+        Assert.AreEqual(HttpStatusCode.BadGateway, response.StatusCode,
+            await response.Content.ReadAsStringAsync());
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.AreEqual("polaris_unavailable", body.RootElement.GetProperty("code").GetString());
+        Assert.AreEqual(1, bib.SearchCount);
+        Assert.AreEqual(0, pickup.UpdateCount);
+    }
+
+    [TestMethod]
+    public async Task StaffSuggestionPatronSearchTaskCancellationWithoutCallerCancellationReturnsUnavailable()
+    {
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var pickup = new ControllablePickupPatronProvider();
+        var bib = new RejectingBibStaffProvider
+        {
+            SearchException = new TaskCanceledException("Polaris search timed out.")
+        };
+        await using var scopedFactory = CreateStaffBibFailureFactory(pickup, bib);
+        var service = scopedFactory.Services.GetRequiredService<StaffSuggestionService>();
+
+        var failure = await Assert.ThrowsExactlyAsync<StaffSuggestionException>(async () =>
+            await service.LookupAsync(actor, new StaffPatronLookupInput("Alex Example", null, 2),
+                CancellationToken.None));
+        Assert.AreEqual(502, failure.StatusCode);
+        Assert.AreEqual("polaris_unavailable", failure.Code);
+        Assert.AreEqual(1, bib.SearchCount);
         Assert.AreEqual(0, pickup.UpdateCount);
     }
 
@@ -67,11 +141,16 @@ public sealed partial class PatronJourneyTests
         HttpStatusCode expectedStatus,
         string expectedCode,
         int expectedValidationCount,
-        bool operationalFailure = false)
+        bool operationalFailure = false,
+        Exception? providerFailure = null)
     {
         var actor = await ReadConfiguredSuperAdminAsync();
         var pickup = new ControllablePickupPatronProvider();
-        var bib = new RejectingBibStaffProvider { OperationalFailure = operationalFailure };
+        var bib = new RejectingBibStaffProvider
+        {
+            OperationalFailure = operationalFailure,
+            ValidationException = providerFailure
+        };
         await using var scopedFactory = CreateStaffBibFailureFactory(pickup, bib);
         using var client = scopedFactory.CreateClient();
         AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
@@ -145,6 +224,266 @@ public sealed partial class PatronJourneyTests
         var failure = await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
             await unavailable.SearchPatronsAsync("provider-error", CancellationToken.None));
         Assert.AreEqual("polaris_patron_search_failed", failure.Code);
+    }
+
+    [TestMethod]
+    public async Task PolarisPatronSearchDistinguishesCallerCancellationFromProviderTimeout()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var cancelledHandler = new ProtectedSequenceResponseHandler()
+        {
+            BeforeProtectedRequest = token =>
+            {
+                Assert.IsTrue(token.CanBeCanceled);
+                cancellation.Cancel();
+                Assert.IsTrue(token.IsCancellationRequested);
+            }
+        };
+        var cancelledProvider = await CreatePolarisProviderAsync(cancelledHandler);
+        Exception? cancellationResult = null;
+        try
+        {
+            await cancelledProvider.SearchPatronsAsync("Alex Example", cancellation.Token);
+        }
+        catch (Exception exception)
+        {
+            cancellationResult = exception;
+        }
+        Assert.IsTrue(cancellation.IsCancellationRequested,
+            $"The test handler never cancelled the search token. Requests: {string.Join(", ", cancelledHandler.RequestUris)}");
+        Assert.IsInstanceOfType<OperationCanceledException>(cancellationResult);
+
+        using var refreshCancellation = new CancellationTokenSource();
+        var protectedRequests = 0;
+        var refreshHandler = new ProtectedSequenceResponseHandler(
+            (HttpStatusCode.OK,
+             "{\"PAPIErrorCode\":0,\"TotalRecordsFound\":1,\"PatronSearchRows\":[{\"Barcode\":\"20000000000045\"}]}"))
+        {
+            BeforeProtectedRequest = token =>
+            {
+                protectedRequests++;
+                if (protectedRequests == 2)
+                {
+                    refreshCancellation.Cancel();
+                    Assert.IsTrue(token.IsCancellationRequested);
+                }
+            }
+        };
+        var refreshProvider = await CreatePolarisProviderAsync(refreshHandler);
+        Exception? refreshCancellationResult = null;
+        try
+        {
+            await refreshProvider.SearchPatronsAsync("Alex Example", refreshCancellation.Token);
+        }
+        catch (Exception exception)
+        {
+            refreshCancellationResult = exception;
+        }
+        Assert.IsInstanceOfType<OperationCanceledException>(refreshCancellationResult);
+        Assert.AreEqual(2, protectedRequests);
+
+        var timeoutHandler = new ProtectedSequenceResponseHandler()
+        {
+            ProtectedRequestException = new TaskCanceledException("Polaris search timed out.")
+        };
+        var timeoutProvider = await CreatePolarisProviderAsync(timeoutHandler);
+        var failure = await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await timeoutProvider.SearchPatronsAsync("Alex Example", CancellationToken.None));
+        Assert.AreEqual("polaris_patron_search_failed", failure.Code);
+    }
+
+    [TestMethod]
+    public async Task PolarisBibValidationPreservesCallerCancellationAndProviderTimeout()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var cancelledHandler = new ProtectedSequenceResponseHandler()
+        {
+            BeforeProtectedRequest = token =>
+            {
+                cancellation.Cancel();
+                Assert.IsTrue(token.IsCancellationRequested);
+            }
+        };
+        var cancelledProvider = await CreatePolarisProviderAsync(cancelledHandler);
+        Exception? cancellationResult = null;
+        try
+        {
+            await cancelledProvider.ValidateBibAsync(9001, cancellation.Token);
+        }
+        catch (Exception exception)
+        {
+            cancellationResult = exception;
+        }
+        Assert.IsInstanceOfType<OperationCanceledException>(cancellationResult);
+
+        var timeoutHandler = new ProtectedSequenceResponseHandler()
+        {
+            ProtectedRequestException = new TaskCanceledException("Polaris BIB lookup timed out.")
+        };
+        var timeoutProvider = await CreatePolarisProviderAsync(timeoutHandler);
+        var failure = await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
+            await timeoutProvider.ValidateBibAsync(9001, CancellationToken.None));
+        Assert.AreEqual("polaris_bib_validation_transport_failed", failure.Code);
+    }
+
+    [TestMethod]
+    public async Task PolarisPatronRefreshAndPickupBranchesHonorCallerCancellation()
+    {
+        using var refreshCancellation = new CancellationTokenSource();
+        var refreshHandler = new ProtectedSequenceResponseHandler()
+        {
+            BeforeProtectedRequest = token =>
+            {
+                refreshCancellation.Cancel();
+                Assert.IsTrue(token.IsCancellationRequested);
+            }
+        };
+        var refreshProvider = await CreatePolarisProviderAsync(refreshHandler);
+        Exception? refreshResult = null;
+        try
+        {
+            await refreshProvider.RefreshAsync("20000000000045", refreshCancellation.Token);
+        }
+        catch (Exception exception)
+        {
+            refreshResult = exception;
+        }
+        Assert.IsInstanceOfType<OperationCanceledException>(refreshResult);
+
+        using var pickupCancellation = new CancellationTokenSource();
+        var pickupHandler = new ProtectedSequenceResponseHandler()
+        {
+            BeforeProtectedRequest = token =>
+            {
+                pickupCancellation.Cancel();
+                Assert.IsTrue(token.IsCancellationRequested);
+            }
+        };
+        var pickupProvider = await CreatePolarisProviderAsync(pickupHandler);
+        var patron = new PatronSnapshot(
+            7004, "20000000000045", "pickup@example.org", "Pickup", "Patron",
+            "1", "Adult", 101, 2, "Test Library", 101);
+        Exception? pickupResult = null;
+        try
+        {
+            await pickupProvider.GetPickupBranchesAsync(patron, pickupCancellation.Token);
+        }
+        catch (Exception exception)
+        {
+            pickupResult = exception;
+        }
+        Assert.IsInstanceOfType<OperationCanceledException>(pickupResult);
+    }
+
+    [TestMethod]
+    [DataRow(true, "polaris_unavailable")]
+    [DataRow(false, "pickup_branches_unavailable")]
+    public async Task StaffPatronRefreshAndPickupTimeoutsAreProviderFailures(
+        bool failRefresh, string expectedCode)
+    {
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var pickup = new ControllablePickupPatronProvider();
+        if (failRefresh)
+        {
+            pickup.RefreshException = new TaskCanceledException("Polaris refresh timed out.");
+        }
+        else
+        {
+            pickup.PickupBranchesException = new OperationCanceledException("Polaris branches timed out.");
+        }
+
+        await using var scopedFactory = factory!.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IPatronProvider>();
+                services.AddSingleton<IPatronProvider>(pickup);
+            }));
+        var lookup = scopedFactory.Services.GetRequiredService<StaffSuggestionService>();
+        var lookupFailure = await Assert.ThrowsExactlyAsync<StaffSuggestionException>(async () =>
+            await lookup.LookupAsync(actor,
+                new StaffPatronLookupInput(null, "20000000001992", 2), CancellationToken.None));
+        Assert.AreEqual(502, lookupFailure.StatusCode);
+        Assert.AreEqual(expectedCode, lookupFailure.Code);
+
+        using var client = scopedFactory.CreateClient();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+        var title = $"Provider timeout before pickup {Guid.NewGuid():N}";
+        using var response = await client.PostAsJsonAsync("/api/asap/staff/suggestions",
+            StaffBibInput(title, "9001"));
+        Assert.AreEqual(HttpStatusCode.BadGateway, response.StatusCode,
+            await response.Content.ReadAsStringAsync());
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.AreEqual(expectedCode, body.RootElement.GetProperty("code").GetString());
+        Assert.AreEqual(0, pickup.UpdateCount);
+        await AssertNoStaffBibRequestAsync(title);
+
+        var persistence = scopedFactory.Services.GetRequiredService<PatronSuggestionService>();
+        var persistenceFailure = await Assert.ThrowsExactlyAsync<PatronFlowException>(async () =>
+            await persistence.CreateForStaffAsync(actor, 2, StaffBibInput(title, "9001"),
+                CancellationToken.None));
+        Assert.AreEqual(502, persistenceFailure.StatusCode);
+        Assert.AreEqual(expectedCode,
+            persistenceFailure.Response?.GetType().GetProperty("code")?.GetValue(persistenceFailure.Response));
+        Assert.AreEqual(0, pickup.UpdateCount);
+    }
+
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task StaffPatronRefreshAndPickupHonorCallerCancellation(bool cancelDuringRefresh)
+    {
+        var actor = await ReadConfiguredSuperAdminAsync();
+        using var cancellation = new CancellationTokenSource();
+        var pickup = new ControllablePickupPatronProvider();
+        Action<CancellationToken> cancel = token =>
+        {
+            Assert.AreEqual(cancellation.Token, token);
+            cancellation.Cancel();
+        };
+        if (cancelDuringRefresh)
+        {
+            pickup.BeforeRefresh = cancel;
+        }
+        else
+        {
+            pickup.BeforePickupBranches = cancel;
+        }
+
+        await using var scopedFactory = factory!.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IPatronProvider>();
+                services.AddSingleton<IPatronProvider>(pickup);
+            }));
+        var lookup = scopedFactory.Services.GetRequiredService<StaffSuggestionService>();
+        await Assert.ThrowsExactlyAsync<OperationCanceledException>(async () =>
+            await lookup.LookupAsync(actor,
+                new StaffPatronLookupInput(null, "20000000001993", 2), cancellation.Token));
+        Assert.AreEqual(0, pickup.UpdateCount);
+
+        using var persistenceCancellation = new CancellationTokenSource();
+        Action<CancellationToken> cancelPersistence = token =>
+        {
+            Assert.AreEqual(persistenceCancellation.Token, token);
+            persistenceCancellation.Cancel();
+        };
+        if (cancelDuringRefresh)
+        {
+            pickup.BeforeRefresh = cancelPersistence;
+        }
+        else
+        {
+            pickup.BeforePickupBranches = cancelPersistence;
+        }
+
+        var persistence = scopedFactory.Services.GetRequiredService<PatronSuggestionService>();
+        var title = $"Canceled before pickup {Guid.NewGuid():N}";
+        await Assert.ThrowsExactlyAsync<OperationCanceledException>(async () =>
+            await persistence.CreateForStaffAsync(actor, 2, StaffBibInput(title, "9001"),
+                persistenceCancellation.Token));
+        Assert.AreEqual(0, pickup.UpdateCount);
+        await AssertNoStaffBibRequestAsync(title);
     }
 
     [TestMethod]
@@ -460,6 +799,86 @@ public sealed partial class PatronJourneyTests
                 workflow.SuggestionLimitMessage = previousLimitMessage;
             }
 
+            await restore.SaveChangesAsync();
+        }
+    }
+
+    [TestMethod]
+    public async Task StaffSuggestionFinalIdentityRevocationAfterPickupReturnsVisiblePartialFailure()
+    {
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var provider = new ControllablePickupPatronProvider();
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var title = $"Revoked after pickup {Guid.NewGuid():N}";
+        const string barcode = "20000000001991";
+        bool wasActive;
+        int beforeEvents;
+        int beforeOutbox;
+        await using (var setup = await contextFactory.CreateDbContextAsync())
+        {
+            wasActive = await setup.StaffUsers.Where(item => item.Id == actor.Id)
+                .Select(item => item.IsActive).SingleAsync();
+            beforeEvents = await setup.TitleRequestEvents.CountAsync();
+            beforeOutbox = await setup.EmailOutbox.CountAsync();
+        }
+
+        provider.AfterUpdate = () =>
+        {
+            using var connection = new SqlConnection(databaseConnectionString);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE [asap].[StaffUser] SET [IsActive] = 0 WHERE [Id] = @id;";
+            command.Parameters.AddWithValue("@id", actor.Id);
+            command.ExecuteNonQuery();
+        };
+
+        try
+        {
+            await using var scopedFactory = factory.WithWebHostBuilder(builder =>
+                builder.ConfigureServices(services =>
+                {
+                    services.RemoveAll<IPatronProvider>();
+                    services.AddSingleton<IPatronProvider>(provider);
+                }));
+            using var client = scopedFactory.CreateClient();
+            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+            client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+            using var response = await client.PostAsJsonAsync("/api/asap/staff/suggestions", new
+            {
+                libraryOrgId = 2,
+                barcode,
+                format = "book",
+                title,
+                author = "Race author",
+                publication = "Coming soon",
+                preferredPickupBranchId = 102,
+                currentPreferredPickupBranchIdAtLoad = 101,
+                currentPreferredPickupBranchObservedAtLoad = true,
+                autohold = true,
+                emailPatronConfirmation = false,
+                customFields = new Dictionary<string, string?>()
+            });
+
+            var raw = await response.Content.ReadAsStringAsync();
+            Assert.AreEqual(HttpStatusCode.Unauthorized, response.StatusCode, raw);
+            using var body = JsonDocument.Parse(raw);
+            Assert.AreEqual("request_not_created_pickup_changed", body.RootElement.GetProperty("code").GetString());
+            Assert.IsTrue(body.RootElement.GetProperty("pickupPreferenceChanged").GetBoolean());
+            var message = body.RootElement.GetProperty("message").GetString()!;
+            StringAssert.Contains(message, "suggestion was not created");
+            StringAssert.Contains(message, "preferred pickup location was changed successfully");
+            Assert.AreEqual(1, provider.UpdateCount);
+            await using var verify = await contextFactory.CreateDbContextAsync();
+            Assert.AreEqual(0, await verify.TitleRequests.CountAsync(item =>
+                item.Barcode == barcode && item.Title == title));
+            Assert.AreEqual(beforeEvents, await verify.TitleRequestEvents.CountAsync());
+            Assert.AreEqual(beforeOutbox, await verify.EmailOutbox.CountAsync());
+        }
+        finally
+        {
+            await using var restore = await contextFactory.CreateDbContextAsync();
+            var staff = await restore.StaffUsers.SingleAsync(item => item.Id == actor.Id);
+            staff.IsActive = wasActive;
             await restore.SaveChangesAsync();
         }
     }

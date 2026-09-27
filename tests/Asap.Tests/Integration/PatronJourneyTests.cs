@@ -10405,6 +10405,10 @@ public sealed partial class PatronJourneyTests
         public int RefreshCount { get; private set; }
         public int UpdateCount { get; private set; }
         public bool FailUpdate { get; set; }
+        public Exception? RefreshException { get; set; }
+        public Exception? PickupBranchesException { get; set; }
+        public Action<CancellationToken>? BeforeRefresh { get; set; }
+        public Action<CancellationToken>? BeforePickupBranches { get; set; }
         public Action? AfterUpdate { get; set; }
         public Action? BeforePickupBranchesReturn { get; set; }
         public Action? BeforeIdentifierLookup { get; set; }
@@ -10416,8 +10420,13 @@ public sealed partial class PatronJourneyTests
 
         public Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             RefreshCount++;
+            BeforeRefresh?.Invoke(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (RefreshException is not null)
+            {
+                throw RefreshException;
+            }
             return Task.FromResult(new PatronSnapshot(
                 7004,
                 barcode,
@@ -10436,7 +10445,12 @@ public sealed partial class PatronJourneyTests
             PatronSnapshot patron,
             CancellationToken cancellationToken)
         {
+            BeforePickupBranches?.Invoke(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
+            if (PickupBranchesException is not null)
+            {
+                throw PickupBranchesException;
+            }
             BeforePickupBranchesReturn?.Invoke();
             return Task.FromResult<IReadOnlyList<PickupBranch>>(IncludeEastBranch
                 ? [new PickupBranch(101, "Main Library"), new PickupBranch(102, "North Branch"),
@@ -10652,17 +10666,26 @@ public sealed partial class PatronJourneyTests
 
         public bool OperationalFailure { get; set; }
 
-        public bool CancelValidation { get; set; }
+        public Exception? ValidationException { get; set; }
 
-        public bool CancelSearch { get; set; }
+        public Exception? SearchException { get; set; }
+
+        public Action<CancellationToken>? BeforeValidation { get; set; }
+
+        public Action<CancellationToken>? BeforeSearch { get; set; }
+
+        public int SearchCount { get; private set; }
 
         public Task<IReadOnlyList<PatronSnapshot>> SearchPatronsAsync(
             string query,
             CancellationToken cancellationToken)
         {
-            if (CancelSearch)
+            SearchCount++;
+            BeforeSearch?.Invoke(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (SearchException is not null)
             {
-                throw new OperationCanceledException("Patron search was canceled.");
+                throw SearchException;
             }
 
             throw new NotSupportedException();
@@ -10670,11 +10693,12 @@ public sealed partial class PatronJourneyTests
 
         public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             ValidationCount++;
-            if (CancelValidation)
+            BeforeValidation?.Invoke(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (ValidationException is not null)
             {
-                throw new OperationCanceledException("BIB validation was canceled.");
+                throw ValidationException;
             }
 
             if (OperationalFailure)
@@ -10848,6 +10872,8 @@ public sealed partial class PatronJourneyTests
 
         public int RequestCount { get; private set; }
         public List<Uri> RequestUris { get; } = [];
+        public Exception? ProtectedRequestException { get; set; }
+        public Action<CancellationToken>? BeforeProtectedRequest { get; set; }
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -10866,6 +10892,13 @@ public sealed partial class PatronJourneyTests
                     Content = new StringContent(ProtectedTokenContent),
                     RequestMessage = request
                 });
+            }
+
+            BeforeProtectedRequest?.Invoke(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (ProtectedRequestException is not null)
+            {
+                throw ProtectedRequestException;
             }
 
             if (!remaining.TryDequeue(out var response))
