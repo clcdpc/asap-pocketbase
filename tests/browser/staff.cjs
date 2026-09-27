@@ -1739,6 +1739,7 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
     await desktopPage.locator('#staff-suggestion-dialog[open]').waitFor();
     const scope = desktopPage.getByLabel('Servicing library', { exact: true });
     assert.equal(await scope.inputValue(), '', 'Super-admin suggestion scope must start blank');
+    await desktopPage.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Servicing library');
     assert.equal(await desktopPage.evaluate(() => document.activeElement.getAttribute('aria-label')), 'Servicing library');
     await scope.selectOption('2');
     await desktopPage.getByLabel('Patron barcode or name', { exact: true }).fill('MULTIPLE');
