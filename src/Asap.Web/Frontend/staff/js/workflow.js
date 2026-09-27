@@ -179,7 +179,8 @@ export function createWorkflowApp() {
     currentRequest: null,
     editControls: null,
     editorDirty: false,
-    verifiedBib: null
+    verifiedBib: null,
+    actionChoice: null
   };
 
   function announce(message, kind = '') {
@@ -233,6 +234,19 @@ export function createWorkflowApp() {
 
   function cancelDialogMutationCompletion() {
     latestLoads.begin('dialog-mutation').abort();
+  }
+
+  function cancelActionChoiceLoad() {
+    latestLoads.begin('action-choice').abort();
+    state.actionChoice = null;
+  }
+
+  function dismissActionChoice() {
+    const choice = state.actionChoice;
+    if (!choice) return;
+    cancelActionChoiceLoad();
+    choice.panel.remove();
+    if (choice.returnFocus?.isConnected) choice.returnFocus.focus();
   }
 
   function cancelAdditionalCopyCreationCompletion() {
@@ -310,6 +324,7 @@ export function createWorkflowApp() {
     cancelDialogFocusReturn();
     cancelAssignmentCandidateLoad();
     cancelDialogMutationCompletion();
+    cancelActionChoiceLoad();
     cancelAdditionalCopyCreationCompletion();
     closeStaffSuggestion({ focusButton: false, force: true });
     if (dom.dialog.open) dom.dialog.close();
@@ -332,7 +347,8 @@ export function createWorkflowApp() {
     latestLoads.begin('additional-copy-preview').abort();
     resetAnalytics();
     settingsController.signedOut();
-    dom.signedOutMessage.textContent = message || 'Sign in with your authorized library account.';
+    dom.signedOutMessage.textContent = state.partialSessionFailureMessage ||
+      message || 'Sign in with your authorized library account.';
     dom.signedOut.hidden = false;
     dom.workspace.hidden = true;
     dom.sessionActions.hidden = true;
@@ -481,10 +497,12 @@ export function createWorkflowApp() {
         const deepLink = currentRequestParameter();
         if (deepLink) await openRequest(deepLink);
       }
+      return true;
     } catch (error) {
       if (!options.silent && !isAbortError(error) && error.status !== 401) {
         announce(error.message || 'Requests could not be loaded.', 'error');
       }
+      return false;
     } finally {
       if (load.isCurrent()) dom.refresh.disabled = false;
       latestLoads.finish('queue', load.token);
@@ -817,6 +835,7 @@ export function createWorkflowApp() {
     cancelDialogFocusReturn();
     cancelAssignmentCandidateLoad();
     cancelDialogMutationCompletion();
+    cancelActionChoiceLoad();
     cancelAdditionalCopyPreviewLoad();
     cancelAdditionalCopyCreationCompletion();
     state.selectedRequestId = String(id);
@@ -1557,6 +1576,7 @@ export function createWorkflowApp() {
     cancelAdditionalCopyPreviewLoad();
     cancelAdditionalCopyCreationCompletion();
     if (!preserveDialogMutation) cancelDialogMutationCompletion();
+    cancelActionChoiceLoad();
     if (state.selectedRequestType === 'title_request' && String(state.selectedRequestId) === String(request.id)) {
       state.selectedRequestVersion = request.version;
     }
@@ -1602,10 +1622,32 @@ export function createWorkflowApp() {
       body.append(tags);
     }
     body.append(buildEditForm(request, configuration));
+    body.append(renderActivity(request.activity));
     body.append(element('section', { className: 'research-section', hidden: 'hidden' }));
     if (request.holdOperation) body.append(buildHoldOperation(request, request.holdOperation));
     dom.dialogBody.replaceChildren(body);
     updateResearchLinks();
+  }
+
+  function renderActivity(activity) {
+    const section = element('section', { className: 'request-activity', 'aria-label': 'Request activity' });
+    section.append(element('h3', { text: 'Activity' }));
+    if (!Array.isArray(activity) || activity.length === 0) {
+      section.append(element('p', { text: 'No recorded activity.' }));
+      return section;
+    }
+    const list = element('ol');
+    for (const item of activity) {
+      const type = text(item.eventType, 'Event').replaceAll('_', ' ');
+      const actor = item.actorName || (item.actorType === 'system' ? 'System' : 'Actor not recorded');
+      list.append(element('li', { 'data-event-id': String(item.id) }, [
+        element('strong', { text: type }),
+        element('span', { text: item.message ? ` ${item.message}` : '' }),
+        element('small', { text: `${actor} · ${dateTime(item.created)}` })
+      ]));
+    }
+    section.append(list);
+    return section;
   }
 
   function buildActionBar(request) {
@@ -1621,9 +1663,9 @@ export function createWorkflowApp() {
     }
     if (request.status === 'suggestion') {
       bar.append(
-        commandButton('Purchase', 'shopping-cart', () => runAction(request, 'purchase'), 'primary-button', workflowBlocked),
+        commandButton('Purchase', 'shopping-cart', event => showActionChoice(request, 'purchase', event.currentTarget), 'primary-button', workflowBlocked),
         commandButton('Already own', 'book', () => runAction(request, 'alreadyOwn'), 'secondary-button', workflowBlocked),
-        commandButton('Reject', 'ban', () => runAction(request, 'reject'), 'danger-button', workflowBlocked),
+        commandButton('Reject', 'ban', event => showActionChoice(request, 'reject', event.currentTarget), 'danger-button', workflowBlocked),
         commandButton('Close silently', 'archive', () => runAction(request, 'silentClose'), 'secondary-button', workflowBlocked)
       );
     } else if (request.status === 'outstanding_purchase') {
@@ -1760,6 +1802,14 @@ export function createWorkflowApp() {
     return result;
   }
 
+  function stableJson(value) {
+    if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+    if (value && typeof value === 'object') {
+      return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+    }
+    return JSON.stringify(value);
+  }
+
   function buildEditForm(request, configuration) {
     const form = element('form', { className: 'edit-form' });
     state.editorDirty = false;
@@ -1801,6 +1851,7 @@ export function createWorkflowApp() {
           state.editorDirty = true;
           updateResearchLinks();
           showSelectedContext();
+          updatePreview();
         }
       });
     });
@@ -1851,9 +1902,37 @@ export function createWorkflowApp() {
     });
     const customFields = element('div', { className: 'custom-fields wide' });
     let customFieldControls = renderCustomFieldEditor(customFields, request, configuration, format.value);
+    const pendingPreview = element('p', { className: 'pending-audit-preview wide', role: 'status' });
+    function updatePreview() {
+      const changed = [];
+      const identifierChanged = !identifier.disabled && identifier.value.trim() !== (request.identifier || '').trim();
+      const bibChanged = !bib.disabled && bib.value.trim() !== (request.bibid || '').trim();
+      const selectedBib = selectedStaffBibId(state.verifiedBib, request.id, bib.value);
+      let bibVerified = request.bibidStaffVerified === true;
+      if (identifierChanged || bibChanged) bibVerified = false;
+      if (bibChanged || selectedBib) bibVerified = Boolean(bib.value.trim());
+      if (title.value.trim() !== request.title) changed.push('title');
+      if ((author.value.trim() || null) !== (request.author || null)) changed.push('author');
+      if (identifierChanged) changed.push('identifier');
+      if (bibChanged) changed.push('BIB ID');
+      if (bibVerified !== (request.bibidStaffVerified === true)) changed.push('BIB verification');
+      if ((publication.value.trim() || null) !== (request.publication || null)) changed.push('publication timing');
+      if (exactDate.value !== (request.exactPublicationDate || '')) changed.push('exact publication date');
+      if (format.value !== request.format) changed.push('format');
+      if (autohold.checked !== request.autohold) changed.push('automatic hold');
+      if (notes.value !== (request.notes || '')) changed.push('notes');
+      if (stableJson(collectCustomFields(request, customFieldControls)) !==
+          stableJson(request.customFields || {})) changed.push('custom fields');
+      pendingPreview.textContent = changed.length
+        ? `Pending changes (not saved): ${changed.join(', ')}.`
+        : 'No pending changes.';
+    }
     format.addEventListener('change', () => {
       customFieldControls = renderCustomFieldEditor(customFields, request, configuration, format.value);
+      updatePreview();
     });
+    form.addEventListener('input', updatePreview);
+    form.addEventListener('change', updatePreview);
     form.append(
       labeledInput('Title', title),
       labeledInput('Author', author),
@@ -1866,10 +1945,12 @@ export function createWorkflowApp() {
       customFields,
       element('label', { className: 'check-field' }, [autohold, element('span', { text: 'Automatically place hold' })]),
       labeledInput('Notes', notes, 'wide'),
+      pendingPreview,
       element('div', { className: 'form-actions wide' }, [
         element('button', { type: 'submit', className: 'primary-button' }, [icon('save'), 'Save changes'])
       ])
     );
+    updatePreview();
     form.addEventListener('submit', async event => {
       event.preventDefault();
       await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/action`, {
@@ -1902,7 +1983,65 @@ export function createWorkflowApp() {
       operation === 'place-hold' ? 'Hold placement completed.' : 'Request updated.');
   }
 
-  async function runAction(request, action, targetStatus) {
+  function showActionChoice(request, action, returnFocus) {
+    if (!isCurrentDialogRequest(request, 'title_request')) return;
+    cancelActionChoiceLoad();
+    dom.dialogBody.querySelector('.action-choice')?.remove();
+    const panel = element('form', { className: 'action-choice', 'aria-label': `${action} options` });
+    const heading = element('h3', { text: action === 'reject' ? 'Reject suggestion' : 'Purchase suggestion' });
+    const submit = element('button', { type: 'submit', className: action === 'reject' ? 'danger-button' : 'primary-button',
+      disabled: action === 'reject' }, action === 'reject' ? 'Reject' : 'Purchase');
+    const cancel = commandButton('Cancel', 'times', dismissActionChoice);
+    let input;
+    if (action === 'purchase') {
+      input = element('input', { type: 'checkbox', checked: state.staff.purchaseReminderDefault });
+      panel.append(heading, element('label', { className: 'check-field' },
+        [input, element('span', { text: 'Send purchase reminder' })]));
+    } else {
+      input = element('select', { 'aria-label': 'Rejection template' });
+      input.append(element('option', { value: '', text: 'Default rejection email' }));
+      panel.append(heading, labeledInput('Rejection template', input));
+    }
+    const choice = { request, action, panel, returnFocus };
+    state.actionChoice = choice;
+    panel.append(element('div', { className: 'form-actions' }, [submit, cancel]));
+    panel.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (state.actionChoice !== choice || !isCurrentDialogRequest(request, 'title_request')) return;
+      submit.disabled = true;
+      try {
+        await runAction(request, action, undefined, action === 'purchase'
+          ? { emailPurchaseReminder: input.checked }
+          : { rejectionTemplateId: input.value || null });
+      } finally {
+        if (state.actionChoice === choice && panel.isConnected) submit.disabled = false;
+      }
+    });
+    dom.dialogBody.querySelector('.action-bar')?.after(panel);
+    input.focus();
+    if (action !== 'reject') return;
+    const load = latestLoads.begin('action-choice');
+    authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(request.id)}/rejection-templates`,
+      { signal: load.signal })
+      .then(data => {
+        if (!load.isCurrent() || state.actionChoice !== choice ||
+            !isCurrentDialogRequest(request, 'title_request')) return;
+        for (const item of data.items || []) {
+          input.append(element('option', { value: String(item.id), text: item.name }));
+        }
+        input.value = data.defaultTemplateId || '';
+        submit.disabled = false;
+      })
+      .catch(error => {
+        if (load.isCurrent() && state.actionChoice === choice &&
+            !isAbortError(error) && error.status !== 401) {
+          announce(error.message || 'Rejection templates could not be loaded.', 'error');
+        }
+      })
+      .finally(() => latestLoads.finish('action-choice', load.token));
+  }
+
+  async function runAction(request, action, targetStatus, choices = {}) {
     const entersPendingHold = action === 'catalogFound' || action === 'alreadyOwn' ||
       targetStatus === 'pending_hold' || action === 'purchase' && Boolean(request.bibid);
     if (entersPendingHold) {
@@ -1916,12 +2055,12 @@ export function createWorkflowApp() {
       }
     }
     const terminal = action === 'reject' || action === 'silentClose' || action === 'closeDuplicate' || targetStatus === 'closed';
-    if (terminal && !window.confirm('Apply this final workflow action?')) return;
+    if (terminal && action !== 'reject' && !window.confirm('Apply this final workflow action?')) return;
     await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/action`, {
       version: request.version,
       action,
       status: targetStatus,
-      emailPurchaseReminder: action === 'purchase' && state.staff.purchaseReminderDefault
+      ...choices
     }, 'Workflow action completed.');
   }
 
@@ -2013,13 +2152,48 @@ export function createWorkflowApp() {
     const mutation = latestLoads.begin('dialog-mutation');
     announce('Saving request...');
     try {
-      await authorizedJson(path, { method: 'POST', body });
-      await loadQueue({ skipDeepLink: true, silent: true });
+      const result = await authorizedJson(path, { method: 'POST', body });
       if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
-      await openRequest(request.id);
-      if (isCurrentDialogSelection(request, 'title_request')) announce(successMessage, 'success');
+      const committed = result?.committed === true;
+      let current = committed ? (result.request || (result.id ? result : null)) : result;
+      const status = committed ? ` Final state: ${statusLabel(result.finalStatus)}.` : '';
+      const notification = committed && result.notificationStatus
+        ? ` Notification ${result.notificationStatus.replaceAll('_', ' ')}${result.notificationReason
+          ? ` (${result.notificationReason.replaceAll('_', ' ')})` : ''}.`
+        : '';
+      let message = `${successMessage}${status}${notification}`;
+      state.partialSessionFailureMessage = committed
+        ? `${message} Sign in again to review the committed request.`
+        : null;
+      if (!current && committed) {
+        try {
+          current = await authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(request.id)}`,
+            { signal: mutation.signal });
+        } catch (error) {
+          if (!isAbortError(error) && error.status !== 401) {
+            message += ' Details and activity could not refresh.';
+          }
+        }
+      }
+      if (!mutation.isCurrent() || !isCurrentDialogSelection(request, 'title_request')) return;
+      if (current) {
+        renderRequest(current, state.configurations.get(String(current.libraryOrgId)) || {},
+          { preserveDialogMutation: true });
+      } else {
+        state.selectedRequestVersion = null;
+        dom.dialogBody.replaceChildren(element('p', { text: 'The action committed. Reload this request to review current details.' }));
+      }
+      dom.closeDialog.focus();
+      announce(message, 'success');
+      const refreshed = await loadQueue({ skipDeepLink: true, silent: true });
+      if (mutation.isCurrent() && isCurrentDialogSelection(request, 'title_request')) {
+        announce(refreshed === false ? `${message} The queue could not refresh.` : message, 'success');
+        if (refreshed === true && current && !['suppressed', 'dispatch_failed'].includes(result.notificationStatus)) {
+          state.partialSessionFailureMessage = null;
+        }
+      }
     } catch (error) {
-      if (error.status === 409) {
+      if (error.status === 409 || error.response?.code === 'request_outcome_unconfirmed') {
         const message = error.message || 'The request changed. Review the refreshed version before trying again.';
         await loadQueue({ skipDeepLink: true, silent: true });
         if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
@@ -2349,6 +2523,7 @@ export function createWorkflowApp() {
     cancelDialogFocusReturn();
     cancelAssignmentCandidateLoad();
     cancelDialogMutationCompletion();
+    cancelActionChoiceLoad();
     cancelAdditionalCopyPreviewLoad();
     cancelAdditionalCopyCreationCompletion();
     if (dom.dialog.open) dom.dialog.close();
@@ -2495,7 +2670,8 @@ export function createWorkflowApp() {
     dom.closeDialog.addEventListener('click', closeDialog);
     dom.dialog.addEventListener('cancel', event => {
       event.preventDefault();
-      closeDialog();
+      if (state.actionChoice) dismissActionChoice();
+      else closeDialog();
     });
     dom.createCopyForm.addEventListener('submit', createAdditionalCopy);
     dom.cancelCreateCopy.addEventListener('click', closeAdditionalCopyCreateDialog);
