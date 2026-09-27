@@ -1758,8 +1758,13 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
     await audience.fill('Created by the staff browser journey.');
 
     await format.selectOption('ebook');
-    await desktopPage.locator('.staff-format-notice').waitFor({ state: 'visible' });
-    assert.match(await desktopPage.locator('.staff-format-notice').textContent(), /help\.libbyapp\.com/);
+    const formatNotice = desktopPage.locator('.staff-format-notice');
+    await formatNotice.waitFor({ state: 'visible' });
+    assert.match(await formatNotice.textContent(), /This is an eBook suggestion/);
+    assert.equal(await formatNotice.locator('p').count(), 2);
+    assert.equal(await formatNotice.locator('a').getAttribute('href'),
+      'https://help.libbyapp.com/en-us/6260.htm');
+    assert.equal((await formatNotice.textContent()).includes('<p>'), false);
     assert.equal(await desktopPage.getByRole('button', { name: 'Create suggestion', exact: true }).isDisabled(), false);
     await format.selectOption('book');
     assert.equal(await audience.isVisible(), true);

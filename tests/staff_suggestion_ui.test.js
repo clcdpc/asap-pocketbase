@@ -39,6 +39,7 @@ async function until(predicate, message) {
     global.URLSearchParams = dom.window.URLSearchParams;
     global.Node = dom.window.Node;
     global.HTMLElement = dom.window.HTMLElement;
+    global.DOMParser = dom.window.DOMParser;
     dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
     dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
     dom.window.gridjs = require(path.join(frontend, 'vendor/gridjs/6.2.0/gridjs.umd.js'));
@@ -95,7 +96,7 @@ async function until(predicate, message) {
         options: [{ id: 'adult', label: 'Adult', enabled: true }]
       }],
       allowPatronAutoholdOptOut: false,
-      ebookMessage: 'Use the library eBook collection.',
+      ebookMessage: '<p>Use the library eBook collection.</p><p><a href="https://example.org/help" target="_blank" rel="noreferrer">Learn more</a></p>',
       eaudiobookMessage: ''
     };
     const createdRequest = {
@@ -263,10 +264,26 @@ async function until(predicate, message) {
       .some(label => label.textContent.includes('Who is it for?')));
     format.value = 'ebook';
     format.dispatchEvent(new dom.window.Event('change'));
-    assert.match(document.querySelector('.staff-format-notice').textContent, /Use the library eBook collection/);
+    const notice = document.querySelector('.staff-format-notice');
+    assert.equal(notice.textContent.includes('<p>'), false);
+    assert.equal(notice.textContent.includes('<a'), false);
+    assert.equal(notice.querySelector('p').textContent, 'Use the library eBook collection.');
+    assert.equal(notice.querySelector('a').getAttribute('href'), 'https://example.org/help');
+    assert.equal(notice.querySelector('a').textContent, 'Learn more');
     assert.equal(document.querySelector('#staff-suggestion-actions button[type="submit"]').disabled, false,
       'informational eBook format must remain available for staff creation');
     assert.equal(document.querySelector('.staff-suggestion-fields input[maxlength="500"]').required, true);
+    configuration.ebookMessage = '<script>window.staffMessageScriptRan = true</script><a href="javascript:alert(1)">JS</a><a href="data:text/html,unsafe">Data</a><a href="vbscript:msgbox(1)">VB</a><span onclick="window.staffMessageEventRan = true">Safe text</span>';
+    format.dispatchEvent(new dom.window.Event('change'));
+    assert.equal(notice.querySelector('script'), null);
+    assert.equal(dom.window.staffMessageScriptRan, undefined);
+    assert.equal(notice.querySelectorAll('a').length, 3);
+    assert.ok([...notice.querySelectorAll('a')].every(anchor => !anchor.hasAttribute('href')));
+    assert.equal(notice.querySelector('span').hasAttribute('onclick'), false);
+    configuration.ebookMessage = '';
+    format.dispatchEvent(new dom.window.Event('change'));
+    assert.equal(notice.hidden, true);
+    assert.equal(notice.childNodes.length, 0);
     format.value = 'book';
     format.dispatchEvent(new dom.window.Event('change'));
     assert.ok([...document.querySelectorAll('#staff-suggestion-body button')]

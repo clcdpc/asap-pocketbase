@@ -58,7 +58,7 @@ public sealed partial class PolarisPatronProvider
 
             return results;
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
             throw;
         }

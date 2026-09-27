@@ -9,6 +9,7 @@ import {
 import { createSettingsController } from './settings.js';
 import { applyPolarisResultToControls, createPolarisLookup, renderResearchLinks, selectedStaffBibId } from './research.js';
 import { loadAnalytics, resetAnalytics } from './analytics.js';
+import { sanitizedHtmlFragment } from '../../shared/html.js';
 import {
   requestedRequestIdFromUrl,
   requestedStatusFromUrl,
@@ -1278,7 +1279,7 @@ export function createWorkflowApp() {
       pickup.prepend(element('option', { value: '', text: 'Choose a pickup location' }));
     }
     const customFields = element('div', { className: 'custom-fields wide' });
-    const formatNotice = element('p', { className: 'staff-format-notice field-help wide', hidden: true });
+    const formatNotice = element('div', { className: 'staff-format-notice field-help wide', hidden: true });
     const titleField = labeledInput('Title', title);
     const authorField = labeledInput('Author', author);
     const identifierField = labeledInput('Identifier / ISBN', identifier);
@@ -1354,7 +1355,8 @@ export function createWorkflowApp() {
       const message = behavior === 'ebookMessage'
         ? configuration.ebookMessage
         : behavior === 'eaudiobookMessage' ? configuration.eaudiobookMessage : formatRule?.message;
-      formatNotice.textContent = message || '';
+      formatNotice.replaceChildren();
+      if (message) formatNotice.append(sanitizedHtmlFragment(message));
       formatNotice.hidden = !message;
       if (submitButton) submitButton.disabled = branches.length === 0;
     };

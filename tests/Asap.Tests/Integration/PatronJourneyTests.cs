@@ -10652,10 +10652,31 @@ public sealed partial class PatronJourneyTests
 
         public bool OperationalFailure { get; set; }
 
+        public bool CancelValidation { get; set; }
+
+        public bool CancelSearch { get; set; }
+
+        public Task<IReadOnlyList<PatronSnapshot>> SearchPatronsAsync(
+            string query,
+            CancellationToken cancellationToken)
+        {
+            if (CancelSearch)
+            {
+                throw new OperationCanceledException("Patron search was canceled.");
+            }
+
+            throw new NotSupportedException();
+        }
+
         public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             ValidationCount++;
+            if (CancelValidation)
+            {
+                throw new OperationCanceledException("BIB validation was canceled.");
+            }
+
             if (OperationalFailure)
             {
                 throw new PolarisOperationalException("polaris_bib_validation_failed", "Polaris is unavailable.");

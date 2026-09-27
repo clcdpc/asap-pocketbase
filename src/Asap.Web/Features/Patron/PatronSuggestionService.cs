@@ -504,7 +504,7 @@ public sealed partial class PatronSuggestionService(
                 new { code = "polaris_unavailable" },
                 exception);
         }
-        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception exception) when (exception is not OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             throw new PatronFlowException(
                 502,
@@ -530,7 +530,7 @@ public sealed partial class PatronSuggestionService(
                 new { code = "pickup_branches_unavailable" },
                 exception);
         }
-        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception exception) when (exception is not OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             throw new PatronFlowException(
                 502,
@@ -563,16 +563,10 @@ public sealed partial class PatronSuggestionService(
             throw new PatronFlowException(500, "Polaris BIB verification is not configured.");
         }
 
+        BibValidationResult result;
         try
         {
-            var result = await staffPolaris.ValidateBibAsync(parsed, cancellationToken);
-            if (!result.IsValid)
-            {
-                throw new PatronFlowException(
-                    404,
-                    "The selected Polaris BIB could not be found.",
-                    new { code = "bib_not_found" });
-            }
+            result = await staffPolaris.ValidateBibAsync(parsed, cancellationToken);
         }
         catch (PolarisOperationalException exception)
         {
@@ -582,6 +576,10 @@ public sealed partial class PatronSuggestionService(
                 new { code = "bib_validation_unavailable" },
                 exception);
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
             throw new PatronFlowException(
@@ -589,6 +587,14 @@ public sealed partial class PatronSuggestionService(
                 "Catalog lookup is temporarily unavailable.",
                 new { code = "bib_validation_unavailable" },
                 exception);
+        }
+
+        if (!result.IsValid)
+        {
+            throw new PatronFlowException(
+                404,
+                "The selected Polaris BIB could not be found.",
+                new { code = "bib_not_found" });
         }
 
         return parsed.ToString(CultureInfo.InvariantCulture);
@@ -1814,7 +1820,7 @@ public sealed partial class PatronSuggestionService(
         {
             result = await patronProvider.LookupIdentifierAsync(identifier, cancellationToken);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
             throw;
         }

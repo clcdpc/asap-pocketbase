@@ -5,6 +5,7 @@ using Asap.Web.Features.Email;
 using Asap.Web.Features.Patron;
 using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Data;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,6 +15,104 @@ namespace Asap.Tests.Integration;
 
 public sealed partial class PatronJourneyTests
 {
+    [TestMethod]
+    public async Task StaffSuggestionMalformedVerifiedBibReturnsInvalidBibBeforeMutation() =>
+        await AssertStaffBibFailureAsync("not-a-bib", HttpStatusCode.BadRequest, "invalid_bib", 0);
+
+    [TestMethod]
+    public async Task StaffSuggestionMissingVerifiedBibReturnsNotFoundBeforeMutation() =>
+        await AssertStaffBibFailureAsync("9001", HttpStatusCode.NotFound, "bib_not_found", 1);
+
+    [TestMethod]
+    public async Task StaffSuggestionBibProviderFailureReturnsUnavailableBeforeMutation() =>
+        await AssertStaffBibFailureAsync(
+            "9001", HttpStatusCode.BadGateway, "bib_validation_unavailable", 1, operationalFailure: true);
+
+    [TestMethod]
+    public async Task StaffSuggestionBibValidationCancellationPropagates()
+    {
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var pickup = new ControllablePickupPatronProvider();
+        var bib = new RejectingBibStaffProvider { CancelValidation = true };
+        await using var scopedFactory = CreateStaffBibFailureFactory(pickup, bib);
+        var service = scopedFactory.Services.GetRequiredService<StaffSuggestionService>();
+        var title = $"Canceled BIB {Guid.NewGuid():N}";
+
+        await Assert.ThrowsExactlyAsync<OperationCanceledException>(async () =>
+            await service.CreateAsync(actor, StaffBibInput(title, "9001"), CancellationToken.None));
+
+        Assert.AreEqual(1, bib.ValidationCount);
+        Assert.AreEqual(0, pickup.UpdateCount);
+        await AssertNoStaffBibRequestAsync(title);
+    }
+
+    [TestMethod]
+    public async Task StaffSuggestionPatronSearchCancellationPropagates()
+    {
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var pickup = new ControllablePickupPatronProvider();
+        var bib = new RejectingBibStaffProvider { CancelSearch = true };
+        await using var scopedFactory = CreateStaffBibFailureFactory(pickup, bib);
+        var service = scopedFactory.Services.GetRequiredService<StaffSuggestionService>();
+
+        await Assert.ThrowsExactlyAsync<OperationCanceledException>(async () =>
+            await service.LookupAsync(actor, new StaffPatronLookupInput("Alex Example", null, 2),
+                CancellationToken.None));
+
+        Assert.AreEqual(0, pickup.UpdateCount);
+    }
+
+    private async Task AssertStaffBibFailureAsync(
+        string verifiedBibId,
+        HttpStatusCode expectedStatus,
+        string expectedCode,
+        int expectedValidationCount,
+        bool operationalFailure = false)
+    {
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var pickup = new ControllablePickupPatronProvider();
+        var bib = new RejectingBibStaffProvider { OperationalFailure = operationalFailure };
+        await using var scopedFactory = CreateStaffBibFailureFactory(pickup, bib);
+        using var client = scopedFactory.CreateClient();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+        var title = $"Rejected BIB {Guid.NewGuid():N}";
+
+        using var response = await client.PostAsJsonAsync(
+            "/api/asap/staff/suggestions", StaffBibInput(title, verifiedBibId));
+
+        Assert.AreEqual(expectedStatus, response.StatusCode, await response.Content.ReadAsStringAsync());
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.AreEqual(expectedCode, body.RootElement.GetProperty("code").GetString());
+        Assert.AreEqual(expectedValidationCount, bib.ValidationCount);
+        Assert.AreEqual(0, pickup.UpdateCount);
+        await AssertNoStaffBibRequestAsync(title);
+    }
+
+    private WebApplicationFactory<Program> CreateStaffBibFailureFactory(
+        ControllablePickupPatronProvider pickup,
+        RejectingBibStaffProvider bib) => factory!.WithWebHostBuilder(builder =>
+        builder.ConfigureServices(services =>
+        {
+            services.RemoveAll<IPatronProvider>();
+            services.AddSingleton<IPatronProvider>(pickup);
+            services.RemoveAll<IStaffPolarisProvider>();
+            services.AddSingleton<IStaffPolarisProvider>(bib);
+        }));
+
+    private static StaffSuggestionInput StaffBibInput(string title, string verifiedBibId) => new(
+        2, "20000000001401", "book", title, "Staff author", null, null, null, null,
+        102, 101, false, false, new Dictionary<string, string?>(), verifiedBibId, true);
+
+    private async Task AssertNoStaffBibRequestAsync(string title)
+    {
+        await using var context = await factory!.Services
+            .GetRequiredService<IDbContextFactory<AsapDbContext>>()
+            .CreateDbContextAsync();
+        Assert.AreEqual(0, await context.TitleRequests.AsNoTracking()
+            .CountAsync(item => item.Barcode == "20000000001401" && item.Title == title));
+    }
+
     [TestMethod]
     public async Task PolarisPatronRefreshDistinguishesDefinitiveNotFoundFromProviderFailure()
     {
