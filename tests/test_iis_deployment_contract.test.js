@@ -74,11 +74,16 @@ const hostedJobs = workflow.slice(0, deploymentJobStart);
 const deploymentJob = workflow.slice(deploymentJobStart);
 assert.ok(!hostedJobs.includes('self-hosted'), 'hosted build/test/package jobs must not use self-hosted labels');
 assert.ok(!hostedJobs.includes('ASAP_TEST_DEPLOYMENT_ENABLED'), 'hosted build/test/package jobs must not depend on activation');
+assert.match(
+  workflow,
+  /  workflow_dispatch:\n    inputs:\n      deploy_test_iis:\n(?:        [^\n]+\n)*        default: false\n/,
+  'manual workflow dispatch must default to no test-IIS deployment'
+);
 assert.ok(
   workflow.slice(deploymentJobStart).includes(
-    "if: ${{ vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))) }}"
+    "if: ${{ vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true' && ((github.event_name == 'workflow_dispatch' && inputs.deploy_test_iis) || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))) }}"
   ),
-  'deployment must require the explicit activation variable and an eligible event'
+  'deployment must require the activation variable and manual opt-in or an eligible tag push'
 );
 assert.ok(
   workflow.slice(deploymentJobStart).includes('runs-on: [self-hosted, windows, x64, asap-test-iis]'),

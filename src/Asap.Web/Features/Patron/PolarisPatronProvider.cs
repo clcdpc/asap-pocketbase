@@ -941,6 +941,13 @@ public sealed partial class PolarisPatronProvider(
         var patron = result?.PatronBasicData;
         if (response.Response?.IsSuccessStatusCode != true)
         {
+            if (response.Response?.StatusCode == HttpStatusCode.NotFound)
+            {
+                throw new PolarisOperationalException(
+                    "polaris_patron_not_found",
+                    "Polaris did not find the patron.");
+            }
+
             throw new PolarisOperationalException(
                 "polaris_patron_transport_failed",
                 "Polaris patron data was unavailable.");
@@ -958,7 +965,9 @@ public sealed partial class PolarisPatronProvider(
         {
             throw string.IsNullOrEmpty(pin)
                 ? new PolarisOperationalException(
-                    "polaris_patron_refresh_failed",
+                    papiErrorCode == -3000
+                        ? "polaris_patron_not_found"
+                        : "polaris_patron_refresh_failed",
                     "Polaris did not return the patron.")
                 : new PatronAuthenticationException("Incorrect Login - Please try again");
         }

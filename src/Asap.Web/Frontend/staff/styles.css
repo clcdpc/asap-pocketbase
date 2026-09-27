@@ -97,6 +97,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 #queue-view, #additional-copy-view, #profile-view, #analytics-view, #operations-view { padding-top: 20px; }
 #settings-view { padding-top: 20px; }
 .section-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 18px; }
+.section-heading-actions { display: flex; align-items: end; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
 .section-heading h1 { margin: 0; font-size: 1.65rem; }
 .section-heading p { margin: 4px 0 0; color: var(--muted); }
 
@@ -281,6 +282,26 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 .dialog-shell { min-height: 240px; background: #fff; }
 .compact-dialog-shell { min-height: 0; }
 #additional-copy-create-dialog { width: min(520px, calc(100vw - 28px)); }
+.dialog-status { min-height: 24px; margin: 0 0 12px; color: var(--muted); }
+.dialog-status.error { color: var(--danger); font-weight: 600; }
+.dialog-status.warning { color: var(--warning); font-weight: 600; }
+.staff-suggestion-search-fields { display: grid; gap: 14px; max-width: 620px; }
+.staff-suggestion-search-fields label, .staff-suggestion-fields label { display: grid; gap: 5px; font-weight: 700; }
+.staff-suggestion-search-fields small, .field-help { color: var(--muted); }
+.staff-suggestion-matches { margin-top: 22px; }
+.staff-suggestion-matches h3 { margin: 0 0 8px; font-size: 1rem; }
+.staff-suggestion-candidate-list { display: grid; gap: 8px; }
+.staff-suggestion-candidate { display: grid; gap: 2px; width: 100%; padding: 11px 13px; color: var(--ink); text-align: left; background: #fff; border: 1px solid var(--line); border-left: 4px solid var(--brand); border-radius: 4px; cursor: pointer; }
+.staff-suggestion-candidate:hover { background: var(--soft); }
+.staff-suggestion-candidate span { color: var(--muted); font-size: .87rem; }
+.staff-suggestion-fields { margin-top: 4px; }
+.staff-suggestion-catalog { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 13px 15px; background: var(--soft); border: 1px solid #d6dde1; border-left: 4px solid var(--brand); }
+.staff-suggestion-catalog p { flex: 1 1 260px; margin: 0; color: var(--muted); }
+.staff-patron-card { grid-column: 1 / -1; padding: 13px 15px; background: var(--soft); border-left: 4px solid var(--brand); }
+.staff-patron-card h3 { margin: 0; font-size: 1.08rem; }
+.staff-patron-card p { margin: 3px 0 0; color: var(--muted); overflow-wrap: anywhere; }
+.staff-suggestion-conflict { display: grid; gap: 8px; margin-top: 12px; padding: 12px; background: #fff6e5; border-left: 4px solid var(--warning); }
+#staff-suggestion-dialog { width: min(860px, calc(100vw - 28px)); }
 .dialog-header { position: sticky; top: 0; z-index: 2; display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 18px 20px 14px; background: #fff; border-bottom: 1px solid var(--line); }
 .dialog-header h2 { margin: 0; font-size: 1.35rem; overflow-wrap: anywhere; }
 .kicker { margin: 0 0 3px; color: var(--brand-dark); font-size: .8rem; font-weight: 800; text-transform: uppercase; }

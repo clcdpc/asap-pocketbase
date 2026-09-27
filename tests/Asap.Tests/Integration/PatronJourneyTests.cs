@@ -467,7 +467,7 @@ public sealed partial class PatronJourneyTests
         using (var report = JsonDocument.Parse(
                    await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "staff-browser-results.json"))))
         {
-            Assert.HasCount(22, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            Assert.HasCount(26, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
             var analytics = report.RootElement.GetProperty("analytics");
             Assert.AreEqual("all", analytics.GetProperty("desktopSuperAdminScope").GetString());
             Assert.AreEqual("last90", analytics.GetProperty("desktopRange").GetString());
@@ -10400,9 +10400,18 @@ public sealed partial class PatronJourneyTests
 
     private sealed class ControllablePickupPatronProvider : IPatronProvider
     {
-        public int CurrentPickupBranchId { get; private set; } = 101;
+        public int? CurrentPickupBranchId { get; set; } = 101;
+        public bool IncludeEastBranch { get; set; }
+        public int RefreshCount { get; private set; }
         public int UpdateCount { get; private set; }
         public bool FailUpdate { get; set; }
+        public Exception? RefreshException { get; set; }
+        public Exception? PickupBranchesException { get; set; }
+        public Action<CancellationToken>? BeforeRefresh { get; set; }
+        public Action<CancellationToken>? BeforePickupBranches { get; set; }
+        public Action? AfterUpdate { get; set; }
+        public Action? BeforePickupBranchesReturn { get; set; }
+        public Action? BeforeIdentifierLookup { get; set; }
 
         public Task<PatronSnapshot> AuthenticateAsync(
             string barcode,
@@ -10411,7 +10420,13 @@ public sealed partial class PatronJourneyTests
 
         public Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
         {
+            RefreshCount++;
+            BeforeRefresh?.Invoke(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
+            if (RefreshException is not null)
+            {
+                throw RefreshException;
+            }
             return Task.FromResult(new PatronSnapshot(
                 7004,
                 barcode,
@@ -10430,9 +10445,17 @@ public sealed partial class PatronJourneyTests
             PatronSnapshot patron,
             CancellationToken cancellationToken)
         {
+            BeforePickupBranches?.Invoke(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<PickupBranch>>(
-                [new PickupBranch(101, "Main Library"), new PickupBranch(102, "North Branch")]);
+            if (PickupBranchesException is not null)
+            {
+                throw PickupBranchesException;
+            }
+            BeforePickupBranchesReturn?.Invoke();
+            return Task.FromResult<IReadOnlyList<PickupBranch>>(IncludeEastBranch
+                ? [new PickupBranch(101, "Main Library"), new PickupBranch(102, "North Branch"),
+                   new PickupBranch(103, "East Branch")]
+                : [new PickupBranch(101, "Main Library"), new PickupBranch(102, "North Branch")]);
         }
 
         public Task UpdatePreferredPickupBranchAsync(
@@ -10447,13 +10470,18 @@ public sealed partial class PatronJourneyTests
                 throw new PolarisOperationalException("testing_pickup_failure", "Testing pickup failure.");
             }
             CurrentPickupBranchId = pickupBranchId;
+            AfterUpdate?.Invoke();
             return Task.CompletedTask;
         }
 
         public Task<IdentifierLookupResult> LookupIdentifierAsync(
             string identifier,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new IdentifierLookupResult(IdentifierLookupOutcome.NotFound));
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            BeforeIdentifierLookup?.Invoke();
+            return Task.FromResult(new IdentifierLookupResult(IdentifierLookupOutcome.NotFound));
+        }
     }
 
     private sealed class ScriptedHoldProvider : IPatronProvider, IStaffPolarisProvider
@@ -10638,10 +10666,41 @@ public sealed partial class PatronJourneyTests
 
         public bool OperationalFailure { get; set; }
 
+        public Exception? ValidationException { get; set; }
+
+        public Exception? SearchException { get; set; }
+
+        public Action<CancellationToken>? BeforeValidation { get; set; }
+
+        public Action<CancellationToken>? BeforeSearch { get; set; }
+
+        public int SearchCount { get; private set; }
+
+        public Task<IReadOnlyList<PatronSnapshot>> SearchPatronsAsync(
+            string query,
+            CancellationToken cancellationToken)
+        {
+            SearchCount++;
+            BeforeSearch?.Invoke(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (SearchException is not null)
+            {
+                throw SearchException;
+            }
+
+            throw new NotSupportedException();
+        }
+
         public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             ValidationCount++;
+            BeforeValidation?.Invoke(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (ValidationException is not null)
+            {
+                throw ValidationException;
+            }
+
             if (OperationalFailure)
             {
                 throw new PolarisOperationalException("polaris_bib_validation_failed", "Polaris is unavailable.");
@@ -10813,6 +10872,8 @@ public sealed partial class PatronJourneyTests
 
         public int RequestCount { get; private set; }
         public List<Uri> RequestUris { get; } = [];
+        public Exception? ProtectedRequestException { get; set; }
+        public Action<CancellationToken>? BeforeProtectedRequest { get; set; }
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -10831,6 +10892,13 @@ public sealed partial class PatronJourneyTests
                     Content = new StringContent(ProtectedTokenContent),
                     RequestMessage = request
                 });
+            }
+
+            BeforeProtectedRequest?.Invoke(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (ProtectedRequestException is not null)
+            {
+                throw ProtectedRequestException;
             }
 
             if (!remaining.TryDequeue(out var response))

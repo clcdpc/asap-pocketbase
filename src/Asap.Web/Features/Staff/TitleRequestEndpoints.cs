@@ -22,8 +22,18 @@ public static class TitleRequestEndpoints
         group.MapGet("/{id}", GetAsync);
         endpoints.MapGet("/api/asap/staff/research-configuration", ResearchConfigurationAsync)
             .RequireAuthorization();
+        endpoints.MapGet("/api/asap/staff/suggestion-configuration", SuggestionConfigurationAsync)
+            .RequireAuthorization();
         endpoints.MapPost("/api/asap/staff/bib-lookup", BibLookupAsync)
             .RequireAuthorization()
+            .AddEndpointFilter<StaffAntiforgeryFilter>();
+        endpoints.MapPost("/api/asap/staff/patron-lookup", LookupPatronAsync)
+            .RequireAuthorization()
+            .AddEndpointFilter<StaffAntiforgeryFilter>();
+        endpoints.MapPost("/api/asap/staff/suggestions", CreateSuggestionAsync)
+            .RequireAuthorization()
+            .AddEndpointFilter<StaffAntiforgeryFilter>();
+        group.MapPost("", CreateSuggestionAsync)
             .AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/claim", ClaimAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/unclaim", UnclaimAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
@@ -47,6 +57,132 @@ public static class TitleRequestEndpoints
             .RequireAuthorization()
             .AddEndpointFilter<StaffAntiforgeryFilter>();
         return endpoints;
+    }
+
+    private static async Task<IResult> SuggestionConfigurationAsync(
+        HttpContext context,
+        int? libraryOrgId,
+        StaffSuggestionService suggestions,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await suggestions.GetConfigurationAsync(
+                Current(context),
+                libraryOrgId,
+                cancellationToken);
+            return Results.Json(new
+            {
+                libraryOrgId = result.LibraryOrgId,
+                libraryOrgName = result.LibraryOrgName,
+                configuration = result.EffectiveConfiguration
+            });
+        }
+        catch (StaffSuggestionException exception)
+        {
+            return StaffSuggestionError(exception);
+        }
+    }
+
+    private static async Task<IResult> LookupPatronAsync(
+        HttpContext context,
+        StaffPatronLookupInput input,
+        StaffSuggestionService suggestions,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return Results.Json(await suggestions.LookupAsync(
+                Current(context),
+                input,
+                cancellationToken));
+        }
+        catch (StaffSuggestionException exception)
+        {
+            return StaffSuggestionError(exception);
+        }
+    }
+
+    private static async Task<IResult> CreateSuggestionAsync(
+        HttpContext context,
+        StaffSuggestionInput input,
+        StaffSuggestionService suggestions,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var created = await suggestions.CreateAsync(Current(context), input, cancellationToken);
+            var id = created.Id.ToString(CultureInfo.InvariantCulture);
+            return Results.Json(new
+            {
+                id,
+                created.SuccessTitle,
+                created.SuccessMessage,
+                notificationStatus = created.NotificationStatus,
+                libraryOrgId = created.LibraryOrganizationId ?? input.LibraryOrgId,
+                requestUrl = $"/staff/?request={Uri.EscapeDataString(id)}"
+            }, statusCode: StatusCodes.Status201Created);
+        }
+        catch (StaffSuggestionException exception)
+        {
+            return StaffSuggestionError(exception);
+        }
+    }
+
+    private static IResult StaffSuggestionError(StaffSuggestionException exception)
+    {
+        if (exception.Response is PatronSuggestionDuplicateConflict conflict)
+        {
+            return Results.Json(
+                new
+                {
+                    code = "duplicate",
+                    conflict.Message,
+                    conflictTitle = conflict.ConflictTitle,
+                    conflictMessage = conflict.ConflictMessage,
+                    duplicate = DuplicatePayload(conflict.Duplicate)
+                },
+                statusCode: exception.StatusCode);
+        }
+
+        if (exception.Response is PatronSuggestionPickupChangedFailure partial)
+        {
+            return Results.Json(
+                new
+                {
+                    code = partial.Code,
+                    partial.Message,
+                    partial.PickupPreferenceChanged,
+                    conflictTitle = partial.DuplicateConflict?.ConflictTitle,
+                    conflictMessage = partial.DuplicateConflict?.ConflictMessage,
+                    duplicateMessage = partial.DuplicateConflict?.Message,
+                    duplicate = partial.DuplicateConflict is { } partialConflict
+                        ? DuplicatePayload(partialConflict.Duplicate)
+                        : null
+                },
+                statusCode: exception.StatusCode);
+        }
+
+        return Results.Json(
+            exception.Response ?? new { code = exception.Code, message = exception.Message },
+            statusCode: exception.StatusCode);
+    }
+
+    private static object DuplicatePayload(PatronSuggestionDuplicate duplicate)
+    {
+        var id = duplicate.Id.ToString(CultureInfo.InvariantCulture);
+        return new
+        {
+            id,
+            duplicate.Created,
+            duplicate.Status,
+            closeReason = duplicate.CloseReason,
+            duplicate.Title,
+            duplicate.Author,
+            format = duplicate.Format,
+            matchType = duplicate.MatchType,
+            requestUrl = $"/staff/?request={Uri.EscapeDataString(id)}"
+        };
     }
 
     private static async Task<IResult> ResearchConfigurationAsync(

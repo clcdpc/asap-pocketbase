@@ -1622,6 +1622,240 @@ async function fillOperatorResolution(page, attestProof) {
   if (attestProof) await page.getByLabel(/I attest that this evidence proves/).check();
 }
 
+async function runStaffSuggestion(browser, args, axeSource, report) {
+  const scopedState = await createContext(
+    browser,
+    { width: 1280, height: 900 },
+    args.baseOrigin,
+    args.staffIdentity
+  );
+  const scopedPage = await scopedState.context.newPage();
+  const scopedErrors = [];
+  scopedPage.on('pageerror', error => scopedErrors.push(error.message));
+  try {
+    await scopedPage.goto(`${args.baseOrigin}/staff/`, { waitUntil: 'networkidle' });
+    await scopedPage.locator('#workspace').waitFor({ state: 'visible' });
+    await scopedPage.getByRole('button', { name: 'New suggestion', exact: true }).click();
+    await scopedPage.locator('#staff-suggestion-dialog[open]').waitFor();
+    const scopedLibrary = scopedPage.getByLabel('Servicing library', { exact: true });
+    assert.equal(await scopedLibrary.isDisabled(), true, 'Ordinary staff must not edit suggestion scope');
+    assert.equal(await scopedLibrary.inputValue(), '2');
+    const scopedSession = await session(scopedState.context, args.baseOrigin);
+    const forbiddenResponse = await scopedState.context.request.post(
+      `${args.baseOrigin}/api/asap/staff/patron-lookup`,
+      {
+        headers: { 'X-ASAP-Antiforgery': scopedSession.antiforgeryToken },
+        data: { query: '20000000000001', barcode: null, libraryOrgId: 3 }
+      }
+    );
+    assert.equal(forbiddenResponse.status(), 403, await forbiddenResponse.text());
+    const forbidden = await forbiddenResponse.json();
+    assert.equal(forbidden.code, 'staff_scope_forbidden');
+    assert.match(forbidden.message, /outside your authorized scope/i);
+    await scopedPage.keyboard.press('Escape');
+    await scopedPage.locator('#staff-suggestion-dialog').waitFor({ state: 'hidden' });
+    assert.deepEqual(scopedErrors, [], `Ordinary staff suggestion flow raised an error: ${scopedErrors.join('; ')}`);
+    assert.equal(scopedState.traffic.externalRequests, 0, 'Ordinary staff suggestion flow requested an external asset');
+  } finally {
+    await scopedState.context.close();
+  }
+
+  const raceState = await createContext(
+    browser,
+    { width: 1280, height: 900 },
+    args.baseOrigin,
+    args.superIdentity
+  );
+  const racePage = await raceState.context.newPage();
+  const raceErrors = [];
+  const releaseConfiguration = deferred();
+  const configurationRequested = deferred();
+  const configurationResponse = await raceState.context.request.get(
+    `${args.baseOrigin}/api/asap/staff/suggestion-configuration?libraryOrgId=2`
+  );
+  assert.equal(configurationResponse.status(), 200, await configurationResponse.text());
+  const configurationBody = await configurationResponse.json();
+  const delayedConfiguration = async route => {
+    configurationRequested.resolve();
+    await releaseConfiguration.promise;
+    try {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(configurationBody)
+      });
+    } catch {
+      // The browser is expected to abort this response after the scope changes.
+    }
+  };
+  racePage.on('pageerror', error => raceErrors.push(error.message));
+  await racePage.route('**/api/asap/staff/suggestion-configuration?*', delayedConfiguration);
+  try {
+    await racePage.goto(`${args.baseOrigin}/staff/`, { waitUntil: 'networkidle' });
+    await racePage.locator('#workspace').waitFor({ state: 'visible' });
+    await racePage.getByRole('button', { name: 'New suggestion', exact: true }).click();
+    await racePage.locator('#staff-suggestion-dialog[open]').waitFor();
+    const raceScope = racePage.getByLabel('Servicing library', { exact: true });
+    await raceScope.selectOption('2');
+    await racePage.getByLabel('Patron barcode or name', { exact: true }).fill('20000000000001');
+    await racePage.getByRole('button', { name: 'Look up patron', exact: true }).click();
+    await configurationRequested.promise;
+    await raceScope.selectOption('');
+    releaseConfiguration.resolve();
+    await racePage.getByText('Choose a servicing library.', { exact: true }).waitFor();
+    assert.equal(
+      await racePage.getByRole('button', { name: 'Create suggestion', exact: true }).count(),
+      0,
+      'A stale configuration response must not render a creation form'
+    );
+    assert.deepEqual(raceErrors, [], `Suggestion configuration race raised an error: ${raceErrors.join('; ')}`);
+    assert.equal(raceState.traffic.externalRequests, 0, 'Suggestion configuration race requested an external asset');
+  } finally {
+    releaseConfiguration.resolve();
+    await racePage.unroute('**/api/asap/staff/suggestion-configuration?*', delayedConfiguration);
+    await raceState.context.close();
+  }
+
+  const titleSeed = `Browser on behalf ${Date.now()}`;
+  const desktopState = await createContext(
+    browser,
+    { width: 1280, height: 900 },
+    args.baseOrigin,
+    args.superIdentity
+  );
+  const desktopPage = await desktopState.context.newPage();
+  const desktopErrors = [];
+  let suggestionPosts = 0;
+  desktopPage.on('pageerror', error => desktopErrors.push(error.message));
+  desktopPage.on('request', request => {
+    if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/asap/staff/suggestions') {
+      suggestionPosts += 1;
+    }
+  });
+  try {
+    await desktopPage.goto(`${args.baseOrigin}/staff/?scope=2`, { waitUntil: 'networkidle' });
+    await desktopPage.locator('#workspace').waitFor({ state: 'visible' });
+    await desktopPage.getByRole('button', { name: 'New suggestion', exact: true }).click();
+    await desktopPage.locator('#staff-suggestion-dialog[open]').waitFor();
+    const scope = desktopPage.getByLabel('Servicing library', { exact: true });
+    assert.equal(await scope.inputValue(), '', 'Super-admin suggestion scope must start blank');
+    await desktopPage.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Servicing library');
+    assert.equal(await desktopPage.evaluate(() => document.activeElement.getAttribute('aria-label')), 'Servicing library');
+    await scope.selectOption('2');
+    await desktopPage.getByLabel('Patron barcode or name', { exact: true }).fill('MULTIPLE');
+    await desktopPage.getByRole('button', { name: 'Look up patron', exact: true }).click();
+    await desktopPage.getByRole('button', { name: /Alex Example/ }).waitFor();
+    assert.equal(await desktopPage.getByRole('button', { name: /Avery Example/ }).count(), 1);
+    await desktopPage.getByRole('button', { name: /Alex Example/ }).click();
+
+    const format = desktopPage.getByLabel('Material format', { exact: true });
+    await format.waitFor();
+    const title = desktopPage.locator('#staff-suggestion-form label')
+      .filter({ hasText: /title/i }).locator('input').first();
+    await title.fill(titleSeed);
+    const audience = desktopPage.getByLabel('Audience note', { exact: true });
+    await audience.waitFor();
+    await audience.fill('Created by the staff browser journey.');
+
+    await format.selectOption('ebook');
+    const formatNotice = desktopPage.locator('.staff-format-notice');
+    await formatNotice.waitFor({ state: 'visible' });
+    assert.match(await formatNotice.textContent(), /This is an eBook suggestion/);
+    assert.equal(await formatNotice.locator('p').count(), 2);
+    assert.equal(await formatNotice.locator('a').getAttribute('href'),
+      'https://help.libbyapp.com/en-us/6260.htm');
+    assert.equal((await formatNotice.textContent()).includes('<p>'), false);
+    assert.equal(await desktopPage.getByRole('button', { name: 'Create suggestion', exact: true }).isDisabled(), false);
+    await format.selectOption('book');
+    assert.equal(await audience.isVisible(), true);
+    await audience.fill('Created by the staff browser journey.');
+    const publication = desktopPage.locator('#staff-suggestion-form label')
+      .filter({ hasText: /publication timing/i }).locator('select').first();
+    await publication.selectOption({ index: 1 });
+    const binding = desktopPage.locator('#staff-suggestion-form label')
+      .filter({ hasText: /binding/i }).locator('select').first();
+    await binding.selectOption({ index: 1 });
+
+    await desktopPage.getByRole('button', { name: 'Search Polaris catalog', exact: true }).click();
+    await desktopPage.locator('#polaris-dialog[open]').waitFor();
+    await desktopPage.locator('#polaris-mode').selectOption('title');
+    await desktopPage.locator('#polaris-query').fill('Browser staff suggestion catalog');
+    await desktopPage.locator('#polaris-form button[type=submit]').click();
+    await desktopPage.getByRole('button', { name: 'Use BIB 9001' }).waitFor();
+    await desktopPage.getByRole('button', { name: 'Use BIB 9001' }).click();
+    await desktopPage.locator('#polaris-dialog').waitFor({ state: 'hidden' });
+    assert.match(await title.inputValue(), /Catalog title 9001/);
+    assert.equal(await desktopPage.getByLabel('Email patron confirmation (optional)', { exact: true }).isChecked(), false);
+    assert.equal(await desktopPage.getByLabel('Automatically place hold', { exact: true }).isChecked(), true);
+    const invalidSuggestionFields = await desktopPage.locator('#staff-suggestion-form').evaluate(form =>
+      [...form.elements]
+        .filter(element => !element.checkValidity())
+        .map(element => ({
+          name: element.name,
+          type: element.type,
+          value: element.value,
+          label: element.closest('label')?.textContent?.trim() || element.getAttribute('aria-label')
+        })));
+    assert.deepEqual(invalidSuggestionFields, [], 'Configured suggestion fields must be valid before submit');
+    await scan(desktopPage, axeSource, args.artifactRoot, report, 'desktop', 'staff-suggestion-editor');
+
+    const createResponsePromise = desktopPage.waitForResponse(response =>
+      response.request().method() === 'POST' &&
+      new URL(response.url()).pathname === '/api/asap/staff/suggestions');
+    await desktopPage.evaluate(() => {
+      const form = document.querySelector('#staff-suggestion-form');
+      form.requestSubmit();
+      form.requestSubmit();
+    });
+    const createResponse = await createResponsePromise;
+    const created = await createResponse.json();
+    assert.equal(createResponse.status(), 201, JSON.stringify(created));
+    assert.equal(typeof created.id, 'string');
+    assert.equal(suggestionPosts, 1, 'Double submit must issue one staff suggestion request');
+    await desktopPage.locator('#staff-suggestion-dialog').waitFor({ state: 'hidden' });
+    await desktopPage.locator('#request-dialog[open]').waitFor();
+    assert.match(desktopPage.url(), /[?&]request=[0-9]+$/);
+    assert.match(await desktopPage.locator('#request-dialog-title').textContent(), /Catalog title 9001/i);
+    await scan(desktopPage, axeSource, args.artifactRoot, report, 'desktop', 'staff-suggestion-created');
+    assert.deepEqual(desktopErrors, [], `Staff suggestion browser flow raised an error: ${desktopErrors.join('; ')}`);
+    assert.equal(desktopState.traffic.externalRequests, 0, 'Staff suggestion browser flow requested an external asset');
+  } finally {
+    await desktopState.context.close();
+  }
+
+  const mobileState = await createContext(
+    browser,
+    { width: 390, height: 844 },
+    args.baseOrigin,
+    args.superIdentity
+  );
+  const mobilePage = await mobileState.context.newPage();
+  const mobileErrors = [];
+  mobilePage.on('pageerror', error => mobileErrors.push(error.message));
+  try {
+    await mobilePage.goto(`${args.baseOrigin}/staff/?scope=2`, { waitUntil: 'networkidle' });
+    await mobilePage.locator('#workspace').waitFor({ state: 'visible' });
+    await mobilePage.getByRole('button', { name: 'New suggestion', exact: true }).click();
+    await mobilePage.locator('#staff-suggestion-dialog[open]').waitFor();
+    const mobileScope = mobilePage.getByLabel('Servicing library', { exact: true });
+    assert.equal(await mobileScope.inputValue(), '', 'Mobile super-admin suggestion scope must start blank');
+    await mobileScope.selectOption('2');
+    await mobilePage.getByLabel('Patron barcode or name', { exact: true }).fill('MULTIPLE');
+    await mobilePage.getByRole('button', { name: 'Look up patron', exact: true }).click();
+    await mobilePage.getByRole('button', { name: /Alex Example/ }).waitFor();
+    await scan(mobilePage, axeSource, args.artifactRoot, report, 'mobile', 'staff-suggestion-matches');
+    await mobilePage.getByRole('button', { name: /Alex Example/ }).click();
+    await mobilePage.getByLabel('Material format', { exact: true }).waitFor();
+    await scan(mobilePage, axeSource, args.artifactRoot, report, 'mobile', 'staff-suggestion-editor');
+    await mobilePage.keyboard.press('Escape');
+    await mobilePage.locator('#staff-suggestion-dialog').waitFor({ state: 'hidden' });
+    assert.deepEqual(mobileErrors, [], `Mobile staff suggestion flow raised an error: ${mobileErrors.join('; ')}`);
+    assert.equal(mobileState.traffic.externalRequests, 0, 'Mobile staff suggestion flow requested an external asset');
+  } finally {
+    await mobileState.context.close();
+  }
+}
+
 async function loadDependencies() {
   let chromium;
   try { ({ chromium } = require('playwright')); } catch {
@@ -1657,7 +1891,8 @@ async function main() {
     await runAdditionalCopies(browser, args, axeSource, report);
     await runOperatorResolution(browser, args, axeSource, report);
     await runScopedBlocked(browser, args, axeSource, report);
-    assert.equal(report.states.length, 22, 'Expected twenty-two major staff browser states');
+    await runStaffSuggestion(browser, args, axeSource, report);
+    assert.equal(report.states.length, 26, 'Expected twenty-six major staff browser states');
     await fs.writeFile(
       path.join(args.artifactRoot, 'staff-browser-results.json'),
       JSON.stringify(report, null, 2),

@@ -10,6 +10,12 @@ on:
     tags:
       - 'v*.*.*-test.*'
   workflow_dispatch:
+    inputs:
+      deploy_test_iis:
+        description: Deploy the tested artifact to test IIS
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -273,7 +279,7 @@ jobs:
   deploy-test-iis:
     name: Deploy exact artifact to test IIS
     needs: build-test-package
-    if: ${{ vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))) }}
+    if: ${{ vars.ASAP_TEST_DEPLOYMENT_ENABLED == 'true' && ((github.event_name == 'workflow_dispatch' && inputs.deploy_test_iis) || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))) }}
     runs-on: [self-hosted, windows, x64, asap-test-iis]
     environment: asap-test-iis
     timeout-minutes: 20
