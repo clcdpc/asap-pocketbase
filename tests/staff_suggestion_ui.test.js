@@ -84,7 +84,7 @@ async function until(predicate, message) {
         key: 'audience', type: 'select', label: 'Audience', helpText: 'Choose an audience.',
         options: [{ id: 'adult', label: 'Adult', enabled: true }]
       }],
-      allowPatronAutoholdOptOut: true,
+      allowPatronAutoholdOptOut: false,
       ebookMessage: '',
       eaudiobookMessage: ''
     };
@@ -97,6 +97,7 @@ async function until(predicate, message) {
     };
     let created = false;
     let suggestionRequests = 0;
+    let duplicateNextSuggestion = false;
     let expireNextSuggestion = false;
     let staleLookupResolve = null;
     global.fetch = async (url, options = {}) => {
@@ -175,6 +176,14 @@ async function until(predicate, message) {
         assert.equal(body.customFields.audience, 'adult');
         assert.equal(body.verifiedBibId, null);
         assert.equal(body.emailPatronConfirmation, false);
+        if (!created) assert.equal(body.autohold, false);
+        if (duplicateNextSuggestion) {
+          duplicateNextSuggestion = false;
+          return response(409, {
+            message: 'This patron already has a suggestion for this catalog BIB.',
+            duplicate: { id: '9007199254740995', matchType: 'bibid' }
+          });
+        }
         created = true;
         return response(201, {
           id: '9007199254740993', successTitle: 'Created', successMessage: 'Created',
@@ -229,6 +238,11 @@ async function until(predicate, message) {
       .some(label => label.textContent.includes('Who is it for?')));
     assert.ok([...document.querySelectorAll('#staff-suggestion-body button')]
       .some(button => button.textContent.includes('Search Polaris catalog')));
+    const autohold = [...document.querySelectorAll('.staff-suggestion-fields label')]
+      .find(label => label.textContent.includes('Automatically place hold'))?.querySelector('input');
+    assert.ok(autohold);
+    assert.equal(autohold.disabled, false, 'staff AutoHold stays enabled when patron opt-out is disabled');
+    autohold.checked = false;
     document.querySelector('.staff-suggestion-catalog button').click();
     await until(() => document.getElementById('polaris-dialog').open, 'staff form must reuse the Task 01 Polaris dialog');
     document.getElementById('close-polaris').click();
@@ -263,6 +277,10 @@ async function until(predicate, message) {
     const expiryAudience = [...document.querySelectorAll('.staff-suggestion-fields select')]
       .find(control => control.getAttribute('aria-label')?.startsWith('Who is it for?'));
     expiryAudience.value = 'adult';
+    duplicateNextSuggestion = true;
+    document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await until(() => document.querySelector('.staff-suggestion-conflict'), 'BIB duplicate must render a conflict');
+    assert.match(document.querySelector('.staff-suggestion-conflict').textContent, /catalog BIB/);
     expireNextSuggestion = true;
     document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
     await until(() => document.getElementById('workspace').hidden, 'session expiry must hide the staff workspace');

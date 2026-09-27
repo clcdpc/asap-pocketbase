@@ -1266,7 +1266,6 @@ export function createWorkflowApp() {
     const exactDate = element('input', { type: 'date' });
     const notes = element('textarea', { maxlength: '10000' });
     const autohold = element('input', { type: 'checkbox', checked: true });
-    if (!configuration.allowPatronAutoholdOptOut) autohold.disabled = true;
     const emailConfirmation = element('input', { type: 'checkbox' });
     const pickup = element('select', { required: 'required', 'aria-label': 'Preferred pickup location' });
     const branches = Array.isArray(context.pickupBranches) ? context.pickupBranches : [];
@@ -1481,9 +1480,14 @@ export function createWorkflowApp() {
       if (!mutation.isCurrent() || isAbortError(error) || error.status === 401) return;
       const duplicateId = error.response?.duplicate?.id;
       if (error.status === 409 && duplicateId) {
+        const matchDescription = {
+          bibid: 'catalog BIB',
+          identifier: 'identifier',
+          title_format: 'title and format'
+        }[error.response?.duplicate?.matchType] || 'request details';
         dom.staffSuggestionBody.append(element('div', { className: 'staff-suggestion-conflict' }, [
           element('strong', { text: 'Existing suggestion found' }),
-          element('span', { text: `Request ${String(duplicateId)} already matches this patron and title.` }),
+          element('span', { text: `Request ${String(duplicateId)} already matches this patron by ${matchDescription}.` }),
           element('button', {
             type: 'button',
             className: 'secondary-button',

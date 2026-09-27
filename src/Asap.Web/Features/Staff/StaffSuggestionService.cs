@@ -15,7 +15,7 @@ public sealed class StaffSuggestionService(
     TimeProvider timeProvider)
 {
     private static readonly Regex BarcodeLike = new(
-        "(?=.*\\d)^[A-Za-z0-9._:-]+$",
+        "^[A-Za-z0-9._:-]+$",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     public async Task<StaffSuggestionConfiguration> GetConfigurationAsync(

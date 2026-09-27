@@ -301,7 +301,7 @@ public sealed partial class PatronSuggestionService(
 
         if (input.CurrentPreferredPickupBranchIdAtLoad.HasValue &&
             input.CurrentPreferredPickupBranchIdAtLoad != patron.PreferredPickupBranchId &&
-            selectedBranch.Id == input.CurrentPreferredPickupBranchIdAtLoad)
+            selectedBranch.Id != patron.PreferredPickupBranchId)
         {
             throw new PatronFlowException(
                 409,
@@ -653,6 +653,7 @@ public sealed partial class PatronSuggestionService(
                 input.Autohold,
                 input.CustomFields),
             configuration,
+            forcedAutoHold: input.Autohold ?? true,
             exactPublicationDate: input.ExactPublicationDate,
             notes: input.Notes,
             verifiedBibId: verifiedBibId);
@@ -663,12 +664,6 @@ public sealed partial class PatronSuggestionService(
             transaction,
             configuration.OrganizationId,
             suggestion,
-            cancellationToken);
-        await EnforceLimitAsync(
-            connection,
-            transaction,
-            barcode,
-            configuration,
             cancellationToken);
         await databaseTransaction.CommitAsync(cancellationToken);
         return (configuration, suggestion);
@@ -761,6 +756,7 @@ public sealed partial class PatronSuggestionService(
                 input.Autohold,
                 input.CustomFields),
             currentConfiguration,
+            forcedAutoHold: input.Autohold ?? true,
             exactPublicationDate: input.ExactPublicationDate,
             notes: input.Notes,
             verifiedBibId: preProviderSuggestion.VerifiedBibId);
@@ -780,12 +776,6 @@ public sealed partial class PatronSuggestionService(
             transaction,
             currentConfiguration.OrganizationId,
             currentSuggestion,
-            cancellationToken);
-        await EnforceLimitAsync(
-            connection,
-            transaction,
-            barcode,
-            currentConfiguration,
             cancellationToken);
         await EnforceDuplicateAsync(
             connection,
@@ -1280,7 +1270,19 @@ public sealed partial class PatronSuggestionService(
 
                 SELECT request.[Id], request.[CreatedUtc], request.[Status], request.[CloseReason],
                        request.[Title], request.[Author], format.[Code] AS [FormatCode],
-                       N'title_format' AS [MatchType], 1 AS [MatchPriority]
+                       N'bibid' AS [MatchType], 1 AS [MatchPriority]
+                FROM [asap].[TitleRequest] AS request WITH (UPDLOCK, HOLDLOCK)
+                JOIN [asap].[MaterialFormat] AS format ON format.[Id] = request.[MaterialFormatId]
+                WHERE request.[LibraryOrganizationId] = @organizationId
+                  AND request.[Barcode] = @barcode
+                  AND @bibId IS NOT NULL
+                  AND request.[BibId] = @bibId
+
+                UNION ALL
+
+                SELECT request.[Id], request.[CreatedUtc], request.[Status], request.[CloseReason],
+                       request.[Title], request.[Author], format.[Code] AS [FormatCode],
+                       N'title_format' AS [MatchType], 2 AS [MatchPriority]
                 FROM [asap].[TitleRequest] AS request WITH (UPDLOCK, HOLDLOCK)
                 JOIN [asap].[MaterialFormat] AS format ON format.[Id] = request.[MaterialFormatId]
                 WHERE request.[LibraryOrganizationId] = @organizationId
@@ -1295,6 +1297,7 @@ public sealed partial class PatronSuggestionService(
         Add(command, "@organizationId", SqlDbType.Int, configuration.OrganizationId);
         Add(command, "@barcode", SqlDbType.NVarChar, barcode, 50);
         Add(command, "@identifier", SqlDbType.NVarChar, suggestion.Identifier, 100);
+        Add(command, "@bibId", SqlDbType.NVarChar, suggestion.VerifiedBibId, 100);
         Add(command, "@title", SqlDbType.NVarChar, suggestion.Title, 500);
         Add(command, "@materialFormatId", SqlDbType.BigInt, suggestion.Format.Id);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -1327,7 +1330,12 @@ public sealed partial class PatronSuggestionService(
             ["duplicate_title"] = title,
             ["duplicate_author"] = author,
             ["duplicate_format"] = formatLabel,
-            ["duplicate_match_type"] = matchType == "identifier" ? "identifier number" : "title and format",
+            ["duplicate_match_type"] = matchType switch
+            {
+                "identifier" => "identifier number",
+                "bibid" => "catalog BIB",
+                _ => "title and format"
+            },
             ["title"] = title,
             ["author"] = author,
             ["format"] = formatLabel
@@ -1337,9 +1345,12 @@ public sealed partial class PatronSuggestionService(
             match => replacements.TryGetValue(match.Groups[1].Value, out var value)
                 ? WebUtility.HtmlEncode(value)
                 : match.Value);
-        var message = matchType == "identifier"
-            ? "This patron already has a suggestion for this identifier number."
-            : "This patron already has this suggestion.";
+        var message = matchType switch
+        {
+            "identifier" => "This patron already has a suggestion for this identifier number.",
+            "bibid" => "This patron already has a suggestion for this catalog BIB.",
+            _ => "This patron already has this suggestion."
+        };
         throw new PatronFlowException(
             409,
             message,

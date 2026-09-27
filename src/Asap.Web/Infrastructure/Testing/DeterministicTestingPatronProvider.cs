@@ -63,6 +63,20 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
     public Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (barcode.Trim() is "MULTIPLE" or "INELIGIBLE" or "PROVIDER" or "UNRESOLVED")
+        {
+            throw new PolarisOperationalException(
+                "polaris_patron_not_found",
+                "The search term is not an exact patron barcode.");
+        }
+
+        if (string.Equals(barcode.Trim(), "ALPHAFAIL", StringComparison.Ordinal))
+        {
+            throw new PolarisOperationalException(
+                "polaris_patron_refresh_failed",
+                "The deterministic patron provider is unavailable.");
+        }
+
         if (string.Equals(barcode.Trim(), "PROVIDER123", StringComparison.Ordinal))
         {
             throw new PolarisOperationalException(

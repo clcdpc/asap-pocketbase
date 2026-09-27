@@ -10400,7 +10400,9 @@ public sealed partial class PatronJourneyTests
 
     private sealed class ControllablePickupPatronProvider : IPatronProvider
     {
-        public int CurrentPickupBranchId { get; private set; } = 101;
+        public int CurrentPickupBranchId { get; set; } = 101;
+        public bool IncludeEastBranch { get; set; }
+        public int RefreshCount { get; private set; }
         public int UpdateCount { get; private set; }
         public bool FailUpdate { get; set; }
         public Action? AfterUpdate { get; set; }
@@ -10413,6 +10415,7 @@ public sealed partial class PatronJourneyTests
         public Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            RefreshCount++;
             return Task.FromResult(new PatronSnapshot(
                 7004,
                 barcode,
@@ -10432,8 +10435,10 @@ public sealed partial class PatronJourneyTests
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<PickupBranch>>(
-                [new PickupBranch(101, "Main Library"), new PickupBranch(102, "North Branch")]);
+            return Task.FromResult<IReadOnlyList<PickupBranch>>(IncludeEastBranch
+                ? [new PickupBranch(101, "Main Library"), new PickupBranch(102, "North Branch"),
+                   new PickupBranch(103, "East Branch")]
+                : [new PickupBranch(101, "Main Library"), new PickupBranch(102, "North Branch")]);
         }
 
         public Task UpdatePreferredPickupBranchAsync(
