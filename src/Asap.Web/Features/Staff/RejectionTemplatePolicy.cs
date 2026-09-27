@@ -33,7 +33,7 @@ internal static class RejectionTemplatePolicy
         IReadOnlyList<EmailTemplate> rows,
         int libraryOrgId) => rows
         .Where(row => row.OrganizationId == 1 ||
-            row.OrganizationId == libraryOrgId && row.IsCustom)
+            row.OrganizationId == libraryOrgId && (row.IsCustom || row.SourceTemplateId is null))
         .Select(row => (Row: row, Template: Resolve(rows, libraryOrgId, row.Id)))
         .Where(item => item.Template is not null)
         .OrderBy(item => item.Row.SortOrder)
@@ -55,7 +55,7 @@ internal static class RejectionTemplatePolicy
 
         EmailTemplate source;
         EmailTemplate? overrideRow = null;
-        if (selected.OrganizationId == 1 || selected.IsCustom)
+        if (selected.OrganizationId == 1 || selected.IsCustom || selected.SourceTemplateId is null)
         {
             source = selected;
             if (selected.OrganizationId == 1 && libraryOrgId != 1)
