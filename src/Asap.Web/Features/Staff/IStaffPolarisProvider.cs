@@ -18,6 +18,12 @@ public interface IStaffPolarisProvider
         Task.FromException<StaffBibSearchResult>(new PolarisOperationalException(
             "polaris_bib_search_unimplemented", "The selected Polaris provider does not implement BIB search."));
 
+    Task<IReadOnlyList<PatronSnapshot>> SearchPatronsAsync(
+        string query,
+        CancellationToken cancellationToken) =>
+        Task.FromException<IReadOnlyList<PatronSnapshot>>(new PolarisOperationalException(
+            "polaris_patron_search_unimplemented", "The selected Polaris provider does not implement patron search."));
+
     Task<StaffBibHoldingsSummary> GetBibHoldingsAsync(
         int bibId, int organizationId, CancellationToken cancellationToken) =>
         Task.FromException<StaffBibHoldingsSummary>(new PolarisOperationalException(

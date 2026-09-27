@@ -467,7 +467,7 @@ public sealed partial class PatronJourneyTests
         using (var report = JsonDocument.Parse(
                    await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "staff-browser-results.json"))))
         {
-            Assert.HasCount(22, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            Assert.HasCount(26, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
             var analytics = report.RootElement.GetProperty("analytics");
             Assert.AreEqual("all", analytics.GetProperty("desktopSuperAdminScope").GetString());
             Assert.AreEqual("last90", analytics.GetProperty("desktopRange").GetString());
@@ -10403,6 +10403,7 @@ public sealed partial class PatronJourneyTests
         public int CurrentPickupBranchId { get; private set; } = 101;
         public int UpdateCount { get; private set; }
         public bool FailUpdate { get; set; }
+        public Action? AfterUpdate { get; set; }
 
         public Task<PatronSnapshot> AuthenticateAsync(
             string barcode,
@@ -10447,6 +10448,7 @@ public sealed partial class PatronJourneyTests
                 throw new PolarisOperationalException("testing_pickup_failure", "Testing pickup failure.");
             }
             CurrentPickupBranchId = pickupBranchId;
+            AfterUpdate?.Invoke();
             return Task.CompletedTask;
         }
 

@@ -63,7 +63,20 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
     public Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(CreatePatron(barcode));
+        if (string.Equals(barcode.Trim(), "PROVIDER123", StringComparison.Ordinal))
+        {
+            throw new PolarisOperationalException(
+                "polaris_patron_refresh_failed",
+                "The deterministic patron provider is unavailable.");
+        }
+
+        return Task.FromResult(barcode.Trim() switch
+        {
+            "20000000000001" => CreatePatron(barcode, "Alex", "Example"),
+            "20000000000002" => CreatePatron(barcode, "Avery", "Example"),
+            "30000000000001" => CreatePatron(barcode, "Out", "Ofscope", 3, "Other Library"),
+            _ => CreatePatron(barcode)
+        });
     }
 
     public Task<int?> GetPatronIdAsync(string barcode, CancellationToken cancellationToken)
@@ -139,6 +152,49 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
         return Task.FromResult(new StaffBibSearchResult(results, results.Length));
     }
 
+    public Task<IReadOnlyList<PatronSnapshot>> SearchPatronsAsync(
+        string query,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (query.Contains("PROVIDER", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new PolarisOperationalException(
+                "testing_provider_unavailable",
+                "The deterministic patron provider is unavailable.");
+        }
+
+        if (query.Contains("UNRESOLVED", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new PolarisOperationalException(
+                "polaris_home_library_missing",
+                "The deterministic patron provider could not resolve the home library.");
+        }
+
+        if (query.Contains("NO MATCH", StringComparison.OrdinalIgnoreCase) ||
+            query.Contains("NONE", StringComparison.OrdinalIgnoreCase))
+        {
+            return Task.FromResult<IReadOnlyList<PatronSnapshot>>([]);
+        }
+
+        if (query.Contains("MULTIPLE", StringComparison.OrdinalIgnoreCase))
+        {
+            return Task.FromResult<IReadOnlyList<PatronSnapshot>>(
+            [
+                CreatePatron("20000000000001", "Alex", "Example"),
+                CreatePatron("20000000000002", "Avery", "Example")
+            ]);
+        }
+
+        if (query.Contains("INELIGIBLE", StringComparison.OrdinalIgnoreCase))
+        {
+            return Task.FromResult<IReadOnlyList<PatronSnapshot>>(
+                [CreatePatron("30000000000001", "Out", "Ofscope", 3, "Other Library")]);
+        }
+
+        return Task.FromResult<IReadOnlyList<PatronSnapshot>>([CreatePatron("20000000000003", "One", "Result")]);
+    }
+
     public Task<StaffBibHoldingsSummary> GetBibHoldingsAsync(
         int bibId, int organizationId, CancellationToken cancellationToken)
     {
@@ -186,16 +242,22 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
             "testing_documented_reply_success"));
     }
 
-    private static PatronSnapshot CreatePatron(string barcode) => new(
+    private static PatronSnapshot CreatePatron(
+        string barcode,
+        string firstName = "Test",
+        string lastName = "Patron",
+        int homeLibraryOrganizationId = 2,
+        string homeLibraryOrganizationName = "Test Library",
+        int patronOrganizationId = 101) => new(
         7001,
         barcode.Trim(),
         $"{barcode.Trim()}@example.org",
-        "Test",
-        "Patron",
+        firstName,
+        lastName,
         "1",
         "Adult",
-        101,
-        2,
-        "Test Library",
+        patronOrganizationId,
+        homeLibraryOrganizationId,
+        homeLibraryOrganizationName,
         101);
 }

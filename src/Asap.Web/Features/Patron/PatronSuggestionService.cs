@@ -5,8 +5,12 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using Asap.Web.Features.Email;
+using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Configuration;
+using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Security;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace Asap.Web.Features.Patron;
 
@@ -20,7 +24,28 @@ public sealed record PatronSuggestionInput(
     bool? Autohold,
     IReadOnlyDictionary<string, string?>? CustomFields);
 
-public sealed record PatronSuggestionResult(long Id, string SuccessTitle, string SuccessMessage);
+public sealed record PatronSuggestionResult(
+    long Id,
+    string SuccessTitle,
+    string SuccessMessage,
+    string NotificationStatus = "queued",
+    int? LibraryOrganizationId = null);
+
+public sealed record PatronSuggestionDuplicate(
+    long Id,
+    DateTime Created,
+    string Status,
+    string CloseReason,
+    string Title,
+    string Author,
+    string Format,
+    string MatchType);
+
+public sealed record PatronSuggestionDuplicateConflict(
+    string Message,
+    string ConflictTitle,
+    string ConflictMessage,
+    PatronSuggestionDuplicate Duplicate);
 
 public sealed class PatronFlowException(
     int statusCode,
@@ -39,7 +64,20 @@ internal sealed record ValidatedSuggestion(
     string? Identifier,
     string? Publication,
     bool AutoHold,
-    string? CustomFieldsJson);
+    string? CustomFieldsJson,
+    DateOnly? ExactPublicationDate,
+    string? Notes,
+    string? VerifiedBibId);
+
+internal sealed record CreationActor(
+    string ActorType,
+    long? StaffUserId,
+    string? ActorName,
+    int? StaffLibraryOrganizationId,
+    bool EmailPatronConfirmation,
+    bool PickupPreferenceChanged);
+
+internal sealed record SubmissionEmailResult(long? OutboxId, string Status);
 
 internal sealed record AutoClaimCandidate(long RuleId, long StaffUserId);
 
@@ -59,8 +97,18 @@ public sealed partial class PatronSuggestionService(
     IEmailSender emailSender,
     RecipientDomainPolicy recipientDomainPolicy,
     TimeProvider timeProvider,
-    ILogger<PatronSuggestionService> logger)
+    ILogger<PatronSuggestionService> logger,
+    IDbContextFactory<AsapDbContext>? contextFactory = null,
+    StaffEligibilityService? staffEligibility = null,
+    IStaffPolarisProvider? staffPolaris = null)
 {
+    private static readonly CreationActor PatronActor = new(
+        "patron",
+        null,
+        null,
+        null,
+        true,
+        false);
     private const string IdentifierMutationBarrierPredicate = """
               AND [Status] = N'suggestion'
               AND NOT EXISTS
@@ -152,6 +200,7 @@ public sealed partial class PatronSuggestionService(
             cancellationToken);
         long requestId = 0;
         long? outboxId = null;
+        var notificationStatus = "queued";
         byte[] expectedRowVersion = [];
         for (var attempt = 1; attempt <= 5; attempt++)
         {
@@ -161,14 +210,17 @@ public sealed partial class PatronSuggestionService(
                 cancellationToken);
             try
             {
-                (requestId, outboxId, expectedRowVersion) = await InsertAsync(
-                    session,
+                (requestId, outboxId, notificationStatus, expectedRowVersion) = await InsertAsync(
+                    session.Barcode,
                     patron,
                     selectedBranch,
                     suggestion,
                     configuration,
                     autoClaimCandidate,
                     emailTransportReadiness,
+                    PatronActor,
+                    enforcePatronLimit: true,
+                    sendSubmissionEmail: true,
                     cancellationToken);
                 break;
             }
@@ -213,17 +265,658 @@ public sealed partial class PatronSuggestionService(
         return new PatronSuggestionResult(
             requestId,
             configuration.SuccessTitle,
-            configuration.SuccessMessage);
+            configuration.SuccessMessage,
+            notificationStatus);
     }
 
-    private async Task<(long RequestId, long? OutboxId, byte[] RowVersion)> InsertAsync(
-        PatronSessionContext session,
+    public async Task<PatronSuggestionResult> CreateForStaffAsync(
+        CurrentStaff actor,
+        int organizationId,
+        StaffSuggestionInput input,
+        CancellationToken cancellationToken)
+    {
+        if (contextFactory is null || staffEligibility is null)
+        {
+            throw new PatronFlowException(500, "Staff suggestion creation is not configured.");
+        }
+
+        var configuration = await configurationService.GetAsync(organizationId, cancellationToken)
+            ?? throw new PatronFlowException(404, "The selected servicing library could not be determined.");
+        if (!configuration.IsActive)
+        {
+            throw new PatronFlowException(409, configuration.SystemNotEnabledMessage);
+        }
+
+        var barcode = Clean(input.Barcode)
+            ?? throw new PatronFlowException(400, "Verify a patron before submitting the suggestion.");
+        var patron = await RefreshStaffPatronAsync(barcode, cancellationToken);
+        EnforceStaffPatronEligibility(configuration, patron);
+        var pickupBranches = await LoadPickupBranchesAsync(patron, cancellationToken);
+        var selectedBranch = pickupBranches.SingleOrDefault(
+            branch => branch.Id == input.PreferredPickupBranchId);
+        if (selectedBranch is null)
+        {
+            throw new PatronFlowException(400, "Choose a valid preferred pickup location.");
+        }
+
+        if (input.CurrentPreferredPickupBranchIdAtLoad.HasValue &&
+            input.CurrentPreferredPickupBranchIdAtLoad != patron.PreferredPickupBranchId &&
+            selectedBranch.Id == input.CurrentPreferredPickupBranchIdAtLoad)
+        {
+            throw new PatronFlowException(
+                409,
+                "The patron's preferred pickup location changed. Refresh the patron and review the current selection.",
+                new { code = "pickup_changed_since_load" });
+        }
+
+        var verifiedBibId = await ValidateStaffBibAsync(input.VerifiedBibId, cancellationToken);
+        var prepared = await PrepareStaffSuggestionMutationAsync(
+            actor,
+            organizationId,
+            barcode,
+            patron,
+            input,
+            verifiedBibId,
+            cancellationToken);
+        var pickupChanged = patron.PreferredPickupBranchId != selectedBranch.Id;
+        var pickupUpdated = false;
+        long requestId = 0;
+        long? outboxId = null;
+        var notificationStatus = input.EmailPatronConfirmation ? "suppressed" : "not_requested";
+        byte[] expectedRowVersion = [];
+        try
+        {
+            if (pickupChanged)
+            {
+                try
+                {
+                    await patronProvider.UpdatePreferredPickupBranchAsync(
+                        barcode,
+                        selectedBranch.Id,
+                        cancellationToken);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    throw new PatronFlowException(
+                        502,
+                        "The patron's preferred pickup location could not be updated in Polaris. The suggestion was not created.",
+                        new { code = "pickup_update_failed" },
+                        exception);
+                }
+
+                pickupUpdated = true;
+
+                // Refresh the snapshot after the external mutation so the persisted patron context
+                // is not merely the browser's earlier lookup row.
+                patron = await RefreshStaffPatronAsync(barcode, cancellationToken);
+                EnforceStaffPatronEligibility(prepared.Configuration, patron);
+                pickupBranches = await LoadPickupBranchesAsync(patron, cancellationToken);
+                selectedBranch = pickupBranches.SingleOrDefault(branch => branch.Id == input.PreferredPickupBranchId)
+                    ?? throw new PatronFlowException(
+                        409,
+                        "The pickup location changed while the suggestion was being submitted. Refresh the patron and try again.",
+                        new { code = "pickup_changed_during_submit" });
+            }
+
+            // Keep the DB-only authorization/configuration gate immediately adjacent to the
+            // provider mutation. Email readiness is local persistence preparation and does not
+            // belong between that gate and the external call.
+            var emailReadiness = input.EmailPatronConfirmation
+                ? await emailSender.CheckReadinessAsync(organizationId, cancellationToken)
+                : EmailTransportReadiness.NotConfigured;
+
+            var creationActor = new CreationActor(
+                "staff",
+                actor.Id,
+                actor.DisplayName ?? actor.UserPrincipalName ?? actor.AuthenticationEmail,
+                organizationId,
+                input.EmailPatronConfirmation,
+                pickupChanged);
+            for (var attempt = 1; attempt <= 5; attempt++)
+            {
+                var autoClaimCandidate = await FindAutoClaimCandidateAsync(
+                    organizationId,
+                    prepared.Suggestion.Format.Id,
+                    cancellationToken);
+                try
+                {
+                    (requestId, outboxId, notificationStatus, expectedRowVersion) = await InsertStaffAsync(
+                        actor,
+                        barcode,
+                        patron,
+                        selectedBranch,
+                        input,
+                        prepared.Suggestion with { VerifiedBibId = verifiedBibId },
+                        prepared.Configuration,
+                        autoClaimCandidate,
+                        emailReadiness,
+                        creationActor,
+                        cancellationToken);
+                    break;
+                }
+                catch (AutoClaimCandidateChangedException) when (attempt < 5)
+                {
+                    continue;
+                }
+                catch (AutoClaimCandidateChangedException exception)
+                {
+                    throw new PatronFlowException(
+                        409,
+                        "The automatic assignment changed while the suggestion was submitted. Please try again.",
+                        innerException: exception);
+                }
+            }
+        }
+        catch (Exception exception) when (pickupUpdated && exception is not OperationCanceledException)
+        {
+            var flowException = exception as PatronFlowException;
+            var detail = flowException?.Message ?? "The suggestion could not be created.";
+            var partialMessage =
+                $"The suggestion was not created, but the patron's preferred pickup location was changed successfully. {detail}";
+            throw new PatronFlowException(
+                flowException?.StatusCode ?? 502,
+                partialMessage,
+                new
+                {
+                    code = "request_not_created_pickup_changed",
+                    message = partialMessage,
+                    originalResponse = flowException?.Response
+                },
+                exception);
+        }
+
+        if (outboxId.HasValue)
+        {
+            try
+            {
+                outboxDispatcher.Enqueue(outboxId.Value);
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(
+                    exception,
+                    "Staff-created submission email outbox {OutboxId} will be recovered by the sweeper.",
+                    outboxId.Value);
+            }
+        }
+
+        if (prepared.Suggestion.Identifier is not null)
+        {
+            await ProcessIdentifierLookupAsync(
+                requestId,
+                prepared.Suggestion.Identifier,
+                organizationId,
+                expectedRowVersion,
+                cancellationToken);
+        }
+
+        return new PatronSuggestionResult(
+            requestId,
+            prepared.Configuration.SuccessTitle,
+            prepared.Configuration.SuccessMessage,
+            notificationStatus,
+            organizationId);
+    }
+
+    private async Task<PatronSnapshot> RefreshStaffPatronAsync(
+        string barcode,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await patronProvider.RefreshAsync(barcode, cancellationToken);
+        }
+        catch (PolarisOperationalException exception)
+        {
+            if (exception.Code is "polaris_patron_not_found" or "polaris_patron_invalid_barcode")
+            {
+                throw new PatronFlowException(
+                    404,
+                    "That patron could not be found in Polaris.",
+                    new { code = "patron_not_found", status = "not_found" },
+                    exception);
+            }
+
+            throw new PatronFlowException(
+                502,
+                "Current patron information could not be loaded from Polaris. Please try again.",
+                new { code = "polaris_unavailable" },
+                exception);
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new PatronFlowException(
+                502,
+                "Current patron information could not be loaded from Polaris. Please try again.",
+                new { code = "polaris_unavailable" },
+                exception);
+        }
+    }
+
+    private async Task<IReadOnlyList<PickupBranch>> LoadPickupBranchesAsync(
+        PatronSnapshot patron,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await patronProvider.GetPickupBranchesAsync(patron, cancellationToken);
+        }
+        catch (PolarisOperationalException exception)
+        {
+            throw new PatronFlowException(
+                502,
+                "Eligible pickup locations could not be loaded from Polaris.",
+                new { code = "pickup_branches_unavailable" },
+                exception);
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new PatronFlowException(
+                502,
+                "Eligible pickup locations could not be loaded from Polaris.",
+                new { code = "pickup_branches_unavailable" },
+                exception);
+        }
+    }
+
+    private async Task<string?> ValidateStaffBibAsync(
+        string? rawBibId,
+        CancellationToken cancellationToken)
+    {
+        var bibId = Clean(rawBibId);
+        if (bibId is null)
+        {
+            return null;
+        }
+
+        if (!int.TryParse(bibId, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) || parsed <= 0)
+        {
+            throw new PatronFlowException(
+                400,
+                "The selected Polaris BIB is invalid.",
+                new { code = "invalid_bib" });
+        }
+
+        if (staffPolaris is null)
+        {
+            throw new PatronFlowException(500, "Polaris BIB verification is not configured.");
+        }
+
+        try
+        {
+            var result = await staffPolaris.ValidateBibAsync(parsed, cancellationToken);
+            if (!result.IsValid)
+            {
+                throw new PatronFlowException(
+                    404,
+                    "The selected Polaris BIB could not be found.",
+                    new { code = "bib_not_found" });
+            }
+        }
+        catch (PolarisOperationalException exception)
+        {
+            throw new PatronFlowException(
+                502,
+                "Catalog lookup is temporarily unavailable.",
+                new { code = "bib_validation_unavailable" },
+                exception);
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new PatronFlowException(
+                502,
+                "Catalog lookup is temporarily unavailable.",
+                new { code = "bib_validation_unavailable" },
+                exception);
+        }
+
+        return parsed.ToString(CultureInfo.InvariantCulture);
+    }
+
+    private async Task<(EffectivePatronConfiguration Configuration, ValidatedSuggestion Suggestion)>
+        PrepareStaffSuggestionMutationAsync(
+        CurrentStaff actor,
+        int organizationId,
+        string barcode,
+        PatronSnapshot patron,
+        StaffSuggestionInput input,
+        string? verifiedBibId,
+        CancellationToken cancellationToken)
+    {
+        if (contextFactory is null || staffEligibility is null)
+        {
+            throw new PatronFlowException(500, "Staff suggestion creation is not configured.");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        await using var databaseTransaction = await context.Database.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        var lockedOrganizationIds = new HashSet<int>();
+        foreach (var currentOrganizationId in new[]
+                     { organizationId, actor.OrganizationId, patron.HomeLibraryOrganizationId }
+                     .Where(item => item > 0)
+                     .Distinct()
+                     .Order())
+        {
+            var organization = await context.Organizations.FromSqlInterpolated(
+                    $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {currentOrganizationId}")
+                .SingleOrDefaultAsync(cancellationToken);
+            var isTargetOrganization = currentOrganizationId == organizationId;
+            var isPatronHomeOrganization = currentOrganizationId == patron.HomeLibraryOrganizationId;
+            if (organization is null ||
+                isTargetOrganization && !organization.IsActive ||
+                isPatronHomeOrganization && !organization.IsActive)
+            {
+                throw new PatronFlowException(
+                    409,
+                    isPatronHomeOrganization && !isTargetOrganization
+                        ? "The patron's home library is no longer participating."
+                        : "The selected servicing library is not participating.",
+                    new
+                    {
+                        code = isPatronHomeOrganization && !isTargetOrganization
+                            ? "patron_home_library_inactive"
+                            : "organization_inactive"
+                    });
+            }
+
+            lockedOrganizationIds.Add(currentOrganizationId);
+        }
+
+        var staffResult = await staffEligibility.RevalidateLockedAsync(
+            context,
+            actor,
+            organizationId,
+            StaffRoleRequirement.Any,
+            requireActorParticipation: true,
+            lockedOrganizationIds,
+            cancellationToken);
+        RequireCurrentStaff(staffResult);
+
+        var configuration = await configurationService.GetAsync(context, organizationId, cancellationToken)
+            ?? throw new PatronFlowException(404, "The selected servicing library could not be determined.");
+        if (!configuration.IsActive)
+        {
+            throw new PatronFlowException(409, configuration.SystemNotEnabledMessage);
+        }
+
+        EnforceStaffPatronEligibility(configuration, patron);
+        var suggestion = Validate(
+            new PatronSuggestionInput(
+                input.Format,
+                input.Title,
+                input.Author,
+                input.Identifier,
+                input.Publication,
+                input.PreferredPickupBranchId,
+                input.Autohold,
+                input.CustomFields),
+            configuration,
+            exactPublicationDate: input.ExactPublicationDate,
+            notes: input.Notes,
+            verifiedBibId: verifiedBibId);
+        var connection = (SqlConnection)context.Database.GetDbConnection();
+        var transaction = (SqlTransaction)databaseTransaction.GetDbTransaction();
+        await LockAndValidateFormatAsync(
+            connection,
+            transaction,
+            configuration.OrganizationId,
+            suggestion,
+            cancellationToken);
+        await EnforceLimitAsync(
+            connection,
+            transaction,
+            barcode,
+            configuration,
+            cancellationToken);
+        await databaseTransaction.CommitAsync(cancellationToken);
+        return (configuration, suggestion);
+    }
+
+    private async Task<(long RequestId, long? OutboxId, string EmailStatus, byte[] RowVersion)> InsertStaffAsync(
+        CurrentStaff actor,
+        string barcode,
+        PatronSnapshot patron,
+        PickupBranch selectedBranch,
+        StaffSuggestionInput input,
+        ValidatedSuggestion preProviderSuggestion,
+        EffectivePatronConfiguration configuration,
+        AutoClaimCandidate? autoClaimCandidate,
+        EmailTransportReadiness emailTransportReadiness,
+        CreationActor creationActor,
+        CancellationToken cancellationToken)
+    {
+        if (contextFactory is null || staffEligibility is null)
+        {
+            throw new PatronFlowException(500, "Staff suggestion creation is not configured.");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        await using var databaseTransaction = await context.Database.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        var connection = (SqlConnection)context.Database.GetDbConnection();
+        var transaction = (SqlTransaction)databaseTransaction.GetDbTransaction();
+        var lockedOrganizationIds = new HashSet<int>();
+        foreach (var currentOrganizationId in new[]
+                     { configuration.OrganizationId, actor.OrganizationId, patron.HomeLibraryOrganizationId }
+                     .Where(item => item > 0)
+                     .Distinct()
+                     .Order())
+        {
+            var organization = await context.Organizations.FromSqlInterpolated(
+                    $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {currentOrganizationId}")
+                .SingleOrDefaultAsync(cancellationToken);
+            var isTargetOrganization = currentOrganizationId == configuration.OrganizationId;
+            var isPatronHomeOrganization = currentOrganizationId == patron.HomeLibraryOrganizationId;
+            if (organization is null ||
+                isTargetOrganization && !organization.IsActive ||
+                isPatronHomeOrganization && !organization.IsActive)
+            {
+                throw new PatronFlowException(
+                    409,
+                    isPatronHomeOrganization && !isTargetOrganization
+                        ? "The patron's home library is no longer participating."
+                        : configuration.SystemNotEnabledMessage,
+                    new
+                    {
+                        code = isPatronHomeOrganization && !isTargetOrganization
+                            ? "patron_home_library_inactive"
+                            : "organization_inactive"
+                    });
+            }
+
+            lockedOrganizationIds.Add(currentOrganizationId);
+        }
+
+        var staffResult = await staffEligibility.RevalidateLockedAsync(
+            context,
+            actor,
+            configuration.OrganizationId,
+            StaffRoleRequirement.Any,
+            requireActorParticipation: true,
+            lockedOrganizationIds,
+            cancellationToken);
+        RequireCurrentStaff(staffResult);
+        var currentConfiguration = await configurationService.GetAsync(
+                context,
+                configuration.OrganizationId,
+                cancellationToken)
+            ?? throw new PatronFlowException(404, "The selected servicing library could not be determined.");
+        if (!currentConfiguration.IsActive)
+        {
+            throw new PatronFlowException(409, currentConfiguration.SystemNotEnabledMessage);
+        }
+
+        EnforceStaffPatronEligibility(currentConfiguration, patron);
+        var currentSuggestion = Validate(
+            new PatronSuggestionInput(
+                input.Format,
+                input.Title,
+                input.Author,
+                input.Identifier,
+                input.Publication,
+                input.PreferredPickupBranchId,
+                input.Autohold,
+                input.CustomFields),
+            currentConfiguration,
+            exactPublicationDate: input.ExactPublicationDate,
+            notes: input.Notes,
+            verifiedBibId: preProviderSuggestion.VerifiedBibId);
+        if (currentSuggestion.Format.Id != preProviderSuggestion.Format.Id)
+        {
+            throw FormatChanged();
+        }
+
+        var autoClaimTarget = await LockAutoClaimTargetAsync(
+            connection,
+            transaction,
+            autoClaimCandidate,
+            currentConfiguration.OrganizationId,
+            cancellationToken);
+        await LockAndValidateFormatAsync(
+            connection,
+            transaction,
+            currentConfiguration.OrganizationId,
+            currentSuggestion,
+            cancellationToken);
+        await EnforceLimitAsync(
+            connection,
+            transaction,
+            barcode,
+            currentConfiguration,
+            cancellationToken);
+        await EnforceDuplicateAsync(
+            connection,
+            transaction,
+            barcode,
+            currentSuggestion,
+            currentConfiguration,
+            cancellationToken);
+
+        long requestId;
+        await using (var insert = new SqlCommand(
+            """
+            INSERT INTO [asap].[TitleRequest]
+                ([LibraryOrganizationId], [PatronOrganizationId], [StaffLibraryOrganizationIdCreatedBy], [Barcode], [Email],
+                 [NameFirst], [NameLast], [PatronCodeId], [PatronCodeDescription],
+                 [PreferredPickupBranchId], [PreferredPickupBranchName], [LibraryNameSnapshot],
+                 [Title], [Author], [Identifier], [Publication], [ExactPublicationDate], [CustomFieldsJson], [AutoHold], [Notes],
+                 [BibId], [BibIdStaffVerified], [MaterialFormatId], [Status], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
+            OUTPUT inserted.[Id]
+            VALUES
+                (@libraryOrganizationId, @patronOrganizationId, @staffLibraryOrganizationIdCreatedBy, @barcode, @email,
+                 @nameFirst, @nameLast, @patronCodeId, @patronCodeDescription,
+                 @pickupBranchId, @pickupBranchName, @libraryName,
+                 @title, @author, @identifier, @publication, @exactPublicationDate, @customFieldsJson, @autoHold, @notes,
+                 @bibId, @bibIdStaffVerified, @materialFormatId, N'suggestion', @isbnCheckStatus, SYSUTCDATETIME(), SYSUTCDATETIME());
+            """,
+            connection,
+            transaction))
+        {
+            Add(insert, "@libraryOrganizationId", SqlDbType.Int, currentConfiguration.OrganizationId);
+            Add(insert, "@patronOrganizationId", SqlDbType.Int, patron.PatronOrganizationId);
+            Add(insert, "@staffLibraryOrganizationIdCreatedBy", SqlDbType.Int, creationActor.StaffLibraryOrganizationId);
+            Add(insert, "@barcode", SqlDbType.NVarChar, barcode, 50);
+            Add(insert, "@email", SqlDbType.NVarChar, patron.Email, 320);
+            Add(insert, "@nameFirst", SqlDbType.NVarChar, patron.NameFirst, 256);
+            Add(insert, "@nameLast", SqlDbType.NVarChar, patron.NameLast, 256);
+            Add(insert, "@patronCodeId", SqlDbType.NVarChar, patron.PatronCodeId, 100);
+            Add(insert, "@patronCodeDescription", SqlDbType.NVarChar, patron.PatronCodeDescription, 256);
+            Add(insert, "@pickupBranchId", SqlDbType.Int, selectedBranch.Id);
+            Add(insert, "@pickupBranchName", SqlDbType.NVarChar, selectedBranch.Label, 256);
+            Add(insert, "@libraryName", SqlDbType.NVarChar, currentConfiguration.OrganizationName, 256);
+            Add(insert, "@title", SqlDbType.NVarChar, currentSuggestion.Title, 500);
+            Add(insert, "@author", SqlDbType.NVarChar, currentSuggestion.Author, 500);
+            Add(insert, "@identifier", SqlDbType.NVarChar, currentSuggestion.Identifier, 100);
+            Add(insert, "@publication", SqlDbType.NVarChar, currentSuggestion.Publication, 200);
+            Add(insert, "@exactPublicationDate", SqlDbType.Date, currentSuggestion.ExactPublicationDate?.ToDateTime(TimeOnly.MinValue));
+            Add(insert, "@customFieldsJson", SqlDbType.NVarChar, currentSuggestion.CustomFieldsJson, -1);
+            Add(insert, "@autoHold", SqlDbType.Bit, currentSuggestion.AutoHold);
+            Add(insert, "@notes", SqlDbType.NVarChar, currentSuggestion.Notes, -1);
+            Add(insert, "@bibId", SqlDbType.NVarChar, currentSuggestion.VerifiedBibId, 100);
+            Add(insert, "@bibIdStaffVerified", SqlDbType.Bit, currentSuggestion.VerifiedBibId is not null);
+            Add(insert, "@materialFormatId", SqlDbType.BigInt, currentSuggestion.Format.Id);
+            Add(insert, "@isbnCheckStatus", SqlDbType.NVarChar,
+                currentSuggestion.Identifier is null ? "skipped_no_isbn" : "pending", 32);
+            requestId = Convert.ToInt64(await insert.ExecuteScalarAsync(cancellationToken));
+        }
+
+        await ApplyAutoClaimAsync(
+            connection,
+            transaction,
+            requestId,
+            currentConfiguration.OrganizationId,
+            currentSuggestion.Format.Id,
+            autoClaimCandidate,
+            autoClaimTarget,
+            cancellationToken);
+        await ApplyCrossPatronDuplicateTagAsync(
+            connection,
+            transaction,
+            requestId,
+            barcode,
+            currentConfiguration.OrganizationId,
+            currentSuggestion.Identifier,
+            cancellationToken);
+        await InsertCreationEventAsync(
+            connection,
+            transaction,
+            requestId,
+            creationActor,
+            currentConfiguration,
+            patron,
+            cancellationToken);
+        var email = creationActor.EmailPatronConfirmation
+            ? await InsertSubmissionEmailAsync(
+                connection,
+                transaction,
+                requestId,
+                patron,
+                currentSuggestion,
+                currentConfiguration,
+                emailTransportReadiness,
+                cancellationToken)
+            : new SubmissionEmailResult(null, "not_requested");
+        byte[] rowVersion;
+        await using (var version = new SqlCommand(
+            "SELECT [RowVersion] FROM [asap].[TitleRequest] WHERE [Id] = @requestId;",
+            connection,
+            transaction))
+        {
+            Add(version, "@requestId", SqlDbType.BigInt, requestId);
+            rowVersion = (byte[])(await version.ExecuteScalarAsync(cancellationToken))!;
+        }
+
+        await databaseTransaction.CommitAsync(cancellationToken);
+        return (requestId, email.OutboxId, email.Status, rowVersion);
+    }
+
+    private static void RequireCurrentStaff(StaffEligibilityResult result)
+    {
+        if (result.Outcome == StaffEligibilityOutcome.Allowed)
+        {
+            return;
+        }
+
+        throw new PatronFlowException(
+            result.Outcome == StaffEligibilityOutcome.InvalidIdentity ? 401 : 403,
+            "Staff access is no longer available for this library.",
+            new { code = result.Code, operationPhase = "rejected" });
+    }
+
+    private async Task<(long RequestId, long? OutboxId, string EmailStatus, byte[] RowVersion)> InsertAsync(
+        string barcode,
         PatronSnapshot patron,
         PickupBranch selectedBranch,
         ValidatedSuggestion suggestion,
         EffectivePatronConfiguration configuration,
         AutoClaimCandidate? autoClaimCandidate,
         EmailTransportReadiness emailTransportReadiness,
+        CreationActor creationActor,
+        bool enforcePatronLimit,
+        bool sendSubmissionEmail,
         CancellationToken cancellationToken)
     {
         await using var connection = new SqlConnection(connectionString);
@@ -249,16 +942,19 @@ public sealed partial class PatronSuggestionService(
             configuration.OrganizationId,
             suggestion,
             cancellationToken);
-        await EnforceLimitAsync(
-            connection,
-            transaction,
-            session.Barcode,
-            configuration,
-            cancellationToken);
+        if (enforcePatronLimit)
+        {
+            await EnforceLimitAsync(
+                connection,
+                transaction,
+                barcode,
+                configuration,
+                cancellationToken);
+        }
         await EnforceDuplicateAsync(
             connection,
             transaction,
-            session.Barcode,
+            barcode,
             suggestion,
             configuration,
             cancellationToken);
@@ -267,17 +963,19 @@ public sealed partial class PatronSuggestionService(
         await using (var insert = new SqlCommand(
             """
             INSERT INTO [asap].[TitleRequest]
-                ([LibraryOrganizationId], [PatronOrganizationId], [Barcode], [Email],
+                ([LibraryOrganizationId], [PatronOrganizationId], [StaffLibraryOrganizationIdCreatedBy], [Barcode], [Email],
                  [NameFirst], [NameLast], [PatronCodeId], [PatronCodeDescription],
                  [PreferredPickupBranchId], [PreferredPickupBranchName], [LibraryNameSnapshot],
-                 [Title], [Author], [Identifier], [Publication], [CustomFieldsJson], [AutoHold],
+                 [Title], [Author], [Identifier], [Publication], [ExactPublicationDate], [CustomFieldsJson], [AutoHold], [Notes],
+                 [BibId], [BibIdStaffVerified],
                  [MaterialFormatId], [Status], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
             OUTPUT inserted.[Id]
             VALUES
-                (@libraryOrganizationId, @patronOrganizationId, @barcode, @email,
+                (@libraryOrganizationId, @patronOrganizationId, @staffLibraryOrganizationIdCreatedBy, @barcode, @email,
                  @nameFirst, @nameLast, @patronCodeId, @patronCodeDescription,
                  @pickupBranchId, @pickupBranchName, @libraryName,
-                 @title, @author, @identifier, @publication, @customFieldsJson, @autoHold,
+                 @title, @author, @identifier, @publication, @exactPublicationDate, @customFieldsJson, @autoHold, @notes,
+                 @bibId, @bibIdStaffVerified,
                  @materialFormatId, N'suggestion', @isbnCheckStatus, SYSUTCDATETIME(), SYSUTCDATETIME());
             """,
             connection,
@@ -285,7 +983,8 @@ public sealed partial class PatronSuggestionService(
         {
             Add(insert, "@libraryOrganizationId", SqlDbType.Int, configuration.OrganizationId);
             Add(insert, "@patronOrganizationId", SqlDbType.Int, patron.PatronOrganizationId);
-            Add(insert, "@barcode", SqlDbType.NVarChar, session.Barcode, 50);
+            Add(insert, "@staffLibraryOrganizationIdCreatedBy", SqlDbType.Int, creationActor.StaffLibraryOrganizationId);
+            Add(insert, "@barcode", SqlDbType.NVarChar, barcode, 50);
             Add(insert, "@email", SqlDbType.NVarChar, patron.Email, 320);
             Add(insert, "@nameFirst", SqlDbType.NVarChar, patron.NameFirst, 256);
             Add(insert, "@nameLast", SqlDbType.NVarChar, patron.NameLast, 256);
@@ -298,8 +997,12 @@ public sealed partial class PatronSuggestionService(
             Add(insert, "@author", SqlDbType.NVarChar, suggestion.Author, 500);
             Add(insert, "@identifier", SqlDbType.NVarChar, suggestion.Identifier, 100);
             Add(insert, "@publication", SqlDbType.NVarChar, suggestion.Publication, 200);
+            Add(insert, "@exactPublicationDate", SqlDbType.Date, suggestion.ExactPublicationDate?.ToDateTime(TimeOnly.MinValue));
             Add(insert, "@customFieldsJson", SqlDbType.NVarChar, suggestion.CustomFieldsJson, -1);
             Add(insert, "@autoHold", SqlDbType.Bit, suggestion.AutoHold);
+            Add(insert, "@notes", SqlDbType.NVarChar, suggestion.Notes, -1);
+            Add(insert, "@bibId", SqlDbType.NVarChar, suggestion.VerifiedBibId, 100);
+            Add(insert, "@bibIdStaffVerified", SqlDbType.Bit, suggestion.VerifiedBibId is not null);
             Add(insert, "@materialFormatId", SqlDbType.BigInt, suggestion.Format.Id);
             Add(
                 insert,
@@ -323,20 +1026,29 @@ public sealed partial class PatronSuggestionService(
             connection,
             transaction,
             requestId,
-            session.Barcode,
+            barcode,
             configuration.OrganizationId,
             suggestion.Identifier,
             cancellationToken);
-        await InsertCreationEventAsync(connection, transaction, requestId, cancellationToken);
-        var outboxId = await InsertSubmissionEmailAsync(
+        await InsertCreationEventAsync(
             connection,
             transaction,
             requestId,
-            patron,
-            suggestion,
+            creationActor,
             configuration,
-            emailTransportReadiness,
+            patron,
             cancellationToken);
+        var email = sendSubmissionEmail
+            ? await InsertSubmissionEmailAsync(
+                connection,
+                transaction,
+                requestId,
+                patron,
+                suggestion,
+                configuration,
+                emailTransportReadiness,
+                cancellationToken)
+            : new SubmissionEmailResult(null, "not_requested");
         byte[] rowVersion;
         await using (var version = new SqlCommand(
             "SELECT [RowVersion] FROM [asap].[TitleRequest] WHERE [Id] = @requestId;",
@@ -348,7 +1060,7 @@ public sealed partial class PatronSuggestionService(
         }
 
         await transaction.CommitAsync(cancellationToken);
-        return (requestId, outboxId, rowVersion);
+        return (requestId, email.OutboxId, email.Status, rowVersion);
     }
 
     private static async Task LockAndValidateOrganizationAsync(
@@ -505,7 +1217,10 @@ public sealed partial class PatronSuggestionService(
             "{{next_available_date}}",
             localNext.ToString("dddd, MMMM d, yyyy h:mm tt", CultureInfo.GetCultureInfo("en-US")),
             StringComparison.Ordinal);
-        throw new PatronFlowException(406, message);
+        throw new PatronFlowException(
+            406,
+            message,
+            new { code = "suggestion_limit_reached", message });
     }
 
     private DateTimeOffset ResolveBusinessCalendarDate(DateTimeOffset instant, int days)
@@ -628,23 +1343,19 @@ public sealed partial class PatronSuggestionService(
         throw new PatronFlowException(
             409,
             message,
-            new
-            {
+            new PatronSuggestionDuplicateConflict(
                 message,
-                conflictTitle = "Already Submitted",
+                "Already Submitted",
                 conflictMessage,
-                duplicate = new
-                {
+                new PatronSuggestionDuplicate(
                     id,
                     created,
                     status,
-                    closeReason = closeReason ?? string.Empty,
+                    closeReason ?? string.Empty,
                     title,
                     author,
-                    format = formatCode,
-                    matchType
-                }
-            });
+                    formatCode,
+                    matchType)));
     }
 
     private async Task<AutoClaimCandidate?> FindAutoClaimCandidateAsync(
@@ -901,22 +1612,41 @@ public sealed partial class PatronSuggestionService(
         SqlConnection connection,
         SqlTransaction transaction,
         long requestId,
+        CreationActor actor,
+        EffectivePatronConfiguration configuration,
+        PatronSnapshot patron,
         CancellationToken cancellationToken)
     {
+        var message = actor.ActorType == "staff"
+            ? $"Suggestion created on behalf of patron by {actor.ActorName ?? "staff"}."
+            : "Suggestion submitted by patron.";
+        var metadata = JsonSerializer.Serialize(new
+        {
+            servicingLibraryOrganizationId = configuration.OrganizationId,
+            patronOrganizationId = patron.PatronOrganizationId,
+            homeLibraryOrganizationId = patron.HomeLibraryOrganizationId,
+            emailPatronConfirmation = actor.EmailPatronConfirmation,
+            pickupPreferenceChanged = actor.PickupPreferenceChanged
+        });
         await using var command = new SqlCommand(
             """
             INSERT INTO [asap].[TitleRequestEvent]
-                ([TitleRequestId], [EventType], [Status], [ActorType], [Message], [CreatedUtc])
+                ([TitleRequestId], [EventType], [Status], [ActorType], [StaffUserId], [ActorName], [Message], [MetadataJson], [CreatedUtc])
             VALUES
-                (@requestId, N'created', N'suggestion', N'patron', N'Suggestion submitted by patron.', SYSUTCDATETIME());
+                (@requestId, N'created', N'suggestion', @actorType, @staffUserId, @actorName, @message, @metadataJson, SYSUTCDATETIME());
             """,
             connection,
             transaction);
         Add(command, "@requestId", SqlDbType.BigInt, requestId);
+        Add(command, "@actorType", SqlDbType.NVarChar, actor.ActorType, 16);
+        Add(command, "@staffUserId", SqlDbType.BigInt, actor.StaffUserId);
+        Add(command, "@actorName", SqlDbType.NVarChar, actor.ActorName, 256);
+        Add(command, "@message", SqlDbType.NVarChar, message, -1);
+        Add(command, "@metadataJson", SqlDbType.NVarChar, metadata, -1);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private async Task<long?> InsertSubmissionEmailAsync(
+    private async Task<SubmissionEmailResult> InsertSubmissionEmailAsync(
         SqlConnection connection,
         SqlTransaction transaction,
         long requestId,
@@ -970,7 +1700,9 @@ public sealed partial class PatronSuggestionService(
         Add(command, "@status", SqlDbType.NVarChar, status, 16);
         Add(command, "@suppressionReason", SqlDbType.NVarChar, suppressionReason, 100);
         var outboxId = Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken));
-        return status == "pending" ? outboxId : null;
+        return new SubmissionEmailResult(
+            status == "pending" ? outboxId : null,
+            status == "pending" ? "queued" : "suppressed");
     }
 
     public async Task<IdentifierLookupOutcome> ProcessIdentifierLookupAsync(
@@ -1321,7 +2053,12 @@ public sealed partial class PatronSuggestionService(
 
     private static ValidatedSuggestion Validate(
         PatronSuggestionInput input,
-        EffectivePatronConfiguration configuration)
+        EffectivePatronConfiguration configuration,
+        bool allowInformationalMessage = false,
+        bool? forcedAutoHold = null,
+        DateOnly? exactPublicationDate = null,
+        string? notes = null,
+        string? verifiedBibId = null)
     {
         var formatCode = Clean(input.Format) ?? "book";
         var format = configuration.Formats.SingleOrDefault(item =>
@@ -1331,7 +2068,8 @@ public sealed partial class PatronSuggestionService(
             throw new PatronFlowException(400, "Choose a valid material format.");
         }
 
-        if (!string.Equals(format.MessageBehavior, "none", StringComparison.Ordinal))
+        if (!allowInformationalMessage &&
+            !string.Equals(format.MessageBehavior, "none", StringComparison.Ordinal))
         {
             var message = format.MessageBehavior switch
             {
@@ -1357,14 +2095,23 @@ public sealed partial class PatronSuggestionService(
         }
 
         var customFields = ValidateCustomFields(input.CustomFields, format, configuration.CustomFields);
+        var cleanedNotes = Clean(notes);
+        if (cleanedNotes?.Length > 10000)
+        {
+            throw new PatronFlowException(400, "Notes cannot exceed 10000 characters.");
+        }
+
         return new ValidatedSuggestion(
             format,
             TitleCase(title!),
             author,
             identifier,
             publication,
-            configuration.AllowPatronAutoholdOptOut ? input.Autohold ?? true : true,
-            customFields);
+            forcedAutoHold ?? (configuration.AllowPatronAutoholdOptOut ? input.Autohold ?? true : true),
+            customFields,
+            exactPublicationDate,
+            cleanedNotes,
+            verifiedBibId);
     }
 
     private static string? ValidateField(
@@ -1412,7 +2159,7 @@ public sealed partial class PatronSuggestionService(
             {
                 if (rule.Mode == "required")
                 {
-                    throw new PatronFlowException(400, $"{definition.Label} is required.");
+                    throw new PatronFlowException(400, $"{rule.Label ?? definition.Label} is required.");
                 }
 
                 continue;
@@ -1427,7 +2174,7 @@ public sealed partial class PatronSuggestionService(
                 {
                     if (rule.Mode == "required")
                     {
-                        throw new PatronFlowException(400, $"{definition.Label} is required.");
+                        throw new PatronFlowException(400, $"{rule.Label ?? definition.Label} is required.");
                     }
 
                     continue;
@@ -1435,7 +2182,7 @@ public sealed partial class PatronSuggestionService(
 
                 snapshot[definition.Key] = new
                 {
-                    label = definition.Label,
+                    label = rule.Label ?? definition.Label,
                     type = definition.Type,
                     value = option.Key,
                     displayValue = option.Label
@@ -1446,7 +2193,7 @@ public sealed partial class PatronSuggestionService(
             var maxLength = definition.Type == "textarea" ? 2000 : 250;
             snapshot[definition.Key] = new
             {
-                label = definition.Label,
+                label = rule.Label ?? definition.Label,
                 type = definition.Type,
                 value = value[..Math.Min(value.Length, maxLength)]
             };
@@ -1467,7 +2214,27 @@ public sealed partial class PatronSuggestionService(
             return;
         }
 
-        throw new PatronFlowException(403, configuration.PatronCodeEligibilityMessage);
+        throw new PatronFlowException(
+            403,
+            configuration.PatronCodeEligibilityMessage,
+            new { code = "patron_ineligible" });
+    }
+
+    private static void EnforceStaffPatronEligibility(
+        EffectivePatronConfiguration configuration,
+        PatronSnapshot patron)
+    {
+        if (patron.PatronOrganizationId <= 1 || patron.HomeLibraryOrganizationId <= 1 ||
+            !configuration.AllowAnyRegisteredCardLogin &&
+            patron.HomeLibraryOrganizationId != configuration.OrganizationId)
+        {
+            throw new PatronFlowException(
+                403,
+                "This patron is not eligible for the selected servicing library.",
+                new { code = "patron_library_forbidden" });
+        }
+
+        EnforcePatronCodeEligibility(configuration, patron);
     }
 
     private static string? Missing(

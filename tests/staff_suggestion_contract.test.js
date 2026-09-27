@@ -1,0 +1,40 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const root = path.join(__dirname, '..');
+const web = path.join(root, 'src', 'Asap.Web');
+const endpoints = fs.readFileSync(path.join(web, 'Features', 'Staff', 'TitleRequestEndpoints.cs'), 'utf8');
+const service = fs.readFileSync(path.join(web, 'Features', 'Staff', 'StaffSuggestionService.cs'), 'utf8');
+const creation = fs.readFileSync(path.join(web, 'Features', 'Patron', 'PatronSuggestionService.cs'), 'utf8');
+const provider = fs.readFileSync(path.join(web, 'Features', 'Staff', 'IStaffPolarisProvider.cs'), 'utf8');
+const workflow = fs.readFileSync(path.join(web, 'Frontend', 'staff', 'js', 'workflow.js'), 'utf8');
+const index = fs.readFileSync(path.join(web, 'Frontend', 'staff', 'index.html'), 'utf8');
+
+assert.match(endpoints, /suggestion-configuration/);
+assert.match(endpoints, /patron-lookup/);
+assert.match(endpoints, /suggestions/);
+assert.match(endpoints, /StaffAntiforgeryFilter/);
+assert.match(service, /requestedOrganizationId\.HasValue/);
+assert.match(service, /multiple_matches/);
+assert.match(service, /ineligible/);
+assert.match(service, /SearchPatronsAsync/);
+assert.match(service, /IsPatronInScopeAsync/);
+assert.match(creation, /PrepareStaffSuggestionMutationAsync/);
+assert.match(creation, /RevalidateLockedAsync/);
+assert.match(creation, /InsertStaffAsync/);
+assert.match(creation, /StaffLibraryOrganizationIdCreatedBy/);
+assert.match(creation, /BibIdStaffVerified/);
+assert.match(creation, /notificationStatus/);
+assert.match(creation, /PatronSuggestionDuplicateConflict/);
+assert.match(provider, /SearchPatronsAsync/);
+assert.match(workflow, /staff-suggestion-configuration/);
+assert.match(workflow, /staff-suggestion-mutation/);
+assert.match(workflow, /verifiedBibId/);
+assert.match(workflow, /9007199254740993|String\(created\.id\)/);
+assert.doesNotMatch(workflow, /api\/asap\/staff\/catalog-search/);
+assert.match(index, /id="new-suggestion"/);
+assert.match(index, /id="staff-suggestion-dialog"/);
+assert.doesNotMatch(workflow, /\.innerHTML\s*=/);
+
+console.log('Staff suggestion endpoint, authority, scope, ID precision, and Polaris reuse contracts passed');
