@@ -68,6 +68,19 @@ function statusLabel(value) {
   return STATUS_LABELS[value] || text(value, 'Unknown');
 }
 
+function closeReasonLabel(value) {
+  const labels = {
+    rejected: 'Rejected',
+    manual: 'Closed by staff',
+    duplicate_hold: 'Duplicate patron hold',
+    hold_cancelled: 'Hold cancelled',
+    silent: 'Closed silently',
+    'Silently Closed': 'Closed silently'
+  };
+  return Object.hasOwn(labels, value) ? labels[value]
+    : value ? String(value).replaceAll('_', ' ') : 'No reason recorded';
+}
+
 function currentRequestParameter() {
   return requestedRequestIdFromUrl();
 }
@@ -111,6 +124,17 @@ export function createWorkflowApp() {
     claim: document.querySelector('#claim-filter'),
     tag: document.querySelector('#tag-filter'),
     refresh: document.querySelector('#refresh-queue'),
+    bulkDelete: document.querySelector('#bulk-delete-closed'),
+    bulkDeleteCopies: document.querySelector('#bulk-delete-closed-copies'),
+    bulkDeleteDialog: document.querySelector('#bulk-delete-dialog'),
+    bulkDeleteClose: document.querySelector('#bulk-delete-close'),
+    bulkDeleteScope: document.querySelector('#bulk-delete-scope'),
+    bulkDeletePreview: document.querySelector('#bulk-delete-preview'),
+    bulkDeleteSummary: document.querySelector('#bulk-delete-summary'),
+    bulkDeleteItems: document.querySelector('#bulk-delete-items'),
+    bulkDeleteConfirmation: document.querySelector('#bulk-delete-confirmation'),
+    bulkDeleteExecute: document.querySelector('#bulk-delete-execute'),
+    bulkDeleteResults: document.querySelector('#bulk-delete-results'),
     newSuggestion: document.querySelector('#new-suggestion'),
     summary: document.querySelector('#queue-summary'),
     grid: document.querySelector('#request-grid'),
@@ -189,7 +213,8 @@ export function createWorkflowApp() {
     editorDirty: false,
     verifiedBib: null,
     dialogMutationInFlight: null,
-    actionChoice: null
+    actionChoice: null,
+    bulkDeleteState: null
   };
 
   function readUnconfirmedCopyCreation() {
@@ -389,6 +414,250 @@ export function createWorkflowApp() {
     return window.confirm(message) && isCurrentDialogRequest(request, requestType);
   }
 
+  function updateBulkDeleteButtons() {
+    const authorized = ['admin', 'super_admin'].includes(state.staff?.role);
+    dom.bulkDelete.hidden = !authorized || state.status !== 'closed';
+    dom.bulkDeleteCopies.hidden = !authorized || state.additionalCopyStatus !== 'closed';
+  }
+
+  function closeBulkDelete(force = false) {
+    const batch = state.bulkDeleteState;
+    if (!batch) return;
+    if (batch.submitting && !force) {
+      dom.bulkDeleteSummary.textContent = 'Deletion is in progress. Wait for the result before closing.';
+      return;
+    }
+    batch.previewAbort?.abort();
+    state.bulkDeleteState = null;
+    if (dom.bulkDeleteDialog.open) dom.bulkDeleteDialog.close();
+    if (batch.returnFocus?.isConnected && state.staff) batch.returnFocus.focus();
+  }
+
+  function resetBulkDeletePreview() {
+    const batch = state.bulkDeleteState;
+    if (!batch || batch.submitting) return;
+    batch.previewAbort?.abort();
+    batch.previewAbort = null;
+    batch.snapshot = null;
+    dom.bulkDeleteSummary.textContent = '';
+    dom.bulkDeleteItems.replaceChildren();
+    dom.bulkDeleteResults.replaceChildren();
+    dom.bulkDeleteConfirmation.value = '';
+    dom.bulkDeleteExecute.disabled = true;
+    dom.bulkDeletePreview.disabled = false;
+    dom.bulkDeleteScope.disabled = false;
+    dom.bulkDeleteConfirmation.disabled = false;
+  }
+
+  function openBulkDelete(returnFocus) {
+    if (!['admin', 'super_admin'].includes(state.staff?.role)) return;
+    const batch = { returnFocus, previewAbort: null, snapshot: null, submitting: false, ledger: [] };
+    state.bulkDeleteState = batch;
+    dom.bulkDeleteScope.replaceChildren();
+    if (state.staff.role === 'super_admin') {
+      dom.bulkDeleteScope.append(element('option', { value: '', text: 'Choose a library scope' }));
+      dom.bulkDeleteScope.append(element('option', { value: 'all', text: 'All libraries' }));
+      for (const option of dom.scope.options) {
+        if (option.value === 'all') continue;
+        dom.bulkDeleteScope.append(element('option', { value: option.value, text: option.textContent }));
+      }
+    } else {
+      dom.bulkDeleteScope.append(element('option', {
+        value: String(state.staff.organizationId), text: state.staff.organizationName || 'My library'
+      }));
+    }
+    dom.bulkDeleteScope.value = state.staff.role === 'super_admin' ? '' : String(state.staff.organizationId);
+    resetBulkDeletePreview();
+    dom.bulkDeleteDialog.showModal();
+    (state.staff.role === 'super_admin' ? dom.bulkDeleteScope : dom.bulkDeletePreview).focus();
+  }
+
+  function bulkItemLabel(item) {
+    return (item.type === 'title_request' ? 'Title request ' : 'Additional-copy task ') +
+      item.id + ' (' + item.libraryOrgName + ')';
+  }
+
+  function validateBulkItem(item, type, scope) {
+    return item?.type === type && typeof item.id === 'string' && /^[1-9]\d*$/.test(item.id) &&
+      typeof item.version === 'string' && item.version.length > 0 && item.status === 'closed' &&
+      Number.isSafeInteger(item.libraryOrgId) &&
+      (scope === 'all' || String(item.libraryOrgId) === scope);
+  }
+
+  async function previewBulkDelete() {
+    const batch = state.bulkDeleteState;
+    const scope = dom.bulkDeleteScope.value;
+    resetBulkDeletePreview();
+    if (!batch || !scope) {
+      dom.bulkDeleteSummary.textContent = 'Choose a library scope before previewing.';
+      dom.bulkDeleteScope.focus();
+      return;
+    }
+    const controller = new AbortController();
+    batch.previewAbort = controller;
+    dom.bulkDeletePreview.disabled = true;
+    dom.bulkDeleteSummary.textContent = 'Loading closed title requests and additional-copy tasks...';
+    try {
+      const session = await loadStaffSession({ signal: controller.signal });
+      if (state.bulkDeleteState !== batch || controller.signal.aborted) return;
+      if (!session.authenticated) {
+        showSignedOut();
+        return;
+      }
+      if (!session.accessAllowed) {
+        showAccessUnavailable();
+        return;
+      }
+      const previewActor = session.staff;
+      if (!previewActor || previewActor.id !== state.staff?.id ||
+          !['admin', 'super_admin'].includes(previewActor.role) ||
+          (scope === 'all' && previewActor.role !== 'super_admin') ||
+          (previewActor.role === 'admin' && scope !== String(previewActor.organizationId)) ||
+          typeof previewActor.version !== 'string' || !previewActor.version) {
+        throw new Error('Staff role or library scope changed. Reload the workspace before previewing deletion.');
+      }
+      const query = encodeURIComponent(scope);
+      const [titles, copies] = await Promise.all([
+        authorizedJson('/api/asap/staff/title-requests?scope=' + query, { signal: controller.signal }),
+        authorizedJson('/api/asap/staff/additional-copies?scope=' + query + '&status=closed',
+          { signal: controller.signal })
+      ]);
+      if (state.bulkDeleteState !== batch || controller.signal.aborted) return;
+      if (titles.scope !== scope || copies.scope !== scope || copies.status !== 'closed' ||
+          !Array.isArray(titles.items) || !Array.isArray(copies.items)) {
+        throw new Error('The requested deletion scope could not be verified.');
+      }
+      const titleItems = titles.items.filter(item => item.status === 'closed');
+      const copyItems = copies.items;
+      if (titleItems.some(item => !validateBulkItem(item, 'title_request', scope)) ||
+          copyItems.some(item => !validateBulkItem(item, 'additional_copy', scope))) {
+        throw new Error('The closed-work preview contained an invalid identity or scope.');
+      }
+      batch.snapshot = {
+        scope,
+        actorVersion: previewActor.version,
+        items: [...titleItems, ...copyItems].map(item => ({
+          type: item.type, id: item.id, version: item.version,
+          title: item.title, libraryOrgName: item.libraryOrgName,
+          libraryOrgId: item.libraryOrgId, closeReason: item.closeReason
+        }))
+      };
+      const scopeName = dom.bulkDeleteScope.selectedOptions[0]?.textContent || scope;
+      dom.bulkDeleteSummary.textContent = 'Preview for ' + scopeName + ': ' +
+        titleItems.length + ' closed title requests and ' + copyItems.length +
+        ' closed additional-copy tasks. Search, claim, tag, and grid filters do not affect this population.';
+      dom.bulkDeleteItems.replaceChildren(...batch.snapshot.items.map(item =>
+        element('li', { text: bulkItemLabel(item) + ' — ' + item.title +
+          (item.type === 'title_request' ? ' — ' + closeReasonLabel(item.closeReason) : '') })));
+      if (batch.snapshot.items.length === 0) {
+        dom.bulkDeleteSummary.textContent += ' There are no eligible records to submit.';
+      }
+      dom.bulkDeleteConfirmation.focus();
+    } catch (error) {
+      if (state.bulkDeleteState === batch && !controller.signal.aborted && error.status !== 401) {
+        dom.bulkDeleteSummary.textContent = error.message || 'The closed-work preview could not be loaded.';
+      }
+    } finally {
+      if (state.bulkDeleteState === batch) {
+        batch.previewAbort = null;
+        dom.bulkDeletePreview.disabled = false;
+      }
+    }
+  }
+
+  function bulkOutcome(error) {
+    const code = error.response?.code;
+    if (error.status === 404 || code === 'not_found') return 'not_found';
+    if (code === 'stale_version') return 'stale';
+    if (code === 'actor_changed_since_preview') return 'actor_changed';
+    if (code === 'request_not_closed' || code === 'delete_requires_closed') return 'not_closed';
+    if (error.status === 401 || error.status === 403 ||
+        ['delete_forbidden', 'staff_scope_forbidden', 'staff_session_invalid'].includes(code)) {
+      return 'forbidden/out_of_scope';
+    }
+    if (code === 'hold_history_retained') return 'blocked_hold_history';
+    if (isAbortError(error) || error.status === 408 || error.status >= 500 || !error.status) {
+      return 'outcome_unconfirmed';
+    }
+    return 'operational_failure';
+  }
+
+  function renderBulkLedger(batch) {
+    const deleted = batch.ledger.filter(item => item.outcome === 'deleted').length;
+    const attempted = batch.ledger.filter(item => item.outcome !== 'not_attempted').length;
+    const summary = 'Confirmed deleted: ' + deleted + ' of ' + batch.snapshot.items.length +
+      '. Attempted: ' + attempted + '. Every record is rechecked by the server.';
+    dom.bulkDeleteResults.replaceChildren(
+      element('p', { text: summary }),
+      element('ul', {}, batch.ledger.map(item =>
+        element('li', { text: bulkItemLabel(item) + ': ' + item.outcome.replaceAll('_', ' ') })))
+    );
+    state.partialSessionFailureMessage = summary + ' ' + batch.ledger.map(item =>
+      bulkItemLabel(item) + ': ' + item.outcome.replaceAll('_', ' ')).join('; ') +
+      '. Sign in again and refresh Closed work before retrying.';
+    state.partialSessionFailureOwner = batch;
+    state.partialSessionFailureDetailAvailable = false;
+    state.partialSessionFailureAfterQueueSequence = null;
+  }
+
+  async function executeBulkDelete() {
+    const batch = state.bulkDeleteState;
+    if (!batch?.snapshot || batch.submitting || dom.bulkDeleteConfirmation.value !== 'DELETE' ||
+        dom.bulkDeleteScope.value !== batch.snapshot.scope || batch.snapshot.items.length === 0) return;
+    batch.submitting = true;
+    dom.bulkDeleteExecute.disabled = true;
+    dom.bulkDeletePreview.disabled = true;
+    dom.bulkDeleteScope.disabled = true;
+    dom.bulkDeleteConfirmation.disabled = true;
+    let stop = false;
+    for (const item of batch.snapshot.items) {
+      if (stop || state.bulkDeleteState !== batch || !state.staff) {
+        batch.ledger.push({ ...item, outcome: 'not_attempted' });
+        continue;
+      }
+      const route = item.type === 'title_request'
+        ? '/api/asap/staff/requests/' : '/api/asap/staff/additional-copies/';
+      batch.currentItem = item;
+      try {
+        const result = await authorizedJson(route + encodeURIComponent(item.id),
+          { method: 'DELETE', body: {
+            version: item.version, actorVersion: batch.snapshot.actorVersion
+          } });
+        batch.ledger.push({ ...item, outcome: result?.deleted === true ? 'deleted' : 'outcome_unconfirmed' });
+        if (result?.deleted !== true) stop = true;
+      } catch (error) {
+        if (state.bulkDeleteState !== batch) return;
+        const outcome = bulkOutcome(error);
+        batch.ledger.push({ ...item, outcome });
+        stop = outcome === 'outcome_unconfirmed' || outcome === 'actor_changed' ||
+          error.status === 401 || error.status === 403;
+      }
+      batch.currentItem = null;
+      if (state.bulkDeleteState === batch) renderBulkLedger(batch);
+    }
+    if (state.bulkDeleteState !== batch || !state.staff) return;
+    batch.submitting = false;
+    renderBulkLedger(batch);
+    state.scope = batch.snapshot.scope;
+    dom.scope.value = state.scope;
+    dom.additionalCopyScope.value = state.scope;
+    state.status = 'closed';
+    state.additionalCopyStatus = 'closed';
+    for (const tab of dom.statusTabs) tab.setAttribute('aria-selected', String(tab.dataset.status === 'closed'));
+    for (const tab of dom.additionalCopyStatusTabs) {
+      tab.setAttribute('aria-selected', String(tab.dataset.copyStatus === 'closed'));
+    }
+    const queueRefreshed = await loadQueue({ skipDeepLink: true, silent: true });
+    const copiesRefreshed = await loadAdditionalCopies({ skipDeepLink: true, silent: true });
+    if (queueRefreshed === true && copiesRefreshed === true) clearCommittedSessionFallback(batch);
+    if (state.bulkDeleteState === batch) {
+      dom.bulkDeleteSummary.textContent = queueRefreshed === true && copiesRefreshed === true
+        ? 'Deletion finished. Both Closed views were refreshed from the server.'
+        : 'Deletion finished, but a Closed view could not refresh. Review the ledger and refresh before retrying.';
+      dom.bulkDeleteResults.focus();
+    }
+  }
+
   function isCurrentAdditionalCopyCreation(mutation, pending) {
     return mutation.isCurrent() &&
       !!state.staff &&
@@ -398,6 +667,11 @@ export function createWorkflowApp() {
   }
 
   function showSignedOut(message) {
+    if (state.bulkDeleteState) {
+      state.bulkDeleteState.previewAbort?.abort();
+      state.bulkDeleteState = null;
+    }
+    if (dom.bulkDeleteDialog.open) dom.bulkDeleteDialog.close();
     polarisLookup.close();
     latestLoads.begin('research-configuration').abort();
     state.verifiedBib = null;
@@ -473,6 +747,7 @@ export function createWorkflowApp() {
     dom.scopeField.hidden = staff.role !== 'super_admin';
     dom.additionalCopyScopeField.hidden = staff.role !== 'super_admin';
     dom.operationsTab.hidden = staff.role !== 'admin' && staff.role !== 'super_admin';
+    updateBulkDeleteButtons();
     dom.operationsScopeField.hidden = staff.role !== 'super_admin';
     state.operationsScope = staff.role === 'super_admin' ? 'all' : String(staff.organizationId);
     dom.operationsScope.replaceChildren(element('option', {
@@ -785,11 +1060,14 @@ export function createWorkflowApp() {
   }
 
   function renderGrid() {
+    updateBulkDeleteButtons();
     const requests = filteredRequests();
     dom.summary.textContent = `${requests.length} ${statusLabel(state.status).toLocaleLowerCase()} request${requests.length === 1 ? '' : 's'}`;
     dom.empty.hidden = requests.length !== 0;
     const rows = requests.map(request => [
       request.title,
+      'Title request',
+      request.status === 'closed' ? closeReasonLabel(request.closeReason) : '—',
       [request.nameLast, request.nameFirst].filter(Boolean).join(', ') || request.barcode,
       request.libraryOrgName,
       request.workflowTags && request.workflowTags.length ? request.workflowTags.join(', ') : 'None',
@@ -801,6 +1079,8 @@ export function createWorkflowApp() {
       state.grid = new window.gridjs.Grid({
         columns: [
           { name: 'Title', width: '25%' },
+          { name: 'Type', width: '110px' },
+          { name: 'Close reason', width: '130px' },
           { name: 'Patron', width: '17%' },
           { name: 'Library', width: '14%' },
           { name: 'Tags', width: '16%' },
@@ -808,7 +1088,7 @@ export function createWorkflowApp() {
             name: 'Claim',
             width: '13%',
             formatter: (cell, row) => {
-              const request = state.requests.find(item => item.id === row.cells[6].data);
+              const request = state.requests.find(item => item.id === row.cells[8].data);
               const mine = request && request.claimedByStaffUserId === state.staff?.id;
               return window.gridjs.h('span', { className: `claim-label${mine ? ' mine' : ''}` }, cell);
             }
@@ -902,6 +1182,7 @@ export function createWorkflowApp() {
   }
 
   function renderAdditionalCopyGrid() {
+    updateBulkDeleteButtons();
     const uncertainCreation = state.unconfirmedCopyCreationAwaitingRefresh;
     const reviewReady = Boolean(uncertainCreation?.reviewReady) && !uncertainCreation.reviewed &&
       state.additionalCopyStatus === 'open' &&
@@ -1044,6 +1325,7 @@ export function createWorkflowApp() {
     addDetail(details, 'Created', dateTime(request.created));
     addDetail(details, 'Closed by', request.closedByUsername);
     addDetail(details, 'Closed', dateTime(request.closedAt));
+    if (request.status === 'closed') addDetail(details, 'Close reason', 'No reason recorded');
     body.append(details);
     if (request.sourceTitleRequest) {
       body.append(element('a', {
@@ -1097,9 +1379,9 @@ export function createWorkflowApp() {
       }, 'primary-button'));
     }
     if (request.capabilities?.canDelete) {
-      bar.append(commandButton('Delete task', 'trash', () => {
+      bar.append(commandButton('Permanently delete task', 'trash', () => {
         if (confirmCurrent(request, 'additional_copy',
-          'Permanently delete this closed additional-copy task? Its deletion audit will remain.')) {
+          `Permanently delete closed additional-copy task ${request.id}? This cannot be undone. Its deletion audit will remain.`)) {
           mutateAdditionalCopy(request, 'delete', 'Additional-copy task deleted.');
         }
       }, 'danger-button'));
@@ -1116,7 +1398,8 @@ export function createWorkflowApp() {
     try {
       const result = await authorizedJson(`/api/asap/staff/additional-copies/${request.id}${operation === 'delete' ? '' : `/${operation}`}`, {
         method: operation === 'delete' ? 'DELETE' : 'POST',
-        body: { version: request.version, ...extra },
+        body: { version: request.version,
+          ...(operation === 'delete' ? { actorVersion: state.staff?.version } : {}), ...extra },
         signal: mutation.signal
       });
       if (!isCurrentDialogMutation(mutation, request, 'additional_copy')) return;
@@ -1830,6 +2113,8 @@ export function createWorkflowApp() {
         className: 'blocked-callout',
         text: request.capabilities.blockingReason === 'hold_operation_incomplete'
           ? 'Workflow-changing edits are blocked while hold placement needs recovery.'
+          : request.capabilities.blockingReason === 'hold_history_retained'
+          ? 'Reopen is unavailable because placed-hold history has no confirmed external reversal.'
           : 'Identifier and BIB changes are locked by this request’s placement history.'
       }));
     }
@@ -1844,6 +2129,7 @@ export function createWorkflowApp() {
     addDetail(details, 'Publication', request.publication);
     addDetail(details, 'Pickup', request.preferredPickupBranchName || request.preferredPickupBranchId);
     addDetail(details, 'Identifier check', request.isbnCheckStatus);
+    if (request.status === 'closed') addDetail(details, 'Close reason', closeReasonLabel(request.closeReason));
     body.append(details);
 
     if (request.workflowTags && request.workflowTags.length) {
@@ -1926,7 +2212,17 @@ export function createWorkflowApp() {
       bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, event.currentTarget), 'secondary-button', !request.bibid));
       bar.append(commandButton('Close request', 'check', () => runAction(request, 'close'), 'primary-button', workflowBlocked));
     } else if (request.status === 'closed') {
-      bar.append(commandButton('Reopen', 'undo', () => runAction(request, 'reopen'), 'primary-button', workflowBlocked));
+      if (!workflowBlocked) {
+        bar.append(commandButton('Reopen', 'undo', () => runAction(request, 'reopen'), 'primary-button'));
+      }
+      if (['admin', 'super_admin'].includes(state.staff?.role)) {
+        bar.append(commandButton('Permanently delete request', 'trash', () => {
+          if (confirmCurrent(request, 'title_request',
+            `Permanently delete closed title request ${request.id}? This cannot be undone. Its deletion audit will remain.`)) {
+            deleteTitleRequest(request);
+          }
+        }, 'danger-button'));
+      }
     }
     if (request.capabilities && request.capabilities.canRetryIdentifierCheck) {
       bar.append(commandButton('Retry identifier check', 'refresh', () => mutateSimple(request, 'retry-identifier-check')));
@@ -2514,6 +2810,52 @@ export function createWorkflowApp() {
     }
   }
 
+  async function deleteTitleRequest(request) {
+    if (!isCurrentDialogRequest(request, 'title_request') || state.dialogMutationInFlight) return;
+    const mutation = latestLoads.begin('dialog-mutation');
+    state.dialogMutationInFlight = 'title:' + request.id + ':' + request.version;
+    announce('Permanently deleting title request...');
+    try {
+      const result = await authorizedJson('/api/asap/staff/requests/' + encodeURIComponent(request.id), {
+        method: 'DELETE', body: { version: request.version, actorVersion: state.staff?.version },
+        signal: mutation.signal
+      });
+      if (result?.deleted !== true) throw unconfirmedResponseError();
+      const message = 'Title request ' + request.id + ' permanently deleted. Its deletion audit remains.';
+      state.partialSessionFailureMessage = message + ' Sign in again to review Closed work.';
+      state.partialSessionFailureOwner = mutation.token;
+      state.partialSessionFailureDetailAvailable = false;
+      state.partialSessionFailureAfterQueueSequence = null;
+      if (!isCurrentDialogMutation(mutation, request, 'title_request')) {
+        if (!state.staff) dom.signedOutMessage.textContent = state.partialSessionFailureMessage;
+        return;
+      }
+      closeDialog({ preserveMutation: true });
+      announce(message, 'success');
+      const refreshed = await loadQueue({ skipDeepLink: true, silent: true });
+      if (refreshed === true) clearCommittedSessionFallback(mutation.token);
+      if (refreshed === false && state.staff) announce(message + ' The Closed view could not refresh.', 'warning');
+    } catch (error) {
+      const uncertain = isUnconfirmedMutationError(error, mutation.signal) ||
+        error.status === 408 || error.status >= 500;
+      if (uncertain && isCurrentDialogMutation(mutation, request, 'title_request')) {
+        retainUnconfirmedOutcome(
+          'Title-request deletion could not be confirmed. Refresh Closed work before retrying.',
+          mutation.token);
+        await loadQueue({ skipDeepLink: true, silent: true });
+        announce('Title-request deletion could not be confirmed. Review Closed work before retrying.', 'warning');
+      } else if (isCurrentDialogMutation(mutation, request, 'title_request') && error.status !== 401) {
+        announce(error.message || 'The title request was not deleted. Review its current state.', 'error');
+        await loadQueue({ skipDeepLink: true, silent: true });
+      }
+    } finally {
+      if (state.dialogMutationInFlight === 'title:' + request.id + ':' + request.version) {
+        state.dialogMutationInFlight = null;
+      }
+      latestLoads.finish('dialog-mutation', mutation.token);
+    }
+  }
+
   async function mutateRequest(request, path, body, successMessage) {
     if (!isCurrentDialogRequest(request, 'title_request') || state.dialogMutationInFlight === `title:${request.id}:${request.version}`) return;
     const mutation = latestLoads.begin('dialog-mutation');
@@ -3061,6 +3403,14 @@ export function createWorkflowApp() {
 
   function bindEvents() {
     onSessionInvalid(error => {
+      const batch = state.bulkDeleteState;
+      if (batch?.submitting && batch.currentItem) {
+        batch.ledger.push({ ...batch.currentItem, outcome: 'forbidden/out_of_scope' });
+        const remaining = batch.snapshot.items.slice(batch.snapshot.items.indexOf(batch.currentItem) + 1);
+        batch.ledger.push(...remaining.map(item => ({ ...item, outcome: 'not_attempted' })));
+        renderBulkLedger(batch);
+        batch.currentItem = null;
+      }
       const pickupChanged = error.response?.code === 'request_not_created_pickup_changed' &&
         error.response?.pickupPreferenceChanged === true;
       if (pickupChanged) {
@@ -3075,9 +3425,35 @@ export function createWorkflowApp() {
       showSignedOut(state.partialSessionFailureMessage ||
         'Your staff session ended or no longer has access. Sign in again.');
     });
-    onAccessUnavailable(showAccessUnavailable);
+    onAccessUnavailable(() => {
+      const batch = state.bulkDeleteState;
+      if (batch?.submitting && batch.currentItem) {
+        batch.ledger.push({ ...batch.currentItem, outcome: 'forbidden/out_of_scope' });
+        const remaining = batch.snapshot.items.slice(batch.snapshot.items.indexOf(batch.currentItem) + 1);
+        batch.ledger.push(...remaining.map(item => ({ ...item, outcome: 'not_attempted' })));
+        renderBulkLedger(batch);
+        batch.currentItem = null;
+      }
+      showAccessUnavailable();
+    });
     settingsController.bind();
     dom.newSuggestion.addEventListener('click', event => openStaffSuggestion(event.currentTarget));
+    dom.bulkDelete.addEventListener('click', event => openBulkDelete(event.currentTarget));
+    dom.bulkDeleteCopies.addEventListener('click', event => openBulkDelete(event.currentTarget));
+    dom.bulkDeleteClose.addEventListener('click', () => closeBulkDelete());
+    dom.bulkDeleteDialog.addEventListener('cancel', event => {
+      event.preventDefault();
+      closeBulkDelete();
+    });
+    dom.bulkDeleteScope.addEventListener('change', resetBulkDeletePreview);
+    dom.bulkDeletePreview.addEventListener('click', previewBulkDelete);
+    dom.bulkDeleteConfirmation.addEventListener('input', () => {
+      const batch = state.bulkDeleteState;
+      dom.bulkDeleteExecute.disabled = !batch?.snapshot?.items.length ||
+        batch.submitting || dom.bulkDeleteScope.value !== batch.snapshot.scope ||
+        dom.bulkDeleteConfirmation.value !== 'DELETE';
+    });
+    dom.bulkDeleteExecute.addEventListener('click', executeBulkDelete);
     dom.signOut.addEventListener('click', async () => {
       try {
         await authorizedJson('/api/asap/staff/sign-out', { method: 'POST' });

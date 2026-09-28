@@ -487,7 +487,7 @@ public sealed partial class PatronJourneyTests
         using (var report = JsonDocument.Parse(
                    await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "staff-browser-results.json"))))
         {
-            Assert.HasCount(26, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            Assert.HasCount(29, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
             var analytics = report.RootElement.GetProperty("analytics");
             Assert.AreEqual("all", analytics.GetProperty("desktopSuperAdminScope").GetString());
             Assert.AreEqual("last90", analytics.GetProperty("desktopRange").GetString());
@@ -3102,7 +3102,7 @@ public sealed partial class PatronJourneyTests
         var sourceDelete = await factory.Services.GetRequiredService<TitleRequestMutationService>().DeleteClosedAsync(
             actor,
             seeded.SourceRequestId,
-            new VersionInput(StaffVersion.Encode(sourceVersion)),
+            new VersionInput(StaffVersion.Encode(sourceVersion), StaffVersion.Encode(actor.RowVersion)),
             CancellationToken.None);
         Assert.AreEqual("deleted", sourceDelete.Code);
         task = await service.GetAsync(actor, task.Id, null, CancellationToken.None);
@@ -3120,7 +3120,7 @@ public sealed partial class PatronJourneyTests
         var deleted = await service.DeleteClosedAsync(
             actor,
             created.RequestId.Value,
-            new VersionInput(task!.Version),
+            new VersionInput(task!.Version, StaffVersion.Encode(actor.RowVersion)),
             CancellationToken.None);
         Assert.AreEqual("deleted", deleted.Code);
 
@@ -3742,27 +3742,14 @@ public sealed partial class PatronJourneyTests
         {
             using var protectedBody = JsonDocument.Parse(await protectedGet.Content.ReadAsStringAsync());
             protectedVersion = protectedBody.RootElement.GetProperty("version").GetString()!;
+            Assert.IsFalse(protectedBody.RootElement.GetProperty("capabilities").GetProperty("canChangeWorkflowState").GetBoolean());
         }
         using var reopen = await client.PostAsJsonAsync(
             $"/api/asap/staff/title-requests/{protectedRequestId}/action",
             new { version = protectedVersion, action = "reopen", status = "suggestion" });
-        Assert.AreEqual(HttpStatusCode.OK, reopen.StatusCode, await reopen.Content.ReadAsStringAsync());
+        Assert.AreEqual(HttpStatusCode.Conflict, reopen.StatusCode, await reopen.Content.ReadAsStringAsync());
         using var reopenBody = JsonDocument.Parse(await reopen.Content.ReadAsStringAsync());
-        Assert.IsFalse(reopenBody.RootElement.GetProperty("capabilities").GetProperty("canEditIdentifier").GetBoolean());
-        Assert.AreEqual(
-            "identifier_locked_by_stage",
-            reopenBody.RootElement.GetProperty("capabilities").GetProperty("blockingReason").GetString());
-
-        using var protectedEdit = await client.PostAsJsonAsync(
-            $"/api/asap/staff/title-requests/{protectedRequestId}/action",
-            new
-            {
-                version = reopenBody.RootElement.GetProperty("version").GetString(),
-                action = "edit",
-                status = "suggestion",
-                identifier = "9780000000999"
-            });
-        Assert.AreEqual(HttpStatusCode.Conflict, protectedEdit.StatusCode);
+        Assert.AreEqual("hold_history_retained", reopenBody.RootElement.GetProperty("code").GetString());
 
         await using var verify = new SqlConnection(databaseConnectionString);
         await verify.OpenAsync();
@@ -3786,7 +3773,7 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task StaffReopenedKnownLegacyAndSuccessfulHoldHistoryRemainIdentifierProtected()
+    public async Task StaffClosedPlacedHoldHistoryCannotReopenWithoutProviderCompensation()
     {
         var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
         using var client = factory!.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
@@ -3841,44 +3828,21 @@ public sealed partial class PatronJourneyTests
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
 
-        async Task<JsonDocument> ReopenAsync(long requestId)
+        async Task AssertReopenBlockedAsync(long requestId)
         {
             using var get = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}");
             using var body = JsonDocument.Parse(await get.Content.ReadAsStringAsync());
+            Assert.IsFalse(body.RootElement.GetProperty("capabilities").GetProperty("canChangeWorkflowState").GetBoolean());
             using var reopen = await client.PostAsJsonAsync(
                 $"/api/asap/staff/title-requests/{requestId}/action",
                 new { version = body.RootElement.GetProperty("version").GetString(), action = "reopen", status = "suggestion" });
-            Assert.AreEqual(HttpStatusCode.OK, reopen.StatusCode, await reopen.Content.ReadAsStringAsync());
-            return JsonDocument.Parse(await reopen.Content.ReadAsStringAsync());
+            Assert.AreEqual(HttpStatusCode.Conflict, reopen.StatusCode, await reopen.Content.ReadAsStringAsync());
+            using var result = JsonDocument.Parse(await reopen.Content.ReadAsStringAsync());
+            Assert.AreEqual("hold_history_retained", result.RootElement.GetProperty("code").GetString());
         }
 
-        using var legacyReopened = await ReopenAsync(legacyRequestId);
-        Assert.IsFalse(legacyReopened.RootElement.GetProperty("capabilities").GetProperty("canEditIdentifier").GetBoolean());
-        using var legacyEdit = await client.PostAsJsonAsync(
-            $"/api/asap/staff/title-requests/{legacyRequestId}/action",
-            new
-            {
-                version = legacyReopened.RootElement.GetProperty("version").GetString(),
-                action = "edit",
-                status = "suggestion",
-                identifier = "9780000002199",
-                bibid = "9999"
-            });
-        Assert.AreEqual(HttpStatusCode.Conflict, legacyEdit.StatusCode, await legacyEdit.Content.ReadAsStringAsync());
-
-        using var successfulReopened = await ReopenAsync(successfulRequestId);
-        Assert.IsFalse(successfulReopened.RootElement.GetProperty("capabilities").GetProperty("canChangeBib").GetBoolean());
-        using var successfulEdit = await client.PostAsJsonAsync(
-            $"/api/asap/staff/title-requests/{successfulRequestId}/action",
-            new
-            {
-                version = successfulReopened.RootElement.GetProperty("version").GetString(),
-                action = "edit",
-                status = "suggestion",
-                identifier = "9780000002141",
-                bibid = (string?)null
-            });
-        Assert.AreEqual(HttpStatusCode.Conflict, successfulEdit.StatusCode, await successfulEdit.Content.ReadAsStringAsync());
+        await AssertReopenBlockedAsync(legacyRequestId);
+        await AssertReopenBlockedAsync(successfulRequestId);
 
         await using var verify = new SqlConnection(databaseConnectionString);
         await verify.OpenAsync();
@@ -4158,6 +4122,7 @@ public sealed partial class PatronJourneyTests
         using var session = await client.GetAsync("/api/asap/staff/session");
         using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
+        var actorVersion = sessionBody.RootElement.GetProperty("staff").GetProperty("version").GetString()!;
 
         async Task<string> VersionAsync(long requestId)
         {
@@ -4168,7 +4133,7 @@ public sealed partial class PatronJourneyTests
 
         using var retained = new HttpRequestMessage(HttpMethod.Delete, $"/api/asap/staff/requests/{retainedId}")
         {
-            Content = JsonContent.Create(new { version = await VersionAsync(retainedId) })
+            Content = JsonContent.Create(new { version = await VersionAsync(retainedId), actorVersion })
         };
         using var retainedResponse = await client.SendAsync(retained);
         Assert.AreEqual(HttpStatusCode.Conflict, retainedResponse.StatusCode, await retainedResponse.Content.ReadAsStringAsync());
@@ -4179,14 +4144,14 @@ public sealed partial class PatronJourneyTests
 
         using var stale = new HttpRequestMessage(HttpMethod.Delete, $"/api/asap/staff/requests/{deletableId}")
         {
-            Content = JsonContent.Create(new { version = Convert.ToBase64String(new byte[8]) })
+            Content = JsonContent.Create(new { version = Convert.ToBase64String(new byte[8]), actorVersion })
         };
         using var staleResponse = await client.SendAsync(stale);
         Assert.AreEqual(HttpStatusCode.Conflict, staleResponse.StatusCode, await staleResponse.Content.ReadAsStringAsync());
 
         using var delete = new HttpRequestMessage(HttpMethod.Delete, $"/api/asap/staff/requests/{deletableId}")
         {
-            Content = JsonContent.Create(new { version = await VersionAsync(deletableId) })
+            Content = JsonContent.Create(new { version = await VersionAsync(deletableId), actorVersion })
         };
         using var deleted = await client.SendAsync(delete);
         Assert.AreEqual(HttpStatusCode.OK, deleted.StatusCode, await deleted.Content.ReadAsStringAsync());

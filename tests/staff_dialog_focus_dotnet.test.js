@@ -127,7 +127,9 @@ async function runJourney(scenario) {
       dom.window.gridjs.Grid.prototype.updateConfig = updateConfig;
       assert.strictEqual(this.config.container.id, gridId, 'Only the owning grid unclaim render may be held');
       assert.ok(Array.isArray(configuration.data), 'The workflow must supply an array to the held update');
-      assert.deepStrictEqual(configuration.data.map(row => [row[6], row[4]]), [['91', 'Unclaimed'], ['92', 'Unclaimed']],
+      assert.deepStrictEqual(configuration.data.map(row =>
+        [row[titleRequest ? 8 : 6], row[titleRequest ? 6 : 4]]),
+      [['91', 'Unclaimed'], ['92', 'Unclaimed']],
         'The held update must be the completed unclaim refresh, not an earlier filter or claim render');
       return updateConfig.call(this, { ...configuration, data: async () => {
         renderStarted = true;

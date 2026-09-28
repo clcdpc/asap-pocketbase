@@ -612,6 +612,14 @@ public sealed class AdditionalCopyService(
         {
             return new AdditionalCopyMutationResult("delete_forbidden");
         }
+        if (!StaffVersion.TryDecode(input.ActorVersion, out var expectedActorVersion))
+        {
+            return new AdditionalCopyMutationResult("actor_changed_since_preview");
+        }
+        if (!actor.RowVersion.SequenceEqual(expectedActorVersion))
+        {
+            return new AdditionalCopyMutationResult("actor_changed_since_preview");
+        }
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var snapshot = await ReadTaskSnapshotAsync(context, requestId, cancellationToken);
         if (snapshot is null)
@@ -642,6 +650,10 @@ public sealed class AdditionalCopyService(
         if (locked.Staff[actor.Id].Role is not ("admin" or "super_admin"))
         {
             return new AdditionalCopyMutationResult("delete_forbidden");
+        }
+        if (!locked.Staff[actor.Id].RowVersion.SequenceEqual(expectedActorVersion))
+        {
+            return new AdditionalCopyMutationResult("actor_changed_since_preview");
         }
         context.DeletedRequestAudits.Add(new DeletedRequestAudit
         {

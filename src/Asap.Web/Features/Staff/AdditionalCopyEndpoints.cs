@@ -238,7 +238,7 @@ public static class AdditionalCopyEndpoints
         "staff_session_invalid" => Results.Json(new { code }, statusCode: StatusCodes.Status401Unauthorized),
         "staff_scope_forbidden" or "claim_forbidden" or "delete_forbidden" =>
             Results.Json(new { code }, statusCode: StatusCodes.Status403Forbidden),
-        "stale_version" or "claim_conflict" or "organization_inactive" =>
+        "stale_version" or "actor_changed_since_preview" or "claim_conflict" or "organization_inactive" =>
             Results.Conflict(new { code, message = "The task changed or is no longer actionable. Reload before continuing." }),
         "notification_dependency_unavailable" => Results.Json(new
         {

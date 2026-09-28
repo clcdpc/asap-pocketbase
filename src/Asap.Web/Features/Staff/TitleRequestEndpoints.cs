@@ -710,9 +710,23 @@ public static class TitleRequestEndpoints
         long id,
         [FromBody] VersionInput input,
         TitleRequestMutationService mutations,
-        CancellationToken cancellationToken) =>
-        ToErrorOrSuccess(await mutations.DeleteClosedAsync(Current(context), id, input, cancellationToken),
-            Results.Json(new { deleted = true }));
+        CancellationToken cancellationToken)
+    {
+        TitleRequestMutationResult result;
+        try
+        {
+            result = await mutations.DeleteClosedAsync(Current(context), id, input, cancellationToken);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return Results.Json(new
+            {
+                code = "request_outcome_unconfirmed",
+                message = "The deletion outcome could not be confirmed. Reload Closed work before retrying."
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+        return ToErrorOrSuccess(result, Results.Json(new { deleted = true }));
+    }
 
     private static async Task<IResult> MutateAndLoadAsync(
         HttpContext context,
@@ -773,7 +787,7 @@ public static class TitleRequestEndpoints
         "staff_scope_forbidden" or "claim_forbidden" or "delete_forbidden" => Results.Json(
             new { code = result.Code, message = "This request is outside your authorized scope." },
             statusCode: StatusCodes.Status403Forbidden),
-        "stale_version" or "claim_conflict" or "hold_operation_incomplete" or
+        "stale_version" or "actor_changed_since_preview" or "claim_conflict" or "hold_operation_incomplete" or
             "identifier_locked_by_stage" or "identifier_retry_not_allowed" or "organization_inactive" or
             "hold_history_retained" => Results.Conflict(new
             {

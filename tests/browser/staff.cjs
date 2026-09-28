@@ -103,7 +103,8 @@ async function assertReadableMobileQueue(page, selector = '#request-grid') {
       nonPositiveCells: bounds.some(bounds => bounds.width <= 0)
     };
   });
-  assert.equal(geometry.cellCount, 7, 'Mobile queue should render all request columns');
+  assert.equal(geometry.cellCount, selector === '#request-grid' ? 9 : 7,
+    'Mobile queue should render all request columns');
   assert.equal(geometry.overlaps, false, 'Mobile queue cells must not overlap neighboring columns');
   assert.equal(geometry.nonPositiveCells, false, 'Mobile queue cells need stable positive widths');
   assert.ok(geometry.wrapperScrollWidth > geometry.wrapperClientWidth, 'Mobile queue should scroll inside its wrapper');
@@ -1045,7 +1046,7 @@ async function runStaleMutationCompletions(browser, args, report) {
       `/api/asap/staff/additional-copies/${args.staleCopyAId}`
     );
     page.once('dialog', dialog => dialog.accept());
-    await page.getByRole('button', { name: 'Delete task' }).click();
+    await page.getByRole('button', { name: 'Permanently delete task' }).click();
     assert.equal((await delayedMutation.accepted).status, 200);
     heldB = await holdCurrentB('additional_copy', args.staleCopyBId);
     await releaseMutationWithBPending(delayedMutation, heldB);
@@ -1575,7 +1576,7 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     page.once('dialog', dialog => dialog.accept());
     await page.getByRole('button', { name: 'Close task' }).click();
     page.once('dialog', dialog => dialog.accept());
-    await page.getByRole('button', { name: 'Delete task' }).click();
+    await page.getByRole('button', { name: 'Permanently delete task' }).click();
     await page.locator('#request-dialog').waitFor({ state: 'hidden' });
     await page.locator('#app-status').filter({ hasText: 'Additional-copy task deleted.' }).waitFor();
 
@@ -1995,6 +1996,221 @@ async function fillOperatorResolution(page, attestProof) {
   if (attestProof) await page.getByLabel(/I attest that this evidence proves/).check();
 }
 
+async function runClosedDeletionControls(browser, args, axeSource, report) {
+  const highId = '9007199254741993';
+  const nextId = '9007199254741994';
+  const { context, traffic } = await createContext(
+    browser, { width: 390, height: 844 }, args.baseOrigin, args.superIdentity
+  );
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    await page.goto(args.baseOrigin + '/staff/', { waitUntil: 'networkidle' });
+    const detailPath = args.baseOrigin + '/api/asap/staff/title-requests/' + args.staleTitleAId;
+    const deletePath = args.baseOrigin + '/api/asap/staff/requests/' + args.staleTitleAId;
+    const sourceResponse = await context.request.get(detailPath);
+    assert.equal(sourceResponse.status(), 200);
+    const source = await sourceResponse.json();
+    const actorVersion = (await session(context, args.baseOrigin)).staff.version;
+    const closedDetail = { ...source, status: 'closed', closeReason: 'rejected',
+      capabilities: { ...source.capabilities, canChangeWorkflowState: true } };
+    let singleDeletes = 0;
+    const detailRoute = route => route.fulfill({ status: 200, contentType: 'application/json',
+      body: JSON.stringify(closedDetail) });
+    const singleDeleteRoute = route => {
+      singleDeletes += 1;
+      assert.equal(route.request().postDataJSON().version, source.version);
+      assert.equal(route.request().postDataJSON().actorVersion, actorVersion);
+      return route.fulfill({ status: 200, contentType: 'application/json',
+        body: JSON.stringify({ deleted: true }) });
+    };
+    await page.route(detailPath, detailRoute);
+    await page.route(deletePath, singleDeleteRoute);
+    await page.goto(args.baseOrigin + '/staff/?request=' + args.staleTitleAId, { waitUntil: 'networkidle' });
+    await page.getByRole('button', { name: 'Permanently delete request' }).waitFor();
+    assert.match(await page.locator('#request-dialog .detail-grid').textContent(),
+      /Close reason\s*Rejected/);
+    await scan(page, axeSource, args.artifactRoot, report, 'mobile', 'single-closed-title-delete');
+    page.once('dialog', dialog => {
+      assert.match(dialog.message(), /cannot be undone/);
+      return dialog.dismiss();
+    });
+    await page.getByRole('button', { name: 'Permanently delete request' }).click();
+    assert.equal(singleDeletes, 0);
+    page.once('dialog', dialog => dialog.accept());
+    await page.getByRole('button', { name: 'Permanently delete request' }).click();
+    await page.locator('#request-dialog').waitFor({ state: 'hidden' });
+    assert.equal(singleDeletes, 1);
+    await page.unroute(detailPath, detailRoute);
+    await page.unroute(deletePath, singleDeleteRoute);
+    await page.locator('[data-status="closed"]').click();
+    await page.locator('#request-search').fill('a hidden unrelated filter');
+    const title = {
+      id: highId, type: 'title_request', title: 'Closed high ID title',
+      status: 'closed', closeReason: 'rejected', version: 'AQIDBAUGBwg=',
+      libraryOrgId: 2, libraryOrgName: 'Preview library'
+    };
+    const copy = {
+      id: highId, type: 'additional_copy', title: 'Closed colliding copy',
+      status: 'closed', version: 'AgMEBQYHCAk=',
+      libraryOrgId: 2, libraryOrgName: 'Preview library'
+    };
+    const missingCopy = {
+      ...copy, id: nextId, title: 'Closed missing copy', version: 'AwQFBgcICQo='
+    };
+    let titleLoads = 0;
+    let copyLoads = 0;
+    await page.route(/\/api\/asap\/staff\/title-requests\?scope=/, route => {
+      titleLoads += 1;
+      return route.fulfill({ status: 200, contentType: 'application/json',
+        body: JSON.stringify({ scope: 'all', organizations: [], items: [title] }) });
+    });
+    await page.route(/\/api\/asap\/staff\/additional-copies\?scope=/, route => {
+      copyLoads += 1;
+      return route.fulfill({ status: 200, contentType: 'application/json',
+        body: JSON.stringify({ scope: 'all', status: 'closed', availableLibraries: [],
+          items: [copy, missingCopy] }) });
+    });
+    const sent = [];
+    let sessionLoss = false;
+    let actorChange = false;
+    let timeoutFailure = false;
+    await page.route(/\/api\/asap\/staff\/requests\/9007199254741993$/, route => {
+      sent.push({ path: new URL(route.request().url()).pathname,
+        version: route.request().postDataJSON().version,
+        actorVersion: route.request().postDataJSON().actorVersion });
+      return route.fulfill({ status: actorChange ? 409 : 200, contentType: 'application/json',
+        body: JSON.stringify(actorChange ? { code: 'actor_changed_since_preview' } : { deleted: true }) });
+    });
+    await page.route(/\/api\/asap\/staff\/additional-copies\/900719925474199[34]$/, route => {
+      const pathname = new URL(route.request().url()).pathname;
+      sent.push({ path: pathname, version: route.request().postDataJSON().version,
+        actorVersion: route.request().postDataJSON().actorVersion });
+      return route.fulfill({ status: sessionLoss && pathname.endsWith(highId) ? 401
+        : timeoutFailure && pathname.endsWith(highId) ? 503
+        : pathname.endsWith(nextId) ? 404 : 409,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: sessionLoss && pathname.endsWith(highId) ? 'staff_session_invalid'
+          : timeoutFailure && pathname.endsWith(highId) ? 'request_outcome_unconfirmed'
+          : pathname.endsWith(nextId) ? 'not_found' : 'stale_version' }) });
+    });
+    await page.getByRole('button', { name: 'Delete closed work...' }).click();
+    await page.locator('#bulk-delete-dialog[open]').waitFor();
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'bulk-delete-scope');
+    assert.equal(await page.locator('#bulk-delete-execute').isDisabled(), true);
+    await page.locator('#bulk-delete-scope').selectOption('all');
+    await page.getByRole('button', { name: 'Preview closed records' }).click();
+    await page.locator('#bulk-delete-summary').filter({
+      hasText: '1 closed title requests and 2 closed additional-copy tasks'
+    }).waitFor();
+    assert.equal(await page.locator('#bulk-delete-items li').count(), 3);
+    assert.match(await page.locator('#bulk-delete-items').textContent(), /Title request 9007199254741993/);
+    assert.match(await page.locator('#bulk-delete-items').textContent(), /Additional-copy task 9007199254741993/);
+    assert.equal(await page.locator('#bulk-delete-execute').isDisabled(), true);
+    await scan(page, axeSource, args.artifactRoot, report, 'mobile', 'bulk-closed-preview');
+    await page.locator('#bulk-delete-confirmation').fill('DELETE');
+    await page.locator('#bulk-delete-execute').evaluate(button => {
+      button.click();
+      button.click();
+    });
+    await page.locator('#bulk-delete-results').filter({ hasText: 'Confirmed deleted: 1 of 3. Attempted: 3.' }).waitFor();
+    assert.deepEqual(sent, [
+      { path: '/api/asap/staff/requests/' + highId, version: title.version, actorVersion },
+      { path: '/api/asap/staff/additional-copies/' + highId, version: copy.version, actorVersion },
+      { path: '/api/asap/staff/additional-copies/' + nextId, version: missingCopy.version, actorVersion }
+    ]);
+    assert.match(await page.locator('#bulk-delete-results').textContent(),
+      /Title request 9007199254741993.*deleted/);
+    assert.match(await page.locator('#bulk-delete-results').textContent(),
+      /Additional-copy task 9007199254741993.*stale/);
+    assert.match(await page.locator('#bulk-delete-results').textContent(),
+      /Additional-copy task 9007199254741994.*not found/);
+    assert.ok(titleLoads >= 2 && copyLoads >= 2, 'Both Closed views must refresh after partial deletion');
+    await scan(page, axeSource, args.artifactRoot, report, 'mobile', 'bulk-closed-results');
+    await page.keyboard.press('Escape');
+    await page.locator('#bulk-delete-dialog').waitFor({ state: 'hidden' });
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'bulk-delete-closed');
+    actorChange = true;
+    await page.getByRole('button', { name: 'Delete closed work...' }).click();
+    await page.locator('#bulk-delete-scope').selectOption('all');
+    await page.getByRole('button', { name: 'Preview closed records' }).click();
+    await page.locator('#bulk-delete-items li').first().waitFor();
+    await page.locator('#bulk-delete-confirmation').fill('DELETE');
+    await page.locator('#bulk-delete-execute').click();
+    await page.locator('#bulk-delete-results').filter({
+      hasText: 'Confirmed deleted: 0 of 3. Attempted: 1.'
+    }).waitFor();
+    assert.match(await page.locator('#bulk-delete-results').textContent(),
+      /Title request 9007199254741993.*actor changed/);
+    assert.match(await page.locator('#bulk-delete-results').textContent(),
+      /Additional-copy task 9007199254741993.*not attempted/);
+    assert.equal(sent.length, 4, 'Actor change must stop the remaining batch');
+    await page.keyboard.press('Escape');
+    await page.locator('#bulk-delete-dialog').waitFor({ state: 'hidden' });
+    actorChange = false;
+    timeoutFailure = true;
+    await page.getByRole('button', { name: 'Delete closed work...' }).click();
+    await page.locator('#bulk-delete-scope').selectOption('all');
+    await page.getByRole('button', { name: 'Preview closed records' }).click();
+    await page.locator('#bulk-delete-items li').first().waitFor();
+    await page.locator('#bulk-delete-confirmation').fill('DELETE');
+    await page.locator('#bulk-delete-execute').click();
+    await page.locator('#bulk-delete-results').filter({
+      hasText: 'Confirmed deleted: 1 of 3. Attempted: 2.'
+    }).waitFor();
+    assert.match(await page.locator('#bulk-delete-results').textContent(),
+      /Additional-copy task 9007199254741993.*outcome unconfirmed/);
+    assert.match(await page.locator('#bulk-delete-results').textContent(),
+      /Additional-copy task 9007199254741994.*not attempted/);
+    assert.equal(sent.length, 6, 'Unconfirmed outcome must stop the remaining batch');
+    await page.keyboard.press('Escape');
+    await page.locator('#bulk-delete-dialog').waitFor({ state: 'hidden' });
+    timeoutFailure = false;
+    sessionLoss = true;
+    await page.goto(args.baseOrigin + '/staff/', { waitUntil: 'networkidle' });
+    await page.locator('[data-status="closed"]').click();
+    await page.getByRole('button', { name: 'Delete closed work...' }).click();
+    await page.locator('#bulk-delete-dialog[open]').waitFor();
+    await page.locator('#bulk-delete-scope').selectOption('all');
+    await page.getByRole('button', { name: 'Preview closed records' }).click();
+    await page.locator('#bulk-delete-items li').first().waitFor();
+    await page.locator('#bulk-delete-confirmation').fill('DELETE');
+    await page.locator('#bulk-delete-execute').click();
+    await page.locator('#signed-out-message').filter({
+      hasText: 'Confirmed deleted: 1 of 3. Attempted: 2.'
+    }).waitFor();
+    assert.match(await page.locator('#signed-out-message').textContent(),
+      /Title request 9007199254741993.*deleted/);
+    assert.match(await page.locator('#signed-out-message').textContent(),
+      /Additional-copy task 9007199254741993.*forbidden\/out of scope/);
+    assert.match(await page.locator('#signed-out-message').textContent(),
+      /Additional-copy task 9007199254741994.*not attempted/);
+    assert.deepEqual(errors, []);
+    assert.equal(traffic.externalRequests, 0);
+  } finally {
+    await context.close();
+  }
+
+  const ordinary = await createContext(browser, { width: 1280, height: 900 },
+    args.baseOrigin, args.staffIdentity);
+  try {
+    const staffPage = await ordinary.context.newPage();
+    await staffPage.goto(args.baseOrigin + '/staff/', { waitUntil: 'networkidle' });
+    await staffPage.locator('[data-status="closed"]').click();
+    assert.equal(await staffPage.locator('#bulk-delete-closed').isHidden(), true);
+    const detail = await ordinary.context.request.get(
+      args.baseOrigin + '/api/asap/staff/title-requests/' + args.staleTitleAId);
+    assert.equal(detail.status(), 200);
+    const denied = await mutateDelete(ordinary.context, args.baseOrigin,
+      '/api/asap/staff/requests/' + args.staleTitleAId, { version: (await detail.json()).version });
+    assert.equal(denied.status(), 403);
+    assert.equal((await denied.json()).code, 'delete_forbidden');
+  } finally {
+    await ordinary.context.close();
+  }
+}
+
 async function runStaffSuggestion(browser, args, axeSource, report) {
   const scopedState = await createContext(
     browser,
@@ -2265,7 +2481,8 @@ async function main() {
     await runOperatorResolution(browser, args, axeSource, report);
     await runScopedBlocked(browser, args, axeSource, report);
     await runStaffSuggestion(browser, args, axeSource, report);
-    assert.equal(report.states.length, 26, 'Expected twenty-six major staff browser states');
+    await runClosedDeletionControls(browser, args, axeSource, report);
+    assert.equal(report.states.length, 29, 'Expected twenty-nine major staff browser states');
     await fs.writeFile(
       path.join(args.artifactRoot, 'staff-browser-results.json'),
       JSON.stringify(report, null, 2),
