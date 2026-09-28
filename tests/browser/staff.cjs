@@ -55,7 +55,12 @@ async function createContext(browser, viewport, baseOrigin, identity) {
   });
   const traffic = { externalRequests: 0 };
   await context.route('**/*', route => {
-    if (sameOrigin(route.request().url(), baseOrigin)) return route.continue();
+    if (sameOrigin(route.request().url(), baseOrigin)) {
+      return route.continue().catch(error => {
+        // A page-level delayed-response route may finish while this context is closing.
+        if (!/Route is already handled|closed/i.test(error.message)) throw error;
+      });
+    }
     traffic.externalRequests += 1;
     return route.abort('blockedbyclient');
   });
@@ -103,7 +108,7 @@ async function assertReadableMobileQueue(page, selector = '#request-grid') {
       nonPositiveCells: bounds.some(bounds => bounds.width <= 0)
     };
   });
-  assert.equal(geometry.cellCount, selector === '#request-grid' ? 9 : 7,
+  assert.equal(geometry.cellCount, selector === '#request-grid' ? 12 : 11,
     'Mobile queue should render all request columns');
   assert.equal(geometry.overlaps, false, 'Mobile queue cells must not overlap neighboring columns');
   assert.equal(geometry.nonPositiveCells, false, 'Mobile queue cells need stable positive widths');
@@ -297,7 +302,16 @@ async function runSuperAdmin(browser, args, axeSource, report) {
   const page = await context.newPage();
   const errors = [];
   const bibLookupBodies = [];
+  const observedSessions = [];
   page.on('pageerror', error => errors.push(error.message));
+  page.on('response', response => {
+    if (new URL(response.url()).pathname !== '/api/asap/staff/session') return;
+    response.json().then(value => observedSessions.push({ status: response.status(),
+      authenticated: value.authenticated, accessAllowed: value.accessAllowed,
+      staff: value.staff && { id: value.staff.id, tenantId: value.staff.tenantId,
+        authenticationEmail: value.staff.authenticationEmail, role: value.staff.role,
+        organizationId: value.staff.organizationId } })).catch(() => {});
+  });
   page.on('request', request => {
     if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/asap/staff/bib-lookup') {
       bibLookupBodies.push(JSON.parse(request.postData() || '{}'));
@@ -344,7 +358,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
         storedBibPurchasePosts += 1;
       }
     });
-    await storedBibPage.route(`**/api/asap/staff/title-requests/${args.primaryRequestId}`, async route => {
+    await storedBibPage.route(`**/api/asap/staff/title-requests/${args.primaryRequestId}*`, async route => {
       const response = await route.fetch();
       const request = await response.json();
       await route.fulfill({ response, json: { ...request, bibid: '9001',
@@ -421,6 +435,18 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     assert.equal(await page.evaluate(() => document.activeElement.dataset.status), 'outstanding_purchase');
     await page.keyboard.press('Enter');
     await page.locator('#library-scope').selectOption('2');
+    assert.equal(await page.locator('#claim-filter').inputValue(), 'mine_unclaimed');
+    await page.locator('#claim-filter').selectOption('all', { timeout: 10000 }).catch(async error => {
+      const context = await page.evaluate(() => ({
+        status: document.querySelector('#app-status')?.textContent,
+        signedOutMessage: document.querySelector('#signed-out-message')?.textContent,
+        queueHidden: document.querySelector('#queue-view')?.hidden,
+        workspaceHidden: document.querySelector('#workspace')?.hidden,
+        activeView: document.querySelector('.view-tab[aria-current="page"]')?.dataset.view,
+        stage: document.querySelector('[data-status][aria-selected="true"]')?.dataset.status
+      }));
+      throw new Error(`${error.message}\n${JSON.stringify(context)}\n${JSON.stringify(observedSessions.slice(-6))}`);
+    });
     await page.getByRole('button', { name: `Open request ${args.primaryRequestId}` }).waitFor();
     assert.equal(await page.getByText('Other browser library title', { exact: true }).count(), 0);
     const open = page.getByRole('button', { name: `Open request ${args.primaryRequestId}` });
@@ -943,8 +969,15 @@ async function runStaleMutationCompletions(browser, args, report) {
       await page.keyboard.press('Escape');
       assert.equal(await page.locator('#request-dialog').isVisible(), true,
         'Escape must keep a consequential in-flight action visible until its result arrives');
+      if (type === 'additional_copy' &&
+          await page.locator('[data-copy-status="closed"]').getAttribute('aria-selected') === 'true') {
+        await page.locator('[data-copy-status="open"]').evaluate(node => node.click());
+      }
       await page.locator(target.claimFilter).selectOption('all');
-      await page.getByRole('button', { name: target.openLabel }).evaluate(node => node.click());
+      const detailResponse = page.waitForResponse(response => response.request().method() === 'GET' &&
+        new URL(response.url()).pathname === target.apiPath);
+      await page.locator(`button.grid-open[aria-label="${target.openLabel}"]`).evaluate(node => node.click());
+      await detailResponse;
       await page.locator('#request-dialog-kicker').filter({ hasText: target.kicker }).waitFor();
       if (type === 'title_request') {
         await page.getByRole('link', { name: 'Open patron in LEAP' }).waitFor();
@@ -952,6 +985,9 @@ async function runStaleMutationCompletions(browser, args, report) {
       const beforeResponse = await context.request.get(`${args.baseOrigin}${target.apiPath}`);
       assert.equal(beforeResponse.status(), 200, await beforeResponse.text());
       const before = await beforeResponse.json();
+      await page.waitForFunction(expectedClaim =>
+        document.querySelector('#request-dialog-body')?.textContent.includes(expectedClaim),
+      before.claimedByDisplayName ? `Claimed by ${before.claimedByDisplayName}` : 'Unclaimed');
       const visible = {
         title: await page.locator('#request-dialog-title').textContent(),
         kicker: await page.locator('#request-dialog-kicker').textContent(),
@@ -1212,6 +1248,13 @@ async function runStaleMutationCompletions(browser, args, report) {
     await page.locator('#additional-copy-create-review').waitFor();
     await page.locator('#additional-copy-create-review-summary').filter({ hasText: /Creation for BIB .* could not be confirmed/ }).waitFor();
     await page.locator('.view-tab[data-view="queue"]').click();
+    const queueNavigationState = await page.evaluate(() => ({
+      hidden: document.querySelector('#queue-view')?.hidden,
+      activeTab: document.querySelector('.view-tab[aria-current="page"]')?.dataset.view,
+      dialogOpen: document.querySelector('#request-dialog')?.open,
+      url: window.location.href
+    }));
+    assert.equal(queueNavigationState.hidden, false, JSON.stringify(queueNavigationState));
     await page.locator('[data-status="hold_placed"]').click();
     await page.getByRole('button', { name: `Open request ${args.staleCreateSourceId}` }).click();
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
@@ -1221,8 +1264,14 @@ async function runStaleMutationCompletions(browser, args, report) {
     await page.locator('.view-tab[data-view="additional-copies"]').click();
     await page.getByRole('button', { name: 'I reviewed these tasks' }).click();
     assert.equal(await page.locator('#additional-copy-create-review').isVisible(), false);
-    assert.equal(await page.locator('#refresh-additional-copies').evaluate(node => document.activeElement === node), true,
-      'focus returns to the task-list refresh control after review acknowledgment');
+    const reviewFocus = await page.locator('#refresh-additional-copies').evaluate(node => ({
+      focused: document.activeElement === node,
+      disabled: node.disabled,
+      activeId: document.activeElement?.id,
+      activeView: document.querySelector('.view-tab[aria-current="page"]')?.dataset.view
+    }));
+    assert.equal(reviewFocus.focused, true,
+      `focus returns to the task-list refresh control after review acknowledgment: ${JSON.stringify(reviewFocus)}`);
     const earlierCreation = await mutate(context, args.baseOrigin,
       `/api/asap/staff/title-requests/${args.staleCreateSourceId}/additional-copy`,
       { version: uncertainSourceVersion, emailPurchaseReminder: false });
@@ -1498,7 +1547,16 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     const claimTransportFailure = route => route.abort('failed');
     await page.route(`**/api/asap/staff/additional-copies/${created.id}/claim`, claimTransportFailure);
     await page.getByRole('button', { name: 'Claim', exact: true }).click();
-    await page.locator('#app-status').filter({ hasText: /additional-copy action outcome could not be confirmed/i }).waitFor();
+    await page.locator('#app-status').filter({ hasText: /additional-copy action outcome could not be confirmed/i })
+      .waitFor({ timeout: 10000 }).catch(async error => {
+        const context = await page.evaluate(() => ({
+          status: document.querySelector('#app-status')?.textContent,
+          dialogOpen: document.querySelector('#request-dialog')?.open,
+          dialogText: document.querySelector('#request-dialog')?.textContent?.slice(0, 250),
+          activeView: document.querySelector('.view-tab[aria-current="page"]')?.dataset.view
+        }));
+        throw new Error(`${error.message}\n${JSON.stringify(context)}`);
+      });
     await page.unroute(`**/api/asap/staff/additional-copies/${created.id}/claim`, claimTransportFailure);
     const emptyClaimReply = route => route.fulfill({ status: 200, contentType: 'application/json',
       body: JSON.stringify({ committed: true, finalStatus: 'open' }) });
@@ -1603,9 +1661,9 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     );
     assert.equal((await retainedClosed.json()).claimedByStaffUserId, args.invalidClaimantId);
 
+    await page.locator('[data-copy-status="closed"]').click();
     await page.locator('#additional-copy-search').fill('');
     await page.locator('#additional-copy-claim-filter').selectOption('all');
-    await page.locator('[data-copy-status="closed"]').click();
     await page.getByRole('button', { name: `Open additional-copy task ${args.invalidClosedCopyId}` }).click();
     const reopenPath = `**/api/asap/staff/additional-copies/${args.invalidClosedCopyId}/reopen`;
     const advancedReopenDetail = async route => {
@@ -2008,6 +2066,7 @@ async function runClosedDeletionControls(browser, args, axeSource, report) {
   try {
     await page.goto(args.baseOrigin + '/staff/', { waitUntil: 'networkidle' });
     const detailPath = args.baseOrigin + '/api/asap/staff/title-requests/' + args.staleTitleAId;
+    const detailRoutePattern = detailPath + '*';
     const deletePath = args.baseOrigin + '/api/asap/staff/requests/' + args.staleTitleAId;
     const sourceResponse = await context.request.get(detailPath);
     assert.equal(sourceResponse.status(), 200);
@@ -2025,7 +2084,7 @@ async function runClosedDeletionControls(browser, args, axeSource, report) {
       return route.fulfill({ status: 200, contentType: 'application/json',
         body: JSON.stringify({ deleted: true }) });
     };
-    await page.route(detailPath, detailRoute);
+    await page.route(detailRoutePattern, detailRoute);
     await page.route(deletePath, singleDeleteRoute);
     await page.goto(args.baseOrigin + '/staff/?request=' + args.staleTitleAId, { waitUntil: 'networkidle' });
     await page.getByRole('button', { name: 'Permanently delete request' }).waitFor();
@@ -2042,7 +2101,7 @@ async function runClosedDeletionControls(browser, args, axeSource, report) {
     await page.getByRole('button', { name: 'Permanently delete request' }).click();
     await page.locator('#request-dialog').waitFor({ state: 'hidden' });
     assert.equal(singleDeletes, 1);
-    await page.unroute(detailPath, detailRoute);
+    await page.unroute(detailRoutePattern, detailRoute);
     await page.unroute(deletePath, singleDeleteRoute);
     await page.locator('[data-status="closed"]').click();
     await page.locator('#request-search').fill('a hidden unrelated filter');
@@ -2126,6 +2185,7 @@ async function runClosedDeletionControls(browser, args, axeSource, report) {
       /Additional-copy task 9007199254741993.*stale/);
     assert.match(await page.locator('#bulk-delete-results').textContent(),
       /Additional-copy task 9007199254741994.*not found/);
+    await page.locator('#bulk-delete-summary').filter({ hasText: 'Both Closed views were refreshed from the server.' }).waitFor();
     assert.ok(titleLoads >= 2 && copyLoads >= 2, 'Both Closed views must refresh after partial deletion');
     await scan(page, axeSource, args.artifactRoot, report, 'mobile', 'bulk-closed-results');
     await page.keyboard.press('Escape');
@@ -2463,6 +2523,292 @@ async function launch(chromium) {
   return chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
 }
 
+async function runNavigationSupport(browser, args, axeSource, report) {
+  const { context, traffic } = await createContext(
+    browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    await page.goto(`${args.baseOrigin}/staff/?request=${args.primaryRequestId}`, { waitUntil: 'networkidle' });
+    await page.locator('#request-dialog[open]').waitFor();
+    const recent = await page.evaluate(() => Object.keys(sessionStorage)
+      .filter(key => key.startsWith('asap.staff.recent.title_request.'))
+      .map(key => JSON.parse(sessionStorage.getItem(key))));
+    assert.equal(recent.length, 1);
+    assert.deepEqual(recent[0][0], { type: 'title_request', id: args.primaryRequestId });
+    assert.equal(await page.locator('.related-requests').count(), 1);
+    await page.getByRole('button', { name: 'Close request details' }).click();
+    await page.locator('#request-search').fill('no such request in this queue');
+    await page.locator('#recent-work summary').click();
+    await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'recent-request-switcher');
+    await page.locator('#recent-request-list button').first().click();
+    await page.locator('#request-dialog[open]').waitFor();
+    assert.equal(await page.locator('#request-search').inputValue(), '',
+      'Following a recent request must clear a filter that hides the target');
+    assert.equal(new URL(page.url()).searchParams.get('request'), args.primaryRequestId);
+    await page.getByRole('button', { name: 'Close request details' }).click();
+    const staleRecentId = '9223372036854775807';
+    await page.evaluate(({ staleId, existingId }) => {
+      const key = Object.keys(sessionStorage).find(item => item.startsWith('asap.staff.recent.title_request.'));
+      sessionStorage.setItem(key, JSON.stringify([
+        { type: 'additional_copy', id: existingId },
+        { type: 'title_request', id: staleId },
+        { type: 'title_request', id: existingId }
+      ]));
+    }, { staleId: staleRecentId, existingId: args.primaryRequestId });
+    await page.locator('#refresh-queue').click();
+    await page.locator('#recent-request-list button').filter({ hasText: staleRecentId }).waitFor({ state: 'attached' });
+    await page.locator('#recent-work summary').click();
+    await page.locator('#recent-request-list button').filter({ hasText: staleRecentId }).click();
+    await page.waitForFunction(id => !document.querySelector('#recent-request-list')?.textContent.includes(id),
+      staleRecentId);
+    assert.equal(await page.locator('#request-dialog').isVisible(), false,
+      'A stale recent item must not open an unauthorized or missing request');
+    assert.equal(await page.locator('#recent-request-list button').count(), 1,
+      'A type-colliding additional-copy recent item must be ignored');
+
+    const listResponse = await context.request.get(`${args.baseOrigin}/api/asap/staff/title-requests?scope=all`);
+    assert.equal(listResponse.status(), 200);
+    const list = await listResponse.json();
+    const suggestions = list.items.filter(item => item.status === 'suggestion');
+    for (const [filter, expected] of [
+      ['similar', suggestions.filter(item => item.relatedRequests?.count > 0).length],
+      ['unique', suggestions.filter(item => item.relatedRequests?.count === 0).length]
+    ]) {
+      await page.locator('#similar-filter').selectOption(filter);
+      await page.waitForFunction(count =>
+        Number(document.querySelector('#queue-summary')?.textContent.match(/^\d+/)?.[0]) === count,
+      expected);
+      assert.equal(Number((await page.locator('#queue-summary').textContent()).match(/^\d+/)[0]), expected);
+    }
+    let releaseScopedQueue;
+    const scopedQueueGate = new Promise(resolve => { releaseScopedQueue = resolve; });
+    let scopedQueueRequested;
+    const scopedQueueStarted = new Promise(resolve => { scopedQueueRequested = resolve; });
+    const holdScopedQueue = async route => {
+      scopedQueueRequested();
+      await scopedQueueGate;
+      await route.continue();
+    };
+    await page.route('**/api/asap/staff/title-requests?scope=2', holdScopedQueue);
+    const scopedQueueResponse = page.waitForResponse(response =>
+      new URL(response.url()).pathname === '/api/asap/staff/title-requests' &&
+      new URL(response.url()).searchParams.get('scope') === '2');
+    try {
+      await page.locator('#library-scope').selectOption('2');
+      await scopedQueueStarted;
+      await page.waitForFunction(() => document.querySelectorAll('#request-grid button.grid-open').length === 0);
+      assert.equal(await page.locator('#similar-filter').inputValue(), 'all');
+      assert.match(await page.locator('#queue-automation').textContent(), /appear with requests/);
+    } finally {
+      releaseScopedQueue();
+      await scopedQueueResponse.catch(() => {});
+      await page.unroute('**/api/asap/staff/title-requests?scope=2', holdScopedQueue);
+    }
+    await scopedQueueResponse;
+    await page.locator('#refresh-queue').waitFor({ state: 'visible' });
+    const changedDetailPath = `**/api/asap/staff/title-requests/${args.primaryRequestId}*`;
+    const changedListPath = '**/api/asap/staff/title-requests?scope=2';
+    const changedDetail = async route => {
+      const response = await route.fetch();
+      const request = await response.json();
+      await route.fulfill({ response, json: { ...request, status: 'pending_hold' } });
+    };
+    const changedList = async route => {
+      const response = await route.fetch();
+      const list = await response.json();
+      await route.fulfill({ response, json: { ...list,
+        items: list.items.map(item => item.id === args.primaryRequestId
+          ? { ...item, status: 'pending_hold' } : item) } });
+    };
+    await page.route(changedDetailPath, changedDetail);
+    await page.route(changedListPath, changedList);
+    try {
+      await page.locator('#recent-work summary').click();
+      await page.locator('#recent-request-list button').first().click();
+      await page.locator('#request-dialog[open]').waitFor();
+      assert.equal(await page.locator('[data-status="pending_hold"]').getAttribute('aria-selected'), 'true');
+      assert.equal(new URL(page.url()).searchParams.get('stage'), 'pending_hold');
+      await page.getByRole('button', { name: 'Close request details' }).click();
+      await page.getByRole('button', { name: `Open request ${args.primaryRequestId}` }).waitFor();
+    } finally {
+      await page.unroute(changedDetailPath, changedDetail);
+      await page.unroute(changedListPath, changedList);
+    }
+
+    const inactiveConfigurationResponse = await context.request.get(`${args.baseOrigin}/api/asap/config?libraryOrgId=2`);
+    assert.equal(inactiveConfigurationResponse.status(), 200);
+    const inactiveConfiguration = await inactiveConfigurationResponse.json();
+    const inactiveDetail = async route => {
+      const response = await route.fetch();
+      const request = await response.json();
+      await route.fulfill({ response, json: { ...request, status: 'pending_hold',
+        libraryOrgId: 999999, libraryOrgName: 'Inactive library' } });
+    };
+    const inactiveList = async route => {
+      const response = await route.fetch();
+      const list = await response.json();
+      await route.fulfill({ response, json: { ...list, items: list.items.map(item =>
+        item.id === args.primaryRequestId ? { ...item, status: 'pending_hold',
+          libraryOrgId: 999999, libraryOrgName: 'Inactive library' } : item) } });
+    };
+    const inactiveConfig = route => route.fulfill({ status: 200,
+      contentType: 'application/json', body: JSON.stringify(inactiveConfiguration) });
+    await page.route(changedDetailPath, inactiveDetail);
+    await page.route('**/api/asap/staff/title-requests?scope=all', inactiveList);
+    await page.route('**/api/asap/config?libraryOrgId=999999', inactiveConfig);
+    try {
+      await page.locator('#recent-work summary').click();
+      await page.locator('#recent-request-list button').first().click();
+      await page.locator('#request-dialog[open]').waitFor();
+      assert.equal(await page.locator('#library-scope').inputValue(), 'all',
+        'An inactive library recent item must use the authorized all-library queue');
+      assert.equal(await page.locator('[data-status="pending_hold"]').getAttribute('aria-selected'), 'true');
+      await page.getByRole('button', { name: 'Close request details' }).click();
+    } finally {
+      await page.unroute(changedDetailPath, inactiveDetail);
+      await page.unroute('**/api/asap/staff/title-requests?scope=all', inactiveList);
+      await page.unroute('**/api/asap/config?libraryOrgId=999999', inactiveConfig);
+    }
+
+    await page.goto(`${args.baseOrigin}/staff/?stage=settings&settingsScope=2#settings-workflow`,
+      { waitUntil: 'networkidle' });
+    await page.locator('#settings-workflow').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#settings-scope').inputValue(), '2');
+    await page.getByRole('button', { name: 'Requests' }).click();
+    await page.getByRole('button', { name: 'Settings' }).click();
+    assert.equal(new URL(page.url()).searchParams.get('settingsScope'), '2');
+    assert.equal(new URL(page.url()).hash, '#settings-workflow');
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.locator('#settings-workflow').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#settings-scope').inputValue(), '2');
+
+    await page.goto(`${args.baseOrigin}/staff/?stage=settings#settings-workflow`, { waitUntil: 'networkidle' });
+    await page.locator('#settings-workflow').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#settings-scope').inputValue(), 'system');
+    assert.equal(await page.locator('#settings-nav [role="tab"][tabindex="0"]').count(), 1);
+    await page.locator('#settings-nav-workflow').focus();
+    await page.keyboard.press('ArrowRight');
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'settings-nav-patron');
+    assert.equal(await page.locator('#settings-nav-workflow').getAttribute('aria-selected'), 'true');
+    await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(() => document.activeElement?.closest('#settings-nav') === null), true,
+      'Tab must leave the Settings tablist after arrow navigation');
+    await page.locator('#suggestion-limit').fill('17');
+    page.once('dialog', dialog => dialog.dismiss());
+    await page.evaluate(() => {
+      const url = new URL(window.location.href);
+      url.searchParams.set('settingsScope', '2');
+      window.history.pushState(null, '', url);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await page.waitForFunction(() => new URL(window.location.href).searchParams.get('settingsScope') === 'system');
+    assert.equal(await page.locator('#suggestion-limit').inputValue(), '17',
+      'A rejected Settings scope deep link must retain unsaved values');
+    await page.locator('#settings-nav-patron').click();
+    await page.locator('#settings-patron').waitFor({ state: 'visible' });
+    await page.goBack();
+    await page.locator('#settings-workflow').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#suggestion-limit').inputValue(), '17',
+      'Back to a Settings subsection must preserve unsaved values');
+    await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'settings-workflow-deep-link');
+    await page.route('**/api/asap/staff/session', route => route.fulfill({
+      status: 200, contentType: 'application/json', body: JSON.stringify({
+        authenticated: true, accessAllowed: true, antiforgeryToken: 'replacement',
+        staff: {
+          id: args.staffIdentity.staffId, tenantId: args.staffIdentity.tenantId,
+          authenticationEmail: args.staffIdentity.email, role: 'staff', organizationId: 2
+        }
+      })
+    }));
+    page.once('dialog', dialog => dialog.accept());
+    await page.getByRole('button', { name: 'Requests' }).click();
+    await page.locator('#workspace').waitFor({ state: 'hidden' });
+    assert.equal(await page.locator('#recent-request-list button').count(), 0,
+      'A replacement account must not inherit the previous account’s recents');
+    assert.equal(await page.locator('#request-grid .grid-open').count(), 0,
+      'A replacement account must not inherit the previous account’s protected queue');
+    assert.deepEqual(errors, []);
+    assert.equal(traffic.externalRequests, 0);
+  } finally {
+    await context.close();
+  }
+
+  const ordinary = await createContext(browser, { width: 390, height: 844 }, args.baseOrigin,
+    args.staffIdentity);
+  try {
+    const staffPage = await ordinary.context.newPage();
+    await staffPage.goto(`${args.baseOrigin}/staff/?stage=settings&settingsScope=system#settings-workflow`,
+      { waitUntil: 'networkidle' });
+    await staffPage.locator('#queue-view').waitFor({ state: 'visible' });
+    assert.equal(await staffPage.locator('#settings-view').isVisible(), false,
+      'A library staff account must not render a deep-linked Settings scope');
+    assert.equal(ordinary.traffic.externalRequests, 0);
+  } finally {
+    await ordinary.context.close();
+  }
+}
+
+async function runProfileSessionReplacementCase(browser, args, detectBeforeResponse, conflict = false) {
+  const { context, traffic } = await createContext(
+    browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    await page.goto(`${args.baseOrigin}/staff/`, { waitUntil: 'networkidle' });
+    const sessionResponse = await context.request.get(`${args.baseOrigin}/api/asap/staff/session`);
+    assert.equal(sessionResponse.status(), 200);
+    const originalSession = await sessionResponse.json();
+    let releaseProfile;
+    const profileGate = new Promise(resolve => { releaseProfile = resolve; });
+    let profileRequested;
+    const profileStarted = new Promise(resolve => { profileRequested = resolve; });
+    await page.route('**/api/asap/staff/profile', async route => {
+      profileRequested();
+      await profileGate;
+      await route.fulfill({ status: conflict ? 409 : 200, contentType: 'application/json',
+        body: conflict ? JSON.stringify({ message: 'The profile changed.' }) :
+          JSON.stringify({ staff: { ...originalSession.staff,
+            weeklyActionSummaryEmail: 'saved-before-switch@example.org' } }) });
+    });
+    await page.getByRole('button', { name: 'Profile' }).click();
+    await page.locator('#weekly-email').fill('saved-before-switch@example.org');
+    await page.getByRole('button', { name: 'Save profile' }).click();
+    await profileStarted;
+    await page.route('**/api/asap/staff/session', route => route.fulfill({ status: 200,
+      contentType: 'application/json', body: JSON.stringify({ authenticated: true,
+        accessAllowed: true, antiforgeryToken: 'replacement', staff: {
+          id: args.staffIdentity.staffId, tenantId: args.staffIdentity.tenantId,
+          authenticationEmail: args.staffIdentity.email, role: 'staff', organizationId: 2
+        } }) }));
+    if (detectBeforeResponse) {
+      await page.evaluate(() => window.dispatchEvent(new PopStateEvent('popstate')));
+      await page.locator('#workspace').waitFor({ state: 'hidden' });
+    }
+    releaseProfile();
+    await page.locator('#workspace').waitFor({ state: 'hidden' });
+    const expectedMessage = conflict ? /Profile could not be saved.*Sign in again/i :
+      /Profile saved.*Sign in again/i;
+    await page.locator('#signed-out-message').filter({ hasText: expectedMessage }).waitFor();
+    assert.match(await page.locator('#signed-out-message').textContent(), expectedMessage,
+      'A profile response must report whether the save committed when the session changes');
+    assert.equal(await page.locator('#recent-request-list button').count(), 0);
+    await page.waitForTimeout(50);
+    assert.deepEqual(errors, []);
+    assert.equal(traffic.externalRequests, 0);
+  } finally {
+    await context.close();
+  }
+}
+
+async function runProfileSessionReplacement(browser, args) {
+  await runProfileSessionReplacementCase(browser, args, false);
+  await runProfileSessionReplacementCase(browser, args, true);
+  await runProfileSessionReplacementCase(browser, args, false, true);
+}
+
 async function main() {
   const args = parseArguments(process.argv.slice(2));
   await fs.mkdir(args.artifactRoot, { recursive: true });
@@ -2471,6 +2817,8 @@ async function main() {
   const report = { states: [] };
   try {
     await runAnonymous(browser, args, axeSource, report);
+    await runNavigationSupport(browser, args, axeSource, report);
+    await runProfileSessionReplacement(browser, args);
     await runSuperAdmin(browser, args, axeSource, report);
     await runAnalytics(browser, args, axeSource, report);
     await runStaleAssignmentCandidates(browser, args, report);
@@ -2482,7 +2830,7 @@ async function main() {
     await runScopedBlocked(browser, args, axeSource, report);
     await runStaffSuggestion(browser, args, axeSource, report);
     await runClosedDeletionControls(browser, args, axeSource, report);
-    assert.equal(report.states.length, 29, 'Expected twenty-nine major staff browser states');
+    assert.equal(report.states.length, 31, 'Expected thirty-one major staff browser states');
     await fs.writeFile(
       path.join(args.artifactRoot, 'staff-browser-results.json'),
       JSON.stringify(report, null, 2),

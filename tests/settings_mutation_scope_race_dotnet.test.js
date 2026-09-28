@@ -204,6 +204,74 @@ async function flush() {
       dom.window.close();
     }
 
+    {
+      const html = fs.readFileSync(path.join(frontendRoot, 'staff', 'index.html'), 'utf8');
+      const dom = new JSDOM(html, { url: 'http://localhost/staff/' });
+      global.window = dom.window;
+      global.document = dom.window.document;
+      global.FormData = dom.window.FormData;
+      global.Node = dom.window.Node;
+      global.Event = dom.window.Event;
+      window.confirm = () => true;
+      let releaseFailedScope;
+      let allowThree = false;
+      global.fetch = async url => {
+        const requestUrl = String(url);
+        if (requestUrl.endsWith('/api/asap/staff/session')) {
+          return response(200, { authenticated: true, antiforgeryToken: 'test-token' });
+        }
+        if (requestUrl.includes('/api/asap/staff/settings?orgId=')) {
+          const organizationId = decodeURIComponent(requestUrl.split('orgId=')[1]);
+          if (organizationId === '3' && !allowThree) {
+            return new Promise(resolve => { releaseFailedScope = () => resolve(response(503, { message: 'Unavailable' })); });
+          }
+          const prefix = organizationId === '2' ? 'Two' : organizationId === '3' ? 'Three' : 'System';
+          return response(200, settingsData(organizationId === 'system' ? 1 : Number(organizationId),
+            `${organizationId}-version`, prefix));
+        }
+        if (requestUrl.endsWith('/api/asap/staff/organizations')) {
+          return response(200, [
+            { id: 2, name: 'Library Two', abbreviation: 'TWO', active: true, version: 'org-2' },
+            { id: 3, name: 'Library Three', abbreviation: 'THREE', active: true, version: 'org-3' }
+          ]);
+        }
+        if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) return response(200, { code: 'ok', data: [] });
+        throw new Error('Unexpected request: ' + requestUrl);
+      };
+      const controller = settingsModule.createSettingsController({
+        root: document.getElementById('settings-view'),
+        tab: document.getElementById('settings-view-tab'),
+        announce: () => {},
+        getStaff: () => ({ role: 'super_admin' })
+      });
+      controller.bind();
+      controller.setStaff({ id: '1', tenantId: 'tenant-1', objectId: 'object-1',
+        role: 'super_admin', organizationId: 1 });
+      await controller.activate();
+      const scope = document.getElementById('settings-scope');
+      const form = document.getElementById('settings-form');
+      scope.value = '2';
+      scope.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+      await flush();
+      assert.strictEqual(form.hidden, false);
+      assert.strictEqual(document.getElementById('branding-alt').value, 'Two logo');
+      scope.value = '3';
+      scope.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+      await flush();
+      assert.strictEqual(form.hidden, true, 'prior library values must be hidden while the new scope loads');
+      assert.strictEqual(controller.isDirty(), false, 'prior library draft must not remain actionable');
+      releaseFailedScope();
+      await flush();
+      assert.strictEqual(form.hidden, true, 'failed scope load must not reveal prior library values');
+      assert.strictEqual(document.getElementById('settings-refresh').disabled, false);
+      allowThree = true;
+      document.getElementById('settings-refresh').click();
+      await flush();
+      assert.strictEqual(form.hidden, false);
+      assert.strictEqual(document.getElementById('branding-alt').value, 'Three logo');
+      dom.window.close();
+    }
+
     console.log('Settings mutation scope race regression checks passed');
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });

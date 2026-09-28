@@ -35,6 +35,19 @@ public sealed record TitleRequestActivity(
     string? Message,
     DateTime Created);
 
+public sealed record RelatedRequestCount(string Status, int LibraryOrgId, string LibraryOrgName, int Count);
+
+public sealed record RelatedRequestSummary(int Count, IReadOnlyList<RelatedRequestCount> StatusAndLibraryCounts);
+
+public sealed record RequestWorkflowContext(
+    bool AutoPromote,
+    bool OutstandingTimeoutEnabled,
+    int? OutstandingTimeoutDays,
+    bool PendingHoldTimeoutEnabled,
+    int? PendingHoldTimeoutDays,
+    bool HoldPickupTimeoutEnabled,
+    int? HoldPickupTimeoutDays);
+
 public sealed record TitleRequestDto(
     string Id,
     string Type,
@@ -85,7 +98,11 @@ public sealed record TitleRequestDto(
     bool? Committed = null,
     string? FinalStatus = null,
     string? NotificationStatus = null,
-    string? NotificationReason = null);
+    string? NotificationReason = null)
+{
+    public RelatedRequestSummary? RelatedRequests { get; init; }
+    public RequestWorkflowContext? WorkflowContext { get; init; }
+}
 
 public sealed record TitleRequestScopeResult(
     IReadOnlyList<TitleRequestDto> Items,
@@ -178,7 +195,7 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
         var requestQuery = context.TitleRequests.AsNoTracking()
             .Where(item => organizationId == null || item.LibraryOrganizationId == organizationId);
         var requests = await requestQuery.ToListAsync(cancellationToken);
-        var items = await BuildDtosAsync(context, requests, staff, includeActivity: false, cancellationToken);
+        var items = await BuildDtosAsync(context, requests, requests, staff, includeActivity: false, cancellationToken);
         return new TitleRequestScopeResult(
             items,
             normalizedScope,
@@ -188,7 +205,8 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
     public async Task<TitleRequestDto?> GetAsync(
         CurrentStaff staff,
         string id,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? scope = null)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var requestId = await LegacyRequestLinkResolver.ResolveAsync(
@@ -208,7 +226,23 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
         {
             return null;
         }
-        return (await BuildDtosAsync(context, [request], staff, includeActivity: true, cancellationToken)).Single();
+        int? relatedOrganizationId = staff.Role == "super_admin" ? null : staff.OrganizationId;
+        if (staff.Role == "super_admin" && !string.IsNullOrWhiteSpace(scope) &&
+            !string.Equals(scope, "all", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!int.TryParse(scope, out var selectedOrganizationId) ||
+                selectedOrganizationId != request.LibraryOrganizationId ||
+                !await context.Organizations.AsNoTracking().AnyAsync(item =>
+                    item.Id == selectedOrganizationId && item.IsActive, cancellationToken))
+            {
+                return null;
+            }
+            relatedOrganizationId = selectedOrganizationId;
+        }
+        var relatedCandidates = await context.TitleRequests.AsNoTracking()
+            .Where(item => relatedOrganizationId == null || item.LibraryOrganizationId == relatedOrganizationId)
+            .ToListAsync(cancellationToken);
+        return (await BuildDtosAsync(context, [request], relatedCandidates, staff, includeActivity: true, cancellationToken)).Single();
     }
 
     public async Task<IReadOnlyList<RejectionTemplateChoice>?> GetRejectionTemplatesAsync(
@@ -260,6 +294,7 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
     private static async Task<IReadOnlyList<TitleRequestDto>> BuildDtosAsync(
         AsapDbContext context,
         IReadOnlyList<TitleRequest> requests,
+        IReadOnlyList<TitleRequest> relatedCandidates,
         CurrentStaff staff,
         bool includeActivity,
         CancellationToken cancellationToken)
@@ -269,9 +304,27 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
             return [];
         }
         var ids = requests.Select(item => item.Id).ToArray();
+        var visibleOrganizationIds = relatedCandidates.Select(item => item.LibraryOrganizationId).Distinct().ToArray();
         var organizations = await context.Organizations.AsNoTracking()
-            .Where(item => requests.Select(request => request.LibraryOrganizationId).Contains(item.Id))
+            .Where(item => visibleOrganizationIds.Contains(item.Id))
             .ToDictionaryAsync(item => item.Id, cancellationToken);
+        var workflowRows = await context.WorkflowSettings.AsNoTracking()
+            .Where(item => item.OrganizationId == 1 || visibleOrganizationIds.Contains(item.OrganizationId))
+            .ToDictionaryAsync(item => item.OrganizationId, cancellationToken);
+        workflowRows.TryGetValue(1, out var systemWorkflow);
+        var relatedByKey = new Dictionary<string, List<TitleRequest>>(StringComparer.Ordinal);
+        foreach (var candidate in relatedCandidates)
+        {
+            foreach (var key in SimilarityKeys(candidate))
+            {
+                if (!relatedByKey.TryGetValue(key, out var matching))
+                {
+                    matching = [];
+                    relatedByKey[key] = matching;
+                }
+                matching.Add(candidate);
+            }
+        }
         var formats = await context.MaterialFormats.AsNoTracking()
             .Where(item => requests.Select(request => request.MaterialFormatId).Contains(item.Id))
             .ToDictionaryAsync(item => item.Id, cancellationToken);
@@ -321,6 +374,22 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
                 .Select(item => (DateTime?)item.CreatedUtc)
                 .LastOrDefault() ?? request.CreatedUtc;
             formats.TryGetValue(request.MaterialFormatId, out var format);
+            workflowRows.TryGetValue(request.LibraryOrganizationId, out var libraryWorkflow);
+            var related = SimilarityKeys(request)
+                .SelectMany(key => relatedByKey.GetValueOrDefault(key) ?? [])
+                .Where(candidate => candidate.Id != request.Id)
+                .DistinctBy(candidate => candidate.Id)
+                .ToList();
+            var relatedCounts = related
+                .GroupBy(item => new { item.Status, item.LibraryOrganizationId })
+                .Select(group => new RelatedRequestCount(
+                    group.Key.Status,
+                    group.Key.LibraryOrganizationId,
+                    organizations.GetValueOrDefault(group.Key.LibraryOrganizationId)?.DisplayName ?? string.Empty,
+                    group.Count()))
+                .OrderBy(item => item.LibraryOrgName)
+                .ThenBy(item => item.Status)
+                .ToArray();
             result.Add(new TitleRequestDto(
                 request.Id.ToString(CultureInfo.InvariantCulture),
                 "title_request",
@@ -386,7 +455,18 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
                     item.ActorType,
                     item.ActorName,
                     item.Message,
-                    AsUtc(item.CreatedUtc))).ToArray() : []));
+                    AsUtc(item.CreatedUtc))).ToArray() : [])
+            {
+                RelatedRequests = new RelatedRequestSummary(related.Count, relatedCounts),
+                WorkflowContext = new RequestWorkflowContext(
+                    libraryWorkflow?.AutoPromote ?? systemWorkflow?.AutoPromote == true,
+                    libraryWorkflow?.OutstandingTimeoutEnabled ?? systemWorkflow?.OutstandingTimeoutEnabled == true,
+                    libraryWorkflow?.OutstandingTimeoutDays ?? systemWorkflow?.OutstandingTimeoutDays,
+                    libraryWorkflow?.PendingHoldTimeoutEnabled ?? systemWorkflow?.PendingHoldTimeoutEnabled == true,
+                    libraryWorkflow?.PendingHoldTimeoutDays ?? systemWorkflow?.PendingHoldTimeoutDays,
+                    libraryWorkflow?.HoldPickupTimeoutEnabled ?? systemWorkflow?.HoldPickupTimeoutEnabled == true,
+                    libraryWorkflow?.HoldPickupTimeoutDays ?? systemWorkflow?.HoldPickupTimeoutDays)
+            });
         }
 
         return result
@@ -396,6 +476,28 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
             .ThenByDescending(item => long.Parse(item.Id))
             .ToList();
     }
+
+    private static IEnumerable<string> SimilarityKeys(TitleRequest request)
+    {
+        var identifier = NormalizeSimilarityValue(request.Identifier);
+        if (identifier.Length > 0)
+        {
+            yield return $"identifier:{identifier}";
+        }
+        var bib = NormalizeSimilarityValue(request.BibId);
+        if (bib.Length > 0)
+        {
+            yield return $"bib:{bib}";
+        }
+        var title = NormalizeSimilarityValue(request.Title);
+        if (title.Length > 0)
+        {
+            yield return $"title:{title}";
+        }
+    }
+
+    private static string NormalizeSimilarityValue(string? value) =>
+        new((value ?? string.Empty).Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
 
     private static object ParseCustomFields(string? value)
     {

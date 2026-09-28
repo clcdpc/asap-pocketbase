@@ -149,12 +149,12 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
             || scenarioOptions.stalePickup
             ? [currentRequest, otherRequest] : [currentRequest] });
       }
-      if (url.endsWith(`/title-requests/${id}`)) {
+      if (new URL(url, 'http://localhost').pathname.endsWith(`/title-requests/${id}`)) {
         return committed && scenarioOptions.detailRefreshFails
           ? response(503, { message: 'Detail unavailable' })
           : response(200, currentRequest);
       }
-      if (url.endsWith(`/title-requests/${otherId}`)) return response(200, otherRequest);
+      if (new URL(url, 'http://localhost').pathname.endsWith(`/title-requests/${otherId}`)) return response(200, otherRequest);
       if (url.endsWith(`/title-requests/${id}/pickup-options`)) {
         if (scenarioOptions.stalePickup) {
           return new Promise(resolve => { releasePickup = resolve; });
@@ -425,6 +425,9 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     async function openOtherRequest() {
       document.querySelector('#close-request').click();
       await until(() => !document.querySelector('#request-dialog').open, 'first dialog closes');
+      if (otherRequest.status !== currentRequest.status) {
+        document.querySelector(`[data-status="${otherRequest.status}"]`).click();
+      }
       await until(() => document.querySelector(`[aria-label="Open request ${otherId}"]`), 'other row appears');
       document.querySelector(`[aria-label="Open request ${otherId}"]`).click();
       await until(() => document.querySelector('#request-dialog-title').textContent === 'Other request',

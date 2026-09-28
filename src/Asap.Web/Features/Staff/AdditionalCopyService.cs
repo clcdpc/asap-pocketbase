@@ -18,6 +18,8 @@ public sealed record AdditionalCopyCapabilities(
     bool CanDelete,
     bool CanClearClaim);
 
+public sealed record AdditionalCopyTimeoutContext(bool Enabled, int? Days);
+
 public sealed record AdditionalCopyDto(
     string Id,
     string Type,
@@ -53,7 +55,10 @@ public sealed record AdditionalCopyDto(
     bool? Committed = null,
     string? FinalStatus = null,
     string? NotificationStatus = null,
-    string? NotificationReason = null);
+    string? NotificationReason = null)
+{
+    public AdditionalCopyTimeoutContext? TimeoutContext { get; init; }
+}
 
 public sealed record AdditionalCopyScopeResult(
     IReadOnlyList<AdditionalCopyDto> Items,
@@ -965,12 +970,18 @@ public sealed class AdditionalCopyService(
         var formats = await context.MaterialFormats.AsNoTracking()
             .Where(item => formatIds.Contains(item.Id))
             .ToDictionaryAsync(item => item.Id, cancellationToken);
+        var organizationIds = requests.Select(item => item.LibraryOrganizationId).Distinct().ToArray();
+        var workflowRows = await context.WorkflowSettings.AsNoTracking()
+            .Where(item => item.OrganizationId == 1 || organizationIds.Contains(item.OrganizationId))
+            .ToDictionaryAsync(item => item.OrganizationId, cancellationToken);
+        workflowRows.TryGetValue(1, out var systemWorkflow);
         return requests.Select(request =>
         {
             sources.TryGetValue(request.SourceTitleRequestId ?? 0, out var source);
             formats.TryGetValue(request.MaterialFormatId ?? 0, out var format);
             var isOpen = request.Status == "open";
             var claimedByActor = request.ClaimedByStaffUserId == actor.Id;
+            workflowRows.TryGetValue(request.LibraryOrganizationId, out var libraryWorkflow);
             return new AdditionalCopyDto(
                 request.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 "additional_copy",
@@ -1010,7 +1021,12 @@ public sealed class AdditionalCopyService(
                     !isOpen,
                     !isOpen && actor.Role is "admin" or "super_admin",
                     isOpen && request.ClaimedByStaffUserId.HasValue && !claimedByActor &&
-                    (actor.Role is "admin" or "super_admin")));
+                    (actor.Role is "admin" or "super_admin")))
+            {
+                TimeoutContext = new AdditionalCopyTimeoutContext(
+                    libraryWorkflow?.AdditionalCopyTimeoutEnabled ?? systemWorkflow?.AdditionalCopyTimeoutEnabled == true,
+                    libraryWorkflow?.AdditionalCopyTimeoutDays ?? systemWorkflow?.AdditionalCopyTimeoutDays)
+            };
         }).ToList();
     }
 
