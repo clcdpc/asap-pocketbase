@@ -1150,7 +1150,9 @@ export function createWorkflowApp() {
       });
       if (!load.isCurrent() || owner !== state.staff || requestedScope !== state.scope) return;
       state.requests = Array.isArray(result.items) ? result.items : [];
+      const previousEmailScope = emailReadinessScopeKey();
       state.scope = result.scope;
+      if (emailReadinessScopeKey() !== previousEmailScope) void refreshEmailReadiness();
       state.queueLoadedScope = result.scope;
       if (state.staff.role === 'super_admin') populateScopes(result.organizations, result.scope);
       populateTags();
@@ -1474,7 +1476,9 @@ export function createWorkflowApp() {
       if (!load.isCurrent() || owner !== state.staff || requestedScope !== state.scope ||
           requestedStatus !== state.additionalCopyStatus) return;
       state.additionalCopies = Array.isArray(result.items) ? result.items : [];
+      const previousEmailScope = emailReadinessScopeKey();
       state.scope = result.scope;
+      if (emailReadinessScopeKey() !== previousEmailScope) void refreshEmailReadiness();
       state.additionalCopyLoaded = true;
       if (state.staff.role === 'super_admin') populateScopes(result.availableLibraries, result.scope);
       const uncertainCreation = state.unconfirmedCopyCreationAwaitingRefresh;
