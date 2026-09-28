@@ -20,6 +20,7 @@ public static class TitleRequestEndpoints
         var group = endpoints.MapGroup("/api/asap/staff/title-requests").RequireAuthorization();
         group.MapGet("", ListAsync);
         group.MapGet("/{id}", GetAsync);
+        group.MapGet("/{id}/rejection-templates", RejectionTemplatesAsync);
         endpoints.MapGet("/api/asap/staff/research-configuration", ResearchConfigurationAsync)
             .RequireAuthorization();
         endpoints.MapGet("/api/asap/staff/suggestion-configuration", SuggestionConfigurationAsync)
@@ -459,14 +460,36 @@ public static class TitleRequestEndpoints
         return result is null ? Results.NotFound() : Results.Json(result);
     }
 
+    private static async Task<IResult> RejectionTemplatesAsync(
+        HttpContext context,
+        string id,
+        TitleRequestViewService views,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var choices = await views.GetRejectionTemplatesAsync(Current(context), id, cancellationToken);
+            return choices is null ? Results.NotFound(new { code = "not_found" }) :
+                Results.Json(new { items = choices, defaultTemplateId = (string?)null });
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return Results.Json(new { code = "template_dependency_unavailable",
+                message = "Rejection templates are temporarily unavailable." },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+    }
+
     private static Task<IResult> ClaimAsync(
         HttpContext context,
         long id,
         VersionInput input,
         TitleRequestMutationService mutations,
         TitleRequestViewService views,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken) =>
-        MutateAndLoadAsync(context, id, mutations.ClaimAsync(Current(context), id, input, false, cancellationToken), views, cancellationToken);
+        MutateAndLoadAsync(context, id, mutations.ClaimAsync(Current(context), id, input, false, cancellationToken),
+            views, loggerFactory, cancellationToken);
 
     private static Task<IResult> UnclaimAsync(
         HttpContext context,
@@ -474,8 +497,10 @@ public static class TitleRequestEndpoints
         VersionInput input,
         TitleRequestMutationService mutations,
         TitleRequestViewService views,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken) =>
-        MutateAndLoadAsync(context, id, mutations.ClaimAsync(Current(context), id, input, true, cancellationToken), views, cancellationToken);
+        MutateAndLoadAsync(context, id, mutations.ClaimAsync(Current(context), id, input, true, cancellationToken),
+            views, loggerFactory, cancellationToken);
 
     private static Task<IResult> AssignAsync(
         HttpContext context,
@@ -483,17 +508,65 @@ public static class TitleRequestEndpoints
         AssignTitleRequestInput input,
         TitleRequestMutationService mutations,
         TitleRequestViewService views,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken) =>
-        MutateAndLoadAsync(context, id, mutations.AssignAsync(Current(context), id, input, cancellationToken), views, cancellationToken);
+        MutateAndLoadAsync(context, id, mutations.AssignAsync(Current(context), id, input, cancellationToken),
+            views, loggerFactory, cancellationToken);
 
-    private static Task<IResult> ActionAsync(
+    private static async Task<IResult> ActionAsync(
         HttpContext context,
         long id,
         TitleRequestActionInput input,
         TitleRequestMutationService mutations,
         TitleRequestViewService views,
-        CancellationToken cancellationToken) =>
-        MutateAndLoadAsync(context, id, mutations.ActionAsync(Current(context), id, input, cancellationToken), views, cancellationToken);
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken)
+    {
+        TitleRequestMutationResult result;
+        try
+        {
+            result = await mutations.ActionAsync(Current(context), id, input, cancellationToken);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return Results.Json(new { code = "request_outcome_unconfirmed",
+                message = "The request outcome could not be confirmed. Reload before trying again." },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+        if (result.Code != "updated")
+        {
+            return ToErrorOrSuccess(result, Results.NoContent());
+        }
+        TitleRequestDto? row = null;
+        try
+        {
+            row = await views.GetAsync(Current(context), id.ToString(CultureInfo.InvariantCulture), cancellationToken);
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            loggerFactory.CreateLogger("Asap.Web.Features.Staff.TitleRequestEndpoints")
+                .LogError(exception, "Request detail refresh failed after action {RequestId} committed", id);
+        }
+        if (row is not null)
+        {
+            return Results.Json(row with
+            {
+                Committed = true,
+                FinalStatus = result.FinalStatus,
+                NotificationStatus = result.NotificationStatus,
+                NotificationReason = result.NotificationReason
+            });
+        }
+        return Results.Json(new
+        {
+            committed = true,
+            request = (TitleRequestDto?)null,
+            finalStatus = result.FinalStatus,
+            notificationStatus = result.NotificationStatus,
+            notificationReason = result.NotificationReason,
+            refreshUnavailable = row is null
+        });
+    }
 
     private static Task<IResult> RetryIdentifierAsync(
         HttpContext context,
@@ -501,8 +574,10 @@ public static class TitleRequestEndpoints
         VersionInput input,
         TitleRequestMutationService mutations,
         TitleRequestViewService views,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken) =>
-        MutateAndLoadAsync(context, id, mutations.RetryIdentifierAsync(Current(context), id, input, cancellationToken), views, cancellationToken);
+        MutateAndLoadAsync(context, id, mutations.RetryIdentifierAsync(Current(context), id, input, cancellationToken),
+            views, loggerFactory, cancellationToken);
 
     private static async Task<IResult> PickupOptionsAsync(
         HttpContext context,
@@ -521,14 +596,24 @@ public static class TitleRequestEndpoints
         PickupPreferenceInput input,
         StaffPickupService pickup,
         TitleRequestViewService views,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         var result = await pickup.UpdateAsync(Current(context), id, input, cancellationToken);
-        if (result.Code != "updated") return PickupError(result.Code);
-        var row = await views.GetAsync(Current(context), id.ToString(), cancellationToken);
-        return row is null
-            ? Results.NotFound()
-            : Results.Json(new { request = row, result.PickupChanged, result.SnapshotChanged });
+        if (result.Code != "updated")
+        {
+            return PickupError(result.Code);
+        }
+        var row = await TryLoadCommittedAsync(context, id, views, loggerFactory, cancellationToken);
+        return Results.Json(new
+        {
+            committed = true,
+            request = row,
+            finalStatus = row?.Status,
+            result.PickupChanged,
+            result.SnapshotChanged,
+            refreshUnavailable = row is null
+        });
     }
 
     private static async Task<IResult> PlaceHoldAsync(
@@ -537,12 +622,19 @@ public static class TitleRequestEndpoints
         VersionInput input,
         HoldPlacementService holds,
         TitleRequestViewService views,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         var result = await holds.PlaceAsync(Current(context), id, input, cancellationToken);
-        if (result.Code != "updated") return HoldError(result.Code);
-        var row = await views.GetAsync(Current(context), id.ToString(), cancellationToken);
-        return row is null ? Results.NotFound() : Results.Json(row);
+        if (result.Code != "updated")
+        {
+            return HoldError(result.Code);
+        }
+        var row = await TryLoadCommittedAsync(context, id, views, loggerFactory, cancellationToken);
+        return row is null
+            ? Results.Json(new { committed = true, request = (TitleRequestDto?)null,
+                finalStatus = (string?)null, refreshUnavailable = true })
+            : Results.Json(row with { Committed = true, FinalStatus = row.Status });
     }
 
     private static async Task<IResult> ReconcileHoldAsync(
@@ -575,15 +667,51 @@ public static class TitleRequestEndpoints
         long id,
         Task<TitleRequestMutationResult> mutation,
         TitleRequestViewService views,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
-        var result = await mutation;
+        TitleRequestMutationResult result;
+        try
+        {
+            result = await mutation;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return Results.Json(new { code = "request_outcome_unconfirmed",
+                message = "The request outcome could not be confirmed. Reload before trying again." },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
         if (result.Code != "updated")
         {
             return ToErrorOrSuccess(result, Results.NoContent());
         }
-        var row = await views.GetAsync(Current(context), id.ToString(), cancellationToken);
-        return row is null ? Results.NotFound() : Results.Json(row);
+        var row = await TryLoadCommittedAsync(context, id, views, loggerFactory, cancellationToken);
+        return row is null
+            ? Results.Json(new { committed = true, request = (TitleRequestDto?)null,
+                finalStatus = result.FinalStatus, notificationStatus = result.NotificationStatus,
+                notificationReason = result.NotificationReason, refreshUnavailable = true })
+            : Results.Json(row with { Committed = true, FinalStatus = result.FinalStatus ?? row.Status,
+                NotificationStatus = result.NotificationStatus, NotificationReason = result.NotificationReason });
+    }
+
+    private static async Task<TitleRequestDto?> TryLoadCommittedAsync(
+        HttpContext context,
+        long id,
+        TitleRequestViewService views,
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await views.GetAsync(Current(context), id.ToString(CultureInfo.InvariantCulture), cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            loggerFactory.CreateLogger("Asap.Web.Features.Staff.TitleRequestEndpoints")
+                .LogError(exception, "Request detail refresh failed after mutation {RequestId} committed", id);
+            return null;
+        }
     }
 
     private static IResult ToErrorOrSuccess(TitleRequestMutationResult result, IResult success) => result.Code switch
@@ -600,6 +728,16 @@ public static class TitleRequestEndpoints
                 code = result.Code,
                 message = "The request changed or is blocked by its current workflow state. Reload it before continuing."
             }),
+        "invalid_rejection_template" => Results.Conflict(new
+        {
+            code = result.Code,
+            message = "The selected rejection template is no longer available for this request. Choose a current template."
+        }),
+        "notification_dependency_unavailable" => Results.Json(new
+        {
+            code = result.Code,
+            message = "Notification configuration is temporarily unavailable. The request was not changed."
+        }, statusCode: StatusCodes.Status503ServiceUnavailable),
         "staff_session_invalid" => Results.Json(new { code = result.Code }, statusCode: StatusCodes.Status401Unauthorized),
         "bib_validation_unavailable" => Results.Json(
             new { code = result.Code, message = "Catalog validation is temporarily unavailable." },

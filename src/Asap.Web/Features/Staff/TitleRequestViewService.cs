@@ -27,6 +27,14 @@ public sealed record HoldOperationSummary(
     bool CanResolveSucceeded,
     bool CanResolveNotPerformed);
 
+public sealed record TitleRequestActivity(
+    string Id,
+    string EventType,
+    string ActorType,
+    string? ActorName,
+    string? Message,
+    DateTime Created);
+
 public sealed record TitleRequestDto(
     string Id,
     string Type,
@@ -54,6 +62,7 @@ public sealed record TitleRequestDto(
     string Status,
     string? CloseReason,
     string? Bibid,
+    bool BibidStaffVerified,
     string? Notes,
     string? ClaimedByStaffUserId,
     string? ClaimedByDisplayName,
@@ -71,7 +80,12 @@ public sealed record TitleRequestDto(
     DateTime Updated,
     string Version,
     TitleRequestCapabilities Capabilities,
-    HoldOperationSummary? HoldOperation);
+    HoldOperationSummary? HoldOperation,
+    IReadOnlyList<TitleRequestActivity> Activity,
+    bool? Committed = null,
+    string? FinalStatus = null,
+    string? NotificationStatus = null,
+    string? NotificationReason = null);
 
 public sealed record TitleRequestScopeResult(
     IReadOnlyList<TitleRequestDto> Items,
@@ -162,7 +176,7 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
         var requestQuery = context.TitleRequests.AsNoTracking()
             .Where(item => organizationId == null || item.LibraryOrganizationId == organizationId);
         var requests = await requestQuery.ToListAsync(cancellationToken);
-        var items = await BuildDtosAsync(context, requests, staff, cancellationToken);
+        var items = await BuildDtosAsync(context, requests, staff, includeActivity: false, cancellationToken);
         return new TitleRequestScopeResult(
             items,
             normalizedScope,
@@ -192,7 +206,24 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
         {
             return null;
         }
-        return (await BuildDtosAsync(context, [request], staff, cancellationToken)).Single();
+        return (await BuildDtosAsync(context, [request], staff, includeActivity: true, cancellationToken)).Single();
+    }
+
+    public async Task<IReadOnlyList<RejectionTemplateChoice>?> GetRejectionTemplatesAsync(
+        CurrentStaff staff,
+        string id,
+        CancellationToken cancellationToken)
+    {
+        var request = await GetAsync(staff, id, cancellationToken);
+        if (request is null)
+        {
+            return null;
+        }
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var rows = await context.EmailTemplates.AsNoTracking()
+            .Where(item => item.OrganizationId == 1 || item.OrganizationId == request.LibraryOrgId)
+            .ToListAsync(cancellationToken);
+        return RejectionTemplatePolicy.Choices(rows, request.LibraryOrgId);
     }
 
     internal static bool CanAccess(CurrentStaff staff, int organizationId) =>
@@ -228,6 +259,7 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
         AsapDbContext context,
         IReadOnlyList<TitleRequest> requests,
         CurrentStaff staff,
+        bool includeActivity,
         CancellationToken cancellationToken)
     {
         if (requests.Count == 0)
@@ -314,6 +346,7 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
                 request.Status,
                 request.CloseReason,
                 request.BibId,
+                request.BibIdStaffVerified,
                 request.Notes,
                 request.ClaimedByStaffUserId?.ToString(CultureInfo.InvariantCulture),
                 request.ClaimedByDisplayName,
@@ -344,7 +377,14 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
                     operation.LastErrorCode,
                     staff.Role == "super_admin" && canTakeOverOperation,
                     staff.Role == "super_admin" && canResolveOperation && operation.Phase != "acquired",
-                    staff.Role == "super_admin" && canResolveOperation)));
+                    staff.Role == "super_admin" && canResolveOperation),
+                includeActivity ? requestEvents.Select(item => new TitleRequestActivity(
+                    item.Id.ToString(CultureInfo.InvariantCulture),
+                    item.EventType,
+                    item.ActorType,
+                    item.ActorName,
+                    item.Message,
+                    AsUtc(item.CreatedUtc))).ToArray() : []));
         }
 
         return result

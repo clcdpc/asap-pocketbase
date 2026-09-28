@@ -352,6 +352,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await storedBibPage.goto(`${args.baseOrigin}/staff/?request=${args.primaryRequestId}`, { waitUntil: 'networkidle' });
     await storedBibPage.locator('#request-dialog[open]').waitFor();
     await storedBibPage.getByRole('button', { name: 'Purchase', exact: true }).click();
+    await storedBibPage.locator('.action-choice button[type="submit"]').click();
     await storedBibPage.getByText(/Search Polaris, select the matching BIB/).waitFor();
     assert.equal(storedBibPurchasePosts, 0, 'Purchase bypassed the verified-BIB gate');
     await storedBibPage.getByRole('button', { name: 'Search Polaris catalog' }).click();
@@ -393,6 +394,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.getByRole('button', { name: 'Claim', exact: true }).click();
     await page.getByRole('button', { name: 'Unclaim' }).waitFor();
     await page.getByRole('button', { name: 'Purchase', exact: true }).click();
+    await page.locator('.action-choice button[type="submit"]').click();
     await page.getByText('Outstanding purchase', { exact: true }).waitFor();
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'edited-claimed-actioned');
 
@@ -944,13 +946,15 @@ async function runStaleMutationCompletions(browser, args, report) {
     }
 
     async function releaseMutationWithBPending(mutation, heldB) {
-      const refresh = page.waitForResponse(response =>
-        response.request().method() === 'GET' &&
-        new URL(response.url()).pathname === heldB.target.listPath);
+      const refresh = heldB.target.listPath === '/api/asap/staff/title-requests'
+        ? null
+        : page.waitForResponse(response =>
+          response.request().method() === 'GET' &&
+          new URL(response.url()).pathname === heldB.target.listPath);
       try {
         mutation.release();
         await mutation.completed;
-        await refresh;
+        if (refresh) await refresh;
         await page.waitForTimeout(100);
         assert.equal(await page.locator('#request-dialog').getAttribute('open'), '');
         assert.equal(await page.locator('#request-dialog-title').textContent(), heldB.visible.title);
