@@ -109,7 +109,9 @@ async function flush() {
     name.value = 'Changed sender';
     name.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
     document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+    document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
     for (let i = 0; i < 15 && saved.length < 1; i++) await flush();
+    assert.strictEqual(saved.length, 1, 'a duplicate submit must not send a second settings mutation');
     assert.strictEqual(saved[0].email.postmarkToken, undefined);
     assert.strictEqual(saved[0].email.clearPostmarkToken, undefined);
     assert.deepStrictEqual(saved[0].templates, []);
