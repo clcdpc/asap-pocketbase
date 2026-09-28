@@ -59,8 +59,12 @@ public sealed class EmailOperationsService(
                 return new EmailOperationResult("organization_not_found");
             }
             var settings = await ReadEffectiveSettingsAsync(context, organizationId, cancellationToken);
+            if (!HasValidSender(settings.FromAddress))
+            {
+                return new EmailOperationResult("ok", new { state = "not_configured", organizationId });
+            }
             var transport = await emailSender.CheckReadinessAsync(organizationId, cancellationToken);
-            var state = !HasValidSender(settings.FromAddress) || !transport.IsConfigured
+            var state = !transport.IsConfigured
                 ? "not_configured"
                 : transport.IsLiveDelivery ? "ready" : "non_delivery";
             return new EmailOperationResult("ok", new { state, organizationId });
@@ -248,8 +252,23 @@ public sealed class EmailOperationsService(
         {
             return new EmailOperationResult("stale_version");
         }
-        dispatcher.Enqueue(row.Id);
-        return new EmailOperationResult("queued", new { id = row.Id, version = StaffVersion.Encode(row.RowVersion) });
+        var dispatchDelayed = false;
+        try
+        {
+            dispatcher.Enqueue(row.Id);
+        }
+        catch (Exception exception)
+        {
+            dispatchDelayed = true;
+            logger?.LogWarning("Email outbox {OutboxId} awaits the scheduled sweep after dispatch failure ({FailureType}).",
+                row.Id, exception.GetType().Name);
+        }
+        return new EmailOperationResult("queued", new
+        {
+            id = row.Id,
+            dispatchDelayed,
+            version = StaffVersion.Encode(row.RowVersion)
+        });
     }
 
     private async Task<bool> LockOrganizationsAsync(

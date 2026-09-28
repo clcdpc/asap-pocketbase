@@ -58,6 +58,49 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task EmailRetryRemainsQueuedWhenImmediateDispatchFailsAfterCommit()
+    {
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var actor = await ReadConfiguredSuperAdminAsync();
+        await using var context = await contextFactory.CreateDbContextAsync();
+        var row = new EmailOutbox
+        {
+            OrganizationId = 1,
+            DeliveryClass = "operational_test",
+            Status = "failed",
+            AttemptCount = 1,
+            LastErrorCode = "provider_failed",
+            ToAddress = "retry@example.org",
+            FromAddress = "system@example.org",
+            Subject = "Retry test",
+            BodyText = "Retry test body",
+            CreatedUtc = DateTime.UtcNow.AddMinutes(-1)
+        };
+        context.EmailOutbox.Add(row);
+        await context.SaveChangesAsync();
+        var version = StaffVersion.Encode(row.RowVersion);
+        try
+        {
+            var service = new EmailOperationsService(contextFactory, new FailingEmailDispatcher(),
+                new ReadinessSender(_ => Task.FromResult(EmailTransportReadiness.Configured)),
+                factory.Services.GetRequiredService<RecipientDomainPolicy>(), TimeProvider.System,
+                factory.Services.GetRequiredService<StaffEligibilityService>());
+            var result = await service.RetryAsync(actor, row.Id, version, CancellationToken.None);
+            Assert.AreEqual("queued", result.Code);
+            var data = JsonSerializer.SerializeToElement(result.Data);
+            Assert.IsTrue(data.GetProperty("dispatchDelayed").GetBoolean());
+            Assert.AreEqual("pending", (await context.EmailOutbox.AsNoTracking()
+                .SingleAsync(item => item.Id == row.Id)).Status);
+            Assert.AreEqual("stale_version", (await service.RetryAsync(
+                actor, row.Id, version, CancellationToken.None)).Code);
+        }
+        finally
+        {
+            await context.EmailOutbox.Where(item => item.Id == row.Id).ExecuteDeleteAsync();
+        }
+    }
+
+    [TestMethod]
     public async Task SystemPostmarkTokenBlankPreservesAndExplicitClearRemovesWithoutEchoingSecret()
     {
         using var client = factory!.CreateClient();
@@ -147,6 +190,8 @@ public sealed partial class PatronJourneyTests
             await context.SaveChangesAsync();
             Assert.AreEqual("not_configured", await ReadStateAsync(new ReadinessSender(_ =>
                 Task.FromResult(EmailTransportReadiness.Configured))));
+            Assert.AreEqual("not_configured", await ReadStateAsync(new ReadinessSender(_ =>
+                Task.FromException<EmailTransportReadiness>(new TaskCanceledException()))));
             system.FromAddress = "sender@example.org";
             await context.SaveChangesAsync();
             var scopedService = new EmailOperationsService(contextFactory,
