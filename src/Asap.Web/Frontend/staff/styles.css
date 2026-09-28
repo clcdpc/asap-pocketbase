@@ -119,6 +119,8 @@ textarea { min-height: 108px; resize: vertical; }
 .gridjs-container { display: block; width: 100%; overflow: visible; color: var(--ink); font-size: .91rem; }
 .gridjs-wrapper { width: 100%; overflow-x: auto; border-radius: 0; box-shadow: none; border-color: var(--line); }
 table.gridjs-table { width: 100%; min-width: 920px; max-width: none; table-layout: fixed; }
+.bulk-delete-items { max-height: 220px; overflow: auto; overflow-wrap: anywhere; }
+#bulk-delete-results { overflow-wrap: anywhere; }
 th.gridjs-th { background: #eef3f5; color: #26333d; }
 td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: anywhere; border-color: #d9dee2; }
 .grid-open { display: inline-flex; gap: 6px; align-items: center; min-height: 34px; padding: 5px 10px; color: var(--brand-dark); background: #fff; border: 1px solid #8ca1ae; border-radius: 4px; cursor: pointer; }

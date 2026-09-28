@@ -118,8 +118,10 @@ public static class TitleRequestCapabilityPolicy
                 false,
                 false,
                 false,
-                true,
-                "identifier_locked_by_stage");
+                request.Status != "closed" || !hasPlacedProtection,
+                request.Status == "closed" && hasPlacedProtection
+                    ? "hold_history_retained"
+                    : "identifier_locked_by_stage");
         }
 
         var canEdit = PrePlacementStatuses.Contains(request.Status);

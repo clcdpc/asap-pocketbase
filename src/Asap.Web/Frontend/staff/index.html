@@ -67,6 +67,7 @@
             <p id="queue-summary">Loading authorized requests...</p>
           </div>
           <div class="section-heading-actions">
+            <button id="bulk-delete-closed" class="danger-button" type="button" hidden>Delete closed work...</button>
             <label id="scope-field" class="compact-field" hidden>
               <span>Library scope</span>
               <select id="library-scope"></select>
@@ -123,6 +124,7 @@
             <span>Library scope</span>
             <select id="additional-copy-library-scope"></select>
           </label>
+          <button id="bulk-delete-closed-copies" class="danger-button" type="button" hidden>Delete closed work...</button>
         </div>
 
         <div id="additional-copy-status-tabs" class="status-tabs" role="tablist" aria-label="Additional-copy status">
@@ -222,6 +224,22 @@
           </section>
         </div>
       </section>
+
+      <dialog id="bulk-delete-dialog" aria-labelledby="bulk-delete-title" aria-describedby="bulk-delete-description">
+        <div class="dialog-shell compact-dialog-shell">
+          <div class="dialog-header"><h2 id="bulk-delete-title">Permanently delete closed work</h2><button id="bulk-delete-close" class="icon-button" type="button" aria-label="Close bulk deletion">Close</button></div>
+          <div class="dialog-body">
+            <p id="bulk-delete-description">This deletes closed title requests and closed additional-copy tasks in the library scope you choose. Deletion audits remain. Open work is never eligible.</p>
+            <label class="compact-field"><span>Library scope for deletion</span><select id="bulk-delete-scope"></select></label>
+            <button id="bulk-delete-preview" class="secondary-button" type="button">Preview closed records</button>
+            <p id="bulk-delete-summary" role="status" aria-live="polite"></p>
+            <ul id="bulk-delete-items" class="bulk-delete-items"></ul>
+            <label class="compact-field"><span>Type DELETE to permanently delete the previewed records</span><input id="bulk-delete-confirmation" type="text" autocomplete="off" spellcheck="false"></label>
+            <div class="form-actions"><button id="bulk-delete-execute" class="danger-button" type="button" disabled>Permanently delete previewed records</button></div>
+            <div id="bulk-delete-results" role="status" aria-live="polite" tabindex="-1"></div>
+          </div>
+        </div>
+      </dialog>
 
       <section id="settings-view" aria-labelledby="settings-title" hidden>
         <div class="section-heading">

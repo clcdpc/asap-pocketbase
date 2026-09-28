@@ -12,7 +12,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Asap.Web.Features.Staff;
 
-public sealed record VersionInput(string? Version);
+public sealed record VersionInput(string? Version, string? ActorVersion = null);
 public sealed record AssignTitleRequestInput(string? Version,
     [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] long? AssigneeId);
 
@@ -387,6 +387,10 @@ public sealed class TitleRequestMutationService(
             cancellationToken);
         var placedProtection = successfulOperation || TitleRequestViewService.HasLegacyPlacedProtection(requestEvents);
         var capabilities = TitleRequestCapabilityPolicy.Evaluate(request, incompleteOperation, placedProtection);
+        if (input.Action == "reopen" && placedProtection)
+        {
+            return new TitleRequestMutationResult("hold_history_retained");
+        }
 
         var identifierSupplied = IsSupplied(input.Identifier);
         var proposedIdentifier = identifierSupplied ? Clean(ElementString(input.Identifier)) : Clean(request.Identifier);
@@ -910,12 +914,24 @@ public sealed class TitleRequestMutationService(
         {
             return new TitleRequestMutationResult("delete_forbidden");
         }
+        if (!StaffVersion.TryDecode(input.ActorVersion, out var expectedActorVersion))
+        {
+            return new TitleRequestMutationResult("actor_changed_since_preview");
+        }
+        if (!actor.RowVersion.SequenceEqual(expectedActorVersion))
+        {
+            return new TitleRequestMutationResult("actor_changed_since_preview");
+        }
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         var locked = await LockForMutationAsync(context, actor, requestId, [actor.Id], cancellationToken);
         if (locked.Code != "locked") return new TitleRequestMutationResult(locked.Code);
         var request = locked.Request!;
         if (locked.Staff[actor.Id].Role is not ("admin" or "super_admin")) return new TitleRequestMutationResult("delete_forbidden");
+        if (!locked.Staff[actor.Id].RowVersion.SequenceEqual(expectedActorVersion))
+        {
+            return new TitleRequestMutationResult("actor_changed_since_preview");
+        }
         if (!request.RowVersion.SequenceEqual(expectedVersion)) return new TitleRequestMutationResult("stale_version");
         if (request.Status != "closed") return new TitleRequestMutationResult("request_not_closed");
         if (await context.HoldPlacementOperations.AnyAsync(item => item.TitleRequestId == request.Id, cancellationToken))
