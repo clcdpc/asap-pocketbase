@@ -366,6 +366,26 @@ public sealed partial class PatronJourneyTests
     public async Task StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers()
     {
         factory!.UseKestrel(0);
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var snapshot = await contextFactory.CreateDbContextAsync();
+        var originalSettings = await snapshot.SystemSettings.AsNoTracking()
+            .Where(item => item.OrganizationId == 1)
+            .Select(item => new { item.LeapBibUrlPattern, item.LeapPatronUrlPattern })
+            .SingleAsync();
+        var originalProviders = await snapshot.ExternalSearchProviders.AsNoTracking()
+            .Where(item => item.ProviderKey == "external_search_1" || item.ProviderKey == "external_search_3")
+            .Select(item => new { item.Id, item.Label, item.UrlTemplate, item.IsEnabled })
+            .ToListAsync();
+        var provider2Id = await snapshot.ExternalSearchProviders.AsNoTracking()
+            .Where(item => item.ProviderKey == "external_search_2")
+            .Select(item => item.Id)
+            .SingleAsync();
+        var originalProvider2Override = await snapshot.ExternalSearchProviderOverrides.AsNoTracking()
+            .Where(item => item.LibraryOrganizationId == 2 && item.ExternalSearchProviderId == provider2Id)
+            .Select(item => new { item.IsEnabled, item.Label, item.UrlTemplate })
+            .SingleOrDefaultAsync();
+        try
+        {
         using var client = factory.CreateClient();
         var baseAddress = client.BaseAddress
             ?? throw new InvalidOperationException("The Kestrel test host did not expose a base address.");
@@ -396,11 +416,11 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(HttpStatusCode.BadRequest, invalidRequestId.StatusCode, requestId);
         }
         using var exactBigintLookup = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup",
-            new { requestId = "9007199254740993", mode = "title", query = "Browser staff title" });
+            new { requestId = "9007199254741993", mode = "title", query = "Browser staff title" });
         Assert.AreEqual(HttpStatusCode.OK, exactBigintLookup.StatusCode,
             await exactBigintLookup.Content.ReadAsStringAsync());
         using var mismatchedRequestLibrary = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup",
-            new { requestId = "9007199254740993", libraryOrgId = 82, mode = "title", query = "catalog" });
+            new { requestId = "9007199254741993", libraryOrgId = 82, mode = "title", query = "catalog" });
         Assert.AreEqual(HttpStatusCode.BadRequest, mismatchedRequestLibrary.StatusCode);
         using var mismatchedRequestLibraryBody = JsonDocument.Parse(
             await mismatchedRequestLibrary.Content.ReadAsStringAsync());
@@ -631,6 +651,34 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(1, copyState.GetInt32(3));
         Assert.AreEqual(1, copyState.GetInt32(4));
         Assert.AreEqual(0, copyState.GetInt32(5));
+        }
+        finally
+        {
+            await using var restore = await contextFactory.CreateDbContextAsync();
+            var settings = await restore.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+            settings.LeapBibUrlPattern = originalSettings.LeapBibUrlPattern;
+            settings.LeapPatronUrlPattern = originalSettings.LeapPatronUrlPattern;
+            foreach (var original in originalProviders)
+            {
+                var provider = await restore.ExternalSearchProviders.SingleAsync(item => item.Id == original.Id);
+                provider.Label = original.Label;
+                provider.UrlTemplate = original.UrlTemplate;
+                provider.IsEnabled = original.IsEnabled;
+            }
+            var provider2Override = await restore.ExternalSearchProviderOverrides.SingleOrDefaultAsync(item =>
+                item.LibraryOrganizationId == 2 && item.ExternalSearchProviderId == provider2Id);
+            if (originalProvider2Override is null && provider2Override is not null)
+            {
+                restore.ExternalSearchProviderOverrides.Remove(provider2Override);
+            }
+            else if (originalProvider2Override is not null && provider2Override is not null)
+            {
+                provider2Override.IsEnabled = originalProvider2Override.IsEnabled;
+                provider2Override.Label = originalProvider2Override.Label;
+                provider2Override.UrlTemplate = originalProvider2Override.UrlTemplate;
+            }
+            await restore.SaveChangesAsync();
+        }
     }
 
     [TestMethod]
@@ -4417,6 +4465,17 @@ public sealed partial class PatronJourneyTests
         }
         Assert.AreEqual(7, rejectingProvider.ValidationCount);
 
+        rejectingProvider.OperationalFailure = false;
+        rejectingProvider.ValidationException = new OperationCanceledException("Provider timeout");
+        using var timedOut = await client.PostAsJsonAsync(
+            $"/api/asap/staff/title-requests/{requestId}/action",
+            new { version, action = "alreadyOwn" });
+        Assert.AreEqual(HttpStatusCode.ServiceUnavailable, timedOut.StatusCode,
+            await timedOut.Content.ReadAsStringAsync());
+        using var timedOutBody = JsonDocument.Parse(await timedOut.Content.ReadAsStringAsync());
+        Assert.AreEqual("bib_validation_unavailable", timedOutBody.RootElement.GetProperty("code").GetString());
+        rejectingProvider.ValidationException = null;
+
         await using var verify = new SqlConnection(databaseConnectionString);
         await verify.OpenAsync();
         await using var command = new SqlCommand(
@@ -4440,6 +4499,29 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(originalOperationCount, reader.GetInt32(5));
         }
         Assert.AreEqual(originalDispatchCount, dispatcher.EnqueuedIds.Count);
+
+        rejectingProvider.ValidBib = true;
+        using var unverified = await client.PostAsJsonAsync(
+            $"/api/asap/staff/title-requests/{requestId}/action",
+            new { version, action = "alreadyOwn" });
+        Assert.AreEqual(HttpStatusCode.Conflict, unverified.StatusCode,
+            await unverified.Content.ReadAsStringAsync());
+        using var unverifiedBody = JsonDocument.Parse(await unverified.Content.ReadAsStringAsync());
+        Assert.AreEqual("bib_unverified", unverifiedBody.RootElement.GetProperty("code").GetString());
+
+        using var selected = await client.PostAsJsonAsync(
+            $"/api/asap/staff/title-requests/{requestId}/action",
+            new { version, action = "alreadyOwn", bibid = "9001", staffSelectedBibId = "9001" });
+        Assert.AreEqual(HttpStatusCode.OK, selected.StatusCode, await selected.Content.ReadAsStringAsync());
+        using var selectedBody = JsonDocument.Parse(await selected.Content.ReadAsStringAsync());
+        Assert.AreEqual("pending_hold", selectedBody.RootElement.GetProperty("finalStatus").GetString());
+        Assert.IsTrue(selectedBody.RootElement.GetProperty("bibidStaffVerified").GetBoolean());
+
+        using var repeated = await client.PostAsJsonAsync(
+            $"/api/asap/staff/title-requests/{requestId}/action",
+            new { version, action = "alreadyOwn", bibid = "9001", staffSelectedBibId = "9001" });
+        Assert.AreEqual(HttpStatusCode.Conflict, repeated.StatusCode,
+            await repeated.Content.ReadAsStringAsync());
     }
 
     [TestMethod]
@@ -4662,8 +4744,10 @@ public sealed partial class PatronJourneyTests
             {
                 services.RemoveAll<IPatronProvider>();
                 services.RemoveAll<IStaffPolarisProvider>();
+                services.RemoveAll<IEmailOutboxDispatcher>();
                 services.AddSingleton<IPatronProvider>(holdProvider);
                 services.AddSingleton<IStaffPolarisProvider>(holdProvider);
+                services.AddSingleton<IEmailOutboxDispatcher, CanceledOutboxDispatcher>();
             }));
         using var client = holdFactory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
         using (var start = await client.GetAsync("/api/asap/staff/session"))
@@ -4687,7 +4771,7 @@ public sealed partial class PatronJourneyTests
                 INSERT INTO [asap].[TitleRequest]
                     ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES (2, N'20000000002105', N'Hold placement title', 1, @formatId, N'pending_hold', N'9001',
+                VALUES (2, N'20000000002105', N'Hold placement title', 1, @formatId, N'pending_hold', N'09001',
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 SELECT @actorId, CONVERT(bigint, SCOPE_IDENTITY());
                 """;
@@ -4708,12 +4792,31 @@ public sealed partial class PatronJourneyTests
         using var get = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}");
         using var getBody = JsonDocument.Parse(await get.Content.ReadAsStringAsync());
 
-        using var placed = await client.PostAsJsonAsync(
+        using var unverified = await client.PostAsJsonAsync(
             $"/api/asap/staff/title-requests/{requestId}/place-hold",
             new { version = getBody.RootElement.GetProperty("version").GetString() });
+        Assert.AreEqual(HttpStatusCode.Conflict, unverified.StatusCode);
+        using var unverifiedBody = JsonDocument.Parse(await unverified.Content.ReadAsStringAsync());
+        Assert.AreEqual("bib_unverified", unverifiedBody.RootElement.GetProperty("code").GetString());
+        Assert.AreEqual(0, holdProvider.CreateCount);
+        await using (var markVerified = new SqlConnection(databaseConnectionString))
+        {
+            await markVerified.OpenAsync();
+            await using var update = new SqlCommand(
+                "UPDATE [asap].[TitleRequest] SET [BibIdStaffVerified] = 1 WHERE [Id] = @id;", markVerified);
+            update.Parameters.AddWithValue("@id", requestId);
+            Assert.AreEqual(1, await update.ExecuteNonQueryAsync());
+        }
+        using var verifiedGet = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}");
+        using var verifiedBody = JsonDocument.Parse(await verifiedGet.Content.ReadAsStringAsync());
+
+        using var placed = await client.PostAsJsonAsync(
+            $"/api/asap/staff/title-requests/{requestId}/place-hold",
+            new { version = verifiedBody.RootElement.GetProperty("version").GetString() });
         Assert.AreEqual(HttpStatusCode.OK, placed.StatusCode, await placed.Content.ReadAsStringAsync());
         using var placedBody = JsonDocument.Parse(await placed.Content.ReadAsStringAsync());
         Assert.AreEqual("hold_placed", placedBody.RootElement.GetProperty("status").GetString());
+        Assert.AreEqual("dispatch_failed", placedBody.RootElement.GetProperty("notificationStatus").GetString());
         Assert.AreEqual(1, holdProvider.CreateCount);
         Assert.AreEqual(1, holdProvider.ReplyCount);
 
@@ -4778,9 +4881,9 @@ public sealed partial class PatronJourneyTests
                 DECLARE @formatId bigint = (
                     SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
-                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
+                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES (2, N'20000000002107', N'Existing hold adoption title', 1, @formatId, N'pending_hold', N'9002',
+                VALUES (2, N'20000000002107', N'Existing hold adoption title', 1, @formatId, N'pending_hold', N'09002', 1,
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 SELECT @actorId, CONVERT(bigint, SCOPE_IDENTITY());
                 """;
@@ -4865,9 +4968,9 @@ public sealed partial class PatronJourneyTests
                 DECLARE @formatId bigint = (
                     SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
-                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
+                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES (2, N'20000000002108', N'Throwing hold placement title', 1, @formatId, N'pending_hold', N'9003',
+                VALUES (2, N'20000000002108', N'Throwing hold placement title', 1, @formatId, N'pending_hold', N'9003', 1,
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 SELECT @actorId, CONVERT(bigint, SCOPE_IDENTITY());
                 """;
@@ -4936,9 +5039,9 @@ public sealed partial class PatronJourneyTests
                 DECLARE @formatId bigint = (
                     SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
-                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
+                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES (2, N'20000000002109', N'Correlated ambiguous hold title', 1, @formatId, N'pending_hold', N'9004',
+                VALUES (2, N'20000000002109', N'Correlated ambiguous hold title', 1, @formatId, N'pending_hold', N'9004', 1,
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 SELECT @actorId, CONVERT(bigint, SCOPE_IDENTITY());
                 """;
@@ -5026,9 +5129,9 @@ public sealed partial class PatronJourneyTests
                 INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
                 VALUES (91211, N'Inactive recovery library', N'IRL', 0);
                 INSERT INTO [asap].[TitleRequest]
-                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
+                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES (91211, N'20000000002111', N'Expired acquired hold title', 1, @formatId, N'pending_hold', N'9005',
+                VALUES (91211, N'20000000002111', N'Expired acquired hold title', 1, @formatId, N'pending_hold', N'9005', 1,
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 DECLARE @requestId bigint = SCOPE_IDENTITY();
                 INSERT INTO [asap].[HoldPlacementOperation]
@@ -5091,6 +5194,86 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task StaffHoldReconcileWillNotDispatchAcquiredWorkAfterBibVerificationIsLost()
+    {
+        var holdProvider = ScriptedHoldProvider.ReplyRequiredThenSuccess();
+        await using var holdFactory = factory!.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IPatronProvider>();
+                services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IPatronProvider>(holdProvider);
+                services.AddSingleton<IStaffPolarisProvider>(holdProvider);
+            }));
+        using var client = holdFactory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        using (var start = await client.GetAsync("/api/asap/staff/session"))
+        {
+            Assert.AreEqual(HttpStatusCode.OK, start.StatusCode);
+        }
+
+        var requestId = await SeedPendingHoldRequestAsync("Unverified acquired recovery", "20000000002133", "9033");
+        long operationId;
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var seed = new SqlCommand(
+                """
+                UPDATE [asap].[TitleRequest] SET [BibIdStaffVerified] = 0 WHERE [Id] = @requestId;
+                INSERT INTO [asap].[HoldPlacementOperation]
+                    ([TitleRequestId], [PatronBarcodeSnapshot], [BibIdSnapshot], [PickupBranchIdSnapshot],
+                     [AttemptNumber], [State], [Phase], [OwnerToken], [ExecutionEpoch], [LeaseExpiresUtc], [RequestStartedUtc])
+                VALUES (@requestId, N'20000000002133', N'9033', 101, 1, N'in_progress', N'acquired',
+                        NEWID(), 1, DATEADD(minute, -1, SYSUTCDATETIME()), SYSUTCDATETIME());
+                SELECT CONVERT(bigint, SCOPE_IDENTITY());
+                """, connection);
+            seed.Parameters.AddWithValue("@requestId", requestId);
+            operationId = Convert.ToInt64(await seed.ExecuteScalarAsync());
+        }
+
+        var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var actor = new SqlCommand(
+                "SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG';", connection);
+            client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", Convert.ToInt64(await actor.ExecuteScalarAsync()).ToString());
+        }
+        client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
+        using var session = await client.GetAsync("/api/asap/staff/session");
+        using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery",
+            sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
+        using var detail = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}");
+        using var detailBody = JsonDocument.Parse(await detail.Content.ReadAsStringAsync());
+        var version = detailBody.RootElement.GetProperty("holdOperation").GetProperty("version").GetString();
+
+        using var reconcile = await client.PostAsJsonAsync(
+            $"/api/asap/staff/hold-operations/{operationId}/reconcile", new { version });
+        Assert.AreEqual(HttpStatusCode.Conflict, reconcile.StatusCode);
+        using var responseBody = JsonDocument.Parse(await reconcile.Content.ReadAsStringAsync());
+        Assert.AreEqual("bib_unverified", responseBody.RootElement.GetProperty("code").GetString());
+        Assert.AreEqual(0, holdProvider.CreateCount);
+        Assert.AreEqual(0, holdProvider.ReplyCount);
+
+        await using var verify = new SqlConnection(databaseConnectionString);
+        await verify.OpenAsync();
+        await using var command = new SqlCommand(
+            """
+            SELECT operation.[State], operation.[Phase], operation.[CreateStartedUtc], request.[Status]
+            FROM [asap].[HoldPlacementOperation] operation
+            JOIN [asap].[TitleRequest] request ON request.[Id] = operation.[TitleRequestId]
+            WHERE operation.[Id] = @operationId;
+            """, verify);
+        command.Parameters.AddWithValue("@operationId", operationId);
+        await using var result = await command.ExecuteReaderAsync();
+        Assert.IsTrue(await result.ReadAsync());
+        Assert.AreEqual("operator_required", result.GetString(0));
+        Assert.AreEqual("acquired", result.GetString(1));
+        Assert.IsTrue(result.IsDBNull(2));
+        Assert.AreEqual("pending_hold", result.GetString(3));
+    }
+
+    [TestMethod]
     public async Task StaffHoldReconcileResumesDurableReplyReadyWithoutRepeatingCreate()
     {
         var holdProvider = ScriptedHoldProvider.ReplyRequiredThenSuccess();
@@ -5117,9 +5300,9 @@ public sealed partial class PatronJourneyTests
                 DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
-                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
+                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES (2, N'20000000002130', N'Reply ready recovery title', 1, @formatId, N'pending_hold', N'9030',
+                VALUES (2, N'20000000002130', N'Reply ready recovery title', 1, @formatId, N'pending_hold', N'9030', 1,
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 DECLARE @requestId bigint = SCOPE_IDENTITY();
                 INSERT INTO [asap].[HoldPlacementOperation]
@@ -5216,9 +5399,9 @@ public sealed partial class PatronJourneyTests
                 DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
-                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
+                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES (2, N'20000000002131', N'Late create result title', 1, @formatId, N'pending_hold', N'9031',
+                VALUES (2, N'20000000002131', N'Late create result title', 1, @formatId, N'pending_hold', N'9031', 1,
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 SELECT @actorId, CONVERT(bigint, SCOPE_IDENTITY());
                 """;
@@ -5852,9 +6035,9 @@ public sealed partial class PatronJourneyTests
                 DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
-                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
+                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES (2, N'20000000002114', N'Reply ambiguity title', 1, @formatId, N'pending_hold', N'9009',
+                VALUES (2, N'20000000002114', N'Reply ambiguity title', 1, @formatId, N'pending_hold', N'9009', 1,
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 SELECT @actorId, CONVERT(bigint, SCOPE_IDENTITY());
                 """;
@@ -6003,7 +6186,16 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task StaffHoldOperatorResolutionDoesNotTreatEvidenceReferenceAsHoldIdentity()
     {
-        using var client = factory!.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        var emailSender = new MutableReadinessEmailSender(isConfigured: true);
+        await using var dispatchFactory = factory!.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IEmailSender>();
+                services.RemoveAll<IEmailOutboxDispatcher>();
+                services.AddSingleton<IEmailSender>(emailSender);
+                services.AddSingleton<IEmailOutboxDispatcher, CanceledOutboxDispatcher>();
+            }));
+        using var client = dispatchFactory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
         using (var start = await client.GetAsync("/api/asap/staff/session"))
         {
             Assert.AreEqual(HttpStatusCode.OK, start.StatusCode);
@@ -6083,10 +6275,33 @@ public sealed partial class PatronJourneyTests
             executorExclusionReference = "incident-runbook-8456",
             executorExclusionExplanation = "The interactive host process was terminated at 2026-09-13T13:00:00Z and the provider response accounts for its in-flight request."
         };
+        emailSender.TimeoutReadiness = true;
+        using var timedOut = await client.PostAsJsonAsync(
+            $"/api/asap/staff/hold-operations/{operationId}/resolve", resolution);
+        Assert.AreEqual(HttpStatusCode.ServiceUnavailable, timedOut.StatusCode,
+            await timedOut.Content.ReadAsStringAsync());
+        using (var timedOutBody = JsonDocument.Parse(await timedOut.Content.ReadAsStringAsync()))
+        {
+            Assert.AreEqual("hold_resolution_dependency_unavailable", timedOutBody.RootElement.GetProperty("code").GetString());
+        }
+        using (var unchanged = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}"))
+        using (var unchangedBody = JsonDocument.Parse(await unchanged.Content.ReadAsStringAsync()))
+        {
+            Assert.AreEqual("pending_hold", unchangedBody.RootElement.GetProperty("status").GetString());
+            Assert.AreEqual(operation.GetProperty("version").GetString(),
+                unchangedBody.RootElement.GetProperty("holdOperation").GetProperty("version").GetString());
+        }
+        emailSender.TimeoutReadiness = false;
         using var resolve = await client.PostAsJsonAsync(
             $"/api/asap/staff/hold-operations/{operationId}/resolve",
             resolution);
         Assert.AreEqual(HttpStatusCode.OK, resolve.StatusCode, await resolve.Content.ReadAsStringAsync());
+        using (var resolvedBody = JsonDocument.Parse(await resolve.Content.ReadAsStringAsync()))
+        {
+            Assert.IsTrue(resolvedBody.RootElement.GetProperty("committed").GetBoolean());
+            Assert.AreEqual("hold_placed", resolvedBody.RootElement.GetProperty("finalStatus").GetString());
+            Assert.AreEqual("dispatch_failed", resolvedBody.RootElement.GetProperty("notificationStatus").GetString());
+        }
         using var duplicate = await client.PostAsJsonAsync(
             $"/api/asap/staff/hold-operations/{operationId}/resolve",
             resolution);
@@ -6162,9 +6377,9 @@ public sealed partial class PatronJourneyTests
                 DECLARE @formatId bigint = (
                     SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
-                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
+                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES (2, N'20000000002106', N'Ambiguous hold title', 1, @formatId, N'pending_hold', N'9001',
+                VALUES (2, N'20000000002106', N'Ambiguous hold title', 1, @formatId, N'pending_hold', N'9001', 1,
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 SELECT @actorId, CONVERT(bigint, SCOPE_IDENTITY());
                 """;
@@ -8588,9 +8803,9 @@ public sealed partial class PatronJourneyTests
             DECLARE @formatId bigint = (
                 SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
             INSERT INTO [asap].[TitleRequest]
-                ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
+                ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                  [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-            VALUES (2, @barcode, @title, 1, @formatId, N'pending_hold', @bibId,
+            VALUES (2, @barcode, @title, 1, @formatId, N'pending_hold', @bibId, 1,
                     101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
             SELECT CONVERT(bigint, SCOPE_IDENTITY());
             """,
@@ -9475,7 +9690,8 @@ public sealed partial class PatronJourneyTests
                 (2, @formatId, @audienceFieldId, N'optional'),
                 (2, @formatId, @bindingFieldId, N'required');
 
-            DECLARE @primaryId bigint = CONVERT(bigint, '9007199254740993');
+            DECLARE @previousTitleIdentity bigint = CONVERT(bigint, IDENT_CURRENT(N'[asap].[TitleRequest]'));
+            DECLARE @primaryId bigint = CONVERT(bigint, '9007199254741993');
             SET IDENTITY_INSERT [asap].[TitleRequest] ON;
             INSERT INTO [asap].[TitleRequest]
                 ([Id], [LegacyId], [LibraryOrganizationId], [Barcode], [Email], [NameFirst], [NameLast], [Title],
@@ -9489,6 +9705,9 @@ public sealed partial class PatronJourneyTests
                  @formatId, N'suggestion', NULL, 101, N'Main Library', @superId, N'Initial Administrator',
                  SYSUTCDATETIME(), N'manual', N'not_found', SYSUTCDATETIME(), SYSUTCDATETIME());
             SET IDENTITY_INSERT [asap].[TitleRequest] OFF;
+            DECLARE @reseedSql nvarchar(200) = N'DBCC CHECKIDENT (''[asap].[TitleRequest]'', RESEED, '
+                + CONVERT(nvarchar(30), @previousTitleIdentity) + N') WITH NO_INFOMSGS';
+            EXEC sp_executesql @reseedSql;
             INSERT INTO [asap].[LegacyPocketBaseMapping] ([EntityType], [PocketBaseId], [NewId])
             VALUES (N'title_request', @legacyId, @primaryId);
 
@@ -10507,6 +10726,12 @@ public sealed partial class PatronJourneyTests
         public TaskCompletionSource CreateStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<HoldProviderResult>? PendingCreate { get; private set; }
+        public TaskCompletionSource HoldReadStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource? PendingHoldRead { get; private set; }
+        public TaskCompletionSource RefreshStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource? PendingRefresh { get; private set; }
         public TaskCompletionSource ReplyStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<HoldProviderResult>? PendingReply { get; private set; }
@@ -10562,6 +10787,18 @@ public sealed partial class PatronJourneyTests
         public void BlockCreate() => PendingCreate = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
+        public void BlockHoldRead() => PendingHoldRead = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void CompleteBlockedHoldRead() => PendingHoldRead!.TrySetResult();
+
+        public void BlockRefresh() => PendingRefresh = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void CompleteBlockedRefresh() => PendingRefresh!.TrySetResult();
+
+        public void CompleteBlockedCreateWithConfiguredResult() => PendingCreate!.TrySetResult(createResult);
+
         public void CompleteBlockedCreate(HoldProviderResult result) =>
             PendingCreate!.TrySetResult(result);
 
@@ -10576,10 +10813,15 @@ public sealed partial class PatronJourneyTests
             string pin,
             CancellationToken cancellationToken) => RefreshAsync(barcode, cancellationToken);
 
-        public Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
+        public async Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(new PatronSnapshot(
+            if (PendingRefresh is not null)
+            {
+                RefreshStarted.TrySetResult();
+                await PendingRefresh.Task.WaitAsync(cancellationToken);
+            }
+            return new PatronSnapshot(
                 7105,
                 barcode,
                 "hold-patron@example.org",
@@ -10590,7 +10832,7 @@ public sealed partial class PatronJourneyTests
                 101,
                 2,
                 "Test Library",
-                101));
+                101);
         }
 
         public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(
@@ -10611,7 +10853,7 @@ public sealed partial class PatronJourneyTests
         public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken) =>
             Task.FromResult(new BibValidationResult(true));
 
-        public Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(
+        public async Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(
             string barcode,
             CancellationToken cancellationToken)
         {
@@ -10621,8 +10863,12 @@ public sealed partial class PatronJourneyTests
             {
                 throw HoldReadException;
             }
-
-            return Task.FromResult(Holds);
+            if (PendingHoldRead is not null)
+            {
+                HoldReadStarted.TrySetResult();
+                await PendingHoldRead.Task.WaitAsync(cancellationToken);
+            }
+            return Holds;
         }
 
         public Task<HoldProviderResult> CreateHoldAsync(
@@ -10666,6 +10912,8 @@ public sealed partial class PatronJourneyTests
 
         public bool OperationalFailure { get; set; }
 
+        public bool ValidBib { get; set; }
+
         public Exception? ValidationException { get; set; }
 
         public Exception? SearchException { get; set; }
@@ -10706,7 +10954,7 @@ public sealed partial class PatronJourneyTests
                 throw new PolarisOperationalException("polaris_bib_validation_failed", "Polaris is unavailable.");
             }
 
-            return Task.FromResult(new BibValidationResult(false));
+            return Task.FromResult(new BibValidationResult(ValidBib));
         }
 
         public Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(
@@ -10729,6 +10977,8 @@ public sealed partial class PatronJourneyTests
     {
         public bool IsConfigured { get; set; } = isConfigured;
 
+        public bool TimeoutReadiness { get; set; }
+
         public int SendCount { get; private set; }
 
         public bool ReturnNotConfiguredOnSend { get; init; }
@@ -10738,6 +10988,10 @@ public sealed partial class PatronJourneyTests
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (TimeoutReadiness)
+            {
+                throw new OperationCanceledException("Email readiness timed out without caller cancellation.");
+            }
             return Task.FromResult(
                 IsConfigured
                     ? EmailTransportReadiness.Configured

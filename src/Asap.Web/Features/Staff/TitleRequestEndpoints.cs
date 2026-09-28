@@ -38,6 +38,7 @@ public static class TitleRequestEndpoints
             .AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/claim", ClaimAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/unclaim", UnclaimAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
+        group.MapPost("/{id:long}/clear-claim", ClearClaimAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/assign", AssignAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/action", ActionAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/retry-identifier-check", RetryIdentifierAsync)
@@ -345,6 +346,12 @@ public static class TitleRequestEndpoints
                 message = "Catalog lookup is temporarily unavailable." },
                 statusCode: StatusCodes.Status502BadGateway);
         }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return Results.Json(new { code = "bib_validation_unavailable",
+                message = "Catalog lookup is temporarily unavailable." },
+                statusCode: StatusCodes.Status502BadGateway);
+        }
     }
 
     private static async Task<ResearchScope> ResolveResearchScopeAsync(
@@ -502,6 +509,17 @@ public static class TitleRequestEndpoints
         MutateAndLoadAsync(context, id, mutations.ClaimAsync(Current(context), id, input, true, cancellationToken),
             views, loggerFactory, cancellationToken);
 
+    private static Task<IResult> ClearClaimAsync(
+        HttpContext context,
+        long id,
+        VersionInput input,
+        TitleRequestMutationService mutations,
+        TitleRequestViewService views,
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken) =>
+        MutateAndLoadAsync(context, id, mutations.ClearClaimAsync(Current(context), id, input, cancellationToken),
+            views, loggerFactory, cancellationToken);
+
     private static Task<IResult> AssignAsync(
         HttpContext context,
         long id,
@@ -625,16 +643,26 @@ public static class TitleRequestEndpoints
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
-        var result = await holds.PlaceAsync(Current(context), id, input, cancellationToken);
+        HoldPlacementResult result;
+        try
+        {
+            result = await holds.PlaceAsync(Current(context), id, input, cancellationToken);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return HoldOutcomeUnconfirmed();
+        }
         if (result.Code != "updated")
         {
-            return HoldError(result.Code);
+            return HoldError(result);
         }
         var row = await TryLoadCommittedAsync(context, id, views, loggerFactory, cancellationToken);
         return row is null
             ? Results.Json(new { committed = true, request = (TitleRequestDto?)null,
-                finalStatus = (string?)null, refreshUnavailable = true })
-            : Results.Json(row with { Committed = true, FinalStatus = row.Status });
+                finalStatus = result.FinalStatus, notificationStatus = result.NotificationStatus,
+                notificationReason = result.NotificationReason, refreshUnavailable = true })
+            : Results.Json(row with { Committed = true, FinalStatus = result.FinalStatus ?? row.Status,
+                NotificationStatus = result.NotificationStatus, NotificationReason = result.NotificationReason });
     }
 
     private static async Task<IResult> ReconcileHoldAsync(
@@ -642,16 +670,40 @@ public static class TitleRequestEndpoints
         long id,
         VersionInput input,
         HoldPlacementService holds,
-        CancellationToken cancellationToken) =>
-        HoldOperationResult(await holds.ReconcileAsync(Current(context), id, input, cancellationToken));
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return HoldOperationResult(await holds.ReconcileAsync(Current(context), id, input, cancellationToken));
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return HoldOutcomeUnconfirmed();
+        }
+    }
 
     private static async Task<IResult> ResolveHoldAsync(
         HttpContext context,
         long id,
         ResolveHoldOperationInput input,
         HoldPlacementService holds,
-        CancellationToken cancellationToken) =>
-        HoldOperationResult(await holds.ResolveAsync(Current(context), id, input, cancellationToken));
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return HoldOperationResult(await holds.ResolveAsync(Current(context), id, input, cancellationToken));
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return HoldOutcomeUnconfirmed();
+        }
+    }
+
+    private static IResult HoldOutcomeUnconfirmed() => Results.Json(new
+    {
+        code = "hold_outcome_unconfirmed",
+        message = "The hold outcome could not be confirmed. Review the operation before retrying."
+    }, statusCode: StatusCodes.Status503ServiceUnavailable);
 
     private static async Task<IResult> DeleteAsync(
         HttpContext context,
@@ -742,6 +794,16 @@ public static class TitleRequestEndpoints
         "bib_validation_unavailable" => Results.Json(
             new { code = result.Code, message = "Catalog validation is temporarily unavailable." },
             statusCode: StatusCodes.Status503ServiceUnavailable),
+        "bib_unverified" => Results.Conflict(new
+        {
+            code = result.Code,
+            message = "Verify the current BIB in Polaris before moving this request to Pending hold."
+        }),
+        "bib_not_found" => Results.BadRequest(new
+        {
+            code = result.Code,
+            message = "The BIB was not found in Polaris. The request was not changed."
+        }),
         _ => Results.BadRequest(new { code = result.Code, message = "The request change is invalid." })
     };
 
@@ -757,26 +819,47 @@ public static class TitleRequestEndpoints
         _ => Results.BadRequest(new { code, message = "The pickup preference is invalid." })
     };
 
-    private static IResult HoldError(string code) => code switch
+    private static IResult HoldError(HoldPlacementResult result) => result.Code switch
     {
-        "not_found" => Results.NotFound(new { code }),
-        "staff_scope_forbidden" => Results.Json(new { code }, statusCode: StatusCodes.Status403Forbidden),
+        "not_found" => Results.NotFound(new { result.Code, result.ProviderOutcomeRecorded }),
+        "staff_scope_forbidden" => Results.Json(new { result.Code, result.ProviderOutcomeRecorded,
+            operationId = result.OperationId?.ToString() }, statusCode: StatusCodes.Status403Forbidden),
         "stale_version" or "hold_operation_incomplete" or "operation_ownership_lost" or
             "hold_identity_ambiguous" or "hold_operator_required" =>
-            Results.Conflict(new { code, message = "Hold placement is blocked or requires reconciliation." }),
+            Results.Conflict(new { result.Code, result.ProviderOutcomeRecorded,
+                message = "Hold placement is blocked or requires reconciliation." }),
+        "bib_unverified" => Results.Conflict(new
+        {
+            result.Code,
+            message = "Verify the current BIB in Polaris before placing a hold. No hold was attempted."
+        }),
         "hold_provider_error" => Results.Json(
-            new { code, message = "Hold placement could not be confirmed." },
+            new { result.Code, message = "Hold placement could not be confirmed." },
             statusCode: StatusCodes.Status502BadGateway),
-        _ => Results.BadRequest(new { code, message = "The hold cannot be placed from the current request state." })
+        _ => Results.BadRequest(new { result.Code, result.ProviderOutcomeRecorded,
+            message = "The hold cannot be placed from the current request state." })
     };
 
     private static IResult HoldOperationResult(HoldPlacementResult result) => result.Code switch
     {
-        "updated" or "resolved" => Results.Json(new { result.Code, operationId = result.OperationId?.ToString() }),
-        "not_found" => Results.NotFound(new { result.Code }),
-        "hold_resolution_forbidden" => Results.Json(new { result.Code }, statusCode: StatusCodes.Status403Forbidden),
-        "hold_provider_error" => Results.Json(new { result.Code }, statusCode: StatusCodes.Status502BadGateway),
-        _ => Results.Conflict(new { result.Code, operationId = result.OperationId?.ToString() })
+        "updated" or "resolved" => Results.Json(new { result.Code, operationId = result.OperationId?.ToString(),
+            committed = true, finalStatus = result.FinalStatus, notificationStatus = result.NotificationStatus,
+            notificationReason = result.NotificationReason }),
+        "not_found" => Results.NotFound(new { result.Code, result.ProviderOutcomeRecorded }),
+        "hold_resolution_forbidden" => Results.Json(new { result.Code, result.ProviderOutcomeRecorded,
+            operationId = result.OperationId?.ToString() }, statusCode: StatusCodes.Status403Forbidden),
+        "hold_resolution_dependency_unavailable" => Results.Json(new
+        {
+            result.Code,
+            message = "Hold resolution could not start because a dependency is unavailable. The operation was not changed."
+        }, statusCode: StatusCodes.Status503ServiceUnavailable),
+        "hold_provider_error" => Results.Json(new
+        {
+            result.Code,
+            message = "The hold provider outcome could not be confirmed. Review the operation before retrying."
+        }, statusCode: StatusCodes.Status502BadGateway),
+        _ => Results.Conflict(new { result.Code, result.ProviderOutcomeRecorded,
+            operationId = result.OperationId?.ToString() })
     };
 
     private static CurrentStaff Current(HttpContext context) =>

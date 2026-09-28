@@ -286,7 +286,7 @@ async function runAnonymous(browser, args, axeSource, report) {
 }
 
 async function runSuperAdmin(browser, args, axeSource, report) {
-  assert.equal(args.primaryRequestId, '9007199254740993');
+  assert.equal(args.primaryRequestId, '9007199254741993');
   const { context, traffic } = await createContext(
     browser,
     { width: 1280, height: 900 },
@@ -394,6 +394,10 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.getByRole('button', { name: 'Claim', exact: true }).click();
     await page.getByRole('button', { name: 'Unclaim' }).waitFor();
     await page.getByRole('button', { name: 'Purchase', exact: true }).click();
+    page.once('dialog', dialog => {
+      assert.match(dialog.message(), /Outstanding purchase/);
+      return dialog.accept();
+    });
     await page.locator('.action-choice button[type="submit"]').click();
     await page.getByText('Outstanding purchase', { exact: true }).waitFor();
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'edited-claimed-actioned');
@@ -464,7 +468,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     assert.ok(bibLookupBodies.length > 0, 'Polaris lookup should send a request body');
     for (const body of bibLookupBodies) {
       assert.equal(typeof body.requestId, 'string');
-      assert.equal(body.requestId, '9007199254740993');
+      assert.equal(body.requestId, '9007199254741993');
     }
 
     const firstSearch = deferred();
@@ -558,6 +562,14 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.locator('.polaris-selection-context').filter({ hasText: 'Polaris format: Book' }).waitFor();
     assert.equal(await page.getByLabel('Publication timing', { exact: true }).inputValue(), 'Library backlist');
     assert.equal(await page.getByLabel('Format', { exact: true }).inputValue(), 'book');
+    await page.getByLabel('Automatically place hold').uncheck();
+    page.once('dialog', dialog => {
+      assert.match(dialog.message(), /No hold will be placed automatically/);
+      return dialog.dismiss();
+    });
+    await page.getByRole('button', { name: 'Save changes' }).click();
+    assert.equal(await page.getByRole('button', { name: 'Save changes' }).isEnabled(), true);
+    page.once('dialog', dialog => dialog.accept());
     await page.getByRole('button', { name: 'Save changes' }).click();
     await page.getByText('Request changes saved.').waitFor();
     const reconciledResponse = await context.request.get(
@@ -570,8 +582,14 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     assert.equal(reconciledRequest.identifier, '9780000002901');
     assert.equal(reconciledRequest.publication, 'Library backlist');
     assert.equal(reconciledRequest.format, 'book');
+    page.once('dialog', dialog => {
+      assert.match(dialog.message(), /Pending hold/);
+      assert.match(dialog.message(), /cannot place a hold until it is enabled/);
+      return dialog.accept();
+    });
     await page.getByRole('button', { name: 'Ready for hold' }).click();
     await page.locator('#request-dialog .status-badge').filter({ hasText: 'Pending hold' }).waitFor();
+    assert.equal(await page.getByRole('button', { name: 'Place hold' }).count(), 0);
 
     await page.getByRole('button', { name: 'Close request details' }).click();
     const noConfig = async route => route.fulfill({ status: 200, contentType: 'application/json',
@@ -922,9 +940,10 @@ async function runStaleMutationCompletions(browser, args, report) {
     async function holdCurrentB(type, id) {
       const target = scenario(type, id);
       await page.keyboard.press('Escape');
-      await page.locator('#request-dialog').waitFor({ state: 'hidden' });
+      assert.equal(await page.locator('#request-dialog').isVisible(), true,
+        'Escape must keep a consequential in-flight action visible until its result arrives');
       await page.locator(target.claimFilter).selectOption('all');
-      await page.getByRole('button', { name: target.openLabel }).click();
+      await page.getByRole('button', { name: target.openLabel }).evaluate(node => node.click());
       await page.locator('#request-dialog-kicker').filter({ hasText: target.kicker }).waitFor();
       if (type === 'title_request') {
         await page.getByRole('link', { name: 'Open patron in LEAP' }).waitFor();
@@ -946,15 +965,9 @@ async function runStaleMutationCompletions(browser, args, report) {
     }
 
     async function releaseMutationWithBPending(mutation, heldB) {
-      const refresh = heldB.target.listPath === '/api/asap/staff/title-requests'
-        ? null
-        : page.waitForResponse(response =>
-          response.request().method() === 'GET' &&
-          new URL(response.url()).pathname === heldB.target.listPath);
       try {
         mutation.release();
         await mutation.completed;
-        if (refresh) await refresh;
         await page.waitForTimeout(100);
         assert.equal(await page.locator('#request-dialog').getAttribute('open'), '');
         assert.equal(await page.locator('#request-dialog-title').textContent(), heldB.visible.title);
@@ -1058,12 +1071,54 @@ async function runStaleMutationCompletions(browser, args, report) {
     const assignedTitleAResponse = await context.request.get(
       `${args.baseOrigin}/api/asap/staff/title-requests/${args.staleTitleAId}`
     );
-    assert.equal((await assignedTitleAResponse.json()).claimedByStaffUserId, args.invalidClaimantId);
+    const assignedTitleA = await assignedTitleAResponse.json();
+    assert.equal(assignedTitleA.claimedByStaffUserId, args.invalidClaimantId);
+    const forgedTitleUnclaim = await mutate(context, args.baseOrigin,
+      `/api/asap/staff/title-requests/${args.staleTitleAId}/unclaim`,
+      { version: assignedTitleA.version });
+    assert.equal(forgedTitleUnclaim.status(), 403, await forgedTitleUnclaim.text());
+    const { context: ordinaryTitleContext } = await createContext(
+      browser, { width: 1280, height: 900 }, args.baseOrigin, args.staffIdentity);
+    try {
+      const forbidden = await mutate(ordinaryTitleContext, args.baseOrigin,
+        `/api/asap/staff/title-requests/${args.staleTitleAId}/clear-claim`,
+        { version: assignedTitleA.version });
+      assert.equal(forbidden.status(), 403, await forbidden.text());
+    } finally {
+      await ordinaryTitleContext.close();
+    }
+    await page.goto(`${args.baseOrigin}/staff/?request=${args.staleTitleAId}`, { waitUntil: 'networkidle' });
+    const titleClear = page.getByRole('button', { name: 'Clear claim' });
+    await titleClear.waitFor();
+    page.once('dialog', dialog => {
+      assert.match(dialog.message(), /become unclaimed/);
+      return dialog.accept();
+    });
+    await titleClear.click();
+    await page.locator('#request-dialog .detail-meta').filter({ hasText: 'Unclaimed' }).waitFor();
+    await page.locator('#request-dialog .request-activity').filter({
+      hasText: `Administrator cleared ${assignedTitleA.claimedByDisplayName}'s claim.`
+    }).waitFor();
+    const repeatedTitleClear = await mutate(context, args.baseOrigin,
+      `/api/asap/staff/title-requests/${args.staleTitleAId}/clear-claim`,
+      { version: assignedTitleA.version });
+    assert.equal(repeatedTitleClear.status(), 409, await repeatedTitleClear.text());
 
     await page.goto(`${args.baseOrigin}/staff/?request=${args.staleCreateSourceId}`, { waitUntil: 'networkidle' });
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     await page.locator('#additional-copy-create-dialog[open]').waitFor();
     await page.locator('#additional-copy-reminder').uncheck();
+    const createPath = `**/api/asap/staff/title-requests/${args.staleCreateSourceId}/additional-copy`;
+    const noCommitCreate = route => route.fulfill({ status: 503, contentType: 'application/json',
+      body: JSON.stringify({ code: 'notification_dependency_unavailable',
+        message: 'Reminder configuration is temporarily unavailable. The task was not changed.' }) });
+    await page.route(createPath, noCommitCreate);
+    await page.getByRole('button', { name: 'Create task' }).click();
+    await page.locator('#app-status').filter({ hasText: /The task was not changed/ }).waitFor();
+    assert.equal(await page.evaluate(() => window.sessionStorage.getItem('asap.staff.unconfirmedCopyCreation')), null,
+      'a definitive pre-mutation dependency error clears the pending attempt marker');
+    assert.equal(await page.getByRole('button', { name: 'Create task' }).isEnabled(), true);
+    await page.unroute(createPath, noCommitCreate);
     delayedMutation = await delayNextServerResponse(
       page,
       'POST',
@@ -1072,15 +1127,128 @@ async function runStaleMutationCompletions(browser, args, report) {
     await page.getByRole('button', { name: 'Create task' }).click();
     const acceptedCreate = await delayedMutation.accepted;
     assert.equal(acceptedCreate.status, 200);
+    const pendingAttempt = await page.evaluate(() =>
+      JSON.parse(window.sessionStorage.getItem('asap.staff.unconfirmedCopyCreation')));
+    assert.equal(pendingAttempt.sourceId, String(args.staleCreateSourceId),
+      'the original source version must be saved before the task request is dispatched');
     const createdId = acceptedCreate.json.additionalCopyRequest.id;
     await page.getByRole('button', { name: 'Cancel' }).click();
+    assert.equal(await page.locator('#additional-copy-create-dialog').isVisible(), true,
+      'Cancel must retain an in-flight creation until the committed result is known');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#additional-copy-create-dialog').isVisible(), true,
+      'Escape must retain an in-flight creation until the committed result is known');
+    delayedMutation.release();
+    await delayedMutation.completed;
+    await delayedMutation.dispose();
+    await page.locator('#app-status').filter({ hasText: `Additional-copy task ${createdId} created.` }).waitFor();
+    assert.equal(await page.evaluate(() => window.sessionStorage.getItem('asap.staff.unconfirmedCopyCreation')), null);
     await page.locator('#additional-copy-create-dialog').waitFor({ state: 'hidden' });
-    heldB = await holdCurrentB('title_request', args.staleTitleBId);
-    await releaseMutationWithBPending(delayedMutation, heldB);
     const createdResponse = await context.request.get(
       `${args.baseOrigin}/api/asap/staff/additional-copies/${createdId}`
     );
     assert.equal(createdResponse.status(), 200, await createdResponse.text());
+
+    await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
+    await page.locator('#additional-copy-create-dialog[open]').waitFor();
+    const uncertainPreview = await context.request.get(
+      `${args.baseOrigin}/api/asap/staff/title-requests/${args.staleCreateSourceId}/additional-copy`);
+    assert.equal(uncertainPreview.status(), 200, await uncertainPreview.text());
+    const uncertainSourceVersion = (await uncertainPreview.json()).version;
+    let releaseOldCopyList;
+    let oldCopyListReached;
+    const oldCopyListAccepted = new Promise(resolve => { oldCopyListReached = resolve; });
+    const oldCopyList = async route => {
+      const held = new Promise(resolve => { releaseOldCopyList = resolve; });
+      oldCopyListReached();
+      await held;
+      try {
+        await route.fulfill({ status: 200, contentType: 'application/json',
+          body: JSON.stringify({ scope: 'all', status: 'open', items: [], availableLibraries: [] }) });
+      } catch {
+        // The mutation's uncertainty fence aborts this pre-mutation list request.
+      }
+    };
+    await page.route(/\/api\/asap\/staff\/additional-copies\?/, oldCopyList);
+    const oldListStarted = page.waitForRequest(candidate =>
+      candidate.method() === 'GET' && /\/api\/asap\/staff\/additional-copies\?/.test(candidate.url()));
+    await page.evaluate(() => document.querySelector('#refresh-additional-copies').click());
+    await oldListStarted;
+    await oldCopyListAccepted;
+    const uncertainCreatePath = `**/api/asap/staff/title-requests/${args.staleCreateSourceId}/additional-copy`;
+    const uncertainCreate = route => route.fulfill({ status: 200, contentType: 'application/json',
+      body: JSON.stringify({ committed: true, additionalCopyRequestId: '1', finalStatus: 'open' }) });
+    await page.route(uncertainCreatePath, uncertainCreate);
+    await page.getByRole('button', { name: 'Create task' }).click();
+    await page.locator('#app-status').filter({ hasText: /Additional-copy creation could not be confirmed/ }).waitFor();
+    await page.unroute(uncertainCreatePath, uncertainCreate);
+    releaseOldCopyList();
+    await page.unroute(/\/api\/asap\/staff\/additional-copies\?/, oldCopyList);
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
+    assert.equal(await page.locator('#additional-copy-create-dialog').isVisible(), false,
+      'an uncertain create cannot be retried from a fresh dialog before task-list refresh');
+    await page.locator('#app-status').filter({ hasText: /Refresh the open additional-copy task list/ }).waitFor();
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
+    assert.equal(await page.locator('#additional-copy-create-dialog').isVisible(), false,
+      'an uncertain create remains blocked after a full page reload');
+    await page.evaluate(() => document.querySelector('[data-copy-status="closed"]').click());
+    await page.locator('#close-request').click();
+    await page.locator('.view-tab[data-view="additional-copies"]').click();
+    await page.locator('#refresh-additional-copies').click();
+    await page.locator('.view-tab[data-view="queue"]').click();
+    await page.locator('[data-status="hold_placed"]').click();
+    await page.getByRole('button', { name: `Open request ${args.staleCreateSourceId}` }).click();
+    await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
+    await page.locator('#app-status').filter({ hasText: /Refresh the open additional-copy task list/ }).waitFor();
+    assert.equal(await page.locator('#additional-copy-create-dialog').isVisible(), false,
+      'the closed-task list cannot resolve an uncertain open-task creation');
+    await page.locator('#close-request').click();
+    await page.locator('.view-tab[data-view="additional-copies"]').click();
+    await page.locator('[data-copy-status="open"]').click();
+    await page.locator('#refresh-additional-copies').click();
+    await page.locator('#additional-copy-create-review').waitFor();
+    await page.locator('#additional-copy-create-review-summary').filter({ hasText: /Creation for BIB .* could not be confirmed/ }).waitFor();
+    await page.locator('.view-tab[data-view="queue"]').click();
+    await page.locator('[data-status="hold_placed"]').click();
+    await page.getByRole('button', { name: `Open request ${args.staleCreateSourceId}` }).click();
+    await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
+    assert.equal(await page.locator('#additional-copy-create-dialog').isVisible(), false,
+      'a refreshed open list still requires the staff user to review matching tasks');
+    await page.locator('#close-request').click();
+    await page.locator('.view-tab[data-view="additional-copies"]').click();
+    await page.getByRole('button', { name: 'I reviewed these tasks' }).click();
+    assert.equal(await page.locator('#additional-copy-create-review').isVisible(), false);
+    assert.equal(await page.locator('#refresh-additional-copies').evaluate(node => document.activeElement === node), true,
+      'focus returns to the task-list refresh control after review acknowledgment');
+    const earlierCreation = await mutate(context, args.baseOrigin,
+      `/api/asap/staff/title-requests/${args.staleCreateSourceId}/additional-copy`,
+      { version: uncertainSourceVersion, emailPurchaseReminder: false });
+    assert.equal(earlierCreation.status(), 200, await earlierCreation.text());
+    const earlierTaskId = (await earlierCreation.json()).additionalCopyRequest.id;
+    await page.locator('.view-tab[data-view="queue"]').click();
+    await page.locator('[data-status="hold_placed"]').click();
+    await page.getByRole('button', { name: `Open request ${args.staleCreateSourceId}` }).click();
+    await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
+    await page.locator('#additional-copy-create-dialog[open]').waitFor();
+    const [fencedRetry] = await Promise.all([
+      page.waitForResponse(candidate => candidate.request().method() === 'POST' &&
+        candidate.url().endsWith(`/api/asap/staff/title-requests/${args.staleCreateSourceId}/additional-copy`)),
+      page.getByRole('button', { name: 'Create task' }).click()
+    ]);
+    assert.equal(fencedRetry.status(), 409, await fencedRetry.text());
+    assert.equal(fencedRetry.request().postDataJSON().version, uncertainSourceVersion,
+      'the retry must submit the original source version, even after a newer preview');
+    await page.locator('#additional-copy-create-dialog').waitFor({ state: 'hidden' });
+    assert.equal(await page.evaluate(() => window.sessionStorage.getItem('asap.staff.unconfirmedCopyCreation')), null,
+      'the original-version retry fence clears after a definitive stale-version result');
+    const refreshedTasks = await context.request.get(`${args.baseOrigin}/api/asap/staff/additional-copies?scope=all&status=open`);
+    assert.equal(refreshedTasks.status(), 200, await refreshedTasks.text());
+    const matchingTasks = (await refreshedTasks.json()).items.filter(item =>
+      item.sourceTitleRequest === String(args.staleCreateSourceId));
+    assert.deepEqual(matchingTasks.map(item => item.id).sort(), [createdId, earlierTaskId].sort(),
+      'a retry after the earlier creation commits cannot create a second task');
 
     await page.goto(copyPage(createdId), { waitUntil: 'networkidle' });
     delayedMutation = await delayNextServerResponse(
@@ -1106,8 +1274,9 @@ async function runStaleMutationCompletions(browser, args, report) {
     await page.getByRole('button', { name: 'Unclaim' }).click();
     assert.equal((await delayedMutation.accepted).status, 200);
     await page.keyboard.press('Escape');
-    await page.locator('#request-dialog').waitFor({ state: 'hidden' });
-    await page.getByRole('button', { name: 'Sign out' }).click();
+    assert.equal(await page.locator('#request-dialog').isVisible(), true,
+      'Escape must retain the in-flight unclaim until its result is known');
+    await page.getByRole('button', { name: 'Sign out' }).evaluate(node => node.click());
     await page.locator('#signed-out').waitFor({ state: 'visible' });
     delayedMutation.release();
     await delayedMutation.completed;
@@ -1158,10 +1327,11 @@ async function runStaleOperationErrorCompletion(browser, args, report) {
     await responses.firstRequested;
 
     await page.keyboard.press('Escape');
-    await page.locator('#request-dialog').waitFor({ state: 'hidden' });
-    await page.locator('[data-status="suggestion"]').click();
+    assert.equal(await page.locator('#request-dialog').isVisible(), true,
+      'Escape must retain an in-flight hold resolution until its outcome is known');
+    await page.locator('[data-status="suggestion"]').evaluate(node => node.click());
     await page.locator('#claim-filter').selectOption('all');
-    await page.getByRole('button', { name: `Open request ${args.staleTitleBId}` }).click();
+    await page.getByRole('button', { name: `Open request ${args.staleTitleBId}` }).evaluate(node => node.click());
     await page.locator('#request-dialog-kicker').filter({ hasText: `Request ${args.staleTitleBId}` }).waitFor();
     await page.keyboard.press('Escape');
     await page.locator('#request-dialog').waitFor({ state: 'hidden' });
@@ -1174,11 +1344,11 @@ async function runStaleOperationErrorCompletion(browser, args, report) {
     page.once('dialog', dialog => dialog.accept());
     await page.getByRole('button', { name: 'Resolve operation' }).click();
     await responses.secondCompleted;
-    await page.getByText('Current hold recovery failed.', { exact: true }).waitFor();
+    await page.locator('#app-status').filter({ hasText: 'The hold recovery outcome could not be confirmed.' }).waitFor();
     const current = {
       title: await page.locator('#request-dialog-title').textContent(),
       kicker: await page.locator('#request-dialog-kicker').textContent(),
-      body: await page.locator('#request-dialog-body').textContent(),
+      recovery: await page.locator('#request-dialog .hold-operation').textContent(),
       status: await page.locator('#app-status').textContent()
     };
 
@@ -1188,9 +1358,9 @@ async function runStaleOperationErrorCompletion(browser, args, report) {
     assert.equal(await page.locator('#request-dialog').getAttribute('open'), '');
     assert.equal(await page.locator('#request-dialog-title').textContent(), current.title);
     assert.equal(await page.locator('#request-dialog-kicker').textContent(), current.kicker);
-    assert.equal(await page.locator('#request-dialog-body').textContent(), current.body);
+    assert.equal(await page.locator('#request-dialog .hold-operation').textContent(), current.recovery);
     assert.equal(await page.locator('#app-status').textContent(), current.status);
-    assert.equal(current.status, 'Current hold recovery failed.');
+    assert.equal(current.status, 'The hold recovery outcome could not be confirmed. Reload before trying again.');
     assert.equal(await page.getByRole('button', { name: 'Resolve operation' }).isEnabled(), true);
     report.staleMutationCompletions.holdOperationError = true;
     assert.deepEqual(errors, [], `Stale hold-recovery error flow raised a browser error: ${errors.join('; ')}`);
@@ -1249,6 +1419,8 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     assert.equal(createResponse.status(), 200, await createResponse.text());
     const createdPayload = await createResponse.json();
     const created = createdPayload.additionalCopyRequest;
+    assert.equal(createdPayload.committed, true);
+    assert.equal(createdPayload.finalStatus, 'open');
     assert.equal(created.claimedByStaffUserId, args.superIdentity.staffId);
     assert.equal(created.libraryOrgName, 'Browser Source Library Snapshot');
     assert.equal(created.claimType, 'legacy');
@@ -1259,6 +1431,15 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     assert.match(created.updated, /Z$/);
     assert.equal(createdPayload.purchaseReminderEmail.requested, true);
     assert.equal(createdPayload.purchaseReminderEmail.queued, true);
+    const { context: ordinaryStaffContext } = await createContext(
+      browser, { width: 1280, height: 900 }, args.baseOrigin, args.staffIdentity);
+    try {
+      const forgedClear = await mutate(ordinaryStaffContext, args.baseOrigin,
+        `/api/asap/staff/additional-copies/${created.id}/clear-claim`, { version: created.version });
+      assert.equal(forgedClear.status(), 403, await forgedClear.text());
+    } finally {
+      await ordinaryStaffContext.close();
+    }
     await page.locator('#app-status').filter({ hasText: `Additional-copy task ${created.id} created.` }).waitFor();
 
     await page.getByRole('button', { name: 'Close request details' }).click();
@@ -1284,6 +1465,17 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     page.once('dialog', dialog => dialog.accept());
     await page.getByRole('button', { name: 'Close task' }).click();
     await page.getByRole('button', { name: 'Reopen task' }).waitFor();
+    page.once('dialog', dialog => {
+      assert.match(dialog.message(), /return to open work/);
+      return dialog.dismiss();
+    });
+    await page.getByRole('button', { name: 'Reopen task' }).click();
+    assert.equal(await page.getByRole('button', { name: 'Reopen task' }).isVisible(), true);
+    assert.equal(await page.getByRole('button', { name: 'Reopen task' }).evaluate(node => document.activeElement === node), true);
+    page.once('dialog', dialog => {
+      assert.match(dialog.message(), /return to open work/);
+      return dialog.accept();
+    });
     await page.getByRole('button', { name: 'Reopen task' }).click();
     await page.getByRole('button', { name: 'Unclaim' }).waitFor();
     const retainedResponse = await context.request.get(
@@ -1302,6 +1494,27 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
       `${args.baseOrigin}/api/asap/staff/additional-copies/${created.id}`
     );
     const unclaimed = await unclaimedResponse.json();
+    const claimTransportFailure = route => route.abort('failed');
+    await page.route(`**/api/asap/staff/additional-copies/${created.id}/claim`, claimTransportFailure);
+    await page.getByRole('button', { name: 'Claim', exact: true }).click();
+    await page.locator('#app-status').filter({ hasText: /additional-copy action outcome could not be confirmed/i }).waitFor();
+    await page.unroute(`**/api/asap/staff/additional-copies/${created.id}/claim`, claimTransportFailure);
+    const emptyClaimReply = route => route.fulfill({ status: 200, contentType: 'application/json',
+      body: JSON.stringify({ committed: true, finalStatus: 'open' }) });
+    await page.route(`**/api/asap/staff/additional-copies/${created.id}/claim`, emptyClaimReply);
+    await page.getByRole('button', { name: 'Claim', exact: true }).click();
+    await page.locator('#app-status').filter({ hasText: /additional-copy action outcome could not be confirmed/i }).waitFor();
+    await page.unroute(`**/api/asap/staff/additional-copies/${created.id}/claim`, emptyClaimReply);
+    const uncertainClaimReply = route => route.fulfill({ status: 503, contentType: 'application/json',
+      body: JSON.stringify({ code: 'additional_copy_outcome_unconfirmed',
+        message: 'The additional-copy outcome could not be confirmed. Reload before trying again.' }) });
+    await page.route(`**/api/asap/staff/additional-copies/${created.id}/claim`, uncertainClaimReply);
+    await page.getByRole('button', { name: 'Claim', exact: true }).click();
+    await page.locator('#app-status').filter({ hasText: /additional-copy action outcome could not be confirmed/i }).waitFor();
+    await page.unroute(`**/api/asap/staff/additional-copies/${created.id}/claim`, uncertainClaimReply);
+    const afterTransportFailure = await context.request.get(
+      `${args.baseOrigin}/api/asap/staff/additional-copies/${created.id}`);
+    assert.equal((await afterTransportFailure.json()).version, unclaimed.version);
     const externalClaim = await mutate(
       context,
       args.baseOrigin,
@@ -1317,8 +1530,48 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     await page.getByRole('button', { name: 'Assign', exact: true }).click();
     const assignment = page.getByLabel('Assign additional-copy task');
     await assignment.selectOption({ label: 'Browser Staff' });
+    const assignmentPath = `**/api/asap/staff/additional-copies/${created.id}/assign`;
+    const partialAssignment = async route => {
+      const response = await route.fetch();
+      const committed = await response.json();
+      assert.equal(committed.committed, true);
+      await route.fulfill({ response, json: { ...committed,
+        notificationStatus: 'dispatch_failed', notificationReason: 'queue_unavailable' } });
+    };
+    await page.route(assignmentPath, partialAssignment);
     await assignment.locator('xpath=ancestor::form').getByRole('button', { name: 'Assign', exact: true }).click();
     await page.getByText('Claimed by Browser Staff', { exact: true }).waitFor();
+    await page.locator('#app-status').filter({ hasText: /Assignment notification could not be queued/ }).waitFor();
+    assert.match(await page.locator('#app-status').getAttribute('class'), /warning/);
+    await page.unroute(assignmentPath, partialAssignment);
+    const assignedForClear = await context.request.get(
+      `${args.baseOrigin}/api/asap/staff/additional-copies/${created.id}`);
+    const assignedClaim = await assignedForClear.json();
+    const forgedCopyUnclaim = await mutate(context, args.baseOrigin,
+      `/api/asap/staff/additional-copies/${created.id}/unclaim`,
+      { version: assignedClaim.version });
+    assert.equal(forgedCopyUnclaim.status(), 403, await forgedCopyUnclaim.text());
+    const staleClear = await mutate(context, args.baseOrigin,
+      `/api/asap/staff/additional-copies/${created.id}/clear-claim`, { version: created.version });
+    assert.equal(staleClear.status(), 409, await staleClear.text());
+    const clearClaim = page.getByRole('button', { name: 'Clear claim' });
+    await clearClaim.waitFor();
+    page.once('dialog', dialog => {
+      assert.match(dialog.message(), /remain open and unclaimed/);
+      return dialog.dismiss();
+    });
+    await clearClaim.click();
+    assert.equal(await clearClaim.evaluate(node => document.activeElement === node), true);
+    page.once('dialog', dialog => dialog.accept());
+    await clearClaim.click();
+    await page.locator('#request-dialog .detail-meta').filter({ hasText: 'Unclaimed' }).waitFor();
+    const clearedTaskResponse = await context.request.get(
+      `${args.baseOrigin}/api/asap/staff/additional-copies/${created.id}`);
+    const clearedTask = await clearedTaskResponse.json();
+    assert.match(clearedTask.notes, /cleared another staff member's claim.*Previous claimant: Browser Staff/);
+    const repeatedClear = await mutate(context, args.baseOrigin,
+      `/api/asap/staff/additional-copies/${created.id}/clear-claim`, { version: assignedClaim.version });
+    assert.equal(repeatedClear.status(), 409, await repeatedClear.text());
     page.once('dialog', dialog => dialog.accept());
     await page.getByRole('button', { name: 'Close task' }).click();
     page.once('dialog', dialog => dialog.accept());
@@ -1353,6 +1606,15 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     await page.locator('#additional-copy-claim-filter').selectOption('all');
     await page.locator('[data-copy-status="closed"]').click();
     await page.getByRole('button', { name: `Open additional-copy task ${args.invalidClosedCopyId}` }).click();
+    const reopenPath = `**/api/asap/staff/additional-copies/${args.invalidClosedCopyId}/reopen`;
+    const advancedReopenDetail = async route => {
+      const response = await route.fetch();
+      const committed = await response.json();
+      assert.equal(committed.status, 'open');
+      await route.fulfill({ response, json: { ...committed, finalStatus: 'closed' } });
+    };
+    await page.route(reopenPath, advancedReopenDetail);
+    page.once('dialog', dialog => dialog.accept());
     const [reopenResponse] = await Promise.all([
       page.waitForResponse(candidate =>
         candidate.request().method() === 'POST' &&
@@ -1364,8 +1626,56 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     assert.equal(reopened.claimClearedReason, 'claimant_inactive');
     assert.equal(reopened.claimedByStaffUserId, null);
     await page.locator('#app-status').filter({ hasText: /retained claim was cleared.*claimant inactive/i }).waitFor();
+    assert.match(await page.locator('#app-status').textContent(), /Final state: Open/);
+    await page.unroute(reopenPath, advancedReopenDetail);
     await page.getByText(/System cleared retained claim while reopening \(claimant_inactive\)/).waitFor();
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'additional-copy-cleared-reopen');
+
+    let postCommitClaimVersion;
+    await page.route(`**/api/asap/staff/additional-copies/${args.invalidClosedCopyId}/claim`, async route => {
+      const response = await route.fetch();
+      const committed = await response.json();
+      assert.equal(committed.committed, true);
+      postCommitClaimVersion = committed.version;
+      await route.fulfill({ response, json: { committed: true, request: null,
+        finalStatus: committed.finalStatus, refreshUnavailable: true } });
+    });
+    await page.route(`**/api/asap/staff/additional-copies/${args.invalidClosedCopyId}`, route =>
+      route.fulfill({ status: 401, contentType: 'application/json',
+        body: JSON.stringify({ code: 'staff_session_invalid' }) }));
+    await page.getByRole('button', { name: 'Claim', exact: true }).click();
+    await page.locator('#signed-out').waitFor({ state: 'visible' });
+    assert.match(await page.locator('#signed-out-message').textContent(),
+      /Task claimed\. Final state: Open\..*Sign in again to review the committed task/);
+    assert.ok(postCommitClaimVersion, 'The committed claim must return a version for cleanup');
+    const unclaimAfterSessionTest = await mutate(context, args.baseOrigin,
+      `/api/asap/staff/additional-copies/${args.invalidClosedCopyId}/unclaim`,
+      { version: postCommitClaimVersion });
+    assert.equal(unclaimAfterSessionTest.status(), 200, await unclaimAfterSessionTest.text());
+
+    const laterPage = await context.newPage();
+    laterPage.on('pageerror', error => errors.push(error.message));
+    await laterPage.goto(`${args.baseOrigin}/staff/?stage=additional_copies`, { waitUntil: 'networkidle' });
+    await laterPage.getByRole('button', { name: `Open additional-copy task ${args.invalidClosedCopyId}` }).click();
+    await laterPage.getByRole('button', { name: 'Claim', exact: true }).click();
+    await laterPage.getByRole('button', { name: 'Unclaim' }).waitFor();
+    await laterPage.locator('#refresh-additional-copies').waitFor({ state: 'visible' });
+    const laterClaimResponse = await context.request.get(
+      `${args.baseOrigin}/api/asap/staff/additional-copies/${args.invalidClosedCopyId}`);
+    const laterClaim = await laterClaimResponse.json();
+    await laterPage.locator('#close-request').click();
+    await laterPage.route(/\/api\/asap\/staff\/additional-copies\?/, route =>
+      route.fulfill({ status: 401, contentType: 'application/json',
+        body: JSON.stringify({ code: 'staff_session_invalid' }) }));
+    await laterPage.locator('#refresh-additional-copies').click();
+    await laterPage.locator('#signed-out').waitFor({ state: 'visible' });
+    assert.doesNotMatch(await laterPage.locator('#signed-out-message').textContent(), /Final state:/,
+      'a later unrelated sign-out must not replay the earlier committed copy result');
+    const laterUnclaim = await mutate(context, args.baseOrigin,
+      `/api/asap/staff/additional-copies/${args.invalidClosedCopyId}/unclaim`,
+      { version: laterClaim.version });
+    assert.equal(laterUnclaim.status(), 200, await laterUnclaim.text());
+    await laterPage.close();
 
     report.additionalCopy = {
       createdId: created.id,
@@ -1493,14 +1803,43 @@ async function runScopedBlocked(browser, args, axeSource, report) {
     await page.getByText('Claimed by Browser Staff', { exact: true }).waitFor();
     await page.getByRole('button', { name: 'Unclaim' }).waitFor();
     await scan(page, axeSource, args.artifactRoot, report, 'mobile', 'additional-copy-scoped-detail');
+    let releaseUnclaimList;
+    let listRequestStarted;
+    let heldUnclaimList = false;
+    const listRequestStartedPromise = new Promise(resolve => { listRequestStarted = resolve; });
+    await page.route('**/api/asap/staff/additional-copies?**', async route => {
+      if (heldUnclaimList) {
+        await route.continue();
+        return;
+      }
+      heldUnclaimList = true;
+      await new Promise(resolve => {
+        releaseUnclaimList = resolve;
+        listRequestStarted();
+      });
+      await route.continue();
+    });
     await page.getByRole('button', { name: 'Unclaim' }).click();
     await page.getByRole('button', { name: 'Claim', exact: true }).waitFor();
     await page.locator('#app-status').filter({ hasText: 'Task unclaimed.' }).waitFor();
+    let listStartTimeout;
+    try {
+      await Promise.race([
+        listRequestStartedPromise,
+        new Promise((_, reject) => {
+          listStartTimeout = setTimeout(() => reject(new Error('Additional-copy follow-up list did not start.')), 30000);
+        })
+      ]);
+    } finally {
+      clearTimeout(listStartTimeout);
+    }
     await page.keyboard.press('Escape');
     await page.locator('#request-dialog').waitFor({ state: 'hidden' });
     await page.waitForFunction(id =>
       document.activeElement?.getAttribute('aria-label') === `Open additional-copy task ${id}`,
     args.mobileCopyId);
+    releaseUnclaimList();
+    await page.waitForFunction(() => !document.getElementById('refresh-additional-copies').disabled);
     await page.getByRole('button', { name: 'Sign out' }).click();
     await page.locator('#signed-out').waitFor({ state: 'visible' });
     report.assignmentCandidates = {
@@ -1590,6 +1929,36 @@ async function runOperatorResolution(browser, args, axeSource, report) {
     await page.goto(`${args.baseOrigin}/staff/?request=${args.resolutionRequestId}`, { waitUntil: 'networkidle' });
     await page.getByText(/Operation \d+; attempt 2; epoch 3; frozen patron \*+2904; frozen BIB 92904\./).waitFor();
     await fillOperatorResolution(page, true);
+    const uncertainResolutionPath = /\/api\/asap\/staff\/hold-operations\/\d+\/resolve$/;
+    const readinessUnavailable = route => route.fulfill({ status: 503, contentType: 'application/json',
+      body: JSON.stringify({ code: 'hold_resolution_dependency_unavailable',
+        message: 'Hold resolution could not start because a dependency is unavailable. The operation was not changed.' }) });
+    await page.route(uncertainResolutionPath, readinessUnavailable);
+    page.once('dialog', dialog => dialog.accept());
+    await page.getByRole('button', { name: 'Resolve operation' }).click();
+    await page.locator('#app-status').filter({ hasText: /The operation was not changed/ }).waitFor();
+    assert.doesNotMatch(await page.locator('#app-status').textContent(), /outcome could not be confirmed/);
+    await page.unroute(uncertainResolutionPath, readinessUnavailable);
+    await fillOperatorResolution(page, true);
+    const emptyResolutionReply = route => route.fulfill({ status: 200, contentType: 'application/json',
+      body: JSON.stringify({ committed: true,
+        operationId: new URL(route.request().url()).pathname.match(/hold-operations\/(\d+)\/resolve$/)[1] }) });
+    await page.route(uncertainResolutionPath, emptyResolutionReply);
+    page.once('dialog', dialog => dialog.accept());
+    await page.getByRole('button', { name: 'Resolve operation' }).click();
+    await page.locator('#app-status').filter({ hasText: /hold recovery outcome could not be confirmed/i }).waitFor();
+    await page.unroute(uncertainResolutionPath, emptyResolutionReply);
+    await fillOperatorResolution(page, true);
+    const providerUncertain = route => route.fulfill({ status: 502, contentType: 'application/json',
+      body: JSON.stringify({ code: 'hold_provider_error',
+        message: 'The hold provider outcome could not be confirmed. Review the operation before retrying.' }) });
+    await page.route(uncertainResolutionPath, providerUncertain);
+    page.once('dialog', dialog => dialog.accept());
+    await page.getByRole('button', { name: 'Resolve operation' }).click();
+    await page.locator('#app-status').filter({ hasText: /hold recovery outcome could not be confirmed/i }).waitFor();
+    await page.getByText(/Operation \d+; attempt 2; epoch 3; frozen patron \*+2904; frozen BIB 92904\./).waitFor();
+    await page.unroute(uncertainResolutionPath, providerUncertain);
+    await fillOperatorResolution(page, true);
     page.once('dialog', dialog => dialog.accept());
     const [response] = await Promise.all([
       page.waitForResponse(candidate =>
@@ -1598,9 +1967,9 @@ async function runOperatorResolution(browser, args, axeSource, report) {
       page.getByRole('button', { name: 'Resolve operation' }).click()
     ]);
     assert.equal(response.status(), 200, await response.text());
-    await page.getByText('Hold recovery state updated.', { exact: true }).waitFor();
+    await page.locator('#app-status').filter({ hasText: /Hold operation .* resolved as succeeded/ }).waitFor();
     const statusValue = page.locator('#request-dialog .status-badge');
-    await statusValue.waitFor();
+    await statusValue.filter({ hasText: 'Hold placed' }).waitFor();
     assert.equal((await statusValue.textContent()).trim(), 'Hold placed');
     assert.equal(await page.getByRole('button', { name: 'Resolve operation' }).count(), 0);
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'operator-resolution-accepted');
@@ -1750,7 +2119,7 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
     await desktopPage.getByRole('button', { name: 'Look up patron', exact: true }).click();
     await desktopPage.getByRole('button', { name: /Alex Example/ }).waitFor();
     assert.equal(await desktopPage.getByRole('button', { name: /Avery Example/ }).count(), 1);
-    await desktopPage.getByRole('button', { name: /Alex Example/ }).click();
+    await desktopPage.getByRole('button', { name: /Avery Example/ }).click();
 
     const format = desktopPage.getByLabel('Material format', { exact: true });
     await format.waitFor();

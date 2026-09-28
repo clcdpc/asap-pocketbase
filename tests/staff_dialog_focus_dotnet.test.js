@@ -81,13 +81,13 @@ async function runJourney(scenario) {
       if (url.endsWith(`${apiPath}/91/claim`)) {
         task = { ...task, version: 'claimed-version', claimedByStaffUserId: staff.id,
           claimedByDisplayName: staff.displayName, capabilities: { canUnclaim: true } };
-        return response(task);
+        return response({ ...task, committed: true, finalStatus: task.status });
       }
       if (url.endsWith(`${apiPath}/91/unclaim`)) {
         assert.strictEqual(options.headers['X-ASAP-Antiforgery'], 'focus-af');
         task = { ...task, version: 'unclaimed-version', claimedByStaffUserId: null,
           claimedByDisplayName: null, capabilities: { canClaim: true } };
-        return response(task);
+        return response({ ...task, committed: true, finalStatus: task.status });
       }
       if (url.endsWith('/sign-out')) return response({ signedOut: true });
       throw new Error(`Unexpected request ${url}`);
@@ -114,7 +114,9 @@ async function runJourney(scenario) {
     await until(() => (replacesFocusedOpener
       ? opener() && opener() !== unclaimedOpener && claimLabel()?.textContent === staff.displayName && claimLabel().classList.contains('mine')
       : !opener()) && opener('92') && opener('92') !== unchangedTaskOpener &&
-      document.getElementById('app-status').textContent === (titleRequest ? 'Request updated.' : 'Task claimed.'), 'Claiming must update the filtered queue');
+      document.getElementById('app-status').textContent ===
+        (titleRequest ? 'Request claimed. Final state: Suggestion.' : 'Task claimed. Final state: Open.'),
+      'Claiming must update the filtered queue');
     await afterFocusFrame(dom.window);
 
     // Use Grid.js's asynchronous data source so its genuine render completes after dialog close.
@@ -135,7 +137,9 @@ async function runJourney(scenario) {
     };
     [...dialog.querySelectorAll('button')].find(button => button.textContent === 'Unclaim').click();
     await until(() => renderStarted, 'The unclaim must start the real asynchronous Grid.js data source');
-    await until(() => document.getElementById('app-status').textContent === (titleRequest ? 'Request updated.' : 'Task unclaimed.'), 'The unclaim and queue refresh must finish');
+    await until(() => document.getElementById('app-status').textContent ===
+      (titleRequest ? 'Your claim was released. Final state: Suggestion.' : 'Task unclaimed. Final state: Open.'),
+    'The unclaim and queue refresh must finish');
     const previousOpener = opener();
     if (replacesFocusedOpener) assert.ok(previousOpener, 'The old row remains until Grid.js completes its data pipeline');
     else assert.strictEqual(previousOpener, null, 'The refreshed grid has not rendered the replacement opener');

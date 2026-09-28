@@ -936,22 +936,29 @@ public sealed class WorkflowProcessingService(
             }
             else if (settings.AutoPromote == true && !string.IsNullOrWhiteSpace(request.BibId))
             {
-                request.Status = request.AutoHold ? "pending_hold" : "closed";
-                request.CloseReason = request.AutoHold ? null : "purchased_no_hold";
-                request.LastPromoterCheckUtc = UtcNow();
-                request.UpdatedUtc = UtcNow();
-                context.TitleRequestEvents.Add(new TitleRequestEvent
+                if (request.AutoHold && !request.BibIdStaffVerified)
                 {
-                    TitleRequestId = request.Id,
-                    EventType = "promoted",
-                    Status = request.Status,
-                    CloseReason = request.CloseReason,
-                    ActorType = "system",
-                    Message = request.AutoHold ? "Purchase promoted to hold placement." : "Purchase completed without an automatic hold.",
-                    CreatedUtc = UtcNow()
-                });
-                code = "changed";
-                changed = true;
+                    code = "bib_unverified";
+                }
+                else
+                {
+                    request.Status = request.AutoHold ? "pending_hold" : "closed";
+                    request.CloseReason = request.AutoHold ? null : "purchased_no_hold";
+                    request.LastPromoterCheckUtc = UtcNow();
+                    request.UpdatedUtc = UtcNow();
+                    context.TitleRequestEvents.Add(new TitleRequestEvent
+                    {
+                        TitleRequestId = request.Id,
+                        EventType = "promoted",
+                        Status = request.Status,
+                        CloseReason = request.CloseReason,
+                        ActorType = "system",
+                        Message = request.AutoHold ? "Purchase promoted to hold placement." : "Purchase completed without an automatic hold.",
+                        CreatedUtc = UtcNow()
+                    });
+                    code = "changed";
+                    changed = true;
+                }
             }
         }
 

@@ -498,6 +498,7 @@ public sealed partial class PatronJourneyTests
             lastCheckedUtc: timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(-10),
             identifierTags: true,
             libraryOrganizationId: scope);
+        long? unverifiedId = null;
 
         try
         {
@@ -533,10 +534,32 @@ public sealed partial class PatronJourneyTests
             await using var verify = await contextFactory.CreateDbContextAsync();
             Assert.IsFalse(await verify.TitleRequestEvents.AnyAsync(item =>
                 item.TitleRequestId == seeded.Id && item.EventType == "promoted"));
+
+            var unverified = await SeedBibOwnershipRequestAsync(
+                "purchase-unverified-bib",
+                "456",
+                staffVerified: false,
+                isbnCheckStatus: "found",
+                status: "outstanding_purchase",
+                autoHold: true,
+                libraryOrganizationId: scope);
+            unverifiedId = unverified.Id;
+            await PrepareSingleItemCycleAsync(QueueNames.PurchasePromotion, scope, unverified.Id);
+            var unverifiedCycle = await workflow.ProcessWorkflowAsync(scope, CancellationToken.None);
+            Assert.AreEqual("completed", unverifiedCycle.Code);
+            var afterUnverifiedCycle = await ReadBibOwnershipRequestAsync(unverified.Id);
+            Assert.AreEqual("outstanding_purchase", afterUnverifiedCycle.Status,
+                "Automatic promotion cannot enter Pending hold with an unverified effective BIB.");
+            Assert.AreEqual("456", afterUnverifiedCycle.BibId);
+            Assert.IsFalse(afterUnverifiedCycle.BibIdStaffVerified);
+            await using var verifyUnverified = await contextFactory.CreateDbContextAsync();
+            Assert.IsFalse(await verifyUnverified.TitleRequestEvents.AnyAsync(item =>
+                item.TitleRequestId == unverified.Id && item.EventType == "promoted"));
         }
         finally
         {
-            await DeleteBibOwnershipRequestsAsync([seeded.Id]);
+            await DeleteBibOwnershipRequestsAsync(unverifiedId.HasValue
+                ? [seeded.Id, unverifiedId.Value] : [seeded.Id]);
             await using var restore = await contextFactory.CreateDbContextAsync();
             var settings = await restore.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == scope);
             if (!settingsExisted)
