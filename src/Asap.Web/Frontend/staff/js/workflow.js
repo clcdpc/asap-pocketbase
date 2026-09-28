@@ -336,15 +336,20 @@ export function createWorkflowApp() {
     }
   });
 
+  function emailReadinessScopeKey() {
+    const selectedScope = state.activeView === 'settings'
+      ? settingsController.currentScope()
+      : state.activeView === 'operations' ? state.operationsScope : state.scope;
+    return state.staff?.role === 'super_admin' && /^\d+$/.test(String(selectedScope))
+      ? String(selectedScope) : 'default';
+  }
+
   async function refreshEmailReadiness() {
     if (!state.staff) return;
     const owner = state.staff;
     const load = latestLoads.begin('email-readiness');
-    const selectedScope = state.activeView === 'settings'
-      ? settingsController.currentScope()
-      : state.activeView === 'operations' ? state.operationsScope : state.scope;
-    const query = state.staff.role === 'super_admin' && /^\d+$/.test(String(selectedScope))
-      ? `?organizationId=${encodeURIComponent(selectedScope)}` : '';
+    const scopeKey = emailReadinessScopeKey();
+    const query = scopeKey === 'default' ? '' : `?organizationId=${encodeURIComponent(scopeKey)}`;
     try {
       const result = await authorizedJson(`/api/asap/staff/email-readiness${query}`, { signal: load.signal });
       if (!load.isCurrent() || state.staff !== owner) return;
@@ -3808,8 +3813,9 @@ export function createWorkflowApp() {
     if (previousView === 'settings' && name !== 'settings') settingsController.suspend();
     if (previousView !== name && name === 'queue') resetQueueFilters();
     if (previousView !== name && name === 'additional-copies') resetAdditionalCopyFilters();
+    const previousEmailScope = emailReadinessScopeKey();
     state.activeView = name;
-    void refreshEmailReadiness();
+    if (emailReadinessScopeKey() !== previousEmailScope) void refreshEmailReadiness();
     dom.queueView.hidden = name !== 'queue';
     dom.additionalCopyView.hidden = name !== 'additional-copies';
     dom.analyticsView.hidden = name !== 'analytics';

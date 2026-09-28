@@ -109,6 +109,12 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
         if (pending) return pending.promise;
         return response(200, emailPayload);
       }
+      if (url.includes('/api/asap/staff/email-readiness')) {
+        return response(200, { state: 'non_delivery' });
+      }
+      if (url.includes('/api/asap/staff/additional-copies?')) {
+        return response(200, { scope: 'all', status: 'open', items: [], availableLibraries: organizations });
+      }
       if (options.method === 'POST') return response(202, { code: 'queued', manualRunId: url.includes('force=true') ? 'forced-run-1' : undefined });
       throw new Error(`Unexpected request ${url}`);
     };
@@ -164,6 +170,13 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
     document.querySelector('[data-view="queue"]').click();
     await settle();
     assert.equal(scope.value, '2', 'queue refresh must not overwrite Operations scope');
+    const readinessCount = requests.filter(item => item.url.includes('/email-readiness')).length;
+    document.querySelector('[data-view="additional-copies"]').click();
+    await settle();
+    document.querySelector('[data-view="queue"]').click();
+    await settle();
+    assert.equal(requests.filter(item => item.url.includes('/email-readiness')).length, readinessCount,
+      'switching between views with the same email scope must not start another readiness request');
 
     document.querySelector('[data-view="operations"]').click();
     await settle();
