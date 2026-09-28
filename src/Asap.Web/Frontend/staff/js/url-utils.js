@@ -43,6 +43,17 @@ export function requestedRequestIdFromUrl(href) {
   return String(value || '').trim();
 }
 
+export function requestedSettingsPanelFromUrl(href) {
+  const hash = readUrl(href).hash;
+  const panel = hash.startsWith('#settings-') ? hash.slice('#settings-'.length) : '';
+  return ['start', 'polaris', 'smtp', 'staff', 'workflow', 'patron', 'templates'].includes(panel)
+    ? panel : '';
+}
+
+export function requestedSettingsScopeFromUrl(href) {
+  return readUrl(href).searchParams.get('settingsScope') || '';
+}
+
 export function replaceRequestUrl(href, id, additionalCopy = false) {
   const url = readUrl(href);
   const normalizedId = id === null || id === undefined ? '' : String(id).trim();
@@ -57,7 +68,51 @@ export function replaceStageUrl(href, stage) {
   url.searchParams.delete('request');
   if (stage) url.searchParams.set('stage', String(stage));
   else url.searchParams.delete('stage');
+  if (stage !== 'settings') {
+    url.searchParams.delete('settingsScope');
+    if (url.hash.startsWith('#settings-')) url.hash = '';
+  }
   return historyPath(url);
+}
+
+export function requestUrl(href, id, stage) {
+  const url = readUrl(href);
+  url.searchParams.set('request', String(id));
+  url.searchParams.set('stage', stage);
+  url.hash = '';
+  return historyPath(url);
+}
+
+export function pushRequestParameter(id, stage) {
+  window.history.pushState(null, '', requestUrl(window.location.href, id, stage));
+}
+
+export function pushStageParameter(stage) {
+  window.history.pushState(null, '', replaceStageUrl(window.location.href, stage));
+}
+
+export function pushSettingsPanelParameter(panel) {
+  const url = readUrl();
+  url.searchParams.delete('request');
+  url.searchParams.set('stage', 'settings');
+  url.hash = `settings-${panel}`;
+  window.history.pushState(null, '', historyPath(url));
+}
+
+export function pushSettingsScopeParameter(scope) {
+  const url = readUrl();
+  url.searchParams.set('stage', 'settings');
+  url.searchParams.set('settingsScope', String(scope));
+  window.history.pushState(null, '', historyPath(url));
+}
+
+export function pushSettingsRouteParameter(scope, panel) {
+  const url = readUrl();
+  url.searchParams.delete('request');
+  url.searchParams.set('stage', 'settings');
+  url.searchParams.set('settingsScope', String(scope));
+  url.hash = `settings-${panel}`;
+  window.history.pushState(null, '', historyPath(url));
 }
 
 export function replaceRequestParameter(id, additionalCopy = false) {

@@ -248,7 +248,9 @@ export function createSettingsController({
   root,
   tab,
   announce,
-  getStaff
+  getStaff,
+  onPanelChange,
+  onScopeChange
 }) {
   const dom = {
     contextSummary: root.querySelector('#settings-context-summary'),
@@ -303,6 +305,7 @@ export function createSettingsController({
     baselineTemplates: new Map(),
     baselineOverrides: new Map(),
     pendingDeletedFormats: [],
+    visible: false,
     bound: false
   };
 
@@ -939,7 +942,7 @@ export function createSettingsController({
             return null;
           })
       ]);
-      if (!loadState.isCurrent() || !isSettingsContextCurrent(context)) return;
+      if (!loadState.isCurrent() || !isSettingsContextCurrent(context) || !state.visible) return;
       const data = settingsResponse?.data && settingsResponse?.version === undefined
         ? settingsResponse.data
         : settingsResponse;
@@ -948,11 +951,14 @@ export function createSettingsController({
       populateScopeOptions();
       const patronCodeChoices = patronCodesResponse?.data ?? patronCodesResponse;
       data.patronCodeChoices = Array.isArray(patronCodeChoices) ? patronCodeChoices : [];
+      const wasHidden = dom.form.hidden;
       populate(data || {});
+      dom.form.hidden = false;
+      if (wasHidden) dom.panels.find(item => item.dataset.settingsPanelContent === state.activePanel)?.focus({ preventScroll: true });
       if (state.activePanel === 'staff') void loadStaffAccess({ silent: true });
       if (!options.silent && loadState.isCurrent() && isSettingsContextCurrent(context)) notify('Settings loaded.');
     } catch (error) {
-      if (loadState.isCurrent() && isSettingsContextCurrent(context) && !isAbortError(error) && error.status !== 401) {
+      if (loadState.isCurrent() && isSettingsContextCurrent(context) && state.visible && !isAbortError(error) && error.status !== 401) {
         notify(error.message || 'Settings could not be loaded.', 'error');
       }
     } finally {
@@ -1472,6 +1478,9 @@ export function createSettingsController({
     }
     cancelSettingsOperations();
     state.scope = next;
+    state.data = null;
+    dom.form.hidden = true;
+    onScopeChange?.(next);
     state.staffUsers = [];
     state.staffAudit = [];
     state.staffAccessLoaded = false;
@@ -1481,17 +1490,22 @@ export function createSettingsController({
     await load();
   }
 
-  function activatePanel(name) {
+  function activatePanel(name, updateUrl = false) {
+    if (!dom.nav.some(button => button.dataset.settingsPanel === name) ||
+        !state.staff || state.staff.role === 'staff') return false;
     state.activePanel = name;
     for (const button of dom.nav) {
       const active = button.dataset.settingsPanel === name;
       button.setAttribute('aria-selected', String(active));
       button.classList.toggle('active', active);
+      button.tabIndex = active ? 0 : -1;
     }
     for (const panel of dom.panels) panel.hidden = panel.dataset.settingsPanelContent !== name;
     const panel = dom.panels.find(item => item.dataset.settingsPanelContent === name);
     panel?.focus({ preventScroll: true });
     if (name === 'staff') void loadStaffAccess();
+    if (updateUrl) onPanelChange?.(name);
+    return true;
   }
 
   function populateScopeOptions() {
@@ -1510,6 +1524,10 @@ export function createSettingsController({
       for (const organization of state.organizations.filter(item => Number(item.id) > 1)) {
         dom.scope.append(node('option', { value: String(organization.id), text: organization.name }));
       }
+      if (state.staff?.role === 'super_admin' && /^\d+$/.test(String(selected)) &&
+          ![...dom.scope.options].some(option => option.value === String(selected))) {
+        dom.scope.append(node('option', { value: String(selected), text: `Library ${selected}` }));
+      }
     }
     dom.scope.value = [...dom.scope.options].some(option => option.value === selected)
       ? selected
@@ -1519,7 +1537,11 @@ export function createSettingsController({
   }
 
   function setStaff(staff) {
-    if (staffContextKey(state.staff) !== staffContextKey(staff)) cancelSettingsOperations();
+    if (staffContextKey(state.staff) !== staffContextKey(staff)) {
+      cancelSettingsOperations();
+      state.data = null;
+      dom.form.hidden = true;
+    }
     state.staff = staff;
     tab.hidden = !staff || staff.role === 'staff';
     if (staff?.role === 'super_admin') {
@@ -1539,6 +1561,9 @@ export function createSettingsController({
 
   function signedOut() {
     cancelSettingsOperations();
+    state.visible = false;
+    root.hidden = true;
+    dom.form.hidden = true;
     state.staff = null;
     state.data = null;
     state.organizations = [];
@@ -1560,13 +1585,18 @@ export function createSettingsController({
     dom.form.addEventListener('change', updateDirtyState);
     dom.scope.addEventListener('change', changeScope);
     for (const button of dom.nav) {
-      button.addEventListener('click', () => activatePanel(button.dataset.settingsPanel));
+      button.tabIndex = button.dataset.settingsPanel === state.activePanel ? 0 : -1;
+      button.addEventListener('click', () => activatePanel(button.dataset.settingsPanel, true));
       button.addEventListener('keydown', event => {
-        if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+        if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
         event.preventDefault();
         const index = dom.nav.indexOf(button);
         const offset = event.key === 'ArrowUp' || event.key === 'ArrowLeft' ? -1 : 1;
-        dom.nav[(index + offset + dom.nav.length) % dom.nav.length].focus();
+        const target = event.key === 'Home' ? dom.nav[0]
+          : event.key === 'End' ? dom.nav.at(-1)
+          : dom.nav[(index + offset + dom.nav.length) % dom.nav.length];
+        for (const item of dom.nav) item.tabIndex = item === target ? 0 : -1;
+        target.focus();
       });
     }
     dom.refresh.addEventListener('click', async () => {
@@ -1617,11 +1647,27 @@ export function createSettingsController({
     });
   }
 
-  async function activate() {
+  async function activate(panel = state.activePanel) {
     if (!state.staff || state.staff.role === 'staff') return;
+    state.visible = true;
+    activatePanel(panel);
     populateScopeOptions();
     if (!state.data || String(state.data.orgId) !== String(state.scope)) await load();
     else configureScopedFields();
+  }
+
+  function suspend() {
+    state.visible = false;
+    latestLoads.begin('administration-settings').abort();
+    latestLoads.begin('administration-staff-access').abort();
+  }
+
+  function setScopeFromUrl(scope) {
+    if (state.scope !== scope) {
+      state.data = null;
+      dom.form.hidden = true;
+    }
+    state.scope = scope;
   }
 
   return {
@@ -1629,7 +1675,12 @@ export function createSettingsController({
     setStaff,
     signedOut,
     activate,
+    activatePanel,
+    suspend,
+    setScopeFromUrl,
     load,
-    isDirty
+    isDirty,
+    currentScope: () => state.scope,
+    currentPanel: () => state.activePanel
   };
 }

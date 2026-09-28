@@ -460,10 +460,11 @@ public static class TitleRequestEndpoints
     private static async Task<IResult> GetAsync(
         HttpContext context,
         string id,
+        string? scope,
         TitleRequestViewService views,
         CancellationToken cancellationToken)
     {
-        var result = await views.GetAsync(Current(context), id, cancellationToken);
+        var result = await views.GetAsync(Current(context), id, cancellationToken, scope);
         return result is null ? Results.NotFound() : Results.Json(result);
     }
 

@@ -128,7 +128,7 @@ async function runJourney(scenario) {
       assert.strictEqual(this.config.container.id, gridId, 'Only the owning grid unclaim render may be held');
       assert.ok(Array.isArray(configuration.data), 'The workflow must supply an array to the held update');
       assert.deepStrictEqual(configuration.data.map(row =>
-        [row[titleRequest ? 8 : 6], row[titleRequest ? 6 : 4]]),
+        [row[titleRequest ? 11 : 10], row[titleRequest ? 9 : 6]]),
       [['91', 'Unclaimed'], ['92', 'Unclaimed']],
         'The held update must be the completed unclaim refresh, not an earlier filter or claim render');
       return updateConfig.call(this, { ...configuration, data: async () => {
@@ -173,8 +173,14 @@ async function runJourney(scenario) {
       newerFocus = document.activeElement;
     }
     renderReleased.resolve();
-    await until(() => document.querySelector(`#${gridId} tbody`) &&
-      (scenario === 'library-navigation' || (opener() && opener() !== previousOpener)), 'The genuine asynchronous grid render must finish');
+    if (scenario === 'sign-out') {
+      await settleGridWork(dom.window);
+      assert.equal(document.querySelector(`#${gridId} tbody`), null,
+        'A late protected grid render must stay detached after sign-out');
+    } else {
+      await until(() => document.querySelector(`#${gridId} tbody`) &&
+        (scenario === 'library-navigation' || (opener() && opener() !== previousOpener)), 'The genuine asynchronous grid render must finish');
+    }
     await afterFocusFrame(dom.window);
     if (newerFocus) {
       assert.strictEqual(document.activeElement, newerFocus, `${scenario}: the old grid must not steal newer focus`);

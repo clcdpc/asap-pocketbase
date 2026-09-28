@@ -56,6 +56,12 @@ button, a, input, select, textarea { outline-offset: 3px; }
 .brand small { margin-top: 3px; color: #e7f4fa; font-size: .76rem; }
 .session-actions { display: flex; align-items: center; gap: 12px; min-width: 0; }
 #staff-identity { max-width: 34vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-work { position: relative; color: var(--ink); }
+.recent-work summary { min-height: 40px; padding: 9px 12px; color: #fff; border: 1px solid rgba(255,255,255,.65); border-radius: 4px; cursor: pointer; white-space: nowrap; }
+.recent-request-list { position: absolute; z-index: 30; right: 0; width: min(330px, 88vw); max-height: 320px; overflow: auto; padding: 8px; background: #fff; border: 1px solid var(--line); box-shadow: 0 6px 20px #0003; }
+.recent-request-list button { display: block; width: 100%; min-height: 40px; padding: 8px; color: var(--ink); background: #fff; border: 0; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.recent-request-list button:hover { background: var(--soft); }
+.recent-request-list p { margin: 6px; color: var(--muted); }
 
 main { width: min(1500px, 100%); margin: 0 auto; padding: 0 clamp(14px, 3vw, 38px) 44px; }
 .status-message { min-height: 28px; margin: 12px 0; color: var(--muted); }
@@ -107,6 +113,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .status-tabs button[aria-selected="true"] { color: var(--brand-dark); background: #fff; border-color: var(--line); border-bottom-color: #fff; margin-bottom: -1px; font-weight: 700; }
 
 .queue-filters { display: flex; align-items: end; gap: 12px; padding: 14px 0; }
+.queue-automation { margin: 0 0 12px; color: var(--muted); font-size: .88rem; }
 .search-field { position: relative; flex: 1 1 320px; }
 .search-field i { position: absolute; left: 12px; top: 13px; color: var(--muted); }
 .search-field input { width: 100%; padding-left: 36px; }
@@ -119,6 +126,8 @@ textarea { min-height: 108px; resize: vertical; }
 .gridjs-container { display: block; width: 100%; overflow: visible; color: var(--ink); font-size: .91rem; }
 .gridjs-wrapper { width: 100%; overflow-x: auto; border-radius: 0; box-shadow: none; border-color: var(--line); }
 table.gridjs-table { width: 100%; min-width: 920px; max-width: none; table-layout: fixed; }
+#request-grid table.gridjs-table { min-width: 1480px; }
+#additional-copy-grid table.gridjs-table { min-width: 1450px; }
 .bulk-delete-items { max-height: 220px; overflow: auto; overflow-wrap: anywhere; }
 #bulk-delete-results { overflow-wrap: anywhere; }
 th.gridjs-th { background: #eef3f5; color: #26333d; }

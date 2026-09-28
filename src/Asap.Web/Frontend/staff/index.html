@@ -19,6 +19,10 @@
     </a>
     <div id="session-actions" class="session-actions" hidden>
       <span id="staff-identity"></span>
+      <details id="recent-work" class="recent-work">
+        <summary>Recent requests</summary>
+        <div id="recent-request-list" class="recent-request-list" aria-label="Recently opened title requests"></div>
+      </details>
       <button id="sign-out" class="icon-button" type="button" title="Sign out" aria-label="Sign out">
         <i class="fa fa-sign-out" aria-hidden="true"></i>
       </button>
@@ -105,10 +109,20 @@
             <span>Tag</span>
             <select id="tag-filter"><option value="all">All tags</option></select>
           </label>
+          <label id="similar-filter-field" class="compact-field">
+            <span>Similarity</span>
+            <select id="similar-filter">
+              <option value="all">All</option>
+              <option value="similar">Similar</option>
+              <option value="unique">Unique</option>
+            </select>
+          </label>
           <button id="refresh-queue" class="icon-button" type="button" title="Refresh requests" aria-label="Refresh requests">
             <i class="fa fa-refresh" aria-hidden="true"></i>
           </button>
         </div>
+
+        <p id="queue-automation" class="queue-automation"></p>
 
         <div id="request-grid" class="request-grid"></div>
         <p id="queue-empty" class="empty-state" hidden>No requests match these filters.</p>
@@ -251,6 +265,7 @@
             <span>Settings scope</span>
             <select id="settings-scope" aria-label="Settings scope"></select>
           </label>
+          <button id="settings-refresh" class="secondary-button" type="button" title="Reload settings" aria-label="Reload settings"><i class="fa fa-refresh" aria-hidden="true"></i></button>
         </div>
 
         <p id="settings-message" class="settings-message" role="status" aria-live="polite"></p>
@@ -267,7 +282,7 @@
             </nav>
           </aside>
 
-          <form id="settings-form" class="settings-form">
+          <form id="settings-form" class="settings-form" hidden>
             <input id="settings-version" type="hidden">
 
             <section id="settings-start" class="settings-panel active" role="tabpanel" tabindex="-1" data-settings-panel-content="start" aria-labelledby="settings-nav-start">
@@ -570,7 +585,6 @@
               <div class="form-actions settings-inline-actions">
                 <button id="settings-discard" class="secondary-button" type="button" hidden>Discard changes</button>
                 <button id="settings-reset" class="danger-button" type="button" hidden><i class="fa fa-refresh" aria-hidden="true"></i> Reset inherited overrides</button>
-                <button id="settings-refresh" class="secondary-button" type="button" title="Reload settings" aria-label="Reload settings"><i class="fa fa-refresh" aria-hidden="true"></i></button>
                 <button id="settings-save" class="primary-button" type="submit"><i class="fa fa-save" aria-hidden="true"></i> Save settings</button>
               </div>
             </div>

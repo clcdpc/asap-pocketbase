@@ -217,7 +217,7 @@ async function until(predicate, message) {
           requestUrl: '/staff/?request=9007199254740993'
         });
       }
-      if (url.endsWith('/title-requests/9007199254740993')) return response(200, createdRequest);
+      if (new URL(url, 'http://localhost').pathname.endsWith('/title-requests/9007199254740993')) return response(200, createdRequest);
       if (url.includes('/research-configuration')) return response(200, { externalSearchProviders: [] });
       throw new Error(`Unexpected request ${url}`);
     };
@@ -341,7 +341,8 @@ async function until(predicate, message) {
     assert.match(document.getElementById('staff-suggestion-status').textContent, /not created.*changed successfully/);
     assert.match(document.querySelector('.staff-suggestion-conflict').textContent, /9007199254740993/);
     document.querySelector('.staff-suggestion-conflict button').click();
-    await until(() => requests.some(item => item.url.endsWith('/title-requests/9007199254740993')),
+    await until(() => requests.some(item =>
+      new URL(item.url, 'http://localhost').pathname.endsWith('/title-requests/9007199254740993')),
       'exact bigint duplicate action must open the existing request');
 
     document.getElementById('new-suggestion').click();
