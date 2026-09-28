@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Asap.Shared;
+using Asap.Web.Features.Email;
 using Asap.Web.Features.Patron;
 using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Data;
@@ -266,6 +267,7 @@ public sealed class AdministrationService(
                 workflow = ToWorkflow(effective, system: libraryWorkflow is null || organizationId == 1),
                 ui_text = ToEffectivePatronText(effective),
                 emails = await ToEffectiveEmailAsync(context, organizationId, effective, cancellationToken),
+                templatePlaceholders = PatronEmailTemplateRenderer.SupportedPlaceholders,
                 formatClaimRules = autoClaimRules,
                 autoClaimStaff,
                 originsForEditor = origins
@@ -282,6 +284,25 @@ public sealed class AdministrationService(
         if (!TryResolveScope(actor, GetString(payload, "orgId") ?? GetString(payload, "organizationId"), out var organizationId, out var failure))
         {
             return failure;
+        }
+
+        var emailSection = GetObject(payload, "emails", "email");
+        var smtpSection = GetObject(payload, "smtp");
+        if (organizationId != 1 &&
+            (HasTokenMutation(payload) || HasTokenMutation(emailSection) || HasTokenMutation(smtpSection)))
+        {
+            return new AdministrationResult("postmark_token_system_only",
+                Message: "The Postmark server token can only be changed at system scope.");
+        }
+        if (organizationId == 1 &&
+            (HasTokenReplacement(emailSection) || HasTokenReplacement(payload)) &&
+            (GetBool(emailSection, "clearPostmarkToken") == true ||
+             GetBool(emailSection, "clearServerToken") == true ||
+             GetBool(payload, "clearPostmarkToken") == true ||
+             GetBool(payload, "clearServerToken") == true))
+        {
+            return new AdministrationResult("postmark_token_intent_conflict",
+                Message: "Choose either a replacement Postmark token or clear, not both.");
         }
 
         var isReset = organizationId != 1 &&
@@ -331,6 +352,13 @@ public sealed class AdministrationService(
             return new AdministrationResult(
                 "stale_version",
                 Message: "These settings changed in another session. Reload before saving.");
+        }
+
+        if (!isReset && organizationId != 1 &&
+            await ReferencesDeletedCustomTemplateAsync(context, organizationId, payload, cancellationToken))
+        {
+            return new AdministrationResult("template_referenced",
+                Message: "This rejection template is used by auto-rejection. Change and save that workflow setting before deleting the template.");
         }
 
         if (isReset)
@@ -1035,9 +1063,6 @@ public sealed class AdministrationService(
         var email = await GetOrCreateEmailAsync(context, organizationId, cancellationToken);
         ApplyText(emailSection, "fromAddress", value => email.FromAddress = NormalizeScopedText(value, isSystem));
         ApplyText(emailSection, "fromName", value => email.FromName = NormalizeScopedText(value, isSystem));
-        ApplySecret(emailSection, "postmarkToken", value => email.ProtectedServerToken = credentialProtector.Protect(value));
-        if (GetBool(emailSection, "clearPostmarkToken") == true) email.ProtectedServerToken = null;
-
         await ApplyWholeSetsAsync(context, organizationId, workflowSection, patronSection, cancellationToken);
         await ApplyProvidersAsync(context, organizationId, workflowSection, payload, cancellationToken);
         await ApplyFormatsAsync(context, organizationId, payload, patronSection, cancellationToken);
@@ -1487,6 +1512,57 @@ public sealed class AdministrationService(
     private static bool HasProperty(JsonElement root, string name) =>
         root.ValueKind == JsonValueKind.Object && root.TryGetProperty(name, out _);
 
+    private static bool HasTokenMutation(JsonElement section) =>
+        HasProperty(section, "postmarkToken") || HasProperty(section, "serverToken") ||
+        HasProperty(section, "clearPostmarkToken") || HasProperty(section, "clearServerToken");
+
+    private static bool HasTokenReplacement(JsonElement section) =>
+        !string.IsNullOrWhiteSpace(GetString(section, "postmarkToken")) ||
+        !string.IsNullOrWhiteSpace(GetString(section, "serverToken"));
+
+    private static async Task<bool> ReferencesDeletedCustomTemplateAsync(
+        AsapDbContext context,
+        int organizationId,
+        JsonElement payload,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetAny(payload, out var templates, "templates", "emailTemplates"))
+        {
+            var emails = GetObject(payload, "emails", "email");
+            if (!TryGetAny(emails, out templates, "rejection_templates"))
+            {
+                return false;
+            }
+        }
+        if (templates.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        var deletedKeys = templates.EnumerateArray()
+            .Where(item => item.ValueKind == JsonValueKind.Object &&
+                (GetBool(item, "isCustom") == true || GetBool(item, "custom") == true) &&
+                (GetBool(item, "reset") == true || GetBool(item, "useSystemDefault") == true ||
+                 GetBool(item, "overridden") == false))
+            .Select(item => Clean(GetString(item, "templateKey") ?? GetString(item, "key")))
+            .Where(key => key is not null)
+            .ToArray();
+        if (deletedKeys.Length == 0)
+        {
+            return false;
+        }
+
+        var templateIds = await context.EmailTemplates.AsNoTracking()
+            .Where(item => item.OrganizationId == organizationId && item.IsCustom &&
+                deletedKeys.Contains(item.TemplateKey))
+            .Select(item => item.Id)
+            .ToArrayAsync(cancellationToken);
+        return templateIds.Length > 0 && await context.WorkflowSettings.AsNoTracking()
+            .AnyAsync(item => item.OrganizationId == organizationId &&
+                item.OutstandingTimeoutRejectionTemplateId.HasValue &&
+                templateIds.Contains(item.OutstandingTimeoutRejectionTemplateId.Value), cancellationToken);
+    }
+
     private static bool TryGetAny(JsonElement root, out JsonElement value, params string[] names)
     {
         if (root.ValueKind == JsonValueKind.Object)
@@ -1662,7 +1738,7 @@ public sealed class AdministrationService(
     {
         fromAddress = row.FromAddress,
         fromName = row.FromName,
-        hasPostmarkToken = !string.IsNullOrWhiteSpace(row.ProtectedServerToken),
+        hasPostmarkToken = row.OrganizationId == 1 && !string.IsNullOrWhiteSpace(row.ProtectedServerToken),
         version = StaffVersion.Encode(row.RowVersion)
     };
 

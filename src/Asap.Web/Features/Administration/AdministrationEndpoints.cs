@@ -66,6 +66,8 @@ public static class AdministrationEndpoints
             .RequireAuthorization();
         endpoints.MapGet("/api/asap/staff/email-operations", ListEmailOperationsAsync)
             .RequireAuthorization();
+        endpoints.MapGet("/api/asap/staff/email-readiness", GetEmailReadinessAsync)
+            .RequireAuthorization();
         endpoints.MapPost("/api/asap/staff/email-operations/{id:long}/retry", RetryEmailAsync)
             .RequireAuthorization()
             .AddEndpointFilter<StaffAntiforgeryFilter>();
@@ -90,6 +92,19 @@ public static class AdministrationEndpoints
         {
             return Invalid(exception);
         }
+    }
+
+    private static async Task<IResult> GetEmailReadinessAsync(
+        HttpContext context,
+        int? organizationId,
+        EmailOperationsService service,
+        CancellationToken cancellationToken)
+    {
+        var result = await service.GetReadinessAsync(
+            StaffAuthenticationEndpoints.RequireCurrentStaff(context), cancellationToken, organizationId);
+        return result.Code == "ok" ? Results.Json(result.Data) :
+            Results.Json(new { code = result.Code }, statusCode: result.Code == "organization_not_found"
+                ? StatusCodes.Status404NotFound : StatusCodes.Status403Forbidden);
     }
 
     private static async Task<IResult> SaveSettingsAsync(
@@ -439,7 +454,7 @@ public static class AdministrationEndpoints
         {
             "staff_scope_forbidden" => StatusCodes.Status403Forbidden,
             "organization_not_found" or "format_not_found" => StatusCodes.Status404NotFound,
-            "stale_version" or "format_referenced" or "system_format_durable" or "format_version_required" or
+            "stale_version" or "template_referenced" or "format_referenced" or "system_format_durable" or "format_version_required" or
                 "settings_version_required" or "invalid_settings_version" or "organization_version_required" => StatusCodes.Status409Conflict,
             "staff_session_invalid" => StatusCodes.Status401Unauthorized,
             "polaris_unavailable" or "patron_codes_unavailable" => StatusCodes.Status502BadGateway,

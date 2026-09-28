@@ -74,6 +74,8 @@ public sealed class ApplicationOptions
 public sealed class EmailSafetyOptions
 {
     public List<string>? AllowedRecipientDomains { get; set; }
+
+    public string DeliveryMode { get; set; } = "capture";
 }
 
 public sealed class PatronLoginRateLimitOptions

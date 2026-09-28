@@ -9,11 +9,15 @@ public interface IEmailSender
     Task<EmailSendResult> SendAsync(EmailEnvelope envelope, CancellationToken cancellationToken);
 }
 
-public sealed record EmailTransportReadiness(bool IsConfigured)
+public sealed record EmailTransportReadiness(bool IsConfigured, bool IsLiveDelivery = true)
 {
     public static EmailTransportReadiness Configured { get; } = new(true);
 
     public static EmailTransportReadiness NotConfigured { get; } = new(false);
+
+    public static EmailTransportReadiness LocalCapture { get; } = new(true, false);
+
+    public static EmailTransportReadiness Sandbox { get; } = new(true, false);
 }
 
 public sealed record EmailEnvelope(

@@ -36,9 +36,9 @@ function settingsData() {
         branding: { hasLogo: false, altText: 'System alt' }
       },
       libraryOverride: {
-        workflow: {},
+        workflow: { outstandingTimeoutRejectionTemplateId: '9007199254740993' },
         patron: { loginNote: 'Existing library note' },
-        email: {},
+        email: { hasPostmarkToken: true },
         publicationOptions: emptySet,
         commonCreators: emptySet,
         allowedPatronCodeIds: emptySet,
@@ -57,7 +57,8 @@ function settingsData() {
       providers: [],
       formats: [],
       customFields: [],
-      templates: [],
+      templates: [{ id: '9007199254740993', organizationId: '2', templateKey: 'rejection:used',
+        displayName: 'Used rejection', subject: 'Subject', body: 'Body', enabled: true, isCustom: true }],
       autoClaimRules: [],
       branding: { hasLogo: false, altText: null }
     },
@@ -148,6 +149,20 @@ async function flush() {
     assert.deepStrictEqual(settingsRequests, ['/api/asap/staff/settings?orgId=2']);
     assert.strictEqual(document.getElementById('settings-scope').value, '2');
     assert.strictEqual(document.getElementById('settings-scope-field').hidden, true);
+    assert.strictEqual(document.getElementById('email-postmark-token').disabled, true);
+    assert.strictEqual(document.getElementById('email-clear-postmark-token').disabled, true);
+    assert.strictEqual(document.querySelector('[data-setting-key="postmarkToken"] .settings-override-toggle'), null);
+    const usedTemplate = document.querySelector('#email-templates-editor [data-template-id="9007199254740993"]');
+    usedTemplate.querySelector('[aria-label="Delete"]').click();
+    assert.strictEqual(usedTemplate.isConnected, true);
+    assert.match(document.getElementById('settings-message').textContent, /used by auto-rejection/);
+    document.getElementById('email-postmark-token').value = 'forged-browser-token';
+    document.getElementById('email-clear-postmark-token').checked = true;
+
+    const fromToggle = document.querySelector('[data-setting-key="fromAddress"] .settings-override-toggle');
+    fromToggle.checked = true;
+    fromToggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    document.getElementById('email-from-address').value = 'library@example.org';
 
     const note = document.getElementById('patron-login-note');
     note.value = 'Own library edit';
@@ -161,6 +176,9 @@ async function flush() {
 
     assert.strictEqual(saveBody.orgId, '2');
     assert.strictEqual(saveBody.patron.loginNote, 'Own library edit');
+    assert.strictEqual(saveBody.email.fromAddress, 'library@example.org');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(saveBody.email, 'postmarkToken'), false);
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(saveBody.email, 'clearPostmarkToken'), false);
     assert.strictEqual(Object.prototype.hasOwnProperty.call(saveBody, 'systemSettings'), false);
     assert.strictEqual(Object.prototype.hasOwnProperty.call(saveBody, 'polaris'), false);
     assert.ok(settingsRequests.every(url => url === '/api/asap/staff/settings?orgId=2'));

@@ -393,7 +393,7 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
         return new EffectiveEmailConfiguration(
             Inherit(library?.FromAddress, system.FromAddress),
             Inherit(library?.FromName, system.FromName),
-            Inherit(library?.ProtectedServerToken, system.ProtectedServerToken));
+            system.ProtectedServerToken);
     }
 
     private static async Task<EffectiveEmailTemplate?> LoadSubmissionTemplateAsync(

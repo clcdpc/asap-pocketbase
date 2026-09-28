@@ -106,6 +106,9 @@ async function flush() {
     global.Event = dom.window.Event;
 
     let saved = false;
+    let failRefresh = false;
+    let saveCount = 0;
+    let committedCount = 0;
     let settingsRequests = 0;
     global.fetch = async (url, options = {}) => {
       const requestUrl = String(url);
@@ -114,6 +117,7 @@ async function flush() {
       }
       if (requestUrl.includes('/api/asap/staff/settings?orgId=2')) {
         settingsRequests += 1;
+        if (failRefresh) return response(503, { code: 'settings_unavailable', message: 'Refresh unavailable' });
         return response(200, saved
           ? settingsData('Saved library note', 'after-save')
           : settingsData('System login note', 'before-save'));
@@ -123,9 +127,11 @@ async function flush() {
         return response(200, { code: 'ok', data: [] });
       }
       if (requestUrl.endsWith('/api/asap/staff/settings')) {
-        assert.strictEqual(JSON.parse(options.body).patron.loginNote, 'Saved library note');
+        assert.strictEqual(JSON.parse(options.body).patron.loginNote,
+          saveCount === 0 ? 'Saved library note' : 'Saved again');
+        saveCount += 1;
         saved = true;
-        return response(200, { code: 'saved', data: { version: 'after-save' } });
+        return response(200, { code: 'saved', data: { version: saveCount === 1 ? 'after-save' : 'after-save-2' } });
       }
       throw new Error(`Unexpected request: ${requestUrl}`);
     };
@@ -134,7 +140,8 @@ async function flush() {
       root: document.getElementById('settings-view'),
       tab: document.getElementById('settings-view-tab'),
       announce: () => {},
-      getStaff: () => ({ role: 'admin', organizationId: 2 })
+      getStaff: () => ({ role: 'admin', organizationId: 2 }),
+      onCommitted: () => { committedCount += 1; }
     });
     controller.bind();
     controller.setStaff({
@@ -165,6 +172,19 @@ async function flush() {
     assert.strictEqual(document.getElementById('settings-save').disabled, true);
     assert.strictEqual(document.getElementById('settings-save-title').textContent, 'No changes');
     assert.strictEqual(controller.isDirty(), false);
+
+    note.value = 'Saved again';
+    note.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    failRefresh = true;
+    document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', {
+      bubbles: true, cancelable: true
+    }));
+    for (let attempt = 0; attempt < 20 && saveCount < 2; attempt++) await flush();
+    for (let attempt = 0; attempt < 20; attempt++) await flush();
+    assert.strictEqual(committedCount, 2);
+    assert.strictEqual(document.getElementById('settings-save-title').textContent, 'Saved; reload needed');
+    assert.strictEqual(document.getElementById('settings-save').disabled, true);
+    assert.match(document.getElementById('settings-message').textContent, /Settings saved, but/);
     dom.window.close();
     console.log('Settings save completion refreshes the baseline and leaves the form clean');
   } finally {

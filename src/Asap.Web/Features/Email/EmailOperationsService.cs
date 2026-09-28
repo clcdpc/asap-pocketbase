@@ -1,4 +1,5 @@
 using System.Data;
+using System.Net.Mail;
 using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Security;
@@ -28,9 +29,51 @@ public sealed class EmailOperationsService(
     IEmailSender emailSender,
     RecipientDomainPolicy recipientDomainPolicy,
     TimeProvider timeProvider,
-    StaffEligibilityService staffEligibility)
+    StaffEligibilityService staffEligibility,
+    ILogger<EmailOperationsService>? logger = null)
 {
     public static bool CanOperate(CurrentStaff actor) => actor.Role is "admin" or "super_admin";
+
+    public async Task<EmailOperationResult> GetReadinessAsync(
+        CurrentStaff actor,
+        CancellationToken cancellationToken,
+        int? requestedOrganizationId = null)
+    {
+        if (requestedOrganizationId <= 0 ||
+            actor.Role != "super_admin" && requestedOrganizationId.HasValue &&
+            requestedOrganizationId != actor.OrganizationId)
+        {
+            return new EmailOperationResult("staff_scope_forbidden");
+        }
+        var organizationId = actor.Role == "super_admin"
+            ? requestedOrganizationId ?? 1 : actor.OrganizationId;
+        try
+        {
+            await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+            var active = await context.Organizations.AsNoTracking()
+                .Where(item => item.Id == organizationId)
+                .Select(item => item.IsActive)
+                .SingleOrDefaultAsync(cancellationToken);
+            if (!active)
+            {
+                return new EmailOperationResult("organization_not_found");
+            }
+            var settings = await ReadEffectiveSettingsAsync(context, organizationId, cancellationToken);
+            var transport = await emailSender.CheckReadinessAsync(organizationId, cancellationToken);
+            var state = !HasValidSender(settings.FromAddress) || !transport.IsConfigured
+                ? "not_configured"
+                : transport.IsLiveDelivery ? "ready" : "non_delivery";
+            return new EmailOperationResult("ok", new { state, organizationId });
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new EmailOperationResult("ok", new { state = "unavailable", organizationId });
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new EmailOperationResult("ok", new { state = "unavailable", organizationId });
+        }
+    }
 
     public async Task<EmailOperationResult> QueueTestAsync(
         CurrentStaff actor,
@@ -80,7 +123,7 @@ public sealed class EmailOperationsService(
             : null;
         var suppression = address is null ? "recipient_missing_or_invalid" :
             !recipientDomainPolicy.IsAllowed(address) ? "recipient_domain_not_allowed" :
-            string.IsNullOrWhiteSpace(settings.FromAddress) ? "sender_missing" :
+            !HasValidSender(settings.FromAddress) ? "sender_missing" :
             !readiness.IsConfigured ? "mail_not_configured" : null;
         var now = timeProvider.GetUtcNow().UtcDateTime;
         var outbox = new EmailOutbox
@@ -102,10 +145,23 @@ public sealed class EmailOperationsService(
         context.EmailOutbox.Add(outbox);
         await context.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        if (suppression is null) dispatcher.Enqueue(outbox.Id);
+        var dispatchDelayed = false;
+        if (suppression is null)
+        {
+            try
+            {
+                dispatcher.Enqueue(outbox.Id);
+            }
+            catch (Exception exception)
+            {
+                dispatchDelayed = true;
+                logger?.LogWarning("Email outbox {OutboxId} awaits the scheduled sweep after dispatch failure ({FailureType}).",
+                    outbox.Id, exception.GetType().Name);
+            }
+        }
         return new EmailOperationResult(
             suppression is null ? "queued" : "suppressed",
-            new { id = outbox.Id, code = suppression, version = StaffVersion.Encode(outbox.RowVersion) });
+            new { id = outbox.Id, code = suppression, dispatchDelayed, version = StaffVersion.Encode(outbox.RowVersion) });
     }
 
     public async Task<IReadOnlyList<EmailOperationItem>> ListAsync(
@@ -230,6 +286,22 @@ public sealed class EmailOperationsService(
     }
 
     private sealed record EffectiveEmailSettings(string? FromAddress, string? FromName);
+
+    private static bool HasValidSender(string? address)
+    {
+        if (string.IsNullOrWhiteSpace(address))
+        {
+            return false;
+        }
+        try
+        {
+            return string.Equals(new MailAddress(address).Address, address.Trim(), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
 
     private static bool TryResolveScope(CurrentStaff actor, int? requested, out int? scope)
     {

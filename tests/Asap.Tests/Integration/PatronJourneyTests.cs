@@ -1417,46 +1417,63 @@ public sealed partial class PatronJourneyTests
                 AssertScalarEquals(sentinel.LibraryValue, librarySection, sentinel.Name, $"preserved peer override {field.Section}.{sentinel.Name}");
             }
 
+            await using (var connection = new SqlConnection(databaseConnectionString))
+            {
+                await connection.OpenAsync();
+                await using var legacy = connection.CreateCommand();
+                legacy.CommandText = "UPDATE [asap].[EmailSettings] SET [ProtectedServerToken] = N'legacy-library-token' WHERE [OrganizationId] = @organizationId";
+                legacy.Parameters.AddWithValue("@organizationId", libraryId);
+                Assert.AreEqual(1, await legacy.ExecuteNonQueryAsync());
+            }
+
             using var secretBase = await ReadSettingsDocumentAsync(client, libraryId.ToString());
-            using (var saveLibrarySecret = await SaveSettingsDocumentAsync(
-                       client,
-                       secretBase.RootElement,
-                       libraryId.ToString(),
-                       new Dictionary<string, object?>
+            Assert.IsFalse(secretBase.RootElement.GetRawText().Contains("legacy-library-token", StringComparison.Ordinal));
+            foreach (var mutation in new object[]
+            {
+                new { postmarkToken = "forged-library-token" },
+                new { clearPostmarkToken = true },
+                new { serverToken = "forged-legacy-alias" },
+                new { clearServerToken = true }
+            })
+            {
+                using var forged = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+                {
+                    orgId = libraryId.ToString(),
+                    version = secretBase.RootElement.GetProperty("version").GetString(),
+                    email = mutation
+                });
+                Assert.AreEqual(HttpStatusCode.BadRequest, forged.StatusCode);
+                using var rejected = JsonDocument.Parse(await forged.Content.ReadAsStringAsync());
+                Assert.AreEqual("postmark_token_system_only", rejected.RootElement.GetProperty("code").GetString());
+            }
+
+            using (var saveSender = await SaveSettingsDocumentAsync(client, secretBase.RootElement,
+                       libraryId.ToString(), new Dictionary<string, object?>
                        {
                            ["email"] = new Dictionary<string, object?>
                            {
                                ["fromAddress"] = "slice4-secret-sentinel@example.org",
-                               ["postmarkToken"] = "slice4-library-secret-token"
+                               ["fromName"] = "Library sender"
                            }
                        }))
             {
-                Assert.AreEqual("saved", saveLibrarySecret.RootElement.GetProperty("code").GetString());
+                Assert.AreEqual("saved", saveSender.RootElement.GetProperty("code").GetString());
             }
 
-            using var withSecret = await ReadSettingsDocumentAsync(client, libraryId.ToString());
-            AssertScalarEquals(true, withSecret.RootElement.GetProperty("stored")
-                .GetProperty("libraryOverride").GetProperty("email"), "hasPostmarkToken", "library secret saved");
-            using var clearSecret = await SaveSettingsDocumentAsync(
-                client,
-                withSecret.RootElement,
-                libraryId.ToString(),
-                new Dictionary<string, object?>
-                {
-                    ["email"] = new Dictionary<string, object?>
-                    {
-                        ["clearPostmarkToken"] = true,
-                        ["fromAddress"] = "slice4-secret-sentinel@example.org"
-                    }
-                });
-            Assert.AreEqual("saved", clearSecret.RootElement.GetProperty("code").GetString());
-
-            using var afterSecretClear = await ReadSettingsDocumentAsync(client, libraryId.ToString());
-            var emailOverride = afterSecretClear.RootElement.GetProperty("stored")
-                .GetProperty("libraryOverride")
-                .GetProperty("email");
-            AssertScalarEquals(false, emailOverride, "hasPostmarkToken", "library secret cleared");
-            AssertScalarEquals("slice4-secret-sentinel@example.org", emailOverride, "fromAddress", "sender override preserved beside secret clear");
+            using var afterSenderSave = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            var emailOverride = afterSenderSave.RootElement.GetProperty("stored")
+                .GetProperty("libraryOverride").GetProperty("email");
+            AssertScalarEquals(false, emailOverride, "hasPostmarkToken", "legacy library token is not offered as an override");
+            AssertScalarEquals("slice4-secret-sentinel@example.org", emailOverride, "fromAddress", "sender address override");
+            AssertScalarEquals("Library sender", emailOverride, "fromName", "sender name override");
+            await using (var connection = new SqlConnection(databaseConnectionString))
+            {
+                await connection.OpenAsync();
+                await using var verify = connection.CreateCommand();
+                verify.CommandText = "SELECT [ProtectedServerToken] FROM [asap].[EmailSettings] WHERE [OrganizationId] = @organizationId";
+                verify.Parameters.AddWithValue("@organizationId", libraryId);
+                Assert.AreEqual("legacy-library-token", await verify.ExecuteScalarAsync());
+            }
         }
         finally
         {
@@ -1471,6 +1488,88 @@ public sealed partial class PatronJourneyTests
             }
 
             await CleanupScalarSettingsTestDataAsync(libraryId, templateKeyA, templateKeyB);
+        }
+    }
+
+    [TestMethod]
+    public async Task ReferencedCustomRejectionTemplateCannotBeDeletedUntilWorkflowReferenceIsSavedAway()
+    {
+        using var client = factory!.CreateClient();
+        var actor = await ReadConfiguredSuperAdminAsync();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+        const int libraryId = 91405;
+        var key = $"rejection:dependency_{Guid.NewGuid():N}";
+        await UpsertTestOrganizationAsync(libraryId, "Template Dependency Library", "TDL");
+        try
+        {
+            using var initial = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            using var created = await SaveSettingsDocumentAsync(client, initial.RootElement,
+                libraryId.ToString(), new Dictionary<string, object?>
+                {
+                    ["templates"] = new object[]
+                    {
+                        new { templateKey = key, isCustom = true, displayName = "Dependency test",
+                            subject = "Subject", body = "Body", enabled = true }
+                    }
+                });
+            Assert.AreEqual("saved", created.RootElement.GetProperty("code").GetString());
+
+            using var withTemplate = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            var templateId = withTemplate.RootElement.GetProperty("stored").GetProperty("templates")
+                .EnumerateArray().Single(item => item.GetProperty("templateKey").GetString() == key)
+                .GetProperty("id").GetString();
+            using var referenced = await SaveSettingsDocumentAsync(client, withTemplate.RootElement,
+                libraryId.ToString(), new Dictionary<string, object?>
+                {
+                    ["workflow"] = new { outstandingTimeoutRejectionTemplateId = templateId }
+                });
+            Assert.AreEqual("saved", referenced.RootElement.GetProperty("code").GetString());
+
+            using var current = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            using var blocked = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+            {
+                orgId = libraryId.ToString(),
+                version = current.RootElement.GetProperty("version").GetString(),
+                templates = new[] { new { templateKey = key, isCustom = true, reset = true } }
+            });
+            Assert.AreEqual(HttpStatusCode.Conflict, blocked.StatusCode);
+            using var blockedBody = JsonDocument.Parse(await blocked.Content.ReadAsStringAsync());
+            Assert.AreEqual("template_referenced", blockedBody.RootElement.GetProperty("code").GetString());
+
+            using var legacyBlocked = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+            {
+                orgId = libraryId.ToString(),
+                version = current.RootElement.GetProperty("version").GetString(),
+                emails = new { rejection_templates = new[] { new { templateKey = key, isCustom = true, reset = true } } }
+            });
+            Assert.AreEqual(HttpStatusCode.Conflict, legacyBlocked.StatusCode);
+            using var legacyBlockedBody = JsonDocument.Parse(await legacyBlocked.Content.ReadAsStringAsync());
+            Assert.AreEqual("template_referenced", legacyBlockedBody.RootElement.GetProperty("code").GetString());
+
+            using var stillReferenced = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            Assert.AreEqual(templateId, stillReferenced.RootElement.GetProperty("stored")
+                .GetProperty("libraryOverride").GetProperty("workflow")
+                .GetProperty("outstandingTimeoutRejectionTemplateId").GetString());
+            Assert.IsTrue(stillReferenced.RootElement.GetProperty("stored").GetProperty("templates")
+                .EnumerateArray().Any(item => item.GetProperty("templateKey").GetString() == key));
+
+            using var changedWorkflow = await SaveSettingsDocumentAsync(client, stillReferenced.RootElement,
+                libraryId.ToString(), new Dictionary<string, object?>
+                {
+                    ["workflow"] = new { outstandingTimeoutRejectionTemplateId = (string?)null }
+                });
+            using var withoutReference = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            using var deleted = await SaveSettingsDocumentAsync(client, withoutReference.RootElement,
+                libraryId.ToString(), new Dictionary<string, object?>
+                {
+                    ["templates"] = new object[] { new { templateKey = key, isCustom = true, reset = true } }
+                });
+            Assert.AreEqual("saved", deleted.RootElement.GetProperty("code").GetString());
+        }
+        finally
+        {
+            await CleanupScalarSettingsTestDataAsync(libraryId, key, key);
         }
     }
 
