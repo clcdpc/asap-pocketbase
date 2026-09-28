@@ -46,11 +46,33 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(0, provider.CreateCount);
             var state = await ReadHoldAuthorityStateAsync(requestId);
             Assert.AreEqual("pending_hold", state.RequestStatus);
-            Assert.AreEqual("in_progress", state.State);
+            Assert.AreEqual("operator_required", state.State);
             Assert.AreEqual("acquired", state.Phase);
+            Assert.AreEqual("staff_authority_changed_before_dispatch", state.LastErrorCode);
             Assert.IsFalse(state.HasOwner);
+            Assert.IsFalse(state.HasLease);
+            Assert.IsFalse(state.Completed);
             Assert.IsFalse(state.CreateStarted);
             Assert.AreEqual(0, state.PlacedEvents);
+
+            var background = await holdFactory.Services.GetRequiredService<HoldPlacementService>()
+                .RecoverBackgroundOperationAsync(state.OperationId, null, CancellationToken.None);
+            Assert.AreEqual("hold_operator_required", background.Code);
+            Assert.AreEqual(0, provider.CreateCount);
+            Assert.AreEqual(0, (await ReadHoldAuthorityStateAsync(requestId)).PlacedEvents);
+
+            await SetHoldActorActiveAsync(actor.Id, true);
+            var reconcileVersion = await HoldOperationVersionAsync(client, requestId);
+            using var reconcile = await client.PostAsJsonAsync(
+                $"/api/asap/staff/hold-operations/{state.OperationId}/reconcile",
+                new { version = reconcileVersion });
+            Assert.AreEqual(HttpStatusCode.OK, reconcile.StatusCode, await reconcile.Content.ReadAsStringAsync());
+            Assert.AreEqual(1, provider.CreateCount);
+            Assert.AreEqual(1, provider.ReplyCount);
+            var completed = await ReadHoldAuthorityStateAsync(requestId);
+            Assert.AreEqual("hold_placed", completed.RequestStatus);
+            Assert.AreEqual("succeeded", completed.State);
+            Assert.AreEqual(1, completed.PlacedEvents);
         }
         finally
         {
@@ -92,16 +114,56 @@ public sealed partial class PatronJourneyTests
             Assert.IsFalse(body.RootElement.GetProperty("providerOutcomeRecorded").GetBoolean());
             Assert.AreEqual(0, provider.CreateCount);
             var state = await ReadHoldAuthorityStateAsync(requestId);
+            Assert.AreEqual("operator_required", state.State);
             Assert.AreEqual("acquired", state.Phase);
+            Assert.AreEqual("staff_authority_changed_before_dispatch", state.LastErrorCode);
             Assert.IsFalse(state.HasOwner);
+            Assert.IsFalse(state.HasLease);
+            Assert.IsFalse(state.Completed);
             Assert.IsFalse(state.CreateStarted);
             Assert.AreEqual(2L, state.Epoch);
             Assert.AreEqual(0, state.PlacedEvents);
+
+            var background = await holdFactory.Services.GetRequiredService<HoldPlacementService>()
+                .RecoverBackgroundOperationAsync(operationId, null, CancellationToken.None);
+            Assert.AreEqual("hold_operator_required", background.Code);
+            Assert.AreEqual(0, provider.CreateCount);
+            Assert.AreEqual(0, (await ReadHoldAuthorityStateAsync(requestId)).PlacedEvents);
         }
         finally
         {
             await SetHoldActorActiveAsync(actor.Id, true);
         }
+    }
+
+    [TestMethod]
+    public async Task CrashedAcquiredHoldStillRecoversAutomatically()
+    {
+        var provider = ScriptedHoldProvider.ReplyRequiredThenSuccess();
+        await using var holdFactory = HoldAuthorityFactory(provider);
+        var requestId = await SeedPendingHoldRequestAsync("Crashed acquired recovery", "20000000003215", "93215");
+        var operationId = await SeedHoldAuthorityOperationAsync(requestId, "acquired", provider.RequestGuid);
+        await ExecuteNonQueryAsync(
+            "UPDATE [asap].[HoldPlacementOperation] SET [OwnerToken] = NEWID(), " +
+            "[LeaseExpiresUtc] = DATEADD(minute, -1, SYSUTCDATETIME()) WHERE [Id] = @id;",
+            ("@id", operationId));
+        var expired = await ReadHoldAuthorityStateAsync(requestId);
+        Assert.IsTrue(expired.HasOwner);
+        Assert.IsTrue(expired.HasLease);
+        Assert.AreEqual("acquired", expired.Phase);
+        Assert.AreEqual("in_progress", expired.State);
+
+        var recovered = await holdFactory.Services.GetRequiredService<HoldPlacementService>()
+            .RecoverBackgroundOperationAsync(operationId, null, CancellationToken.None);
+
+        Assert.AreEqual("updated", recovered.Code);
+        Assert.AreEqual(1, provider.CreateCount);
+        Assert.AreEqual(1, provider.ReplyCount);
+        var completed = await ReadHoldAuthorityStateAsync(requestId);
+        Assert.AreEqual("hold_placed", completed.RequestStatus);
+        Assert.AreEqual("succeeded", completed.State);
+        Assert.AreEqual(2L, completed.Epoch);
+        Assert.AreEqual(1, completed.PlacedEvents);
     }
 
     [TestMethod]
@@ -147,6 +209,16 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(state.CreateStarted);
             Assert.IsFalse(state.ReplyStarted);
             Assert.AreEqual(0, state.PlacedEvents);
+
+            var recovered = await holdFactory.Services.GetRequiredService<HoldPlacementService>()
+                .RecoverBackgroundOperationAsync(state.OperationId, null, CancellationToken.None);
+            Assert.AreEqual("updated", recovered.Code);
+            Assert.AreEqual(1, provider.CreateCount);
+            Assert.AreEqual(1, provider.ReplyCount);
+            var completed = await ReadHoldAuthorityStateAsync(requestId);
+            Assert.AreEqual("hold_placed", completed.RequestStatus);
+            Assert.AreEqual("succeeded", completed.State);
+            Assert.AreEqual(1, completed.PlacedEvents);
         }
         finally
         {
@@ -271,8 +343,10 @@ public sealed partial class PatronJourneyTests
     }
 
     private sealed record HoldAuthorityState(
-        string RequestStatus, string State, string Phase, string? ResultCode, string? EvidenceKind,
-        bool HasOwner, bool CreateStarted, bool ReplyStarted, long Epoch, int PlacedEvents);
+        long OperationId, string RequestStatus, string State, string Phase, string? ResultCode,
+        string? EvidenceKind, string? LastErrorCode,
+        bool HasOwner, bool HasLease, bool Completed, bool CreateStarted, bool ReplyStarted,
+        long Epoch, int PlacedEvents);
 
     private static async Task<HoldAuthorityState> ReadHoldAuthorityStateAsync(long requestId)
     {
@@ -280,8 +354,9 @@ public sealed partial class PatronJourneyTests
         await connection.OpenAsync();
         await using var command = new SqlCommand(
             """
-            SELECT request.[Status], operation.[State], operation.[Phase], operation.[ResultCode],
-                   operation.[OutcomeEvidenceKind], operation.[OwnerToken], operation.[CreateStartedUtc],
+            SELECT operation.[Id], request.[Status], operation.[State], operation.[Phase], operation.[ResultCode],
+                   operation.[OutcomeEvidenceKind], operation.[LastErrorCode], operation.[OwnerToken],
+                   operation.[LeaseExpiresUtc], operation.[CompletedUtc], operation.[CreateStartedUtc],
                    operation.[ReplyStartedUtc], operation.[ExecutionEpoch],
                    (SELECT COUNT(*) FROM [asap].[TitleRequestEvent]
                     WHERE [TitleRequestId] = request.[Id] AND [EventType] = N'hold_placed')
@@ -293,10 +368,12 @@ public sealed partial class PatronJourneyTests
         await using var reader = await command.ExecuteReaderAsync();
         Assert.IsTrue(await reader.ReadAsync());
         return new HoldAuthorityState(
-            reader.GetString(0), reader.GetString(1), reader.GetString(2),
-            reader.IsDBNull(3) ? null : reader.GetString(3),
+            reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
             reader.IsDBNull(4) ? null : reader.GetString(4),
-            !reader.IsDBNull(5), !reader.IsDBNull(6), !reader.IsDBNull(7),
-            reader.GetInt64(8), reader.GetInt32(9));
+            reader.IsDBNull(5) ? null : reader.GetString(5),
+            reader.IsDBNull(6) ? null : reader.GetString(6),
+            !reader.IsDBNull(7), !reader.IsDBNull(8), !reader.IsDBNull(9),
+            !reader.IsDBNull(10), !reader.IsDBNull(11),
+            reader.GetInt64(12), reader.GetInt32(13));
     }
 }

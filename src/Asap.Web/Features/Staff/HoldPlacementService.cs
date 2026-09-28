@@ -1221,7 +1221,9 @@ public sealed class HoldPlacementService(
                     : IsManualEvidenceEligible(manualActorEvidence!, staff, requestSnapshot.LibraryOrganizationId));
             if (!permitted)
             {
-                var released = await ReleaseOwnedOperationAsync(context, owner, expectedPhase, cancellationToken);
+                var released = await ReleaseOwnedOperationAsync(
+                    context, owner, expectedPhase, cancellationToken,
+                    fenceAcquiredAuthorityRejection: expectedPhase == "acquired");
                 await transaction.CommitAsync(cancellationToken);
                 return released
                     ? actor is not null && owner.IsRecovery ? "hold_resolution_forbidden" : "staff_scope_forbidden"
@@ -1262,11 +1264,16 @@ public sealed class HoldPlacementService(
         AsapDbContext context,
         OwnedOperation owner,
         string expectedPhase,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        bool fenceAcquiredAuthorityRejection = false) =>
         await context.Database.ExecuteSqlInterpolatedAsync(
             $"""
             UPDATE [asap].[HoldPlacementOperation]
-            SET [OwnerToken] = NULL, [LeaseExpiresUtc] = NULL
+            SET [State] = CASE WHEN {fenceAcquiredAuthorityRejection} = CAST(1 AS bit)
+                    THEN N'operator_required' ELSE [State] END,
+                [LastErrorCode] = CASE WHEN {fenceAcquiredAuthorityRejection} = CAST(1 AS bit)
+                    THEN N'staff_authority_changed_before_dispatch' ELSE [LastErrorCode] END,
+                [OwnerToken] = NULL, [LeaseExpiresUtc] = NULL
             WHERE [Id] = {owner.Id} AND [OwnerToken] = {owner.Token} AND [ExecutionEpoch] = {owner.Epoch}
               AND [State] = N'in_progress' AND [Phase] = {expectedPhase} AND [CompletedUtc] IS NULL
               AND [LeaseExpiresUtc] > SYSUTCDATETIME();
