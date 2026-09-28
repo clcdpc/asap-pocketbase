@@ -2587,6 +2587,7 @@ export function createWorkflowApp() {
         announce(refreshed === false ? `${message} The queue could not refresh.` : message, messageKind);
       }
     } catch (error) {
+      const recordedProviderOutcome = error.response?.providerOutcomeRecorded === true;
       const definiteNoCommit = ['bib_validation_unavailable', 'notification_dependency_unavailable']
         .includes(error.response?.code);
       const unconfirmedOutcome = !definiteNoCommit &&
@@ -2594,19 +2595,24 @@ export function createWorkflowApp() {
       const outcomeUnknown = unconfirmedOutcome ||
         ['request_outcome_unconfirmed', 'hold_outcome_unconfirmed', 'hold_provider_error']
           .includes(error.response?.code);
-      if (error.status === 409 || outcomeUnknown) {
-        const message = outcomeUnknown
+      const holdReviewRequired = path.endsWith('/place-hold') && error.status === 409;
+      if (error.status === 409 || outcomeUnknown || recordedProviderOutcome) {
+        const message = recordedProviderOutcome
+          ? 'Polaris returned a hold result, but request finalization was deferred after staff access changed. Review the hold operation with an authorized account.'
+          : outcomeUnknown
           ? path.endsWith('/place-hold')
             ? 'The hold outcome could not be confirmed. Reload the operation before trying again.'
             : 'The request outcome could not be confirmed. Reload before trying again.'
           : error.message || 'The request changed. Review the refreshed version before trying again.';
-        if (outcomeUnknown && isCurrentDialogMutation(mutation, request, 'title_request')) {
+        if ((outcomeUnknown || recordedProviderOutcome || holdReviewRequired) &&
+            isCurrentDialogMutation(mutation, request, 'title_request')) {
           retainUnconfirmedOutcome(message, mutation.token);
         }
         const refreshed = await loadQueue({ skipDeepLink: true, silent: true });
         if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
         const detailLoaded = await openRequest(request.id);
-        if (outcomeUnknown && refreshed === true && detailLoaded === true) {
+        if ((outcomeUnknown || recordedProviderOutcome || holdReviewRequired) &&
+            refreshed === true && detailLoaded === true) {
           clearCommittedSessionFallback(mutation.token);
         }
         if (isCurrentDialogSelection(request, 'title_request')) announce(message, 'error');
@@ -2877,22 +2883,28 @@ export function createWorkflowApp() {
         announce(`${message}${followup}`, notification.partial || followup ? 'warning' : 'success');
       }
     } catch (error) {
+      const recordedProviderOutcome = error.response?.providerOutcomeRecorded === true;
       const definiteNoCommit = error.response?.code === 'hold_resolution_dependency_unavailable';
       const unconfirmedOutcome = !definiteNoCommit &&
         (isUnconfirmedMutationError(error, mutation.signal) || error.status === 408 || error.status >= 500);
       const outcomeUnknown = unconfirmedOutcome ||
         ['hold_outcome_unconfirmed', 'hold_provider_error'].includes(error.response?.code);
-      if (error.status === 409 || outcomeUnknown) {
-        const message = outcomeUnknown
+      const holdReviewRequired = error.status === 409;
+      if (error.status === 409 || outcomeUnknown || recordedProviderOutcome) {
+        const message = recordedProviderOutcome
+          ? 'Polaris returned a hold result, but request finalization was deferred after staff access changed. Review the hold operation with an authorized account.'
+          : outcomeUnknown
           ? 'The hold recovery outcome could not be confirmed. Reload before trying again.'
           : error.message || 'The hold recovery changed. Review the refreshed request before trying again.';
-        if (outcomeUnknown && isCurrentDialogMutation(mutation, request, 'title_request')) {
+        if ((outcomeUnknown || recordedProviderOutcome || holdReviewRequired) &&
+            isCurrentDialogMutation(mutation, request, 'title_request')) {
           retainUnconfirmedOutcome(message, mutation.token);
         }
         const refreshed = await loadQueue({ skipDeepLink: true, silent: true });
         if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
         const detailLoaded = await openRequest(request.id);
-        if (outcomeUnknown && refreshed === true && detailLoaded === true) {
+        if ((outcomeUnknown || recordedProviderOutcome || holdReviewRequired) &&
+            refreshed === true && detailLoaded === true) {
           clearCommittedSessionFallback(mutation.token);
         }
         if (isCurrentDialogSelection(request, 'title_request')) announce(message, 'error');

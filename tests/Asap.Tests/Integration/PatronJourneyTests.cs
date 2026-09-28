@@ -5300,9 +5300,9 @@ public sealed partial class PatronJourneyTests
                 DECLARE @actorId bigint = (SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG');
                 DECLARE @formatId bigint = (SELECT TOP (1) [Id] FROM [asap].[MaterialFormat] WHERE [Code] = N'book');
                 INSERT INTO [asap].[TitleRequest]
-                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
+                    ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES (2, N'20000000002130', N'Reply ready recovery title', 1, @formatId, N'pending_hold', N'9030',
+                VALUES (2, N'20000000002130', N'Reply ready recovery title', 1, @formatId, N'pending_hold', N'9030', 1,
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 DECLARE @requestId bigint = SCOPE_IDENTITY();
                 INSERT INTO [asap].[HoldPlacementOperation]
@@ -10726,6 +10726,12 @@ public sealed partial class PatronJourneyTests
         public TaskCompletionSource CreateStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<HoldProviderResult>? PendingCreate { get; private set; }
+        public TaskCompletionSource HoldReadStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource? PendingHoldRead { get; private set; }
+        public TaskCompletionSource RefreshStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource? PendingRefresh { get; private set; }
         public TaskCompletionSource ReplyStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<HoldProviderResult>? PendingReply { get; private set; }
@@ -10781,6 +10787,18 @@ public sealed partial class PatronJourneyTests
         public void BlockCreate() => PendingCreate = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
+        public void BlockHoldRead() => PendingHoldRead = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void CompleteBlockedHoldRead() => PendingHoldRead!.TrySetResult();
+
+        public void BlockRefresh() => PendingRefresh = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void CompleteBlockedRefresh() => PendingRefresh!.TrySetResult();
+
+        public void CompleteBlockedCreateWithConfiguredResult() => PendingCreate!.TrySetResult(createResult);
+
         public void CompleteBlockedCreate(HoldProviderResult result) =>
             PendingCreate!.TrySetResult(result);
 
@@ -10795,10 +10813,15 @@ public sealed partial class PatronJourneyTests
             string pin,
             CancellationToken cancellationToken) => RefreshAsync(barcode, cancellationToken);
 
-        public Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
+        public async Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(new PatronSnapshot(
+            if (PendingRefresh is not null)
+            {
+                RefreshStarted.TrySetResult();
+                await PendingRefresh.Task.WaitAsync(cancellationToken);
+            }
+            return new PatronSnapshot(
                 7105,
                 barcode,
                 "hold-patron@example.org",
@@ -10809,7 +10832,7 @@ public sealed partial class PatronJourneyTests
                 101,
                 2,
                 "Test Library",
-                101));
+                101);
         }
 
         public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(
@@ -10830,7 +10853,7 @@ public sealed partial class PatronJourneyTests
         public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken) =>
             Task.FromResult(new BibValidationResult(true));
 
-        public Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(
+        public async Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(
             string barcode,
             CancellationToken cancellationToken)
         {
@@ -10840,8 +10863,12 @@ public sealed partial class PatronJourneyTests
             {
                 throw HoldReadException;
             }
-
-            return Task.FromResult(Holds);
+            if (PendingHoldRead is not null)
+            {
+                HoldReadStarted.TrySetResult();
+                await PendingHoldRead.Task.WaitAsync(cancellationToken);
+            }
+            return Holds;
         }
 
         public Task<HoldProviderResult> CreateHoldAsync(

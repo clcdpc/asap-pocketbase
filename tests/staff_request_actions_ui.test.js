@@ -104,6 +104,8 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     let payload = null;
     let committed = false;
     let mutationFailed = false;
+    let recordedHoldForbidden = false;
+    let holdReviewFailed = false;
     let postCommitQueueLoads = 0;
     let releaseTemplate = null;
     let releasePickup = null;
@@ -114,6 +116,9 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         return response(200, { authenticated: true, accessAllowed: true, antiforgeryToken: 'token', staff });
       }
       if (url.includes('/title-requests?')) {
+        if (recordedHoldForbidden || holdReviewFailed) {
+          return response(401, { code: 'staff_session_invalid' });
+        }
         if (mutationFailed && scenarioOptions.mutationNetworkFailureAfter401) {
           return response(401, { code: 'staff_session_invalid' });
         }
@@ -176,6 +181,18 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
           scenarioOptions.holdProviderError) {
         return response(502, { code: 'hold_provider_error',
           message: 'The hold provider outcome could not be confirmed. Review the operation before retrying.' });
+      }
+      if (url.endsWith(`/title-requests/${id}/place-hold`) && options.method === 'POST' &&
+          scenarioOptions.holdRecordedForbidden) {
+        recordedHoldForbidden = true;
+        return response(403, { code: 'staff_scope_forbidden', providerOutcomeRecorded: true,
+          operationId: '31' });
+      }
+      if (url.endsWith(`/title-requests/${id}/place-hold`) && options.method === 'POST' &&
+          scenarioOptions.holdReviewRequired) {
+        holdReviewFailed = true;
+        return response(409, { code: 'hold_operator_required',
+          message: 'Hold placement is blocked or requires reconciliation.' });
       }
       if (url.endsWith('/bib-lookup') && options.method === 'POST') {
         return response(200, { bibId: '9001', title: 'Original title', author: null });
@@ -278,10 +295,20 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       const placeHold = [...document.querySelectorAll('.action-bar button')]
         .find(item => item.textContent.includes('Place hold'));
       assert.equal(Boolean(placeHold), Boolean(scenarioOptions.verifiedPendingHold));
-      if (scenarioOptions.holdTimeout || scenarioOptions.holdProviderError) {
+      if (scenarioOptions.holdTimeout || scenarioOptions.holdProviderError ||
+          scenarioOptions.holdRecordedForbidden || scenarioOptions.holdReviewRequired) {
         placeHold.click();
-        await until(() => /hold outcome could not be confirmed/i.test(document.querySelector('#app-status').textContent),
-          'hold provider uncertainty reports an unconfirmed result');
+        if (scenarioOptions.holdRecordedForbidden || scenarioOptions.holdReviewRequired) {
+          await until(() => !document.querySelector('#signed-out').hidden,
+            'recorded provider result remains visible after session loss');
+          assert.match(document.querySelector('#signed-out-message').textContent,
+            scenarioOptions.holdRecordedForbidden ? /Polaris returned a hold result/ : /requires reconciliation/);
+          assert.match(document.querySelector('#signed-out-message').textContent,
+            /authoritative result before retrying/);
+        } else {
+          await until(() => /hold outcome could not be confirmed/i.test(document.querySelector('#app-status').textContent),
+            'hold provider uncertainty reports an unconfirmed result');
+        }
         assert.equal(payload, null, 'hold failure must not submit a title action');
       }
       return;
@@ -624,6 +651,8 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
   await scenario('reject', false, false, { verifiedPendingHold: true });
   await scenario('reject', false, false, { verifiedPendingHold: true, holdTimeout: true });
   await scenario('reject', false, false, { verifiedPendingHold: true, holdProviderError: true });
+  await scenario('reject', false, false, { verifiedPendingHold: true, holdRecordedForbidden: true });
+  await scenario('reject', false, false, { verifiedPendingHold: true, holdReviewRequired: true });
   await scenario('reject', false, false, { autoHoldOffBib: true });
   await scenario('reject', false, false, { autoHoldOffOutstandingPurchase: true });
   await scenario('reject', false, false, { autoHoldOnlyOutstandingPurchase: true });
