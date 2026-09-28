@@ -1176,7 +1176,8 @@ async function runStaleMutationCompletions(browser, args, report) {
     await oldListStarted;
     await oldCopyListAccepted;
     const uncertainCreatePath = `**/api/asap/staff/title-requests/${args.staleCreateSourceId}/additional-copy`;
-    const uncertainCreate = route => route.abort('failed');
+    const uncertainCreate = route => route.fulfill({ status: 200, contentType: 'application/json',
+      body: JSON.stringify({ committed: true, additionalCopyRequestId: '1', finalStatus: 'open' }) });
     await page.route(uncertainCreatePath, uncertainCreate);
     await page.getByRole('button', { name: 'Create task' }).click();
     await page.locator('#app-status').filter({ hasText: /Additional-copy creation could not be confirmed/ }).waitFor();
@@ -1498,6 +1499,12 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     await page.getByRole('button', { name: 'Claim', exact: true }).click();
     await page.locator('#app-status').filter({ hasText: /additional-copy action outcome could not be confirmed/i }).waitFor();
     await page.unroute(`**/api/asap/staff/additional-copies/${created.id}/claim`, claimTransportFailure);
+    const emptyClaimReply = route => route.fulfill({ status: 200, contentType: 'application/json',
+      body: JSON.stringify({ committed: true, finalStatus: 'open' }) });
+    await page.route(`**/api/asap/staff/additional-copies/${created.id}/claim`, emptyClaimReply);
+    await page.getByRole('button', { name: 'Claim', exact: true }).click();
+    await page.locator('#app-status').filter({ hasText: /additional-copy action outcome could not be confirmed/i }).waitFor();
+    await page.unroute(`**/api/asap/staff/additional-copies/${created.id}/claim`, emptyClaimReply);
     const uncertainClaimReply = route => route.fulfill({ status: 503, contentType: 'application/json',
       body: JSON.stringify({ code: 'additional_copy_outcome_unconfirmed',
         message: 'The additional-copy outcome could not be confirmed. Reload before trying again.' }) });
@@ -1599,6 +1606,14 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     await page.locator('#additional-copy-claim-filter').selectOption('all');
     await page.locator('[data-copy-status="closed"]').click();
     await page.getByRole('button', { name: `Open additional-copy task ${args.invalidClosedCopyId}` }).click();
+    const reopenPath = `**/api/asap/staff/additional-copies/${args.invalidClosedCopyId}/reopen`;
+    const advancedReopenDetail = async route => {
+      const response = await route.fetch();
+      const committed = await response.json();
+      assert.equal(committed.status, 'open');
+      await route.fulfill({ response, json: { ...committed, finalStatus: 'closed' } });
+    };
+    await page.route(reopenPath, advancedReopenDetail);
     page.once('dialog', dialog => dialog.accept());
     const [reopenResponse] = await Promise.all([
       page.waitForResponse(candidate =>
@@ -1611,6 +1626,8 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     assert.equal(reopened.claimClearedReason, 'claimant_inactive');
     assert.equal(reopened.claimedByStaffUserId, null);
     await page.locator('#app-status').filter({ hasText: /retained claim was cleared.*claimant inactive/i }).waitFor();
+    assert.match(await page.locator('#app-status').textContent(), /Final state: Open/);
+    await page.unroute(reopenPath, advancedReopenDetail);
     await page.getByText(/System cleared retained claim while reopening \(claimant_inactive\)/).waitFor();
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'additional-copy-cleared-reopen');
 
@@ -1620,7 +1637,8 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
       const committed = await response.json();
       assert.equal(committed.committed, true);
       postCommitClaimVersion = committed.version;
-      await route.fulfill({ response, json: { committed: true, request: null, finalStatus: committed.finalStatus } });
+      await route.fulfill({ response, json: { committed: true, request: null,
+        finalStatus: committed.finalStatus, refreshUnavailable: true } });
     });
     await page.route(`**/api/asap/staff/additional-copies/${args.invalidClosedCopyId}`, route =>
       route.fulfill({ status: 401, contentType: 'application/json',
@@ -1912,6 +1930,25 @@ async function runOperatorResolution(browser, args, axeSource, report) {
     await page.getByText(/Operation \d+; attempt 2; epoch 3; frozen patron \*+2904; frozen BIB 92904\./).waitFor();
     await fillOperatorResolution(page, true);
     const uncertainResolutionPath = /\/api\/asap\/staff\/hold-operations\/\d+\/resolve$/;
+    const readinessUnavailable = route => route.fulfill({ status: 503, contentType: 'application/json',
+      body: JSON.stringify({ code: 'hold_resolution_dependency_unavailable',
+        message: 'Hold resolution could not start because a dependency is unavailable. The operation was not changed.' }) });
+    await page.route(uncertainResolutionPath, readinessUnavailable);
+    page.once('dialog', dialog => dialog.accept());
+    await page.getByRole('button', { name: 'Resolve operation' }).click();
+    await page.locator('#app-status').filter({ hasText: /The operation was not changed/ }).waitFor();
+    assert.doesNotMatch(await page.locator('#app-status').textContent(), /outcome could not be confirmed/);
+    await page.unroute(uncertainResolutionPath, readinessUnavailable);
+    await fillOperatorResolution(page, true);
+    const emptyResolutionReply = route => route.fulfill({ status: 200, contentType: 'application/json',
+      body: JSON.stringify({ committed: true,
+        operationId: new URL(route.request().url()).pathname.match(/hold-operations\/(\d+)\/resolve$/)[1] }) });
+    await page.route(uncertainResolutionPath, emptyResolutionReply);
+    page.once('dialog', dialog => dialog.accept());
+    await page.getByRole('button', { name: 'Resolve operation' }).click();
+    await page.locator('#app-status').filter({ hasText: /hold recovery outcome could not be confirmed/i }).waitFor();
+    await page.unroute(uncertainResolutionPath, emptyResolutionReply);
+    await fillOperatorResolution(page, true);
     const providerUncertain = route => route.fulfill({ status: 502, contentType: 'application/json',
       body: JSON.stringify({ code: 'hold_provider_error',
         message: 'The hold provider outcome could not be confirmed. Review the operation before retrying.' }) });

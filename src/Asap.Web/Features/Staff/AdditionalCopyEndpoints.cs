@@ -88,6 +88,7 @@ public static class AdditionalCopyEndpoints
             notificationStatus = result.NotificationStatus,
             notificationReason = result.NotificationReason,
             additionalCopyRequest = request,
+            refreshUnavailable = request is null,
             result.OpenCountBefore,
             result.OpenCountAfter,
             purchaseReminderEmail = new

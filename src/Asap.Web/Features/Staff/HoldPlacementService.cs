@@ -421,8 +421,15 @@ public sealed class HoldPlacementService(
         EmailTransportReadiness readiness = EmailTransportReadiness.NotConfigured;
         if (outcome == "succeeded")
         {
-            patron = await TryRefreshPatronAsync(preOperation.PatronBarcodeSnapshot, cancellationToken);
-            readiness = await emailSender.CheckReadinessAsync(preRequest.LibraryOrganizationId, cancellationToken);
+            try
+            {
+                patron = await TryRefreshPatronAsync(preOperation.PatronBarcodeSnapshot, cancellationToken);
+                readiness = await emailSender.CheckReadinessAsync(preRequest.LibraryOrganizationId, cancellationToken);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                return new HoldPlacementResult("hold_resolution_dependency_unavailable", operationId);
+            }
         }
 
         long? outboxId = null;

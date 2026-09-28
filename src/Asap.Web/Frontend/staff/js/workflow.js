@@ -370,6 +370,21 @@ export function createWorkflowApp() {
     return !signal.aborted && (isAbortError(error) || error?.status === 0);
   }
 
+  function unconfirmedResponseError() {
+    return Object.assign(new Error('The server response did not confirm the workflow result.'), { status: 0 });
+  }
+
+  function isCommittedRequestResponse(result, requestId) {
+    if (result?.committed !== true) return false;
+    if (result.request === null) {
+      return result.refreshUnavailable === true && Object.hasOwn(result, 'finalStatus');
+    }
+    const detail = result.request || result;
+    if (String(detail.id) === String(requestId) && typeof detail.version === 'string' &&
+        detail.version && typeof detail.status === 'string' && detail.status) return true;
+    return false;
+  }
+
   function confirmCurrent(request, requestType, message) {
     return window.confirm(message) && isCurrentDialogRequest(request, requestType);
   }
@@ -1105,9 +1120,14 @@ export function createWorkflowApp() {
         signal: mutation.signal
       });
       if (!isCurrentDialogMutation(mutation, request, 'additional_copy')) return;
+      if (operation === 'delete' ? result?.deleted !== true :
+          !isCommittedRequestResponse(result, request.id)) {
+        throw unconfirmedResponseError();
+      }
       const notification = notificationOutcome(result.notificationStatus, result.notificationReason,
         operation === 'assign' ? 'Assignment notification' : 'Notification');
-      let message = `${successMessage}${result.finalStatus ? ` Final state: ${statusLabel(result.finalStatus)}.` : ''}${notification.text}`;
+      const resultStatus = result.status || result.finalStatus;
+      let message = `${successMessage}${resultStatus ? ` Final state: ${statusLabel(resultStatus)}.` : ''}${notification.text}`;
       let messageKind = notification.partial ? 'warning' : 'success';
       state.partialSessionFailureMessage = `${message} Sign in again to review ${operation === 'delete' ? 'the updated task list' : 'the committed task'}.`;
       state.partialSessionFailureOwner = mutation.token;
@@ -1130,6 +1150,13 @@ export function createWorkflowApp() {
           if (error.status !== 401 && !isAbortError(error)) message += ' Details could not refresh.';
         }
       }
+      if (current?.status && current.status !== resultStatus) {
+        message = `${successMessage} Final state: ${statusLabel(current.status)}.${notification.text}`;
+      }
+      if (result.claimClearedReason) message += ` The retained claim was cleared (${result.claimClearedReason.replaceAll('_', ' ')}).`;
+      if (state.partialSessionFailureOwner === mutation.token) {
+        state.partialSessionFailureMessage = `${message} Sign in again to review the committed task.`;
+      }
       if (!mutation.isCurrent() || !isCurrentDialogSelection(request, 'additional_copy')) return;
       if (current) {
         renderAdditionalCopy(current, { preserveDialogMutation: true });
@@ -1137,7 +1164,6 @@ export function createWorkflowApp() {
         state.selectedRequestVersion = null;
         dom.dialogBody.replaceChildren(element('p', { text: 'The action committed. Reload this task to review current details.' }));
       }
-      if (result.claimClearedReason) message += ` The retained claim was cleared (${result.claimClearedReason.replaceAll('_', ' ')}).`;
       dom.closeDialog.focus();
       announce(message, messageKind);
       if (state.dialogMutationInFlight === `copy:${request.id}:${request.version}`) {
@@ -2416,6 +2442,16 @@ export function createWorkflowApp() {
         }
       });
       if (!isCurrentAdditionalCopyCreation(mutation, pending)) return;
+      if (result?.committed !== true || typeof result.additionalCopyRequestId !== 'string' ||
+          !/^\d+$/.test(result.additionalCopyRequestId) || typeof result.finalStatus !== 'string' ||
+          !Object.hasOwn(result, 'additionalCopyRequest') ||
+          (result.additionalCopyRequest === null && result.refreshUnavailable !== true) ||
+          (result.additionalCopyRequest !== null &&
+            (String(result.additionalCopyRequest.id) !== result.additionalCopyRequestId ||
+             result.additionalCopyRequest.status !== result.finalStatus ||
+             typeof result.additionalCopyRequest.version !== 'string'))) {
+        throw unconfirmedResponseError();
+      }
       state.unconfirmedCopyCreationAwaitingRefresh = false;
       rememberUnconfirmedCopyCreation(false);
       const taskId = result.additionalCopyRequest?.id || result.additionalCopyRequestId;
@@ -2486,9 +2522,13 @@ export function createWorkflowApp() {
     try {
       const result = await authorizedJson(path, { method: 'POST', body, signal: mutation.signal });
       if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
+      if (!isCommittedRequestResponse(result, request.id)) {
+        throw unconfirmedResponseError();
+      }
       const committed = result?.committed === true;
       let current = result?.request || (committed ? (result.id ? result : null) : result);
-      const status = committed && result.finalStatus ? ` Final state: ${statusLabel(result.finalStatus)}.` : '';
+      const resultStatus = current?.status || result.finalStatus;
+      const status = committed && resultStatus ? ` Final state: ${statusLabel(resultStatus)}.` : '';
       const notificationLabel = body?.action === 'reject' ? 'Rejection email'
         : path.endsWith('/assign') ? 'Assignment notification'
           : body?.action === 'purchase' ? 'Purchase reminder' : 'Notification';
@@ -2511,6 +2551,12 @@ export function createWorkflowApp() {
           if (!isAbortError(error) && error.status !== 401) {
             message += ' Details and activity could not refresh.';
           }
+        }
+      }
+      if (current?.status && current.status !== resultStatus) {
+        message = `${successMessage} Final state: ${statusLabel(current.status)}.${notification.text}`;
+        if (state.partialSessionFailureOwner === mutation.token) {
+          state.partialSessionFailureMessage = `${message} Sign in again to review the committed request.`;
         }
       }
       if (state.partialSessionFailureOwner === mutation.token) {
@@ -2806,6 +2852,10 @@ export function createWorkflowApp() {
       const result = await authorizedJson(`/api/asap/staff/hold-operations/${operation.id}/${action}`,
         { method: 'POST', body, signal: mutation.signal });
       if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
+      if (result?.committed !== true || !['updated', 'resolved'].includes(result.code) ||
+          String(result.operationId) !== String(operation.id)) {
+        throw unconfirmedResponseError();
+      }
       const notification = notificationOutcome(result.notificationStatus, result.notificationReason, 'Hold notification');
       const finalState = result.finalStatus ? ` Final state: ${statusLabel(result.finalStatus)}.` :
         ' Review the refreshed request for final state.';
@@ -2827,8 +2877,9 @@ export function createWorkflowApp() {
         announce(`${message}${followup}`, notification.partial || followup ? 'warning' : 'success');
       }
     } catch (error) {
-      const unconfirmedOutcome = isUnconfirmedMutationError(error, mutation.signal) ||
-        error.status === 408 || error.status >= 500;
+      const definiteNoCommit = error.response?.code === 'hold_resolution_dependency_unavailable';
+      const unconfirmedOutcome = !definiteNoCommit &&
+        (isUnconfirmedMutationError(error, mutation.signal) || error.status === 408 || error.status >= 500);
       const outcomeUnknown = unconfirmedOutcome ||
         ['hold_outcome_unconfirmed', 'hold_provider_error'].includes(error.response?.code);
       if (error.status === 409 || outcomeUnknown) {

@@ -844,6 +844,11 @@ public static class TitleRequestEndpoints
             notificationReason = result.NotificationReason }),
         "not_found" => Results.NotFound(new { result.Code }),
         "hold_resolution_forbidden" => Results.Json(new { result.Code }, statusCode: StatusCodes.Status403Forbidden),
+        "hold_resolution_dependency_unavailable" => Results.Json(new
+        {
+            result.Code,
+            message = "Hold resolution could not start because a dependency is unavailable. The operation was not changed."
+        }, statusCode: StatusCodes.Status503ServiceUnavailable),
         "hold_provider_error" => Results.Json(new
         {
             result.Code,

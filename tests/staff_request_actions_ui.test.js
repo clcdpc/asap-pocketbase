@@ -211,12 +211,19 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         if (scenarioOptions.mutationServerFailure) {
           return response(500, { code: 'server_error', message: 'Unexpected server failure.' });
         }
+        if (scenarioOptions.mutationEmptySuccess) {
+          return response(200, {});
+        }
+        if (scenarioOptions.mutationMalformedCommit) {
+          return response(200, { committed: true });
+        }
         if (scenarioOptions.mutationDefiniteUnavailable) {
           return response(503, { code: 'notification_dependency_unavailable',
             message: 'Notification configuration is temporarily unavailable. The request was not changed.' });
         }
         const finalStatus = action === 'reject' ? 'closed' : action === 'alreadyOwn' || scenarioOptions.purchaseVerifiedBib ? 'pending_hold' : 'outstanding_purchase';
-        currentRequest = { ...currentRequest, version: 'v2', status: finalStatus,
+        currentRequest = { ...currentRequest, version: 'v2',
+          status: scenarioOptions.serverAdvancedStatus ? 'closed' : finalStatus,
           activity: [...currentRequest.activity, {
           id: '9007199254740999', eventType: 'status_changed', actorType: 'staff',
           actorName: 'Staff', message: 'Committed', created: '2026-01-02T00:00:00Z'
@@ -227,7 +234,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
           notificationStatus: scenarioOptions.rejectEmailQueued ? 'queued'
             : action === 'purchase' && explicitChoice && !scenarioOptions.purchaseVerifiedBib ? 'suppressed' : 'not_requested',
           notificationReason: action === 'purchase' && explicitChoice && !scenarioOptions.purchaseVerifiedBib ? 'mail_not_configured' : null,
-          refreshUnavailable: false });
+          refreshUnavailable: Boolean(scenarioOptions.detailRefreshFails) });
         return scenarioOptions.staleMutation
           ? new Promise(resolve => { releaseMutation = () => resolve(result); })
           : result;
@@ -511,7 +518,8 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       return;
     }
     if (scenarioOptions.mutationDependencyAbort || scenarioOptions.mutationNetworkFailure ||
-        scenarioOptions.mutationServerFailure) {
+        scenarioOptions.mutationServerFailure || scenarioOptions.mutationEmptySuccess ||
+        scenarioOptions.mutationMalformedCommit) {
       await until(() => /outcome could not be confirmed/.test(document.querySelector('#app-status').textContent),
         'uncancelled mutation dependency abort reports unconfirmed outcome');
       assert.equal(document.querySelector('#request-dialog .status-badge').textContent, 'Suggestion');
@@ -566,6 +574,11 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       await until(() => document.querySelectorAll('.request-activity li').length === 3,
         'committed activity renders once');
       assert.match(document.querySelector('#app-status').textContent, /Final state:/);
+      if (scenarioOptions.serverAdvancedStatus) {
+        assert.equal(document.querySelector('#request-dialog .status-badge').textContent, 'Closed');
+        assert.match(document.querySelector('#app-status').textContent, /Final state: Closed/);
+        assert.doesNotMatch(document.querySelector('#app-status').textContent, /Final state: Outstanding purchase/);
+      }
       if (scenarioOptions.rejectEmailQueued) {
         assert.match(document.querySelector('#app-status').textContent, /Rejection email queued/);
       }
@@ -580,6 +593,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
 (async () => {
   await scenario('purchase', true, false);
   await scenario('purchase', false, true);
+  await scenario('purchase', false, true, { serverAdvancedStatus: true });
   await scenario('purchase', true, true, { purchaseVerifiedBib: true });
   await scenario('reject', false, true);
   await scenario('reject', false, true, { rejectEmailQueued: true });
@@ -597,6 +611,8 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
   await scenario('reject', false, false, { mutationDependencyAbort: true });
   await scenario('reject', false, false, { mutationNetworkFailure: true });
   await scenario('reject', false, false, { mutationServerFailure: true });
+  await scenario('reject', false, false, { mutationEmptySuccess: true });
+  await scenario('reject', false, false, { mutationMalformedCommit: true });
   await scenario('reject', false, false, { mutationDefiniteUnavailable: true });
   await scenario('reject', false, false, { mutationNetworkFailureAfter401: true });
   await scenario('reject', false, false, { templateDependencyAbort: true });

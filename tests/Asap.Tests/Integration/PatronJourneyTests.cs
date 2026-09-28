@@ -6282,7 +6282,7 @@ public sealed partial class PatronJourneyTests
             await timedOut.Content.ReadAsStringAsync());
         using (var timedOutBody = JsonDocument.Parse(await timedOut.Content.ReadAsStringAsync()))
         {
-            Assert.AreEqual("hold_outcome_unconfirmed", timedOutBody.RootElement.GetProperty("code").GetString());
+            Assert.AreEqual("hold_resolution_dependency_unavailable", timedOutBody.RootElement.GetProperty("code").GetString());
         }
         using (var unchanged = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}"))
         using (var unchangedBody = JsonDocument.Parse(await unchanged.Content.ReadAsStringAsync()))
