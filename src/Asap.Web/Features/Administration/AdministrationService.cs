@@ -1526,28 +1526,62 @@ public sealed class AdministrationService(
         JsonElement payload,
         CancellationToken cancellationToken)
     {
-        if (!TryGetAny(payload, out var templates, "templates", "emailTemplates"))
+        var deletedKeys = new List<string>();
+        void AddDeletedKey(JsonElement item, string? legacyKey = null)
         {
-            var emails = GetObject(payload, "emails", "email");
-            if (!TryGetAny(emails, out templates, "rejection_templates"))
+            if (item.ValueKind != JsonValueKind.Object)
             {
-                return false;
+                return;
+            }
+            var key = Clean(GetString(item, "templateKey") ?? GetString(item, "key") ?? legacyKey);
+            var sourceId = GetLong(item, "sourceTemplateId") ?? GetLong(item, "sourceId");
+            var isCustom = GetBool(item, "isCustom") == true || GetBool(item, "custom") == true ||
+                (GetBool(item, "libraryCustom") == true && !sourceId.HasValue && key is not null);
+            var reset = GetBool(item, "reset") == true || GetBool(item, "useSystemDefault") == true ||
+                GetBool(item, "overridden") == false;
+            if (key is not null && isCustom && reset &&
+                (GetInt(item, "organizationId") is not int itemOrganization || itemOrganization == organizationId))
+            {
+                deletedKeys.Add(key);
             }
         }
-        if (templates.ValueKind != JsonValueKind.Array)
-        {
-            return false;
-        }
 
-        var deletedKeys = templates.EnumerateArray()
-            .Where(item => item.ValueKind == JsonValueKind.Object &&
-                (GetBool(item, "isCustom") == true || GetBool(item, "custom") == true) &&
-                (GetBool(item, "reset") == true || GetBool(item, "useSystemDefault") == true ||
-                 GetBool(item, "overridden") == false))
-            .Select(item => Clean(GetString(item, "templateKey") ?? GetString(item, "key")))
-            .Where(key => key is not null)
-            .ToArray();
-        if (deletedKeys.Length == 0)
+        if (TryGetAny(payload, out var templates, "templates", "emailTemplates"))
+        {
+            if (templates.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in templates.EnumerateArray())
+                {
+                    AddDeletedKey(item);
+                }
+            }
+        }
+        else
+        {
+            var emails = GetObject(payload, "emails", "email");
+            if (emails.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var property in emails.EnumerateObject())
+                {
+                    if (property.Name == "rejection_templates")
+                    {
+                        if (property.Value.ValueKind == JsonValueKind.Array)
+                        {
+                            foreach (var item in property.Value.EnumerateArray())
+                            {
+                                AddDeletedKey(item);
+                            }
+                        }
+                        continue;
+                    }
+                    if (property.Name is not ("fromAddress" or "fromName" or "postmarkToken" or "serverToken"))
+                    {
+                        AddDeletedKey(property.Value, property.Name);
+                    }
+                }
+            }
+        }
+        if (deletedKeys.Count == 0)
         {
             return false;
         }

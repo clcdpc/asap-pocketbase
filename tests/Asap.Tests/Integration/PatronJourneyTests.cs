@@ -1547,6 +1547,19 @@ public sealed partial class PatronJourneyTests
             using var legacyBlockedBody = JsonDocument.Parse(await legacyBlocked.Content.ReadAsStringAsync());
             Assert.AreEqual("template_referenced", legacyBlockedBody.RootElement.GetProperty("code").GetString());
 
+            using var namedLegacyBlocked = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+            {
+                orgId = libraryId.ToString(),
+                version = current.RootElement.GetProperty("version").GetString(),
+                emails = new Dictionary<string, object?>
+                {
+                    [key] = new { libraryCustom = true, reset = true }
+                }
+            });
+            Assert.AreEqual(HttpStatusCode.Conflict, namedLegacyBlocked.StatusCode);
+            using var namedLegacyBlockedBody = JsonDocument.Parse(await namedLegacyBlocked.Content.ReadAsStringAsync());
+            Assert.AreEqual("template_referenced", namedLegacyBlockedBody.RootElement.GetProperty("code").GetString());
+
             using var stillReferenced = await ReadSettingsDocumentAsync(client, libraryId.ToString());
             Assert.AreEqual(templateId, stillReferenced.RootElement.GetProperty("stored")
                 .GetProperty("libraryOverride").GetProperty("workflow")
