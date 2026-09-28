@@ -14,7 +14,8 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Asap.Web.Features.Staff;
 
-public sealed record HoldPlacementResult(string Code, long? OperationId = null);
+public sealed record HoldPlacementResult(string Code, long? OperationId = null,
+    string? FinalStatus = null, string? NotificationStatus = null, string? NotificationReason = null);
 
 public sealed record ResolveHoldOperationInput(
     string? Version,
@@ -45,7 +46,8 @@ public sealed class HoldPlacementService(
     RecipientDomainPolicy recipientDomainPolicy,
     IEmailOutboxDispatcher outboxDispatcher,
     WorkflowProcessingGuard workflowProcessingGuard,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    ILogger<HoldPlacementService> logger)
 {
     private static readonly TimeSpan LeaseDuration = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(30);
@@ -617,8 +619,16 @@ public sealed class HoldPlacementService(
         await context.SaveChangesAsync(cancellationToken);
         outboxId = pendingOutbox?.Status == "pending" ? pendingOutbox.Id : null;
         await transaction.CommitAsync(cancellationToken);
-        if (outboxId.HasValue) outboxDispatcher.Enqueue(outboxId.Value);
-        return new HoldPlacementResult("resolved", operationId);
+        var notificationStatus = pendingOutbox is null ? "not_applicable" :
+            pendingOutbox.Status == "pending" ? "queued" : "suppressed";
+        var notificationReason = pendingOutbox?.SuppressionReason;
+        if (outboxId.HasValue && !DispatchCommittedOutbox(outboxId.Value, request.Id))
+        {
+            notificationStatus = "dispatch_failed";
+            notificationReason = "queue_unavailable";
+        }
+        return new HoldPlacementResult("resolved", operationId, request.Status,
+            notificationStatus, notificationReason);
     }
 
     internal async Task<HoldPlacementResult> RecordCompletedIdentityAsync(
@@ -780,6 +790,7 @@ public sealed class HoldPlacementService(
         if (!request.RowVersion.SequenceEqual(expectedVersion)) return new AcquisitionResult("stale_version");
         if (request.Status != "pending_hold" || !request.AutoHold) return new AcquisitionResult("hold_not_eligible");
         if (!int.TryParse(request.BibId, out var bibId) || bibId <= 0) return new AcquisitionResult("bib_required");
+        if (!request.BibIdStaffVerified) return new AcquisitionResult("bib_unverified");
         if (string.IsNullOrWhiteSpace(request.Barcode)) return new AcquisitionResult("patron_barcode_missing");
 
         var existing = await context.HoldPlacementOperations.FromSqlInterpolated(
@@ -857,6 +868,14 @@ public sealed class HoldPlacementService(
             return await ObserveMarkedAmbiguityAsync(owner, cancellationToken);
         }
         if (operation.Phase != "acquired") return new HoldPlacementResult("operation_phase_invalid", owner.Id);
+
+        var sourceError = await AcquiredSourceErrorAsync(operation, cancellationToken);
+        if (sourceError is not null)
+        {
+            return await RequireOperatorAsync(owner, sourceError, cancellationToken)
+                ? new HoldPlacementResult(sourceError, owner.Id)
+                : new HoldPlacementResult("operation_ownership_lost", owner.Id);
+        }
 
         PatronSnapshot patron;
         IReadOnlyList<PolarisHoldSnapshot> holds;
@@ -951,6 +970,21 @@ public sealed class HoldPlacementService(
         };
     }
 
+    private async Task<string?> AcquiredSourceErrorAsync(
+        HoldPlacementOperation operation,
+        CancellationToken cancellationToken)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var request = await context.TitleRequests.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.Id == operation.TitleRequestId, cancellationToken);
+        if (request is null || request.Status != "pending_hold" || !request.AutoHold ||
+            !string.Equals(request.BibId, operation.BibIdSnapshot, StringComparison.Ordinal))
+        {
+            return "hold_not_eligible";
+        }
+        return request.BibIdStaffVerified ? null : "bib_unverified";
+    }
+
     private async Task<HoldPlacementResult> ExecuteReplyAsync(
         OwnedOperation owner,
         CurrentStaff? actor,
@@ -1041,6 +1075,10 @@ public sealed class HoldPlacementService(
                 [DetailJson] = {detail}
             WHERE [Id] = {owner.Id} AND [OwnerToken] = {owner.Token} AND [ExecutionEpoch] = {owner.Epoch}
               AND [State] = N'in_progress' AND [Phase] = N'acquired'
+              AND EXISTS (SELECT 1 FROM [asap].[TitleRequest] AS request
+                  WHERE request.[Id] = [TitleRequestId] AND request.[Status] = N'pending_hold'
+                    AND request.[AutoHold] = 1 AND request.[BibIdStaffVerified] = 1
+                    AND request.[BibId] = [BibIdSnapshot])
               AND [LeaseExpiresUtc] > SYSUTCDATETIME();
             """,
             cancellationToken);
@@ -1130,7 +1168,12 @@ public sealed class HoldPlacementService(
                 [ResultCode] = N'success', [OutcomeEvidenceKind] = N'existing_hold_adoption',
                 [ProviderStatusType] = {hold.StatusId.ToString()}, [ProviderStatusValue] = {Clean(hold.StatusDescription)}
             WHERE [Id] = {owner.Id} AND [OwnerToken] = {owner.Token} AND [ExecutionEpoch] = {owner.Epoch}
-              AND [State] = N'in_progress' AND [Phase] = N'acquired' AND [LeaseExpiresUtc] > SYSUTCDATETIME();
+              AND [State] = N'in_progress' AND [Phase] = N'acquired'
+              AND EXISTS (SELECT 1 FROM [asap].[TitleRequest] AS request
+                  WHERE request.[Id] = [TitleRequestId] AND request.[Status] = N'pending_hold'
+                    AND request.[AutoHold] = 1 AND request.[BibIdStaffVerified] = 1
+                    AND request.[BibId] = [BibIdSnapshot])
+              AND [LeaseExpiresUtc] > SYSUTCDATETIME();
             """,
             cancellationToken) == 1;
     }
@@ -1257,8 +1300,30 @@ public sealed class HoldPlacementService(
         await context.SaveChangesAsync(cancellationToken);
         outboxId = outbox?.Status == "pending" ? outbox.Id : null;
         await transaction.CommitAsync(cancellationToken);
-        if (outboxId.HasValue) outboxDispatcher.Enqueue(outboxId.Value);
-        return new HoldPlacementResult("updated", owner.Id);
+        var notificationStatus = outbox is null ? "not_applicable" :
+            outbox.Status == "pending" ? "queued" : "suppressed";
+        var notificationReason = outbox?.SuppressionReason;
+        if (outboxId.HasValue && !DispatchCommittedOutbox(outboxId.Value, request.Id))
+        {
+            notificationStatus = "dispatch_failed";
+            notificationReason = "queue_unavailable";
+        }
+        return new HoldPlacementResult("updated", owner.Id, request.Status,
+            notificationStatus, notificationReason);
+    }
+
+    private bool DispatchCommittedOutbox(long outboxId, long requestId)
+    {
+        try
+        {
+            outboxDispatcher.Enqueue(outboxId);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Hold notification dispatch failed after request {RequestId} committed", requestId);
+            return false;
+        }
     }
 
     private async Task<EmailOutbox?> AddPatronHoldOutboxAsync(
@@ -1331,13 +1396,13 @@ public sealed class HoldPlacementService(
         return new HoldPlacementResult("hold_operator_required", owner.Id);
     }
 
-    private async Task RequireOperatorAsync(
+    private async Task<bool> RequireOperatorAsync(
         OwnedOperation owner,
         string errorCode,
         CancellationToken cancellationToken)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        await context.Database.ExecuteSqlInterpolatedAsync(
+        return await context.Database.ExecuteSqlInterpolatedAsync(
             $"""
             UPDATE [asap].[HoldPlacementOperation]
             SET [State] = N'operator_required', [RecoveryAttemptCount] = [RecoveryAttemptCount] + 1,
@@ -1346,7 +1411,7 @@ public sealed class HoldPlacementService(
             WHERE [Id] = {owner.Id} AND [OwnerToken] = {owner.Token} AND [ExecutionEpoch] = {owner.Epoch}
               AND [CompletedUtc] IS NULL AND [LeaseExpiresUtc] > SYSUTCDATETIME();
             """,
-            cancellationToken);
+            cancellationToken) == 1;
     }
 
     private static Task RequireOperatorInTransactionAsync(

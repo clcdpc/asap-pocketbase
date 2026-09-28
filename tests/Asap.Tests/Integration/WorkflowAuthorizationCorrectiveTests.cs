@@ -77,12 +77,12 @@ public sealed partial class PatronJourneyTests
                     var copies = factory.Services.GetRequiredService<AdditionalCopyService>();
                     return (delete
                         ? await copies.DeleteClosedAsync(actor, requestId, input, CancellationToken.None)
-                        : await copies.ClaimAsync(actor, requestId, input, true, CancellationToken.None)).Code;
+                        : await copies.ClearClaimAsync(actor, requestId, input, CancellationToken.None)).Code;
                 }
                 var titles = factory.Services.GetRequiredService<TitleRequestMutationService>();
                 return (delete
                     ? await titles.DeleteClosedAsync(actor, requestId, input, CancellationToken.None)
-                    : await titles.ClaimAsync(actor, requestId, input, true, CancellationToken.None)).Code;
+                    : await titles.ClearClaimAsync(actor, requestId, input, CancellationToken.None)).Code;
             }
             Task<StaffLifecycleResult> ContractAsync() => change == "deactivate"
                 ? lifecycle.DeactivateAsync(superAdmin, admin.Id, new StaffDeactivateInput(StaffVersion.Encode(admin.RowVersion)), CancellationToken.None)
@@ -214,8 +214,8 @@ public sealed partial class PatronJourneyTests
         Task<TitleRequestMutationResult> MutateAsync() => reassign
             ? titles.AssignAsync(workflowActor, racingTitle.Id,
                 new AssignTitleRequestInput(StaffVersion.Encode(racingTitle.RowVersion), replacement.Id), CancellationToken.None)
-            : titles.ClaimAsync(workflowActor, racingTitle.Id,
-                new VersionInput(StaffVersion.Encode(racingTitle.RowVersion)), true, CancellationToken.None);
+            : titles.ClearClaimAsync(workflowActor, racingTitle.Id,
+                new VersionInput(StaffVersion.Encode(racingTitle.RowVersion)), CancellationToken.None);
 
         await using var blocker = new SqlConnection(databaseConnectionString);
         await blocker.OpenAsync();
@@ -285,7 +285,7 @@ public sealed partial class PatronJourneyTests
         Assert.IsNull(currentTitle.ClaimRuleId);
         var events = await verify.TitleRequestEvents.Where(item => item.TitleRequestId == racingTitle.Id).ToListAsync();
         Assert.HasCount(1, events);
-        Assert.AreEqual(lifecycleFirst ? "claim_cleared" : reassign ? "claim_manual_assigned" : "claim_manual_cleared", events[0].EventType);
+        Assert.AreEqual(lifecycleFirst ? "claim_cleared" : reassign ? "claim_manual_assigned" : "claim_admin_cleared", events[0].EventType);
         Assert.AreEqual(lifecycleFirst ? lifecycleActor.Id : workflowActor.Id, events[0].StaffUserId);
         if (lifecycleFirst)
         {

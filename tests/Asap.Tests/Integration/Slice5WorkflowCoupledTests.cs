@@ -127,11 +127,13 @@ public sealed partial class PatronJourneyTests
             Barcode = $"s5-cr-{Guid.NewGuid():N}",
             Title = $"Slice 5 coupled recovery {index}",
             MaterialFormatId = format.Id,
-            Status = "suggestion",
+            Status = "pending_hold",
             BibId = (93000 + index).ToString(),
+            BibIdStaffVerified = true,
+            AutoHold = true,
             IsbnCheckStatus = "found",
-            CreatedUtc = baseUtc.AddTicks(index),
-            UpdatedUtc = baseUtc.AddTicks(index)
+            CreatedUtc = baseUtc.AddTicks(200 + index),
+            UpdatedUtc = baseUtc.AddTicks(200 + index)
         }).ToList();
         var placementRequests = Enumerable.Range(0, placementCount).Select(index => new TitleRequest
         {
@@ -141,6 +143,7 @@ public sealed partial class PatronJourneyTests
             MaterialFormatId = format.Id,
             Status = "pending_hold",
             BibId = (94000 + index).ToString(),
+            BibIdStaffVerified = true,
             AutoHold = true,
             IsbnCheckStatus = "found",
             CreatedUtc = baseUtc.AddTicks(100 + index),

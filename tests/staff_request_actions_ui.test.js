@@ -42,6 +42,14 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     global.URLSearchParams = dom.window.URLSearchParams;
     dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
     dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
+    const confirmMessages = [];
+    dom.window.confirm = message => {
+      confirmMessages.push(message);
+      return !(scenarioOptions.formatWarning || scenarioOptions.autoClaimOther ||
+        scenarioOptions.autoHoldOffBib || scenarioOptions.autoHoldOffOutstandingPurchase ||
+        scenarioOptions.autoHoldOnlyOutstandingPurchase) ||
+        confirmMessages.length > 1;
+    };
     dom.window.gridjs = require(path.join(frontend, 'vendor/gridjs/6.2.0/gridjs.umd.js'));
     const staff = {
       id: '20', role: scenarioOptions.supersededFollowup ? 'super_admin' : 'staff',
@@ -50,21 +58,35 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       purchaseReminderDefault: profileDefault, defaultMineUnclaimedFilter: false
     };
     const configuration = {
-      availableFormats: ['book'], formatLabels: { book: 'Book' }, publicationOptions: [],
+      availableFormats: scenarioOptions.formatWarning || scenarioOptions.manualFormat
+        ? ['book', 'ebook'] : ['book'],
+      formatLabels: { book: 'Book', ebook: 'eBook' }, publicationOptions: [],
       additionalFieldDefinitions: [{ key: 'shelf', label: 'Shelf', type: 'text' }],
       formatRules: { book: { customFields: { shelf: { mode: 'optional' } } } }
     };
     const request = {
       id, version: 'v1', type: 'title_request', title: 'Original title', author: null,
       libraryOrgId: 2, libraryOrgName: 'Library', barcode: '20000000000001',
-      status: scenarioOptions.pickupWrappedResponse || scenarioOptions.stalePickup ? 'pending_hold' : 'suggestion',
+      status: scenarioOptions.autoHoldOffOutstandingPurchase || scenarioOptions.autoHoldOnlyOutstandingPurchase
+        ? 'outstanding_purchase'
+        : scenarioOptions.pickupWrappedResponse || scenarioOptions.stalePickup ||
+          scenarioOptions.unverifiedPendingHold || scenarioOptions.verifiedPendingHold ? 'pending_hold' : 'suggestion',
       format: 'book', formatLabel: 'Book', identifier: null,
-      bibid: scenarioOptions.verifyBib || scenarioOptions.verificationInvalidation ||
+      bibid: scenarioOptions.verifyBib || scenarioOptions.verifiedUnchangedBib || scenarioOptions.purchaseVerifiedBib ||
+        scenarioOptions.autoHoldOffBib || scenarioOptions.autoHoldOffOutstandingPurchase ||
+        scenarioOptions.autoHoldOnlyOutstandingPurchase ||
+        scenarioOptions.verifyBibAndInvalidateIdentifier ||
+        scenarioOptions.unverifiedPendingHold || scenarioOptions.verifiedPendingHold ||
+        scenarioOptions.verificationInvalidation ||
         scenarioOptions.pickupWrappedResponse || scenarioOptions.stalePickup ? '9001' : null,
-      bibidStaffVerified: Boolean(scenarioOptions.verificationInvalidation),
-      claimedByStaffUserId: scenarioOptions.unclaimedPreview ? null : staff.id,
+      bibidStaffVerified: Boolean(scenarioOptions.verificationInvalidation || scenarioOptions.verifiedUnchangedBib ||
+        scenarioOptions.purchaseVerifiedBib || scenarioOptions.verifiedPendingHold),
+      claimedByStaffUserId: scenarioOptions.unclaimedPreview ? null : scenarioOptions.autoClaimOther ? '21' : staff.id,
+      claimType: scenarioOptions.formatWarning || scenarioOptions.autoClaimOther ? 'automatic_format_rule'
+        : scenarioOptions.manualFormat ? 'manual' : null,
       publication: null, exactPublicationDate: '2026-01-02',
-      notes: 'Editable note', autohold: false,
+      notes: 'Editable note', autohold: Boolean(scenarioOptions.unverifiedPendingHold ||
+        scenarioOptions.verifiedPendingHold || scenarioOptions.autoHoldOnlyOutstandingPurchase),
       customFields: { shelf: { value: 'Reference', type: 'text', label: 'Shelf' } },
       workflowTags: [], phaseEnteredAt: '2026-01-01T00:00:00Z',
       created: '2026-01-01T00:00:00Z', updated: '2026-01-01T00:00:00Z',
@@ -81,6 +103,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       status: scenarioOptions.stalePickup ? 'suggestion' : request.status, activity: [] };
     let payload = null;
     let committed = false;
+    let mutationFailed = false;
     let postCommitQueueLoads = 0;
     let releaseTemplate = null;
     let releasePickup = null;
@@ -91,6 +114,9 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         return response(200, { authenticated: true, accessAllowed: true, antiforgeryToken: 'token', staff });
       }
       if (url.includes('/title-requests?')) {
+        if (mutationFailed && scenarioOptions.mutationNetworkFailureAfter401) {
+          return response(401, { code: 'staff_session_invalid' });
+        }
         if (committed && (scenarioOptions.laterUnrelated401 || scenarioOptions.laterUnrelated403)) {
           postCommitQueueLoads += 1;
           if (postCommitQueueLoads > (scenarioOptions.supersededFollowup ? 2 : 1)) {
@@ -165,7 +191,14 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         if (scenarioOptions.mutationDependencyAbort) {
           throw Object.assign(new Error('Dependency aborted'), { name: 'AbortError' });
         }
-        const finalStatus = action === 'reject' ? 'closed' : 'outstanding_purchase';
+        if (scenarioOptions.mutationNetworkFailure) {
+          throw new TypeError('Connection lost after submission');
+        }
+        if (scenarioOptions.mutationNetworkFailureAfter401) {
+          mutationFailed = true;
+          throw new TypeError('Connection lost after submission');
+        }
+        const finalStatus = action === 'reject' ? 'closed' : action === 'alreadyOwn' || scenarioOptions.purchaseVerifiedBib ? 'pending_hold' : 'outstanding_purchase';
         currentRequest = { ...currentRequest, version: 'v2', status: finalStatus,
           activity: [...currentRequest.activity, {
           id: '9007199254740999', eventType: 'status_changed', actorType: 'staff',
@@ -174,8 +207,9 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         committed = true;
         const result = response(200, { committed: true,
           request: scenarioOptions.detailRefreshFails ? null : currentRequest, finalStatus,
-          notificationStatus: action === 'purchase' && explicitChoice ? 'suppressed' : 'not_requested',
-          notificationReason: action === 'purchase' && explicitChoice ? 'mail_not_configured' : null,
+          notificationStatus: scenarioOptions.rejectEmailQueued ? 'queued'
+            : action === 'purchase' && explicitChoice && !scenarioOptions.purchaseVerifiedBib ? 'suppressed' : 'not_requested',
+          notificationReason: action === 'purchase' && explicitChoice && !scenarioOptions.purchaseVerifiedBib ? 'mail_not_configured' : null,
           refreshUnavailable: false });
         return scenarioOptions.staleMutation
           ? new Promise(resolve => { releaseMutation = () => resolve(result); })
@@ -198,8 +232,44 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       assert.equal(document.querySelector('.edit-form button[type="submit"]').disabled, false);
       return;
     }
+    if (scenarioOptions.autoClaimOther) {
+      assert.match(document.querySelector('.pending-audit-preview').textContent, /claim transfer/);
+      const notes = document.querySelector('.edit-form textarea');
+      notes.value = 'Updated note';
+      notes.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+      const form = document.querySelector('.edit-form');
+      form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+      assert.equal(payload, null, 'cancelled automatic-claim transfer must not mutate');
+      assert.match(confirmMessages[0], /transfers the automatic format claim from the current claimant to your manual claim/);
+      form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+      await until(() => payload !== null, 'automatic claim edit submitted');
+      assert.equal(payload.notes, 'Updated note');
+      await until(() => /Request changes saved/.test(document.querySelector('#app-status').textContent),
+        'automatic claim edit result rendered');
+      return;
+    }
     assert.match(document.querySelector('.pending-audit-preview').textContent, /No pending changes/);
     assert.equal(document.querySelector('.edit-form button[type="submit"]').disabled, true);
+    if (scenarioOptions.unverifiedPendingHold || scenarioOptions.verifiedPendingHold) {
+      const placeHold = [...document.querySelectorAll('.action-bar button')]
+        .find(item => item.textContent.includes('Place hold'));
+      assert.equal(Boolean(placeHold), Boolean(scenarioOptions.verifiedPendingHold));
+      return;
+    }
+    if (scenarioOptions.autoHoldOnlyOutstandingPurchase) {
+      const checkbox = document.querySelector('.edit-form input[type="checkbox"]');
+      checkbox.checked = false;
+      checkbox.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+      const form = document.querySelector('.edit-form');
+      form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+      assert.equal(payload, null, 'cancelled auto-hold-only change must not mutate');
+      assert.match(confirmMessages[0], /automatic purchase promotion may later close it without a hold/);
+      form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+      await until(() => payload !== null, 'confirmed auto-hold-only change submitted');
+      assert.equal(payload.autohold, false);
+      assert.equal(payload.staffSelectedBibId, undefined);
+      return;
+    }
     document.querySelector('.edit-form').dispatchEvent(
       new dom.window.Event('submit', { bubbles: true, cancelable: true }));
     assert.equal(payload, null, 'unchanged edit must not generate a claim event');
@@ -222,7 +292,9 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     exactDate.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
     assert.match(document.querySelector('.pending-audit-preview').textContent, /No pending changes/);
 
-    if (scenarioOptions.verifyBib) {
+    if (scenarioOptions.verifyBib || scenarioOptions.verifiedUnchangedBib || scenarioOptions.autoHoldOffBib ||
+        scenarioOptions.autoHoldOffOutstandingPurchase ||
+        scenarioOptions.purchaseVerifiedBib || scenarioOptions.verifyBibAndInvalidateIdentifier) {
       [...document.querySelectorAll('.edit-form button')]
         .find(item => item.textContent.includes('Search Polaris catalog')).click();
       await until(() => document.querySelector('#polaris-dialog').open, 'Polaris lookup opens');
@@ -230,15 +302,66 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         new dom.window.Event('submit', { bubbles: true, cancelable: true }));
       await until(() => document.querySelector('#polaris-results button'), 'BIB result appears');
       document.querySelector('#polaris-results button').click();
-      await until(() => /BIB verification/.test(document.querySelector('.pending-audit-preview').textContent),
-        'same-BIB Polaris selection previews verification');
-      return;
+      if (scenarioOptions.verifiedUnchangedBib) {
+        assert.match(document.querySelector('.pending-audit-preview').textContent, /No pending changes/);
+        assert.equal(document.querySelector('.edit-form button[type="submit"]').disabled, true);
+        [...document.querySelectorAll('.action-bar button')]
+          .find(item => item.textContent.includes('Already own')).click();
+        await until(() => payload !== null, 'unchanged verified BIB can enter Pending hold');
+        assert.equal(payload.action, 'alreadyOwn');
+        assert.match(confirmMessages[0], /Pending hold/);
+        return;
+      }
+      if (!scenarioOptions.purchaseVerifiedBib) {
+        await until(() => /BIB verification/.test(document.querySelector('.pending-audit-preview').textContent),
+          'same-BIB Polaris selection previews verification');
+        if (scenarioOptions.autoHoldOffBib || scenarioOptions.autoHoldOffOutstandingPurchase) {
+          const form = document.querySelector('.edit-form');
+          form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+          assert.equal(payload, null, 'cancelled no-auto-hold consequence must not mutate');
+          assert.match(confirmMessages[0], /No hold will be placed automatically/);
+          if (scenarioOptions.autoHoldOffOutstandingPurchase) {
+            assert.match(confirmMessages[0], /automatic purchase promotion may later close it without a hold/);
+          }
+          form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+          await until(() => payload !== null, 'confirmed BIB save submitted');
+          assert.equal(payload.autohold, false);
+          assert.equal(payload.staffSelectedBibId, '9001');
+          await until(() => /Request changes saved/.test(document.querySelector('#app-status').textContent),
+            'confirmed BIB save result rendered');
+          return;
+        }
+        if (scenarioOptions.verifyBibAndInvalidateIdentifier) {
+          const identifier = document.querySelector('.edit-form input[maxlength="100"]');
+          identifier.value = '9780000000002';
+          identifier.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+          assert.equal(document.querySelector('.polaris-selection-context').textContent, '');
+        }
+        return;
+      }
     }
     if (scenarioOptions.verificationInvalidation) {
       const bib = document.querySelector('.edit-form input[inputmode="numeric"]');
       bib.value = '';
       bib.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
       assert.match(document.querySelector('.pending-audit-preview').textContent, /BIB ID, BIB verification/);
+      return;
+    }
+    if (scenarioOptions.formatWarning || scenarioOptions.manualFormat) {
+      const format = document.querySelector('.edit-form select[aria-label="Format"]');
+      format.value = 'ebook';
+      format.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+      const form = document.querySelector('.edit-form');
+      form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+      if (scenarioOptions.formatWarning) {
+        assert.equal(payload, null, 'cancelled format warning must not mutate');
+        assert.match(confirmMessages[0], /replaces the automatic format claim with your manual claim/);
+        form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+      } else {
+        assert.deepEqual(confirmMessages, [], 'manual claim must not trigger automatic-claim warning');
+      }
+      await until(() => payload !== null, 'format edit submitted');
+      assert.equal(payload.format, 'ebook');
       return;
     }
 
@@ -320,6 +443,9 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       assert.equal(select.options[1].value, templateId);
       assert.equal(choice.querySelector('img'), null);
       select.value = templateId;
+    } else if (scenarioOptions.purchaseVerifiedBib) {
+      assert.equal(choice.querySelector('input[type="checkbox"]'), null);
+      assert.match(choice.textContent, /A purchase reminder does not apply/);
     } else {
       const checkbox = choice.querySelector('input[type="checkbox"]');
       assert.equal(checkbox.checked, profileDefault);
@@ -328,17 +454,34 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     choice.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
     await until(() => payload !== null, 'action submitted');
     if (action === 'reject') assert.equal(payload.rejectionTemplateId, templateId);
-    else assert.equal(payload.emailPurchaseReminder, explicitChoice);
+    else assert.equal(payload.emailPurchaseReminder, scenarioOptions.purchaseVerifiedBib ? false : explicitChoice);
+    if (scenarioOptions.purchaseVerifiedBib) {
+      assert.match(confirmMessages.at(-1), /cannot place a hold until it is enabled/);
+    }
     if (scenarioOptions.staleMutation) {
       await until(() => releaseMutation, 'purchase mutation starts');
-      await openOtherRequest();
+      document.querySelector('#close-request').click();
+      assert.equal(document.querySelector('#request-dialog').open, true,
+        'in-flight workflow action must remain visible after Close');
+      await until(() => document.querySelector(`[aria-label="Open request ${otherId}"]`),
+        'newer request is present in the queue');
+      document.querySelector(`[aria-label="Open request ${otherId}"]`).click();
+      await until(() => document.querySelector('#request-dialog-title').textContent === 'Other request',
+        'forced newer request takes ownership of the dialog');
       releaseMutation();
       await new Promise(resolve => setImmediate(resolve));
       assert.equal(document.querySelector('#request-dialog-title').textContent, 'Other request');
       assert.equal(document.querySelector('#request-dialog .status-badge').textContent, 'Suggestion');
       return;
     }
-    if (scenarioOptions.mutationDependencyAbort) {
+    if (scenarioOptions.mutationNetworkFailureAfter401) {
+      await until(() => !document.querySelector('#signed-out').hidden,
+        'unconfirmed action and immediate failed refresh sign out');
+      assert.match(document.querySelector('#signed-out-message').textContent, /outcome could not be confirmed/);
+      assert.match(document.querySelector('#signed-out-message').textContent, /authoritative result before retrying/);
+      return;
+    }
+    if (scenarioOptions.mutationDependencyAbort || scenarioOptions.mutationNetworkFailure) {
       await until(() => /outcome could not be confirmed/.test(document.querySelector('#app-status').textContent),
         'uncancelled mutation dependency abort reports unconfirmed outcome');
       assert.equal(document.querySelector('#request-dialog .status-badge').textContent, 'Suggestion');
@@ -347,13 +490,17 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     if (scenarioOptions.queue401 || scenarioOptions.queue403) {
       await until(() => !document.querySelector('#signed-out').hidden, 'session transition displays result');
       assert.match(document.querySelector('#signed-out-message').textContent, /Final state: Outstanding purchase/);
-      assert.match(document.querySelector('#signed-out-message').textContent, /Notification suppressed/);
+      assert.match(document.querySelector('#signed-out-message').textContent, /Purchase reminder suppressed/);
     } else if (scenarioOptions.laterUnrelated401 || scenarioOptions.laterUnrelated403) {
       await until(() => postCommitQueueLoads === 1, 'committed follow-up queue load starts');
       if (scenarioOptions.closeDuringFollowup) {
         await until(() => releaseFollowupQueue, 'delayed follow-up queue load starts');
         document.querySelector('#close-request').click();
+        assert.equal(document.querySelector('#request-dialog').open, false,
+          'the dialog may close after the committed detail renders, even while the queue refresh is in flight');
         releaseFollowupQueue(response(200, { scope: '2', organizations: [], items: [currentRequest] }));
+        await until(() => !document.querySelector('#refresh-queue').disabled,
+          'committed follow-up queue load completes after Close');
       } else if (scenarioOptions.supersededFollowup) {
         await until(() => releaseFollowupQueue, 'delayed follow-up queue load starts');
         const scope = document.querySelector('#library-scope');
@@ -389,6 +536,9 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       await until(() => document.querySelectorAll('.request-activity li').length === 3,
         'committed activity renders once');
       assert.match(document.querySelector('#app-status').textContent, /Final state:/);
+      if (scenarioOptions.rejectEmailQueued) {
+        assert.match(document.querySelector('#app-status').textContent, /Rejection email queued/);
+      }
       assert.equal(document.querySelector('.request-activity [data-event-id="9007199254740999"]') !== null, true);
     }
   } finally {
@@ -400,7 +550,9 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
 (async () => {
   await scenario('purchase', true, false);
   await scenario('purchase', false, true);
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true });
   await scenario('reject', false, true);
+  await scenario('reject', false, true, { rejectEmailQueued: true });
   await scenario('purchase', false, true, { queue401: true });
   await scenario('purchase', false, true, { queue403: true });
   await scenario('purchase', false, true, { laterUnrelated401: true });
@@ -413,10 +565,22 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
   await scenario('reject', false, false, { staleChoice: true });
   await scenario('purchase', false, true, { staleMutation: true });
   await scenario('reject', false, false, { mutationDependencyAbort: true });
+  await scenario('reject', false, false, { mutationNetworkFailure: true });
+  await scenario('reject', false, false, { mutationNetworkFailureAfter401: true });
   await scenario('reject', false, false, { templateDependencyAbort: true });
   await scenario('reject', false, false, { verifyBib: true });
+  await scenario('alreadyOwn', false, false, { verifiedUnchangedBib: true });
+  await scenario('reject', false, false, { verifyBibAndInvalidateIdentifier: true });
   await scenario('reject', false, false, { verificationInvalidation: true });
+  await scenario('reject', false, false, { unverifiedPendingHold: true });
+  await scenario('reject', false, false, { verifiedPendingHold: true });
+  await scenario('reject', false, false, { autoHoldOffBib: true });
+  await scenario('reject', false, false, { autoHoldOffOutstandingPurchase: true });
+  await scenario('reject', false, false, { autoHoldOnlyOutstandingPurchase: true });
   await scenario('reject', false, false, { unclaimedPreview: true });
+  await scenario('reject', false, false, { formatWarning: true });
+  await scenario('reject', false, false, { autoClaimOther: true });
+  await scenario('reject', false, false, { manualFormat: true });
   await scenario('purchase', false, false, { pickupWrappedResponse: true });
   await scenario('purchase', false, false, { stalePickup: true });
   console.log('Staff request action choice, preview, activity, safe text, and exact ID UI checks passed');

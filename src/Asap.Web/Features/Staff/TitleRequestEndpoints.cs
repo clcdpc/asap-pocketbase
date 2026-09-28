@@ -38,6 +38,7 @@ public static class TitleRequestEndpoints
             .AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/claim", ClaimAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/unclaim", UnclaimAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
+        group.MapPost("/{id:long}/clear-claim", ClearClaimAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/assign", AssignAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/action", ActionAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/retry-identifier-check", RetryIdentifierAsync)
@@ -345,6 +346,12 @@ public static class TitleRequestEndpoints
                 message = "Catalog lookup is temporarily unavailable." },
                 statusCode: StatusCodes.Status502BadGateway);
         }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return Results.Json(new { code = "bib_validation_unavailable",
+                message = "Catalog lookup is temporarily unavailable." },
+                statusCode: StatusCodes.Status502BadGateway);
+        }
     }
 
     private static async Task<ResearchScope> ResolveResearchScopeAsync(
@@ -502,6 +509,17 @@ public static class TitleRequestEndpoints
         MutateAndLoadAsync(context, id, mutations.ClaimAsync(Current(context), id, input, true, cancellationToken),
             views, loggerFactory, cancellationToken);
 
+    private static Task<IResult> ClearClaimAsync(
+        HttpContext context,
+        long id,
+        VersionInput input,
+        TitleRequestMutationService mutations,
+        TitleRequestViewService views,
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken) =>
+        MutateAndLoadAsync(context, id, mutations.ClearClaimAsync(Current(context), id, input, cancellationToken),
+            views, loggerFactory, cancellationToken);
+
     private static Task<IResult> AssignAsync(
         HttpContext context,
         long id,
@@ -633,8 +651,10 @@ public static class TitleRequestEndpoints
         var row = await TryLoadCommittedAsync(context, id, views, loggerFactory, cancellationToken);
         return row is null
             ? Results.Json(new { committed = true, request = (TitleRequestDto?)null,
-                finalStatus = (string?)null, refreshUnavailable = true })
-            : Results.Json(row with { Committed = true, FinalStatus = row.Status });
+                finalStatus = result.FinalStatus, notificationStatus = result.NotificationStatus,
+                notificationReason = result.NotificationReason, refreshUnavailable = true })
+            : Results.Json(row with { Committed = true, FinalStatus = result.FinalStatus ?? row.Status,
+                NotificationStatus = result.NotificationStatus, NotificationReason = result.NotificationReason });
     }
 
     private static async Task<IResult> ReconcileHoldAsync(
@@ -742,6 +762,16 @@ public static class TitleRequestEndpoints
         "bib_validation_unavailable" => Results.Json(
             new { code = result.Code, message = "Catalog validation is temporarily unavailable." },
             statusCode: StatusCodes.Status503ServiceUnavailable),
+        "bib_unverified" => Results.Conflict(new
+        {
+            code = result.Code,
+            message = "Verify the current BIB in Polaris before moving this request to Pending hold."
+        }),
+        "bib_not_found" => Results.BadRequest(new
+        {
+            code = result.Code,
+            message = "The BIB was not found in Polaris. The request was not changed."
+        }),
         _ => Results.BadRequest(new { code = result.Code, message = "The request change is invalid." })
     };
 
@@ -764,6 +794,11 @@ public static class TitleRequestEndpoints
         "stale_version" or "hold_operation_incomplete" or "operation_ownership_lost" or
             "hold_identity_ambiguous" or "hold_operator_required" =>
             Results.Conflict(new { code, message = "Hold placement is blocked or requires reconciliation." }),
+        "bib_unverified" => Results.Conflict(new
+        {
+            code,
+            message = "Verify the current BIB in Polaris before placing a hold. No hold was attempted."
+        }),
         "hold_provider_error" => Results.Json(
             new { code, message = "Hold placement could not be confirmed." },
             statusCode: StatusCodes.Status502BadGateway),
@@ -772,7 +807,9 @@ public static class TitleRequestEndpoints
 
     private static IResult HoldOperationResult(HoldPlacementResult result) => result.Code switch
     {
-        "updated" or "resolved" => Results.Json(new { result.Code, operationId = result.OperationId?.ToString() }),
+        "updated" or "resolved" => Results.Json(new { result.Code, operationId = result.OperationId?.ToString(),
+            committed = true, finalStatus = result.FinalStatus, notificationStatus = result.NotificationStatus,
+            notificationReason = result.NotificationReason }),
         "not_found" => Results.NotFound(new { result.Code }),
         "hold_resolution_forbidden" => Results.Json(new { result.Code }, statusCode: StatusCodes.Status403Forbidden),
         "hold_provider_error" => Results.Json(new { result.Code }, statusCode: StatusCodes.Status502BadGateway),

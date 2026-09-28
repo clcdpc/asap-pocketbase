@@ -177,6 +177,7 @@ export function createWorkflowApp() {
     partialSessionFailureOwner: null,
     partialSessionFailureDetailAvailable: false,
     partialSessionFailureAfterQueueSequence: null,
+    unconfirmedCopyCreationAwaitingRefresh: false,
     queueLoadSequence: 0,
     configurations: new Map(),
     research: null,
@@ -184,6 +185,7 @@ export function createWorkflowApp() {
     editControls: null,
     editorDirty: false,
     verifiedBib: null,
+    dialogMutationInFlight: null,
     actionChoice: null
   };
 
@@ -196,6 +198,8 @@ export function createWorkflowApp() {
 
   function isVerifiedDraft(request) {
     return state.verifiedBib?.requestId === String(request.id) &&
+      state.verifiedBib.version === request.version &&
+      state.verifiedBib.identifier === String(request.identifier || '').trim() &&
       state.editControls?.bib.value.trim() === state.verifiedBib.bibId;
   }
 
@@ -242,6 +246,7 @@ export function createWorkflowApp() {
 
   function cancelDialogMutationCompletion() {
     latestLoads.begin('dialog-mutation').abort();
+    state.dialogMutationInFlight = null;
   }
 
   function cancelActionChoiceLoad() {
@@ -316,6 +321,23 @@ export function createWorkflowApp() {
     return mutation.isCurrent() && isCurrentDialogRequest(request, requestType);
   }
 
+  function notificationOutcome(status, reason, label = 'Notification') {
+    if (!status || status === 'not_requested' || status === 'not_applicable') return { text: '', partial: false };
+    const explanation = reason ? ` (${reason.replaceAll('_', ' ')})` : '';
+    if (status === 'queued') return { text: ` ${label} queued; delivery is pending.`, partial: false };
+    if (status === 'suppressed') return { text: ` ${label} suppressed${explanation}.`, partial: true };
+    if (status === 'dispatch_failed') return { text: ` ${label} could not be queued${explanation}.`, partial: true };
+    return { text: ` ${label} ${status.replaceAll('_', ' ')}${explanation}.`, partial: true };
+  }
+
+  function isUnconfirmedMutationError(error, signal) {
+    return !signal.aborted && (isAbortError(error) || error?.status === 0);
+  }
+
+  function confirmCurrent(request, requestType, message) {
+    return window.confirm(message) && isCurrentDialogRequest(request, requestType);
+  }
+
   function isCurrentAdditionalCopyCreation(mutation, pending) {
     return mutation.isCurrent() &&
       !!state.staff &&
@@ -364,11 +386,28 @@ export function createWorkflowApp() {
     announce('');
   }
 
+  function clearCommittedSessionFallback(owner) {
+    if (state.partialSessionFailureOwner !== owner || !state.staff) return;
+    state.partialSessionFailureMessage = null;
+    state.partialSessionFailureOwner = null;
+    state.partialSessionFailureDetailAvailable = false;
+    state.partialSessionFailureAfterQueueSequence = null;
+    state.unconfirmedCopyCreationAwaitingRefresh = false;
+  }
+
+  function retainUnconfirmedOutcome(message, owner) {
+    state.partialSessionFailureMessage = `${message} Sign in again to check the authoritative result before retrying.`;
+    state.partialSessionFailureOwner = owner;
+    state.partialSessionFailureDetailAvailable = false;
+    state.partialSessionFailureAfterQueueSequence = null;
+  }
+
   function showWorkspace(staff) {
     state.partialSessionFailureMessage = null;
     state.partialSessionFailureOwner = null;
     state.partialSessionFailureDetailAvailable = false;
     state.partialSessionFailureAfterQueueSequence = null;
+    state.unconfirmedCopyCreationAwaitingRefresh = false;
     state.staff = staff;
     state.scope = staff.role === 'super_admin' ? 'all' : String(staff.organizationId);
     dom.signedOut.hidden = true;
@@ -745,6 +784,7 @@ export function createWorkflowApp() {
 
   async function loadAdditionalCopies(options = {}) {
     if (!state.staff) return;
+    const uncertaintyAtStart = state.unconfirmedCopyCreationAwaitingRefresh;
     const load = latestLoads.begin('additional-copies');
     dom.additionalCopyRefresh.disabled = true;
     if (!options.silent) announce('Loading authorized additional-copy tasks...');
@@ -754,22 +794,29 @@ export function createWorkflowApp() {
         `/api/asap/staff/additional-copies?scope=${encodeURIComponent(scope)}&status=${encodeURIComponent(state.additionalCopyStatus)}`,
         { signal: load.signal }
       );
-      if (!load.isCurrent()) return;
+      if (!load.isCurrent()) return false;
       state.additionalCopies = Array.isArray(result.items) ? result.items : [];
       state.scope = result.scope;
       state.additionalCopyLoaded = true;
       if (state.staff.role === 'super_admin') populateScopes(result.availableLibraries, result.scope);
       renderAdditionalCopyGrid();
+      const uncertainCreation = state.unconfirmedCopyCreationAwaitingRefresh;
+      if (uncertainCreation && uncertaintyAtStart === uncertainCreation && result.status === 'open' &&
+          (result.scope === 'all' || String(result.scope) === String(uncertainCreation.libraryOrgId))) {
+        clearCommittedSessionFallback(state.partialSessionFailureOwner);
+      }
       if (!options.silent) announce(`${state.additionalCopies.length} authorized additional-copy tasks loaded.`);
       if (!state.additionalCopyDeepLinkHandled && !options.skipDeepLink) {
         state.additionalCopyDeepLinkHandled = true;
         const deepLink = currentRequestParameter();
         if (deepLink) await openAdditionalCopy(deepLink);
       }
+      return true;
     } catch (error) {
       if (!options.silent && !isAbortError(error) && error.status !== 401) {
         announce(error.message || 'Additional-copy tasks could not be loaded.', 'error');
       }
+      return false;
     } finally {
       if (load.isCurrent()) dom.additionalCopyRefresh.disabled = false;
       latestLoads.finish('additional-copies', load.token);
@@ -847,7 +894,7 @@ export function createWorkflowApp() {
   }
 
   async function openAdditionalCopy(id, returnFocus) {
-    if (!state.staff) return;
+    if (!state.staff) return false;
     polarisLookup.close();
     latestLoads.begin('research-configuration').abort();
     state.research = null;
@@ -871,19 +918,21 @@ export function createWorkflowApp() {
       const request = await authorizedJson(`/api/asap/staff/additional-copies/${encodeURIComponent(id)}`, {
         signal: load.signal
       });
-      if (!load.isCurrent() || state.selectedRequestId !== String(id) || state.selectedRequestType !== 'additional_copy') return;
+      if (!load.isCurrent() || state.selectedRequestId !== String(id) || state.selectedRequestType !== 'additional_copy') return false;
       state.selectedRequestId = request.id;
       replaceRequestParameter(request.id, true);
       renderAdditionalCopy(request);
       if (!dom.dialog.open) dom.dialog.showModal();
       dom.closeDialog.focus();
       announce(`Opened additional-copy task ${request.id}.`);
+      return true;
     } catch (error) {
       if (load.isCurrent() && state.selectedRequestId === String(id) &&
           state.selectedRequestType === 'additional_copy' &&
           !(isAbortError(error) && load.signal.aborted) && error.status !== 401) {
         announce(error.status === 404 ? 'That additional-copy task is no longer available.' : error.message, 'error');
       }
+      return false;
     } finally {
       latestLoads.finish('additional-copy-detail', load.token);
     }
@@ -939,8 +988,16 @@ export function createWorkflowApp() {
 
   function buildAdditionalCopyActionBar(request) {
     const bar = element('div', { className: 'action-bar', 'aria-label': 'Additional-copy actions' });
-    if (request.capabilities?.canUnclaim) {
+    if (request.capabilities?.canUnclaim && request.claimedByStaffUserId === state.staff?.id) {
       bar.append(commandButton('Unclaim', 'user-times', () => mutateAdditionalCopy(request, 'unclaim', 'Task unclaimed.')));
+    } else if (request.capabilities?.canClearClaim && request.claimedByStaffUserId &&
+               ['admin', 'super_admin'].includes(state.staff?.role)) {
+      bar.append(commandButton('Clear claim', 'user-times', () => {
+        if (confirmCurrent(request, 'additional_copy',
+          `Clear ${request.claimedByDisplayName || 'another staff member'}'s claim? The task will remain open and unclaimed.`)) {
+          mutateAdditionalCopy(request, 'clear-claim', 'Additional-copy claim cleared.');
+        }
+      }));
     } else if (request.capabilities?.canClaim) {
       bar.append(commandButton('Claim', 'user-plus', () => mutateAdditionalCopy(request, 'claim', 'Task claimed.'), 'primary-button'));
     }
@@ -949,17 +1006,24 @@ export function createWorkflowApp() {
     }
     if (request.capabilities?.canClose) {
       bar.append(commandButton('Close task', 'check', () => {
-        if (window.confirm('Close this additional-copy task?')) {
+        if (confirmCurrent(request, 'additional_copy',
+          'Close this additional-copy task? It will leave the open work queue; the source patron hold will not change.')) {
           mutateAdditionalCopy(request, 'close', 'Additional-copy task closed.');
         }
       }, 'primary-button'));
     }
     if (request.capabilities?.canReopen) {
-      bar.append(commandButton('Reopen task', 'undo', () => mutateAdditionalCopy(request, 'reopen', 'Additional-copy task reopened.'), 'primary-button'));
+      bar.append(commandButton('Reopen task', 'undo', () => {
+        if (confirmCurrent(request, 'additional_copy',
+          'Reopen this additional-copy task? It will return to open work. An eligible retained claim stays; an invalid claim is cleared.')) {
+          mutateAdditionalCopy(request, 'reopen', 'Additional-copy task reopened.');
+        }
+      }, 'primary-button'));
     }
     if (request.capabilities?.canDelete) {
       bar.append(commandButton('Delete task', 'trash', () => {
-        if (window.confirm('Permanently delete this closed task?')) {
+        if (confirmCurrent(request, 'additional_copy',
+          'Permanently delete this closed additional-copy task? Its deletion audit will remain.')) {
           mutateAdditionalCopy(request, 'delete', 'Additional-copy task deleted.');
         }
       }, 'danger-button'));
@@ -968,42 +1032,84 @@ export function createWorkflowApp() {
   }
 
   async function mutateAdditionalCopy(request, operation, successMessage, extra = {}) {
+    if (!isCurrentDialogRequest(request, 'additional_copy') ||
+        state.dialogMutationInFlight === `copy:${request.id}:${request.version}`) return;
     const mutation = latestLoads.begin('dialog-mutation');
+    state.dialogMutationInFlight = `copy:${request.id}:${request.version}`;
     announce('Saving additional-copy task...');
     try {
       const result = await authorizedJson(`/api/asap/staff/additional-copies/${request.id}${operation === 'delete' ? '' : `/${operation}`}`, {
         method: operation === 'delete' ? 'DELETE' : 'POST',
-        body: { version: request.version, ...extra }
+        body: { version: request.version, ...extra },
+        signal: mutation.signal
       });
+      if (!isCurrentDialogMutation(mutation, request, 'additional_copy')) return;
+      const notification = notificationOutcome(result.notificationStatus, result.notificationReason,
+        operation === 'assign' ? 'Assignment notification' : 'Notification');
+      let message = `${successMessage}${result.finalStatus ? ` Final state: ${statusLabel(result.finalStatus)}.` : ''}${notification.text}`;
+      let messageKind = notification.partial ? 'warning' : 'success';
+      state.partialSessionFailureMessage = `${message} Sign in again to review ${operation === 'delete' ? 'the updated task list' : 'the committed task'}.`;
+      state.partialSessionFailureOwner = mutation.token;
+      state.partialSessionFailureDetailAvailable = Boolean(result.id);
+      state.partialSessionFailureAfterQueueSequence = null;
       if (operation === 'delete') {
-        await loadAdditionalCopies({ skipDeepLink: true, silent: true });
-        if (!isCurrentDialogMutation(mutation, request, 'additional_copy')) return;
-        closeDialog();
-        announce(successMessage, 'success');
+        closeDialog({ preserveMutation: true });
+        announce(message, messageKind);
+        const refreshed = await loadAdditionalCopies({ skipDeepLink: true, silent: true });
+        if (refreshed === true) clearCommittedSessionFallback(mutation.token);
+        if (refreshed === false && state.staff) announce(`${message} The task list could not refresh.`, 'warning');
         return;
       }
-      if (isCurrentDialogMutation(mutation, request, 'additional_copy')) {
-        renderAdditionalCopy(result, { preserveDialogMutation: true });
+      let current = result.request || (result.id ? result : null);
+      if (!current) {
+        try {
+          current = await authorizedJson(`/api/asap/staff/additional-copies/${encodeURIComponent(request.id)}`,
+            { signal: mutation.signal });
+        } catch (error) {
+          if (error.status !== 401 && !isAbortError(error)) message += ' Details could not refresh.';
+        }
       }
-      await loadAdditionalCopies({ skipDeepLink: true, silent: true });
-      if (!mutation.isCurrent() || !isCurrentDialogRequest(result, 'additional_copy')) return;
-      if (result.claimClearedReason) {
-        announce(`Task reopened; the retained claim was cleared (${result.claimClearedReason.replaceAll('_', ' ')}).`, 'success');
+      if (!mutation.isCurrent() || !isCurrentDialogSelection(request, 'additional_copy')) return;
+      if (current) {
+        renderAdditionalCopy(current, { preserveDialogMutation: true });
       } else {
-        announce(successMessage, 'success');
+        state.selectedRequestVersion = null;
+        dom.dialogBody.replaceChildren(element('p', { text: 'The action committed. Reload this task to review current details.' }));
+      }
+      if (result.claimClearedReason) message += ` The retained claim was cleared (${result.claimClearedReason.replaceAll('_', ' ')}).`;
+      dom.closeDialog.focus();
+      announce(message, messageKind);
+      if (state.dialogMutationInFlight === `copy:${request.id}:${request.version}`) {
+        state.dialogMutationInFlight = null;
+      }
+      const refreshed = await loadAdditionalCopies({ skipDeepLink: true, silent: true });
+      if (refreshed === true) clearCommittedSessionFallback(mutation.token);
+      if (mutation.isCurrent() && isCurrentDialogSelection(request, 'additional_copy')) {
+        if (refreshed === false) messageKind = 'warning';
+        announce(refreshed === false ? `${message} The task list could not refresh.` : message, messageKind);
       }
     } catch (error) {
-      if (error.status === 409) {
-        const message = error.message || 'The task changed. Review the refreshed version before trying again.';
-        await loadAdditionalCopies({ skipDeepLink: true, silent: true });
+      const unconfirmedOutcome = isUnconfirmedMutationError(error, mutation.signal);
+      if (error.status === 409 || unconfirmedOutcome) {
+        const message = unconfirmedOutcome
+          ? 'The additional-copy action outcome could not be confirmed. Reload before trying again.'
+          : error.message || 'The task changed. Review the refreshed version before trying again.';
+        if (unconfirmedOutcome && isCurrentDialogMutation(mutation, request, 'additional_copy')) {
+          retainUnconfirmedOutcome(message, mutation.token);
+        }
+        const refreshed = await loadAdditionalCopies({ skipDeepLink: true, silent: true });
         if (!isCurrentDialogMutation(mutation, request, 'additional_copy')) return;
-        await openAdditionalCopy(request.id);
+        const detailLoaded = await openAdditionalCopy(request.id);
+        if (unconfirmedOutcome && refreshed === true && detailLoaded === true) {
+          clearCommittedSessionFallback(mutation.token);
+        }
         if (isCurrentDialogSelection(request, 'additional_copy')) announce(message, 'error');
       } else if (isCurrentDialogMutation(mutation, request, 'additional_copy') &&
                  error.status !== 401 && !isAbortError(error)) {
         announce(error.message || 'The additional-copy task could not be updated.', 'error');
       }
     } finally {
+      if (state.dialogMutationInFlight === `copy:${request.id}:${request.version}`) state.dialogMutationInFlight = null;
       latestLoads.finish('dialog-mutation', mutation.token);
     }
   }
@@ -1032,7 +1138,7 @@ export function createWorkflowApp() {
         event.preventDefault();
         if (!form.isConnected || !isCurrentDialogRequest(request, 'additional_copy')) return;
         await mutateAdditionalCopy(request, 'assign', 'Additional-copy task assigned.', {
-          assigneeId: Number(select.value)
+          assigneeId: select.value
         });
       });
       dom.dialogBody.prepend(form);
@@ -1082,12 +1188,14 @@ export function createWorkflowApp() {
       dom.closeDialog.focus();
       announce(`Opened ${request.title}.`);
       loadResearchConfiguration(request);
+      return true;
     } catch (error) {
       if (load.isCurrent() && state.selectedRequestId === String(id) &&
           state.selectedRequestType === 'title_request' &&
           !(isAbortError(error) && load.signal.aborted) && error.status !== 401) {
         announce(error.status === 404 ? 'That request is no longer available.' : error.message, 'error');
       }
+      return false;
     } finally {
       latestLoads.finish('detail', load.token);
     }
@@ -1612,6 +1720,8 @@ export function createWorkflowApp() {
     }
     state.currentRequest = request;
     if (state.verifiedBib && (state.verifiedBib.requestId !== String(request.id) ||
+        state.verifiedBib.version !== request.version ||
+        state.verifiedBib.identifier !== String(request.identifier || '').trim() ||
         state.verifiedBib.bibId !== String(request.bibid || '').trim())) {
       state.verifiedBib = null;
     }
@@ -1688,6 +1798,13 @@ export function createWorkflowApp() {
         bar.append(commandButton('Unclaim', 'user-times', () => mutateSimple(request, 'unclaim')));
       } else if (!request.claimedByStaffUserId) {
         bar.append(commandButton('Claim', 'user-plus', () => mutateSimple(request, 'claim'), 'primary-button'));
+      } else if (['admin', 'super_admin'].includes(state.staff?.role)) {
+        bar.append(commandButton('Clear claim', 'user-times', () => {
+          if (confirmCurrent(request, 'title_request',
+            `Clear ${request.claimedByDisplayName || 'another staff member'}'s claim? The request will remain in ${statusLabel(request.status)} and become unclaimed.`)) {
+            mutateSimple(request, 'clear-claim');
+          }
+        }));
       }
       bar.append(commandButton('Assign', 'users', () => showAssignment(request)));
     }
@@ -1704,8 +1821,13 @@ export function createWorkflowApp() {
     } else if (request.status === 'pending_hold') {
       bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, event.currentTarget), 'secondary-button', !request.bibid));
       bar.append(commandButton('Pickup', 'map-marker', () => showPickup(request), 'secondary-button', workflowBlocked));
-      if (request.autohold && request.bibid) {
-        bar.append(commandButton('Place hold', 'bookmark', () => mutateSimple(request, 'place-hold'), 'primary-button', workflowBlocked));
+      if (request.autohold && request.bibid && request.bibidStaffVerified === true) {
+        bar.append(commandButton('Place hold', 'bookmark', () => {
+          if (confirmCurrent(request, 'title_request',
+            `Place a Polaris hold for BIB ${request.bibid} and this patron? If the provider outcome is uncertain, recovery will be required before another attempt.`)) {
+            mutateSimple(request, 'place-hold');
+          }
+        }, 'primary-button', workflowBlocked));
       }
       if ((request.workflowTags || []).includes('Hold exists (same patron)')) {
         bar.append(commandButton('Close duplicate', 'clone', () => runAction(request, 'closeDuplicate'), 'secondary-button', workflowBlocked));
@@ -1875,6 +1997,8 @@ export function createWorkflowApp() {
           applyPolarisResultToControls(selected, { bib, title, author, identifier });
           state.verifiedBib = {
             requestId: String(request.id),
+            version: request.version,
+            identifier: String(identifier.value).trim(),
             bibId: String(selected.bibId),
             detail: verifiedDetail
           };
@@ -1957,6 +2081,7 @@ export function createWorkflowApp() {
       const claimantId = request.claimedByStaffUserId == null ? null : String(request.claimedByStaffUserId);
       const actorId = state.staff?.id == null ? null : String(state.staff.id);
       if (actorId && claimantId !== actorId) changed.push(claimantId ? 'claim transfer' : 'staff claim');
+      state.editorDirty = changed.some(item => item !== 'claim transfer' && item !== 'staff claim');
       pendingPreview.textContent = changed.length
         ? `Pending changes (not saved): ${changed.join(', ')}.`
         : 'No pending changes.';
@@ -1986,7 +2111,27 @@ export function createWorkflowApp() {
     updatePreview();
     form.addEventListener('submit', async event => {
       event.preventDefault();
-      if (save.disabled) return;
+      if (save.disabled || !isCurrentDialogRequest(request, 'title_request')) return;
+      const bibWillChange = !bib.disabled && bib.value.trim() !== String(request.bibid || '').trim();
+      const bibSelected = Boolean(selectedStaffBibId(state.verifiedBib, request.id, bib.value));
+      const turnsOffHoldForBib = request.autohold && !autohold.checked && Boolean(request.bibid);
+      const noAutoHoldConsequence = request.status === 'outstanding_purchase'
+        ? 'Save this BIB with automatic hold off? No hold will be placed automatically. The request stays Outstanding purchase now; automatic purchase promotion may later close it without a hold.'
+        : 'Save this BIB with automatic hold off? No hold will be placed automatically, and hold placement remains unavailable while auto-hold is off.';
+      if ((bibWillChange || bibSelected || turnsOffHoldForBib) && !autohold.checked &&
+          !confirmCurrent(request, 'title_request', noAutoHoldConsequence)) return;
+      if (request.claimType === 'automatic_format_rule') {
+        const claimantId = request.claimedByStaffUserId == null ? null : String(request.claimedByStaffUserId);
+        const transfersClaim = claimantId && claimantId !== String(state.staff?.id);
+        const formatConsequence = format.value !== request.format
+          ? `Change the format from ${request.formatLabel || request.format} to ${format.selectedOptions[0]?.textContent || format.value}?`
+          : 'Save these request edits?';
+        const claimConsequence = transfersClaim
+          ? 'This transfers the automatic format claim from the current claimant to your manual claim.'
+          : 'This replaces the automatic format claim with your manual claim.';
+        if (!confirmCurrent(request, 'title_request', `${formatConsequence} ${claimConsequence}`)) return;
+      }
+      if (!isCurrentDialogRequest(request, 'title_request') || !form.isConnected) return;
       await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/action`, {
         version: request.version,
         action: 'edit',
@@ -2009,12 +2154,19 @@ export function createWorkflowApp() {
   }
 
   async function mutateSimple(request, operation) {
-    const path = operation === 'claim' || operation === 'unclaim' || operation === 'retry-identifier-check' || operation === 'place-hold'
+    const path = operation === 'claim' || operation === 'unclaim' || operation === 'clear-claim' ||
+      operation === 'retry-identifier-check' || operation === 'place-hold'
       ? `/api/asap/staff/title-requests/${request.id}/${operation}`
       : null;
     if (!path) return;
-    await mutateRequest(request, path, { version: request.version },
-      operation === 'place-hold' ? 'Hold placement completed.' : 'Request updated.');
+    const messages = {
+      claim: 'Request claimed.',
+      unclaim: 'Your claim was released.',
+      'clear-claim': 'Another staff member’s claim was cleared.',
+      'retry-identifier-check': 'Identifier retry requested.',
+      'place-hold': 'Hold placement completed.'
+    };
+    await mutateRequest(request, path, { version: request.version }, messages[operation]);
   }
 
   function showActionChoice(request, action, returnFocus) {
@@ -2028,13 +2180,18 @@ export function createWorkflowApp() {
     const cancel = commandButton('Cancel', 'times', dismissActionChoice);
     let input;
     if (action === 'purchase') {
-      input = element('input', { type: 'checkbox', checked: state.staff.purchaseReminderDefault });
-      panel.append(heading, element('label', { className: 'check-field' },
+      const entersPendingHold = Boolean(request.bibid);
+      input = entersPendingHold ? null : element('input', { type: 'checkbox', checked: state.staff.purchaseReminderDefault });
+      panel.append(heading, element('p', { text: request.bibid
+        ? 'Purchase moves this BIB to Pending hold after server verification. A purchase reminder does not apply. The final state comes from the server.'
+        : 'Purchase moves this request to Outstanding purchase. A reminder is optional.' }));
+      if (input) panel.append(element('label', { className: 'check-field' },
         [input, element('span', { text: 'Send purchase reminder' })]));
     } else {
       input = element('select', { 'aria-label': 'Rejection template' });
       input.append(element('option', { value: '', text: 'Default rejection email' }));
-      panel.append(heading, labeledInput('Rejection template', input));
+      panel.append(heading, element('p', { text: 'Reject closes this request. A patron rejection email is queued only when a template and delivery are available.' }),
+        labeledInput('Rejection template', input));
     }
     const choice = { request, action, panel, returnFocus };
     state.actionChoice = choice;
@@ -2045,14 +2202,14 @@ export function createWorkflowApp() {
       submit.disabled = true;
       try {
         await runAction(request, action, undefined, action === 'purchase'
-          ? { emailPurchaseReminder: input.checked }
+          ? { emailPurchaseReminder: input?.checked === true }
           : { rejectionTemplateId: input.value || null });
       } finally {
         if (state.actionChoice === choice && panel.isConnected) submit.disabled = false;
       }
     });
     dom.dialogBody.querySelector('.action-bar')?.after(panel);
-    input.focus();
+    (input || submit).focus();
     if (action !== 'reject') return;
     const load = latestLoads.begin('action-choice');
     authorizedJson(`/api/asap/staff/title-requests/${encodeURIComponent(request.id)}/rejection-templates`,
@@ -2088,8 +2245,21 @@ export function createWorkflowApp() {
         return;
       }
     }
-    const terminal = action === 'reject' || action === 'silentClose' || action === 'closeDuplicate' || targetStatus === 'closed';
-    if (terminal && action !== 'reject' && !window.confirm('Apply this final workflow action?')) return;
+    const holdOffConsequence = request.autohold
+      ? '' : ' Automatic hold is off, so staff cannot place a hold until it is enabled.';
+    const confirmations = {
+      purchase: request.bibid
+        ? `Move this request to Pending hold using its verified BIB? The server will determine the final state.${holdOffConsequence}`
+        : 'Record this purchase decision and move the request to Outstanding purchase?',
+      alreadyOwn: `Record that the library already owns this title and move the verified BIB to Pending hold?${holdOffConsequence}`,
+      catalogFound: `Move this verified catalog title to Pending hold?${holdOffConsequence}`,
+      reject: 'Reject and close this request? A patron rejection email is queued only when a template and delivery are available.',
+      silentClose: 'Close this suggestion without a rejection email? It will leave the active queue.',
+      closeDuplicate: 'Close this request as a duplicate of an existing patron hold? No new hold will be placed.',
+      close: 'Close this hold-placed request? Its placed-hold history will remain.',
+      reopen: 'Reopen this closed request as a suggestion? The action will assign a manual claim to you.'
+    };
+    if (confirmations[action] && !confirmCurrent(request, 'title_request', confirmations[action])) return;
     await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/action`, {
       version: request.version,
       action,
@@ -2099,6 +2269,10 @@ export function createWorkflowApp() {
   }
 
   async function showAdditionalCopyPreview(request, returnFocus) {
+    if (state.unconfirmedCopyCreationAwaitingRefresh) {
+      announce('Additional-copy creation is unconfirmed. Refresh the open additional-copy task list for this library and check for a new task before trying again.', 'warning');
+      return;
+    }
     cancelAdditionalCopyCreationCompletion();
     const load = latestLoads.begin('additional-copy-preview');
     announce('Loading additional-copy preview...');
@@ -2112,6 +2286,7 @@ export function createWorkflowApp() {
       const holdState = request.status === 'hold_placed' ? 'placed' : 'queued';
       dom.createCopySummary.textContent = `${preview.openCount} open additional-copy task${preview.openCount === 1 ? '' : 's'} already exist for BIB ${preview.bibid}. The patron hold remains ${holdState}.`;
       dom.createCopyReminder.checked = Boolean(preview.emailPurchaseReminderDefault);
+      dom.createCopyForm.querySelector('button[type="submit"]').disabled = false;
       dom.createCopyDialog.showModal();
       dom.cancelCreateCopy.focus();
       announce('Review the additional-copy task before creating it.');
@@ -2126,18 +2301,27 @@ export function createWorkflowApp() {
   }
 
   function closeAdditionalCopyCreateDialog(options = {}) {
+    if (state.createCopyRequest?.submitting && options.preserveMutation !== true && !options.force) {
+      announce('Task creation is in progress. Wait for the authoritative result before closing.', 'warning');
+      dom.cancelCreateCopy.focus();
+      return false;
+    }
     if (options.preserveMutation !== true) cancelAdditionalCopyCreationCompletion();
     if (dom.createCopyDialog.open) dom.createCopyDialog.close();
     state.createCopyRequest = null;
     const returnFocus = state.createCopyReturnFocus;
     state.createCopyReturnFocus = null;
     if (returnFocus && returnFocus.isConnected) returnFocus.focus();
+    return true;
   }
 
   async function createAdditionalCopy(event) {
     event.preventDefault();
     const pending = state.createCopyRequest;
-    if (!pending) return;
+    if (!pending || pending.submitting || pending.outcomeUnconfirmed ||
+        state.unconfirmedCopyCreationAwaitingRefresh ||
+        !isCurrentDialogRequest(pending.request, 'title_request')) return;
+    pending.submitting = true;
     const mutation = latestLoads.begin('additional-copy-create-mutation');
     const submit = dom.createCopyForm.querySelector('button[type="submit"]');
     submit.disabled = true;
@@ -2145,24 +2329,46 @@ export function createWorkflowApp() {
     try {
       const result = await authorizedJson(`/api/asap/staff/title-requests/${pending.request.id}/additional-copy`, {
         method: 'POST',
+        signal: mutation.signal,
         body: {
           version: pending.version,
           emailPurchaseReminder: dom.createCopyReminder.checked
         }
       });
-      const taskId = result.additionalCopyRequest?.id;
+      if (!isCurrentAdditionalCopyCreation(mutation, pending)) return;
+      const taskId = result.additionalCopyRequest?.id || result.additionalCopyRequestId;
+      const notification = notificationOutcome(result.notificationStatus, result.notificationReason, 'Purchase reminder');
+      const message = `Additional-copy task ${taskId || ''} created. Final state: ${statusLabel(result.finalStatus || 'open')}.${notification.text}`;
+      state.partialSessionFailureMessage = `${message} Sign in again to review the committed task.`;
+      state.partialSessionFailureOwner = mutation.token;
+      state.partialSessionFailureDetailAvailable = Boolean(taskId);
+      state.partialSessionFailureAfterQueueSequence = null;
       state.additionalCopyLoaded = false;
-      await loadQueue({ skipDeepLink: true, silent: true });
+      announce(message, notification.partial ? 'warning' : 'success');
+      const refreshed = await loadQueue({ skipDeepLink: true, silent: true });
       if (isCurrentAdditionalCopyCreation(mutation, pending)) {
         const returnFocus = state.createCopyReturnFocus;
         closeAdditionalCopyCreateDialog({ preserveMutation: true });
-        await openRequest(pending.request.id, returnFocus);
+        const detailLoaded = await openRequest(pending.request.id, returnFocus);
+        if (refreshed === true && detailLoaded === true) clearCommittedSessionFallback(mutation.token);
         if (isCurrentDialogSelection(pending.request, 'title_request')) {
-          announce(`Additional-copy task ${taskId || ''} created.`, 'success');
+          const followup = `${refreshed === false ? ' The request queue could not refresh.' : ''}${detailLoaded ? '' : ' Request details could not refresh.'}`;
+          announce(`${message}${followup}`, notification.partial || followup ? 'warning' : 'success');
         }
       }
     } catch (error) {
-      if (error.status === 409) {
+      const unconfirmedOutcome = isUnconfirmedMutationError(error, mutation.signal);
+      if (unconfirmedOutcome && isCurrentAdditionalCopyCreation(mutation, pending)) {
+        pending.outcomeUnconfirmed = true;
+        const message = 'Additional-copy creation could not be confirmed. Check the task list before trying again.';
+        retainUnconfirmedOutcome(message, mutation.token);
+        state.unconfirmedCopyCreationAwaitingRefresh = {
+          libraryOrgId: pending.request.libraryOrgId,
+          bibid: pending.request.bibid
+        };
+        latestLoads.begin('additional-copies').abort();
+        announce(message, 'warning');
+      } else if (error.status === 409) {
         await loadQueue({ skipDeepLink: true, silent: true });
         if (isCurrentAdditionalCopyCreation(mutation, pending)) {
           closeAdditionalCopyCreateDialog({ preserveMutation: true });
@@ -2176,15 +2382,18 @@ export function createWorkflowApp() {
         announce(error.message || 'The additional-copy task could not be created.', 'error');
       }
     } finally {
+      pending.submitting = false;
       if (mutation.isCurrent() && state.createCopyRequest === pending && submit.isConnected) {
-        submit.disabled = false;
+        submit.disabled = pending.outcomeUnconfirmed === true;
       }
       latestLoads.finish('additional-copy-create-mutation', mutation.token);
     }
   }
 
   async function mutateRequest(request, path, body, successMessage) {
+    if (!isCurrentDialogRequest(request, 'title_request') || state.dialogMutationInFlight === `title:${request.id}:${request.version}`) return;
     const mutation = latestLoads.begin('dialog-mutation');
+    state.dialogMutationInFlight = `title:${request.id}:${request.version}`;
     announce('Saving request...');
     try {
       const result = await authorizedJson(path, { method: 'POST', body, signal: mutation.signal });
@@ -2192,11 +2401,13 @@ export function createWorkflowApp() {
       const committed = result?.committed === true;
       let current = result?.request || (committed ? (result.id ? result : null) : result);
       const status = committed && result.finalStatus ? ` Final state: ${statusLabel(result.finalStatus)}.` : '';
-      const notification = committed && result.notificationStatus
-        ? ` Notification ${result.notificationStatus.replaceAll('_', ' ')}${result.notificationReason
-          ? ` (${result.notificationReason.replaceAll('_', ' ')})` : ''}.`
-        : '';
-      let message = `${successMessage}${status}${notification}`;
+      const notificationLabel = body?.action === 'reject' ? 'Rejection email'
+        : path.endsWith('/assign') ? 'Assignment notification'
+          : body?.action === 'purchase' ? 'Purchase reminder' : 'Notification';
+      const notification = notificationOutcome(result?.notificationStatus, result?.notificationReason,
+        notificationLabel);
+      let message = `${successMessage}${status}${notification.text}`;
+      let messageKind = notification.partial ? 'warning' : 'success';
       const sessionFailureMessage = committed
         ? `${message} Sign in again to review the committed request.`
         : null;
@@ -2219,6 +2430,12 @@ export function createWorkflowApp() {
       }
       if (!mutation.isCurrent() || !isCurrentDialogSelection(request, 'title_request')) return;
       if (current) {
+        if (body?.action === 'edit' && current.bibidStaffVerified === true && state.verifiedBib &&
+            state.verifiedBib.requestId === String(current.id) &&
+            state.verifiedBib.bibId === String(current.bibid || '').trim() &&
+            state.verifiedBib.identifier === String(current.identifier || '').trim()) {
+          state.verifiedBib.version = current.version;
+        }
         renderRequest(current, state.configurations.get(String(current.libraryOrgId)) || {},
           { preserveDialogMutation: true });
       } else {
@@ -2226,26 +2443,38 @@ export function createWorkflowApp() {
         dom.dialogBody.replaceChildren(element('p', { text: 'The action committed. Reload this request to review current details.' }));
       }
       dom.closeDialog.focus();
-      announce(message, 'success');
+      announce(message, messageKind);
+      if (state.dialogMutationInFlight === `title:${request.id}:${request.version}`) {
+        state.dialogMutationInFlight = null;
+      }
       const refreshed = await loadQueue({ skipDeepLink: true, silent: true });
       if (mutation.isCurrent() && isCurrentDialogSelection(request, 'title_request')) {
-        announce(refreshed === false ? `${message} The queue could not refresh.` : message, 'success');
+        if (refreshed === false) messageKind = 'warning';
+        announce(refreshed === false ? `${message} The queue could not refresh.` : message, messageKind);
       }
     } catch (error) {
-      const dependencyAbort = isAbortError(error) && !mutation.signal.aborted;
-      if (error.status === 409 || error.response?.code === 'request_outcome_unconfirmed' || dependencyAbort) {
-        const message = dependencyAbort
+      const unconfirmedOutcome = isUnconfirmedMutationError(error, mutation.signal);
+      const outcomeUnknown = unconfirmedOutcome || error.response?.code === 'request_outcome_unconfirmed';
+      if (error.status === 409 || outcomeUnknown) {
+        const message = outcomeUnknown
           ? 'The request outcome could not be confirmed. Reload before trying again.'
           : error.message || 'The request changed. Review the refreshed version before trying again.';
-        await loadQueue({ skipDeepLink: true, silent: true });
+        if (outcomeUnknown && isCurrentDialogMutation(mutation, request, 'title_request')) {
+          retainUnconfirmedOutcome(message, mutation.token);
+        }
+        const refreshed = await loadQueue({ skipDeepLink: true, silent: true });
         if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
-        await openRequest(request.id);
+        const detailLoaded = await openRequest(request.id);
+        if (outcomeUnknown && refreshed === true && detailLoaded === true) {
+          clearCommittedSessionFallback(mutation.token);
+        }
         if (isCurrentDialogSelection(request, 'title_request')) announce(message, 'error');
       } else if (isCurrentDialogMutation(mutation, request, 'title_request') &&
                  error.status !== 401 && !isAbortError(error)) {
         announce(error.message || 'The request could not be updated.', 'error');
       }
     } finally {
+      if (state.dialogMutationInFlight === `title:${request.id}:${request.version}`) state.dialogMutationInFlight = null;
       latestLoads.finish('dialog-mutation', mutation.token);
     }
   }
@@ -2275,7 +2504,7 @@ export function createWorkflowApp() {
         if (!form.isConnected || !isCurrentDialogRequest(request, 'title_request')) return;
         await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/assign`, {
           version: request.version,
-          assigneeId: Number(select.value)
+          assigneeId: select.value
         }, 'Request assigned.');
       });
       dom.dialogBody.prepend(form);
@@ -2342,6 +2571,8 @@ export function createWorkflowApp() {
     if (operation.lastErrorCode) section.append(element('p', { text: `Last diagnostic: ${operation.lastErrorCode}` }));
     if (operation.canReconcile) {
       section.append(commandButton('Reconcile provider state', 'search', async () => {
+        if (!confirmCurrent(request, 'title_request',
+          `Reconcile hold operation ${operation.id}, attempt ${operation.attemptNumber}? This may inspect Polaris or retry only when the server confirms the operation is safe to resume.`)) return;
         await mutateOperation(request, operation, 'reconcile', { version: operation.version });
       }));
     }
@@ -2448,7 +2679,8 @@ export function createWorkflowApp() {
     updateEvidence();
     form.addEventListener('submit', async event => {
       event.preventDefault();
-      if (!window.confirm('Resolve this operation using the recorded authoritative evidence?')) return;
+      if (!confirmCurrent(request, 'title_request',
+        `Resolve hold operation ${operation.id}, attempt ${operation.attemptNumber}, as ${outcome.value.replaceAll('_', ' ')} using ${evidence.selectedOptions[0]?.textContent || evidence.value}? The recorded evidence will determine whether this request has a placed hold or may be retried.`)) return;
       await mutateOperation(request, operation, 'resolve', {
         version: operation.version,
         requestVersion: request.version,
@@ -2470,26 +2702,57 @@ export function createWorkflowApp() {
   }
 
   async function mutateOperation(request, operation, action, body) {
+    if (!isCurrentDialogRequest(request, 'title_request') ||
+        state.dialogMutationInFlight === `hold:${operation.id}:${operation.version}`) return;
     const mutation = latestLoads.begin('dialog-mutation');
+    state.dialogMutationInFlight = `hold:${operation.id}:${operation.version}`;
     announce(`${action === 'resolve' ? 'Resolving' : 'Reconciling'} hold operation...`);
     try {
-      await authorizedJson(`/api/asap/staff/hold-operations/${operation.id}/${action}`, { method: 'POST', body });
-      await loadQueue({ skipDeepLink: true, silent: true });
+      const result = await authorizedJson(`/api/asap/staff/hold-operations/${operation.id}/${action}`,
+        { method: 'POST', body, signal: mutation.signal });
       if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
-      await openRequest(request.id);
-      if (isCurrentDialogSelection(request, 'title_request')) announce('Hold recovery state updated.', 'success');
+      const notification = notificationOutcome(result.notificationStatus, result.notificationReason, 'Hold notification');
+      const finalState = result.finalStatus ? ` Final state: ${statusLabel(result.finalStatus)}.` :
+        ' Review the refreshed request for final state.';
+      const message = action === 'resolve'
+        ? `Hold operation ${result.operationId || operation.id} resolved as ${body.outcome.replaceAll('_', ' ')}.${finalState}${notification.text}`
+        : `Hold operation ${result.operationId || operation.id} reconciliation recorded.${finalState}${notification.text}`;
+      state.partialSessionFailureMessage = `${message} Sign in again to review the committed recovery result.`;
+      state.partialSessionFailureOwner = mutation.token;
+      state.partialSessionFailureDetailAvailable = false;
+      state.partialSessionFailureAfterQueueSequence = state.queueLoadSequence;
+      announce(message, notification.partial ? 'warning' : 'success');
+      const refreshed = await loadQueue({ skipDeepLink: true, silent: true });
+      if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
+      const detailLoaded = await openRequest(request.id);
+      if (refreshed === true && detailLoaded === true) clearCommittedSessionFallback(mutation.token);
+      if (isCurrentDialogSelection(request, 'title_request')) {
+        state.partialSessionFailureDetailAvailable = Boolean(detailLoaded);
+        const followup = `${refreshed === false ? ' The queue could not refresh.' : ''}${detailLoaded ? '' : ' Details could not refresh.'}`;
+        announce(`${message}${followup}`, notification.partial || followup ? 'warning' : 'success');
+      }
     } catch (error) {
-      if (error.status === 409) {
-        const message = error.message || 'The hold recovery changed. Review the refreshed request before trying again.';
-        await loadQueue({ skipDeepLink: true, silent: true });
+      const unconfirmedOutcome = isUnconfirmedMutationError(error, mutation.signal);
+      if (error.status === 409 || unconfirmedOutcome) {
+        const message = unconfirmedOutcome
+          ? 'The hold recovery outcome could not be confirmed. Reload before trying again.'
+          : error.message || 'The hold recovery changed. Review the refreshed request before trying again.';
+        if (unconfirmedOutcome && isCurrentDialogMutation(mutation, request, 'title_request')) {
+          retainUnconfirmedOutcome(message, mutation.token);
+        }
+        const refreshed = await loadQueue({ skipDeepLink: true, silent: true });
         if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
-        await openRequest(request.id);
+        const detailLoaded = await openRequest(request.id);
+        if (unconfirmedOutcome && refreshed === true && detailLoaded === true) {
+          clearCommittedSessionFallback(mutation.token);
+        }
         if (isCurrentDialogSelection(request, 'title_request')) announce(message, 'error');
       } else if (isCurrentDialogMutation(mutation, request, 'title_request') &&
                  error.status !== 401 && !isAbortError(error)) {
         announce(error.message || 'Hold recovery could not be updated.', 'error');
       }
     } finally {
+      if (state.dialogMutationInFlight === `hold:${operation.id}:${operation.version}`) state.dialogMutationInFlight = null;
       latestLoads.finish('dialog-mutation', mutation.token);
     }
   }
@@ -2564,7 +2827,12 @@ export function createWorkflowApp() {
     if (name === 'settings') settingsController.activate();
   }
 
-  function closeDialog() {
+  function closeDialog(options = {}) {
+    if (state.dialogMutationInFlight && options.preserveMutation !== true && !options.force) {
+      announce('The workflow action is in progress. Wait for its authoritative result before closing.', 'warning');
+      dom.closeDialog.focus();
+      return false;
+    }
     polarisLookup.close();
     latestLoads.begin('research-configuration').abort();
     state.verifiedBib = null;
@@ -2574,7 +2842,7 @@ export function createWorkflowApp() {
     cancelDialogFocusReturn();
     cancelAssignmentCandidateLoad();
     cancelPickupOptionsLoad();
-    cancelDialogMutationCompletion();
+    if (options.preserveMutation !== true) cancelDialogMutationCompletion();
     cancelActionChoiceLoad();
     cancelAdditionalCopyPreviewLoad();
     cancelAdditionalCopyCreationCompletion();
@@ -2591,6 +2859,7 @@ export function createWorkflowApp() {
     state.selectedRequestVersion = null;
     state.returnFocus = null;
     replaceRequestParameter(null, wasAdditionalCopy || state.activeView === 'additional-copies');
+    if (options.preserveMutation === true) state.dialogMutationInFlight = null;
     const ariaLabel = wasAdditionalCopy
       ? `Open additional-copy task ${selectedId}`
       : `Open request ${selectedId}`;
@@ -2626,6 +2895,7 @@ export function createWorkflowApp() {
     observer.observe(grid, { childList: true, subtree: true });
     document.addEventListener('focusin', focusMoved);
     frame = window.requestAnimationFrame(focusReturnButton);
+    return true;
   }
 
   function bindEvents() {
@@ -2718,14 +2988,15 @@ export function createWorkflowApp() {
     dom.additionalCopyClaim.addEventListener('change', renderAdditionalCopyGrid);
     dom.profile.addEventListener('submit', saveProfile);
     for (const tab of dom.viewTabs) tab.addEventListener('click', () => {
-      if (dom.dialog.open) closeDialog();
+      if (dom.dialog.open && !closeDialog()) return;
       if (dom.staffSuggestionDialog.open) closeStaffSuggestion();
       switchView(tab.dataset.view);
     });
-    dom.closeDialog.addEventListener('click', closeDialog);
+    dom.closeDialog.addEventListener('click', () => closeDialog());
     dom.dialog.addEventListener('cancel', event => {
       event.preventDefault();
-      if (state.actionChoice) dismissActionChoice();
+      if (state.dialogMutationInFlight) closeDialog();
+      else if (state.actionChoice) dismissActionChoice();
       else closeDialog();
     });
     dom.createCopyForm.addEventListener('submit', createAdditionalCopy);

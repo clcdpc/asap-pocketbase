@@ -2,6 +2,7 @@ using System.Data;
 using System.Globalization;
 using System.Net.Mail;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Asap.Web.Features.Email;
 using Asap.Web.Features.Patron;
 using Asap.Web.Infrastructure.Configuration;
@@ -12,7 +13,8 @@ using Microsoft.EntityFrameworkCore;
 namespace Asap.Web.Features.Staff;
 
 public sealed record VersionInput(string? Version);
-public sealed record AssignTitleRequestInput(string? Version, long? AssigneeId);
+public sealed record AssignTitleRequestInput(string? Version,
+    [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] long? AssigneeId);
 
 public sealed class TitleRequestActionInput
 {
@@ -89,9 +91,11 @@ public sealed class TitleRequestMutationService(
 
         if (unclaim)
         {
-            if (request.ClaimedByStaffUserId.HasValue &&
-                request.ClaimedByStaffUserId != actor.Id &&
-                locked.Staff[actor.Id].Role == "staff")
+            if (!request.ClaimedByStaffUserId.HasValue)
+            {
+                return new TitleRequestMutationResult("claim_conflict");
+            }
+            if (request.ClaimedByStaffUserId != actor.Id)
             {
                 return new TitleRequestMutationResult("claim_forbidden");
             }
@@ -117,6 +121,64 @@ public sealed class TitleRequestMutationService(
         return new TitleRequestMutationResult("updated", request.Id);
     }
 
+    public async Task<TitleRequestMutationResult> ClearClaimAsync(
+        CurrentStaff actor,
+        long requestId,
+        VersionInput input,
+        CancellationToken cancellationToken)
+    {
+        if (!StaffVersion.TryDecode(input.Version, out var expectedVersion))
+        {
+            return new TitleRequestMutationResult("invalid_version");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+        var locked = await LockForMutationAsync(context, actor, requestId, [actor.Id], cancellationToken);
+        if (locked.Code != "locked")
+        {
+            return new TitleRequestMutationResult(locked.Code);
+        }
+        var request = locked.Request!;
+        if (!request.RowVersion.SequenceEqual(expectedVersion))
+        {
+            return new TitleRequestMutationResult("stale_version");
+        }
+        if (locked.Staff[actor.Id].Role is not ("admin" or "super_admin"))
+        {
+            return new TitleRequestMutationResult("claim_forbidden");
+        }
+        if (request.Status == "closed" || !request.ClaimedByStaffUserId.HasValue ||
+            request.ClaimedByStaffUserId == actor.Id)
+        {
+            return new TitleRequestMutationResult("claim_conflict");
+        }
+        var previousClaimantId = request.ClaimedByStaffUserId.Value;
+        var previousClaimantName = request.ClaimedByDisplayName;
+        var previousClaimedAt = request.ClaimedAtUtc;
+        var previousClaimType = request.ClaimType;
+        var previousClaimRuleId = request.ClaimRuleId;
+        request.ClaimedByStaffUserId = null;
+        request.ClaimedByDisplayName = null;
+        request.ClaimedAtUtc = null;
+        request.ClaimType = null;
+        request.ClaimRuleId = null;
+        request.UpdatedUtc = DateTime.UtcNow;
+        AddEvent(context, request, actor, "claim_admin_cleared",
+            $"Administrator cleared {previousClaimantName ?? previousClaimantId.ToString(CultureInfo.InvariantCulture)}'s claim.",
+            new
+            {
+                previousClaimantId = previousClaimantId.ToString(CultureInfo.InvariantCulture),
+                previousClaimantName,
+                previousClaimedAt,
+                previousClaimType,
+                previousClaimRuleId = previousClaimRuleId?.ToString(CultureInfo.InvariantCulture)
+            });
+        await context.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return new TitleRequestMutationResult("updated", request.Id);
+    }
+
     public async Task<TitleRequestMutationResult> AssignAsync(
         CurrentStaff actor,
         long requestId,
@@ -129,14 +191,27 @@ public sealed class TitleRequestMutationService(
         }
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        var notificationOrganizationId = await context.TitleRequests.AsNoTracking().Where(item => item.Id == requestId)
-            .Select(item => (int?)item.LibraryOrganizationId).SingleOrDefaultAsync(cancellationToken);
-        if (!notificationOrganizationId.HasValue || !TitleRequestViewService.CanAccess(actor, notificationOrganizationId.Value))
+        var notificationRequest = await context.TitleRequests.AsNoTracking().Where(item => item.Id == requestId)
+            .Select(item => new { item.LibraryOrganizationId, item.RowVersion }).SingleOrDefaultAsync(cancellationToken);
+        if (notificationRequest is null || !TitleRequestViewService.CanAccess(actor, notificationRequest.LibraryOrganizationId))
+        {
             return new TitleRequestMutationResult("not_found");
+        }
+        if (!notificationRequest.RowVersion.SequenceEqual(expectedVersion))
+        {
+            return new TitleRequestMutationResult("stale_version");
+        }
+        var currentActor = await context.StaffUsers.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.Id == actor.Id, cancellationToken);
+        if (currentActor is null || !IsSameCurrentActor(actor, currentActor) ||
+            !IsEligibleForLibrary(currentActor, notificationRequest.LibraryOrganizationId))
+        {
+            return new TitleRequestMutationResult("staff_scope_forbidden");
+        }
         EmailTransportReadiness readiness;
         try
         {
-            readiness = await emailSender.CheckReadinessAsync(notificationOrganizationId.Value, cancellationToken);
+            readiness = await emailSender.CheckReadinessAsync(notificationRequest.LibraryOrganizationId, cancellationToken);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -150,7 +225,7 @@ public sealed class TitleRequestMutationService(
             return new TitleRequestMutationResult(locked.Code);
         }
         var request = locked.Request!;
-        if (!request.RowVersion.SequenceEqual(expectedVersion) || request.LibraryOrganizationId != notificationOrganizationId)
+        if (!request.RowVersion.SequenceEqual(expectedVersion) || request.LibraryOrganizationId != notificationRequest.LibraryOrganizationId)
         {
             return new TitleRequestMutationResult("stale_version");
         }
@@ -183,10 +258,6 @@ public sealed class TitleRequestMutationService(
         try
         {
             Dispatch(outbox);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
         }
         catch (Exception exception)
         {
@@ -242,11 +313,24 @@ public sealed class TitleRequestMutationService(
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var notificationRequest = await context.TitleRequests.AsNoTracking().Where(item => item.Id == requestId)
-            .Select(item => new { item.LibraryOrganizationId, item.Status, item.Identifier, item.BibId })
+            .Select(item => new { item.LibraryOrganizationId, item.Status, item.Identifier, item.BibId, item.RowVersion })
             .SingleOrDefaultAsync(cancellationToken);
         if (notificationRequest is null ||
             !TitleRequestViewService.CanAccess(actor, notificationRequest.LibraryOrganizationId))
+        {
             return new TitleRequestMutationResult("not_found");
+        }
+        var actionActor = await context.StaffUsers.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.Id == actor.Id, cancellationToken);
+        if (actionActor is null || !IsSameCurrentActor(actor, actionActor) ||
+            !IsEligibleForLibrary(actionActor, notificationRequest.LibraryOrganizationId))
+        {
+            return new TitleRequestMutationResult("staff_scope_forbidden");
+        }
+        if (!notificationRequest.RowVersion.SequenceEqual(expectedVersion))
+        {
+            return new TitleRequestMutationResult("stale_version");
+        }
         var previewIdentifier = Clean(notificationRequest.Identifier);
         var previewBib = Clean(notificationRequest.BibId);
         var previewIdentifierChanged = IsSupplied(input.Identifier) &&
@@ -343,6 +427,11 @@ public sealed class TitleRequestMutationService(
         if (targetStatus == "pending_hold" && statusChanged && string.IsNullOrWhiteSpace(bibAfterMutation))
         {
             return new TitleRequestMutationResult("bib_required");
+        }
+        if (targetStatus == "pending_hold" && statusChanged &&
+            !request.BibIdStaffVerified && !bibChanged && !staffSelectedBib)
+        {
+            return new TitleRequestMutationResult("bib_unverified");
         }
         if (bibChanged && proposedBib is not null && !IsPositiveInteger(proposedBib))
         {
@@ -602,10 +691,6 @@ public sealed class TitleRequestMutationService(
                 outboxDispatcher.Enqueue(outboxId);
             }
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
         catch (Exception exception)
         {
             logger.LogError(exception, "Notification dispatch failed after request {RequestId} committed", request.Id);
@@ -650,6 +735,13 @@ public sealed class TitleRequestMutationService(
         if (request is null || !TitleRequestViewService.CanAccess(actor, request.LibraryOrganizationId))
         {
             return "not_found";
+        }
+        var currentActor = await context.StaffUsers.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.Id == actor.Id, cancellationToken);
+        if (currentActor is null || !IsSameCurrentActor(actor, currentActor) ||
+            !IsEligibleForLibrary(currentActor, request.LibraryOrganizationId))
+        {
+            return "staff_scope_forbidden";
         }
         if (!request.RowVersion.SequenceEqual(expectedVersion))
         {
@@ -739,6 +831,10 @@ public sealed class TitleRequestMutationService(
             return result.IsValid ? null : "bib_not_found";
         }
         catch (PolarisOperationalException)
+        {
+            return "bib_validation_unavailable";
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             return "bib_validation_unavailable";
         }

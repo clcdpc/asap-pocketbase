@@ -93,6 +93,7 @@ public sealed partial class PatronJourneyTests
                             : null,
                         MaterialFormatId = index == 5 ? systemFormat.Id : formatId,
                         BibId = index >= 5 ? "9001" : null,
+                BibIdStaffVerified = index == 6,
                         Status = "suggestion",
                         IsbnCheckStatus = "skipped_no_isbn",
                         CreatedUtc = DateTime.UtcNow,
@@ -329,7 +330,7 @@ public sealed partial class PatronJourneyTests
                              builder.ConfigureServices(services =>
                              {
                                  services.RemoveAll<IEmailOutboxDispatcher>();
-                                 services.AddSingleton<IEmailOutboxDispatcher, ThrowingOutboxDispatcher>();
+                                 services.AddSingleton<IEmailOutboxDispatcher, CanceledOutboxDispatcher>();
                              })))
             {
                 using var dispatchClient = dispatchFactory.CreateClient(
@@ -460,8 +461,8 @@ public sealed partial class PatronJourneyTests
             throw new NotSupportedException();
     }
 
-    private sealed class ThrowingOutboxDispatcher : IEmailOutboxDispatcher
+    private sealed class CanceledOutboxDispatcher : IEmailOutboxDispatcher
     {
-        public void Enqueue(long outboxId) => throw new InvalidOperationException("Queue unavailable after commit.");
+        public void Enqueue(long outboxId) => throw new OperationCanceledException("Queue aborted after commit.");
     }
 }
