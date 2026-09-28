@@ -1498,6 +1498,13 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     await page.getByRole('button', { name: 'Claim', exact: true }).click();
     await page.locator('#app-status').filter({ hasText: /additional-copy action outcome could not be confirmed/i }).waitFor();
     await page.unroute(`**/api/asap/staff/additional-copies/${created.id}/claim`, claimTransportFailure);
+    const uncertainClaimReply = route => route.fulfill({ status: 503, contentType: 'application/json',
+      body: JSON.stringify({ code: 'additional_copy_outcome_unconfirmed',
+        message: 'The additional-copy outcome could not be confirmed. Reload before trying again.' }) });
+    await page.route(`**/api/asap/staff/additional-copies/${created.id}/claim`, uncertainClaimReply);
+    await page.getByRole('button', { name: 'Claim', exact: true }).click();
+    await page.locator('#app-status').filter({ hasText: /additional-copy action outcome could not be confirmed/i }).waitFor();
+    await page.unroute(`**/api/asap/staff/additional-copies/${created.id}/claim`, uncertainClaimReply);
     const afterTransportFailure = await context.request.get(
       `${args.baseOrigin}/api/asap/staff/additional-copies/${created.id}`);
     assert.equal((await afterTransportFailure.json()).version, unclaimed.version);

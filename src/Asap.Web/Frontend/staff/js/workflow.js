@@ -1150,7 +1150,10 @@ export function createWorkflowApp() {
         announce(refreshed === false ? `${message} The task list could not refresh.` : message, messageKind);
       }
     } catch (error) {
-      const unconfirmedOutcome = isUnconfirmedMutationError(error, mutation.signal);
+      const definiteNoCommit = error.status === 503 &&
+        error.response?.code === 'notification_dependency_unavailable';
+      const unconfirmedOutcome = !definiteNoCommit &&
+        (isUnconfirmedMutationError(error, mutation.signal) || error.status === 408 || error.status >= 500);
       if (error.status === 409 || unconfirmedOutcome) {
         const message = unconfirmedOutcome
           ? 'The additional-copy action outcome could not be confirmed. Reload before trying again.'
@@ -2538,7 +2541,10 @@ export function createWorkflowApp() {
         announce(refreshed === false ? `${message} The queue could not refresh.` : message, messageKind);
       }
     } catch (error) {
-      const unconfirmedOutcome = isUnconfirmedMutationError(error, mutation.signal);
+      const definiteNoCommit = ['bib_validation_unavailable', 'notification_dependency_unavailable']
+        .includes(error.response?.code);
+      const unconfirmedOutcome = !definiteNoCommit &&
+        (isUnconfirmedMutationError(error, mutation.signal) || error.status === 408 || error.status >= 500);
       const outcomeUnknown = unconfirmedOutcome ||
         ['request_outcome_unconfirmed', 'hold_outcome_unconfirmed', 'hold_provider_error']
           .includes(error.response?.code);
@@ -2821,7 +2827,8 @@ export function createWorkflowApp() {
         announce(`${message}${followup}`, notification.partial || followup ? 'warning' : 'success');
       }
     } catch (error) {
-      const unconfirmedOutcome = isUnconfirmedMutationError(error, mutation.signal);
+      const unconfirmedOutcome = isUnconfirmedMutationError(error, mutation.signal) ||
+        error.status === 408 || error.status >= 500;
       const outcomeUnknown = unconfirmedOutcome ||
         ['hold_outcome_unconfirmed', 'hold_provider_error'].includes(error.response?.code);
       if (error.status === 409 || outcomeUnknown) {

@@ -65,7 +65,15 @@ public static class AdditionalCopyEndpoints
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
-        var result = await service.CreateAsync(Current(context), id, input, cancellationToken);
+        AdditionalCopyMutationResult result;
+        try
+        {
+            result = await service.CreateAsync(Current(context), id, input, cancellationToken);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return OutcomeUnconfirmed();
+        }
         if (result.Code != "created")
         {
             return Error(result.Code);
@@ -151,7 +159,15 @@ public static class AdditionalCopyEndpoints
         AdditionalCopyService service,
         CancellationToken cancellationToken)
     {
-        var result = await service.DeleteClosedAsync(Current(context), id, input, cancellationToken);
+        AdditionalCopyMutationResult result;
+        try
+        {
+            result = await service.DeleteClosedAsync(Current(context), id, input, cancellationToken);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return OutcomeUnconfirmed();
+        }
         return result.Code == "deleted" ? Results.Json(new { deleted = true }) : Error(result.Code);
     }
 
@@ -163,7 +179,15 @@ public static class AdditionalCopyEndpoints
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
-        var result = await mutation;
+        AdditionalCopyMutationResult result;
+        try
+        {
+            result = await mutation;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return OutcomeUnconfirmed();
+        }
         if (result.Code != "updated")
         {
             return Error(result.Code);
@@ -179,6 +203,12 @@ public static class AdditionalCopyEndpoints
                 NotificationStatus = result.NotificationStatus,
                 NotificationReason = result.NotificationReason });
     }
+
+    private static IResult OutcomeUnconfirmed() => Results.Json(new
+    {
+        code = "additional_copy_outcome_unconfirmed",
+        message = "The additional-copy outcome could not be confirmed. Reload before trying again."
+    }, statusCode: StatusCodes.Status503ServiceUnavailable);
 
     private static async Task<AdditionalCopyDto?> TryLoadCommittedAsync(
         HttpContext context,

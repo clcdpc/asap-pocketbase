@@ -208,6 +208,13 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
           mutationFailed = true;
           throw new TypeError('Connection lost after submission');
         }
+        if (scenarioOptions.mutationServerFailure) {
+          return response(500, { code: 'server_error', message: 'Unexpected server failure.' });
+        }
+        if (scenarioOptions.mutationDefiniteUnavailable) {
+          return response(503, { code: 'notification_dependency_unavailable',
+            message: 'Notification configuration is temporarily unavailable. The request was not changed.' });
+        }
         const finalStatus = action === 'reject' ? 'closed' : action === 'alreadyOwn' || scenarioOptions.purchaseVerifiedBib ? 'pending_hold' : 'outstanding_purchase';
         currentRequest = { ...currentRequest, version: 'v2', status: finalStatus,
           activity: [...currentRequest.activity, {
@@ -497,7 +504,14 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       assert.match(document.querySelector('#signed-out-message').textContent, /authoritative result before retrying/);
       return;
     }
-    if (scenarioOptions.mutationDependencyAbort || scenarioOptions.mutationNetworkFailure) {
+    if (scenarioOptions.mutationDefiniteUnavailable) {
+      await until(() => /request was not changed/.test(document.querySelector('#app-status').textContent),
+        'pre-mutation dependency outage reports its definite no-change result');
+      assert.doesNotMatch(document.querySelector('#app-status').textContent, /outcome could not be confirmed/);
+      return;
+    }
+    if (scenarioOptions.mutationDependencyAbort || scenarioOptions.mutationNetworkFailure ||
+        scenarioOptions.mutationServerFailure) {
       await until(() => /outcome could not be confirmed/.test(document.querySelector('#app-status').textContent),
         'uncancelled mutation dependency abort reports unconfirmed outcome');
       assert.equal(document.querySelector('#request-dialog .status-badge').textContent, 'Suggestion');
@@ -582,6 +596,8 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
   await scenario('purchase', false, true, { staleMutation: true });
   await scenario('reject', false, false, { mutationDependencyAbort: true });
   await scenario('reject', false, false, { mutationNetworkFailure: true });
+  await scenario('reject', false, false, { mutationServerFailure: true });
+  await scenario('reject', false, false, { mutationDefiniteUnavailable: true });
   await scenario('reject', false, false, { mutationNetworkFailureAfter401: true });
   await scenario('reject', false, false, { templateDependencyAbort: true });
   await scenario('reject', false, false, { verifyBib: true });
