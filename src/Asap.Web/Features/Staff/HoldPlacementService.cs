@@ -381,8 +381,24 @@ public sealed class HoldPlacementService(
                 ? null
                 : await preContext.TitleRequests.AsNoTracking()
                     .SingleOrDefaultAsync(item => item.Id == preOperation.TitleRequestId, cancellationToken);
+            if (preOperation is null || preRequest is null)
+            {
+                return new HoldPlacementResult("not_found", operationId);
+            }
+            var currentStaff = await preContext.StaffUsers.AsNoTracking()
+                .SingleOrDefaultAsync(item => item.Id == actor.Id, cancellationToken);
+            var systemActive = await preContext.Organizations.AsNoTracking()
+                .AnyAsync(item => item.Id == 1 && item.IsActive, cancellationToken);
+            if (currentStaff is null || !systemActive || !IsCurrentSuperAdmin(actor, currentStaff))
+            {
+                return new HoldPlacementResult("hold_resolution_forbidden", operationId);
+            }
+            if (!preOperation.RowVersion.SequenceEqual(expectedVersion) ||
+                !preRequest.RowVersion.SequenceEqual(expectedRequestVersion))
+            {
+                return new HoldPlacementResult("stale_version", operationId);
+            }
         }
-        if (preOperation is null || preRequest is null) return new HoldPlacementResult("not_found", operationId);
         var markedMutation = preOperation.Phase is "create_started" or "reply_started";
         if (markedMutation &&
             (!input.OriginalExecutorExcluded || !input.ExecutorExclusionAttested ||
@@ -444,7 +460,7 @@ public sealed class HoldPlacementService(
         if (request.Id != preRequest.Id || request.LibraryOrganizationId != preRequest.LibraryOrganizationId ||
             operation.TitleRequestId != request.Id || request.Status != "pending_hold" ||
             !string.Equals(request.Barcode, operation.PatronBarcodeSnapshot, StringComparison.Ordinal) ||
-            !string.Equals(request.BibId, operation.BibIdSnapshot, StringComparison.Ordinal))
+            !SameBibIdentity(request.BibId, operation.BibIdSnapshot))
         {
             return new HoldPlacementResult("request_state_conflict", operationId);
         }
@@ -712,7 +728,7 @@ public sealed class HoldPlacementService(
         }
         if (request.Status != "hold_placed" ||
             request.Barcode != operation.PatronBarcodeSnapshot ||
-            request.BibId != operation.BibIdSnapshot)
+            !SameBibIdentity(request.BibId, operation.BibIdSnapshot))
         {
             return new HoldPlacementResult("hold_identity_association_changed", operationId);
         }
@@ -978,7 +994,7 @@ public sealed class HoldPlacementService(
         var request = await context.TitleRequests.AsNoTracking()
             .SingleOrDefaultAsync(item => item.Id == operation.TitleRequestId, cancellationToken);
         if (request is null || request.Status != "pending_hold" || !request.AutoHold ||
-            !string.Equals(request.BibId, operation.BibIdSnapshot, StringComparison.Ordinal))
+            !SameBibIdentity(request.BibId, operation.BibIdSnapshot))
         {
             return "hold_not_eligible";
         }
@@ -1078,7 +1094,7 @@ public sealed class HoldPlacementService(
               AND EXISTS (SELECT 1 FROM [asap].[TitleRequest] AS request
                   WHERE request.[Id] = [TitleRequestId] AND request.[Status] = N'pending_hold'
                     AND request.[AutoHold] = 1 AND request.[BibIdStaffVerified] = 1
-                    AND request.[BibId] = [BibIdSnapshot])
+                    AND TRY_CONVERT(int, request.[BibId]) = TRY_CONVERT(int, [BibIdSnapshot]))
               AND [LeaseExpiresUtc] > SYSUTCDATETIME();
             """,
             cancellationToken);
@@ -1172,7 +1188,7 @@ public sealed class HoldPlacementService(
               AND EXISTS (SELECT 1 FROM [asap].[TitleRequest] AS request
                   WHERE request.[Id] = [TitleRequestId] AND request.[Status] = N'pending_hold'
                     AND request.[AutoHold] = 1 AND request.[BibIdStaffVerified] = 1
-                    AND request.[BibId] = [BibIdSnapshot])
+                    AND TRY_CONVERT(int, request.[BibId]) = TRY_CONVERT(int, [BibIdSnapshot]))
               AND [LeaseExpiresUtc] > SYSUTCDATETIME();
             """,
             cancellationToken) == 1;
@@ -1252,7 +1268,7 @@ public sealed class HoldPlacementService(
             return new HoldPlacementResult("hold_timeout_due", owner.Id);
         }
         if (request.LibraryOrganizationId != requestSnapshot.LibraryOrganizationId ||
-            request.BibId != operation.BibIdSnapshot || request.Status != "pending_hold")
+            !SameBibIdentity(request.BibId, operation.BibIdSnapshot) || request.Status != "pending_hold")
         {
             await RequireOperatorInTransactionAsync(operation, now, "request_state_conflict");
             await context.SaveChangesAsync(cancellationToken);
@@ -1590,6 +1606,10 @@ public sealed class HoldPlacementService(
         IReadOnlyList<PolarisHoldSnapshot> holds,
         string bibId) =>
         holds.Where(item => item.BibId.ToString() == bibId && !IsTerminal(item.StatusId)).ToList();
+
+    private static bool SameBibIdentity(string? currentBibId, string bibIdSnapshot) =>
+        int.TryParse(currentBibId, out var current) && current > 0 &&
+        int.TryParse(bibIdSnapshot, out var snapshot) && current == snapshot;
 
     private static async Task<WorkflowSettings> EffectiveWorkflowAsync(
         AsapDbContext context,

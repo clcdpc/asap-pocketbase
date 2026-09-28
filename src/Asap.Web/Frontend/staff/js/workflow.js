@@ -124,6 +124,9 @@ export function createWorkflowApp() {
     additionalCopySummary: document.querySelector('#additional-copy-summary'),
     additionalCopyGrid: document.querySelector('#additional-copy-grid'),
     additionalCopyEmpty: document.querySelector('#additional-copy-empty'),
+    additionalCopyCreateReview: document.querySelector('#additional-copy-create-review'),
+    additionalCopyCreateReviewSummary: document.querySelector('#additional-copy-create-review-summary'),
+    additionalCopyCreateReviewDone: document.querySelector('#additional-copy-create-review-done'),
     profile: document.querySelector('#profile-form'),
     notificationEmail: document.querySelector('#notification-email'),
     weeklyEmail: document.querySelector('#weekly-email'),
@@ -177,7 +180,7 @@ export function createWorkflowApp() {
     partialSessionFailureOwner: null,
     partialSessionFailureDetailAvailable: false,
     partialSessionFailureAfterQueueSequence: null,
-    unconfirmedCopyCreationAwaitingRefresh: false,
+    unconfirmedCopyCreationAwaitingRefresh: readUnconfirmedCopyCreation(),
     queueLoadSequence: 0,
     configurations: new Map(),
     research: null,
@@ -188,6 +191,39 @@ export function createWorkflowApp() {
     dialogMutationInFlight: null,
     actionChoice: null
   };
+
+  function readUnconfirmedCopyCreation() {
+    try {
+      const saved = JSON.parse(window.sessionStorage.getItem('asap.staff.unconfirmedCopyCreation'));
+      if (Number.isSafeInteger(saved?.libraryOrgId) && saved.libraryOrgId > 0 &&
+          typeof saved.bibid === 'string' && saved.bibid &&
+          typeof saved.sourceId === 'string' && /^\d+$/.test(saved.sourceId) &&
+          typeof saved.version === 'string' && saved.version) {
+        return { ...saved, reviewReady: false, reviewed: false };
+      }
+    } catch {
+      // A later create verifies storage availability before dispatch.
+    }
+    return false;
+  }
+
+  function rememberUnconfirmedCopyCreation(value) {
+    try {
+      if (value) {
+        window.sessionStorage.setItem('asap.staff.unconfirmedCopyCreation', JSON.stringify({
+          libraryOrgId: value.libraryOrgId,
+          bibid: value.bibid,
+          sourceId: value.sourceId,
+          version: value.version
+        }));
+      } else {
+        window.sessionStorage.removeItem('asap.staff.unconfirmedCopyCreation');
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   function announce(message, kind = '') {
     dom.status.textContent = message || '';
@@ -392,7 +428,6 @@ export function createWorkflowApp() {
     state.partialSessionFailureOwner = null;
     state.partialSessionFailureDetailAvailable = false;
     state.partialSessionFailureAfterQueueSequence = null;
-    state.unconfirmedCopyCreationAwaitingRefresh = false;
   }
 
   function retainUnconfirmedOutcome(message, owner) {
@@ -407,7 +442,12 @@ export function createWorkflowApp() {
     state.partialSessionFailureOwner = null;
     state.partialSessionFailureDetailAvailable = false;
     state.partialSessionFailureAfterQueueSequence = null;
-    state.unconfirmedCopyCreationAwaitingRefresh = false;
+    if (state.unconfirmedCopyCreationAwaitingRefresh) {
+      state.unconfirmedCopyCreationAwaitingRefresh.reviewReady = false;
+      state.unconfirmedCopyCreationAwaitingRefresh.reviewed = false;
+      state.additionalCopyLoaded = false;
+      dom.additionalCopyCreateReview.hidden = true;
+    }
     state.staff = staff;
     state.scope = staff.role === 'super_admin' ? 'all' : String(staff.organizationId);
     dom.signedOut.hidden = true;
@@ -799,13 +839,19 @@ export function createWorkflowApp() {
       state.scope = result.scope;
       state.additionalCopyLoaded = true;
       if (state.staff.role === 'super_admin') populateScopes(result.availableLibraries, result.scope);
-      renderAdditionalCopyGrid();
       const uncertainCreation = state.unconfirmedCopyCreationAwaitingRefresh;
       if (uncertainCreation && uncertaintyAtStart === uncertainCreation && result.status === 'open' &&
           (result.scope === 'all' || String(result.scope) === String(uncertainCreation.libraryOrgId))) {
-        clearCommittedSessionFallback(state.partialSessionFailureOwner);
+        uncertainCreation.reviewReady = true;
+        dom.additionalCopySearch.value = '';
+        dom.additionalCopyClaim.value = 'all';
+      } else if (uncertainCreation) {
+        uncertainCreation.reviewReady = false;
       }
-      if (!options.silent) announce(`${state.additionalCopies.length} authorized additional-copy tasks loaded.`);
+      renderAdditionalCopyGrid();
+      if (!options.silent) announce(uncertainCreation?.reviewReady
+        ? 'Open additional-copy tasks loaded. Review the matching tasks and acknowledge the review before trying again.'
+        : `${state.additionalCopies.length} authorized additional-copy tasks loaded.`);
       if (!state.additionalCopyDeepLinkHandled && !options.skipDeepLink) {
         state.additionalCopyDeepLinkHandled = true;
         const deepLink = currentRequestParameter();
@@ -841,6 +887,21 @@ export function createWorkflowApp() {
   }
 
   function renderAdditionalCopyGrid() {
+    const uncertainCreation = state.unconfirmedCopyCreationAwaitingRefresh;
+    const reviewReady = Boolean(uncertainCreation?.reviewReady) && !uncertainCreation.reviewed &&
+      state.additionalCopyStatus === 'open' &&
+      (state.scope === 'all' || String(state.scope) === String(uncertainCreation.libraryOrgId));
+    dom.additionalCopyCreateReview.hidden = !reviewReady;
+    if (reviewReady) {
+      const matching = state.additionalCopies.filter(item =>
+        String(item.libraryOrgId) === String(uncertainCreation.libraryOrgId) &&
+        String(item.bibid) === String(uncertainCreation.bibid));
+      const ids = matching.map(item => item.id).join(', ');
+      dom.additionalCopyCreateReviewSummary.textContent =
+        matching.length === 0
+          ? `Creation for BIB ${uncertainCreation.bibid} could not be confirmed. No matching open task is visible yet. Review the list before retrying; a retry will use the original request version so a completed earlier creation cannot be duplicated.`
+          : `Creation for BIB ${uncertainCreation.bibid} could not be confirmed. Review the ${matching.length} matching open task${matching.length === 1 ? '' : 's'} for this library before creating another: ${ids}.`;
+    }
     const requests = filteredAdditionalCopies();
     dom.additionalCopySummary.textContent = `${requests.length} ${state.additionalCopyStatus} task${requests.length === 1 ? '' : 's'}`;
     dom.additionalCopyEmpty.hidden = requests.length !== 0;
@@ -2269,8 +2330,9 @@ export function createWorkflowApp() {
   }
 
   async function showAdditionalCopyPreview(request, returnFocus) {
-    if (state.unconfirmedCopyCreationAwaitingRefresh) {
-      announce('Additional-copy creation is unconfirmed. Refresh the open additional-copy task list for this library and check for a new task before trying again.', 'warning');
+    const uncertainCreation = state.unconfirmedCopyCreationAwaitingRefresh;
+    if (uncertainCreation && (!uncertainCreation.reviewed || uncertainCreation.sourceId !== String(request.id))) {
+      announce('Additional-copy creation is unconfirmed. Refresh the open additional-copy task list for this library and review matching tasks before trying again.', 'warning');
       return;
     }
     cancelAdditionalCopyCreationCompletion();
@@ -2284,7 +2346,8 @@ export function createWorkflowApp() {
       state.createCopyRequest = { request, version: preview.version };
       state.createCopyReturnFocus = returnFocus || document.activeElement;
       const holdState = request.status === 'hold_placed' ? 'placed' : 'queued';
-      dom.createCopySummary.textContent = `${preview.openCount} open additional-copy task${preview.openCount === 1 ? '' : 's'} already exist for BIB ${preview.bibid}. The patron hold remains ${holdState}.`;
+      dom.createCopySummary.textContent = `${preview.openCount} open additional-copy task${preview.openCount === 1 ? '' : 's'} already exist for BIB ${preview.bibid}. The patron hold remains ${holdState}.` +
+        (uncertainCreation ? ' This retry uses the original request version; the server will reject it if the earlier creation changed the request.' : '');
       dom.createCopyReminder.checked = Boolean(preview.emailPurchaseReminderDefault);
       dom.createCopyForm.querySelector('button[type="submit"]').disabled = false;
       dom.createCopyDialog.showModal();
@@ -2318,8 +2381,9 @@ export function createWorkflowApp() {
   async function createAdditionalCopy(event) {
     event.preventDefault();
     const pending = state.createCopyRequest;
+    const uncertainCreation = state.unconfirmedCopyCreationAwaitingRefresh;
     if (!pending || pending.submitting || pending.outcomeUnconfirmed ||
-        state.unconfirmedCopyCreationAwaitingRefresh ||
+        (uncertainCreation && (!uncertainCreation.reviewed || uncertainCreation.sourceId !== String(pending.request.id))) ||
         !isCurrentDialogRequest(pending.request, 'title_request')) return;
     pending.submitting = true;
     const mutation = latestLoads.begin('additional-copy-create-mutation');
@@ -2327,15 +2391,30 @@ export function createWorkflowApp() {
     submit.disabled = true;
     announce('Creating additional-copy task...');
     try {
+      const attempt = uncertainCreation || {
+        libraryOrgId: pending.request.libraryOrgId,
+        bibid: pending.request.bibid,
+        sourceId: String(pending.request.id),
+        version: pending.version,
+        reviewReady: false,
+        reviewed: false
+      };
+      if (!rememberUnconfirmedCopyCreation(attempt)) {
+        announce('This browser could not save the pending task attempt. Enable site storage before creating the task.', 'error');
+        return;
+      }
+      state.unconfirmedCopyCreationAwaitingRefresh = attempt;
       const result = await authorizedJson(`/api/asap/staff/title-requests/${pending.request.id}/additional-copy`, {
         method: 'POST',
         signal: mutation.signal,
         body: {
-          version: pending.version,
+          version: attempt.version,
           emailPurchaseReminder: dom.createCopyReminder.checked
         }
       });
       if (!isCurrentAdditionalCopyCreation(mutation, pending)) return;
+      state.unconfirmedCopyCreationAwaitingRefresh = false;
+      rememberUnconfirmedCopyCreation(false);
       const taskId = result.additionalCopyRequest?.id || result.additionalCopyRequestId;
       const notification = notificationOutcome(result.notificationStatus, result.notificationReason, 'Purchase reminder');
       const message = `Additional-copy task ${taskId || ''} created. Final state: ${statusLabel(result.finalStatus || 'open')}.${notification.text}`;
@@ -2357,15 +2436,21 @@ export function createWorkflowApp() {
         }
       }
     } catch (error) {
-      const unconfirmedOutcome = isUnconfirmedMutationError(error, mutation.signal);
+      const definiteNoCommit = [400, 401, 403, 404, 409].includes(error.status) ||
+        (error.status === 503 && error.response?.code === 'notification_dependency_unavailable');
+      if (definiteNoCommit) {
+        state.unconfirmedCopyCreationAwaitingRefresh = false;
+        rememberUnconfirmedCopyCreation(false);
+      }
+      const unconfirmedOutcome = !definiteNoCommit &&
+        (isUnconfirmedMutationError(error, mutation.signal) || error.status === 408 || error.status >= 500);
       if (unconfirmedOutcome && isCurrentAdditionalCopyCreation(mutation, pending)) {
         pending.outcomeUnconfirmed = true;
         const message = 'Additional-copy creation could not be confirmed. Check the task list before trying again.';
         retainUnconfirmedOutcome(message, mutation.token);
-        state.unconfirmedCopyCreationAwaitingRefresh = {
-          libraryOrgId: pending.request.libraryOrgId,
-          bibid: pending.request.bibid
-        };
+        state.unconfirmedCopyCreationAwaitingRefresh.reviewReady = false;
+        state.unconfirmedCopyCreationAwaitingRefresh.reviewed = false;
+        renderAdditionalCopyGrid();
         latestLoads.begin('additional-copies').abort();
         announce(message, 'warning');
       } else if (error.status === 409) {
@@ -2454,10 +2539,14 @@ export function createWorkflowApp() {
       }
     } catch (error) {
       const unconfirmedOutcome = isUnconfirmedMutationError(error, mutation.signal);
-      const outcomeUnknown = unconfirmedOutcome || error.response?.code === 'request_outcome_unconfirmed';
+      const outcomeUnknown = unconfirmedOutcome ||
+        ['request_outcome_unconfirmed', 'hold_outcome_unconfirmed', 'hold_provider_error']
+          .includes(error.response?.code);
       if (error.status === 409 || outcomeUnknown) {
         const message = outcomeUnknown
-          ? 'The request outcome could not be confirmed. Reload before trying again.'
+          ? path.endsWith('/place-hold')
+            ? 'The hold outcome could not be confirmed. Reload the operation before trying again.'
+            : 'The request outcome could not be confirmed. Reload before trying again.'
           : error.message || 'The request changed. Review the refreshed version before trying again.';
         if (outcomeUnknown && isCurrentDialogMutation(mutation, request, 'title_request')) {
           retainUnconfirmedOutcome(message, mutation.token);
@@ -2733,17 +2822,19 @@ export function createWorkflowApp() {
       }
     } catch (error) {
       const unconfirmedOutcome = isUnconfirmedMutationError(error, mutation.signal);
-      if (error.status === 409 || unconfirmedOutcome) {
-        const message = unconfirmedOutcome
+      const outcomeUnknown = unconfirmedOutcome ||
+        ['hold_outcome_unconfirmed', 'hold_provider_error'].includes(error.response?.code);
+      if (error.status === 409 || outcomeUnknown) {
+        const message = outcomeUnknown
           ? 'The hold recovery outcome could not be confirmed. Reload before trying again.'
           : error.message || 'The hold recovery changed. Review the refreshed request before trying again.';
-        if (unconfirmedOutcome && isCurrentDialogMutation(mutation, request, 'title_request')) {
+        if (outcomeUnknown && isCurrentDialogMutation(mutation, request, 'title_request')) {
           retainUnconfirmedOutcome(message, mutation.token);
         }
         const refreshed = await loadQueue({ skipDeepLink: true, silent: true });
         if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
         const detailLoaded = await openRequest(request.id);
-        if (unconfirmedOutcome && refreshed === true && detailLoaded === true) {
+        if (outcomeUnknown && refreshed === true && detailLoaded === true) {
           clearCommittedSessionFallback(mutation.token);
         }
         if (isCurrentDialogSelection(request, 'title_request')) announce(message, 'error');
@@ -2935,6 +3026,16 @@ export function createWorkflowApp() {
       loadQueue({ skipDeepLink: true });
     });
     dom.additionalCopyRefresh.addEventListener('click', () => loadAdditionalCopies({ skipDeepLink: true }));
+    dom.additionalCopyCreateReviewDone.addEventListener('click', () => {
+      if (!state.unconfirmedCopyCreationAwaitingRefresh?.reviewReady ||
+          state.additionalCopyStatus !== 'open' ||
+          (state.scope !== 'all' && String(state.scope) !== String(state.unconfirmedCopyCreationAwaitingRefresh.libraryOrgId))) return;
+      state.unconfirmedCopyCreationAwaitingRefresh.reviewed = true;
+      clearCommittedSessionFallback(state.partialSessionFailureOwner);
+      renderAdditionalCopyGrid();
+      dom.additionalCopyRefresh.focus();
+      announce('Additional-copy task list reviewed. You can open the request again if another task is needed.', 'success');
+    });
     dom.additionalCopyScope.addEventListener('change', () => {
       state.scope = dom.additionalCopyScope.value;
       dom.scope.value = state.scope;

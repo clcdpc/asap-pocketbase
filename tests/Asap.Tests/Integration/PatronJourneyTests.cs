@@ -4771,7 +4771,7 @@ public sealed partial class PatronJourneyTests
                 INSERT INTO [asap].[TitleRequest]
                     ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES (2, N'20000000002105', N'Hold placement title', 1, @formatId, N'pending_hold', N'9001',
+                VALUES (2, N'20000000002105', N'Hold placement title', 1, @formatId, N'pending_hold', N'09001',
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 SELECT @actorId, CONVERT(bigint, SCOPE_IDENTITY());
                 """;
@@ -4883,7 +4883,7 @@ public sealed partial class PatronJourneyTests
                 INSERT INTO [asap].[TitleRequest]
                     ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId], [Status], [BibId], [BibIdStaffVerified],
                      [PreferredPickupBranchId], [PreferredPickupBranchName], [IsbnCheckStatus], [CreatedUtc], [UpdatedUtc])
-                VALUES (2, N'20000000002107', N'Existing hold adoption title', 1, @formatId, N'pending_hold', N'9002', 1,
+                VALUES (2, N'20000000002107', N'Existing hold adoption title', 1, @formatId, N'pending_hold', N'09002', 1,
                         101, N'Main Library', N'found', SYSUTCDATETIME(), SYSUTCDATETIME());
                 SELECT @actorId, CONVERT(bigint, SCOPE_IDENTITY());
                 """;
@@ -6186,10 +6186,13 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task StaffHoldOperatorResolutionDoesNotTreatEvidenceReferenceAsHoldIdentity()
     {
+        var emailSender = new MutableReadinessEmailSender(isConfigured: true);
         await using var dispatchFactory = factory!.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
             {
+                services.RemoveAll<IEmailSender>();
                 services.RemoveAll<IEmailOutboxDispatcher>();
+                services.AddSingleton<IEmailSender>(emailSender);
                 services.AddSingleton<IEmailOutboxDispatcher, CanceledOutboxDispatcher>();
             }));
         using var client = dispatchFactory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
@@ -6272,6 +6275,23 @@ public sealed partial class PatronJourneyTests
             executorExclusionReference = "incident-runbook-8456",
             executorExclusionExplanation = "The interactive host process was terminated at 2026-09-13T13:00:00Z and the provider response accounts for its in-flight request."
         };
+        emailSender.TimeoutReadiness = true;
+        using var timedOut = await client.PostAsJsonAsync(
+            $"/api/asap/staff/hold-operations/{operationId}/resolve", resolution);
+        Assert.AreEqual(HttpStatusCode.ServiceUnavailable, timedOut.StatusCode,
+            await timedOut.Content.ReadAsStringAsync());
+        using (var timedOutBody = JsonDocument.Parse(await timedOut.Content.ReadAsStringAsync()))
+        {
+            Assert.AreEqual("hold_outcome_unconfirmed", timedOutBody.RootElement.GetProperty("code").GetString());
+        }
+        using (var unchanged = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}"))
+        using (var unchangedBody = JsonDocument.Parse(await unchanged.Content.ReadAsStringAsync()))
+        {
+            Assert.AreEqual("pending_hold", unchangedBody.RootElement.GetProperty("status").GetString());
+            Assert.AreEqual(operation.GetProperty("version").GetString(),
+                unchangedBody.RootElement.GetProperty("holdOperation").GetProperty("version").GetString());
+        }
+        emailSender.TimeoutReadiness = false;
         using var resolve = await client.PostAsJsonAsync(
             $"/api/asap/staff/hold-operations/{operationId}/resolve",
             resolution);
@@ -10930,6 +10950,8 @@ public sealed partial class PatronJourneyTests
     {
         public bool IsConfigured { get; set; } = isConfigured;
 
+        public bool TimeoutReadiness { get; set; }
+
         public int SendCount { get; private set; }
 
         public bool ReturnNotConfiguredOnSend { get; init; }
@@ -10939,6 +10961,10 @@ public sealed partial class PatronJourneyTests
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (TimeoutReadiness)
+            {
+                throw new OperationCanceledException("Email readiness timed out without caller cancellation.");
+            }
             return Task.FromResult(
                 IsConfigured
                     ? EmailTransportReadiness.Configured

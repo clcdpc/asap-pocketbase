@@ -1108,6 +1108,17 @@ async function runStaleMutationCompletions(browser, args, report) {
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     await page.locator('#additional-copy-create-dialog[open]').waitFor();
     await page.locator('#additional-copy-reminder').uncheck();
+    const createPath = `**/api/asap/staff/title-requests/${args.staleCreateSourceId}/additional-copy`;
+    const noCommitCreate = route => route.fulfill({ status: 503, contentType: 'application/json',
+      body: JSON.stringify({ code: 'notification_dependency_unavailable',
+        message: 'Reminder configuration is temporarily unavailable. The task was not changed.' }) });
+    await page.route(createPath, noCommitCreate);
+    await page.getByRole('button', { name: 'Create task' }).click();
+    await page.locator('#app-status').filter({ hasText: /The task was not changed/ }).waitFor();
+    assert.equal(await page.evaluate(() => window.sessionStorage.getItem('asap.staff.unconfirmedCopyCreation')), null,
+      'a definitive pre-mutation dependency error clears the pending attempt marker');
+    assert.equal(await page.getByRole('button', { name: 'Create task' }).isEnabled(), true);
+    await page.unroute(createPath, noCommitCreate);
     delayedMutation = await delayNextServerResponse(
       page,
       'POST',
@@ -1116,6 +1127,10 @@ async function runStaleMutationCompletions(browser, args, report) {
     await page.getByRole('button', { name: 'Create task' }).click();
     const acceptedCreate = await delayedMutation.accepted;
     assert.equal(acceptedCreate.status, 200);
+    const pendingAttempt = await page.evaluate(() =>
+      JSON.parse(window.sessionStorage.getItem('asap.staff.unconfirmedCopyCreation')));
+    assert.equal(pendingAttempt.sourceId, String(args.staleCreateSourceId),
+      'the original source version must be saved before the task request is dispatched');
     const createdId = acceptedCreate.json.additionalCopyRequest.id;
     await page.getByRole('button', { name: 'Cancel' }).click();
     assert.equal(await page.locator('#additional-copy-create-dialog').isVisible(), true,
@@ -1127,6 +1142,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     await delayedMutation.completed;
     await delayedMutation.dispose();
     await page.locator('#app-status').filter({ hasText: `Additional-copy task ${createdId} created.` }).waitFor();
+    assert.equal(await page.evaluate(() => window.sessionStorage.getItem('asap.staff.unconfirmedCopyCreation')), null);
     await page.locator('#additional-copy-create-dialog').waitFor({ state: 'hidden' });
     const createdResponse = await context.request.get(
       `${args.baseOrigin}/api/asap/staff/additional-copies/${createdId}`
@@ -1135,6 +1151,10 @@ async function runStaleMutationCompletions(browser, args, report) {
 
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     await page.locator('#additional-copy-create-dialog[open]').waitFor();
+    const uncertainPreview = await context.request.get(
+      `${args.baseOrigin}/api/asap/staff/title-requests/${args.staleCreateSourceId}/additional-copy`);
+    assert.equal(uncertainPreview.status(), 200, await uncertainPreview.text());
+    const uncertainSourceVersion = (await uncertainPreview.json()).version;
     let releaseOldCopyList;
     let oldCopyListReached;
     const oldCopyListAccepted = new Promise(resolve => { oldCopyListReached = resolve; });
@@ -1168,6 +1188,10 @@ async function runStaleMutationCompletions(browser, args, report) {
     assert.equal(await page.locator('#additional-copy-create-dialog').isVisible(), false,
       'an uncertain create cannot be retried from a fresh dialog before task-list refresh');
     await page.locator('#app-status').filter({ hasText: /Refresh the open additional-copy task list/ }).waitFor();
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
+    assert.equal(await page.locator('#additional-copy-create-dialog').isVisible(), false,
+      'an uncertain create remains blocked after a full page reload');
     await page.evaluate(() => document.querySelector('[data-copy-status="closed"]').click());
     await page.locator('#close-request').click();
     await page.locator('.view-tab[data-view="additional-copies"]').click();
@@ -1183,12 +1207,47 @@ async function runStaleMutationCompletions(browser, args, report) {
     await page.locator('.view-tab[data-view="additional-copies"]').click();
     await page.locator('[data-copy-status="open"]').click();
     await page.locator('#refresh-additional-copies').click();
+    await page.locator('#additional-copy-create-review').waitFor();
+    await page.locator('#additional-copy-create-review-summary').filter({ hasText: /Creation for BIB .* could not be confirmed/ }).waitFor();
+    await page.locator('.view-tab[data-view="queue"]').click();
+    await page.locator('[data-status="hold_placed"]').click();
+    await page.getByRole('button', { name: `Open request ${args.staleCreateSourceId}` }).click();
+    await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
+    assert.equal(await page.locator('#additional-copy-create-dialog').isVisible(), false,
+      'a refreshed open list still requires the staff user to review matching tasks');
+    await page.locator('#close-request').click();
+    await page.locator('.view-tab[data-view="additional-copies"]').click();
+    await page.getByRole('button', { name: 'I reviewed these tasks' }).click();
+    assert.equal(await page.locator('#additional-copy-create-review').isVisible(), false);
+    assert.equal(await page.locator('#refresh-additional-copies').evaluate(node => document.activeElement === node), true,
+      'focus returns to the task-list refresh control after review acknowledgment');
+    const earlierCreation = await mutate(context, args.baseOrigin,
+      `/api/asap/staff/title-requests/${args.staleCreateSourceId}/additional-copy`,
+      { version: uncertainSourceVersion, emailPurchaseReminder: false });
+    assert.equal(earlierCreation.status(), 200, await earlierCreation.text());
+    const earlierTaskId = (await earlierCreation.json()).additionalCopyRequest.id;
     await page.locator('.view-tab[data-view="queue"]').click();
     await page.locator('[data-status="hold_placed"]').click();
     await page.getByRole('button', { name: `Open request ${args.staleCreateSourceId}` }).click();
     await page.getByRole('button', { name: 'Additional copy', exact: true }).click();
     await page.locator('#additional-copy-create-dialog[open]').waitFor();
-    await page.getByRole('button', { name: 'Cancel' }).click();
+    const [fencedRetry] = await Promise.all([
+      page.waitForResponse(candidate => candidate.request().method() === 'POST' &&
+        candidate.url().endsWith(`/api/asap/staff/title-requests/${args.staleCreateSourceId}/additional-copy`)),
+      page.getByRole('button', { name: 'Create task' }).click()
+    ]);
+    assert.equal(fencedRetry.status(), 409, await fencedRetry.text());
+    assert.equal(fencedRetry.request().postDataJSON().version, uncertainSourceVersion,
+      'the retry must submit the original source version, even after a newer preview');
+    await page.locator('#additional-copy-create-dialog').waitFor({ state: 'hidden' });
+    assert.equal(await page.evaluate(() => window.sessionStorage.getItem('asap.staff.unconfirmedCopyCreation')), null,
+      'the original-version retry fence clears after a definitive stale-version result');
+    const refreshedTasks = await context.request.get(`${args.baseOrigin}/api/asap/staff/additional-copies?scope=all&status=open`);
+    assert.equal(refreshedTasks.status(), 200, await refreshedTasks.text());
+    const matchingTasks = (await refreshedTasks.json()).items.filter(item =>
+      item.sourceTitleRequest === String(args.staleCreateSourceId));
+    assert.deepEqual(matchingTasks.map(item => item.id).sort(), [createdId, earlierTaskId].sort(),
+      'a retry after the earlier creation commits cannot create a second task');
 
     await page.goto(copyPage(createdId), { waitUntil: 'networkidle' });
     delayedMutation = await delayNextServerResponse(
@@ -1284,11 +1343,11 @@ async function runStaleOperationErrorCompletion(browser, args, report) {
     page.once('dialog', dialog => dialog.accept());
     await page.getByRole('button', { name: 'Resolve operation' }).click();
     await responses.secondCompleted;
-    await page.getByText('Current hold recovery failed.', { exact: true }).waitFor();
+    await page.locator('#app-status').filter({ hasText: 'The hold recovery outcome could not be confirmed.' }).waitFor();
     const current = {
       title: await page.locator('#request-dialog-title').textContent(),
       kicker: await page.locator('#request-dialog-kicker').textContent(),
-      body: await page.locator('#request-dialog-body').textContent(),
+      recovery: await page.locator('#request-dialog .hold-operation').textContent(),
       status: await page.locator('#app-status').textContent()
     };
 
@@ -1298,9 +1357,9 @@ async function runStaleOperationErrorCompletion(browser, args, report) {
     assert.equal(await page.locator('#request-dialog').getAttribute('open'), '');
     assert.equal(await page.locator('#request-dialog-title').textContent(), current.title);
     assert.equal(await page.locator('#request-dialog-kicker').textContent(), current.kicker);
-    assert.equal(await page.locator('#request-dialog-body').textContent(), current.body);
+    assert.equal(await page.locator('#request-dialog .hold-operation').textContent(), current.recovery);
     assert.equal(await page.locator('#app-status').textContent(), current.status);
-    assert.equal(current.status, 'Current hold recovery failed.');
+    assert.equal(current.status, 'The hold recovery outcome could not be confirmed. Reload before trying again.');
     assert.equal(await page.getByRole('button', { name: 'Resolve operation' }).isEnabled(), true);
     report.staleMutationCompletions.holdOperationError = true;
     assert.deepEqual(errors, [], `Stale hold-recovery error flow raised a browser error: ${errors.join('; ')}`);
@@ -1844,6 +1903,17 @@ async function runOperatorResolution(browser, args, axeSource, report) {
   try {
     await page.goto(`${args.baseOrigin}/staff/?request=${args.resolutionRequestId}`, { waitUntil: 'networkidle' });
     await page.getByText(/Operation \d+; attempt 2; epoch 3; frozen patron \*+2904; frozen BIB 92904\./).waitFor();
+    await fillOperatorResolution(page, true);
+    const uncertainResolutionPath = /\/api\/asap\/staff\/hold-operations\/\d+\/resolve$/;
+    const providerUncertain = route => route.fulfill({ status: 502, contentType: 'application/json',
+      body: JSON.stringify({ code: 'hold_provider_error',
+        message: 'The hold provider outcome could not be confirmed. Review the operation before retrying.' }) });
+    await page.route(uncertainResolutionPath, providerUncertain);
+    page.once('dialog', dialog => dialog.accept());
+    await page.getByRole('button', { name: 'Resolve operation' }).click();
+    await page.locator('#app-status').filter({ hasText: /hold recovery outcome could not be confirmed/i }).waitFor();
+    await page.getByText(/Operation \d+; attempt 2; epoch 3; frozen patron \*+2904; frozen BIB 92904\./).waitFor();
+    await page.unroute(uncertainResolutionPath, providerUncertain);
     await fillOperatorResolution(page, true);
     page.once('dialog', dialog => dialog.accept());
     const [response] = await Promise.all([

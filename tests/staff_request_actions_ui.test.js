@@ -167,6 +167,16 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         committed = true;
         return response(200, { request: currentRequest, pickupChanged: true, snapshotChanged: false });
       }
+      if (url.endsWith(`/title-requests/${id}/place-hold`) && options.method === 'POST' &&
+          scenarioOptions.holdTimeout) {
+        return response(503, { code: 'hold_outcome_unconfirmed',
+          message: 'The hold outcome could not be confirmed. Review the operation before retrying.' });
+      }
+      if (url.endsWith(`/title-requests/${id}/place-hold`) && options.method === 'POST' &&
+          scenarioOptions.holdProviderError) {
+        return response(502, { code: 'hold_provider_error',
+          message: 'The hold provider outcome could not be confirmed. Review the operation before retrying.' });
+      }
       if (url.endsWith('/bib-lookup') && options.method === 'POST') {
         return response(200, { bibId: '9001', title: 'Original title', author: null });
       }
@@ -254,6 +264,12 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       const placeHold = [...document.querySelectorAll('.action-bar button')]
         .find(item => item.textContent.includes('Place hold'));
       assert.equal(Boolean(placeHold), Boolean(scenarioOptions.verifiedPendingHold));
+      if (scenarioOptions.holdTimeout || scenarioOptions.holdProviderError) {
+        placeHold.click();
+        await until(() => /hold outcome could not be confirmed/i.test(document.querySelector('#app-status').textContent),
+          'hold provider uncertainty reports an unconfirmed result');
+        assert.equal(payload, null, 'hold failure must not submit a title action');
+      }
       return;
     }
     if (scenarioOptions.autoHoldOnlyOutstandingPurchase) {
@@ -574,6 +590,8 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
   await scenario('reject', false, false, { verificationInvalidation: true });
   await scenario('reject', false, false, { unverifiedPendingHold: true });
   await scenario('reject', false, false, { verifiedPendingHold: true });
+  await scenario('reject', false, false, { verifiedPendingHold: true, holdTimeout: true });
+  await scenario('reject', false, false, { verifiedPendingHold: true, holdProviderError: true });
   await scenario('reject', false, false, { autoHoldOffBib: true });
   await scenario('reject', false, false, { autoHoldOffOutstandingPurchase: true });
   await scenario('reject', false, false, { autoHoldOnlyOutstandingPurchase: true });

@@ -643,7 +643,15 @@ public static class TitleRequestEndpoints
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
-        var result = await holds.PlaceAsync(Current(context), id, input, cancellationToken);
+        HoldPlacementResult result;
+        try
+        {
+            result = await holds.PlaceAsync(Current(context), id, input, cancellationToken);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return HoldOutcomeUnconfirmed();
+        }
         if (result.Code != "updated")
         {
             return HoldError(result.Code);
@@ -662,16 +670,40 @@ public static class TitleRequestEndpoints
         long id,
         VersionInput input,
         HoldPlacementService holds,
-        CancellationToken cancellationToken) =>
-        HoldOperationResult(await holds.ReconcileAsync(Current(context), id, input, cancellationToken));
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return HoldOperationResult(await holds.ReconcileAsync(Current(context), id, input, cancellationToken));
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return HoldOutcomeUnconfirmed();
+        }
+    }
 
     private static async Task<IResult> ResolveHoldAsync(
         HttpContext context,
         long id,
         ResolveHoldOperationInput input,
         HoldPlacementService holds,
-        CancellationToken cancellationToken) =>
-        HoldOperationResult(await holds.ResolveAsync(Current(context), id, input, cancellationToken));
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return HoldOperationResult(await holds.ResolveAsync(Current(context), id, input, cancellationToken));
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return HoldOutcomeUnconfirmed();
+        }
+    }
+
+    private static IResult HoldOutcomeUnconfirmed() => Results.Json(new
+    {
+        code = "hold_outcome_unconfirmed",
+        message = "The hold outcome could not be confirmed. Review the operation before retrying."
+    }, statusCode: StatusCodes.Status503ServiceUnavailable);
 
     private static async Task<IResult> DeleteAsync(
         HttpContext context,
@@ -812,7 +844,11 @@ public static class TitleRequestEndpoints
             notificationReason = result.NotificationReason }),
         "not_found" => Results.NotFound(new { result.Code }),
         "hold_resolution_forbidden" => Results.Json(new { result.Code }, statusCode: StatusCodes.Status403Forbidden),
-        "hold_provider_error" => Results.Json(new { result.Code }, statusCode: StatusCodes.Status502BadGateway),
+        "hold_provider_error" => Results.Json(new
+        {
+            result.Code,
+            message = "The hold provider outcome could not be confirmed. Review the operation before retrying."
+        }, statusCode: StatusCodes.Status502BadGateway),
         _ => Results.Conflict(new { result.Code, operationId = result.OperationId?.ToString() })
     };
 

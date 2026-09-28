@@ -93,7 +93,7 @@ public sealed partial class PatronJourneyTests
                             : null,
                         MaterialFormatId = index == 5 ? systemFormat.Id : formatId,
                         BibId = index >= 5 ? "9001" : null,
-                BibIdStaffVerified = index == 6,
+                        BibIdStaffVerified = index == 6,
                         Status = "suggestion",
                         IsbnCheckStatus = "skipped_no_isbn",
                         CreatedUtc = DateTime.UtcNow,
