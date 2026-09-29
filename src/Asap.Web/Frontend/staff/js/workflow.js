@@ -3470,7 +3470,7 @@ export function createWorkflowApp() {
         announce(refreshed === false ? `${message} The queue could not refresh.` : message, messageKind);
       }
     } catch (error) {
-      if (path.endsWith('/action') && error.status === 409 &&
+      if ((path.endsWith('/action') || path.endsWith('/place-hold')) && error.status === 409 &&
           error.response?.code === 'duplicate_open_request') {
         await showDuplicateRecovery(request, mutation, selectionGeneration, error.response.duplicate);
         return;

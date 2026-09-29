@@ -10,6 +10,7 @@ using Asap.Web.Infrastructure.Jobs;
 using Asap.Web.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Asap.Tests.Integration;
@@ -590,25 +591,77 @@ public sealed partial class PatronJourneyTests
     {
         var actor = await GetOwnershipTestActorAsync();
         var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var holdProvider = ScriptedHoldProvider.ReplyRequiredThenSuccess();
+        await using var holdFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IPatronProvider>();
+                services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IPatronProvider>(holdProvider);
+                services.AddSingleton<IStaffPolarisProvider>(holdProvider);
+            }));
         var first = await SeedBibOwnershipRequestAsync("duplicate-hold-first", "9001", true, status: "pending_hold", autoHold: true);
         var second = await SeedBibOwnershipRequestAsync("duplicate-hold-second", "09001", true, status: "pending_hold", autoHold: true);
         try
         {
+            byte[] secondVersion;
             await using (var setup = await contextFactory.CreateDbContextAsync())
             {
                 var firstRow = await setup.TitleRequests.SingleAsync(item => item.Id == first.Id);
                 var secondRow = await setup.TitleRequests.SingleAsync(item => item.Id == second.Id);
                 secondRow.Barcode = firstRow.Barcode;
                 await setup.SaveChangesAsync();
+                secondVersion = secondRow.RowVersion.ToArray();
             }
-            var result = await factory.Services.GetRequiredService<HoldPlacementService>().PlaceAsync(
+            var result = await holdFactory.Services.GetRequiredService<HoldPlacementService>().PlaceAsync(
                 actor, first.Id, new VersionInput(StaffVersion.Encode(first.RowVersion)), CancellationToken.None);
             Assert.AreEqual("duplicate_open_request", result.Code);
+            Assert.IsFalse(result.ProviderOutcomeRecorded);
+            Assert.IsNotNull(result.Duplicate);
+            Assert.AreEqual(second.Id, result.Duplicate.Id);
+            Assert.AreEqual("Staff entered title", result.Duplicate.Title);
+            Assert.AreEqual("pending_hold", result.Duplicate.Status);
+            Assert.AreEqual("09001", result.Duplicate.BibId);
+            Assert.AreEqual("bibid", result.Duplicate.MatchType);
+
+            using var client = holdFactory.CreateClient();
+            var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
+            client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actor.Id.ToString());
+            client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
+            using var session = await client.GetAsync("/api/asap/staff/session");
+            Assert.AreEqual(HttpStatusCode.OK, session.StatusCode);
+            using var sessionJson = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
+            client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery",
+                sessionJson.RootElement.GetProperty("antiforgeryToken").GetString());
+            using var response = await client.PostAsJsonAsync($"/api/asap/staff/title-requests/{first.Id}/place-hold",
+                new { version = StaffVersion.Encode(first.RowVersion) });
+            Assert.AreEqual(HttpStatusCode.Conflict, response.StatusCode);
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.AreEqual("duplicate_open_request", body.RootElement.GetProperty("code").GetString());
+            Assert.IsFalse(body.RootElement.GetProperty("providerOutcomeRecorded").GetBoolean());
+            Assert.AreEqual(JsonValueKind.String, body.RootElement.GetProperty("duplicate").GetProperty("id").ValueKind);
+            Assert.AreEqual(second.Id.ToString(), body.RootElement.GetProperty("duplicate").GetProperty("id").GetString());
+            Assert.AreEqual("Staff entered title", body.RootElement.GetProperty("duplicate").GetProperty("title").GetString());
+            Assert.AreEqual("pending_hold", body.RootElement.GetProperty("duplicate").GetProperty("status").GetString());
+            Assert.AreEqual("09001", body.RootElement.GetProperty("duplicate").GetProperty("bibid").GetString());
+            Assert.AreEqual("bibid", body.RootElement.GetProperty("duplicate").GetProperty("matchType").GetString());
+
             await using var verify = await contextFactory.CreateDbContextAsync();
+            var unchangedFirst = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == first.Id);
+            var unchangedSecond = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == second.Id);
+            CollectionAssert.AreEqual(first.RowVersion, unchangedFirst.RowVersion);
+            CollectionAssert.AreEqual(secondVersion, unchangedSecond.RowVersion);
+            Assert.AreEqual("pending_hold", unchangedFirst.Status);
+            Assert.AreEqual("pending_hold", unchangedSecond.Status);
+            Assert.AreEqual("9001", unchangedFirst.BibId);
+            Assert.AreEqual("09001", unchangedSecond.BibId);
             Assert.IsFalse(await verify.HoldPlacementOperations.AnyAsync(item =>
                 item.TitleRequestId == first.Id || item.TitleRequestId == second.Id));
             Assert.IsFalse(await verify.TitleRequestEvents.AnyAsync(item =>
                 item.TitleRequestId == first.Id || item.TitleRequestId == second.Id));
+            Assert.AreEqual(0, holdProvider.CreateCount);
+            Assert.AreEqual(0, holdProvider.ReplyCount);
+            Assert.AreEqual(0, holdProvider.HoldReadCount);
         }
         finally
         {

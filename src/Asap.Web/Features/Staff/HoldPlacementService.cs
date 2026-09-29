@@ -16,7 +16,7 @@ namespace Asap.Web.Features.Staff;
 
 public sealed record HoldPlacementResult(string Code, long? OperationId = null,
     string? FinalStatus = null, string? NotificationStatus = null, string? NotificationReason = null,
-    bool ProviderOutcomeRecorded = false);
+    bool ProviderOutcomeRecorded = false, TitleRequestDuplicateConflict? Duplicate = null);
 
 public sealed record ResolveHoldOperationInput(
     string? Version,
@@ -80,7 +80,7 @@ public sealed class HoldPlacementService(
             cancellationToken);
         if (acquisition.Code != "acquired")
         {
-            return new HoldPlacementResult(acquisition.Code, acquisition.OperationId);
+            return new HoldPlacementResult(acquisition.Code, acquisition.OperationId, Duplicate: acquisition.Duplicate);
         }
         return await ExecuteOwnedAsync(acquisition.Owner!, actor, null, cancellationToken);
     }
@@ -102,7 +102,7 @@ public sealed class HoldPlacementService(
             manualActorEvidence);
         if (acquisition.Code != "acquired")
         {
-            return new HoldPlacementResult(acquisition.Code, acquisition.OperationId);
+            return new HoldPlacementResult(acquisition.Code, acquisition.OperationId, Duplicate: acquisition.Duplicate);
         }
         return await ExecuteOwnedAsync(acquisition.Owner!, null, manualActorEvidence, cancellationToken);
     }
@@ -127,7 +127,7 @@ public sealed class HoldPlacementService(
             manualActorEvidence);
         if (acquisition.Code != "acquired")
         {
-            return new HoldPlacementResult(acquisition.Code, acquisition.OperationId);
+            return new HoldPlacementResult(acquisition.Code, acquisition.OperationId, Duplicate: acquisition.Duplicate);
         }
         return await ExecuteOwnedAsync(acquisition.Owner!, null, manualActorEvidence, cancellationToken);
     }
@@ -825,15 +825,19 @@ public sealed class HoldPlacementService(
                 $"SELECT * FROM [asap].[HoldPlacementOperation] WITH (UPDLOCK,HOLDLOCK) WHERE [TitleRequestId] = {requestId} AND [CompletedUtc] IS NULL")
             .SingleOrDefaultAsync(cancellationToken);
         if (existing is not null) return new AcquisitionResult("hold_operation_incomplete", existing.Id);
-        var otherActiveBibs = await context.TitleRequests.AsNoTracking()
+        var otherActiveRequests = await context.TitleRequests.AsNoTracking()
             .Where(item => item.LibraryOrganizationId == request.LibraryOrganizationId &&
                 item.Barcode == request.Barcode && item.Id != request.Id &&
                 (item.Status == "pending_hold" || item.Status == "hold_placed") && item.BibId != null)
-            .Select(item => item.BibId!)
+            .OrderBy(item => item.Id)
+            .Select(item => new { item.Id, item.Title, item.Status, item.BibId })
             .ToListAsync(cancellationToken);
-        if (otherActiveBibs.Any(otherBib => SameBibIdentity(otherBib, request.BibId!)))
+        var duplicate = otherActiveRequests.FirstOrDefault(other => SameBibIdentity(other.BibId, request.BibId!));
+        if (duplicate is not null)
         {
-            return new AcquisitionResult("duplicate_open_request");
+            return new AcquisitionResult("duplicate_open_request", Duplicate:
+                new TitleRequestDuplicateConflict(duplicate.Id, duplicate.Title, duplicate.Status,
+                    duplicate.BibId!, "bibid"));
         }
         var attempt = await context.HoldPlacementOperations
             .Where(item => item.TitleRequestId == requestId)
@@ -1837,7 +1841,8 @@ public sealed class HoldPlacementService(
     private sealed record AcquisitionResult(
         string Code,
         long? OperationId = null,
-        OwnedOperation? Owner = null);
+        OwnedOperation? Owner = null,
+        TitleRequestDuplicateConflict? Duplicate = null);
     private sealed record OwnedOperation(long Id, Guid Token, long Epoch, bool IsRecovery = false);
     private sealed class LeaseHeartbeat
     {

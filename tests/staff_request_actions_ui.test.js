@@ -190,6 +190,20 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         return response(200, { request: currentRequest, pickupChanged: true, snapshotChanged: false });
       }
       if (url.endsWith(`/title-requests/${id}/place-hold`) && options.method === 'POST' &&
+          scenarioOptions.duplicateHoldRecovery) {
+        payload = JSON.parse(options.body);
+        mutationPayloads.push(payload);
+        duplicateRejected = true;
+        currentRequest = { ...currentRequest, version: 'v2' };
+        const conflict = response(409, { code: 'duplicate_open_request', providerOutcomeRecorded: false,
+          message: 'This patron already has an active request or hold for this BIB. No new hold was attempted.',
+          duplicate: { id: otherId, title: 'Existing <img src=x onerror=alert(1)>',
+            status: 'pending_hold', bibid: '09001', matchType: 'bibid' } });
+        return scenarioOptions.duplicateLateResponse
+          ? new Promise(resolve => { releaseDuplicate = () => resolve(conflict); })
+          : conflict;
+      }
+      if (url.endsWith(`/title-requests/${id}/place-hold`) && options.method === 'POST' &&
           scenarioOptions.holdTimeout) {
         return response(503, { code: 'hold_outcome_unconfirmed',
           message: 'The hold outcome could not be confirmed. Review the operation before retrying.' });
@@ -332,6 +346,12 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       const placeHold = [...document.querySelectorAll('.action-bar button')]
         .find(item => item.textContent.includes('Place hold'));
       assert.equal(Boolean(placeHold), Boolean(scenarioOptions.verifiedPendingHold));
+      if (scenarioOptions.duplicateHoldRecovery) {
+        placeHold.click();
+        await until(() => payload !== null, 'place-hold mutation starts');
+        await checkDuplicateRecovery('place-hold', 'Pending hold');
+        return;
+      }
       if (scenarioOptions.holdTimeout || scenarioOptions.holdProviderError ||
           scenarioOptions.holdRecordedForbidden || scenarioOptions.holdReviewRequired) {
         placeHold.click();
@@ -586,8 +606,10 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       assert.equal(document.querySelector('#request-dialog .status-badge').textContent, 'Suggestion');
       return;
     }
-    if (scenarioOptions.duplicateRecovery) {
-      assert.equal(payload.action, 'purchase');
+    async function checkDuplicateRecovery(expectedFirst, expectedStatus) {
+      assert.equal(mutationPayloads.length, 1);
+      assert.equal(mutationPayloads[0].action, expectedFirst === 'purchase' ? 'purchase' : undefined);
+      assert.equal(mutationPayloads[0].version, 'v1');
       if (scenarioOptions.duplicateLateResponse) {
         await until(() => releaseDuplicate, 'duplicate response is pending');
         await until(() => document.querySelector(`[aria-label="Open request ${otherId}"]`),
@@ -632,8 +654,15 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       assert.equal(panel.querySelector('img'), null);
       assert.match(panel.textContent, /attempted change was not saved/);
       assert.doesNotMatch(document.querySelector('#app-status').textContent, /Workflow action completed|Final state:/);
+      if (expectedFirst === 'place-hold') {
+        assert.doesNotMatch(document.querySelector('#app-status').textContent, /hold outcome could not be confirmed|requires reconciliation/i);
+        assert.equal(document.querySelector('#signed-out').hidden, true);
+        assert.equal([...Array(dom.window.sessionStorage.length)].some((_, index) =>
+          /unconfirmed.hold|hold outcome could not be confirmed/i.test(
+            String(dom.window.sessionStorage.getItem(dom.window.sessionStorage.key(index))))), false);
+      }
       assert.equal(mutationPayloads.length, 1, 'the rejected action remains rejected');
-      assert.equal(document.querySelector('#request-dialog .status-badge').textContent, 'Suggestion');
+      assert.equal(document.querySelector('#request-dialog .status-badge').textContent, expectedStatus);
       if (scenarioOptions.duplicateNavigateAfterRefresh) {
         const staleClose = [...panel.querySelectorAll('button')]
           .find(item => item.textContent.includes('Close current'));
@@ -649,7 +678,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         assert.equal(document.querySelector('.duplicate-recovery'), null);
         assert.equal(mutationPayloads.length, 1, 'declining does not mutate');
         assert.equal(document.querySelector('.edit-form input[inputmode="numeric"]') !== null, true);
-        assert.equal(document.querySelector('#request-dialog .status-badge').textContent, 'Suggestion');
+        assert.equal(document.querySelector('#request-dialog .status-badge').textContent, expectedStatus);
         return;
       }
       [...panel.querySelectorAll('button')].find(item => item.textContent.includes('Close current')).click();
@@ -659,13 +688,17 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       if (scenarioOptions.duplicateCloseStale) {
         await until(() => /The request changed/.test(document.querySelector('#app-status').textContent),
           'stale follow-up close is rejected');
-        assert.equal(document.querySelector('#request-dialog .status-badge').textContent, 'Suggestion');
+        assert.equal(document.querySelector('#request-dialog .status-badge').textContent, expectedStatus);
         assert.equal(mutationPayloads.length, 2);
         return;
       }
       await until(() => document.querySelector('#request-dialog .status-badge').textContent === 'Closed',
         'current request closes authoritatively');
       assert.equal(document.querySelector('#request-dialog-title').textContent, 'Original title');
+      return;
+    }
+    if (scenarioOptions.duplicateRecovery) {
+      await checkDuplicateRecovery('purchase', 'Suggestion');
       return;
     }
     if (scenarioOptions.mutationNetworkFailureAfter401) {
@@ -772,6 +805,13 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
   await scenario('purchase', true, true, { purchaseVerifiedBib: true, duplicateRecovery: true, duplicateNavigateDuringRefresh: true });
   await scenario('purchase', true, true, { purchaseVerifiedBib: true, duplicateRecovery: true, duplicateDetailRefreshFails: true });
   await scenario('purchase', true, true, { purchaseVerifiedBib: true, duplicateRecovery: true, duplicateCloseStale: true });
+  await scenario('reject', false, false, { verifiedPendingHold: true, duplicateRecovery: true, duplicateHoldRecovery: true });
+  await scenario('reject', false, false, { verifiedPendingHold: true, duplicateRecovery: true, duplicateHoldRecovery: true, duplicateDecline: true });
+  await scenario('reject', false, false, { verifiedPendingHold: true, duplicateRecovery: true, duplicateHoldRecovery: true, duplicateNavigateAfterRefresh: true });
+  await scenario('reject', false, false, { verifiedPendingHold: true, duplicateRecovery: true, duplicateHoldRecovery: true, duplicateLateResponse: true });
+  await scenario('reject', false, false, { verifiedPendingHold: true, duplicateRecovery: true, duplicateHoldRecovery: true, duplicateNavigateDuringRefresh: true });
+  await scenario('reject', false, false, { verifiedPendingHold: true, duplicateRecovery: true, duplicateHoldRecovery: true, duplicateDetailRefreshFails: true });
+  await scenario('reject', false, false, { verifiedPendingHold: true, duplicateRecovery: true, duplicateHoldRecovery: true, duplicateCloseStale: true });
   await scenario('reject', false, true);
   await scenario('reject', false, true, { rejectEmailQueued: true });
   await scenario('purchase', false, true, { queue401: true });

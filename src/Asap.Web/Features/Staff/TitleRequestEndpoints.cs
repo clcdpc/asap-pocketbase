@@ -861,7 +861,21 @@ public static class TitleRequestEndpoints
         "not_found" => Results.NotFound(new { result.Code, result.ProviderOutcomeRecorded }),
         "staff_scope_forbidden" => Results.Json(new { result.Code, result.ProviderOutcomeRecorded,
             operationId = result.OperationId?.ToString() }, statusCode: StatusCodes.Status403Forbidden),
-        "stale_version" or "hold_operation_incomplete" or "duplicate_open_request" or "operation_ownership_lost" or
+        "duplicate_open_request" => Results.Conflict(new
+        {
+            result.Code,
+            result.ProviderOutcomeRecorded,
+            message = "This patron already has an active request or hold for this BIB. No new hold was attempted.",
+            duplicate = result.Duplicate is { } duplicate ? new
+            {
+                id = duplicate.Id.ToString(CultureInfo.InvariantCulture),
+                title = duplicate.Title,
+                status = duplicate.Status,
+                bibid = duplicate.BibId,
+                matchType = duplicate.MatchType
+            } : null
+        }),
+        "stale_version" or "hold_operation_incomplete" or "operation_ownership_lost" or
             "hold_identity_ambiguous" or "hold_operator_required" =>
             Results.Conflict(new { result.Code, result.ProviderOutcomeRecorded,
                 message = "Hold placement is blocked or requires reconciliation." }),
