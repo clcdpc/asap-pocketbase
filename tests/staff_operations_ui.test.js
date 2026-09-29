@@ -82,8 +82,8 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
     });
     const emailPayload = {
       items: [
-        { id: 41, status: 'failed', deliveryClass: 'operational_test', lastErrorCode: '<unsafe-error>', suppressionReason: null, createdUtc: '2026-09-14T12:00:00Z', version: 'email-version' },
-        { id: 42, status: 'sent', deliveryClass: 'business_event', lastErrorCode: null, suppressionReason: null, createdUtc: '2026-09-14T11:00:00Z', version: 'sent-version' }
+        { id: '9007199254740993', status: 'failed', deliveryClass: 'operational_test', lastErrorCode: '<unsafe-error>', suppressionReason: null, createdUtc: '2026-09-14T12:00:00Z', version: 'email-version' },
+        { id: '42', status: 'sent', deliveryClass: 'business_event', lastErrorCode: null, suppressionReason: null, createdUtc: '2026-09-14T11:00:00Z', version: 'sent-version' }
       ]
     };
 
@@ -128,6 +128,7 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
     assert.equal(document.querySelectorAll('#email-operations-table tbody tr').length, 2);
     assert.equal(document.querySelector('#email-operations-table').textContent.includes('<unsafe-error>'), true);
     assert.equal(document.querySelector('#email-operations-table').querySelector('script'), null, 'runtime text must not become markup');
+    assert.match(document.querySelector('#email-operations-table').textContent, /9007199254740993/);
     assert.match(document.getElementById('queue-progress-table').textContent, /12/);
     assert.match(document.getElementById('queue-progress-table').textContent, /11/);
     assert.match(document.getElementById('queue-progress-table').textContent, /processed/);
@@ -160,8 +161,8 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
     assert.ok(retry, 'failed rows should expose Retry');
     retry.click();
     await settle();
-    const retryRequest = requests.find(item => item.url.includes('/email-operations/41/retry'));
-    assertRequest(retryRequest, '/api/asap/staff/email-operations/41/retry', null, { version: 'email-version' });
+    const retryRequest = requests.find(item => item.url.includes('/email-operations/9007199254740993/retry'));
+    assertRequest(retryRequest, '/api/asap/staff/email-operations/9007199254740993/retry', null, { version: 'email-version' });
     assert.equal(document.querySelectorAll('#email-operations-table button').length, 1, 'sent rows must not expose Retry');
 
     scope.value = '2';

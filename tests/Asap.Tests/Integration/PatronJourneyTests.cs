@@ -8424,6 +8424,132 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task ReadinessTimeoutReleasesClaimWithoutSpendingProviderAttemptsAndLaterSends()
+    {
+        var seeded = await SeedSensitiveOutboxAsync("readiness-timeout");
+        var sender = new MutableReadinessEmailSender(isConfigured: true)
+        {
+            ReadinessException = new TaskCanceledException("Synthetic dependency timeout")
+        };
+        var jobs = CreateEmailOutboxJobs(sender, EmailOutboxRuntimeOptions.Default);
+
+        for (var index = 0; index < EmailOutboxRuntimeOptions.Default.MaxAttempts + 1; index++)
+        {
+            await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
+            var state = await ReadPreSendStateAsync(seeded.OutboxId);
+            Assert.AreEqual("pending", state.Status);
+            Assert.AreEqual("mail_readiness_unavailable", state.LastErrorCode);
+            Assert.AreEqual(0, state.AttemptCount);
+            Assert.IsNull(state.LeaseId);
+            Assert.IsNull(state.SendingStartedUtc);
+            Assert.IsNull(state.LeaseExpiresUtc);
+            Assert.IsTrue(state.NextAttemptUtc > DateTime.UtcNow.AddSeconds(30));
+            Assert.AreEqual(0, sender.SendCount);
+            await MakeOutboxDueAsync(seeded.OutboxId);
+        }
+
+        sender.ReadinessException = null;
+        await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
+        var sent = await ReadPreSendStateAsync(seeded.OutboxId);
+        Assert.AreEqual("sent", sent.Status);
+        Assert.AreEqual(1, sent.AttemptCount);
+        Assert.AreEqual(1, sender.SendCount);
+    }
+
+    [TestMethod]
+    public async Task ReadinessDependencyExceptionAlsoReleasesClaim()
+    {
+        var seeded = await SeedSensitiveOutboxAsync("readiness-unavailable");
+        var sender = new MutableReadinessEmailSender(isConfigured: true)
+        {
+            ReadinessException = new InvalidOperationException("Synthetic provider diagnostic")
+        };
+        await CreateEmailOutboxJobs(sender, EmailOutboxRuntimeOptions.Default)
+            .DeliverAsync(seeded.OutboxId, CancellationToken.None);
+
+        var state = await ReadPreSendStateAsync(seeded.OutboxId);
+        Assert.AreEqual("pending", state.Status);
+        Assert.AreEqual("mail_readiness_unavailable", state.LastErrorCode);
+        Assert.AreEqual(0, state.AttemptCount);
+        Assert.AreEqual(0, sender.SendCount);
+        Assert.IsFalse(state.LastErrorDetail?.Contains("Synthetic", StringComparison.Ordinal) == true);
+    }
+
+    [TestMethod]
+    public async Task CallerCancellationDuringReadinessPropagatesAndReleasesClaim()
+    {
+        var seeded = await SeedSensitiveOutboxAsync("readiness-caller-cancel");
+        using var caller = new CancellationTokenSource();
+        var sender = new ReadinessGateEmailSender();
+        var jobs = CreateEmailOutboxJobs(sender, EmailOutboxRuntimeOptions.Default);
+        var delivery = jobs.DeliverAsync(seeded.OutboxId, caller.Token);
+        await sender.FirstCheckStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        caller.Cancel();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(async () => await delivery);
+        var state = await ReadPreSendStateAsync(seeded.OutboxId);
+        Assert.AreEqual("pending", state.Status);
+        Assert.AreEqual("pre_send_cancelled", state.LastErrorCode);
+        Assert.AreEqual(0, state.AttemptCount);
+        Assert.AreEqual(0, sender.SendCount);
+    }
+
+    [TestMethod]
+    public async Task StaleReadinessFailureCannotOverwriteNewLeaseCompletion()
+    {
+        var seeded = await SeedSensitiveOutboxAsync("stale-readiness");
+        var sender = new ReadinessGateEmailSender();
+        var jobs = CreateEmailOutboxJobs(sender, EmailOutboxRuntimeOptions.Default);
+        var firstDelivery = jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
+        await sender.FirstCheckStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await SetLeaseExpiryAsync(seeded.OutboxId, expired: true);
+        await jobs.SweepAsync(CancellationToken.None);
+        var reclaimed = await ReadPreSendStateAsync(seeded.OutboxId);
+        Assert.AreEqual("pending", reclaimed.Status);
+        Assert.AreEqual("mail_readiness_unavailable", reclaimed.LastErrorCode);
+        Assert.AreEqual(0, reclaimed.AttemptCount);
+        await MakeOutboxDueAsync(seeded.OutboxId);
+        await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
+
+        sender.FailFirstCheck();
+        await firstDelivery;
+        var state = await ReadPreSendStateAsync(seeded.OutboxId);
+        Assert.AreEqual("sent", state.Status);
+        Assert.AreEqual(1, state.AttemptCount);
+        Assert.AreEqual(1, sender.SendCount);
+    }
+
+    [TestMethod]
+    public async Task ExpiredProviderLeaseAtAttemptLimitFailsWithoutRecordedError()
+    {
+        var seeded = await SeedSensitiveOutboxAsync("expired-provider-limit");
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var command = new SqlCommand(
+                """
+                UPDATE [asap].[EmailOutbox]
+                SET [Status] = N'sending', [AttemptCount] = 5,
+                    [SendingStartedUtc] = DATEADD(minute, -3, SYSUTCDATETIME()),
+                    [LeaseId] = NEWID(), [LeaseExpiresUtc] = DATEADD(minute, -1, SYSUTCDATETIME()),
+                    [LastErrorCode] = NULL
+                WHERE [Id] = @id;
+                """,
+                connection);
+            command.Parameters.AddWithValue("@id", seeded.OutboxId);
+            Assert.AreEqual(1, await command.ExecuteNonQueryAsync());
+        }
+
+        await CreateEmailOutboxJobs(new MutableReadinessEmailSender(isConfigured: true),
+            EmailOutboxRuntimeOptions.Default).SweepAsync(CancellationToken.None);
+        var state = await ReadPreSendStateAsync(seeded.OutboxId);
+        Assert.AreEqual("failed", state.Status);
+        Assert.AreEqual("ambiguous_expired_lease", state.LastErrorCode);
+        Assert.AreEqual(5, state.AttemptCount);
+        Assert.IsNull(state.NextAttemptUtc);
+    }
+
+    [TestMethod]
     public async Task TransportCanReportConfigurationLostAtSendBoundary()
     {
         var seeded = await SeedSensitiveOutboxAsync("send-not-configured");
@@ -10503,6 +10629,49 @@ public sealed partial class PatronJourneyTests
             reader.IsDBNull(3) ? null : reader.GetString(3));
     }
 
+    private static async Task<PreSendOutboxState> ReadPreSendStateAsync(long outboxId)
+    {
+        await using var connection = new SqlConnection(databaseConnectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT [Status], [LastErrorCode], [LastErrorDetail], [AttemptCount], [NextAttemptUtc], " +
+            "[SendingStartedUtc], [LeaseId], [LeaseExpiresUtc] FROM [asap].[EmailOutbox] WHERE [Id] = @id;";
+        command.Parameters.AddWithValue("@id", outboxId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.IsTrue(await reader.ReadAsync());
+        return new PreSendOutboxState(
+            reader.GetString(0),
+            reader.IsDBNull(1) ? null : reader.GetString(1),
+            reader.IsDBNull(2) ? null : reader.GetString(2),
+            reader.GetInt32(3),
+            reader.IsDBNull(4) ? null : reader.GetDateTime(4),
+            reader.IsDBNull(5) ? null : reader.GetDateTime(5),
+            reader.IsDBNull(6) ? null : reader.GetGuid(6),
+            reader.IsDBNull(7) ? null : reader.GetDateTime(7));
+    }
+
+    private static async Task MakeOutboxDueAsync(long outboxId)
+    {
+        await using var connection = new SqlConnection(databaseConnectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(
+            "UPDATE [asap].[EmailOutbox] SET [NextAttemptUtc] = DATEADD(second, -1, SYSUTCDATETIME()) WHERE [Id] = @id;",
+            connection);
+        command.Parameters.AddWithValue("@id", outboxId);
+        Assert.AreEqual(1, await command.ExecuteNonQueryAsync());
+    }
+
+    private sealed record PreSendOutboxState(
+        string Status,
+        string? LastErrorCode,
+        string? LastErrorDetail,
+        int AttemptCount,
+        DateTime? NextAttemptUtc,
+        DateTime? SendingStartedUtc,
+        Guid? LeaseId,
+        DateTime? LeaseExpiresUtc);
+
     private static async Task SetLeaseExpiryAsync(long outboxId, bool expired)
     {
         await using var connection = new SqlConnection(databaseConnectionString);
@@ -11056,6 +11225,8 @@ public sealed partial class PatronJourneyTests
 
         public bool TimeoutReadiness { get; set; }
 
+        public Exception? ReadinessException { get; set; }
+
         public int SendCount { get; private set; }
 
         public bool ReturnNotConfiguredOnSend { get; init; }
@@ -11068,6 +11239,10 @@ public sealed partial class PatronJourneyTests
             if (TimeoutReadiness)
             {
                 throw new OperationCanceledException("Email readiness timed out without caller cancellation.");
+            }
+            if (ReadinessException is not null)
+            {
+                throw ReadinessException;
             }
             return Task.FromResult(
                 IsConfigured
@@ -11086,6 +11261,38 @@ public sealed partial class PatronJourneyTests
                     ? EmailSendResult.NotConfigured
                     : new EmailSendResult("test-message"));
         }
+    }
+
+    private sealed class ReadinessGateEmailSender : IEmailSender
+    {
+        private readonly TaskCompletionSource<EmailTransportReadiness> firstCheck =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int checkCount;
+
+        public TaskCompletionSource FirstCheckStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int SendCount { get; private set; }
+
+        public Task<EmailTransportReadiness> CheckReadinessAsync(
+            int organizationId,
+            CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref checkCount) == 1)
+            {
+                FirstCheckStarted.TrySetResult();
+                return firstCheck.Task.WaitAsync(cancellationToken);
+            }
+            return Task.FromResult(EmailTransportReadiness.Configured);
+        }
+
+        public Task<EmailSendResult> SendAsync(EmailEnvelope envelope, CancellationToken cancellationToken)
+        {
+            SendCount++;
+            return Task.FromResult(new EmailSendResult("new-owner-message"));
+        }
+
+        public void FailFirstCheck() => firstCheck.TrySetException(new TaskCanceledException("Synthetic stale timeout"));
     }
 
     private sealed class CancellationAwareTimeoutEmailSender : IEmailSender

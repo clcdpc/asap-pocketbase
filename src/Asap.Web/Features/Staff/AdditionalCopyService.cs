@@ -238,7 +238,7 @@ public sealed class AdditionalCopyService(
                 ? await emailSender.CheckReadinessAsync(snapshot.LibraryOrganizationId, cancellationToken)
                 : EmailTransportReadiness.NotConfigured;
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
         {
             return new AdditionalCopyMutationResult("notification_dependency_unavailable");
         }
@@ -435,7 +435,7 @@ public sealed class AdditionalCopyService(
                 ? await emailSender.CheckReadinessAsync(snapshot.LibraryOrganizationId, cancellationToken)
                 : EmailTransportReadiness.NotConfigured;
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
         {
             return new AdditionalCopyMutationResult("notification_dependency_unavailable");
         }

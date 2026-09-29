@@ -1235,6 +1235,7 @@ export function createWorkflowApp() {
     renderOperationsTable(
       dom.emailOperationsTable,
       [
+        { label: 'Reference', render: row => element('span', { text: String(row.id) }) },
         { label: 'Created', render: row => element('time', { text: dateTime(row.createdUtc), datetime: row.createdUtc }) },
         { label: 'Status', key: 'status' },
         { label: 'Type', key: 'deliveryClass' },

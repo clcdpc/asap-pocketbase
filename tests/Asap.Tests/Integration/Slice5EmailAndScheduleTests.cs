@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Net;
+using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using Asap.Web.Features.Email;
@@ -35,7 +36,8 @@ public sealed partial class PatronJourneyTests
             var result = await service.QueueTestAsync(actor, 1, CancellationToken.None);
             Assert.AreEqual("queued", result.Code);
             var data = JsonSerializer.SerializeToElement(result.Data);
-            id = data.GetProperty("id").GetInt64();
+            Assert.AreEqual(JsonValueKind.String, data.GetProperty("id").ValueKind);
+            id = long.Parse(data.GetProperty("id").GetString()!, System.Globalization.CultureInfo.InvariantCulture);
             Assert.IsTrue(data.GetProperty("dispatchDelayed").GetBoolean());
             Assert.AreEqual("pending", (await context.EmailOutbox.AsNoTracking()
                 .SingleAsync(item => item.Id == id.Value)).Status);
@@ -55,6 +57,25 @@ public sealed partial class PatronJourneyTests
     private sealed class FailingEmailDispatcher : IEmailOutboxDispatcher
     {
         public void Enqueue(long outboxId) => throw new InvalidOperationException("Synthetic dispatch failure");
+    }
+
+    [TestMethod]
+    public async Task TestEmailPreflightDistinguishesDependencyTimeoutFromCallerCancellation()
+    {
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var sender = new ReadinessSender(_ =>
+            Task.FromException<EmailTransportReadiness>(new TaskCanceledException("Synthetic readiness timeout")));
+        var service = new EmailOperationsService(contextFactory, new FailingEmailDispatcher(), sender,
+            factory.Services.GetRequiredService<RecipientDomainPolicy>(), TimeProvider.System,
+            factory.Services.GetRequiredService<StaffEligibilityService>());
+
+        Assert.AreEqual("email_transport_unavailable",
+            (await service.QueueTestAsync(actor, 1, CancellationToken.None)).Code);
+        using var caller = new CancellationTokenSource();
+        caller.Cancel();
+        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+            await service.QueueTestAsync(actor, 1, caller.Token));
     }
 
     [TestMethod]
@@ -88,6 +109,9 @@ public sealed partial class PatronJourneyTests
             var result = await service.RetryAsync(actor, row.Id, version, CancellationToken.None);
             Assert.AreEqual("queued", result.Code);
             var data = JsonSerializer.SerializeToElement(result.Data);
+            Assert.AreEqual(JsonValueKind.String, data.GetProperty("id").ValueKind);
+            Assert.AreEqual(row.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                data.GetProperty("id").GetString());
             Assert.IsTrue(data.GetProperty("dispatchDelayed").GetBoolean());
             Assert.AreEqual("pending", (await context.EmailOutbox.AsNoTracking()
                 .SingleAsync(item => item.Id == row.Id)).Status);
@@ -325,6 +349,15 @@ public sealed partial class PatronJourneyTests
             Assert.IsFalse((await sender.CheckReadinessAsync(2, CancellationToken.None)).IsConfigured);
             Assert.AreEqual(EmailSendOutcome.NotConfigured,
                 (await sender.SendAsync(new EmailEnvelope(2, 2, null,
+                    "admin@example.org", "library@example.org", null, "Test", "Body", null),
+                    CancellationToken.None)).Outcome);
+
+            system.ProtectedServerToken = "undecryptable-test-value";
+            await context.SaveChangesAsync();
+            Assert.IsFalse((await sender.CheckReadinessAsync(2, CancellationToken.None)).IsConfigured);
+            Assert.AreEqual("not_configured", await ReadStateAsync());
+            Assert.AreEqual(EmailSendOutcome.NotConfigured,
+                (await sender.SendAsync(new EmailEnvelope(3, 2, null,
                     "admin@example.org", "library@example.org", null, "Test", "Body", null),
                     CancellationToken.None)).Outcome);
         }
@@ -572,9 +605,10 @@ public sealed partial class PatronJourneyTests
         try
         {
             var result = await service.ListAsync(actor, 2, null, CancellationToken.None);
-            Assert.IsTrue(result.Any(item => item.Id == ids[0] && item.Status == "failed"));
+            var expectedId = ids[0].ToString(System.Globalization.CultureInfo.InvariantCulture);
+            Assert.IsTrue(result.Any(item => item.Id == expectedId && item.Status == "failed"));
             var failedOnly = await service.ListAsync(actor, 2, "failed", CancellationToken.None);
-            Assert.IsTrue(failedOnly.Any(item => item.Id == ids[0]));
+            Assert.IsTrue(failedOnly.Any(item => item.Id == expectedId));
             Assert.IsTrue(failedOnly.All(item => item.Status == "failed"));
         }
         finally
@@ -583,6 +617,53 @@ public sealed partial class PatronJourneyTests
                 "DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @prefix;",
                 ("@prefix", $"{businessKeyPrefix}:%"));
             await DeactivateCorrectiveStaffAsync(admin.Id);
+        }
+    }
+
+    [TestMethod]
+    public async Task EmailOperationsApiPreservesBigintIdentityThroughListAndRetry()
+    {
+        const long largeId = 9007199254740993;
+        const string exactId = "9007199254740993";
+        var actor = await ReadConfiguredSuperAdminAsync();
+        using var client = factory!.CreateClient();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+        await ExecuteNonQueryAsync(
+            """
+            SET IDENTITY_INSERT [asap].[EmailOutbox] ON;
+            INSERT INTO [asap].[EmailOutbox]
+                ([Id], [OrganizationId], [DeliveryClass], [Status], [AttemptCount], [LastErrorCode],
+                 [ToAddress], [FromAddress], [Subject], [BodyText], [CreatedUtc])
+            VALUES
+                (@id, 1, N'operational_test', N'failed', 1, N'synthetic_failure',
+                 N'large-id@example.org', N'system@example.org', N'Large ID', N'Body', SYSUTCDATETIME());
+            SET IDENTITY_INSERT [asap].[EmailOutbox] OFF;
+            """,
+            ("@id", largeId));
+        try
+        {
+            using var list = await client.GetAsync("/api/asap/staff/email-operations?organizationId=1&status=failed");
+            Assert.AreEqual(HttpStatusCode.OK, list.StatusCode);
+            using var listJson = JsonDocument.Parse(await list.Content.ReadAsStringAsync());
+            var item = listJson.RootElement.GetProperty("items").EnumerateArray()
+                .Single(row => row.GetProperty("id").GetString() == exactId);
+            Assert.AreEqual(JsonValueKind.String, item.GetProperty("id").ValueKind);
+
+            var version = item.GetProperty("version").GetString();
+            using var retry = await client.PostAsJsonAsync(
+                $"/api/asap/staff/email-operations/{exactId}/retry", new { version });
+            Assert.AreEqual(HttpStatusCode.Accepted, retry.StatusCode);
+            using var retryJson = JsonDocument.Parse(await retry.Content.ReadAsStringAsync());
+            var returnedId = retryJson.RootElement.GetProperty("data").GetProperty("id");
+            Assert.AreEqual(JsonValueKind.String, returnedId.ValueKind);
+            Assert.AreEqual(exactId, returnedId.GetString());
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync(
+                "DELETE FROM [asap].[EmailOutbox] WHERE [Id] = @id; DBCC CHECKIDENT ('asap.EmailOutbox', RESEED);",
+                ("@id", largeId));
         }
     }
 

@@ -125,7 +125,7 @@ public sealed class PostmarkEmailSender(
         }
         catch (System.Security.Cryptography.CryptographicException)
         {
-            throw new InvalidOperationException("The saved Postmark credential is unavailable.");
+            return null;
         }
     }
 }

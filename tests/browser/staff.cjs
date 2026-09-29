@@ -1494,6 +1494,7 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
 
     await page.getByRole('button', { name: 'Close request details' }).click();
     await page.getByRole('button', { name: 'Additional copies' }).click();
+    await page.waitForFunction(() => !document.getElementById('refresh-additional-copies').disabled);
     assert.equal(await page.evaluate(() => document.activeElement.id), 'additional-copy-title');
     const openTab = page.locator('[data-copy-status="open"]');
     await openTab.focus();

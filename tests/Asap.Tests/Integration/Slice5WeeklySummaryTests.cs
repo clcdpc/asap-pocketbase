@@ -366,6 +366,73 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task WeeklySummaryRetainsCommittedOutboxWhenImmediateDispatchFails()
+    {
+        var superAdmin = await ReadConfiguredSuperAdminAsync();
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var scope = Slice5IsolatedLibraryId;
+        await EnsureSlice5IsolatedLibraryAsync(contextFactory, scope);
+        var admin = await CreateCorrectiveStaffAsync(superAdmin, "admin", scope);
+        await using var scoped = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IEmailOutboxDispatcher>();
+                services.AddSingleton<IEmailOutboxDispatcher>(new FailingEmailDispatcher());
+            }));
+        var scopedContextFactory = scoped.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var businessKeyPrefix = $"weekly-summary:{admin.Id}:";
+        long requestId = 0;
+        string? oldStaffUrl = null;
+        await using (var seed = await scopedContextFactory.CreateDbContextAsync())
+        {
+            var system = await seed.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+            oldStaffUrl = system.StaffApplicationUrl;
+            system.StaffApplicationUrl = "https://staff.example.org/staff/";
+            var staff = await seed.StaffUsers.SingleAsync(item => item.Id == admin.Id);
+            staff.WeeklyActionSummaryEnabled = true;
+            staff.WeeklyActionSummaryEmail = "weekly-dispatch@example.org";
+            var formatId = await seed.MaterialFormats.Where(item => item.Code == "book")
+                .Select(item => item.Id).SingleAsync();
+            var request = new TitleRequest
+            {
+                LibraryOrganizationId = scope,
+                Barcode = $"s5-weekly-dispatch-{Guid.NewGuid():N}"[..35],
+                Title = "Weekly dispatch recovery",
+                MaterialFormatId = formatId,
+                Status = "suggestion",
+                CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime,
+                UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime
+            };
+            seed.TitleRequests.Add(request);
+            await seed.SaveChangesAsync();
+            requestId = request.Id;
+        }
+
+        try
+        {
+            var result = await scoped.Services.GetRequiredService<WorkflowProcessingService>()
+                .SendWeeklyStaffSummaryAsync(null, scope, CancellationToken.None);
+            Assert.AreEqual("completed", result.Code);
+            Assert.AreEqual(1, result.Changed);
+            await using var verify = await scopedContextFactory.CreateDbContextAsync();
+            var outbox = await verify.EmailOutbox.AsNoTracking().SingleAsync(item =>
+                item.BusinessKey != null && item.BusinessKey.StartsWith(businessKeyPrefix));
+            Assert.AreEqual("pending", outbox.Status);
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync("DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @prefix;",
+                ("@prefix", businessKeyPrefix + "%"));
+            await DeleteRequestIdsAsync(scopedContextFactory, [requestId]);
+            await using var restore = await scopedContextFactory.CreateDbContextAsync();
+            var system = await restore.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+            system.StaffApplicationUrl = oldStaffUrl;
+            await restore.SaveChangesAsync();
+            await DeactivateCorrectiveStaffAsync(admin.Id);
+        }
+    }
+
+    [TestMethod]
     public async Task WeeklySummaryUsesAddressFromTheLockedCurrentRecipient()
     {
         const int scope = 99005;

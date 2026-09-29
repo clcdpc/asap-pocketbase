@@ -1,4 +1,5 @@
 using System.Data;
+using System.Globalization;
 using System.Net.Mail;
 using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Data;
@@ -8,7 +9,7 @@ using Microsoft.EntityFrameworkCore;
 namespace Asap.Web.Features.Email;
 
 public sealed record EmailOperationItem(
-    long Id,
+    string Id,
     int OrganizationId,
     string Status,
     string? BusinessKey,
@@ -99,7 +100,15 @@ public sealed class EmailOperationsService(
 
         // Readiness may call the final transport/configuration boundary. Keep it outside
         // the short SQL transaction that commits the durable intent.
-        var readiness = await emailSender.CheckReadinessAsync(targetOrganizationId, cancellationToken);
+        EmailTransportReadiness readiness;
+        try
+        {
+            readiness = await emailSender.CheckReadinessAsync(targetOrganizationId, cancellationToken);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new EmailOperationResult("email_transport_unavailable");
+        }
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         if (!await LockOrganizationsAsync(context, actor, targetOrganizationId, cancellationToken))
@@ -165,7 +174,8 @@ public sealed class EmailOperationsService(
         }
         return new EmailOperationResult(
             suppression is null ? "queued" : "suppressed",
-            new { id = outbox.Id, code = suppression, dispatchDelayed, version = StaffVersion.Encode(outbox.RowVersion) });
+            new { id = outbox.Id.ToString(CultureInfo.InvariantCulture), code = suppression,
+                dispatchDelayed, version = StaffVersion.Encode(outbox.RowVersion) });
     }
 
     public async Task<IReadOnlyList<EmailOperationItem>> ListAsync(
@@ -187,7 +197,8 @@ public sealed class EmailOperationsService(
             .ThenByDescending(item => item.CreatedUtc)
             .Take(500)
             .Select(item => new EmailOperationItem(
-                item.Id, item.OrganizationId, item.Status, item.BusinessKey, item.DeliveryClass,
+                item.Id.ToString(CultureInfo.InvariantCulture), item.OrganizationId, item.Status,
+                item.BusinessKey, item.DeliveryClass,
                 item.RecipientAddressKind, item.AttemptCount, item.LastErrorCode, item.SuppressionReason,
                 item.CreatedUtc, item.SentUtc, StaffVersion.Encode(item.RowVersion)))
             .ToListAsync(cancellationToken);
@@ -265,7 +276,7 @@ public sealed class EmailOperationsService(
         }
         return new EmailOperationResult("queued", new
         {
-            id = row.Id,
+            id = row.Id.ToString(CultureInfo.InvariantCulture),
             dispatchDelayed,
             version = StaffVersion.Encode(row.RowVersion)
         });

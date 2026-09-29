@@ -203,9 +203,18 @@ public sealed partial class PatronSuggestionService(
         }
 
         var suggestion = Validate(input, configuration);
-        var emailTransportReadiness = await emailSender.CheckReadinessAsync(
-            configuration.OrganizationId,
-            cancellationToken);
+        EmailTransportReadiness emailTransportReadiness;
+        try
+        {
+            emailTransportReadiness = await emailSender.CheckReadinessAsync(
+                configuration.OrganizationId,
+                cancellationToken);
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new PatronFlowException(502, "Email readiness could not be checked. Please try again.",
+                new { code = "notification_dependency_unavailable" }, exception);
+        }
         long requestId = 0;
         long? outboxId = null;
         var notificationStatus = "queued";
@@ -375,9 +384,18 @@ public sealed partial class PatronSuggestionService(
             // Keep the DB-only authorization/configuration gate immediately adjacent to the
             // provider mutation. Email readiness is local persistence preparation and does not
             // belong between that gate and the external call.
-            var emailReadiness = input.EmailPatronConfirmation
-                ? await emailSender.CheckReadinessAsync(organizationId, cancellationToken)
-                : EmailTransportReadiness.NotConfigured;
+            EmailTransportReadiness emailReadiness;
+            try
+            {
+                emailReadiness = input.EmailPatronConfirmation
+                    ? await emailSender.CheckReadinessAsync(organizationId, cancellationToken)
+                    : EmailTransportReadiness.NotConfigured;
+            }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new PatronFlowException(502, "Email readiness could not be checked. Please try again.",
+                    new { code = "notification_dependency_unavailable" }, exception);
+            }
 
             var creationActor = new CreationActor(
                 "staff",

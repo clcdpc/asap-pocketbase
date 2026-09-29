@@ -423,6 +423,7 @@ public static class AdministrationEndpoints
             "suppressed" => StatusCodes.Status200OK,
             "staff_scope_forbidden" => StatusCodes.Status403Forbidden,
             "organization_inactive" => StatusCodes.Status409Conflict,
+            "email_transport_unavailable" => StatusCodes.Status503ServiceUnavailable,
             _ => StatusCodes.Status400BadRequest
         };
         return Results.Json(new { code = result.Code, data = result.Data }, statusCode: status);
