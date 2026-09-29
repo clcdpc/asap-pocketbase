@@ -14,8 +14,9 @@ function response(status, body) {
   };
 }
 
-function settingsData() {
+function settingsData(librarySetsExist = false) {
   const emptySet = { exists: false, values: [] };
+  const librarySet = { exists: librarySetsExist, values: [] };
   return {
     orgId: '2',
     version: 'library-2-version',
@@ -39,8 +40,8 @@ function settingsData() {
         workflow: { outstandingTimeoutRejectionTemplateId: '9007199254740993' },
         patron: { loginNote: 'Existing library note' },
         email: { hasPostmarkToken: true },
-        publicationOptions: emptySet,
-        commonCreators: emptySet,
+        publicationOptions: librarySet,
+        commonCreators: librarySet,
         allowedPatronCodeIds: emptySet,
         providers: [],
         formats: [],
@@ -105,6 +106,8 @@ async function flush() {
 
     const settingsRequests = [];
     let saveBody;
+    const saveBodies = [];
+    let librarySetsExist = false;
     let saveCompleted;
     const saveFinished = new Promise(resolve => { saveCompleted = resolve; });
     global.fetch = async (url, options = {}) => {
@@ -114,7 +117,7 @@ async function flush() {
       }
       if (requestUrl.includes('/api/asap/staff/settings?orgId=')) {
         settingsRequests.push(requestUrl);
-        return response(200, settingsData());
+        return response(200, settingsData(librarySetsExist));
       }
       if (requestUrl.endsWith('/api/asap/staff/organizations')) {
         return response(200, []);
@@ -124,7 +127,9 @@ async function flush() {
       }
       if (requestUrl.endsWith('/api/asap/staff/settings')) {
         saveBody = JSON.parse(options.body);
-        saveCompleted();
+        saveBodies.push(saveBody);
+        librarySetsExist = saveBodies.length === 1;
+        if (saveBodies.length === 1) saveCompleted();
         return response(200, { code: 'saved', data: { version: 'library-2-saved' } });
       }
       throw new Error(`Unexpected request: ${requestUrl}`);
@@ -164,6 +169,12 @@ async function flush() {
     fromToggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
     document.getElementById('email-from-address').value = 'library@example.org';
 
+    for (const id of ['publication-options-use-system', 'common-creators-use-system']) {
+      const toggle = document.getElementById(id);
+      toggle.checked = false;
+      toggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    }
+
     const note = document.getElementById('patron-login-note');
     note.value = 'Own library edit';
     note.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
@@ -177,11 +188,30 @@ async function flush() {
     assert.strictEqual(saveBody.orgId, '2');
     assert.strictEqual(saveBody.patron.loginNote, 'Own library edit');
     assert.strictEqual(saveBody.email.fromAddress, 'library@example.org');
+    assert.deepStrictEqual(saveBody.patron.publicationOptions, []);
+    assert.deepStrictEqual(saveBody.workflow.commonAuthorsList, []);
     assert.strictEqual(Object.prototype.hasOwnProperty.call(saveBody.email, 'postmarkToken'), false);
     assert.strictEqual(Object.prototype.hasOwnProperty.call(saveBody.email, 'clearPostmarkToken'), false);
     assert.strictEqual(Object.prototype.hasOwnProperty.call(saveBody, 'systemSettings'), false);
     assert.strictEqual(Object.prototype.hasOwnProperty.call(saveBody, 'polaris'), false);
     assert.ok(settingsRequests.every(url => url === '/api/asap/staff/settings?orgId=2'));
+
+    for (let attempt = 0; attempt < 20 &&
+      document.getElementById('settings-save-title').textContent !== 'No changes'; attempt++) await flush();
+    for (const id of ['publication-options-use-system', 'common-creators-use-system']) {
+      const toggle = document.getElementById(id);
+      assert.strictEqual(toggle.checked, false);
+      toggle.checked = true;
+      toggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    }
+    document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', {
+      bubbles: true,
+      cancelable: true
+    }));
+    for (let attempt = 0; attempt < 20 && saveBodies.length < 2; attempt++) await flush();
+    assert.strictEqual(saveBodies.length, 2);
+    assert.strictEqual(saveBodies[1].patron.publicationOptions, null);
+    assert.strictEqual(saveBodies[1].workflow.commonAuthorsList, null);
 
     dom.window.close();
     console.log('Non-super-admin settings scope survives initial option population and save');

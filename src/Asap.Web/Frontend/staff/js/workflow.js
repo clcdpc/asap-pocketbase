@@ -223,7 +223,7 @@ export function createWorkflowApp() {
     staffSuggestion: null,
     staffSuggestionReturnFocus: null,
     partialSessionFailureMessage: null,
-    settingsCommitPendingRefresh: false,
+    settingsCommitPendingRefresh: null,
     partialSessionFailureOwner: null,
     partialSessionFailureDetailAvailable: false,
     partialSessionFailureAfterQueueSequence: null,
@@ -329,9 +329,9 @@ export function createWorkflowApp() {
       pushSettingsScopeParameter(scope);
       void refreshEmailReadiness();
     },
-    onCommitted: () => { state.settingsCommitPendingRefresh = true; },
+    onCommitted: (message = 'Settings saved.') => { state.settingsCommitPendingRefresh = message; },
     onRefreshed: () => {
-      state.settingsCommitPendingRefresh = false;
+      state.settingsCommitPendingRefresh = null;
       void refreshEmailReadiness();
     }
   });
@@ -908,7 +908,7 @@ export function createWorkflowApp() {
     resetAnalytics();
     settingsController.signedOut();
     dom.signedOutMessage.textContent = state.settingsCommitPendingRefresh
-      ? 'Settings saved. Sign in again to review the current values.'
+      ? `${state.settingsCommitPendingRefresh} Sign in again to review the current values.`
       : settingsMutationUnconfirmed
         ? 'Settings change outcome is uncertain. Sign in again and check saved values before retrying.'
         : state.partialSessionFailureMessage ||
@@ -1278,7 +1278,7 @@ export function createWorkflowApp() {
   }
 
   async function loadOperations(options = {}) {
-    if (!state.staff || (state.staff.role !== 'admin' && state.staff.role !== 'super_admin')) return;
+    if (!state.staff || (state.staff.role !== 'admin' && state.staff.role !== 'super_admin')) return false;
     const load = latestLoads.begin('operations');
     const requestedScope = state.operationsScope;
     dom.refreshOperations.disabled = true;
@@ -1292,18 +1292,20 @@ export function createWorkflowApp() {
           ? authorizedJson('/api/asap/staff/organizations', { signal: load.signal })
           : Promise.resolve(null)
       ]);
-      if (!load.isCurrent() || requestedScope !== state.operationsScope) return;
+      if (!load.isCurrent() || requestedScope !== state.operationsScope) return false;
       if (state.staff.role === 'super_admin' && Array.isArray(organizationResult)) {
         populateScopes(organizationResult.filter(item => Number(item.id) > 1), requestedScope);
       }
       renderOperations({ queue, email });
       state.operationsLoaded = true;
       if (!options.silent) announce('Workflow operations loaded.');
+      return true;
     } catch (error) {
       if (load.isCurrent() && requestedScope === state.operationsScope &&
           !options.silent && !isAbortError(error) && error.status !== 401) {
         announce(error.message || 'Workflow operations could not be loaded.', 'error');
       }
+      return false;
     } finally {
       if (load.isCurrent()) dom.refreshOperations.disabled = false;
       latestLoads.finish('operations', load.token);
@@ -1318,8 +1320,15 @@ export function createWorkflowApp() {
     try {
       const result = await authorizedJson(`${path}${query}`, { method: 'POST', signal: load.signal });
       if (!load.isCurrent() || requestedScope !== state.operationsScope) return;
-      await loadOperations({ silent: true });
-      announce(result.manualRunId ? `${message} Run ${result.manualRunId} queued.` : message, 'success');
+      const committedMessage = result.manualRunId ? `${message} Run ${result.manualRunId} queued.` : message;
+      state.partialSessionFailureMessage = `${committedMessage} Sign in again to review workflow operations.`;
+      state.partialSessionFailureOwner = load.token;
+      const refreshed = await loadOperations({ silent: true });
+      if (refreshed === true) clearCommittedSessionFallback(load.token);
+      if (load.isCurrent() && requestedScope === state.operationsScope && state.staff) {
+        announce(refreshed ? committedMessage : `${committedMessage} Operations could not be refreshed.`,
+          refreshed ? 'success' : 'warning');
+      }
     } catch (error) {
       if (load.isCurrent() && requestedScope === state.operationsScope &&
           !isAbortError(error) && error.status !== 401) {
@@ -1340,8 +1349,14 @@ export function createWorkflowApp() {
         signal: load.signal
       });
       if (!load.isCurrent() || requestedScope !== state.operationsScope) return;
-      await loadOperations({ silent: true });
-      announce('Email retry queued.', 'success');
+      state.partialSessionFailureMessage = `Email retry ${row.id} queued. Sign in again to review email operations.`;
+      state.partialSessionFailureOwner = load.token;
+      const refreshed = await loadOperations({ silent: true });
+      if (refreshed === true) clearCommittedSessionFallback(load.token);
+      if (load.isCurrent() && requestedScope === state.operationsScope && state.staff) {
+        announce(refreshed ? 'Email retry queued.' : 'Email retry queued. Operations could not be refreshed.',
+          refreshed ? 'success' : 'warning');
+      }
     } catch (error) {
       if (load.isCurrent() && requestedScope === state.operationsScope &&
           !isAbortError(error) && error.status !== 401) {
@@ -1529,7 +1544,9 @@ export function createWorkflowApp() {
       }
       return true;
     } catch (error) {
-      if (!options.silent && !isAbortError(error) && error.status !== 401) {
+      if (load.isCurrent() && owner === state.staff && requestedScope === state.scope &&
+          requestedStatus === state.additionalCopyStatus &&
+          !options.silent && !isAbortError(error) && error.status !== 401) {
         announce(error.message || 'Additional-copy tasks could not be loaded.', 'error');
       }
       return false;
@@ -2030,12 +2047,14 @@ export function createWorkflowApp() {
       loadResearchConfiguration(request);
       return true;
     } catch (error) {
-      if (load.isCurrent() && state.selectedRequestId === String(id) &&
-          state.selectedRequestType === 'title_request' &&
+      const current = load.isCurrent() && navigationGeneration === state.navigationGeneration &&
+          staff === state.staff && state.selectedRequestId === String(id) &&
+          state.selectedRequestType === 'title_request';
+      if (current &&
           !(isAbortError(error) && load.signal.aborted) && error.status !== 401) {
         announce(error.status === 404 ? 'That request is no longer available.' : error.message, 'error');
       }
-      if (options.fromRecent && error.status === 404) {
+      if (current && options.fromRecent && error.status === 404) {
         const storage = recentStorage();
         if (storage) forgetRecentRequest(storage, state.recentKey, String(id));
         renderRecentRequests();
@@ -2457,31 +2476,46 @@ export function createWorkflowApp() {
         signal: mutation.signal
       });
       if (!mutation.isCurrent() || state.staffSuggestion !== current) return;
-      const id = String(created.id);
+      if (typeof created?.id !== 'string' || !/^[1-9]\d*$/.test(created.id)) {
+        throw unconfirmedResponseError();
+      }
+      const id = created.id;
       const targetLibraryId = String(created.libraryOrgId || current.scopeId);
+      const notification = created.notificationStatus === 'queued'
+        ? 'Confirmation email queued.'
+        : created.notificationStatus === 'suppressed'
+          ? 'No confirmation email was sent because delivery is suppressed.'
+          : 'No confirmation email was requested.';
+      const committedMessage = `Suggestion ${id} created on behalf of the patron. ${notification}`;
+      state.partialSessionFailureMessage = `${committedMessage} Sign in again to review the committed request.`;
+      state.partialSessionFailureOwner = mutation.token;
+      state.partialSessionFailureDetailAvailable = false;
+      state.partialSessionFailureAfterQueueSequence = null;
       current.submitting = false;
       closeStaffSuggestion({ focusButton: false, force: true });
       if (state.staff?.role === 'super_admin') {
         state.scope = targetLibraryId;
         dom.scope.value = targetLibraryId;
       }
+      let queueRefreshed = false;
       try {
-        await loadQueue({ skipDeepLink: true, silent: true });
+        queueRefreshed = await loadQueue({ skipDeepLink: true, silent: true }) === true;
       } catch {
         // Queue refresh is follow-up presentation work. The create response is already
         // authoritative and must remain a visible success even if the refresh races.
       }
-      try {
-        await openRequest(id, dom.newSuggestion);
-      } catch {
-        // The authoritative create response remains the success path if the queue refresh races.
+      let detailLoaded = false;
+      if (state.staff) {
+        try {
+          detailLoaded = await openRequest(id, dom.newSuggestion) === true;
+        } catch {
+          // The authoritative create response remains the success path if the detail refresh races.
+        }
       }
-      const notification = created.notificationStatus === 'queued'
-        ? 'Confirmation email queued.'
-        : created.notificationStatus === 'suppressed'
-          ? 'No confirmation email was sent because delivery is suppressed.'
-          : 'No confirmation email was requested.';
-      announce(`Suggestion ${id} created on behalf of the patron. ${notification}`, 'success');
+      if (queueRefreshed && detailLoaded) clearCommittedSessionFallback(mutation.token);
+      if (state.staff) announce(committedMessage +
+        (queueRefreshed && detailLoaded ? '' : ' Current details could not be refreshed.'),
+      queueRefreshed && detailLoaded ? 'success' : 'warning');
     } catch (error) {
       if (!mutation.isCurrent() || isAbortError(error) || error.status === 401) return;
       dom.staffSuggestionBody.querySelector('.staff-suggestion-conflict')?.remove();

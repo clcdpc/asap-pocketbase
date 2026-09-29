@@ -316,10 +316,22 @@ public sealed class AdditionalCopyService(
 
         var openCountAfter = openCount + 1;
         var holdText = source.Status == "hold_placed" ? "placed" : "queued";
-        source.Notes = AppendNote(
-            source.Notes,
-            $"Additional copy request created for BIB {source.BibId}. Patron hold remains {holdText} for the same BIB. Open additional-copy tasks for this library/BIB: {openCountAfter}.");
-        source.UpdatedUtc = now;
+        source.UpdatedUtc = now <= source.UpdatedUtc
+            ? source.UpdatedUtc.AddTicks(1)
+            : now;
+        await context.SaveChangesAsync(cancellationToken);
+        context.TitleRequestEvents.Add(new TitleRequestEvent
+        {
+            TitleRequestId = source.Id,
+            EventType = "additional_copy_created",
+            Status = source.Status,
+            CloseReason = source.CloseReason,
+            ActorType = "staff",
+            StaffUserId = actor.Id,
+            ActorName = DisplayName(locked.Staff[actor.Id]),
+            Message = $"Additional-copy task {request.Id} created for BIB {source.BibId}. Patron hold remains {holdText} for the same BIB. Open additional-copy tasks for this library/BIB: {openCountAfter}.",
+            CreatedUtc = now
+        });
         await context.SaveChangesAsync(cancellationToken);
 
         EmailOutbox? outbox = null;

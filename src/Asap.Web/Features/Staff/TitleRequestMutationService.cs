@@ -441,6 +441,22 @@ public sealed class TitleRequestMutationService(
         {
             return new TitleRequestMutationResult("invalid_bib");
         }
+        if (targetStatus == "pending_hold" && bibAfterMutation is not null &&
+            (request.Status != "pending_hold" || !request.AutoHold || bibChanged))
+        {
+            // LockForMutationAsync holds the library Organization row until commit. Patron
+            // creation and automatic promotion take the same lock before writing requests.
+            var otherOpenBibs = await context.TitleRequests.AsNoTracking().Where(item =>
+                item.LibraryOrganizationId == request.LibraryOrganizationId &&
+                item.Barcode == request.Barcode && item.BibId != null &&
+                item.Id != request.Id && item.Status != "closed")
+                .Select(item => item.BibId!)
+                .ToListAsync(cancellationToken);
+            if (otherOpenBibs.Any(otherBib => SameBibIdentity(otherBib, bibAfterMutation)))
+            {
+                return new TitleRequestMutationResult("duplicate_open_request");
+            }
+        }
 
         ResolvedRejectionTemplate? rejectionTemplate = null;
         long? rejectionTemplateId = null;
@@ -1257,6 +1273,10 @@ public sealed class TitleRequestMutationService(
         ? value.GetString()
         : value.ToString();
     private static bool IsPositiveInteger(string? value) => int.TryParse(value, out var result) && result > 0;
+
+    private static bool SameBibIdentity(string? first, string? second) =>
+        int.TryParse(first, out var firstId) && firstId > 0 &&
+        int.TryParse(second, out var secondId) && firstId == secondId;
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     private static string DisplayName(StaffUser value) =>
         Clean(value.DisplayName) ?? Clean(value.UserPrincipalName) ?? "Staff";

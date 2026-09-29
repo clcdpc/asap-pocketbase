@@ -458,6 +458,127 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    [DataRow("catalogFound")]
+    [DataRow("purchase")]
+    [DataRow("alreadyOwn")]
+    [DataRow("edit")]
+    public async Task StaffBibActionsRejectActiveDuplicateBeforeAnyWrite(string action)
+    {
+        var actor = await GetOwnershipTestActorAsync();
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var target = await SeedBibOwnershipRequestAsync(
+            "duplicate-action-target", action == "edit" ? "9002" : "9001",
+            staffVerified: true, status: action == "edit" ? "pending_hold" : "suggestion",
+            autoHold: true);
+        var blocker = await SeedBibOwnershipRequestAsync(
+            "duplicate-action-blocker", "09001", staffVerified: true,
+            status: "pending_hold", autoHold: true);
+        try
+        {
+            await using (var setup = await contextFactory.CreateDbContextAsync())
+            {
+                var targetRow = await setup.TitleRequests.SingleAsync(item => item.Id == target.Id);
+                var blockerRow = await setup.TitleRequests.SingleAsync(item => item.Id == blocker.Id);
+                blockerRow.Barcode = targetRow.Barcode;
+                await setup.SaveChangesAsync();
+            }
+            using var bib = JsonDocument.Parse("\"9001\"");
+            var result = await factory.Services.GetRequiredService<TitleRequestMutationService>().ActionAsync(
+                actor, target.Id, new TitleRequestActionInput
+                {
+                    Version = StaffVersion.Encode(target.RowVersion),
+                    Action = action,
+                    Bibid = action == "edit" ? bib.RootElement : default
+                }, CancellationToken.None);
+            Assert.AreEqual("duplicate_open_request", result.Code);
+            await using var verify = await contextFactory.CreateDbContextAsync();
+            var unchanged = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == target.Id);
+            CollectionAssert.AreEqual(target.RowVersion, unchanged.RowVersion);
+            Assert.AreEqual(action == "edit" ? "pending_hold" : "suggestion", unchanged.Status);
+            Assert.AreEqual(action == "edit" ? "9002" : "9001", unchanged.BibId);
+            Assert.IsFalse(await verify.TitleRequestEvents.AnyAsync(item => item.TitleRequestId == target.Id));
+        }
+        finally
+        {
+            await DeleteBibOwnershipRequestsAsync([target.Id, blocker.Id]);
+        }
+    }
+
+    [TestMethod]
+    public async Task ConcurrentStaffBibActionsAllowOnlyOnePendingHold()
+    {
+        var actor = await GetOwnershipTestActorAsync();
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var first = await SeedBibOwnershipRequestAsync("concurrent-bib-first", null, false, status: "suggestion", autoHold: true);
+        var second = await SeedBibOwnershipRequestAsync("concurrent-bib-second", null, false, status: "suggestion", autoHold: true);
+        try
+        {
+            byte[] secondVersion;
+            await using (var setup = await contextFactory.CreateDbContextAsync())
+            {
+                var firstRow = await setup.TitleRequests.SingleAsync(item => item.Id == first.Id);
+                var secondRow = await setup.TitleRequests.SingleAsync(item => item.Id == second.Id);
+                secondRow.Barcode = firstRow.Barcode;
+                await setup.SaveChangesAsync();
+                secondVersion = secondRow.RowVersion.ToArray();
+            }
+            var mutations = factory.Services.GetRequiredService<TitleRequestMutationService>();
+            using var bib = JsonDocument.Parse("\"9001\"");
+            var results = await Task.WhenAll(
+                mutations.ActionAsync(actor, first.Id, new TitleRequestActionInput
+                    { Version = StaffVersion.Encode(first.RowVersion), Action = "catalogFound", Bibid = bib.RootElement }, CancellationToken.None),
+                mutations.ActionAsync(actor, second.Id, new TitleRequestActionInput
+                    { Version = StaffVersion.Encode(secondVersion), Action = "catalogFound", Bibid = bib.RootElement }, CancellationToken.None));
+            CollectionAssert.AreEquivalent(new[] { "updated", "duplicate_open_request" },
+                results.Select(item => item.Code).ToArray(),
+                string.Join(", ", results.Select(item => item.Code)));
+            await using var verify = await contextFactory.CreateDbContextAsync();
+            var rows = await verify.TitleRequests.AsNoTracking()
+                .Where(item => item.Id == first.Id || item.Id == second.Id).ToListAsync();
+            Assert.AreEqual(1, rows.Count(item => item.Status == "pending_hold"));
+            var rejected = results[0].Code == "duplicate_open_request" ? first : second;
+            var rejectedRow = rows.Single(item => item.Id == rejected.Id);
+            CollectionAssert.AreEqual(rejected.Id == second.Id ? secondVersion : rejected.RowVersion, rejectedRow.RowVersion);
+            Assert.IsFalse(await verify.TitleRequestEvents.AnyAsync(item => item.TitleRequestId == rejected.Id));
+        }
+        finally
+        {
+            await DeleteBibOwnershipRequestsAsync([first.Id, second.Id]);
+        }
+    }
+
+    [TestMethod]
+    public async Task HoldAcquisitionRejectsPreexistingSamePatronBibDuplicates()
+    {
+        var actor = await GetOwnershipTestActorAsync();
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var first = await SeedBibOwnershipRequestAsync("duplicate-hold-first", "9001", true, status: "pending_hold", autoHold: true);
+        var second = await SeedBibOwnershipRequestAsync("duplicate-hold-second", "09001", true, status: "pending_hold", autoHold: true);
+        try
+        {
+            await using (var setup = await contextFactory.CreateDbContextAsync())
+            {
+                var firstRow = await setup.TitleRequests.SingleAsync(item => item.Id == first.Id);
+                var secondRow = await setup.TitleRequests.SingleAsync(item => item.Id == second.Id);
+                secondRow.Barcode = firstRow.Barcode;
+                await setup.SaveChangesAsync();
+            }
+            var result = await factory.Services.GetRequiredService<HoldPlacementService>().PlaceAsync(
+                actor, first.Id, new VersionInput(StaffVersion.Encode(first.RowVersion)), CancellationToken.None);
+            Assert.AreEqual("duplicate_open_request", result.Code);
+            await using var verify = await contextFactory.CreateDbContextAsync();
+            Assert.IsFalse(await verify.HoldPlacementOperations.AnyAsync(item =>
+                item.TitleRequestId == first.Id || item.TitleRequestId == second.Id));
+            Assert.IsFalse(await verify.TitleRequestEvents.AnyAsync(item =>
+                item.TitleRequestId == first.Id || item.TitleRequestId == second.Id));
+        }
+        finally
+        {
+            await DeleteBibOwnershipRequestsAsync([first.Id, second.Id]);
+        }
+    }
+
+    [TestMethod]
     public async Task IdentifierEditClearsStaffBibBeforePurchasePromotionWorkflow()
     {
         var actor = await GetOwnershipTestActorAsync();
@@ -499,6 +620,8 @@ public sealed partial class PatronJourneyTests
             identifierTags: true,
             libraryOrganizationId: scope);
         long? unverifiedId = null;
+        long? duplicateTargetId = null;
+        long? duplicateBlockerId = null;
 
         try
         {
@@ -555,11 +678,39 @@ public sealed partial class PatronJourneyTests
             await using var verifyUnverified = await contextFactory.CreateDbContextAsync();
             Assert.IsFalse(await verifyUnverified.TitleRequestEvents.AnyAsync(item =>
                 item.TitleRequestId == unverified.Id && item.EventType == "promoted"));
+
+            var duplicateTarget = await SeedBibOwnershipRequestAsync(
+                "purchase-duplicate-target", "789", staffVerified: true,
+                status: "outstanding_purchase", autoHold: true,
+                libraryOrganizationId: scope);
+            duplicateTargetId = duplicateTarget.Id;
+            var duplicateBlocker = await SeedBibOwnershipRequestAsync(
+                "purchase-duplicate-blocker", "789", staffVerified: true,
+                status: "suggestion", autoHold: true,
+                libraryOrganizationId: scope);
+            duplicateBlockerId = duplicateBlocker.Id;
+            await using (var duplicateSetup = await contextFactory.CreateDbContextAsync())
+            {
+                var target = await duplicateSetup.TitleRequests.SingleAsync(item => item.Id == duplicateTarget.Id);
+                var blocker = await duplicateSetup.TitleRequests.SingleAsync(item => item.Id == duplicateBlocker.Id);
+                blocker.Barcode = target.Barcode;
+                await duplicateSetup.SaveChangesAsync();
+            }
+            await PrepareSingleItemCycleAsync(QueueNames.PurchasePromotion, scope, duplicateTarget.Id);
+            var duplicateCycle = await workflow.ProcessWorkflowAsync(scope, CancellationToken.None);
+            Assert.AreEqual("completed", duplicateCycle.Code);
+            var afterDuplicateCycle = await ReadBibOwnershipRequestAsync(duplicateTarget.Id);
+            Assert.AreEqual("outstanding_purchase", afterDuplicateCycle.Status,
+                "Promotion must not queue another open hold for the same patron and BIB.");
+            await using var verifyDuplicate = await contextFactory.CreateDbContextAsync();
+            Assert.IsFalse(await verifyDuplicate.TitleRequestEvents.AnyAsync(item =>
+                item.TitleRequestId == duplicateTarget.Id && item.EventType == "promoted"));
         }
         finally
         {
-            await DeleteBibOwnershipRequestsAsync(unverifiedId.HasValue
-                ? [seeded.Id, unverifiedId.Value] : [seeded.Id]);
+            await DeleteBibOwnershipRequestsAsync(new long?[]
+                { seeded.Id, unverifiedId, duplicateTargetId, duplicateBlockerId }
+                .Where(item => item.HasValue).Select(item => item!.Value));
             await using var restore = await contextFactory.CreateDbContextAsync();
             var settings = await restore.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == scope);
             if (!settingsExisted)

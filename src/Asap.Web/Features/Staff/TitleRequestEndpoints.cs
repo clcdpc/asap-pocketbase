@@ -789,6 +789,7 @@ public static class TitleRequestEndpoints
             new { code = result.Code, message = "This request is outside your authorized scope." },
             statusCode: StatusCodes.Status403Forbidden),
         "stale_version" or "actor_changed_since_preview" or "claim_conflict" or "hold_operation_incomplete" or
+            "duplicate_open_request" or
             "identifier_locked_by_stage" or "identifier_retry_not_allowed" or "organization_inactive" or
             "hold_history_retained" => Results.Conflict(new
             {
@@ -839,7 +840,7 @@ public static class TitleRequestEndpoints
         "not_found" => Results.NotFound(new { result.Code, result.ProviderOutcomeRecorded }),
         "staff_scope_forbidden" => Results.Json(new { result.Code, result.ProviderOutcomeRecorded,
             operationId = result.OperationId?.ToString() }, statusCode: StatusCodes.Status403Forbidden),
-        "stale_version" or "hold_operation_incomplete" or "operation_ownership_lost" or
+        "stale_version" or "hold_operation_incomplete" or "duplicate_open_request" or "operation_ownership_lost" or
             "hold_identity_ambiguous" or "hold_operator_required" =>
             Results.Conflict(new { result.Code, result.ProviderOutcomeRecorded,
                 message = "Hold placement is blocked or requires reconciliation." }),

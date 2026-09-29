@@ -14,7 +14,7 @@ function response(status, body) {
   };
 }
 
-function settingsData(note, version) {
+function settingsData(note, version, formats = []) {
   const emptySet = { exists: false, values: [] };
   const systemNote = 'System login note';
   const libraryOverride = note === systemNote ? null : {
@@ -25,7 +25,7 @@ function settingsData(note, version) {
     commonCreators: emptySet,
     allowedPatronCodeIds: emptySet,
     providers: [],
-    formats: [],
+    formats,
     templates: [],
     branding: { hasLogo: false, altText: null }
   };
@@ -37,7 +37,7 @@ function settingsData(note, version) {
     commonCreators: emptySet,
     allowedPatronCodeIds: emptySet,
     providers: [],
-    formats: [],
+    formats,
     templates: [],
     branding: { hasLogo: false, altText: 'System alt' }
   };
@@ -58,7 +58,7 @@ function settingsData(note, version) {
       commonCreators: [],
       allowedPatronCodeIds: [],
       providers: [],
-      formats: [],
+      formats,
       customFields: [],
       templates: [],
       autoClaimRules: [],
@@ -69,7 +69,7 @@ function settingsData(note, version) {
       publicationOptions: [],
       commonCreators: [],
       externalSearchProviders: [],
-      formats: [],
+      formats,
       customFields: [],
       email: { fromAddress: 'system@example.org', fromName: 'System' },
       logoAltText: 'System alt',
@@ -110,7 +110,10 @@ async function flush() {
     let refreshFailureStatus = 0;
     let saveCount = 0;
     let committedCount = 0;
+    const committedMessages = [];
     let settingsRequests = 0;
+    let formatRows = [];
+    let formatDeleteCount = 0;
     global.fetch = async (url, options = {}) => {
       const requestUrl = String(url);
       if (requestUrl.endsWith('/api/asap/staff/session')) {
@@ -121,7 +124,7 @@ async function flush() {
         if (refreshFailureStatus) return response(refreshFailureStatus,
           { code: 'settings_unavailable', message: 'Refresh unavailable' });
         return response(200, saved
-          ? settingsData(savedNote, saveCount === 1 ? 'after-save' : `after-save-${saveCount}`)
+          ? settingsData(savedNote, saveCount === 1 ? 'after-save' : `after-save-${saveCount}`, formatRows)
           : settingsData('System login note', 'before-save'));
       }
       if (requestUrl.endsWith('/api/asap/staff/organizations')) return response(200, []);
@@ -130,12 +133,21 @@ async function flush() {
       }
       if (requestUrl.endsWith('/api/asap/staff/settings')) {
         const submittedNote = JSON.parse(options.body).patron.loginNote;
-        assert.strictEqual(submittedNote,
-          ['Saved library note', 'Saved again', 'Saved after 401'][saveCount]);
+        if (saveCount < 3) {
+          assert.strictEqual(submittedNote,
+            ['Saved library note', 'Saved again', 'Saved after 401'][saveCount]);
+        }
         saveCount += 1;
         saved = true;
-        savedNote = submittedNote;
+        if (submittedNote) savedNote = submittedNote;
         return response(200, { code: 'saved', data: { version: saveCount === 1 ? 'after-save' : `after-save-${saveCount}` } });
+      }
+      if (requestUrl.includes('/api/asap/staff/settings/formats/')) {
+        assert.strictEqual(options.method, 'DELETE');
+        formatDeleteCount += 1;
+        return formatDeleteCount === 1
+          ? response(200, { code: 'deleted' })
+          : response(401, { code: 'unauthorized' });
       }
       throw new Error(`Unexpected request: ${requestUrl}`);
     };
@@ -145,7 +157,10 @@ async function flush() {
       tab: document.getElementById('settings-view-tab'),
       announce: () => {},
       getStaff: () => ({ role: 'admin', organizationId: 2 }),
-      onCommitted: () => { committedCount += 1; }
+      onCommitted: message => {
+        committedCount += 1;
+        committedMessages.push(message);
+      }
     });
     controller.bind();
     controller.setStaff({
@@ -207,6 +222,31 @@ async function flush() {
     assert.strictEqual(document.getElementById('settings-save-title').textContent, 'Saved; reload needed');
     assert.strictEqual(document.getElementById('settings-save').disabled, true);
     assert.match(document.getElementById('settings-message').textContent, /Settings saved, but/);
+
+    formatRows = [
+      { id: '101', version: 'format-v1', code: 'local_one', label: 'Local one', ownerOrganizationId: 2, isEnabled: true },
+      { id: '102', version: 'format-v2', code: 'local_two', label: 'Local two', ownerOrganizationId: 2, isEnabled: true }
+    ];
+    refreshFailureStatus = 0;
+    document.getElementById('settings-refresh').click();
+    for (let attempt = 0; attempt < 20 &&
+      document.querySelectorAll('.settings-format-row button[aria-label="Delete"]').length < 2; attempt++) await flush();
+    assert.strictEqual(document.querySelectorAll('.settings-format-row button[aria-label="Delete"]').length, 2);
+    document.querySelector('.settings-format-row button[aria-label="Delete"]').click();
+    document.querySelector('.settings-format-row button[aria-label="Delete"]').click();
+    assert.strictEqual(document.getElementById('settings-save').disabled, false);
+    document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', {
+      bubbles: true,
+      cancelable: true
+    }));
+    for (let attempt = 0; attempt < 20 && formatDeleteCount < 2; attempt++) await flush();
+    for (let attempt = 0; attempt < 20; attempt++) await flush();
+    assert.strictEqual(formatDeleteCount, 2);
+    assert.match(committedMessages.at(-2), /Format deletions confirmed: 0 of 2/);
+    assert.match(committedMessages.at(-1), /Format deletions confirmed: 1 of 2/);
+    assert.match(document.getElementById('settings-message').textContent,
+      /Settings saved\. Format deletions confirmed: 1 of 2\. A follow-up action failed/);
+    assert.strictEqual(document.getElementById('settings-save-title').textContent, 'Saved; reload needed');
     dom.window.close();
     console.log('Settings save completion refreshes the baseline and leaves the form clean');
   } finally {

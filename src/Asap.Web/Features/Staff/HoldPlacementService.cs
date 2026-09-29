@@ -825,6 +825,16 @@ public sealed class HoldPlacementService(
                 $"SELECT * FROM [asap].[HoldPlacementOperation] WITH (UPDLOCK,HOLDLOCK) WHERE [TitleRequestId] = {requestId} AND [CompletedUtc] IS NULL")
             .SingleOrDefaultAsync(cancellationToken);
         if (existing is not null) return new AcquisitionResult("hold_operation_incomplete", existing.Id);
+        var otherActiveBibs = await context.TitleRequests.AsNoTracking()
+            .Where(item => item.LibraryOrganizationId == request.LibraryOrganizationId &&
+                item.Barcode == request.Barcode && item.Id != request.Id &&
+                (item.Status == "pending_hold" || item.Status == "hold_placed") && item.BibId != null)
+            .Select(item => item.BibId!)
+            .ToListAsync(cancellationToken);
+        if (otherActiveBibs.Any(otherBib => SameBibIdentity(otherBib, request.BibId!)))
+        {
+            return new AcquisitionResult("duplicate_open_request");
+        }
         var attempt = await context.HoldPlacementOperations
             .Where(item => item.TitleRequestId == requestId)
             .Select(item => (int?)item.AttemptNumber)

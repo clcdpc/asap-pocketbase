@@ -633,7 +633,11 @@ public sealed partial class PatronJourneyTests
                 (SELECT COUNT(*) FROM [asap].[TitleRequest]
                  WHERE [Id]=@copySourceId
                    AND [Status]=N'hold_placed'
-                   AND [Notes] LIKE N'%Additional copy request created for BIB 92905.%'),
+                   AND COALESCE([Notes], N'') NOT LIKE N'%Additional copy request created for BIB 92905.%'),
+                (SELECT COUNT(*) FROM [asap].[TitleRequestEvent]
+                 WHERE [TitleRequestId]=@copySourceId
+                   AND [EventType]=N'additional_copy_created'
+                   AND [Message] LIKE N'%BIB 92905%'),
                 (SELECT COUNT(*) FROM [asap].[EmailOutbox]
                  WHERE [Subject]=N'ASAP additional-copy reminder'
                    AND [BodyText] LIKE N'%Browser additional copy source (BIB 92905)%'
@@ -667,7 +671,8 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(1, copyState.GetInt32(2));
         Assert.AreEqual(1, copyState.GetInt32(3));
         Assert.AreEqual(1, copyState.GetInt32(4));
-        Assert.AreEqual(0, copyState.GetInt32(5));
+        Assert.AreEqual(1, copyState.GetInt32(5));
+        Assert.AreEqual(0, copyState.GetInt32(6));
         }
         finally
         {
@@ -7414,6 +7419,32 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task PolarisIdentifierLookupPreservesCancellationDuringOptionalBibDetail()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var handler = new SequenceResponseHandler(
+            (HttpStatusCode.OK,
+             """{"PAPIErrorCode":0,"TotalRecordsFound":1,"BibSearchRows":[{"ControlNumber":9001,"Title":"Catalog title"}]}"""),
+            (HttpStatusCode.OK, """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[]}"""),
+            (HttpStatusCode.OK, """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[]}"""));
+        handler.OnRequest = (count, token) =>
+        {
+            if (count == 4)
+            {
+                cancellation.Cancel();
+                token.ThrowIfCancellationRequested();
+            }
+        };
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+            await provider.LookupIdentifierAsync("9780000000001", cancellation.Token));
+
+        Assert.AreEqual(4, handler.RequestCount);
+        Assert.IsTrue(cancellation.IsCancellationRequested);
+    }
+
+    [TestMethod]
     [DataRow("{\"PAPIErrorCode\":0,\"ErrorMessage\":\"Search terms normalized\",\"TotalRecordsFound\":0,\"BibSearchRows\":[]}")]
     [DataRow("{\"PAPIErrorCode\":-1,\"TotalRecordsFound\":0,\"BibSearchRows\":[],\"ErrorMessage\":\"\"}")]
     [DataRow("""{"PAPIErrorCode":-1,"TotalRecordsFound":0,"BibSearchRows":[],"ErrorMessage":"  "}""")]
@@ -11705,6 +11736,7 @@ public sealed partial class PatronJourneyTests
 
         public int RequestCount { get; private set; }
         public List<Uri> RequestUris { get; } = [];
+        public Action<int, CancellationToken>? OnRequest { get; set; }
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -11713,6 +11745,7 @@ public sealed partial class PatronJourneyTests
             cancellationToken.ThrowIfCancellationRequested();
             RequestCount++;
             RequestUris.Add(request.RequestUri!);
+            OnRequest?.Invoke(RequestCount, cancellationToken);
             if (!remaining.TryDequeue(out var response))
             {
                 throw new InvalidOperationException("No fake Polaris response remains for this request.");

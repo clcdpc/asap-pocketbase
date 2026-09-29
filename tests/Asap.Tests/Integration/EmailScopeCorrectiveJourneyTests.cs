@@ -145,9 +145,12 @@ public sealed partial class PatronJourneyTests
             var created = await copies.CreateAsync(actor, source.Id, new AdditionalCopyCreateInput(StaffVersion.Encode(source.RowVersion), true), CancellationToken.None);
             Assert.AreEqual("created", created.Code);
             var copy = await context.AdditionalCopyRequests.AsNoTracking().SingleAsync(item => item.Id == created.RequestId);
+            Assert.AreEqual(now, copy.CreatedUtc, "A source rowversion bump must not future-date the new copy.");
+            Assert.AreEqual(now, copy.UpdatedUtc);
             Assert.AreEqual("updated", (await copies.AssignAsync(actor, copy.Id,
                 new AssignAdditionalCopyInput(StaffVersion.Encode(copy.RowVersion), staff.Id), CancellationToken.None)).Code);
             await context.Entry(source).ReloadAsync();
+            Assert.IsTrue(source.UpdatedUtc > now, "Creating a copy must invalidate a stale source preview.");
             var hold = await scoped.Services.GetRequiredService<HoldPlacementService>().PlaceAsync(actor, source.Id,
                 new VersionInput(StaffVersion.Encode(source.RowVersion)), CancellationToken.None);
             Assert.AreEqual("updated", hold.Code);

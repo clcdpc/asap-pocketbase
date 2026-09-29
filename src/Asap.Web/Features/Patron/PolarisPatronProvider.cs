@@ -433,6 +433,10 @@ public sealed partial class PolarisPatronProvider(
                     catalogAuthor = Clean(detail.Author.FirstOrDefault()) ?? catalogAuthor;
                 }
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception)
             {
                 // Search success remains authoritative when optional detail reconciliation fails.
