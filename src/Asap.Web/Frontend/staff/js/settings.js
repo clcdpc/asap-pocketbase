@@ -52,8 +52,7 @@ const PATRON_FIELDS = [
 
 const EMAIL_FIELDS = [
   ['fromAddress', 'email-from-address'],
-  ['fromName', 'email-from-name'],
-  ['postmarkToken', 'email-postmark-token']
+  ['fromName', 'email-from-name']
 ];
 
 const SYSTEM_FIELDS = [
@@ -250,7 +249,9 @@ export function createSettingsController({
   announce,
   getStaff,
   onPanelChange,
-  onScopeChange
+  onScopeChange,
+  onCommitted = () => {},
+  onRefreshed = () => {}
 }) {
   const dom = {
     contextSummary: root.querySelector('#settings-context-summary'),
@@ -305,14 +306,72 @@ export function createSettingsController({
     baselineTemplates: new Map(),
     baselineOverrides: new Map(),
     pendingDeletedFormats: [],
+    templateSelection: null,
+    savedRejectionTemplateId: '',
+    awaitingReload: false,
+    saving: false,
     visible: false,
     bound: false
   };
 
   const domainEditors = createSettingsDomainEditors({
     root,
-    onChange: updateDirtyState
+    onChange: updateDirtyState,
+    canRemoveTemplate: template => {
+      const id = stringValue(template.id);
+      const savedReference = state.savedRejectionTemplateId;
+      const draftReference = document.getElementById('outstanding-timeout-rejection-template-id').value;
+      if (id && (id === savedReference || id === draftReference)) {
+        notify('This rejection template is used by auto-rejection. Change and save the workflow setting before deleting it.', 'error');
+        return false;
+      }
+      return true;
+    }
   });
+
+  function isTemplateTextEditor(control) {
+    return Boolean(control?.matches) && !control.disabled &&
+      (control.matches('#settings-template-editor input[type="text"], #settings-template-editor textarea') ||
+       control.matches('#email-templates-editor .template-subject, #email-templates-editor .template-body'));
+  }
+
+  function rememberTemplateSelection(control) {
+    if (!isTemplateTextEditor(control)) return;
+    state.templateSelection = {
+      control,
+      start: control.selectionStart ?? control.value.length,
+      end: control.selectionEnd ?? control.value.length
+    };
+  }
+
+  function insertPlaceholder(key) {
+    const selection = state.templateSelection;
+    const status = document.getElementById('template-placeholder-status');
+    if (!selection?.control?.isConnected || !isTemplateTextEditor(selection.control)) {
+      status.textContent = 'Select a template Subject or Body field first.';
+      return;
+    }
+    const token = `{{${key}}}`;
+    selection.control.setRangeText(token, selection.start, selection.end, 'end');
+    selection.control.dispatchEvent(new window.Event('input', { bubbles: true }));
+    selection.control.focus();
+    rememberTemplateSelection(selection.control);
+    updateDirtyState();
+    status.textContent = `${token} inserted.`;
+  }
+
+  function renderPlaceholderHelp(data) {
+    const list = document.getElementById('template-placeholder-list');
+    list.replaceChildren();
+    for (const key of Array.isArray(data.templatePlaceholders) ? data.templatePlaceholders : []) {
+      if (typeof key !== 'string' || !/^\w+$/.test(key)) continue;
+      const button = node('button', { type: 'button', className: 'secondary-button', text: `{{${key}}}` });
+      button.addEventListener('click', () => insertPlaceholder(key));
+      list.append(button);
+    }
+    state.templateSelection = null;
+    document.getElementById('template-placeholder-status').textContent = '';
+  }
 
   function isSystem() {
     return state.scope === 'system';
@@ -433,10 +492,12 @@ export function createSettingsController({
 
   function updateDirtyState() {
     const dirty = isDirty();
-    dom.save.disabled = !dirty;
+    dom.save.disabled = !dirty || state.awaitingReload || state.saving;
     dom.discard.hidden = !dirty;
-    dom.saveTitle.textContent = dirty ? 'Unsaved changes' : 'No changes';
-    dom.saveDetail.textContent = dirty
+    dom.saveTitle.textContent = state.awaitingReload ? 'Saved; reload needed' : dirty ? 'Unsaved changes' : 'No changes';
+    dom.saveDetail.textContent = state.awaitingReload
+      ? 'The save committed. Reload current settings before editing again.'
+      : dirty
       ? 'Changes are local until you save this settings context.'
       : 'Everything in this settings context is saved.';
     dom.reset.hidden = isSystem();
@@ -453,9 +514,6 @@ export function createSettingsController({
   }
 
   function hasRawOverride(section, key) {
-    if (section === 'email' && key === 'postmarkToken') {
-      return Boolean(property(rawSection(section), 'hasPostmarkToken'));
-    }
     return meaningful(property(rawSection(section), key));
   }
 
@@ -499,6 +557,7 @@ export function createSettingsController({
 
   function configureScopedFields() {
     const system = isSystem();
+    document.getElementById('email-clear-postmark-token').disabled = !system;
     for (const field of root.querySelectorAll('[data-setting-section][data-setting-key]')) {
       const section = field.dataset.settingSection;
       const key = field.dataset.settingKey;
@@ -883,6 +942,7 @@ export function createSettingsController({
     const workflow = isSystem()
       ? systemWorkflow
       : mergeConfigured(systemWorkflow, libraryOverride.workflow, data.workflow);
+    state.savedRejectionTemplateId = stringValue(property(workflow, 'outstandingTimeoutRejectionTemplateId'));
     const systemPatron = mergeConfigured(configuredSystem.patron, null, effectivePatron);
     const patron = isSystem()
       ? systemPatron
@@ -900,12 +960,17 @@ export function createSettingsController({
     for (const [key, id, kind] of WORKFLOW_FIELDS) writeControl(document.getElementById(id), property(workflow, key));
     setScopedFields(patron, PATRON_FIELDS);
     setSender(email);
+    document.getElementById('email-token-status').textContent =
+      property(configuredSystem.email, 'hasPostmarkToken')
+        ? 'A system Postmark token is stored. Leave the token field blank to keep it.'
+        : 'No system Postmark token is stored.';
     setCollections(data);
     writeControl(document.getElementById('branding-alt'), property(
       isSystem() ? configuredSystem.branding : effective,
       'logoAltText'
     ) || property(isSystem() ? configuredSystem.branding : libraryOverride.branding, 'altText'));
     setTemplates(data);
+    renderPlaceholderHelp(data);
     setRejectionTemplateOptions(data, workflow);
 
     state.baselineOverrides.clear();
@@ -952,15 +1017,19 @@ export function createSettingsController({
       const patronCodeChoices = patronCodesResponse?.data ?? patronCodesResponse;
       data.patronCodeChoices = Array.isArray(patronCodeChoices) ? patronCodeChoices : [];
       const wasHidden = dom.form.hidden;
+      state.awaitingReload = false;
       populate(data || {});
+      onRefreshed();
       dom.form.hidden = false;
       if (wasHidden) dom.panels.find(item => item.dataset.settingsPanelContent === state.activePanel)?.focus({ preventScroll: true });
       if (state.activePanel === 'staff') void loadStaffAccess({ silent: true });
       if (!options.silent && loadState.isCurrent() && isSettingsContextCurrent(context)) notify('Settings loaded.');
+      return true;
     } catch (error) {
       if (loadState.isCurrent() && isSettingsContextCurrent(context) && state.visible && !isAbortError(error) && error.status !== 401) {
         notify(error.message || 'Settings could not be loaded.', 'error');
       }
+      return false;
     } finally {
       if (loadState.isCurrent() && isSettingsContextCurrent(context)) dom.refresh.disabled = false;
       latestLoads.finish('administration-settings', loadState.token);
@@ -1147,11 +1216,14 @@ export function createSettingsController({
     const systemRows = raw.filter(row => Number(row.organizationId) === 1);
     const libraryRows = raw.filter(row => Number(row.organizationId) === organizationId());
     for (const [key, prefix, subjectId, bodyId] of TEMPLATE_FIELDS) {
-      const subject = clean(document.getElementById(subjectId).value);
-      const body = clean(document.getElementById(bodyId).value);
+      const subject = document.getElementById(subjectId).value;
+      const body = document.getElementById(bodyId).value;
       const systemRow = findTemplate(systemRows, key);
+      const baseline = state.baselineTemplates.get(key) || {};
       if (isSystem()) {
-        rows.push({ templateKey: key, subject, body });
+        if (subject !== (baseline.subject ?? '') || body !== (baseline.body ?? '')) {
+          rows.push({ templateKey: key, subject, body });
+        }
         continue;
       }
       const fieldset = root.querySelector(`[data-template-key="${key}"]`);
@@ -1166,13 +1238,12 @@ export function createSettingsController({
         });
         continue;
       }
-      const baseline = state.baselineTemplates.get(key) || {};
       const row = {
         templateKey: key,
         sourceTemplateId: String(systemRow?.id || libraryRow?.sourceTemplateId || '')
       };
-      if (subject !== (baseline.subject || null)) row.subject = subject;
-      if (body !== (baseline.body || null)) row.body = body;
+      if (subject !== (baseline.subject ?? '')) row.subject = subject;
+      if (body !== (baseline.body ?? '')) row.body = body;
       if (Object.keys(row).length > 2) rows.push(row);
     }
     if (domainData?.domainsChanged?.templates) {
@@ -1253,8 +1324,12 @@ export function createSettingsController({
     if (domainData.domainsChanged.rules) payload.formatRules = domainValues.rules;
     if (domainData.domainsChanged.fields && !isSystem()) payload.customFields = domainValues.fields;
     if (domainData.domainsChanged.claims && !isSystem()) payload.autoClaimRules = domainValues.claims;
-    if (document.getElementById('email-clear-postmark-token').checked) {
-      payload.email.clearPostmarkToken = true;
+    if (isSystem()) {
+      const replacement = clean(document.getElementById('email-postmark-token').value);
+      if (replacement) payload.email.postmarkToken = replacement;
+      if (document.getElementById('email-clear-postmark-token').checked) {
+        payload.email.clearPostmarkToken = true;
+      }
     }
     if (Object.keys(branding).length > 0) payload.branding = branding;
 
@@ -1274,10 +1349,12 @@ export function createSettingsController({
 
   async function saveSettings(event) {
     event?.preventDefault();
-    if (!state.data || !isDirty()) return;
+    if (!state.data || !isDirty() || state.awaitingReload || state.saving) return;
+    state.saving = true;
     const mutation = beginSettingsOperation('administration-settings-save');
     dom.save.disabled = true;
     notify('Saving settings...');
+    let committed = false;
     try {
       const payload = collectPayload();
       const deletedFormats = state.pendingDeletedFormats.slice();
@@ -1287,6 +1364,13 @@ export function createSettingsController({
         signal: mutation.signal
       });
       if (!isSettingsOperationCurrent(mutation)) return;
+      committed = true;
+      state.data.version = response?.data?.version || state.data.version;
+      state.baselineSnapshot = snapshotForm(dom.form);
+      domainEditors.setBaseline();
+      state.awaitingReload = true;
+      onCommitted();
+      notify('Settings saved. Refreshing current values...', 'success');
       for (const format of deletedFormats) {
         if (!isSettingsOperationCurrent(mutation)) return;
         const id = encodeURIComponent(String(format.id));
@@ -1297,16 +1381,26 @@ export function createSettingsController({
         });
       }
       if (!isSettingsOperationCurrent(mutation)) return;
-      await load({ silent: true });
-      if (isSettingsOperationCurrent(mutation)) notify(response?.data?.version ? 'Settings saved.' : 'Settings saved.', 'success');
+      const refreshed = await load({ silent: true });
+      if (isSettingsOperationCurrent(mutation)) {
+        notify(refreshed ? 'Settings saved.' :
+          'Settings saved, but current values could not be refreshed. Reload before editing again.',
+        refreshed ? 'success' : 'error');
+      }
     } catch (error) {
       if (!isSettingsOperationCurrent(mutation)) return;
+      if (committed) {
+        notify('Settings saved, but a follow-up action failed. Reload before editing again.', 'error');
+        return;
+      }
       if (error.status === 409) {
         const stale = error.response?.code === 'stale_version';
-        if (stale) {
+        if (stale || error.response?.code === 'template_referenced') {
           await load({ silent: true });
           if (isSettingsOperationCurrent(mutation)) {
-            notify('These settings changed elsewhere. Review the refreshed values before saving again.', 'error');
+            notify(stale
+              ? 'These settings changed elsewhere. Review the refreshed values before saving again.'
+              : 'This rejection template is used by auto-rejection. Change and save that workflow setting before deleting it.', 'error');
           }
         } else {
           notify(error.message || 'The settings could not be saved.', 'error');
@@ -1315,6 +1409,7 @@ export function createSettingsController({
         notify(error.message || 'The settings could not be saved.', 'error');
       }
     } finally {
+      state.saving = false;
       latestLoads.finish('administration-settings-save', mutation.token);
       if (isSettingsContextCurrent(mutation.context)) updateDirtyState();
     }
@@ -1583,6 +1678,10 @@ export function createSettingsController({
     dom.form.addEventListener('submit', saveSettings);
     dom.form.addEventListener('input', updateDirtyState);
     dom.form.addEventListener('change', updateDirtyState);
+    const templatesPanel = document.getElementById('settings-templates');
+    for (const eventName of ['focusin', 'select', 'keyup', 'mouseup']) {
+      templatesPanel.addEventListener(eventName, event => rememberTemplateSelection(event.target));
+    }
     dom.scope.addEventListener('change', changeScope);
     for (const button of dom.nav) {
       button.tabIndex = button.dataset.settingsPanel === state.activePanel ? 0 : -1;
@@ -1616,6 +1715,12 @@ export function createSettingsController({
     dom.staffAuditRefresh.addEventListener('click', () => loadStaffAccess());
     dom.saveLogo.addEventListener('click', () => saveLogo(false));
     dom.clearLogo.addEventListener('click', () => saveLogo(true));
+    document.getElementById('email-postmark-token').addEventListener('input', event => {
+      if (event.target.value) document.getElementById('email-clear-postmark-token').checked = false;
+    });
+    document.getElementById('email-clear-postmark-token').addEventListener('change', event => {
+      if (event.target.checked) document.getElementById('email-postmark-token').value = '';
+    });
     for (const [sourceId, targetId] of [
       ['email-from-address', 'email-template-from-address'],
       ['email-from-name', 'email-template-from-name']

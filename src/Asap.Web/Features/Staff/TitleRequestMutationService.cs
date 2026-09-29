@@ -213,7 +213,7 @@ public sealed class TitleRequestMutationService(
         {
             readiness = await emailSender.CheckReadinessAsync(notificationRequest.LibraryOrganizationId, cancellationToken);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
         {
             return new TitleRequestMutationResult("notification_dependency_unavailable");
         }
@@ -357,7 +357,7 @@ public sealed class TitleRequestMutationService(
                 transportConfigured = (await emailSender.CheckReadinessAsync(
                     notificationRequest.LibraryOrganizationId, cancellationToken)).IsConfigured;
             }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
             {
                 return new TitleRequestMutationResult("notification_dependency_unavailable");
             }

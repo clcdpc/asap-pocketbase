@@ -106,6 +106,7 @@ function currentStageParameter() {
 export function createWorkflowApp() {
   const dom = {
     status: document.querySelector('#app-status'),
+    emailReadinessWarning: document.querySelector('#email-readiness-warning'),
     signedOut: document.querySelector('#signed-out'),
     signedOutMessage: document.querySelector('#signed-out-message'),
     workspace: document.querySelector('#workspace'),
@@ -222,6 +223,7 @@ export function createWorkflowApp() {
     staffSuggestion: null,
     staffSuggestionReturnFocus: null,
     partialSessionFailureMessage: null,
+    settingsCommitPendingRefresh: false,
     partialSessionFailureOwner: null,
     partialSessionFailureDetailAvailable: false,
     partialSessionFailureAfterQueueSequence: null,
@@ -325,8 +327,51 @@ export function createWorkflowApp() {
     onScopeChange: scope => {
       state.navigationGeneration += 1;
       pushSettingsScopeParameter(scope);
+      void refreshEmailReadiness();
+    },
+    onCommitted: () => { state.settingsCommitPendingRefresh = true; },
+    onRefreshed: () => {
+      state.settingsCommitPendingRefresh = false;
+      void refreshEmailReadiness();
     }
   });
+
+  function emailReadinessScopeKey() {
+    const selectedScope = state.activeView === 'settings'
+      ? settingsController.currentScope()
+      : state.activeView === 'operations' ? state.operationsScope : state.scope;
+    return state.staff?.role === 'super_admin' && /^\d+$/.test(String(selectedScope))
+      ? String(selectedScope) : 'default';
+  }
+
+  async function refreshEmailReadiness() {
+    if (!state.staff) return;
+    const owner = state.staff;
+    const load = latestLoads.begin('email-readiness');
+    const scopeKey = emailReadinessScopeKey();
+    const query = scopeKey === 'default' ? '' : `?organizationId=${encodeURIComponent(scopeKey)}`;
+    try {
+      const result = await authorizedJson(`/api/asap/staff/email-readiness${query}`, { signal: load.signal });
+      if (!load.isCurrent() || state.staff !== owner) return;
+      const stateCode = result?.state;
+      const warning = stateCode === 'not_configured'
+        ? 'Email delivery is not configured for this scope. Requests and staff workflows remain available.'
+        : stateCode === 'non_delivery'
+          ? 'Live email delivery is disabled in this environment. Requests and staff workflows remain available.'
+          : stateCode === 'unavailable'
+            ? 'Email delivery status is unavailable. Requests and staff workflows remain available.'
+            : '';
+      dom.emailReadinessWarning.textContent = warning;
+      dom.emailReadinessWarning.hidden = !warning;
+    } catch (error) {
+      if (load.isCurrent() && state.staff === owner && !isAbortError(error) && error.status !== 401) {
+        dom.emailReadinessWarning.textContent = 'Email delivery status is unavailable. Requests and staff workflows remain available.';
+        dom.emailReadinessWarning.hidden = false;
+      }
+    } finally {
+      latestLoads.finish('email-readiness', load.token);
+    }
+  }
 
   function recentStorage() {
     try {
@@ -818,6 +863,8 @@ export function createWorkflowApp() {
     if (dom.bulkDeleteDialog.open) dom.bulkDeleteDialog.close();
     polarisLookup.close();
     latestLoads.begin('research-configuration').abort();
+    latestLoads.begin('email-readiness').abort();
+    dom.emailReadinessWarning.hidden = true;
     state.verifiedBib = null;
     state.research = null;
     cancelDialogFocusReturn();
@@ -858,7 +905,8 @@ export function createWorkflowApp() {
     latestLoads.begin('additional-copy-preview').abort();
     resetAnalytics();
     settingsController.signedOut();
-    dom.signedOutMessage.textContent = state.partialSessionFailureMessage ||
+    dom.signedOutMessage.textContent = state.settingsCommitPendingRefresh
+      ? 'Settings saved. Sign in again to review the current values.' : state.partialSessionFailureMessage ||
       message || 'Sign in with your authorized library account.';
     dom.signedOut.hidden = false;
     dom.workspace.hidden = true;
@@ -917,6 +965,7 @@ export function createWorkflowApp() {
     dom.similar.value = 'all';
     dom.additionalCopyClaim.value = staff.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
     populateProfile(staff);
+    void refreshEmailReadiness();
   }
 
   function showAccessUnavailable() {
@@ -1101,7 +1150,9 @@ export function createWorkflowApp() {
       });
       if (!load.isCurrent() || owner !== state.staff || requestedScope !== state.scope) return;
       state.requests = Array.isArray(result.items) ? result.items : [];
+      const previousEmailScope = emailReadinessScopeKey();
       state.scope = result.scope;
+      if (emailReadinessScopeKey() !== previousEmailScope) void refreshEmailReadiness();
       state.queueLoadedScope = result.scope;
       if (state.staff.role === 'super_admin') populateScopes(result.organizations, result.scope);
       populateTags();
@@ -1184,6 +1235,7 @@ export function createWorkflowApp() {
     renderOperationsTable(
       dom.emailOperationsTable,
       [
+        { label: 'Reference', render: row => element('span', { text: String(row.id) }) },
         { label: 'Created', render: row => element('time', { text: dateTime(row.createdUtc), datetime: row.createdUtc }) },
         { label: 'Status', key: 'status' },
         { label: 'Type', key: 'deliveryClass' },
@@ -1425,7 +1477,9 @@ export function createWorkflowApp() {
       if (!load.isCurrent() || owner !== state.staff || requestedScope !== state.scope ||
           requestedStatus !== state.additionalCopyStatus) return;
       state.additionalCopies = Array.isArray(result.items) ? result.items : [];
+      const previousEmailScope = emailReadinessScopeKey();
       state.scope = result.scope;
+      if (emailReadinessScopeKey() !== previousEmailScope) void refreshEmailReadiness();
       state.additionalCopyLoaded = true;
       if (state.staff.role === 'super_admin') populateScopes(result.availableLibraries, result.scope);
       const uncertainCreation = state.unconfirmedCopyCreationAwaitingRefresh;
@@ -3764,7 +3818,9 @@ export function createWorkflowApp() {
     if (previousView === 'settings' && name !== 'settings') settingsController.suspend();
     if (previousView !== name && name === 'queue') resetQueueFilters();
     if (previousView !== name && name === 'additional-copies') resetAdditionalCopyFilters();
+    const previousEmailScope = emailReadinessScopeKey();
     state.activeView = name;
+    if (emailReadinessScopeKey() !== previousEmailScope) void refreshEmailReadiness();
     dom.queueView.hidden = name !== 'queue';
     dom.additionalCopyView.hidden = name !== 'additional-copies';
     dom.analyticsView.hidden = name !== 'analytics';
@@ -3946,6 +4002,7 @@ export function createWorkflowApp() {
     dom.scope.addEventListener('change', () => {
       invalidateNavigation();
       state.scope = dom.scope.value;
+      void refreshEmailReadiness();
       dom.additionalCopyScope.value = state.scope;
       resetQueueFilters();
       clearTitleQueueForContextChange();
@@ -3967,6 +4024,7 @@ export function createWorkflowApp() {
     dom.additionalCopyScope.addEventListener('change', () => {
       invalidateNavigation();
       state.scope = dom.additionalCopyScope.value;
+      void refreshEmailReadiness();
       dom.scope.value = state.scope;
       resetAdditionalCopyFilters();
       clearAdditionalCopyQueueForScopeChange();
@@ -3976,6 +4034,7 @@ export function createWorkflowApp() {
     });
     dom.operationsScope.addEventListener('change', () => {
       state.operationsScope = dom.operationsScope.value;
+      void refreshEmailReadiness();
       loadOperations();
     });
     dom.runWorkflowNow.addEventListener('click', () =>

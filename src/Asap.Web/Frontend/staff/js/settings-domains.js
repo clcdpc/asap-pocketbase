@@ -215,7 +215,7 @@ function rawSnapshot(configuredSystem, libraryOverride, key, system) {
   return property(libraryOverride, key);
 }
 
-export function createSettingsDomainEditors({ root, onChange = () => {} }) {
+export function createSettingsDomainEditors({ root, onChange = () => {}, canRemoveTemplate = () => true }) {
   const dom = {
     publication: root.querySelector('#publication-options-editor'),
     publicationUseSystem: root.querySelector('#publication-options-use-system'),
@@ -742,8 +742,8 @@ export function createSettingsDomainEditors({ root, onChange = () => {} }) {
         version: override?.version || system.version,
         sourceTemplateId: system.id,
         displayName: override?.displayName ?? system.displayName,
-        subject: clean(override?.subject) ?? system.subject,
-        body: clean(override?.body) ?? system.body,
+        subject: override?.subject?.trim() ? override.subject : system.subject,
+        body: override?.body?.trim() ? override.body : system.body,
         enabled: system.enabled && (!override || override.enabled),
         isCustom: false,
         overridden: Boolean(override),
@@ -817,7 +817,9 @@ export function createSettingsDomainEditors({ root, onChange = () => {} }) {
           'data-domain-editable': 'true'
         }), element('span', { text: 'Enabled' })]),
         override?.wrapper,
-        actions(index, values.length, (from, offset) => reorder('templates', from, offset), value.isCustom ? from => remove('templates', from) : null)
+        actions(index, values.length, (from, offset) => reorder('templates', from, offset), value.isCustom ? from => {
+          if (canRemoveTemplate(value)) remove('templates', from);
+        } : null)
       ]);
       if (override) {
         override.input.addEventListener('change', () => {
@@ -833,12 +835,12 @@ export function createSettingsDomainEditors({ root, onChange = () => {} }) {
   function readTemplates() {
     return [...(dom.templates?.querySelectorAll('[data-domain-row]') || [])].map(row => {
       const lineage = row.dataset.templateKind === 'lineage';
-      const currentSubject = clean(row.querySelector('.template-subject')?.value);
-      const currentBody = clean(row.querySelector('.template-body')?.value);
+      const currentSubject = row.querySelector('.template-subject')?.value ?? null;
+      const currentBody = row.querySelector('.template-body')?.value ?? null;
       const currentDisplayName = clean(row.querySelector('.template-display-name')?.value);
       const currentEnabled = Boolean(row.querySelector('.template-enabled')?.checked);
-      const baselineSubject = clean(row.dataset.templateBaselineSubject);
-      const baselineBody = clean(row.dataset.templateBaselineBody);
+      const baselineSubject = row.dataset.templateBaselineSubject;
+      const baselineBody = row.dataset.templateBaselineBody;
       const baselineDisplayName = clean(row.dataset.templateBaselineDisplayName);
       const baselineEnabled = row.dataset.templateBaselineEnabled === 'true';
       const override = row.querySelector('.settings-template-override');

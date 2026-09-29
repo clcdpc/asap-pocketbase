@@ -1417,46 +1417,63 @@ public sealed partial class PatronJourneyTests
                 AssertScalarEquals(sentinel.LibraryValue, librarySection, sentinel.Name, $"preserved peer override {field.Section}.{sentinel.Name}");
             }
 
+            await using (var connection = new SqlConnection(databaseConnectionString))
+            {
+                await connection.OpenAsync();
+                await using var legacy = connection.CreateCommand();
+                legacy.CommandText = "UPDATE [asap].[EmailSettings] SET [ProtectedServerToken] = N'legacy-library-token' WHERE [OrganizationId] = @organizationId";
+                legacy.Parameters.AddWithValue("@organizationId", libraryId);
+                Assert.AreEqual(1, await legacy.ExecuteNonQueryAsync());
+            }
+
             using var secretBase = await ReadSettingsDocumentAsync(client, libraryId.ToString());
-            using (var saveLibrarySecret = await SaveSettingsDocumentAsync(
-                       client,
-                       secretBase.RootElement,
-                       libraryId.ToString(),
-                       new Dictionary<string, object?>
+            Assert.IsFalse(secretBase.RootElement.GetRawText().Contains("legacy-library-token", StringComparison.Ordinal));
+            foreach (var mutation in new object[]
+            {
+                new { postmarkToken = "forged-library-token" },
+                new { clearPostmarkToken = true },
+                new { serverToken = "forged-legacy-alias" },
+                new { clearServerToken = true }
+            })
+            {
+                using var forged = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+                {
+                    orgId = libraryId.ToString(),
+                    version = secretBase.RootElement.GetProperty("version").GetString(),
+                    email = mutation
+                });
+                Assert.AreEqual(HttpStatusCode.BadRequest, forged.StatusCode);
+                using var rejected = JsonDocument.Parse(await forged.Content.ReadAsStringAsync());
+                Assert.AreEqual("postmark_token_system_only", rejected.RootElement.GetProperty("code").GetString());
+            }
+
+            using (var saveSender = await SaveSettingsDocumentAsync(client, secretBase.RootElement,
+                       libraryId.ToString(), new Dictionary<string, object?>
                        {
                            ["email"] = new Dictionary<string, object?>
                            {
                                ["fromAddress"] = "slice4-secret-sentinel@example.org",
-                               ["postmarkToken"] = "slice4-library-secret-token"
+                               ["fromName"] = "Library sender"
                            }
                        }))
             {
-                Assert.AreEqual("saved", saveLibrarySecret.RootElement.GetProperty("code").GetString());
+                Assert.AreEqual("saved", saveSender.RootElement.GetProperty("code").GetString());
             }
 
-            using var withSecret = await ReadSettingsDocumentAsync(client, libraryId.ToString());
-            AssertScalarEquals(true, withSecret.RootElement.GetProperty("stored")
-                .GetProperty("libraryOverride").GetProperty("email"), "hasPostmarkToken", "library secret saved");
-            using var clearSecret = await SaveSettingsDocumentAsync(
-                client,
-                withSecret.RootElement,
-                libraryId.ToString(),
-                new Dictionary<string, object?>
-                {
-                    ["email"] = new Dictionary<string, object?>
-                    {
-                        ["clearPostmarkToken"] = true,
-                        ["fromAddress"] = "slice4-secret-sentinel@example.org"
-                    }
-                });
-            Assert.AreEqual("saved", clearSecret.RootElement.GetProperty("code").GetString());
-
-            using var afterSecretClear = await ReadSettingsDocumentAsync(client, libraryId.ToString());
-            var emailOverride = afterSecretClear.RootElement.GetProperty("stored")
-                .GetProperty("libraryOverride")
-                .GetProperty("email");
-            AssertScalarEquals(false, emailOverride, "hasPostmarkToken", "library secret cleared");
-            AssertScalarEquals("slice4-secret-sentinel@example.org", emailOverride, "fromAddress", "sender override preserved beside secret clear");
+            using var afterSenderSave = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            var emailOverride = afterSenderSave.RootElement.GetProperty("stored")
+                .GetProperty("libraryOverride").GetProperty("email");
+            AssertScalarEquals(false, emailOverride, "hasPostmarkToken", "legacy library token is not offered as an override");
+            AssertScalarEquals("slice4-secret-sentinel@example.org", emailOverride, "fromAddress", "sender address override");
+            AssertScalarEquals("Library sender", emailOverride, "fromName", "sender name override");
+            await using (var connection = new SqlConnection(databaseConnectionString))
+            {
+                await connection.OpenAsync();
+                await using var verify = connection.CreateCommand();
+                verify.CommandText = "SELECT [ProtectedServerToken] FROM [asap].[EmailSettings] WHERE [OrganizationId] = @organizationId";
+                verify.Parameters.AddWithValue("@organizationId", libraryId);
+                Assert.AreEqual("legacy-library-token", await verify.ExecuteScalarAsync());
+            }
         }
         finally
         {
@@ -1471,6 +1488,101 @@ public sealed partial class PatronJourneyTests
             }
 
             await CleanupScalarSettingsTestDataAsync(libraryId, templateKeyA, templateKeyB);
+        }
+    }
+
+    [TestMethod]
+    public async Task ReferencedCustomRejectionTemplateCannotBeDeletedUntilWorkflowReferenceIsSavedAway()
+    {
+        using var client = factory!.CreateClient();
+        var actor = await ReadConfiguredSuperAdminAsync();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+        const int libraryId = 91405;
+        var key = $"rejection:dependency_{Guid.NewGuid():N}";
+        await UpsertTestOrganizationAsync(libraryId, "Template Dependency Library", "TDL");
+        try
+        {
+            using var initial = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            using var created = await SaveSettingsDocumentAsync(client, initial.RootElement,
+                libraryId.ToString(), new Dictionary<string, object?>
+                {
+                    ["templates"] = new object[]
+                    {
+                        new { templateKey = key, isCustom = true, displayName = "Dependency test",
+                            subject = "Subject", body = "Body", enabled = true }
+                    }
+                });
+            Assert.AreEqual("saved", created.RootElement.GetProperty("code").GetString());
+
+            using var withTemplate = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            var templateId = withTemplate.RootElement.GetProperty("stored").GetProperty("templates")
+                .EnumerateArray().Single(item => item.GetProperty("templateKey").GetString() == key)
+                .GetProperty("id").GetString();
+            using var referenced = await SaveSettingsDocumentAsync(client, withTemplate.RootElement,
+                libraryId.ToString(), new Dictionary<string, object?>
+                {
+                    ["workflow"] = new { outstandingTimeoutRejectionTemplateId = templateId }
+                });
+            Assert.AreEqual("saved", referenced.RootElement.GetProperty("code").GetString());
+
+            using var current = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            using var blocked = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+            {
+                orgId = libraryId.ToString(),
+                version = current.RootElement.GetProperty("version").GetString(),
+                templates = new[] { new { templateKey = key, isCustom = true, reset = true } }
+            });
+            Assert.AreEqual(HttpStatusCode.Conflict, blocked.StatusCode);
+            using var blockedBody = JsonDocument.Parse(await blocked.Content.ReadAsStringAsync());
+            Assert.AreEqual("template_referenced", blockedBody.RootElement.GetProperty("code").GetString());
+
+            using var legacyBlocked = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+            {
+                orgId = libraryId.ToString(),
+                version = current.RootElement.GetProperty("version").GetString(),
+                emails = new { rejection_templates = new[] { new { templateKey = key, isCustom = true, reset = true } } }
+            });
+            Assert.AreEqual(HttpStatusCode.Conflict, legacyBlocked.StatusCode);
+            using var legacyBlockedBody = JsonDocument.Parse(await legacyBlocked.Content.ReadAsStringAsync());
+            Assert.AreEqual("template_referenced", legacyBlockedBody.RootElement.GetProperty("code").GetString());
+
+            using var namedLegacyBlocked = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+            {
+                orgId = libraryId.ToString(),
+                version = current.RootElement.GetProperty("version").GetString(),
+                emails = new Dictionary<string, object?>
+                {
+                    [key] = new { libraryCustom = true, reset = true }
+                }
+            });
+            Assert.AreEqual(HttpStatusCode.Conflict, namedLegacyBlocked.StatusCode);
+            using var namedLegacyBlockedBody = JsonDocument.Parse(await namedLegacyBlocked.Content.ReadAsStringAsync());
+            Assert.AreEqual("template_referenced", namedLegacyBlockedBody.RootElement.GetProperty("code").GetString());
+
+            using var stillReferenced = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            Assert.AreEqual(templateId, stillReferenced.RootElement.GetProperty("stored")
+                .GetProperty("libraryOverride").GetProperty("workflow")
+                .GetProperty("outstandingTimeoutRejectionTemplateId").GetString());
+            Assert.IsTrue(stillReferenced.RootElement.GetProperty("stored").GetProperty("templates")
+                .EnumerateArray().Any(item => item.GetProperty("templateKey").GetString() == key));
+
+            using var changedWorkflow = await SaveSettingsDocumentAsync(client, stillReferenced.RootElement,
+                libraryId.ToString(), new Dictionary<string, object?>
+                {
+                    ["workflow"] = new { outstandingTimeoutRejectionTemplateId = (string?)null }
+                });
+            using var withoutReference = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            using var deleted = await SaveSettingsDocumentAsync(client, withoutReference.RootElement,
+                libraryId.ToString(), new Dictionary<string, object?>
+                {
+                    ["templates"] = new object[] { new { templateKey = key, isCustom = true, reset = true } }
+                });
+            Assert.AreEqual("saved", deleted.RootElement.GetProperty("code").GetString());
+        }
+        finally
+        {
+            await CleanupScalarSettingsTestDataAsync(libraryId, key, key);
         }
     }
 
@@ -8312,6 +8424,132 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task ReadinessTimeoutReleasesClaimWithoutSpendingProviderAttemptsAndLaterSends()
+    {
+        var seeded = await SeedSensitiveOutboxAsync("readiness-timeout");
+        var sender = new MutableReadinessEmailSender(isConfigured: true)
+        {
+            ReadinessException = new TaskCanceledException("Synthetic dependency timeout")
+        };
+        var jobs = CreateEmailOutboxJobs(sender, EmailOutboxRuntimeOptions.Default);
+
+        for (var index = 0; index < EmailOutboxRuntimeOptions.Default.MaxAttempts + 1; index++)
+        {
+            await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
+            var state = await ReadPreSendStateAsync(seeded.OutboxId);
+            Assert.AreEqual("pending", state.Status);
+            Assert.AreEqual("mail_readiness_unavailable", state.LastErrorCode);
+            Assert.AreEqual(0, state.AttemptCount);
+            Assert.IsNull(state.LeaseId);
+            Assert.IsNull(state.SendingStartedUtc);
+            Assert.IsNull(state.LeaseExpiresUtc);
+            Assert.IsTrue(state.NextAttemptUtc > DateTime.UtcNow.AddSeconds(30));
+            Assert.AreEqual(0, sender.SendCount);
+            await MakeOutboxDueAsync(seeded.OutboxId);
+        }
+
+        sender.ReadinessException = null;
+        await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
+        var sent = await ReadPreSendStateAsync(seeded.OutboxId);
+        Assert.AreEqual("sent", sent.Status);
+        Assert.AreEqual(1, sent.AttemptCount);
+        Assert.AreEqual(1, sender.SendCount);
+    }
+
+    [TestMethod]
+    public async Task ReadinessDependencyExceptionAlsoReleasesClaim()
+    {
+        var seeded = await SeedSensitiveOutboxAsync("readiness-unavailable");
+        var sender = new MutableReadinessEmailSender(isConfigured: true)
+        {
+            ReadinessException = new InvalidOperationException("Synthetic provider diagnostic")
+        };
+        await CreateEmailOutboxJobs(sender, EmailOutboxRuntimeOptions.Default)
+            .DeliverAsync(seeded.OutboxId, CancellationToken.None);
+
+        var state = await ReadPreSendStateAsync(seeded.OutboxId);
+        Assert.AreEqual("pending", state.Status);
+        Assert.AreEqual("mail_readiness_unavailable", state.LastErrorCode);
+        Assert.AreEqual(0, state.AttemptCount);
+        Assert.AreEqual(0, sender.SendCount);
+        Assert.IsFalse(state.LastErrorDetail?.Contains("Synthetic", StringComparison.Ordinal) == true);
+    }
+
+    [TestMethod]
+    public async Task CallerCancellationDuringReadinessPropagatesAndReleasesClaim()
+    {
+        var seeded = await SeedSensitiveOutboxAsync("readiness-caller-cancel");
+        using var caller = new CancellationTokenSource();
+        var sender = new ReadinessGateEmailSender();
+        var jobs = CreateEmailOutboxJobs(sender, EmailOutboxRuntimeOptions.Default);
+        var delivery = jobs.DeliverAsync(seeded.OutboxId, caller.Token);
+        await sender.FirstCheckStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        caller.Cancel();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(async () => await delivery);
+        var state = await ReadPreSendStateAsync(seeded.OutboxId);
+        Assert.AreEqual("pending", state.Status);
+        Assert.AreEqual("pre_send_cancelled", state.LastErrorCode);
+        Assert.AreEqual(0, state.AttemptCount);
+        Assert.AreEqual(0, sender.SendCount);
+    }
+
+    [TestMethod]
+    public async Task StaleReadinessFailureCannotOverwriteNewLeaseCompletion()
+    {
+        var seeded = await SeedSensitiveOutboxAsync("stale-readiness");
+        var sender = new ReadinessGateEmailSender();
+        var jobs = CreateEmailOutboxJobs(sender, EmailOutboxRuntimeOptions.Default);
+        var firstDelivery = jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
+        await sender.FirstCheckStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await SetLeaseExpiryAsync(seeded.OutboxId, expired: true);
+        await jobs.SweepAsync(CancellationToken.None);
+        var reclaimed = await ReadPreSendStateAsync(seeded.OutboxId);
+        Assert.AreEqual("pending", reclaimed.Status);
+        Assert.AreEqual("mail_readiness_unavailable", reclaimed.LastErrorCode);
+        Assert.AreEqual(0, reclaimed.AttemptCount);
+        await MakeOutboxDueAsync(seeded.OutboxId);
+        await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
+
+        sender.FailFirstCheck();
+        await firstDelivery;
+        var state = await ReadPreSendStateAsync(seeded.OutboxId);
+        Assert.AreEqual("sent", state.Status);
+        Assert.AreEqual(1, state.AttemptCount);
+        Assert.AreEqual(1, sender.SendCount);
+    }
+
+    [TestMethod]
+    public async Task ExpiredProviderLeaseAtAttemptLimitFailsWithoutRecordedError()
+    {
+        var seeded = await SeedSensitiveOutboxAsync("expired-provider-limit");
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var command = new SqlCommand(
+                """
+                UPDATE [asap].[EmailOutbox]
+                SET [Status] = N'sending', [AttemptCount] = 5,
+                    [SendingStartedUtc] = DATEADD(minute, -3, SYSUTCDATETIME()),
+                    [LeaseId] = NEWID(), [LeaseExpiresUtc] = DATEADD(minute, -1, SYSUTCDATETIME()),
+                    [LastErrorCode] = NULL
+                WHERE [Id] = @id;
+                """,
+                connection);
+            command.Parameters.AddWithValue("@id", seeded.OutboxId);
+            Assert.AreEqual(1, await command.ExecuteNonQueryAsync());
+        }
+
+        await CreateEmailOutboxJobs(new MutableReadinessEmailSender(isConfigured: true),
+            EmailOutboxRuntimeOptions.Default).SweepAsync(CancellationToken.None);
+        var state = await ReadPreSendStateAsync(seeded.OutboxId);
+        Assert.AreEqual("failed", state.Status);
+        Assert.AreEqual("ambiguous_expired_lease", state.LastErrorCode);
+        Assert.AreEqual(5, state.AttemptCount);
+        Assert.IsNull(state.NextAttemptUtc);
+    }
+
+    [TestMethod]
     public async Task TransportCanReportConfigurationLostAtSendBoundary()
     {
         var seeded = await SeedSensitiveOutboxAsync("send-not-configured");
@@ -10391,6 +10629,49 @@ public sealed partial class PatronJourneyTests
             reader.IsDBNull(3) ? null : reader.GetString(3));
     }
 
+    private static async Task<PreSendOutboxState> ReadPreSendStateAsync(long outboxId)
+    {
+        await using var connection = new SqlConnection(databaseConnectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT [Status], [LastErrorCode], [LastErrorDetail], [AttemptCount], [NextAttemptUtc], " +
+            "[SendingStartedUtc], [LeaseId], [LeaseExpiresUtc] FROM [asap].[EmailOutbox] WHERE [Id] = @id;";
+        command.Parameters.AddWithValue("@id", outboxId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.IsTrue(await reader.ReadAsync());
+        return new PreSendOutboxState(
+            reader.GetString(0),
+            reader.IsDBNull(1) ? null : reader.GetString(1),
+            reader.IsDBNull(2) ? null : reader.GetString(2),
+            reader.GetInt32(3),
+            reader.IsDBNull(4) ? null : reader.GetDateTime(4),
+            reader.IsDBNull(5) ? null : reader.GetDateTime(5),
+            reader.IsDBNull(6) ? null : reader.GetGuid(6),
+            reader.IsDBNull(7) ? null : reader.GetDateTime(7));
+    }
+
+    private static async Task MakeOutboxDueAsync(long outboxId)
+    {
+        await using var connection = new SqlConnection(databaseConnectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(
+            "UPDATE [asap].[EmailOutbox] SET [NextAttemptUtc] = DATEADD(second, -1, SYSUTCDATETIME()) WHERE [Id] = @id;",
+            connection);
+        command.Parameters.AddWithValue("@id", outboxId);
+        Assert.AreEqual(1, await command.ExecuteNonQueryAsync());
+    }
+
+    private sealed record PreSendOutboxState(
+        string Status,
+        string? LastErrorCode,
+        string? LastErrorDetail,
+        int AttemptCount,
+        DateTime? NextAttemptUtc,
+        DateTime? SendingStartedUtc,
+        Guid? LeaseId,
+        DateTime? LeaseExpiresUtc);
+
     private static async Task SetLeaseExpiryAsync(long outboxId, bool expired)
     {
         await using var connection = new SqlConnection(databaseConnectionString);
@@ -10944,6 +11225,8 @@ public sealed partial class PatronJourneyTests
 
         public bool TimeoutReadiness { get; set; }
 
+        public Exception? ReadinessException { get; set; }
+
         public int SendCount { get; private set; }
 
         public bool ReturnNotConfiguredOnSend { get; init; }
@@ -10956,6 +11239,10 @@ public sealed partial class PatronJourneyTests
             if (TimeoutReadiness)
             {
                 throw new OperationCanceledException("Email readiness timed out without caller cancellation.");
+            }
+            if (ReadinessException is not null)
+            {
+                throw ReadinessException;
             }
             return Task.FromResult(
                 IsConfigured
@@ -10974,6 +11261,38 @@ public sealed partial class PatronJourneyTests
                     ? EmailSendResult.NotConfigured
                     : new EmailSendResult("test-message"));
         }
+    }
+
+    private sealed class ReadinessGateEmailSender : IEmailSender
+    {
+        private readonly TaskCompletionSource<EmailTransportReadiness> firstCheck =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int checkCount;
+
+        public TaskCompletionSource FirstCheckStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int SendCount { get; private set; }
+
+        public Task<EmailTransportReadiness> CheckReadinessAsync(
+            int organizationId,
+            CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref checkCount) == 1)
+            {
+                FirstCheckStarted.TrySetResult();
+                return firstCheck.Task.WaitAsync(cancellationToken);
+            }
+            return Task.FromResult(EmailTransportReadiness.Configured);
+        }
+
+        public Task<EmailSendResult> SendAsync(EmailEnvelope envelope, CancellationToken cancellationToken)
+        {
+            SendCount++;
+            return Task.FromResult(new EmailSendResult("new-owner-message"));
+        }
+
+        public void FailFirstCheck() => firstCheck.TrySetException(new TaskCanceledException("Synthetic stale timeout"));
     }
 
     private sealed class CancellationAwareTimeoutEmailSender : IEmailSender

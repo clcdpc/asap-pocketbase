@@ -430,7 +430,7 @@ public sealed class HoldPlacementService(
                 patron = await TryRefreshPatronAsync(preOperation.PatronBarcodeSnapshot, cancellationToken);
                 readiness = await emailSender.CheckReadinessAsync(preRequest.LibraryOrganizationId, cancellationToken);
             }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
             {
                 return new HoldPlacementResult("hold_resolution_dependency_unavailable", operationId);
             }
@@ -1353,7 +1353,16 @@ public sealed class HoldPlacementService(
         {
             return new HoldPlacementResult("not_found", owner.Id, ProviderOutcomeRecorded: true);
         }
-        var readiness = await emailSender.CheckReadinessAsync(requestSnapshot.LibraryOrganizationId, cancellationToken);
+        EmailTransportReadiness readiness;
+        try
+        {
+            readiness = await emailSender.CheckReadinessAsync(requestSnapshot.LibraryOrganizationId, cancellationToken);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new HoldPlacementResult("hold_resolution_dependency_unavailable", owner.Id,
+                ProviderOutcomeRecorded: true);
+        }
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         if (!await LockAuthorityOrganizationsAsync(
                 context,

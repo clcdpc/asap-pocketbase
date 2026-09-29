@@ -82,8 +82,8 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
     });
     const emailPayload = {
       items: [
-        { id: 41, status: 'failed', deliveryClass: 'operational_test', lastErrorCode: '<unsafe-error>', suppressionReason: null, createdUtc: '2026-09-14T12:00:00Z', version: 'email-version' },
-        { id: 42, status: 'sent', deliveryClass: 'business_event', lastErrorCode: null, suppressionReason: null, createdUtc: '2026-09-14T11:00:00Z', version: 'sent-version' }
+        { id: '9007199254740993', status: 'failed', deliveryClass: 'operational_test', lastErrorCode: '<unsafe-error>', suppressionReason: null, createdUtc: '2026-09-14T12:00:00Z', version: 'email-version' },
+        { id: '42', status: 'sent', deliveryClass: 'business_event', lastErrorCode: null, suppressionReason: null, createdUtc: '2026-09-14T11:00:00Z', version: 'sent-version' }
       ]
     };
 
@@ -109,6 +109,12 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
         if (pending) return pending.promise;
         return response(200, emailPayload);
       }
+      if (url.includes('/api/asap/staff/email-readiness')) {
+        return response(200, { state: 'non_delivery' });
+      }
+      if (url.includes('/api/asap/staff/additional-copies?')) {
+        return response(200, { scope: 'all', status: 'open', items: [], availableLibraries: organizations });
+      }
       if (options.method === 'POST') return response(202, { code: 'queued', manualRunId: url.includes('force=true') ? 'forced-run-1' : undefined });
       throw new Error(`Unexpected request ${url}`);
     };
@@ -122,6 +128,7 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
     assert.equal(document.querySelectorAll('#email-operations-table tbody tr').length, 2);
     assert.equal(document.querySelector('#email-operations-table').textContent.includes('<unsafe-error>'), true);
     assert.equal(document.querySelector('#email-operations-table').querySelector('script'), null, 'runtime text must not become markup');
+    assert.match(document.querySelector('#email-operations-table').textContent, /9007199254740993/);
     assert.match(document.getElementById('queue-progress-table').textContent, /12/);
     assert.match(document.getElementById('queue-progress-table').textContent, /11/);
     assert.match(document.getElementById('queue-progress-table').textContent, /processed/);
@@ -154,8 +161,8 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
     assert.ok(retry, 'failed rows should expose Retry');
     retry.click();
     await settle();
-    const retryRequest = requests.find(item => item.url.includes('/email-operations/41/retry'));
-    assertRequest(retryRequest, '/api/asap/staff/email-operations/41/retry', null, { version: 'email-version' });
+    const retryRequest = requests.find(item => item.url.includes('/email-operations/9007199254740993/retry'));
+    assertRequest(retryRequest, '/api/asap/staff/email-operations/9007199254740993/retry', null, { version: 'email-version' });
     assert.equal(document.querySelectorAll('#email-operations-table button').length, 1, 'sent rows must not expose Retry');
 
     scope.value = '2';
@@ -164,6 +171,13 @@ function assertRequest(request, pathPart, expectedScope, expectedBody) {
     document.querySelector('[data-view="queue"]').click();
     await settle();
     assert.equal(scope.value, '2', 'queue refresh must not overwrite Operations scope');
+    const readinessCount = requests.filter(item => item.url.includes('/email-readiness')).length;
+    document.querySelector('[data-view="additional-copies"]').click();
+    await settle();
+    document.querySelector('[data-view="queue"]').click();
+    await settle();
+    assert.equal(requests.filter(item => item.url.includes('/email-readiness')).length, readinessCount,
+      'switching between views with the same email scope must not start another readiness request');
 
     document.querySelector('[data-view="operations"]').click();
     await settle();

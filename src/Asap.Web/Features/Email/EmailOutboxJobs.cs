@@ -68,17 +68,38 @@ public sealed class EmailOutboxJobs(
             return;
         }
 
-        var readiness = await emailSender.CheckReadinessAsync(
-            claim.OrganizationId,
-            cancellationToken);
+        EmailTransportReadiness readiness;
+        try
+        {
+            readiness = await emailSender.CheckReadinessAsync(claim.OrganizationId, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await ReleasePreSendFailureAsync(claim, "pre_send_cancelled", CancellationToken.None);
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning("Email outbox {OutboxId} could not release a cancelled pre-send claim ({FailureType}).",
+                    claim.Id, exception.GetType().Name);
+            }
+            throw;
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning("Email outbox {OutboxId} readiness check failed ({FailureType}).",
+                claim.Id, exception.GetType().Name);
+            await ReleasePreSendFailureAsync(claim, "mail_readiness_unavailable", cancellationToken);
+            return;
+        }
         if (!readiness.IsConfigured)
         {
             await FailNotConfiguredAsync(claim, cancellationToken);
             return;
         }
 
-        if (!await StillOwnsUnexpiredLeaseAsync(claim, cancellationToken) ||
-            DateTime.UtcNow - claim.SendingStartedUtc > runtimeOptions.ProviderStartDeadline)
+        if (DateTime.UtcNow - claim.SendingStartedUtc > runtimeOptions.ProviderStartDeadline)
         {
             await RecordAmbiguousFailureAsync(
                 claim,
@@ -87,6 +108,13 @@ public sealed class EmailOutboxJobs(
                 cancellationToken);
             return;
         }
+
+        var providerClaim = await TryBeginProviderSendAsync(claim, cancellationToken);
+        if (providerClaim is null)
+        {
+            return;
+        }
+        claim = providerClaim;
 
         try
         {
@@ -146,13 +174,21 @@ public sealed class EmailOutboxJobs(
         await using (var reclaim = new SqlCommand(
             """
             UPDATE [asap].[EmailOutbox]
-            SET [Status] = CASE WHEN [AttemptCount] >= @maxAttempts THEN N'failed' ELSE N'pending' END,
-                [NextAttemptUtc] = CASE WHEN [AttemptCount] >= @maxAttempts THEN NULL ELSE SYSUTCDATETIME() END,
+            SET [Status] = CASE WHEN [LastErrorCode] = N'pre_send_check_pending' OR [AttemptCount] < @maxAttempts
+                    THEN N'pending' ELSE N'failed' END,
+                [NextAttemptUtc] = CASE WHEN [LastErrorCode] = N'pre_send_check_pending'
+                    THEN DATEADD(minute, 1, SYSUTCDATETIME())
+                    WHEN [AttemptCount] >= @maxAttempts THEN NULL ELSE SYSUTCDATETIME() END,
+                [AttemptCount] = CASE WHEN [LastErrorCode] = N'pre_send_check_pending'
+                    THEN [AttemptCount] - 1 ELSE [AttemptCount] END,
                 [SendingStartedUtc] = NULL,
                 [LeaseId] = NULL,
                 [LeaseExpiresUtc] = NULL,
-                [LastErrorCode] = N'ambiguous_expired_lease',
-                [LastErrorDetail] = N'The prior transport outcome is unknown because its lease expired.'
+                [LastErrorCode] = CASE WHEN [LastErrorCode] = N'pre_send_check_pending'
+                    THEN N'mail_readiness_unavailable' ELSE N'ambiguous_expired_lease' END,
+                [LastErrorDetail] = CASE WHEN [LastErrorCode] = N'pre_send_check_pending'
+                    THEN N'The email transport readiness check did not complete.'
+                    ELSE N'The prior transport outcome is unknown because its lease expired.' END
             OUTPUT inserted.[Id]
             WHERE [Status] = N'sending'
               AND [LeaseExpiresUtc] <= SYSUTCDATETIME();
@@ -206,7 +242,7 @@ public sealed class EmailOutboxJobs(
                 [SendingStartedUtc] = SYSUTCDATETIME(),
                 [LeaseId] = NEWID(),
                 [LeaseExpiresUtc] = DATEADD(second, @leaseSeconds, SYSUTCDATETIME()),
-                [LastErrorCode] = NULL,
+                [LastErrorCode] = N'pre_send_check_pending',
                 [LastErrorDetail] = NULL
             OUTPUT
                 inserted.[Id], inserted.[OrganizationId], inserted.[BusinessKey],
@@ -342,6 +378,8 @@ public sealed class EmailOutboxJobs(
             SET [Status] = N'suppressed',
                 [SuppressionReason] = @detail,
                 [SuppressedUtc] = SYSUTCDATETIME(),
+                [LastErrorCode] = NULL,
+                [LastErrorDetail] = NULL,
                 [NextAttemptUtc] = NULL,
                 [SendingStartedUtc] = NULL,
                 [LeaseId] = NULL,
@@ -374,6 +412,34 @@ public sealed class EmailOutboxJobs(
             "mail_not_configured",
             cancellationToken);
 
+    private async Task ReleasePreSendFailureAsync(
+        ClaimedEmail claim,
+        string errorCode,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = new SqlCommand(
+            """
+            UPDATE [asap].[EmailOutbox]
+            SET [Status] = N'pending',
+                [AttemptCount] = [AttemptCount] - 1,
+                [NextAttemptUtc] = DATEADD(minute, 1, SYSUTCDATETIME()),
+                [SendingStartedUtc] = NULL,
+                [LeaseId] = NULL,
+                [LeaseExpiresUtc] = NULL,
+                [LastErrorCode] = @errorCode,
+                [LastErrorDetail] = N'The email transport readiness check did not complete.'
+            WHERE [Id] = @id AND [Status] = N'sending'
+              AND [LeaseId] = @leaseId AND [RowVersion] = @rowVersion
+              AND [LastErrorCode] = N'pre_send_check_pending';
+            """,
+            connection);
+        command.Parameters.Add("@errorCode", SqlDbType.NVarChar, 100).Value = errorCode;
+        AddFence(command, claim);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     private async Task RecordAmbiguousFailureAsync(
         ClaimedEmail claim,
         string errorCode,
@@ -397,7 +463,7 @@ public sealed class EmailOutboxJobs(
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private async Task<bool> StillOwnsUnexpiredLeaseAsync(
+    private async Task<ClaimedEmail?> TryBeginProviderSendAsync(
         ClaimedEmail claim,
         CancellationToken cancellationToken)
     {
@@ -405,15 +471,19 @@ public sealed class EmailOutboxJobs(
         await connection.OpenAsync(cancellationToken);
         await using var command = new SqlCommand(
             """
-            SELECT COUNT_BIG(*)
-            FROM [asap].[EmailOutbox]
+            UPDATE [asap].[EmailOutbox]
+            SET [LastErrorCode] = NULL,
+                [LastErrorDetail] = NULL
+            OUTPUT inserted.[RowVersion]
             WHERE [Id] = @id AND [Status] = N'sending'
               AND [LeaseId] = @leaseId AND [RowVersion] = @rowVersion
+              AND [LastErrorCode] = N'pre_send_check_pending'
               AND [LeaseExpiresUtc] > SYSUTCDATETIME();
             """,
             connection);
         AddFence(command, claim);
-        return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken)) == 1;
+        var version = await command.ExecuteScalarAsync(cancellationToken) as byte[];
+        return version is null ? null : claim with { RowVersion = version };
     }
 
     private async Task FinalizeAsync(

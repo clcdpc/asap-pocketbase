@@ -1494,6 +1494,7 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
 
     await page.getByRole('button', { name: 'Close request details' }).click();
     await page.getByRole('button', { name: 'Additional copies' }).click();
+    await page.waitForFunction(() => !document.getElementById('refresh-additional-copies').disabled);
     assert.equal(await page.evaluate(() => document.activeElement.id), 'additional-copy-title');
     const openTab = page.locator('[data-copy-status="open"]');
     await openTab.focus();
@@ -2672,6 +2673,39 @@ async function runNavigationSupport(browser, args, axeSource, report) {
       await page.unroute('**/api/asap/config?libraryOrgId=999999', inactiveConfig);
     }
 
+    await page.goto(`${args.baseOrigin}/staff/?stage=settings&settingsScope=2#settings-smtp`,
+      { waitUntil: 'networkidle' });
+    await page.locator('#settings-smtp').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#email-postmark-token').isDisabled(), true);
+    assert.equal(await page.locator('#email-clear-postmark-token').isDisabled(), true);
+    assert.equal(await page.locator('[data-setting-key="postmarkToken"] .settings-override-toggle').count(), 0);
+    assert.equal(await page.locator('#settings-nav-smtp').textContent(), 'Email / Postmark');
+    const readiness = await page.evaluate(async () =>
+      (await fetch('/api/asap/staff/email-readiness')).json());
+    if (readiness.state !== 'ready') {
+      await page.locator('#email-readiness-warning').waitFor({ state: 'visible' });
+    }
+
+    await page.goto(`${args.baseOrigin}/staff/?stage=settings#settings-templates`,
+      { waitUntil: 'networkidle' });
+    await page.locator('#settings-templates').waitFor({ state: 'visible' });
+    const originalSubject = await page.locator('#email-submit-subject').inputValue();
+    await page.locator('#template-placeholder-help summary').click();
+    assert.equal(await page.locator('#template-placeholder-list button').count(), 7);
+    await page.evaluate(() => {
+      const subject = document.getElementById('email-submit-subject');
+      subject.focus();
+      subject.setSelectionRange(0, 0);
+      subject.dispatchEvent(new Event('select', { bubbles: true }));
+    });
+    await page.getByRole('button', { name: '{{name}}' }).click();
+    assert.equal(await page.locator('#email-submit-subject').inputValue(), `{{name}}${originalSubject}`);
+    assert.equal(await page.locator('#settings-save-title').textContent(), 'Unsaved changes');
+    page.once('dialog', dialog => dialog.accept());
+    await page.locator('#settings-discard').click();
+    await page.waitForFunction(expected => document.getElementById('email-submit-subject').value === expected,
+      originalSubject);
+
     await page.goto(`${args.baseOrigin}/staff/?stage=settings&settingsScope=2#settings-workflow`,
       { waitUntil: 'networkidle' });
     await page.locator('#settings-workflow').waitFor({ state: 'visible' });
@@ -2687,6 +2721,22 @@ async function runNavigationSupport(browser, args, axeSource, report) {
     await page.goto(`${args.baseOrigin}/staff/?stage=settings#settings-workflow`, { waitUntil: 'networkidle' });
     await page.locator('#settings-workflow').waitFor({ state: 'visible' });
     assert.equal(await page.locator('#settings-scope').inputValue(), 'system');
+    const scopedEmailReadiness = route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ state: new URL(route.request().url()).searchParams.get('organizationId') === '2'
+        ? 'not_configured' : 'ready' })
+    });
+    await page.route('**/api/asap/staff/email-readiness*', scopedEmailReadiness);
+    await page.locator('#settings-scope').selectOption('2');
+    await page.waitForFunction(() => document.querySelector('#email-readiness-warning')?.textContent
+      .includes('Email delivery is not configured'));
+    await page.waitForFunction(() => !document.getElementById('settings-form').hidden &&
+      document.getElementById('settings-context-summary').textContent.includes('Library configuration'));
+    await page.locator('#settings-scope').selectOption('system');
+    await page.locator('#email-readiness-warning').waitFor({ state: 'hidden' });
+    await page.waitForFunction(() => !document.getElementById('settings-form').hidden &&
+      document.getElementById('settings-context-summary').textContent === 'System level configuration');
+    await page.unroute('**/api/asap/staff/email-readiness*', scopedEmailReadiness);
     assert.equal(await page.locator('#settings-nav [role="tab"][tabindex="0"]').count(), 1);
     await page.locator('#settings-nav-workflow').focus();
     await page.keyboard.press('ArrowRight');

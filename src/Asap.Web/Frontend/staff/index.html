@@ -43,6 +43,7 @@
     </section>
 
     <div id="workspace" hidden>
+      <p id="email-readiness-warning" class="email-readiness-warning" role="status" aria-live="polite" hidden></p>
       <nav class="view-tabs" aria-label="Staff views">
         <button class="view-tab active" type="button" data-view="queue" aria-current="page">
           <i class="fa fa-list" aria-hidden="true"></i> Requests
@@ -274,7 +275,7 @@
             <nav id="settings-nav" class="settings-nav" role="tablist" aria-label="Settings categories">
               <button id="settings-nav-start" type="button" role="tab" aria-selected="true" aria-controls="settings-start" data-settings-panel="start">Getting started</button>
               <button id="settings-nav-polaris" type="button" role="tab" aria-selected="false" aria-controls="settings-polaris" data-settings-panel="polaris">Polaris</button>
-              <button id="settings-nav-smtp" type="button" role="tab" aria-selected="false" aria-controls="settings-smtp" data-settings-panel="smtp">Email / SMTP</button>
+              <button id="settings-nav-smtp" type="button" role="tab" aria-selected="false" aria-controls="settings-smtp" data-settings-panel="smtp">Email / Postmark</button>
               <button id="settings-nav-staff" type="button" role="tab" aria-selected="false" aria-controls="settings-staff" data-settings-panel="staff">Staff access</button>
               <button id="settings-nav-workflow" type="button" role="tab" aria-selected="false" aria-controls="settings-workflow" data-settings-panel="workflow">Workflow</button>
               <button id="settings-nav-patron" type="button" role="tab" aria-selected="false" aria-controls="settings-patron" data-settings-panel="patron">Patron experience</button>
@@ -353,17 +354,18 @@
 
             <section id="settings-smtp" class="settings-panel" role="tabpanel" tabindex="-1" data-settings-panel-content="smtp" aria-labelledby="settings-nav-smtp" hidden>
               <div class="settings-panel-heading">
-                <h2>Email / SMTP</h2>
-                <p>Sender identity is inherited by library scope; transport credentials remain protected.</p>
+                <h2>Email / Postmark</h2>
+                <p>Libraries may override sender identity. The protected Postmark server token belongs to system settings.</p>
               </div>
               <fieldset class="settings-fieldset">
                 <legend>Sender identity</legend>
                 <div class="settings-grid">
                   <label class="settings-field" data-setting-section="email" data-setting-key="fromAddress"><span>From email address</span><input id="email-from-address" type="email" autocomplete="email"></label>
                   <label class="settings-field" data-setting-section="email" data-setting-key="fromName"><span>From name</span><input id="email-from-name" type="text"></label>
-                  <label class="settings-field" data-setting-section="email" data-setting-key="postmarkToken" data-secret="true"><span>Postmark server token</span><input id="email-postmark-token" type="password" autocomplete="new-password"></label>
-                  <label class="settings-field"><span>Clear stored Postmark token</span><input id="email-clear-postmark-token" type="checkbox"></label>
+                  <label class="settings-field" data-setting-section="email" data-setting-key="postmarkToken" data-secret="true" data-system-only="true"><span>Postmark server token (system only)</span><input id="email-postmark-token" type="password" autocomplete="new-password"></label>
+                  <label class="settings-field" data-system-only="true"><span>Clear stored Postmark token</span><input id="email-clear-postmark-token" type="checkbox"></label>
                 </div>
+                <p id="email-token-status" class="settings-result"></p>
               </fieldset>
             </section>
 
@@ -537,6 +539,12 @@
                 <h2>Email templates</h2>
                 <p>Subject and body content preserve system identity and library lineage.</p>
               </div>
+              <details id="template-placeholder-help" class="settings-fieldset" data-settings-ignore="true">
+                <summary>Template placeholders</summary>
+                <p>Place the cursor in a template Subject or Body, then choose a placeholder to insert it.</p>
+                <div id="template-placeholder-list" class="settings-inline-actions"></div>
+                <p id="template-placeholder-status" role="status" aria-live="polite"></p>
+              </details>
               <fieldset class="settings-fieldset">
                 <legend>Sender details</legend>
                 <div class="settings-grid">

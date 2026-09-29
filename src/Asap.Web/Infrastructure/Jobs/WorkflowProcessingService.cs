@@ -250,7 +250,15 @@ public sealed class WorkflowProcessingService(
                 item.LibraryOrganizationId == authorizationOrganizationId)
                 .OrderByDescending(item => item.CreatedUtc).ThenByDescending(item => item.Id).ToList();
             if (newSubmissions.Count == 0 && purchases.Count == 0 && copies.Count == 0) continue;
-            var readiness = await emailSender.CheckReadinessAsync(authorizationOrganizationId, cancellationToken);
+            EmailTransportReadiness readiness;
+            try
+            {
+                readiness = await emailSender.CheckReadinessAsync(authorizationOrganizationId, cancellationToken);
+            }
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new InvalidOperationException("Email transport readiness is unavailable.");
+            }
             var businessKey = manualRunId is null
                 ? $"weekly-summary:{recipientSnapshot.Id}:{periodStart:yyyyMMdd}-{periodEnd:yyyyMMdd}"
                 : $"weekly-summary-force:{manualRunId}:{recipientSnapshot.Id}";
@@ -329,8 +337,8 @@ public sealed class WorkflowProcessingService(
             {
                 await context.SaveChangesAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
-                if (outbox.Status == "pending") outboxDispatcher.Enqueue(outbox.Id);
                 createdCount++;
+                DispatchCommittedOutbox(outbox);
             }
             catch (DbUpdateException exception) when (exception.InnerException is DbException)
             {
@@ -1198,7 +1206,14 @@ public sealed class WorkflowProcessingService(
                 cancellationToken);
             if (readinessSettings.OutstandingTimeoutSendEmail == true)
             {
-                readiness = await emailSender.CheckReadinessAsync(candidate.LibraryOrganizationId, cancellationToken);
+                try
+                {
+                    readiness = await emailSender.CheckReadinessAsync(candidate.LibraryOrganizationId, cancellationToken);
+                }
+                catch (Exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    throw new InvalidOperationException("Email transport readiness is unavailable.");
+                }
             }
         }
 
@@ -1276,8 +1291,28 @@ public sealed class WorkflowProcessingService(
             code,
             changed,
             cancellationToken);
-        if (pendingOutbox?.Status == "pending") outboxDispatcher.Enqueue(pendingOutbox.Id);
+        if (result.LocalCommit)
+        {
+            DispatchCommittedOutbox(pendingOutbox);
+        }
         return result;
+    }
+
+    private void DispatchCommittedOutbox(EmailOutbox? outbox)
+    {
+        if (outbox?.Status != "pending")
+        {
+            return;
+        }
+        try
+        {
+            outboxDispatcher.Enqueue(outbox.Id);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning("Email outbox {OutboxId} awaits the scheduled sweep after dispatch failure ({FailureType}).",
+                outbox.Id, exception.GetType().Name);
+        }
     }
 
     private async Task<WorkflowItemResult> CloseCopyTimeoutAsync(

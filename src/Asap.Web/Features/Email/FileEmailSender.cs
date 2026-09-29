@@ -19,7 +19,7 @@ public sealed class FileEmailSender : IEmailSender
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(EmailTransportReadiness.Configured);
+        return Task.FromResult(EmailTransportReadiness.LocalCapture);
     }
 
     public async Task<EmailSendResult> SendAsync(
