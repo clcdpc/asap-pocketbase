@@ -268,6 +268,14 @@ public sealed class AdministrationService(
                 ui_text = ToEffectivePatronText(effective),
                 emails = await ToEffectiveEmailAsync(context, organizationId, effective, cancellationToken),
                 templatePlaceholders = PatronEmailTemplateRenderer.SupportedPlaceholders,
+                publicPatron = PublicPatronLinkBuilder.Build(systemSettings.StaffApplicationUrl, organizationId, organization.IsActive),
+                publicPatronUnavailableReason = organizationId == 1
+                    ? "Select an active library to get its public patron URL."
+                    : !organization.IsActive
+                        ? "This library is inactive; activate it before sharing its patron URL."
+                        : PublicPatronLinkBuilder.Build(systemSettings.StaffApplicationUrl, organizationId, true) is null
+                            ? "Set a valid system Staff URL ending in /staff/ to generate public patron links."
+                            : null,
                 formatClaimRules = autoClaimRules,
                 autoClaimStaff,
                 originsForEditor = origins
@@ -307,15 +315,13 @@ public sealed class AdministrationService(
 
         var isReset = organizationId != 1 &&
                       string.Equals(GetString(payload, "action"), "reset", StringComparison.OrdinalIgnoreCase);
-        if (!isReset)
+        var patronCodeValidation = isReset
+            ? (Snapshot: (PatronCodeValidation?)null, Failure: (AdministrationResult?)null)
+            : await PreparePatronCodeValidationAsync(payload, organizationId, cancellationToken);
+        if (patronCodeValidation.Failure is not null)
         {
-            var patronCodeFailure = await ValidatePatronCodePayloadAsync(payload, cancellationToken);
-            if (patronCodeFailure is not null)
-            {
-                return patronCodeFailure;
-            }
+            return patronCodeValidation.Failure;
         }
-
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         await using var transaction = await context.Database.BeginTransactionAsync(
             System.Data.IsolationLevel.Serializable,
@@ -352,6 +358,16 @@ public sealed class AdministrationService(
             return new AdministrationResult(
                 "stale_version",
                 Message: "These settings changed in another session. Reload before saving.");
+        }
+
+        if (patronCodeValidation.Snapshot is not null)
+        {
+            var patronCodeFailure = await ValidatePatronCodePayloadAsync(
+                context, organizationId, patronCodeValidation.Snapshot, cancellationToken);
+            if (patronCodeFailure is not null)
+            {
+                return patronCodeFailure;
+            }
         }
 
         if (!isReset && organizationId != 1 &&
@@ -1249,8 +1265,13 @@ public sealed class AdministrationService(
             ? new AdministrationResult("staff_session_invalid")
             : new AdministrationResult("staff_scope_forbidden");
 
-    private async Task<AdministrationResult?> ValidatePatronCodePayloadAsync(
+    private sealed record PatronCodeValidation(
+        IReadOnlyList<string> Requested,
+        IReadOnlySet<string> Known);
+
+    private async Task<(PatronCodeValidation? Snapshot, AdministrationResult? Failure)> PreparePatronCodeValidationAsync(
         JsonElement payload,
+        int organizationId,
         CancellationToken cancellationToken)
     {
         var workflow = GetObject(payload, "workflow");
@@ -1260,19 +1281,26 @@ public sealed class AdministrationService(
         }
         if (!TryGetAny(workflow, out var value, "allowedPatronCodeIds", "patronCodeIds"))
         {
-            return null;
+            return (null, null);
+        }
+        if (value.ValueKind == JsonValueKind.Null)
+        {
+            return (null, organizationId == 1
+                ? new AdministrationResult("patron_codes_invalid",
+                    Message: "System patron-code IDs cannot inherit another scope. Use an empty array to clear them.")
+                : null);
         }
         if (value.ValueKind is not (JsonValueKind.String or JsonValueKind.Array))
         {
-            return new AdministrationResult(
+            return (null, new AdministrationResult(
                 "patron_codes_invalid",
-                Message: "allowedPatronCodeIds must be an array or newline-delimited string.");
+                Message: "allowedPatronCodeIds must be an array or newline-delimited string."));
         }
 
         var requested = ParseValues(value);
         if (requested.Count == 0)
         {
-            return null;
+            return (null, null);
         }
 
         IReadOnlyList<PolarisPatronCodeSnapshot> choices;
@@ -1286,15 +1314,15 @@ public sealed class AdministrationService(
         }
         catch (PolarisOperationalException exception)
         {
-            return new AdministrationResult(
+            return (null, new AdministrationResult(
                 "patron_codes_unavailable",
-                Message: exception.Message);
+                Message: exception.Message));
         }
         catch (Exception)
         {
-            return new AdministrationResult(
+            return (null, new AdministrationResult(
                 "patron_codes_unavailable",
-                Message: "Patron-code reference data is unavailable.");
+                Message: "Patron-code reference data is unavailable."));
         }
 
         var known = choices
@@ -1302,8 +1330,28 @@ public sealed class AdministrationService(
             .Where(item => item is not null)
             .Select(item => item!)
             .ToHashSet(StringComparer.Ordinal);
-        var unknown = requested
-            .Where(item => !known.Contains(item))
+        return (new PatronCodeValidation(requested, known), null);
+    }
+
+    private static async Task<AdministrationResult?> ValidatePatronCodePayloadAsync(
+        AsapDbContext context,
+        int organizationId,
+        PatronCodeValidation snapshot,
+        CancellationToken cancellationToken)
+    {
+        var sourceOrganizationId = organizationId;
+        if (organizationId != 1 && !await context.PatronCodeEligibilitySets.AsNoTracking()
+                .AnyAsync(item => item.OrganizationId == organizationId, cancellationToken))
+        {
+            sourceOrganizationId = 1;
+        }
+        var previouslySelected = await context.PatronCodeEligibilityMembers.AsNoTracking()
+            .Where(item => item.OrganizationId == sourceOrganizationId)
+            .Select(item => item.PatronCodeId)
+            .ToListAsync(cancellationToken);
+        var preserved = previouslySelected.ToHashSet(StringComparer.Ordinal);
+        var unknown = snapshot.Requested
+            .Where(item => !snapshot.Known.Contains(item) && !preserved.Contains(item))
             .ToArray();
         return unknown.Length == 0
             ? null
@@ -2300,14 +2348,15 @@ public sealed class AdministrationService(
 
     private static async Task<IReadOnlyList<string>> LoadPatronCodesAsync(AsapDbContext context, int organizationId, CancellationToken cancellationToken)
     {
-        var rows = await context.PatronCodeEligibilityMembers.AsNoTracking()
-            .Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId)
-            .OrderBy(item => item.OrganizationId).ThenBy(item => item.PatronCodeId)
-            .ToListAsync(cancellationToken);
-        var owner = organizationId != 1 && rows.Any(item => item.OrganizationId == organizationId)
+        var owner = organizationId != 1 && await context.PatronCodeEligibilitySets.AsNoTracking()
+            .AnyAsync(item => item.OrganizationId == organizationId, cancellationToken)
             ? organizationId
             : 1;
-        return rows.Where(item => item.OrganizationId == owner).Select(item => item.PatronCodeId).ToArray();
+        return await context.PatronCodeEligibilityMembers.AsNoTracking()
+            .Where(item => item.OrganizationId == owner)
+            .OrderBy(item => item.PatronCodeId)
+            .Select(item => item.PatronCodeId)
+            .ToArrayAsync(cancellationToken);
     }
 
     private static async Task<IReadOnlyList<object>> LoadAutoClaimRulesAsync(AsapDbContext context, int organizationId, CancellationToken cancellationToken) =>
@@ -2457,7 +2506,8 @@ public sealed class AdministrationService(
         if (TryGetAny(workflow, out var patronCodes, "allowedPatronCodeIds", "patronCodeIds"))
         {
             var values = ParseValues(patronCodes);
-            await ReplacePatronCodesAsync(context, organizationId, values, cancellationToken);
+            await ReplacePatronCodesAsync(context, organizationId, values,
+                patronCodes.ValueKind == JsonValueKind.Null, cancellationToken);
         }
 
         if (TryGetAny(patron, out var publicationOptions, "publicationOptions", "publicationOptionSet"))
@@ -2502,6 +2552,7 @@ public sealed class AdministrationService(
         AsapDbContext context,
         int organizationId,
         IReadOnlyList<string> values,
+        bool resetToSystem,
         CancellationToken cancellationToken)
     {
         var existingSet = await context.PatronCodeEligibilitySets
@@ -2509,7 +2560,7 @@ public sealed class AdministrationService(
         var members = await context.PatronCodeEligibilityMembers
             .Where(item => item.OrganizationId == organizationId)
             .ToListAsync(cancellationToken);
-        if (organizationId != 1 && values.Count == 0)
+        if (organizationId != 1 && resetToSystem)
         {
             context.PatronCodeEligibilityMembers.RemoveRange(members);
             if (existingSet is not null) context.PatronCodeEligibilitySets.Remove(existingSet);

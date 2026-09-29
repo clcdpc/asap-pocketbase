@@ -370,8 +370,12 @@ public sealed partial class PatronJourneyTests
         await using var snapshot = await contextFactory.CreateDbContextAsync();
         var originalSettings = await snapshot.SystemSettings.AsNoTracking()
             .Where(item => item.OrganizationId == 1)
-            .Select(item => new { item.LeapBibUrlPattern, item.LeapPatronUrlPattern })
+            .Select(item => new { item.LeapBibUrlPattern, item.LeapPatronUrlPattern, item.StaffApplicationUrl })
             .SingleAsync();
+        var originalBranding = await snapshot.Branding.AsNoTracking()
+            .Where(item => item.OrganizationId == 1)
+            .Select(item => new { item.LogoAltText })
+            .SingleOrDefaultAsync();
         var originalProviders = await snapshot.ExternalSearchProviders.AsNoTracking()
             .Where(item => item.ProviderKey == "external_search_1" || item.ProviderKey == "external_search_3")
             .Select(item => new { item.Id, item.Label, item.UrlTemplate, item.IsEnabled })
@@ -395,6 +399,19 @@ public sealed partial class PatronJourneyTests
             Guid.Parse(identity.TenantId!),
             Guid.Parse(identity.ObjectId!),
             staffObjectId);
+        await using (var linkContext = await contextFactory.CreateDbContextAsync())
+        {
+            var systemLinks = await linkContext.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+            systemLinks.StaffApplicationUrl = $"{baseAddress.GetLeftPart(UriPartial.Authority)}/staff/";
+            var systemBranding = await linkContext.Branding.SingleOrDefaultAsync(item => item.OrganizationId == 1);
+            if (systemBranding is null)
+            {
+                systemBranding = new Branding { OrganizationId = 1 };
+                linkContext.Branding.Add(systemBranding);
+            }
+            systemBranding.LogoAltText = "Browser saved system alt";
+            await linkContext.SaveChangesAsync();
+        }
 
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", seeded.StaffId.ToString());
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
@@ -658,6 +675,16 @@ public sealed partial class PatronJourneyTests
             var settings = await restore.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
             settings.LeapBibUrlPattern = originalSettings.LeapBibUrlPattern;
             settings.LeapPatronUrlPattern = originalSettings.LeapPatronUrlPattern;
+            settings.StaffApplicationUrl = originalSettings.StaffApplicationUrl;
+            var branding = await restore.Branding.SingleOrDefaultAsync(item => item.OrganizationId == 1);
+            if (originalBranding is null && branding is not null)
+            {
+                restore.Branding.Remove(branding);
+            }
+            else if (originalBranding is not null && branding is not null)
+            {
+                branding.LogoAltText = originalBranding.LogoAltText;
+            }
             foreach (var original in originalProviders)
             {
                 var provider = await restore.ExternalSearchProviders.SingleAsync(item => item.Id == original.Id);
@@ -676,6 +703,55 @@ public sealed partial class PatronJourneyTests
                 provider2Override.IsEnabled = originalProvider2Override.IsEnabled;
                 provider2Override.Label = originalProvider2Override.Label;
                 provider2Override.UrlTemplate = originalProvider2Override.UrlTemplate;
+            }
+            await restore.SaveChangesAsync();
+        }
+    }
+
+    [TestMethod]
+    public async Task SystemBrandingAltClearReturnsEffectiveFallback()
+    {
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        await using var context = await contextFactory.CreateDbContextAsync();
+        var branding = await context.Branding.SingleOrDefaultAsync(item => item.OrganizationId == 1);
+        var originalAlt = branding?.LogoAltText;
+        var created = branding is null;
+        branding ??= new Branding { OrganizationId = 1 };
+        try
+        {
+            if (created)
+            {
+                context.Branding.Add(branding);
+            }
+            branding.LogoAltText = "Saved system alternate text";
+            await context.SaveChangesAsync();
+
+            var actor = await ReadConfiguredSuperAdminAsync();
+            using var client = factory.CreateClient();
+            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+            client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+            using var before = await ReadSettingsDocumentAsync(client, "system");
+            Assert.AreEqual("Saved system alternate text", before.RootElement.GetProperty("effective")
+                .GetProperty("logoAltText").GetString());
+            using var saved = await SaveSettingsDocumentAsync(client, before.RootElement, "system",
+                new Dictionary<string, object?> { ["branding"] = new { altText = (string?)null } });
+            using var after = await ReadSettingsDocumentAsync(client, "system");
+            Assert.AreEqual(JsonValueKind.Null, after.RootElement.GetProperty("stored")
+                .GetProperty("configuredSystem").GetProperty("branding").GetProperty("altText").ValueKind);
+            Assert.AreEqual("Library Logo", after.RootElement.GetProperty("effective")
+                .GetProperty("logoAltText").GetString());
+        }
+        finally
+        {
+            await using var restore = await contextFactory.CreateDbContextAsync();
+            var restoredBranding = await restore.Branding.SingleOrDefaultAsync(item => item.OrganizationId == 1);
+            if (created && restoredBranding is not null)
+            {
+                restore.Branding.Remove(restoredBranding);
+            }
+            else if (restoredBranding is not null)
+            {
+                restoredBranding.LogoAltText = originalAlt;
             }
             await restore.SaveChangesAsync();
         }
@@ -1250,12 +1326,12 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(HttpStatusCode.OK, finalResponse.StatusCode, await finalResponse.Content.ReadAsStringAsync());
             using var finalDocument = JsonDocument.Parse(await finalResponse.Content.ReadAsStringAsync());
             var final = finalDocument.RootElement;
-            Assert.IsFalse(final.GetProperty("stored").GetProperty("libraryOverride").GetProperty("allowedPatronCodeIds")
+            Assert.IsTrue(final.GetProperty("stored").GetProperty("libraryOverride").GetProperty("allowedPatronCodeIds")
                 .GetProperty("exists").GetBoolean());
             CollectionAssert.AreEqual(
-                systemEffectiveCodes,
+                Array.Empty<string>(),
                 final.GetProperty("effective").GetProperty("allowedPatronCodeIds")
-                    .EnumerateArray().Select(item => item.GetString()).ToArray());
+                    .EnumerateArray().Select(item => item.GetString()!).ToArray());
 
             await using var connection = new SqlConnection(databaseConnectionString);
             await connection.OpenAsync();
@@ -1265,8 +1341,25 @@ public sealed partial class PatronJourneyTests
                 "(SELECT COUNT(*) FROM [asap].[PatronCodeEligibilityMember] WHERE [OrganizationId] = 2);";
             await using var reader = await verify.ExecuteReaderAsync();
             Assert.IsTrue(await reader.ReadAsync());
-            Assert.AreEqual(0, reader.GetInt32(0));
+            Assert.AreEqual(1, reader.GetInt32(0));
             Assert.AreEqual(0, reader.GetInt32(1));
+            await reader.DisposeAsync();
+
+            using var inheritResponse = await client.PostAsJsonAsync(
+                "/api/asap/staff/settings",
+                new
+                {
+                    orgId = "2",
+                    version = final.GetProperty("version").GetString(),
+                    workflow = new { allowedPatronCodeIds = (string[]?)null }
+                });
+            Assert.AreEqual(HttpStatusCode.OK, inheritResponse.StatusCode, await inheritResponse.Content.ReadAsStringAsync());
+            using var inherited = await ReadSettingsDocumentAsync(client, "2");
+            Assert.IsFalse(inherited.RootElement.GetProperty("stored").GetProperty("libraryOverride")
+                .GetProperty("allowedPatronCodeIds").GetProperty("exists").GetBoolean());
+            CollectionAssert.AreEqual(systemEffectiveCodes,
+                inherited.RootElement.GetProperty("effective").GetProperty("allowedPatronCodeIds")
+                    .EnumerateArray().Select(item => item.GetString()!).ToArray());
         }
         finally
         {
@@ -1283,7 +1376,7 @@ public sealed partial class PatronJourneyTests
                         workflow = new
                         {
                             suggestionLimitMessage = originalWorkflowMessage,
-                            allowedPatronCodeIds = originalCodesExist ? originalCodeValues : Array.Empty<string>()
+                            allowedPatronCodeIds = originalCodesExist ? originalCodeValues : null
                         },
                         patron = new { loginNote = originalLoginNote }
                     });
@@ -1696,6 +1789,214 @@ public sealed partial class PatronJourneyTests
         var after = await ReadPatronCodeRowsAsync(2);
         Assert.AreEqual(before.SetCount, after.SetCount);
         CollectionAssert.AreEqual(before.Values, after.Values);
+    }
+
+    [TestMethod]
+    public async Task PatronCodeReferenceLookupRunsBeforeSettingsLocks()
+    {
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var provider = new LockProbePatronCodeReferenceProvider(databaseConnectionString);
+        await using var probeFactory = CreateApplicationFactory(configurationPath, provider);
+        using var client = probeFactory.CreateClient();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+
+        using var response = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+        {
+            orgId = "2",
+            version = Convert.ToBase64String(new byte[32]),
+            workflow = new { allowedPatronCodeIds = new[] { "1" } }
+        });
+        Assert.IsTrue(provider.LockProbeSucceeded, "Polaris lookup must happen before actor and organization locks.");
+        Assert.AreEqual(HttpStatusCode.Conflict, response.StatusCode, await response.Content.ReadAsStringAsync());
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.AreEqual("stale_version", body.RootElement.GetProperty("code").GetString());
+    }
+
+    [TestMethod]
+    public async Task LibraryEmptyPatronCodeOverrideRemainsDistinctFromInheritance()
+    {
+        const int libraryId = 8830;
+        bool addedSystemCode;
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var seed = connection.CreateCommand();
+            seed.CommandText =
+                """
+                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
+                VALUES (8830, N'Empty Code Override Library', N'ECL', 1);
+                SELECT COUNT(*) FROM [asap].[PatronCodeEligibilityMember]
+                WHERE [OrganizationId] = 1 AND [PatronCodeId] = N'1';
+                """;
+            addedSystemCode = Convert.ToInt32(await seed.ExecuteScalarAsync()) == 0;
+            if (addedSystemCode)
+            {
+                seed.CommandText =
+                    "INSERT INTO [asap].[PatronCodeEligibilityMember] ([OrganizationId], [PatronCodeId]) VALUES (1, N'1');";
+                await seed.ExecuteNonQueryAsync();
+            }
+        }
+
+        try
+        {
+            var actor = await ReadConfiguredSuperAdminAsync();
+            using var client = factory!.CreateClient();
+            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+            client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+            using var system = await ReadSettingsDocumentAsync(client, "system");
+            using var invalidSystemInheritance = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+            {
+                orgId = "system",
+                version = system.RootElement.GetProperty("version").GetString(),
+                workflow = new { allowedPatronCodeIds = (string[]?)null }
+            });
+            Assert.AreEqual(HttpStatusCode.BadRequest, invalidSystemInheritance.StatusCode,
+                await invalidSystemInheritance.Content.ReadAsStringAsync());
+            using var initial = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            using var emptySave = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+            {
+                orgId = libraryId.ToString(),
+                version = initial.RootElement.GetProperty("version").GetString(),
+                workflow = new { patronCodeEligibilityEnabled = true, allowedPatronCodeIds = Array.Empty<string>() }
+            });
+            Assert.AreEqual(HttpStatusCode.OK, emptySave.StatusCode, await emptySave.Content.ReadAsStringAsync());
+            using var empty = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            Assert.IsTrue(empty.RootElement.GetProperty("stored").GetProperty("libraryOverride")
+                .GetProperty("allowedPatronCodeIds").GetProperty("exists").GetBoolean());
+            Assert.IsTrue(empty.RootElement.GetProperty("effective").GetProperty("patronCodeEligibilityEnabled").GetBoolean());
+            Assert.AreEqual(0, empty.RootElement.GetProperty("effective").GetProperty("allowedPatronCodeIds").GetArrayLength());
+
+            using var reset = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+            {
+                orgId = libraryId.ToString(),
+                version = empty.RootElement.GetProperty("version").GetString(),
+                workflow = new { allowedPatronCodeIds = (string[]?)null }
+            });
+            Assert.AreEqual(HttpStatusCode.OK, reset.StatusCode, await reset.Content.ReadAsStringAsync());
+            using var inherited = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            Assert.IsFalse(inherited.RootElement.GetProperty("stored").GetProperty("libraryOverride")
+                .GetProperty("allowedPatronCodeIds").GetProperty("exists").GetBoolean());
+            Assert.IsTrue(inherited.RootElement.GetProperty("effective").GetProperty("allowedPatronCodeIds")
+                .EnumerateArray().Any(item => item.GetString() == "1"));
+        }
+        finally
+        {
+            await using var connection = new SqlConnection(databaseConnectionString);
+            await connection.OpenAsync();
+            await using var cleanup = connection.CreateCommand();
+            cleanup.CommandText =
+                """
+                DELETE FROM [asap].[AdministrativeAudit] WHERE [OrganizationId] = 8830;
+                DELETE FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = 8830;
+                DELETE FROM [asap].[PatronSettings] WHERE [OrganizationId] = 8830;
+                DELETE FROM [asap].[EmailSettings] WHERE [OrganizationId] = 8830;
+                DELETE FROM [asap].[PatronCodeEligibilityMember] WHERE [OrganizationId] = 8830;
+                DELETE FROM [asap].[PatronCodeEligibilitySet] WHERE [OrganizationId] = 8830;
+                DELETE FROM [asap].[Organization] WHERE [Id] = 8830;
+                """ + (addedSystemCode
+                    ? "DELETE FROM [asap].[PatronCodeEligibilityMember] WHERE [OrganizationId] = 1 AND [PatronCodeId] = N'1';"
+                    : string.Empty);
+            await cleanup.ExecuteNonQueryAsync();
+        }
+    }
+
+    [TestMethod]
+    public async Task SettingsPublicLinksIgnoreRequestHostAndHistoricalCodesStayScoped()
+    {
+        const int libraryId = 8828;
+        string? previousStaffUrl;
+        await using (var connection = new SqlConnection(databaseConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var seed = connection.CreateCommand();
+            seed.CommandText =
+                "SELECT [StaffApplicationUrl] FROM [asap].[SystemSettings] WHERE [OrganizationId] = 1;";
+            previousStaffUrl = (await seed.ExecuteScalarAsync()) as string;
+            seed.CommandText =
+                """
+                INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
+                VALUES (8828, N'Patron Link Library', N'PLL', 1),
+                       (8829, N'Foreign Code Library', N'FCL', 1);
+                INSERT INTO [asap].[PatronCodeEligibilitySet] ([OrganizationId]) VALUES (8828), (8829);
+                INSERT INTO [asap].[PatronCodeEligibilityMember] ([OrganizationId], [PatronCodeId])
+                VALUES (8828, N'historical-8828'), (8829, N'foreign-8829');
+                UPDATE [asap].[SystemSettings] SET [StaffApplicationUrl] = N'https://trusted.example.org/staff/'
+                WHERE [OrganizationId] = 1;
+                """;
+            await seed.ExecuteNonQueryAsync();
+        }
+
+        try
+        {
+            var actor = await ReadConfiguredSuperAdminAsync();
+            using var client = factory!.CreateClient();
+            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+            client.DefaultRequestHeaders.Host = "poison.example.org";
+            client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+
+            using var settings = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            var links = settings.RootElement.GetProperty("publicPatron");
+            Assert.AreEqual("https://trusted.example.org/patron/?libraryOrgId=8828",
+                links.GetProperty("url").GetString());
+            Assert.IsFalse(links.GetProperty("autoResize").GetString()!.Contains("poison.example.org", StringComparison.Ordinal));
+
+            using var system = await ReadSettingsDocumentAsync(client, "system");
+            Assert.AreEqual(JsonValueKind.Null, system.RootElement.GetProperty("publicPatron").ValueKind);
+
+            using var forged = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+            {
+                orgId = libraryId.ToString(),
+                version = settings.RootElement.GetProperty("version").GetString(),
+                workflow = new { allowedPatronCodeIds = new[] { "historical-8828", "foreign-8829" } }
+            });
+            Assert.AreEqual(HttpStatusCode.BadRequest, forged.StatusCode, await forged.Content.ReadAsStringAsync());
+            using (var body = JsonDocument.Parse(await forged.Content.ReadAsStringAsync()))
+            {
+                Assert.AreEqual("patron_code_unknown", body.RootElement.GetProperty("code").GetString());
+            }
+
+            using var preserved = await client.PostAsJsonAsync("/api/asap/staff/settings", new
+            {
+                orgId = libraryId.ToString(),
+                version = settings.RootElement.GetProperty("version").GetString(),
+                workflow = new { allowedPatronCodeIds = new[] { "historical-8828", "1" } }
+            });
+            Assert.AreEqual(HttpStatusCode.OK, preserved.StatusCode, await preserved.Content.ReadAsStringAsync());
+            CollectionAssert.AreEqual(new[] { "1", "historical-8828" },
+                (await ReadPatronCodeRowsAsync(libraryId)).Values);
+
+            await using (var connection = new SqlConnection(databaseConnectionString))
+            {
+                await connection.OpenAsync();
+                await using var deactivate = new SqlCommand(
+                    "UPDATE [asap].[Organization] SET [IsActive] = 0 WHERE [Id] = @id;", connection);
+                deactivate.Parameters.AddWithValue("@id", libraryId);
+                await deactivate.ExecuteNonQueryAsync();
+            }
+            using var inactive = await ReadSettingsDocumentAsync(client, libraryId.ToString());
+            Assert.AreEqual(JsonValueKind.Null, inactive.RootElement.GetProperty("publicPatron").ValueKind);
+            StringAssert.Contains(inactive.RootElement.GetProperty("publicPatronUnavailableReason").GetString()!, "inactive");
+        }
+        finally
+        {
+            await using var connection = new SqlConnection(databaseConnectionString);
+            await connection.OpenAsync();
+            await using var cleanup = connection.CreateCommand();
+            cleanup.CommandText =
+                """
+                UPDATE [asap].[SystemSettings] SET [StaffApplicationUrl] = @staffUrl WHERE [OrganizationId] = 1;
+                DELETE FROM [asap].[AdministrativeAudit] WHERE [OrganizationId] IN (8828, 8829);
+                DELETE FROM [asap].[WorkflowSettings] WHERE [OrganizationId] IN (8828, 8829);
+                DELETE FROM [asap].[PatronSettings] WHERE [OrganizationId] IN (8828, 8829);
+                DELETE FROM [asap].[EmailSettings] WHERE [OrganizationId] IN (8828, 8829);
+                DELETE FROM [asap].[PatronCodeEligibilityMember] WHERE [OrganizationId] IN (8828, 8829);
+                DELETE FROM [asap].[PatronCodeEligibilitySet] WHERE [OrganizationId] IN (8828, 8829);
+                DELETE FROM [asap].[Organization] WHERE [Id] IN (8828, 8829);
+                """;
+            cleanup.Parameters.AddWithValue("@staffUrl", (object?)previousStaffUrl ?? DBNull.Value);
+            await cleanup.ExecuteNonQueryAsync();
+        }
     }
 
     [TestMethod]
@@ -10822,6 +11123,30 @@ public sealed partial class PatronJourneyTests
             throw new PolarisOperationalException(
                 "testing_patron_codes_failure",
                 "Testing patron-code reference failure.");
+    }
+
+    private sealed class LockProbePatronCodeReferenceProvider(string connectionString) : IPolarisReferenceProvider
+    {
+        public bool LockProbeSucceeded { get; private set; }
+
+        public Task<PolarisConnectionTestResult> TestConnectionAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new PolarisConnectionTestResult(true, 1));
+
+        public Task<IReadOnlyList<PolarisOrganizationSnapshot>> GetOrganizationsAsync(
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<PolarisOrganizationSnapshot>>([]);
+
+        public async Task<IReadOnlyList<PolarisPatronCodeSnapshot>> GetPatronCodesAsync(
+            CancellationToken cancellationToken)
+        {
+            await using var connection = new SqlConnection(connectionString);
+            await connection.OpenAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT [Id] FROM [asap].[Organization] WITH (UPDLOCK, NOWAIT) WHERE [Id] = 2;";
+            await command.ExecuteScalarAsync(cancellationToken);
+            LockProbeSucceeded = true;
+            return [new PolarisPatronCodeSnapshot("1", "Adult")];
+        }
     }
 
     private sealed class DisallowedPreferredPickupPatronProvider : IPatronProvider

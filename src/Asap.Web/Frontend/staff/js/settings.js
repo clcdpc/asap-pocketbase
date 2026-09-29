@@ -283,9 +283,21 @@ export function createSettingsController({
     staffAuditRefresh: root.querySelector('#staff-audit-refresh'),
     staffAudit: root.querySelector('#settings-staff-audit-list'),
     saveLogo: root.querySelector('#save-branding-logo'),
+    discardLogoDraft: root.querySelector('#discard-branding-draft'),
     clearLogo: root.querySelector('#clear-branding-logo'),
     logo: root.querySelector('#branding-logo'),
     brandingStatus: root.querySelector('#branding-status'),
+    brandingPreview: root.querySelector('#branding-preview'),
+    brandingPreviewSource: root.querySelector('#branding-preview-source'),
+    systemContext: root.querySelector('#settings-system-context'),
+    switchSystem: root.querySelector('#settings-switch-system'),
+    publicLinks: root.querySelector('#patron-public-links'),
+    publicStatus: root.querySelector('#patron-public-url-status'),
+    publicUrl: root.querySelector('#patron-public-url'),
+    iframeMarkup: root.querySelector('#patron-iframe-markup'),
+    loaderMarkup: root.querySelector('#patron-loader-markup'),
+    copyStatus: root.querySelector('#patron-copy-status'),
+    crossLibraryUrl: root.querySelector('#cross-library-public-url'),
     saveTitle: root.querySelector('#settings-save-title'),
     saveDetail: root.querySelector('#settings-save-detail')
   };
@@ -309,10 +321,102 @@ export function createSettingsController({
     templateSelection: null,
     savedRejectionTemplateId: '',
     awaitingReload: false,
+    outcomeUncertain: false,
     saving: false,
+    pendingMutation: null,
     visible: false,
     bound: false
   };
+  let logoDraftUrl = null;
+  let logoPreviewGeneration = 0;
+  let copyGeneration = 0;
+
+  function releaseLogoDraft() {
+    if (logoDraftUrl) URL.revokeObjectURL(logoDraftUrl);
+    logoDraftUrl = null;
+    logoPreviewGeneration += 1;
+  }
+
+  function renderPublicLinks(data) {
+    const links = object(property(data, 'publicPatron'));
+    const url = stringValue(property(links, 'url'));
+    dom.publicLinks.hidden = !url;
+    dom.publicStatus.textContent = url ? 'Public links for the selected active library.' :
+      stringValue(property(data, 'publicPatronUnavailableReason'));
+    dom.publicUrl.value = url;
+    dom.iframeMarkup.value = stringValue(property(links, 'iframe'));
+    dom.loaderMarkup.value = stringValue(property(links, 'autoResize'));
+    dom.crossLibraryUrl.hidden = !url;
+    if (url) dom.crossLibraryUrl.href = url;
+    else dom.crossLibraryUrl.removeAttribute('href');
+    dom.copyStatus.textContent = '';
+    copyGeneration += 1;
+  }
+
+  function renderBrandingPreview(draft = false) {
+    if (!state.data) return;
+    const stored = object(property(state.data, 'stored'));
+    const configured = object(property(stored, 'configuredSystem'));
+    const library = object(property(stored, 'libraryOverride'));
+    const systemBranding = object(property(configured, 'branding'));
+    const libraryBranding = object(property(library, 'branding'));
+    const effective = object(property(state.data, 'effective'));
+    const hasLogo = Boolean(property(effective, 'hasLogo'));
+    const imageSource = draft ? 'Unsaved image preview' : isSystem()
+      ? (hasLogo ? 'Saved system logo' : 'No logo configured')
+      : property(libraryBranding, 'hasLogo') ? 'Saved library logo'
+        : property(systemBranding, 'hasLogo') ? 'Inherited system logo' : 'No logo configured';
+    const altText = document.getElementById('branding-alt').value;
+    const effectiveAlt = stringValue(property(effective, 'logoAltText'));
+    const altDescription = altText === effectiveAlt
+      ? `Effective alternate text: ${effectiveAlt || 'none'}.`
+      : `Unsaved alternate text draft: ${altText || 'none'}. Effective alternate text: ${effectiveAlt || 'none'}.`;
+    dom.brandingPreviewSource.textContent = `${imageSource}. ${draft ? 'Save the image to publish it. ' : ''}${altDescription}`;
+    const generation = ++logoPreviewGeneration;
+    dom.brandingPreview.hidden = true;
+    dom.brandingPreview.alt = altText;
+    if (!draft && !hasLogo) {
+      dom.brandingPreview.removeAttribute('src');
+      return;
+    }
+    dom.brandingPreview.onload = () => {
+      if (generation === logoPreviewGeneration) dom.brandingPreview.hidden = false;
+    };
+    dom.brandingPreview.onerror = () => {
+      if (generation === logoPreviewGeneration) dom.brandingPreviewSource.textContent += ' Preview image could not be loaded.';
+    };
+    dom.brandingPreview.src = draft && logoDraftUrl ? logoDraftUrl
+      : `/api/asap/config/logo?libraryOrgId=${encodeURIComponent(organizationId())}&v=${encodeURIComponent(state.data.version || '')}`;
+  }
+
+  function previewLogoFile() {
+    releaseLogoDraft();
+    const file = dom.logo.files?.[0];
+    if (file && ['image/png', 'image/jpeg', 'image/gif'].includes(file.type)) {
+      logoDraftUrl = URL.createObjectURL(file);
+    }
+    renderBrandingPreview(Boolean(logoDraftUrl));
+    dom.brandingStatus.textContent = file
+      ? logoDraftUrl ? 'Unsaved image preview. Server validation happens when you save.' : 'This image type cannot be previewed or saved.'
+      : '';
+    dom.discardLogoDraft.hidden = !file;
+    updateDirtyState();
+  }
+
+  async function copyPublicValue(value, label) {
+    const context = captureSettingsContext();
+    const generation = copyGeneration;
+    try {
+      await navigator.clipboard.writeText(value);
+      if (!isSettingsContextCurrent(context) || generation !== copyGeneration) return;
+      dom.copyStatus.textContent = `${label} copied.`;
+      notify(`${label} copied.`, 'success');
+    } catch (error) {
+      if (!isSettingsContextCurrent(context) || generation !== copyGeneration) return;
+      dom.copyStatus.textContent = `${label} could not be copied. Select the text and copy it manually.`;
+      notify(dom.copyStatus.textContent, 'error');
+    }
+  }
 
   const domainEditors = createSettingsDomainEditors({
     root,
@@ -405,6 +509,32 @@ export function createSettingsController({
     return operation?.isCurrent() && isSettingsContextCurrent(operation.context);
   }
 
+  function isUnconfirmedMutationFailure(error, operation) {
+    return !operation.signal.aborted && (error?.status === 0 || isAbortError(error));
+  }
+
+  function markUnconfirmedMutation(message) {
+    state.outcomeUncertain = true;
+    state.awaitingReload = true;
+    notify(message, 'error');
+  }
+
+  function holdSettingsMutation(operation) {
+    latestLoads.begin('administration-settings').abort();
+    state.pendingMutation = operation;
+    dom.form.inert = true;
+    dom.form.setAttribute('aria-busy', 'true');
+    dom.refresh.disabled = false;
+  }
+
+  function finishSettingsMutation(operation) {
+    if (state.pendingMutation !== operation) return;
+    state.pendingMutation = null;
+    dom.form.inert = false;
+    dom.form.removeAttribute('aria-busy');
+    dom.refresh.disabled = false;
+  }
+
   function cancelSettingsOperations() {
     for (const slot of SETTINGS_OPERATION_SLOTS) latestLoads.begin(slot).abort();
   }
@@ -493,14 +623,20 @@ export function createSettingsController({
   function updateDirtyState() {
     const dirty = isDirty();
     dom.save.disabled = !dirty || state.awaitingReload || state.saving;
+    dom.saveLogo.disabled = state.awaitingReload || Boolean(state.pendingMutation);
+    dom.clearLogo.disabled = state.awaitingReload || Boolean(state.pendingMutation);
     dom.discard.hidden = !dirty;
-    dom.saveTitle.textContent = state.awaitingReload ? 'Saved; reload needed' : dirty ? 'Unsaved changes' : 'No changes';
-    dom.saveDetail.textContent = state.awaitingReload
+    dom.saveTitle.textContent = state.outcomeUncertain ? 'Outcome uncertain; reload needed'
+      : state.awaitingReload ? 'Saved; reload needed' : dirty ? 'Unsaved changes' : 'No changes';
+    dom.saveDetail.textContent = state.outcomeUncertain
+      ? 'The request may have committed. Reload current settings before retrying.'
+      : state.awaitingReload
       ? 'The save committed. Reload current settings before editing again.'
       : dirty
       ? 'Changes are local until you save this settings context.'
       : 'Everything in this settings context is saved.';
     dom.reset.hidden = isSystem();
+    dom.reset.disabled = state.awaitingReload || Boolean(state.pendingMutation);
   }
 
   function rawSection(section) {
@@ -930,6 +1066,9 @@ export function createSettingsController({
   }
 
   function populate(data) {
+    releaseLogoDraft();
+    dom.logo.value = '';
+    dom.discardLogoDraft.hidden = true;
     state.data = data;
     state.scope = String(data.orgId || state.scope);
     const stored = object(data.stored);
@@ -965,10 +1104,8 @@ export function createSettingsController({
         ? 'A system Postmark token is stored. Leave the token field blank to keep it.'
         : 'No system Postmark token is stored.';
     setCollections(data);
-    writeControl(document.getElementById('branding-alt'), property(
-      isSystem() ? configuredSystem.branding : effective,
-      'logoAltText'
-    ) || property(isSystem() ? configuredSystem.branding : libraryOverride.branding, 'altText'));
+    renderPublicLinks(data);
+    writeControl(document.getElementById('branding-alt'), property(effective, 'logoAltText'));
     setTemplates(data);
     renderPlaceholderHelp(data);
     setRejectionTemplateOptions(data, workflow);
@@ -978,6 +1115,10 @@ export function createSettingsController({
       for (const [key] of fields) state.baselineOverrides.set(`${section}.${key}`, hasRawOverride(section, key));
     }
     configureScopedFields();
+    dom.systemContext.hidden = isSystem();
+    dom.switchSystem.hidden = state.staff?.role !== 'super_admin';
+    dom.clearLogo.textContent = isSystem() ? 'Clear system image' : 'Clear image (use inherited image)';
+    renderBrandingPreview();
     populateParticipation();
     renderOrganizations();
     renderStaffUsers();
@@ -993,6 +1134,7 @@ export function createSettingsController({
 
   async function load(options = {}) {
     if (!state.staff || state.staff.role === 'staff') return;
+    if (state.pendingMutation && state.pendingMutation !== options.owner) return false;
     const context = captureSettingsContext();
     const loadState = latestLoads.begin('administration-settings');
     dom.refresh.disabled = true;
@@ -1007,7 +1149,8 @@ export function createSettingsController({
             return null;
           })
       ]);
-      if (!loadState.isCurrent() || !isSettingsContextCurrent(context) || !state.visible) return;
+      if (!loadState.isCurrent() || !isSettingsContextCurrent(context) || !state.visible ||
+          state.pendingMutation && state.pendingMutation !== options.owner) return false;
       const data = settingsResponse?.data && settingsResponse?.version === undefined
         ? settingsResponse.data
         : settingsResponse;
@@ -1018,6 +1161,7 @@ export function createSettingsController({
       data.patronCodeChoices = Array.isArray(patronCodeChoices) ? patronCodeChoices : [];
       const wasHidden = dom.form.hidden;
       state.awaitingReload = false;
+      state.outcomeUncertain = false;
       populate(data || {});
       onRefreshed();
       dom.form.hidden = false;
@@ -1027,7 +1171,9 @@ export function createSettingsController({
       return true;
     } catch (error) {
       if (loadState.isCurrent() && isSettingsContextCurrent(context) && state.visible && !isAbortError(error) && error.status !== 401) {
-        notify(error.message || 'Settings could not be loaded.', 'error');
+        notify(state.outcomeUncertain
+          ? 'Settings change outcome is still uncertain. Current values could not be reloaded; try again before editing.'
+          : error.message || 'Settings could not be loaded.', 'error');
       }
       return false;
     } finally {
@@ -1317,7 +1463,7 @@ export function createSettingsController({
     if (domainData.domainsChanged.codes) {
       payload.workflow.allowedPatronCodeIds = isSystem() || !domainValues.codesUseSystem
         ? domainValues.codes
-        : [];
+        : null;
     }
     if (domainData.domainsChanged.providers) payload.providers = domainValues.providers;
     if (domainData.domainsChanged.formats) payload.formats = domainValues.formats;
@@ -1349,9 +1495,15 @@ export function createSettingsController({
 
   async function saveSettings(event) {
     event?.preventDefault();
-    if (!state.data || !isDirty() || state.awaitingReload || state.saving) return;
+    if (!state.data || !isDirty() || state.awaitingReload || state.saving || state.pendingMutation) return;
+    if (dom.logo.files?.length) {
+      notify('The selected logo image is still a draft. Use Save logo or remove the image selection before saving settings.', 'error');
+      dom.saveLogo.focus();
+      return;
+    }
     state.saving = true;
     const mutation = beginSettingsOperation('administration-settings-save');
+    holdSettingsMutation(mutation);
     dom.save.disabled = true;
     notify('Saving settings...');
     let committed = false;
@@ -1381,7 +1533,7 @@ export function createSettingsController({
         });
       }
       if (!isSettingsOperationCurrent(mutation)) return;
-      const refreshed = await load({ silent: true });
+      const refreshed = await load({ silent: true, owner: mutation });
       if (isSettingsOperationCurrent(mutation)) {
         notify(refreshed ? 'Settings saved.' :
           'Settings saved, but current values could not be refreshed. Reload before editing again.',
@@ -1393,10 +1545,14 @@ export function createSettingsController({
         notify('Settings saved, but a follow-up action failed. Reload before editing again.', 'error');
         return;
       }
+      if (isUnconfirmedMutationFailure(error, mutation)) {
+        markUnconfirmedMutation('Settings change outcome is uncertain. Reload current values before retrying.');
+        return;
+      }
       if (error.status === 409) {
         const stale = error.response?.code === 'stale_version';
         if (stale || error.response?.code === 'template_referenced') {
-          await load({ silent: true });
+          await load({ silent: true, owner: mutation });
           if (isSettingsOperationCurrent(mutation)) {
             notify(stale
               ? 'These settings changed elsewhere. Review the refreshed values before saving again.'
@@ -1410,42 +1566,65 @@ export function createSettingsController({
       }
     } finally {
       state.saving = false;
+      finishSettingsMutation(mutation);
       latestLoads.finish('administration-settings-save', mutation.token);
       if (isSettingsContextCurrent(mutation.context)) updateDirtyState();
     }
   }
 
   async function resetSettings() {
-    if (isSystem() || !state.data) return;
+    if (isSystem() || !state.data || state.awaitingReload || state.pendingMutation) return;
     if (isDirty() && !window.confirm('Discard unsaved changes before resetting inherited overrides?')) return;
     if (!window.confirm('Reset this library\'s inherited overrides to the current system values?')) return;
     const mutation = beginSettingsOperation('administration-settings-reset');
+    holdSettingsMutation(mutation);
+    let committed = false;
     try {
-      await authorizedJson(`/api/asap/staff/settings/reset?organizationId=${encodeURIComponent(organizationId())}`, {
+      const response = await authorizedJson(`/api/asap/staff/settings/reset?organizationId=${encodeURIComponent(organizationId())}`, {
         method: 'POST',
         body: { version: state.data.version },
         signal: mutation.signal
       });
       if (!isSettingsOperationCurrent(mutation)) return;
-      await load({ silent: true });
-      if (isSettingsOperationCurrent(mutation)) notify('Inherited overrides reset.', 'success');
+      committed = true;
+      state.data.version = response?.data?.version || state.data.version;
+      state.awaitingReload = true;
+      onCommitted();
+      notify('Inherited overrides reset. Refreshing current values...', 'success');
+      const refreshed = await load({ silent: true, owner: mutation });
+      if (isSettingsOperationCurrent(mutation)) notify(refreshed ? 'Inherited overrides reset.' :
+        'Inherited overrides reset, but current values could not be refreshed. Reload before editing.',
+      refreshed ? 'success' : 'error');
     } catch (error) {
       if (!isSettingsOperationCurrent(mutation)) return;
+      if (committed) {
+        notify('Inherited overrides reset, but current values could not be refreshed. Reload before editing.', 'error');
+        return;
+      }
+      if (isUnconfirmedMutationFailure(error, mutation)) {
+        markUnconfirmedMutation('Override reset outcome is uncertain. Reload current values before retrying.');
+        return;
+      }
       if (error.status === 409) {
-        await load({ silent: true });
+        await load({ silent: true, owner: mutation });
         if (isSettingsOperationCurrent(mutation)) {
           notify(error.message || 'The settings changed elsewhere. Review the refreshed values.', 'error');
         }
       } else if (error.status !== 401) notify(error.message || 'The inherited overrides could not be reset.', 'error');
     } finally {
+      finishSettingsMutation(mutation);
       latestLoads.finish('administration-settings-reset', mutation.token);
       if (isSettingsContextCurrent(mutation.context)) updateDirtyState();
     }
   }
 
   async function saveLogo(clear = false) {
-    if (!state.data) return;
+    if (!state.data || state.awaitingReload || state.pendingMutation) return;
+    const withoutLogo = rows => rows.filter(([id]) => id !== 'branding-logo');
     const file = dom.logo.files?.[0];
+    const hasOtherDraft = !sameSnapshot(withoutLogo(state.baselineSnapshot), withoutLogo(snapshotForm(dom.form)));
+    if ((hasOtherDraft || clear && file) &&
+        !window.confirm('Discard unsaved settings changes or image selection before updating the saved logo?')) return;
     if (!clear && !file) {
       notify('Choose an image before saving the logo.', 'error');
       return;
@@ -1457,32 +1636,56 @@ export function createSettingsController({
     dom.saveLogo.disabled = true;
     dom.clearLogo.disabled = true;
     const mutation = beginSettingsOperation('administration-settings-logo');
+    holdSettingsMutation(mutation);
+    let committed = false;
     try {
       const scope = encodeURIComponent(String(state.scope));
-      await authorizedJson(`/api/asap/staff/settings/logo?orgId=${scope}`, {
+      const response = await authorizedJson(`/api/asap/staff/settings/logo?orgId=${scope}`, {
         method: 'POST',
         body,
         signal: mutation.signal
       });
       if (!isSettingsOperationCurrent(mutation)) return;
-      await load({ silent: true });
+      committed = true;
+      state.data.version = response?.data?.version || state.data.version;
+      state.awaitingReload = true;
+      releaseLogoDraft();
+      dom.logo.value = '';
+      dom.brandingPreview.hidden = true;
+      dom.brandingPreviewSource.textContent = 'Image change saved. Reloading the effective preview.';
+      dom.brandingStatus.textContent = clear ? 'Image cleared; refreshing the effective logo.' : 'Logo saved; refreshing the effective logo.';
+      notify(dom.brandingStatus.textContent, 'success');
+      onCommitted();
+      const refreshed = await load({ silent: true, owner: mutation });
       if (!isSettingsOperationCurrent(mutation)) return;
-      dom.brandingStatus.textContent = clear ? 'Logo image cleared.' : 'Logo image saved.';
-      notify(clear ? 'Logo image cleared.' : 'Logo image saved.', 'success');
+      dom.brandingStatus.textContent = refreshed
+        ? clear ? 'Image cleared; effective logo refreshed.' : 'Logo saved; effective logo refreshed.'
+        : 'Image change saved, but effective branding could not be refreshed. Reload before editing.';
+      notify(dom.brandingStatus.textContent, refreshed ? 'success' : 'error');
     } catch (error) {
       if (!isSettingsOperationCurrent(mutation)) return;
-      if (error.status === 409) {
-        await load({ silent: true });
-        if (!isSettingsOperationCurrent(mutation)) return;
+      if (committed) {
+        dom.brandingStatus.textContent = 'Image change saved, but effective branding could not be refreshed. Reload before editing.';
+        notify(dom.brandingStatus.textContent, 'error');
+        return;
+      }
+      if (isUnconfirmedMutationFailure(error, mutation)) {
+        dom.brandingStatus.textContent = 'Image change outcome is uncertain. Reload effective branding before retrying.';
+        markUnconfirmedMutation(dom.brandingStatus.textContent);
+        return;
       }
       if (error.status !== 401 && !isAbortError(error)) {
-        dom.brandingStatus.textContent = error.message || 'Logo could not be saved.';
-        notify(error.message || 'Logo could not be saved.', 'error');
+        dom.brandingStatus.textContent = `${error.message || 'Logo could not be saved.'} The image preview is still unsaved.`;
+        notify(dom.brandingStatus.textContent, 'error');
       }
     } finally {
+      finishSettingsMutation(mutation);
       latestLoads.finish('administration-settings-logo', mutation.token);
-      dom.saveLogo.disabled = false;
-      dom.clearLogo.disabled = false;
+      if (isSettingsContextCurrent(mutation.context)) {
+        dom.saveLogo.disabled = false;
+        dom.clearLogo.disabled = false;
+        updateDirtyState();
+      }
     }
   }
 
@@ -1567,11 +1770,23 @@ export function createSettingsController({
   async function changeScope() {
     const next = dom.scope.value;
     if (next === state.scope) return;
+    if (state.pendingMutation) {
+      dom.scope.value = state.scope;
+      notify('Wait for the settings change to finish before switching scope.', 'warning');
+      return;
+    }
+    if (state.outcomeUncertain) {
+      dom.scope.value = state.scope;
+      notify('Reload current settings to verify the uncertain change before switching scope.', 'warning');
+      return;
+    }
     if (isDirty() && !window.confirm('Discard unsaved settings changes and switch scope?')) {
       dom.scope.value = state.scope;
       return;
     }
     cancelSettingsOperations();
+    releaseLogoDraft();
+    copyGeneration += 1;
     state.scope = next;
     state.data = null;
     dom.form.hidden = true;
@@ -1634,6 +1849,8 @@ export function createSettingsController({
   function setStaff(staff) {
     if (staffContextKey(state.staff) !== staffContextKey(staff)) {
       cancelSettingsOperations();
+      releaseLogoDraft();
+      copyGeneration += 1;
       state.data = null;
       dom.form.hidden = true;
     }
@@ -1656,6 +1873,8 @@ export function createSettingsController({
 
   function signedOut() {
     cancelSettingsOperations();
+    releaseLogoDraft();
+    copyGeneration += 1;
     state.visible = false;
     root.hidden = true;
     dom.form.hidden = true;
@@ -1683,6 +1902,29 @@ export function createSettingsController({
       templatesPanel.addEventListener(eventName, event => rememberTemplateSelection(event.target));
     }
     dom.scope.addEventListener('change', changeScope);
+    dom.switchSystem.addEventListener('click', async () => {
+      if (state.staff?.role !== 'super_admin') return;
+      dom.scope.value = 'system';
+      await changeScope();
+      dom.scope.focus();
+    });
+    for (const [buttonId, value, label] of [
+      ['copy-patron-public-url', dom.publicUrl, 'Patron URL'],
+      ['copy-patron-iframe', dom.iframeMarkup, 'Iframe markup'],
+      ['copy-patron-loader', dom.loaderMarkup, 'Auto-resizing loader markup']
+    ]) {
+      root.querySelector(`#${buttonId}`).addEventListener('click', () => copyPublicValue(value.value, label));
+    }
+    dom.logo.addEventListener('change', previewLogoFile);
+    dom.discardLogoDraft.addEventListener('click', () => {
+      releaseLogoDraft();
+      dom.logo.value = '';
+      dom.discardLogoDraft.hidden = true;
+      dom.brandingStatus.textContent = 'Unsaved image selection removed.';
+      renderBrandingPreview();
+      updateDirtyState();
+    });
+    document.getElementById('branding-alt').addEventListener('input', () => renderBrandingPreview(Boolean(logoDraftUrl)));
     for (const button of dom.nav) {
       button.tabIndex = button.dataset.settingsPanel === state.activePanel ? 0 : -1;
       button.addEventListener('click', () => activatePanel(button.dataset.settingsPanel, true));
@@ -1699,10 +1941,18 @@ export function createSettingsController({
       });
     }
     dom.refresh.addEventListener('click', async () => {
+      if (state.pendingMutation) {
+        notify('Wait for the settings change to finish before reloading.', 'warning');
+        return;
+      }
       if (isDirty() && !window.confirm('Discard unsaved settings changes and reload?')) return;
       await load();
     });
     dom.discard.addEventListener('click', async () => {
+      if (state.pendingMutation) {
+        notify('Wait for the settings change to finish before discarding changes.', 'warning');
+        return;
+      }
       if (!window.confirm('Discard unsaved settings changes?')) return;
       await load({ silent: true });
     });
@@ -1746,7 +1996,7 @@ export function createSettingsController({
       });
     }
     window.addEventListener('beforeunload', event => {
-      if (!isDirty()) return;
+      if (!isDirty() && !state.pendingMutation && !state.outcomeUncertain) return;
       event.preventDefault();
       event.returnValue = '';
     });
@@ -1762,17 +2012,27 @@ export function createSettingsController({
   }
 
   function suspend() {
+    if (state.pendingMutation || state.outcomeUncertain) return false;
     state.visible = false;
+    releaseLogoDraft();
+    dom.logo.value = '';
+    dom.discardLogoDraft.hidden = true;
+    renderBrandingPreview();
+    updateDirtyState();
+    copyGeneration += 1;
     latestLoads.begin('administration-settings').abort();
     latestLoads.begin('administration-staff-access').abort();
+    return true;
   }
 
   function setScopeFromUrl(scope) {
+    if (state.pendingMutation || state.outcomeUncertain) return false;
     if (state.scope !== scope) {
       state.data = null;
       dom.form.hidden = true;
     }
     state.scope = scope;
+    return true;
   }
 
   return {
@@ -1785,6 +2045,8 @@ export function createSettingsController({
     setScopeFromUrl,
     load,
     isDirty,
+    hasPendingMutation: () => Boolean(state.pendingMutation),
+    hasUnconfirmedOutcome: () => state.outcomeUncertain,
     currentScope: () => state.scope,
     currentPanel: () => state.activePanel
   };

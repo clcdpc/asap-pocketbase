@@ -27,6 +27,7 @@ export async function loadStaffSession(options = {}) {
     cache: 'no-store',
     signal: options.signal
   });
+  options.signal?.throwIfAborted();
   if (sessionInvalidated) {
     throw new HttpError('The staff account or access changed. Reload this page to continue.', 401,
       { code: 'staff_session_changed' });
@@ -66,9 +67,11 @@ export async function authorizedJson(path, options = {}) {
     }
 
     const result = await requestJson(path, { ...options, method, headers, cache: 'no-store' });
+    options.signal?.throwIfAborted();
     if (method === 'GET' && sessionContext) await loadStaffSession({ signal: options.signal });
     return result;
   } catch (error) {
+    options.signal?.throwIfAborted();
     if (error && error.status === 401 && error.response?.code !== 'staff_session_changed' &&
         sessionInvalidHandler) sessionInvalidHandler(error);
     if (error?.status === 403 && error.response?.accessAllowed === false && accessUnavailableHandler) accessUnavailableHandler(error);

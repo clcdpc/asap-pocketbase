@@ -2686,6 +2686,145 @@ async function runNavigationSupport(browser, args, axeSource, report) {
       await page.locator('#email-readiness-warning').waitFor({ state: 'visible' });
     }
 
+    await page.goto(`${args.baseOrigin}/staff/?stage=settings&settingsScope=2#settings-patron`,
+      { waitUntil: 'networkidle' });
+    await page.locator('#settings-patron').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#settings-scope').inputValue(), '2');
+    assert.equal(await page.locator('#patron-public-url').inputValue(),
+      `${args.baseOrigin}/patron/?libraryOrgId=2`);
+    assert.match(await page.locator('#patron-loader-markup').inputValue(), /data-asap-suggestions/);
+    await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', {
+      configurable: true, value: { writeText: async () => { throw new Error('denied'); } }
+    }));
+    await page.locator('#copy-patron-iframe').click();
+    await page.locator('#patron-copy-status').filter({ hasText: /could not be copied/ }).waitFor();
+    assert.doesNotMatch(await page.locator('#patron-copy-status').textContent(), /copied\.$/);
+    await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', {
+      configurable: true, value: { writeText: async text => { window.__copiedPatronText = text; } }
+    }));
+    await page.locator('#copy-patron-loader').click();
+    await page.locator('#patron-copy-status').filter({ hasText: /copied\./ }).waitFor();
+    assert.equal(await page.evaluate(() => window.__copiedPatronText),
+      await page.locator('#patron-loader-markup').inputValue());
+    await page.locator('#settings-nav-workflow').click();
+    await page.locator('#patron-codes-use-system').uncheck();
+    await page.locator('#patron-code-search').fill('Adult');
+    await page.locator('#patron-codes-select-all').click();
+    assert.ok(await page.locator('#patron-codes-editor [data-domain-row]').count() > 0);
+    await page.locator('#patron-codes-clear-all').click();
+    await page.locator('[data-setting-key="patronCodeEligibilityEnabled"] .settings-override-toggle').check();
+    await page.locator('#patron-code-eligibility-enabled').check();
+    await page.locator('#patron-code-warning').filter({ hasText: /allows all patron codes/ }).waitFor();
+    await page.locator('#settings-nav-patron').click();
+    await page.locator('#branding-logo').setInputFiles({
+      name: 'preview.gif', mimeType: 'image/gif',
+      buffer: Buffer.from('R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=', 'base64')
+    });
+    await page.locator('#branding-preview-source').filter({ hasText: /Unsaved image preview/ }).waitFor();
+    let prematureSettingsSaves = 0;
+    const unexpectedSettingsSave = route => {
+      prematureSettingsSaves += 1;
+      return route.continue();
+    };
+    await page.route('**/api/asap/staff/settings', unexpectedSettingsSave);
+    await page.locator('#settings-save').click();
+    await page.locator('#settings-message').filter({ hasText: /selected logo image is still a draft/ }).waitFor();
+    assert.equal(prematureSettingsSaves, 0, 'Main settings save must not discard an unuploaded image');
+    assert.match(await page.locator('#branding-logo').inputValue(), /preview\.gif$/);
+    await page.unroute('**/api/asap/staff/settings', unexpectedSettingsSave);
+    let releaseLogoRequest;
+    let signalLogoRequest;
+    const logoRequestSeen = new Promise(resolve => { signalLogoRequest = resolve; });
+    const heldLogoRequest = new Promise(resolve => { releaseLogoRequest = resolve; });
+    const delayedLogo = async route => {
+      signalLogoRequest();
+      await heldLogoRequest;
+      await route.fulfill({
+        status: 409, contentType: 'application/json',
+        body: JSON.stringify({ code: 'stale_version', message: 'The settings changed elsewhere.' })
+      });
+    };
+    await page.route('**/api/asap/staff/settings/logo?orgId=2', delayedLogo);
+    page.once('dialog', dialog => dialog.accept());
+    await page.locator('#save-branding-logo').click();
+    await logoRequestSeen;
+    assert.equal(await page.locator('#settings-form').evaluate(form => form.inert), true);
+    const brandingAltDuringSave = await page.locator('#branding-alt').inputValue();
+    await page.locator('#branding-alt').evaluate(input => input.focus());
+    await page.keyboard.type('late alternate text');
+    assert.equal(await page.locator('#branding-alt').inputValue(), brandingAltDuringSave,
+      'A later alternate-text draft must not be entered during an in-flight image save');
+    await assert.rejects(() => page.locator('#discard-branding-draft').click({ timeout: 500 }));
+    assert.match(await page.locator('#branding-logo').inputValue(), /preview\.gif$/,
+      'An in-flight image selection cannot be discarded while its request may commit');
+    await page.locator('#settings-scope').selectOption('system');
+    assert.equal(await page.locator('#settings-scope').inputValue(), '2',
+      'An in-flight logo save must retain its owning Settings scope');
+    await page.locator('#settings-refresh').click();
+    assert.match(await page.locator('#settings-message').textContent(), /Wait for the settings change to finish before reloading/);
+    await assert.rejects(() => page.locator('#settings-discard').click({ timeout: 500 }));
+    assert.match(await page.locator('#branding-logo').inputValue(), /preview\.gif$/);
+    await page.getByRole('button', { name: 'Requests' }).click();
+    assert.equal(await page.locator('#settings-patron').isVisible(), true,
+      'View navigation must wait for the logo save result');
+    await page.evaluate(() => {
+      const url = new URL(window.location.href);
+      url.searchParams.set('settingsScope', 'system');
+      window.history.pushState(null, '', url);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await page.waitForFunction(() => new URL(location.href).searchParams.get('settingsScope') === '2');
+    assert.match(await page.locator('#settings-message').textContent(), /Wait for the settings change/);
+    releaseLogoRequest();
+    await page.locator('#branding-status').filter({ hasText: /image preview is still unsaved/ }).waitFor();
+    assert.equal(await page.locator('#settings-form').evaluate(form => form.inert), false);
+    await page.unroute('**/api/asap/staff/settings/logo?orgId=2', delayedLogo);
+    page.once('dialog', dialog => dialog.dismiss());
+    await page.locator('#clear-branding-logo').click();
+    assert.match(await page.locator('#branding-logo').inputValue(), /preview\.gif$/,
+      'Declining clear must retain the unsaved image selection');
+    page.once('dialog', dialog => dialog.dismiss());
+    await page.locator('#settings-switch-system').click();
+    assert.equal(await page.locator('#settings-scope').inputValue(), '2');
+    assert.match(await page.locator('#branding-preview-source').textContent(), /Unsaved image preview/);
+    page.once('dialog', dialog => dialog.accept());
+    await page.locator('#settings-switch-system').click();
+    await page.waitForFunction(() => !document.getElementById('settings-form').hidden &&
+      document.getElementById('settings-scope').value === 'system');
+    assert.equal(await page.locator('#branding-logo').inputValue(), '');
+    assert.equal(await page.locator('#discard-branding-draft').isVisible(), false);
+    assert.equal(await page.locator('#patron-public-links').isVisible(), false,
+      'System scope must not display a library-specific patron URL');
+    assert.equal(await page.locator('#settings-switch-system').isVisible(), false);
+    assert.match(await page.locator('#ui-system-not-enabled-msg').locator('..').textContent(), /\{\{library\}\}/);
+    assert.match(await page.locator('#ui-misconfigured-msg').locator('..').textContent(), /\{\{library\}\}/);
+    assert.equal(await page.locator('#branding-alt').inputValue(), 'Browser saved system alt');
+    assert.match(await page.locator('#branding-preview-source').textContent(),
+      /Effective alternate text: Browser saved system alt/);
+    assert.doesNotMatch(await page.locator('#branding-preview-source').textContent(),
+      /Unsaved alternate text draft/);
+    const missingSystemAlt = async route => {
+      const response = await route.fetch();
+      const body = await response.json();
+      const settings = body.data?.effective ? body.data : body;
+      settings.stored.configuredSystem.branding.altText = null;
+      settings.effective.logoAltText = 'Library Logo';
+      await route.fulfill({ response, body: JSON.stringify(body) });
+    };
+    await page.route('**/api/asap/staff/settings?orgId=system', missingSystemAlt);
+    try {
+      await page.reload({ waitUntil: 'networkidle' });
+      await page.locator('#settings-patron').waitFor({ state: 'visible' });
+      assert.equal(await page.locator('#branding-alt').inputValue(), 'Library Logo');
+    } finally {
+      await page.unroute('**/api/asap/staff/settings?orgId=system', missingSystemAlt);
+    }
+    assert.match(await page.locator('#branding-preview-source').textContent(),
+      /Effective alternate text: Library Logo/);
+    assert.doesNotMatch(await page.locator('#branding-preview-source').textContent(),
+      /Unsaved alternate text draft/);
+    assert.equal(await page.locator('#branding-preview').getAttribute('alt'), 'Library Logo');
+
     await page.goto(`${args.baseOrigin}/staff/?stage=settings#settings-templates`,
       { waitUntil: 'networkidle' });
     await page.locator('#settings-templates').waitFor({ state: 'visible' });
@@ -2859,6 +2998,53 @@ async function runProfileSessionReplacement(browser, args) {
   await runProfileSessionReplacementCase(browser, args, false, true);
 }
 
+async function runSettingsUnconfirmedSessionCase(browser, args) {
+  const { context, traffic } = await createContext(
+    browser, { width: 1280, height: 900 }, args.baseOrigin, args.superIdentity);
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    await page.goto(`${args.baseOrigin}/staff/?stage=settings&settingsScope=2#settings-patron`,
+      { waitUntil: 'networkidle' });
+    await page.locator('#settings-patron').waitFor({ state: 'visible' });
+    await page.locator('#branding-logo').setInputFiles({
+      name: 'pending.gif', mimeType: 'image/gif',
+      buffer: Buffer.from('R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=', 'base64')
+    });
+    let signalStarted;
+    let releaseUpload;
+    const started = new Promise(resolve => { signalStarted = resolve; });
+    const gate = new Promise(resolve => { releaseUpload = resolve; });
+    await page.route('**/api/asap/staff/settings/logo?orgId=2', async route => {
+      signalStarted();
+      await gate;
+      await route.fulfill({ status: 200, contentType: 'application/json',
+        body: JSON.stringify({ code: 'saved', data: { version: 'pending-upload' } }) })
+        .catch(error => { if (!/closed|handled|aborted/i.test(error.message)) throw error; });
+    });
+    await page.locator('#save-branding-logo').click();
+    await started;
+    await page.route('**/api/asap/staff/session', route => route.fulfill({ status: 200,
+      contentType: 'application/json', body: JSON.stringify({ authenticated: true,
+        accessAllowed: true, antiforgeryToken: 'replacement', staff: {
+          id: args.staffIdentity.staffId, tenantId: args.staffIdentity.tenantId,
+          authenticationEmail: args.staffIdentity.email, role: 'staff', organizationId: 2
+        } }) }));
+    await page.evaluate(async () => {
+      const { loadStaffSession } = await import('/staff/js/http.js');
+      try { await loadStaffSession(); } catch { /* Session replacement is the test trigger. */ }
+    });
+    await page.locator('#workspace').waitFor({ state: 'hidden' });
+    await page.locator('#signed-out-message').filter({ hasText: /Settings change outcome is uncertain/ }).waitFor();
+    assert.equal(traffic.externalRequests, 0);
+    assert.deepEqual(errors, []);
+    releaseUpload();
+  } finally {
+    await context.close();
+  }
+}
+
 async function main() {
   const args = parseArguments(process.argv.slice(2));
   await fs.mkdir(args.artifactRoot, { recursive: true });
@@ -2868,6 +3054,7 @@ async function main() {
   try {
     await runAnonymous(browser, args, axeSource, report);
     await runNavigationSupport(browser, args, axeSource, report);
+    await runSettingsUnconfirmedSessionCase(browser, args);
     await runProfileSessionReplacement(browser, args);
     await runSuperAdmin(browser, args, axeSource, report);
     await runAnalytics(browser, args, axeSource, report);

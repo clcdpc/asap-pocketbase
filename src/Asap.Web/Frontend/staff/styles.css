@@ -204,6 +204,7 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .settings-field { min-width: 0; display: grid; gap: 5px; color: var(--ink); font-weight: 700; }
 .settings-field.wide { grid-column: 1 / -1; }
+.settings-grid > .wide { grid-column: 1 / -1; }
 .settings-field textarea { width: 100%; }
 .settings-field input, .settings-field textarea { min-width: 0; }
 .settings-field.check-field { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; }
@@ -220,6 +221,11 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-result { min-height: 22px; margin: 8px 0 0; color: var(--muted); }
 .settings-result.error { color: var(--danger); font-weight: 700; }
 .settings-result.success { color: var(--success); font-weight: 700; }
+.settings-branding-preview { display: block; max-width: min(100%, 360px); max-height: 180px; object-fit: contain; margin: 12px 0; }
+.settings-branding-preview[hidden] { display: none; }
+#patron-public-links { min-width: 0; }
+#patron-public-links .settings-field { margin-top: 12px; }
+#patron-public-links input, #patron-public-links textarea { width: 100%; overflow-wrap: anywhere; }
 .settings-inline-actions { flex-wrap: wrap; align-items: center; }
 .settings-row-editor { display: grid; gap: 10px; min-width: 0; }
 .settings-editor-row {

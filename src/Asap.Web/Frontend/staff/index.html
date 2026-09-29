@@ -270,6 +270,10 @@
         </div>
 
         <p id="settings-message" class="settings-message" role="status" aria-live="polite"></p>
+        <div id="settings-system-context" class="settings-callout" hidden>
+          System-only controls are available at System level. Library settings can override only the fields enabled below.
+          <button id="settings-switch-system" class="secondary-button" type="button" hidden>Switch to System level</button>
+        </div>
         <div class="settings-layout">
           <aside class="settings-sidebar" aria-label="Settings sections">
             <nav id="settings-nav" class="settings-nav" role="tablist" aria-label="Settings categories">
@@ -311,9 +315,11 @@
                   </label>
                   <label class="settings-field wide" data-setting-section="systemSettings" data-setting-key="systemNotEnabledMessage" data-system-only="true">
                     <span>Nonparticipating-library message</span><textarea id="ui-system-not-enabled-msg" rows="3"></textarea>
+                    <small class="field-help">Use {{library}} for the selected library name.</small>
                   </label>
                   <label class="settings-field wide" data-setting-section="systemSettings" data-setting-key="misconfiguredMessage" data-system-only="true">
                     <span>Misconfigured system message</span><textarea id="ui-misconfigured-msg" rows="3"></textarea>
+                    <small class="field-help">Use {{library}} for the selected library name.</small>
                   </label>
                 </div>
               </fieldset>
@@ -415,9 +421,11 @@
                   <label class="settings-field" data-setting-section="workflow" data-setting-key="suggestionLimit"><span>Weekly suggestion limit</span><input id="suggestion-limit" type="number" min="1" max="1000"></label>
                   <label class="settings-field wide" data-setting-section="workflow" data-setting-key="suggestionLimitMessage"><span>Suggestion limit message</span><textarea id="suggestion-limit-message" rows="3"></textarea></label>
                   <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="allowAnyRegisteredCardLogin"><input id="allow-any-registered-card-login" type="checkbox"><span>Allow any registered card login</span></label>
+                  <p class="settings-callout wide">When enabled, an eligible patron from another library can use this portal. Their suggestion follows this portal library's settings and workflow, not their home library's. <a id="cross-library-public-url" href="#" hidden>Open this library's patron portal</a></p>
                   <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="allowPatronAutoholdOptOut"><input id="allow-patron-autohold-opt-out" type="checkbox"><span>Allow patron auto-hold opt out</span></label>
                   <label class="settings-field check-field" data-setting-section="workflow" data-setting-key="patronCodeEligibilityEnabled"><input id="patron-code-eligibility-enabled" type="checkbox"><span>Require eligible patron code</span></label>
                   <label class="settings-field wide" data-setting-section="workflow" data-setting-key="patronCodeEligibilityMessage"><span>Patron-code eligibility message</span><textarea id="patron-code-eligibility-message" rows="3"></textarea></label>
+                  <p class="settings-callout wide">The suggestion limit message supports <code>{{next_available_date}}</code>. The patron-code eligibility message is displayed as written.</p>
                 </div>
               </fieldset>
               <fieldset class="settings-fieldset">
@@ -451,6 +459,9 @@
                   <div class="settings-domain-block wide">
                     <div class="settings-domain-heading"><strong>Allowed patron-code IDs</strong><button id="add-patron-code" class="secondary-button" type="button"><i class="fa fa-plus" aria-hidden="true"></i> Add ID</button></div>
                     <label id="patron-codes-inherit-field" class="settings-inline-check"><input id="patron-codes-use-system" type="checkbox"><span>Use system IDs</span></label>
+                    <label class="settings-field" data-settings-ignore="true"><span>Search patron codes</span><input id="patron-code-search" type="search" autocomplete="off"></label>
+                    <div class="settings-inline-actions"><button id="patron-codes-select-all" class="secondary-button" type="button">Select all matches</button><button id="patron-codes-clear-all" class="secondary-button" type="button">Clear all</button></div>
+                    <p id="patron-code-warning" class="settings-callout" role="status" hidden></p>
                     <div id="patron-codes-editor" class="settings-row-editor" aria-live="polite"></div>
                   </div>
                 </div>
@@ -468,7 +479,22 @@
                 <p>Patron-facing text, publication choices, formats, custom fields, and branding.</p>
               </div>
               <fieldset class="settings-fieldset">
+                <legend>Public patron portal</legend>
+                <p id="patron-public-url-status" class="settings-callout" role="status"></p>
+                <div id="patron-public-links" data-settings-ignore="true" hidden>
+                  <label class="settings-field"><span>Direct URL</span><input id="patron-public-url" type="text" readonly></label>
+                  <button id="copy-patron-public-url" class="secondary-button" type="button">Copy URL</button>
+                  <label class="settings-field"><span>Iframe markup</span><textarea id="patron-iframe-markup" rows="3" readonly></textarea></label>
+                  <button id="copy-patron-iframe" class="secondary-button" type="button">Copy iframe</button>
+                  <label class="settings-field"><span>Auto-resizing loader markup</span><textarea id="patron-loader-markup" rows="4" readonly></textarea></label>
+                  <button id="copy-patron-loader" class="secondary-button" type="button">Copy loader</button>
+                  <p>External embedding works only when the embedding site's origin is in the system allowed-origin policy.</p>
+                  <p id="patron-copy-status" class="settings-result" role="status" aria-live="polite"></p>
+                </div>
+              </fieldset>
+              <fieldset class="settings-fieldset">
                 <legend>Patron text</legend>
+                <p>Rendered patron text supports <code>{{barcode_label}}</code> and <code>{{pin_label}}</code> for the configured labels. Examples include the page title, login and form notes, common-creator text, and success messages. The already-submitted message also supports <code>{{duplicate_date}}</code>, <code>{{duplicate_status}}</code>, <code>{{duplicate_title}}</code>, <code>{{duplicate_author}}</code>, <code>{{duplicate_format}}</code>, and <code>{{duplicate_match_type}}</code>; the legacy <code>{{title}}</code>, <code>{{author}}</code>, and <code>{{format}}</code> aliases also work there.</p>
                 <div class="settings-grid">
                   <label class="settings-field" data-setting-section="patron" data-setting-key="pageTitle"><span>Page title</span><input id="patron-page-title" type="text"></label>
                   <label class="settings-field" data-setting-section="patron" data-setting-key="barcodeLabel"><span>Barcode label</span><input id="patron-barcode-label" type="text"></label>
@@ -522,13 +548,16 @@
               </fieldset>
               <fieldset class="settings-fieldset">
                 <legend>Branding</legend>
+                <p id="branding-preview-source" class="settings-callout"></p>
+                <img id="branding-preview" class="settings-branding-preview" alt="" hidden>
                 <div class="settings-grid">
                   <label class="settings-field wide" data-setting-section="branding" data-setting-key="altText"><span>Logo alternate text</span><input id="branding-alt" type="text"></label>
                   <label class="settings-field wide"><span>Logo image</span><input id="branding-logo" type="file" accept="image/png,image/jpeg,image/gif"></label>
                 </div>
                 <div class="form-actions settings-inline-actions">
                   <button id="save-branding-logo" class="secondary-button" type="button"><i class="fa fa-picture-o" aria-hidden="true"></i> Save logo</button>
-                  <button id="clear-branding-logo" class="secondary-button" type="button"><i class="fa fa-times" aria-hidden="true"></i> Clear image</button>
+                  <button id="discard-branding-draft" class="secondary-button" type="button" hidden>Remove unsaved image selection</button>
+                  <button id="clear-branding-logo" class="secondary-button" type="button"><i class="fa fa-times" aria-hidden="true"></i> Clear image (use inherited image)</button>
                 </div>
                 <p id="branding-status" class="settings-result" role="status"></p>
               </fieldset>
