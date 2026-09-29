@@ -321,6 +321,7 @@ export function createSettingsController({
     templateSelection: null,
     savedRejectionTemplateId: '',
     awaitingReload: false,
+    outcomeUncertain: false,
     saving: false,
     pendingMutation: null,
     visible: false,
@@ -508,6 +509,16 @@ export function createSettingsController({
     return operation?.isCurrent() && isSettingsContextCurrent(operation.context);
   }
 
+  function isUnconfirmedMutationFailure(error, operation) {
+    return !operation.signal.aborted && (error?.status === 0 || isAbortError(error));
+  }
+
+  function markUnconfirmedMutation(message) {
+    state.outcomeUncertain = true;
+    state.awaitingReload = true;
+    notify(message, 'error');
+  }
+
   function holdSettingsMutation(operation) {
     latestLoads.begin('administration-settings').abort();
     state.pendingMutation = operation;
@@ -612,14 +623,20 @@ export function createSettingsController({
   function updateDirtyState() {
     const dirty = isDirty();
     dom.save.disabled = !dirty || state.awaitingReload || state.saving;
+    dom.saveLogo.disabled = state.awaitingReload || Boolean(state.pendingMutation);
+    dom.clearLogo.disabled = state.awaitingReload || Boolean(state.pendingMutation);
     dom.discard.hidden = !dirty;
-    dom.saveTitle.textContent = state.awaitingReload ? 'Saved; reload needed' : dirty ? 'Unsaved changes' : 'No changes';
-    dom.saveDetail.textContent = state.awaitingReload
+    dom.saveTitle.textContent = state.outcomeUncertain ? 'Outcome uncertain; reload needed'
+      : state.awaitingReload ? 'Saved; reload needed' : dirty ? 'Unsaved changes' : 'No changes';
+    dom.saveDetail.textContent = state.outcomeUncertain
+      ? 'The request may have committed. Reload current settings before retrying.'
+      : state.awaitingReload
       ? 'The save committed. Reload current settings before editing again.'
       : dirty
       ? 'Changes are local until you save this settings context.'
       : 'Everything in this settings context is saved.';
     dom.reset.hidden = isSystem();
+    dom.reset.disabled = state.awaitingReload || Boolean(state.pendingMutation);
   }
 
   function rawSection(section) {
@@ -1144,6 +1161,7 @@ export function createSettingsController({
       data.patronCodeChoices = Array.isArray(patronCodeChoices) ? patronCodeChoices : [];
       const wasHidden = dom.form.hidden;
       state.awaitingReload = false;
+      state.outcomeUncertain = false;
       populate(data || {});
       onRefreshed();
       dom.form.hidden = false;
@@ -1153,7 +1171,9 @@ export function createSettingsController({
       return true;
     } catch (error) {
       if (loadState.isCurrent() && isSettingsContextCurrent(context) && state.visible && !isAbortError(error) && error.status !== 401) {
-        notify(error.message || 'Settings could not be loaded.', 'error');
+        notify(state.outcomeUncertain
+          ? 'Settings change outcome is still uncertain. Current values could not be reloaded; try again before editing.'
+          : error.message || 'Settings could not be loaded.', 'error');
       }
       return false;
     } finally {
@@ -1525,6 +1545,10 @@ export function createSettingsController({
         notify('Settings saved, but a follow-up action failed. Reload before editing again.', 'error');
         return;
       }
+      if (isUnconfirmedMutationFailure(error, mutation)) {
+        markUnconfirmedMutation('Settings change outcome is uncertain. Reload current values before retrying.');
+        return;
+      }
       if (error.status === 409) {
         const stale = error.response?.code === 'stale_version';
         if (stale || error.response?.code === 'template_referenced') {
@@ -1549,7 +1573,7 @@ export function createSettingsController({
   }
 
   async function resetSettings() {
-    if (isSystem() || !state.data || state.pendingMutation) return;
+    if (isSystem() || !state.data || state.awaitingReload || state.pendingMutation) return;
     if (isDirty() && !window.confirm('Discard unsaved changes before resetting inherited overrides?')) return;
     if (!window.confirm('Reset this library\'s inherited overrides to the current system values?')) return;
     const mutation = beginSettingsOperation('administration-settings-reset');
@@ -1575,6 +1599,10 @@ export function createSettingsController({
       if (!isSettingsOperationCurrent(mutation)) return;
       if (committed) {
         notify('Inherited overrides reset, but current values could not be refreshed. Reload before editing.', 'error');
+        return;
+      }
+      if (isUnconfirmedMutationFailure(error, mutation)) {
+        markUnconfirmedMutation('Override reset outcome is uncertain. Reload current values before retrying.');
         return;
       }
       if (error.status === 409) {
@@ -1639,6 +1667,11 @@ export function createSettingsController({
       if (committed) {
         dom.brandingStatus.textContent = 'Image change saved, but effective branding could not be refreshed. Reload before editing.';
         notify(dom.brandingStatus.textContent, 'error');
+        return;
+      }
+      if (isUnconfirmedMutationFailure(error, mutation)) {
+        dom.brandingStatus.textContent = 'Image change outcome is uncertain. Reload effective branding before retrying.';
+        markUnconfirmedMutation(dom.brandingStatus.textContent);
         return;
       }
       if (error.status !== 401 && !isAbortError(error)) {
@@ -1740,6 +1773,11 @@ export function createSettingsController({
     if (state.pendingMutation) {
       dom.scope.value = state.scope;
       notify('Wait for the settings change to finish before switching scope.', 'warning');
+      return;
+    }
+    if (state.outcomeUncertain) {
+      dom.scope.value = state.scope;
+      notify('Reload current settings to verify the uncertain change before switching scope.', 'warning');
       return;
     }
     if (isDirty() && !window.confirm('Discard unsaved settings changes and switch scope?')) {
@@ -1958,7 +1996,7 @@ export function createSettingsController({
       });
     }
     window.addEventListener('beforeunload', event => {
-      if (!isDirty() && !state.pendingMutation) return;
+      if (!isDirty() && !state.pendingMutation && !state.outcomeUncertain) return;
       event.preventDefault();
       event.returnValue = '';
     });
@@ -1974,7 +2012,7 @@ export function createSettingsController({
   }
 
   function suspend() {
-    if (state.pendingMutation) return false;
+    if (state.pendingMutation || state.outcomeUncertain) return false;
     state.visible = false;
     releaseLogoDraft();
     dom.logo.value = '';
@@ -1988,7 +2026,7 @@ export function createSettingsController({
   }
 
   function setScopeFromUrl(scope) {
-    if (state.pendingMutation) return false;
+    if (state.pendingMutation || state.outcomeUncertain) return false;
     if (state.scope !== scope) {
       state.data = null;
       dom.form.hidden = true;
@@ -2008,6 +2046,7 @@ export function createSettingsController({
     load,
     isDirty,
     hasPendingMutation: () => Boolean(state.pendingMutation),
+    hasUnconfirmedOutcome: () => state.outcomeUncertain,
     currentScope: () => state.scope,
     currentPanel: () => state.activePanel
   };

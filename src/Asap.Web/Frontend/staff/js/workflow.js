@@ -848,8 +848,8 @@ export function createWorkflowApp() {
   }
 
   function showSignedOut(message) {
-    const settingsMutationUnconfirmed = settingsController.hasPendingMutation() &&
-      !state.settingsCommitPendingRefresh;
+    const settingsMutationUnconfirmed = (settingsController.hasPendingMutation() ||
+      settingsController.hasUnconfirmedOutcome()) && !state.settingsCommitPendingRefresh;
     invalidateNavigation();
     const storage = recentStorage();
     if (storage && state.recentKey) {
@@ -1030,6 +1030,17 @@ export function createWorkflowApp() {
       restoredUrl.hash = `settings-${settingsController.currentPanel()}`;
       window.history.replaceState(null, '', `${restoredUrl.pathname}${restoredUrl.search}${restoredUrl.hash}`);
       announce('Wait for the settings change to finish before navigating away.', 'warning');
+      return;
+    }
+    if (state.activeView === 'settings' && settingsController.hasUnconfirmedOutcome() &&
+        leavingSettingsContext) {
+      const restoredUrl = new URL(window.location.href);
+      restoredUrl.searchParams.set('stage', 'settings');
+      restoredUrl.searchParams.set('settingsScope', settingsController.currentScope());
+      restoredUrl.searchParams.delete('request');
+      restoredUrl.hash = `settings-${settingsController.currentPanel()}`;
+      window.history.replaceState(null, '', `${restoredUrl.pathname}${restoredUrl.search}${restoredUrl.hash}`);
+      announce('Reload current settings to verify the uncertain change before navigating away.', 'warning');
       return;
     }
     if (state.activeView === 'settings' && settingsController.isDirty() && leavingSettingsContext &&
@@ -3829,6 +3840,11 @@ export function createWorkflowApp() {
     if (previousView === 'settings' && name !== 'settings' &&
         settingsController.hasPendingMutation()) {
       announce('Wait for the settings change to finish before navigating away.', 'warning');
+      return;
+    }
+    if (previousView === 'settings' && name !== 'settings' &&
+        settingsController.hasUnconfirmedOutcome()) {
+      announce('Reload current settings to verify the uncertain change before navigating away.', 'warning');
       return;
     }
     if (updateUrl && previousView === 'settings' && name !== 'settings' &&

@@ -245,6 +245,130 @@ async function flush() {
       dom.window.close();
     }
 
+    for (const mutation of ['save', 'reset', 'logo', 'clear', 'logo-abort']) {
+      const html = fs.readFileSync(path.join(frontendRoot, 'staff', 'index.html'), 'utf8');
+      const dom = new JSDOM(html, { url: 'http://localhost/staff/' });
+      global.window = dom.window;
+      global.document = dom.window.document;
+      global.FormData = dom.window.FormData;
+      global.Node = dom.window.Node;
+      global.Event = dom.window.Event;
+      window.confirm = () => true;
+      let mutationRequests = 0;
+      let failReload = false;
+      global.fetch = async url => {
+        const requestUrl = String(url);
+        if (requestUrl.endsWith('/api/asap/staff/session')) {
+          return response(200, { authenticated: true, antiforgeryToken: 'test-token' });
+        }
+        if (requestUrl.includes('/api/asap/staff/settings?orgId=')) {
+          const organizationId = decodeURIComponent(requestUrl.split('orgId=')[1]);
+          const data = settingsData(organizationId === 'system' ? 1 : 2,
+            `${organizationId}-version`, organizationId === 'system' ? 'System' : 'Two');
+          if (organizationId === 'system') data.orgId = 'system';
+          return failReload ? response(503, { message: 'Unavailable' })
+            : response(200, data);
+        }
+        if (requestUrl.endsWith('/api/asap/staff/organizations')) {
+          return response(200, [{ id: 2, name: 'Library Two', active: true, version: 'org-2' }]);
+        }
+        if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) {
+          return response(200, { code: 'ok', data: [] });
+        }
+        if (requestUrl.endsWith('/api/asap/staff/settings') ||
+            requestUrl.includes('/api/asap/staff/settings/reset?') ||
+            requestUrl.includes('/api/asap/staff/settings/logo?')) {
+          mutationRequests += 1;
+          const failure = new Error('Connection closed after request was sent');
+          if (mutation === 'logo-abort') failure.name = 'AbortError';
+          throw failure;
+        }
+        throw new Error('Unexpected request: ' + requestUrl);
+      };
+      const controller = settingsModule.createSettingsController({
+        root: document.getElementById('settings-view'),
+        tab: document.getElementById('settings-view-tab'),
+        announce: () => {},
+        getStaff: () => ({ role: 'super_admin' })
+      });
+      controller.bind();
+      controller.setStaff({ id: '1', tenantId: 'tenant-1', objectId: 'object-1',
+        role: 'super_admin', organizationId: 1 });
+      await controller.activate();
+      const scope = document.getElementById('settings-scope');
+      scope.value = '2';
+      scope.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+      await flush();
+      if (mutation === 'save') {
+        const draft = document.getElementById('patron-login-note');
+        draft.value = 'Unsaved library draft';
+        draft.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+        document.getElementById('settings-form').dispatchEvent(
+          new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+      } else if (mutation === 'reset') {
+        document.getElementById('settings-reset').click();
+      } else {
+        if (mutation.startsWith('logo')) {
+          const file = new dom.window.File(['gif'], 'draft.gif', { type: 'image/gif' });
+          Object.defineProperty(document.getElementById('branding-logo'), 'files',
+            { configurable: true, value: [file] });
+        }
+        document.getElementById(mutation.startsWith('logo') ? 'save-branding-logo' : 'clear-branding-logo').click();
+      }
+      for (let attempt = 0; attempt < 10 && document.getElementById('settings-form').inert; attempt++) {
+        await flush();
+      }
+      assert.strictEqual(mutationRequests, 1, `${mutation} should submit once`);
+      assert.strictEqual(controller.hasUnconfirmedOutcome(), true, `${mutation} must retain uncertainty`);
+      assert.match(document.getElementById('settings-message').textContent, /outcome is uncertain/i);
+      assert.strictEqual(document.getElementById('settings-save-title').textContent,
+        'Outcome uncertain; reload needed');
+      assert.strictEqual(document.getElementById('settings-save').disabled, true);
+      assert.strictEqual(document.getElementById('settings-reset').disabled, true);
+      assert.strictEqual(document.getElementById('save-branding-logo').disabled, true);
+      if (mutation === 'save') {
+        assert.strictEqual(document.getElementById('patron-login-note').value, 'Unsaved library draft');
+      }
+      if (mutation.startsWith('logo')) {
+        assert.strictEqual(document.getElementById('branding-logo').files.length, 1);
+      }
+      document.getElementById('settings-form').dispatchEvent(
+        new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+      document.getElementById('settings-reset').click();
+      document.getElementById('save-branding-logo').click();
+      document.getElementById('clear-branding-logo').click();
+      await flush();
+      assert.strictEqual(mutationRequests, 1, `${mutation} must not retry before verifying current values`);
+      if (mutation === 'reset') {
+        scope.value = 'system';
+        scope.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+        await flush();
+        assert.strictEqual(scope.value, '2',
+          'an uncertain reset must keep its library context until authoritative reload');
+        assert.match(document.getElementById('settings-message').textContent,
+          /reload current settings to verify the uncertain change/i);
+      }
+      failReload = true;
+      document.getElementById('settings-refresh').click();
+      await flush();
+      assert.strictEqual(controller.hasUnconfirmedOutcome(), true,
+        `${mutation} uncertainty must survive a failed authoritative reload`);
+      assert.match(document.getElementById('settings-message').textContent, /still uncertain/i);
+      failReload = false;
+      document.getElementById('settings-refresh').click();
+      await flush();
+      assert.strictEqual(controller.hasUnconfirmedOutcome(), false,
+        `${mutation} uncertainty clears only after authoritative reload`);
+      if (mutation === 'reset') {
+        scope.value = 'system';
+        scope.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+        await flush();
+        assert.strictEqual(scope.value, 'system',
+          'scope switching resumes after authoritative reload resolves the reset');
+      }
+      dom.window.close();
+    }
+
     {
       const html = fs.readFileSync(path.join(frontendRoot, 'staff', 'index.html'), 'utf8');
       const dom = new JSDOM(html, { url: 'http://localhost/staff/' });
