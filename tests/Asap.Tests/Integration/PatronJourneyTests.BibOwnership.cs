@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Http.Json;
 using System.Text.Json;
 using Asap.Web.Features.Email;
 using Asap.Web.Features.Patron;
@@ -475,12 +477,14 @@ public sealed partial class PatronJourneyTests
             status: "pending_hold", autoHold: true);
         try
         {
+            byte[] blockerVersion;
             await using (var setup = await contextFactory.CreateDbContextAsync())
             {
                 var targetRow = await setup.TitleRequests.SingleAsync(item => item.Id == target.Id);
                 var blockerRow = await setup.TitleRequests.SingleAsync(item => item.Id == blocker.Id);
                 blockerRow.Barcode = targetRow.Barcode;
                 await setup.SaveChangesAsync();
+                blockerVersion = blockerRow.RowVersion.ToArray();
             }
             using var bib = JsonDocument.Parse("\"9001\"");
             var result = await factory.Services.GetRequiredService<TitleRequestMutationService>().ActionAsync(
@@ -491,12 +495,46 @@ public sealed partial class PatronJourneyTests
                     Bibid = action == "edit" ? bib.RootElement : default
                 }, CancellationToken.None);
             Assert.AreEqual("duplicate_open_request", result.Code);
+            Assert.IsNotNull(result.Duplicate);
+            Assert.AreEqual(blocker.Id, result.Duplicate.Id);
+            Assert.AreEqual("Staff entered title", result.Duplicate.Title);
+            Assert.AreEqual("pending_hold", result.Duplicate.Status);
+            Assert.AreEqual("09001", result.Duplicate.BibId);
+            Assert.AreEqual("bibid", result.Duplicate.MatchType);
+            if (action == "purchase")
+            {
+                using var client = factory.CreateClient();
+                var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
+                client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actor.Id.ToString());
+                client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
+                using var session = await client.GetAsync("/api/asap/staff/session");
+                Assert.AreEqual(HttpStatusCode.OK, session.StatusCode);
+                using var sessionJson = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
+                client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery",
+                    sessionJson.RootElement.GetProperty("antiforgeryToken").GetString());
+                using var response = await client.PostAsJsonAsync($"/api/asap/staff/title-requests/{target.Id}/action",
+                    new { version = StaffVersion.Encode(target.RowVersion), action });
+                Assert.AreEqual(HttpStatusCode.Conflict, response.StatusCode);
+                using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                Assert.AreEqual("duplicate_open_request", body.RootElement.GetProperty("code").GetString());
+                Assert.AreEqual(JsonValueKind.String, body.RootElement.GetProperty("duplicate").GetProperty("id").ValueKind);
+                Assert.AreEqual(blocker.Id.ToString(), body.RootElement.GetProperty("duplicate").GetProperty("id").GetString());
+                Assert.AreEqual("Staff entered title", body.RootElement.GetProperty("duplicate").GetProperty("title").GetString());
+                Assert.AreEqual("pending_hold", body.RootElement.GetProperty("duplicate").GetProperty("status").GetString());
+                Assert.AreEqual("09001", body.RootElement.GetProperty("duplicate").GetProperty("bibid").GetString());
+                Assert.AreEqual("bibid", body.RootElement.GetProperty("duplicate").GetProperty("matchType").GetString());
+            }
             await using var verify = await contextFactory.CreateDbContextAsync();
             var unchanged = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == target.Id);
+            var unchangedBlocker = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == blocker.Id);
             CollectionAssert.AreEqual(target.RowVersion, unchanged.RowVersion);
             Assert.AreEqual(action == "edit" ? "pending_hold" : "suggestion", unchanged.Status);
             Assert.AreEqual(action == "edit" ? "9002" : "9001", unchanged.BibId);
+            CollectionAssert.AreEqual(blockerVersion, unchangedBlocker.RowVersion);
+            Assert.AreEqual("pending_hold", unchangedBlocker.Status);
+            Assert.AreEqual("09001", unchangedBlocker.BibId);
             Assert.IsFalse(await verify.TitleRequestEvents.AnyAsync(item => item.TitleRequestId == target.Id));
+            Assert.IsFalse(await verify.HoldPlacementOperations.AnyAsync(item => item.TitleRequestId == target.Id));
         }
         finally
         {

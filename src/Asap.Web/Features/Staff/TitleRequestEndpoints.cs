@@ -792,8 +792,20 @@ public static class TitleRequestEndpoints
         "staff_scope_forbidden" or "claim_forbidden" or "delete_forbidden" => Results.Json(
             new { code = result.Code, message = "This request is outside your authorized scope." },
             statusCode: StatusCodes.Status403Forbidden),
+        "duplicate_open_request" => Results.Conflict(new
+        {
+            code = result.Code,
+            message = "This patron already has an open request or hold for this BIB. The request was not changed.",
+            duplicate = result.Duplicate is { } duplicate ? new
+            {
+                id = duplicate.Id.ToString(CultureInfo.InvariantCulture),
+                title = duplicate.Title,
+                status = duplicate.Status,
+                bibid = duplicate.BibId,
+                matchType = duplicate.MatchType
+            } : null
+        }),
         "stale_version" or "actor_changed_since_preview" or "claim_conflict" or "claim_rule_changed" or "hold_operation_incomplete" or
-            "duplicate_open_request" or
             "identifier_locked_by_stage" or "identifier_retry_not_allowed" or "organization_inactive" or
             "hold_history_retained" => Results.Conflict(new
             {

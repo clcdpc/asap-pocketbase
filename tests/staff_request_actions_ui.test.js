@@ -114,7 +114,12 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     let releaseTemplate = null;
     let releasePickup = null;
     let releaseMutation = null;
+    let releaseDuplicate = null;
+    let releaseDuplicateDetail = null;
+    let duplicateDetailDeferred = false;
     let releaseFollowupQueue = null;
+    const mutationPayloads = [];
+    let duplicateRejected = false;
     global.fetch = async (url, options = {}) => {
       if (url.endsWith('/session')) {
         return response(200, { authenticated: true, accessAllowed: true, antiforgeryToken: 'token', staff });
@@ -149,11 +154,19 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         }
         return response(200, { scope: scenarioOptions.supersededFollowup && !url.includes('scope=2') ? 'all' : '2',
           organizations: scenarioOptions.supersededFollowup ? [{ id: 2, name: 'Library' }] : [],
-          items: scenarioOptions.staleChoice || scenarioOptions.staleMutation
+          items: scenarioOptions.staleChoice || scenarioOptions.staleMutation ||
+            scenarioOptions.duplicateRecovery
             || scenarioOptions.stalePickup
             ? [currentRequest, otherRequest] : [currentRequest] });
       }
       if (new URL(url, 'http://localhost').pathname.endsWith(`/title-requests/${id}`)) {
+        if (scenarioOptions.duplicateNavigateDuringRefresh && duplicateRejected && !duplicateDetailDeferred) {
+          duplicateDetailDeferred = true;
+          return new Promise(resolve => { releaseDuplicateDetail = () => resolve(response(200, currentRequest)); });
+        }
+        if (scenarioOptions.duplicateDetailRefreshFails && duplicateRejected) {
+          return response(503, { message: 'Detail unavailable' });
+        }
         return committed && scenarioOptions.detailRefreshFails
           ? response(503, { message: 'Detail unavailable' })
           : response(200, currentRequest);
@@ -219,6 +232,21 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       }
       if (url.endsWith(`/title-requests/${id}/action`) && options.method === 'POST') {
         payload = JSON.parse(options.body);
+        mutationPayloads.push(payload);
+        if (scenarioOptions.duplicateRecovery && !duplicateRejected) {
+          duplicateRejected = true;
+          currentRequest = { ...currentRequest, version: 'v2' };
+          const conflict = response(409, { code: 'duplicate_open_request',
+            message: 'This patron already has an open request or hold for this BIB. The request was not changed.',
+            duplicate: { id: otherId, title: 'Existing <img src=x onerror=alert(1)>',
+              status: 'pending_hold', bibid: '09001', matchType: 'bibid' } });
+          return scenarioOptions.duplicateLateResponse
+            ? new Promise(resolve => { releaseDuplicate = () => resolve(conflict); })
+            : conflict;
+        }
+        if (scenarioOptions.duplicateCloseStale && payload.action === 'closeDuplicate') {
+          return response(409, { code: 'stale_version', message: 'The request changed. Reload it before continuing.' });
+        }
         if (scenarioOptions.mutationDependencyAbort) {
           throw Object.assign(new Error('Dependency aborted'), { name: 'AbortError' });
         }
@@ -242,8 +270,9 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
           return response(503, { code: 'notification_dependency_unavailable',
             message: 'Notification configuration is temporarily unavailable. The request was not changed.' });
         }
-        const finalStatus = action === 'reject' ? 'closed' : action === 'alreadyOwn' || scenarioOptions.purchaseVerifiedBib ? 'pending_hold' : 'outstanding_purchase';
-        currentRequest = { ...currentRequest, version: 'v2',
+        const finalStatus = payload.action === 'closeDuplicate' || action === 'reject' ? 'closed'
+          : action === 'alreadyOwn' || scenarioOptions.purchaseVerifiedBib ? 'pending_hold' : 'outstanding_purchase';
+        currentRequest = { ...currentRequest, version: scenarioOptions.duplicateRecovery ? 'v3' : 'v2',
           status: scenarioOptions.serverAdvancedStatus ? 'closed' : finalStatus,
           activity: [...currentRequest.activity, {
           id: '9007199254740999', eventType: 'status_changed', actorType: 'staff',
@@ -557,6 +586,88 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       assert.equal(document.querySelector('#request-dialog .status-badge').textContent, 'Suggestion');
       return;
     }
+    if (scenarioOptions.duplicateRecovery) {
+      assert.equal(payload.action, 'purchase');
+      if (scenarioOptions.duplicateLateResponse) {
+        await until(() => releaseDuplicate, 'duplicate response is pending');
+        await until(() => document.querySelector(`[aria-label="Open request ${otherId}"]`),
+          'other request is in the queue');
+        document.querySelector(`[aria-label="Open request ${otherId}"]`).click();
+        await until(() => document.querySelector('#request-dialog-title').textContent === 'Other request',
+          'newer request takes ownership of the dialog');
+        releaseDuplicate();
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(document.querySelector('#request-dialog-title').textContent, 'Other request');
+        assert.equal(document.querySelector('.duplicate-recovery'), null);
+        assert.equal(mutationPayloads.length, 1, 'late duplicate response cannot close another request');
+        return;
+      }
+      if (scenarioOptions.duplicateNavigateDuringRefresh) {
+        await until(() => releaseDuplicateDetail, 'duplicate detail refresh is pending');
+        await until(() => document.querySelector(`[aria-label="Open request ${otherId}"]`),
+          'other request is in the queue');
+        document.querySelector(`[aria-label="Open request ${otherId}"]`).click();
+        await until(() => document.querySelector('#request-dialog-title').textContent === 'Other request',
+          'newer request takes ownership during refresh');
+        releaseDuplicateDetail();
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(document.querySelector('.duplicate-recovery'), null);
+        assert.equal(mutationPayloads.length, 1, 'stale refresh cannot start a close');
+        return;
+      }
+      if (scenarioOptions.duplicateDetailRefreshFails) {
+        await until(() => /Current details could not refresh/.test(document.querySelector('#app-status').textContent),
+          'duplicate detail refresh failure is explained');
+        assert.match(document.querySelector('#app-status').textContent, /attempted change was not saved/);
+        assert.equal(document.querySelector('.duplicate-recovery'), null);
+        assert.equal(mutationPayloads.length, 1);
+        return;
+      }
+      await until(() => document.querySelector('.duplicate-recovery'), 'duplicate recovery appears');
+      const panel = document.querySelector('.duplicate-recovery');
+      assert.match(panel.textContent, /Request 9007199254740994/);
+      assert.match(panel.textContent, /Existing <img src=x onerror=alert\(1\)>/);
+      assert.match(panel.textContent, /Pending hold/);
+      assert.match(panel.textContent, /BIB 09001/);
+      assert.equal(panel.querySelector('img'), null);
+      assert.match(panel.textContent, /attempted change was not saved/);
+      assert.doesNotMatch(document.querySelector('#app-status').textContent, /Workflow action completed|Final state:/);
+      assert.equal(mutationPayloads.length, 1, 'the rejected action remains rejected');
+      assert.equal(document.querySelector('#request-dialog .status-badge').textContent, 'Suggestion');
+      if (scenarioOptions.duplicateNavigateAfterRefresh) {
+        const staleClose = [...panel.querySelectorAll('button')]
+          .find(item => item.textContent.includes('Close current'));
+        await openOtherRequest();
+        staleClose.click();
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(mutationPayloads.length, 1, 'stale recovery control cannot close another request');
+        assert.equal(document.querySelector('#request-dialog-title').textContent, 'Other request');
+        return;
+      }
+      if (scenarioOptions.duplicateDecline) {
+        [...panel.querySelectorAll('button')].find(item => item.textContent.includes('Continue')).click();
+        assert.equal(document.querySelector('.duplicate-recovery'), null);
+        assert.equal(mutationPayloads.length, 1, 'declining does not mutate');
+        assert.equal(document.querySelector('.edit-form input[inputmode="numeric"]') !== null, true);
+        assert.equal(document.querySelector('#request-dialog .status-badge').textContent, 'Suggestion');
+        return;
+      }
+      [...panel.querySelectorAll('button')].find(item => item.textContent.includes('Close current')).click();
+      await until(() => mutationPayloads.length === 2, 'closeDuplicate follow-up submits');
+      assert.equal(mutationPayloads[1].action, 'closeDuplicate');
+      assert.equal(mutationPayloads[1].version, 'v2', 'close uses authoritative refreshed version');
+      if (scenarioOptions.duplicateCloseStale) {
+        await until(() => /The request changed/.test(document.querySelector('#app-status').textContent),
+          'stale follow-up close is rejected');
+        assert.equal(document.querySelector('#request-dialog .status-badge').textContent, 'Suggestion');
+        assert.equal(mutationPayloads.length, 2);
+        return;
+      }
+      await until(() => document.querySelector('#request-dialog .status-badge').textContent === 'Closed',
+        'current request closes authoritatively');
+      assert.equal(document.querySelector('#request-dialog-title').textContent, 'Original title');
+      return;
+    }
     if (scenarioOptions.mutationNetworkFailureAfter401) {
       await until(() => !document.querySelector('#signed-out').hidden,
         'unconfirmed action and immediate failed refresh sign out');
@@ -654,6 +765,13 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
   await scenario('purchase', false, true, { serverAdvancedStatus: true });
   await scenario('purchase', false, true, { serverAdvancedStatus: true, refreshConcurrentStatus: true });
   await scenario('purchase', true, true, { purchaseVerifiedBib: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, duplicateRecovery: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, duplicateRecovery: true, duplicateDecline: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, duplicateRecovery: true, duplicateNavigateAfterRefresh: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, duplicateRecovery: true, duplicateLateResponse: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, duplicateRecovery: true, duplicateNavigateDuringRefresh: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, duplicateRecovery: true, duplicateDetailRefreshFails: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, duplicateRecovery: true, duplicateCloseStale: true });
   await scenario('reject', false, true);
   await scenario('reject', false, true, { rejectEmailQueued: true });
   await scenario('purchase', false, true, { queue401: true });

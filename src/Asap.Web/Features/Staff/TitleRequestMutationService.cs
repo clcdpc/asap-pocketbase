@@ -44,7 +44,10 @@ public sealed record TitleRequestMutationResult(
     string? NotificationStatus = null,
     string? NotificationReason = null,
     string? PatronNotificationStatus = null,
-    string? PatronNotificationReason = null);
+    string? PatronNotificationReason = null,
+    TitleRequestDuplicateConflict? Duplicate = null);
+
+public sealed record TitleRequestDuplicateConflict(long Id, string Title, string Status, string BibId, string MatchType);
 
 public sealed class TitleRequestMutationService(
     IDbContextFactory<AsapDbContext> contextFactory,
@@ -505,15 +508,19 @@ public sealed class TitleRequestMutationService(
         {
             // LockForMutationAsync holds the library Organization row until commit. Patron
             // creation and automatic promotion take the same lock before writing requests.
-            var otherOpenBibs = await context.TitleRequests.AsNoTracking().Where(item =>
+            var otherOpenRequests = await context.TitleRequests.AsNoTracking().Where(item =>
                 item.LibraryOrganizationId == request.LibraryOrganizationId &&
                 item.Barcode == request.Barcode && item.BibId != null &&
                 item.Id != request.Id && item.Status != "closed")
-                .Select(item => item.BibId!)
+                .OrderBy(item => item.Id)
+                .Select(item => new { item.Id, item.Title, item.Status, item.BibId })
                 .ToListAsync(cancellationToken);
-            if (otherOpenBibs.Any(otherBib => SameBibIdentity(otherBib, bibAfterMutation)))
+            var duplicate = otherOpenRequests.FirstOrDefault(other => SameBibIdentity(other.BibId, bibAfterMutation));
+            if (duplicate is not null)
             {
-                return new TitleRequestMutationResult("duplicate_open_request");
+                return new TitleRequestMutationResult("duplicate_open_request", Duplicate:
+                    new TitleRequestDuplicateConflict(duplicate.Id, duplicate.Title, duplicate.Status,
+                        duplicate.BibId!, "bibid"));
             }
         }
 
