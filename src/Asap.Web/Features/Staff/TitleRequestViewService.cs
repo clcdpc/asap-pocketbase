@@ -98,7 +98,9 @@ public sealed record TitleRequestDto(
     bool? Committed = null,
     string? FinalStatus = null,
     string? NotificationStatus = null,
-    string? NotificationReason = null)
+    string? NotificationReason = null,
+    string? PatronNotificationStatus = null,
+    string? PatronNotificationReason = null)
 {
     public RelatedRequestSummary? RelatedRequests { get; init; }
     public RequestWorkflowContext? WorkflowContext { get; init; }

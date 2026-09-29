@@ -94,6 +94,7 @@ public sealed partial class PatronJourneyTests
                         MaterialFormatId = index == 5 ? systemFormat.Id : formatId,
                         BibId = index >= 5 ? "9001" : null,
                         BibIdStaffVerified = index == 6,
+                        AutoHold = index == 6,
                         Status = "suggestion",
                         IsbnCheckStatus = "skipped_no_isbn",
                         CreatedUtc = DateTime.UtcNow,
@@ -373,8 +374,7 @@ public sealed partial class PatronJourneyTests
             using var dateOmitted = await client.PostAsJsonAsync(
                 $"/api/asap/staff/title-requests/{requestIds[5]}/action",
                 new { version = datedDetail.RootElement.GetProperty("version").GetString(), action = "edit",
-                    status = "suggestion", title = "Action title 5", format = collidingCode,
-                    customFields = new { shelf = new { label = "Shelf", type = "text", value = "Reference" } } });
+                    status = "suggestion", title = "Action title 5", format = collidingCode });
             Assert.AreEqual(HttpStatusCode.OK, dateOmitted.StatusCode, await dateOmitted.Content.ReadAsStringAsync());
             using var dateOmittedBody = JsonDocument.Parse(await dateOmitted.Content.ReadAsStringAsync());
             Assert.AreEqual("2026-01-02", dateOmittedBody.RootElement.GetProperty("exactPublicationDate").GetString());

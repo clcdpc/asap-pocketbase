@@ -642,8 +642,13 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("purchase-identifier-B", afterEdit.Identifier);
             Assert.IsNull(afterEdit.BibId);
             Assert.IsFalse(afterEdit.BibIdStaffVerified);
-            Assert.AreEqual("pending", afterEdit.IsbnCheckStatus);
-            AssertIdentifierEvidenceWasCleared(afterEdit);
+            Assert.IsNull(afterEdit.IsbnCheckStatus);
+            Assert.AreEqual("Identifier processing was not completed before this request left suggestions.",
+                afterEdit.IsbnCheckResult);
+            Assert.AreEqual(0, afterEdit.IsbnCheckRetryCount);
+            Assert.IsNull(afterEdit.IsbnCheckLastErrorCode);
+            Assert.IsNull(afterEdit.LastCheckedUtc);
+            Assert.AreEqual(0, afterEdit.IdentifierTags.Count);
 
             await PrepareSingleItemCycleAsync(QueueNames.PurchasePromotion, scope, seeded.Id);
             var workflow = factory.Services.GetRequiredService<WorkflowProcessingService>();

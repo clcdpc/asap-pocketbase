@@ -87,6 +87,7 @@ function closeReasonLabel(value) {
     rejected: 'Rejected',
     manual: 'Closed by staff',
     duplicate_hold: 'Duplicate patron hold',
+    purchased_no_hold: 'Purchased, no hold',
     hold_cancelled: 'Hold cancelled',
     silent: 'Closed silently',
     'Silently Closed': 'Closed silently'
@@ -2727,7 +2728,7 @@ export function createWorkflowApp() {
         commandButton('Close silently', 'archive', () => runAction(request, 'silentClose'), 'secondary-button', workflowBlocked)
       );
     } else if (request.status === 'outstanding_purchase') {
-      bar.append(commandButton('Ready for hold', 'arrow-right', () => runAction(request, 'catalogFound'),
+      bar.append(commandButton(request.autohold ? 'Ready for hold' : 'Close without hold', 'arrow-right', () => runAction(request, 'catalogFound'),
         'primary-button', workflowBlocked));
     } else if (request.status === 'pending_hold') {
       bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, event.currentTarget), 'secondary-button', !request.bibid));
@@ -3036,10 +3037,12 @@ export function createWorkflowApp() {
       const bibWillChange = !bib.disabled && bib.value.trim() !== String(request.bibid || '').trim();
       const bibSelected = Boolean(selectedStaffBibId(state.verifiedBib, request.id, bib.value));
       const turnsOffHoldForBib = request.autohold && !autohold.checked && Boolean(request.bibid);
-      const noAutoHoldConsequence = request.status === 'outstanding_purchase'
-        ? 'Save this BIB with automatic hold off? No hold will be placed automatically. The request stays Outstanding purchase now; automatic purchase promotion may later close it without a hold.'
-        : 'Save this BIB with automatic hold off? No hold will be placed automatically, and hold placement remains unavailable while auto-hold is off.';
-      if ((bibWillChange || bibSelected || turnsOffHoldForBib) && !autohold.checked &&
+      const closesExistingNoHold = Boolean(request.bibid) && !autohold.checked &&
+        (request.status === 'outstanding_purchase' || request.status === 'pending_hold');
+      const noAutoHoldConsequence = request.status === 'outstanding_purchase' || request.status === 'pending_hold'
+        ? 'Save with automatic hold off? This request will close without placing a hold.'
+        : 'Save with automatic hold off? Advancing this request with a verified BIB will close it without placing a hold.';
+      if ((bibWillChange || bibSelected || turnsOffHoldForBib || closesExistingNoHold) && !autohold.checked &&
           !confirmCurrent(request, 'title_request', noAutoHoldConsequence)) return;
       if (request.claimType === 'automatic_format_rule') {
         const claimantId = request.claimedByStaffUserId == null ? null : String(request.claimedByStaffUserId);
@@ -3049,7 +3052,9 @@ export function createWorkflowApp() {
           : 'Save these request edits?';
         const claimConsequence = transfersClaim
           ? 'This transfers the automatic format claim from the current claimant to your manual claim.'
-          : 'This replaces the automatic format claim with your manual claim.';
+          : format.value !== request.format
+            ? 'The new format rule may reassign or clear the automatic claim.'
+            : 'Your automatic claim will remain.';
         if (!confirmCurrent(request, 'title_request', `${formatConsequence} ${claimConsequence}`)) return;
       }
       if (!isCurrentDialogRequest(request, 'title_request') || !form.isConnected) return;
@@ -3166,14 +3171,12 @@ export function createWorkflowApp() {
         return;
       }
     }
-    const holdOffConsequence = request.autohold
-      ? '' : ' Automatic hold is off, so staff cannot place a hold until it is enabled.';
     const confirmations = {
       purchase: request.bibid
-        ? `Move this request to Pending hold using its verified BIB? The server will determine the final state.${holdOffConsequence}`
+        ? `${request.autohold ? 'Move this request to Pending hold' : 'Close this request without a hold'} using its verified BIB? The server will determine the final state.`
         : 'Record this purchase decision and move the request to Outstanding purchase?',
-      alreadyOwn: `Record that the library already owns this title and move the verified BIB to Pending hold?${holdOffConsequence}`,
-      catalogFound: `Move this verified catalog title to Pending hold?${holdOffConsequence}`,
+      alreadyOwn: `Record that the library already owns this title and ${request.autohold ? 'move the verified BIB to Pending hold' : 'close it without a hold'}?`,
+      catalogFound: `${request.autohold ? 'Move this verified catalog title to Pending hold' : 'Close this verified catalog title without a hold'}?`,
       reject: 'Reject and close this request? A patron rejection email is queued only when a template and delivery are available.',
       silentClose: 'Close this suggestion without a rejection email? It will leave the active queue.',
       closeDuplicate: 'Close this request as a duplicate of an existing patron hold? No new hold will be placed.',
@@ -3411,8 +3414,10 @@ export function createWorkflowApp() {
           : body?.action === 'purchase' ? 'Purchase reminder' : 'Notification';
       const notification = notificationOutcome(result?.notificationStatus, result?.notificationReason,
         notificationLabel);
-      let message = `${successMessage}${status}${notification.text}`;
-      let messageKind = notification.partial ? 'warning' : 'success';
+      const patronNotification = notificationOutcome(result?.patronNotificationStatus,
+        result?.patronNotificationReason, 'Purchase approval email');
+      let message = `${successMessage}${status}${notification.text}${patronNotification.text}`;
+      let messageKind = notification.partial || patronNotification.partial ? 'warning' : 'success';
       const sessionFailureMessage = committed
         ? `${message} Sign in again to review the committed request.`
         : null;
@@ -3431,7 +3436,7 @@ export function createWorkflowApp() {
         }
       }
       if (current?.status && current.status !== resultStatus) {
-        message = `${successMessage} Final state: ${statusLabel(current.status)}.${notification.text}`;
+        message = `${successMessage} Final state: ${statusLabel(current.status)}.${notification.text}${patronNotification.text}`;
         if (state.partialSessionFailureOwner === mutation.token) {
           state.partialSessionFailureMessage = `${message} Sign in again to review the committed request.`;
         }

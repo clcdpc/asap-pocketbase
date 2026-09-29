@@ -563,12 +563,12 @@ public sealed partial class PatronJourneyTests
         await using var verified = await command.ExecuteReaderAsync();
         Assert.IsTrue(await verified.ReadAsync());
         Assert.AreEqual("Catalog title 9001 (Browser staff title edited)", verified.GetString(0));
-        Assert.AreEqual("pending_hold", verified.GetString(1));
+        Assert.AreEqual("closed", verified.GetString(1));
         Assert.AreEqual(seeded.SuperId, verified.GetInt64(2));
         Assert.IsTrue(verified.GetBoolean(3));
         Assert.AreEqual("browser-weekly@example.org", verified.GetString(4));
         Assert.IsTrue(verified.GetBoolean(5));
-        Assert.AreEqual(6, verified.GetInt32(6));
+        Assert.AreEqual(2, verified.GetInt32(6));
         Assert.AreEqual("Library backlist", verified.GetString(7));
         Assert.AreEqual("Edited audience", verified.GetString(8));
         Assert.AreEqual("hardback", verified.GetString(9));
@@ -4449,8 +4449,9 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("outstanding_purchase", result.GetString(1));
         Assert.AreEqual("9780000002190", result.GetString(3));
         Assert.IsTrue(result.IsDBNull(4));
-        Assert.AreEqual("pending", result.GetString(5));
-        Assert.IsTrue(result.IsDBNull(6));
+        Assert.IsTrue(result.IsDBNull(5));
+        Assert.AreEqual("Identifier processing was not completed before this request left suggestions.",
+            result.GetString(6));
         Assert.AreEqual(0, result.GetInt32(7));
         Assert.IsTrue(result.IsDBNull(8));
         Assert.IsTrue(result.IsDBNull(9));
