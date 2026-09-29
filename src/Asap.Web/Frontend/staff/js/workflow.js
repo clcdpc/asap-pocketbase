@@ -3396,6 +3396,7 @@ export function createWorkflowApp() {
 
   async function mutateRequest(request, path, body, successMessage) {
     if (!isCurrentDialogRequest(request, 'title_request') || state.dialogMutationInFlight === `title:${request.id}:${request.version}`) return;
+    const selectionGeneration = state.navigationGeneration;
     const mutation = latestLoads.begin('dialog-mutation');
     state.dialogMutationInFlight = `title:${request.id}:${request.version}`;
     announce('Saving request...');
@@ -3469,6 +3470,11 @@ export function createWorkflowApp() {
         announce(refreshed === false ? `${message} The queue could not refresh.` : message, messageKind);
       }
     } catch (error) {
+      if ((path.endsWith('/action') || path.endsWith('/place-hold')) && error.status === 409 &&
+          error.response?.code === 'duplicate_open_request') {
+        await showDuplicateRecovery(request, mutation, selectionGeneration, error.response.duplicate);
+        return;
+      }
       const recordedProviderOutcome = error.response?.providerOutcomeRecorded === true;
       const definiteNoCommit = ['bib_validation_unavailable', 'notification_dependency_unavailable']
         .includes(error.response?.code);
@@ -3506,6 +3512,59 @@ export function createWorkflowApp() {
       if (state.dialogMutationInFlight === `title:${request.id}:${request.version}`) state.dialogMutationInFlight = null;
       latestLoads.finish('dialog-mutation', mutation.token);
     }
+  }
+
+  async function showDuplicateRecovery(request, mutation, selectionGeneration, duplicate) {
+    if (!isCurrentDialogMutation(mutation, request, 'title_request') ||
+        state.navigationGeneration !== selectionGeneration) return;
+    await loadQueue({ skipDeepLink: true, silent: true });
+    if (!isCurrentDialogMutation(mutation, request, 'title_request') ||
+        state.navigationGeneration !== selectionGeneration) return;
+    const detailLoaded = await openRequest(request.id);
+    if (detailLoaded !== true) {
+      if (state.navigationGeneration === selectionGeneration + 1 &&
+          isCurrentDialogSelection(request, 'title_request')) {
+        announce('The attempted change was not saved because another open request has this BIB. Current details could not refresh; reload this request before deciding whether to close it.', 'error');
+      }
+      return;
+    }
+    if (state.navigationGeneration !== selectionGeneration + 1 ||
+        !state.currentRequest || String(state.currentRequest.id) !== String(request.id) ||
+        !isCurrentDialogRequest(state.currentRequest, 'title_request')) return;
+    const current = state.currentRequest;
+    const duplicateLabel = duplicate && typeof duplicate.id === 'string' && /^\d+$/.test(duplicate.id)
+      ? `Request ${duplicate.id}: ${duplicate.title || 'Untitled'} (${statusLabel(duplicate.status)}), BIB ${duplicate.bibid || 'unknown'}`
+      : 'another open request for this patron and BIB';
+    const panel = element('section', {
+      className: 'action-choice duplicate-recovery', 'aria-labelledby': 'duplicate-recovery-title'
+    });
+    panel.append(
+      element('h3', { id: 'duplicate-recovery-title', text: 'Duplicate BIB request' }),
+      element('p', { text: `The attempted change was not saved. This patron already has ${duplicateLabel}.` }),
+      element('p', { text: 'Close this current request as a duplicate, or leave it open to edit or select another BIB.' })
+    );
+    const continueButton = element('button', { type: 'button', onclick: () => {
+      if (!panel.isConnected || state.navigationGeneration !== selectionGeneration + 1 ||
+          !isCurrentDialogRequest(current, 'title_request')) return;
+      panel.remove();
+      dom.dialogBody.querySelector('.edit-form input[inputmode="numeric"]')?.focus();
+      announce('The request remains open. Edit it or select another BIB.');
+    } }, 'Continue editing');
+    const closeButton = element('button', { type: 'button', className: 'secondary-button', onclick: async () => {
+      if (!panel.isConnected || state.navigationGeneration !== selectionGeneration + 1 ||
+          !isCurrentDialogRequest(current, 'title_request')) return;
+      await runAction(current, 'closeDuplicate');
+    } }, 'Close current request as duplicate');
+    if (current.status !== 'closed') {
+      panel.append(element('div', { className: 'form-actions' }, [closeButton, continueButton]));
+      dom.dialogBody.querySelector('.action-bar')?.after(panel);
+      closeButton.focus();
+    } else {
+      panel.append(element('div', { className: 'form-actions' }, [continueButton]));
+      dom.dialogBody.querySelector('.action-bar')?.after(panel);
+      continueButton.focus();
+    }
+    announce('The attempted change was not saved. Review the duplicate request and choose whether to close this request.', 'error');
   }
 
   async function showAssignment(request) {
