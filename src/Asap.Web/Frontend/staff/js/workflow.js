@@ -87,6 +87,7 @@ function closeReasonLabel(value) {
     rejected: 'Rejected',
     manual: 'Closed by staff',
     duplicate_hold: 'Duplicate patron hold',
+    purchased_no_hold: 'Purchased, no hold',
     hold_cancelled: 'Hold cancelled',
     silent: 'Closed silently',
     'Silently Closed': 'Closed silently'
@@ -223,7 +224,7 @@ export function createWorkflowApp() {
     staffSuggestion: null,
     staffSuggestionReturnFocus: null,
     partialSessionFailureMessage: null,
-    settingsCommitPendingRefresh: false,
+    settingsCommitPendingRefresh: null,
     partialSessionFailureOwner: null,
     partialSessionFailureDetailAvailable: false,
     partialSessionFailureAfterQueueSequence: null,
@@ -329,9 +330,9 @@ export function createWorkflowApp() {
       pushSettingsScopeParameter(scope);
       void refreshEmailReadiness();
     },
-    onCommitted: () => { state.settingsCommitPendingRefresh = true; },
+    onCommitted: (message = 'Settings saved.') => { state.settingsCommitPendingRefresh = message; },
     onRefreshed: () => {
-      state.settingsCommitPendingRefresh = false;
+      state.settingsCommitPendingRefresh = null;
       void refreshEmailReadiness();
     }
   });
@@ -908,7 +909,7 @@ export function createWorkflowApp() {
     resetAnalytics();
     settingsController.signedOut();
     dom.signedOutMessage.textContent = state.settingsCommitPendingRefresh
-      ? 'Settings saved. Sign in again to review the current values.'
+      ? `${state.settingsCommitPendingRefresh} Sign in again to review the current values.`
       : settingsMutationUnconfirmed
         ? 'Settings change outcome is uncertain. Sign in again and check saved values before retrying.'
         : state.partialSessionFailureMessage ||
@@ -1278,7 +1279,7 @@ export function createWorkflowApp() {
   }
 
   async function loadOperations(options = {}) {
-    if (!state.staff || (state.staff.role !== 'admin' && state.staff.role !== 'super_admin')) return;
+    if (!state.staff || (state.staff.role !== 'admin' && state.staff.role !== 'super_admin')) return false;
     const load = latestLoads.begin('operations');
     const requestedScope = state.operationsScope;
     dom.refreshOperations.disabled = true;
@@ -1292,18 +1293,20 @@ export function createWorkflowApp() {
           ? authorizedJson('/api/asap/staff/organizations', { signal: load.signal })
           : Promise.resolve(null)
       ]);
-      if (!load.isCurrent() || requestedScope !== state.operationsScope) return;
+      if (!load.isCurrent() || requestedScope !== state.operationsScope) return false;
       if (state.staff.role === 'super_admin' && Array.isArray(organizationResult)) {
         populateScopes(organizationResult.filter(item => Number(item.id) > 1), requestedScope);
       }
       renderOperations({ queue, email });
       state.operationsLoaded = true;
       if (!options.silent) announce('Workflow operations loaded.');
+      return true;
     } catch (error) {
       if (load.isCurrent() && requestedScope === state.operationsScope &&
           !options.silent && !isAbortError(error) && error.status !== 401) {
         announce(error.message || 'Workflow operations could not be loaded.', 'error');
       }
+      return false;
     } finally {
       if (load.isCurrent()) dom.refreshOperations.disabled = false;
       latestLoads.finish('operations', load.token);
@@ -1318,8 +1321,15 @@ export function createWorkflowApp() {
     try {
       const result = await authorizedJson(`${path}${query}`, { method: 'POST', signal: load.signal });
       if (!load.isCurrent() || requestedScope !== state.operationsScope) return;
-      await loadOperations({ silent: true });
-      announce(result.manualRunId ? `${message} Run ${result.manualRunId} queued.` : message, 'success');
+      const committedMessage = result.manualRunId ? `${message} Run ${result.manualRunId} queued.` : message;
+      state.partialSessionFailureMessage = `${committedMessage} Sign in again to review workflow operations.`;
+      state.partialSessionFailureOwner = load.token;
+      const refreshed = await loadOperations({ silent: true });
+      if (refreshed === true) clearCommittedSessionFallback(load.token);
+      if (load.isCurrent() && requestedScope === state.operationsScope && state.staff) {
+        announce(refreshed ? committedMessage : `${committedMessage} Operations could not be refreshed.`,
+          refreshed ? 'success' : 'warning');
+      }
     } catch (error) {
       if (load.isCurrent() && requestedScope === state.operationsScope &&
           !isAbortError(error) && error.status !== 401) {
@@ -1340,8 +1350,14 @@ export function createWorkflowApp() {
         signal: load.signal
       });
       if (!load.isCurrent() || requestedScope !== state.operationsScope) return;
-      await loadOperations({ silent: true });
-      announce('Email retry queued.', 'success');
+      state.partialSessionFailureMessage = `Email retry ${row.id} queued. Sign in again to review email operations.`;
+      state.partialSessionFailureOwner = load.token;
+      const refreshed = await loadOperations({ silent: true });
+      if (refreshed === true) clearCommittedSessionFallback(load.token);
+      if (load.isCurrent() && requestedScope === state.operationsScope && state.staff) {
+        announce(refreshed ? 'Email retry queued.' : 'Email retry queued. Operations could not be refreshed.',
+          refreshed ? 'success' : 'warning');
+      }
     } catch (error) {
       if (load.isCurrent() && requestedScope === state.operationsScope &&
           !isAbortError(error) && error.status !== 401) {
@@ -1529,7 +1545,9 @@ export function createWorkflowApp() {
       }
       return true;
     } catch (error) {
-      if (!options.silent && !isAbortError(error) && error.status !== 401) {
+      if (load.isCurrent() && owner === state.staff && requestedScope === state.scope &&
+          requestedStatus === state.additionalCopyStatus &&
+          !options.silent && !isAbortError(error) && error.status !== 401) {
         announce(error.message || 'Additional-copy tasks could not be loaded.', 'error');
       }
       return false;
@@ -2030,12 +2048,14 @@ export function createWorkflowApp() {
       loadResearchConfiguration(request);
       return true;
     } catch (error) {
-      if (load.isCurrent() && state.selectedRequestId === String(id) &&
-          state.selectedRequestType === 'title_request' &&
+      const current = load.isCurrent() && navigationGeneration === state.navigationGeneration &&
+          staff === state.staff && state.selectedRequestId === String(id) &&
+          state.selectedRequestType === 'title_request';
+      if (current &&
           !(isAbortError(error) && load.signal.aborted) && error.status !== 401) {
         announce(error.status === 404 ? 'That request is no longer available.' : error.message, 'error');
       }
-      if (options.fromRecent && error.status === 404) {
+      if (current && options.fromRecent && error.status === 404) {
         const storage = recentStorage();
         if (storage) forgetRecentRequest(storage, state.recentKey, String(id));
         renderRecentRequests();
@@ -2457,31 +2477,46 @@ export function createWorkflowApp() {
         signal: mutation.signal
       });
       if (!mutation.isCurrent() || state.staffSuggestion !== current) return;
-      const id = String(created.id);
+      if (typeof created?.id !== 'string' || !/^[1-9]\d*$/.test(created.id)) {
+        throw unconfirmedResponseError();
+      }
+      const id = created.id;
       const targetLibraryId = String(created.libraryOrgId || current.scopeId);
+      const notification = created.notificationStatus === 'queued'
+        ? 'Confirmation email queued.'
+        : created.notificationStatus === 'suppressed'
+          ? 'No confirmation email was sent because delivery is suppressed.'
+          : 'No confirmation email was requested.';
+      const committedMessage = `Suggestion ${id} created on behalf of the patron. ${notification}`;
+      state.partialSessionFailureMessage = `${committedMessage} Sign in again to review the committed request.`;
+      state.partialSessionFailureOwner = mutation.token;
+      state.partialSessionFailureDetailAvailable = false;
+      state.partialSessionFailureAfterQueueSequence = null;
       current.submitting = false;
       closeStaffSuggestion({ focusButton: false, force: true });
       if (state.staff?.role === 'super_admin') {
         state.scope = targetLibraryId;
         dom.scope.value = targetLibraryId;
       }
+      let queueRefreshed = false;
       try {
-        await loadQueue({ skipDeepLink: true, silent: true });
+        queueRefreshed = await loadQueue({ skipDeepLink: true, silent: true }) === true;
       } catch {
         // Queue refresh is follow-up presentation work. The create response is already
         // authoritative and must remain a visible success even if the refresh races.
       }
-      try {
-        await openRequest(id, dom.newSuggestion);
-      } catch {
-        // The authoritative create response remains the success path if the queue refresh races.
+      let detailLoaded = false;
+      if (state.staff) {
+        try {
+          detailLoaded = await openRequest(id, dom.newSuggestion) === true;
+        } catch {
+          // The authoritative create response remains the success path if the detail refresh races.
+        }
       }
-      const notification = created.notificationStatus === 'queued'
-        ? 'Confirmation email queued.'
-        : created.notificationStatus === 'suppressed'
-          ? 'No confirmation email was sent because delivery is suppressed.'
-          : 'No confirmation email was requested.';
-      announce(`Suggestion ${id} created on behalf of the patron. ${notification}`, 'success');
+      if (queueRefreshed && detailLoaded) clearCommittedSessionFallback(mutation.token);
+      if (state.staff) announce(committedMessage +
+        (queueRefreshed && detailLoaded ? '' : ' Current details could not be refreshed.'),
+      queueRefreshed && detailLoaded ? 'success' : 'warning');
     } catch (error) {
       if (!mutation.isCurrent() || isAbortError(error) || error.status === 401) return;
       dom.staffSuggestionBody.querySelector('.staff-suggestion-conflict')?.remove();
@@ -2693,7 +2728,7 @@ export function createWorkflowApp() {
         commandButton('Close silently', 'archive', () => runAction(request, 'silentClose'), 'secondary-button', workflowBlocked)
       );
     } else if (request.status === 'outstanding_purchase') {
-      bar.append(commandButton('Ready for hold', 'arrow-right', () => runAction(request, 'catalogFound'),
+      bar.append(commandButton(request.autohold ? 'Ready for hold' : 'Close without hold', 'arrow-right', () => runAction(request, 'catalogFound'),
         'primary-button', workflowBlocked));
     } else if (request.status === 'pending_hold') {
       bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, event.currentTarget), 'secondary-button', !request.bibid));
@@ -3002,10 +3037,12 @@ export function createWorkflowApp() {
       const bibWillChange = !bib.disabled && bib.value.trim() !== String(request.bibid || '').trim();
       const bibSelected = Boolean(selectedStaffBibId(state.verifiedBib, request.id, bib.value));
       const turnsOffHoldForBib = request.autohold && !autohold.checked && Boolean(request.bibid);
-      const noAutoHoldConsequence = request.status === 'outstanding_purchase'
-        ? 'Save this BIB with automatic hold off? No hold will be placed automatically. The request stays Outstanding purchase now; automatic purchase promotion may later close it without a hold.'
-        : 'Save this BIB with automatic hold off? No hold will be placed automatically, and hold placement remains unavailable while auto-hold is off.';
-      if ((bibWillChange || bibSelected || turnsOffHoldForBib) && !autohold.checked &&
+      const closesExistingNoHold = Boolean(request.bibid) && !autohold.checked &&
+        (request.status === 'outstanding_purchase' || request.status === 'pending_hold');
+      const noAutoHoldConsequence = request.status === 'outstanding_purchase' || request.status === 'pending_hold'
+        ? 'Save with automatic hold off? This request will close without placing a hold.'
+        : 'Save with automatic hold off? Advancing this request with a verified BIB will close it without placing a hold.';
+      if ((bibWillChange || bibSelected || turnsOffHoldForBib || closesExistingNoHold) && !autohold.checked &&
           !confirmCurrent(request, 'title_request', noAutoHoldConsequence)) return;
       if (request.claimType === 'automatic_format_rule') {
         const claimantId = request.claimedByStaffUserId == null ? null : String(request.claimedByStaffUserId);
@@ -3015,7 +3052,9 @@ export function createWorkflowApp() {
           : 'Save these request edits?';
         const claimConsequence = transfersClaim
           ? 'This transfers the automatic format claim from the current claimant to your manual claim.'
-          : 'This replaces the automatic format claim with your manual claim.';
+          : format.value !== request.format
+            ? 'The new format rule may reassign or clear the automatic claim.'
+            : 'Your automatic claim will remain.';
         if (!confirmCurrent(request, 'title_request', `${formatConsequence} ${claimConsequence}`)) return;
       }
       if (!isCurrentDialogRequest(request, 'title_request') || !form.isConnected) return;
@@ -3132,14 +3171,12 @@ export function createWorkflowApp() {
         return;
       }
     }
-    const holdOffConsequence = request.autohold
-      ? '' : ' Automatic hold is off, so staff cannot place a hold until it is enabled.';
     const confirmations = {
       purchase: request.bibid
-        ? `Move this request to Pending hold using its verified BIB? The server will determine the final state.${holdOffConsequence}`
+        ? `${request.autohold ? 'Move this request to Pending hold' : 'Close this request without a hold'} using its verified BIB? The server will determine the final state.`
         : 'Record this purchase decision and move the request to Outstanding purchase?',
-      alreadyOwn: `Record that the library already owns this title and move the verified BIB to Pending hold?${holdOffConsequence}`,
-      catalogFound: `Move this verified catalog title to Pending hold?${holdOffConsequence}`,
+      alreadyOwn: `Record that the library already owns this title and ${request.autohold ? 'move the verified BIB to Pending hold' : 'close it without a hold'}?`,
+      catalogFound: `${request.autohold ? 'Move this verified catalog title to Pending hold' : 'Close this verified catalog title without a hold'}?`,
       reject: 'Reject and close this request? A patron rejection email is queued only when a template and delivery are available.',
       silentClose: 'Close this suggestion without a rejection email? It will leave the active queue.',
       closeDuplicate: 'Close this request as a duplicate of an existing patron hold? No new hold will be placed.',
@@ -3359,6 +3396,7 @@ export function createWorkflowApp() {
 
   async function mutateRequest(request, path, body, successMessage) {
     if (!isCurrentDialogRequest(request, 'title_request') || state.dialogMutationInFlight === `title:${request.id}:${request.version}`) return;
+    const selectionGeneration = state.navigationGeneration;
     const mutation = latestLoads.begin('dialog-mutation');
     state.dialogMutationInFlight = `title:${request.id}:${request.version}`;
     announce('Saving request...');
@@ -3377,8 +3415,10 @@ export function createWorkflowApp() {
           : body?.action === 'purchase' ? 'Purchase reminder' : 'Notification';
       const notification = notificationOutcome(result?.notificationStatus, result?.notificationReason,
         notificationLabel);
-      let message = `${successMessage}${status}${notification.text}`;
-      let messageKind = notification.partial ? 'warning' : 'success';
+      const patronNotification = notificationOutcome(result?.patronNotificationStatus,
+        result?.patronNotificationReason, 'Purchase approval email');
+      let message = `${successMessage}${status}${notification.text}${patronNotification.text}`;
+      let messageKind = notification.partial || patronNotification.partial ? 'warning' : 'success';
       const sessionFailureMessage = committed
         ? `${message} Sign in again to review the committed request.`
         : null;
@@ -3397,7 +3437,7 @@ export function createWorkflowApp() {
         }
       }
       if (current?.status && current.status !== resultStatus) {
-        message = `${successMessage} Final state: ${statusLabel(current.status)}.${notification.text}`;
+        message = `${successMessage} Final state: ${statusLabel(current.status)}.${notification.text}${patronNotification.text}`;
         if (state.partialSessionFailureOwner === mutation.token) {
           state.partialSessionFailureMessage = `${message} Sign in again to review the committed request.`;
         }
@@ -3430,6 +3470,11 @@ export function createWorkflowApp() {
         announce(refreshed === false ? `${message} The queue could not refresh.` : message, messageKind);
       }
     } catch (error) {
+      if ((path.endsWith('/action') || path.endsWith('/place-hold')) && error.status === 409 &&
+          error.response?.code === 'duplicate_open_request') {
+        await showDuplicateRecovery(request, mutation, selectionGeneration, error.response.duplicate);
+        return;
+      }
       const recordedProviderOutcome = error.response?.providerOutcomeRecorded === true;
       const definiteNoCommit = ['bib_validation_unavailable', 'notification_dependency_unavailable']
         .includes(error.response?.code);
@@ -3467,6 +3512,59 @@ export function createWorkflowApp() {
       if (state.dialogMutationInFlight === `title:${request.id}:${request.version}`) state.dialogMutationInFlight = null;
       latestLoads.finish('dialog-mutation', mutation.token);
     }
+  }
+
+  async function showDuplicateRecovery(request, mutation, selectionGeneration, duplicate) {
+    if (!isCurrentDialogMutation(mutation, request, 'title_request') ||
+        state.navigationGeneration !== selectionGeneration) return;
+    await loadQueue({ skipDeepLink: true, silent: true });
+    if (!isCurrentDialogMutation(mutation, request, 'title_request') ||
+        state.navigationGeneration !== selectionGeneration) return;
+    const detailLoaded = await openRequest(request.id);
+    if (detailLoaded !== true) {
+      if (state.navigationGeneration === selectionGeneration + 1 &&
+          isCurrentDialogSelection(request, 'title_request')) {
+        announce('The attempted change was not saved because another open request has this BIB. Current details could not refresh; reload this request before deciding whether to close it.', 'error');
+      }
+      return;
+    }
+    if (state.navigationGeneration !== selectionGeneration + 1 ||
+        !state.currentRequest || String(state.currentRequest.id) !== String(request.id) ||
+        !isCurrentDialogRequest(state.currentRequest, 'title_request')) return;
+    const current = state.currentRequest;
+    const duplicateLabel = duplicate && typeof duplicate.id === 'string' && /^\d+$/.test(duplicate.id)
+      ? `Request ${duplicate.id}: ${duplicate.title || 'Untitled'} (${statusLabel(duplicate.status)}), BIB ${duplicate.bibid || 'unknown'}`
+      : 'another open request for this patron and BIB';
+    const panel = element('section', {
+      className: 'action-choice duplicate-recovery', 'aria-labelledby': 'duplicate-recovery-title'
+    });
+    panel.append(
+      element('h3', { id: 'duplicate-recovery-title', text: 'Duplicate BIB request' }),
+      element('p', { text: `The attempted change was not saved. This patron already has ${duplicateLabel}.` }),
+      element('p', { text: 'Close this current request as a duplicate, or leave it open to edit or select another BIB.' })
+    );
+    const continueButton = element('button', { type: 'button', onclick: () => {
+      if (!panel.isConnected || state.navigationGeneration !== selectionGeneration + 1 ||
+          !isCurrentDialogRequest(current, 'title_request')) return;
+      panel.remove();
+      dom.dialogBody.querySelector('.edit-form input[inputmode="numeric"]')?.focus();
+      announce('The request remains open. Edit it or select another BIB.');
+    } }, 'Continue editing');
+    const closeButton = element('button', { type: 'button', className: 'secondary-button', onclick: async () => {
+      if (!panel.isConnected || state.navigationGeneration !== selectionGeneration + 1 ||
+          !isCurrentDialogRequest(current, 'title_request')) return;
+      await runAction(current, 'closeDuplicate');
+    } }, 'Close current request as duplicate');
+    if (current.status !== 'closed') {
+      panel.append(element('div', { className: 'form-actions' }, [closeButton, continueButton]));
+      dom.dialogBody.querySelector('.action-bar')?.after(panel);
+      closeButton.focus();
+    } else {
+      panel.append(element('div', { className: 'form-actions' }, [continueButton]));
+      dom.dialogBody.querySelector('.action-bar')?.after(panel);
+      continueButton.focus();
+    }
+    announce('The attempted change was not saved. Review the duplicate request and choose whether to close this request.', 'error');
   }
 
   async function showAssignment(request) {

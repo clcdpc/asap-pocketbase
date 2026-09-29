@@ -591,7 +591,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     assert.equal(await page.getByLabel('Format', { exact: true }).inputValue(), 'book');
     await page.getByLabel('Automatically place hold').uncheck();
     page.once('dialog', dialog => {
-      assert.match(dialog.message(), /No hold will be placed automatically/);
+      assert.match(dialog.message(), /close without placing a hold/);
       return dialog.dismiss();
     });
     await page.getByRole('button', { name: 'Save changes' }).click();
@@ -609,13 +609,9 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     assert.equal(reconciledRequest.identifier, '9780000002901');
     assert.equal(reconciledRequest.publication, 'Library backlist');
     assert.equal(reconciledRequest.format, 'book');
-    page.once('dialog', dialog => {
-      assert.match(dialog.message(), /Pending hold/);
-      assert.match(dialog.message(), /cannot place a hold until it is enabled/);
-      return dialog.accept();
-    });
-    await page.getByRole('button', { name: 'Ready for hold' }).click();
-    await page.locator('#request-dialog .status-badge').filter({ hasText: 'Pending hold' }).waitFor();
+    assert.equal(reconciledRequest.status, 'closed');
+    assert.equal(reconciledRequest.closeReason, 'purchased_no_hold');
+    await page.locator('#request-dialog .status-badge').filter({ hasText: 'Closed' }).waitFor();
     assert.equal(await page.getByRole('button', { name: 'Place hold' }).count(), 0);
 
     await page.getByRole('button', { name: 'Close request details' }).click();

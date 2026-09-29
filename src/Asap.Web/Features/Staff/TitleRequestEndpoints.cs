@@ -573,7 +573,9 @@ public static class TitleRequestEndpoints
                 Committed = true,
                 FinalStatus = result.FinalStatus,
                 NotificationStatus = result.NotificationStatus,
-                NotificationReason = result.NotificationReason
+                NotificationReason = result.NotificationReason,
+                PatronNotificationStatus = result.PatronNotificationStatus,
+                PatronNotificationReason = result.PatronNotificationReason
             });
         }
         return Results.Json(new
@@ -583,6 +585,8 @@ public static class TitleRequestEndpoints
             finalStatus = result.FinalStatus,
             notificationStatus = result.NotificationStatus,
             notificationReason = result.NotificationReason,
+            patronNotificationStatus = result.PatronNotificationStatus,
+            patronNotificationReason = result.PatronNotificationReason,
             refreshUnavailable = row is null
         });
     }
@@ -788,7 +792,20 @@ public static class TitleRequestEndpoints
         "staff_scope_forbidden" or "claim_forbidden" or "delete_forbidden" => Results.Json(
             new { code = result.Code, message = "This request is outside your authorized scope." },
             statusCode: StatusCodes.Status403Forbidden),
-        "stale_version" or "actor_changed_since_preview" or "claim_conflict" or "hold_operation_incomplete" or
+        "duplicate_open_request" => Results.Conflict(new
+        {
+            code = result.Code,
+            message = "This patron already has an open request or hold for this BIB. The request was not changed.",
+            duplicate = result.Duplicate is { } duplicate ? new
+            {
+                id = duplicate.Id.ToString(CultureInfo.InvariantCulture),
+                title = duplicate.Title,
+                status = duplicate.Status,
+                bibid = duplicate.BibId,
+                matchType = duplicate.MatchType
+            } : null
+        }),
+        "stale_version" or "actor_changed_since_preview" or "claim_conflict" or "claim_rule_changed" or "hold_operation_incomplete" or
             "identifier_locked_by_stage" or "identifier_retry_not_allowed" or "organization_inactive" or
             "hold_history_retained" => Results.Conflict(new
             {
@@ -799,6 +816,11 @@ public static class TitleRequestEndpoints
         {
             code = result.Code,
             message = "The selected rejection template is no longer available for this request. Choose a current template."
+        }),
+        "invalid_custom_fields" => Results.BadRequest(new
+        {
+            code = result.Code,
+            message = "The request's custom fields do not match the selected format. Review the current fields before saving."
         }),
         "notification_dependency_unavailable" => Results.Json(new
         {
@@ -839,6 +861,20 @@ public static class TitleRequestEndpoints
         "not_found" => Results.NotFound(new { result.Code, result.ProviderOutcomeRecorded }),
         "staff_scope_forbidden" => Results.Json(new { result.Code, result.ProviderOutcomeRecorded,
             operationId = result.OperationId?.ToString() }, statusCode: StatusCodes.Status403Forbidden),
+        "duplicate_open_request" => Results.Conflict(new
+        {
+            result.Code,
+            result.ProviderOutcomeRecorded,
+            message = "This patron already has an active request or hold for this BIB. No new hold was attempted.",
+            duplicate = result.Duplicate is { } duplicate ? new
+            {
+                id = duplicate.Id.ToString(CultureInfo.InvariantCulture),
+                title = duplicate.Title,
+                status = duplicate.Status,
+                bibid = duplicate.BibId,
+                matchType = duplicate.MatchType
+            } : null
+        }),
         "stale_version" or "hold_operation_incomplete" or "operation_ownership_lost" or
             "hold_identity_ambiguous" or "hold_operator_required" =>
             Results.Conflict(new { result.Code, result.ProviderOutcomeRecorded,

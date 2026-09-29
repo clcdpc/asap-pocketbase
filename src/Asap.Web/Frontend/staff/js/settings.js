@@ -1195,7 +1195,7 @@ export function createSettingsController({
   }
 
   async function loadStaffAccess(options = {}) {
-    if (!state.staff || state.staff.role === 'staff') return;
+    if (!state.staff || state.staff.role === 'staff') return false;
     const loadState = beginSettingsOperation('administration-staff-access');
     if (!options.silent) setStaffStatus(`Loading staff access for ${scopedStaffLabel()}...`);
     if (dom.staffRefresh) dom.staffRefresh.disabled = true;
@@ -1208,7 +1208,7 @@ export function createSettingsController({
           return { data: [] };
         })
       ]);
-      if (!isSettingsOperationCurrent(loadState)) return;
+      if (!isSettingsOperationCurrent(loadState)) return false;
       const users = usersResponse?.data ?? usersResponse ?? {};
       state.staffUsers = Array.isArray(users.users) ? users.users : [];
       state.staffCanAssignSuperAdmin = Boolean(users.canAssignSuperAdmin);
@@ -1218,10 +1218,12 @@ export function createSettingsController({
       renderStaffUsers();
       renderStaffAudit();
       if (!options.silent) setStaffStatus(`Staff access loaded for ${scopedStaffLabel()}.`, 'success');
+      return true;
     } catch (error) {
       if (isSettingsOperationCurrent(loadState) && !isAbortError(error) && error.status !== 401) {
         setStaffStatus(error.message || 'Staff access could not be loaded.', 'error');
       }
+      return false;
     } finally {
       if (isSettingsOperationCurrent(loadState)) {
         if (dom.staffRefresh) dom.staffRefresh.disabled = false;
@@ -1239,8 +1241,13 @@ export function createSettingsController({
       if (!isSettingsOperationCurrent(mutation)) return null;
       const cleanup = response?.cleanup ?? response?.data?.cleanup ?? {};
       state.lastStaffCleanup = { staffId: stringValue(property(response?.user ?? response?.data?.user, 'id') || staffId), cleanup };
-      await loadStaffAccess({ silent: true });
-      if (isSettingsOperationCurrent(mutation)) setStaffStatus(`${successMessage} ${cleanupSummary(cleanup)}`, 'success');
+      const committedMessage = `${successMessage} ${cleanupSummary(cleanup)}`;
+      onCommitted(committedMessage);
+      const refreshed = await loadStaffAccess({ silent: true });
+      if (refreshed) onRefreshed();
+      if (isSettingsOperationCurrent(mutation)) setStaffStatus(refreshed
+        ? committedMessage : `${committedMessage} Staff access could not be refreshed.`,
+      refreshed ? 'success' : 'error');
       return response;
     } catch (error) {
       if (!isSettingsOperationCurrent(mutation)) return null;
@@ -1453,12 +1460,12 @@ export function createSettingsController({
     if (domainData.domainsChanged.publication) {
       payload.patron.publicationOptions = isSystem() || !domainValues.publicationUseSystem
         ? domainValues.publication
-        : [];
+        : null;
     }
     if (domainData.domainsChanged.creators) {
       payload.workflow.commonAuthorsList = isSystem() || !domainValues.creatorsUseSystem
         ? domainValues.creators
-        : [];
+        : null;
     }
     if (domainData.domainsChanged.codes) {
       payload.workflow.allowedPatronCodeIds = isSystem() || !domainValues.codesUseSystem
@@ -1507,9 +1514,15 @@ export function createSettingsController({
     dom.save.disabled = true;
     notify('Saving settings...');
     let committed = false;
+    let deletedFormatCount = 0;
+    let totalFormatDeletes = 0;
+    const committedMessage = () => totalFormatDeletes > 0
+      ? `Settings saved. Format deletions confirmed: ${deletedFormatCount} of ${totalFormatDeletes}.`
+      : 'Settings saved.';
     try {
       const payload = collectPayload();
       const deletedFormats = state.pendingDeletedFormats.slice();
+      totalFormatDeletes = deletedFormats.length;
       const response = await authorizedJson('/api/asap/staff/settings', {
         method: 'POST',
         body: payload,
@@ -1521,7 +1534,7 @@ export function createSettingsController({
       state.baselineSnapshot = snapshotForm(dom.form);
       domainEditors.setBaseline();
       state.awaitingReload = true;
-      onCommitted();
+      onCommitted(committedMessage());
       notify('Settings saved. Refreshing current values...', 'success');
       for (const format of deletedFormats) {
         if (!isSettingsOperationCurrent(mutation)) return;
@@ -1531,6 +1544,8 @@ export function createSettingsController({
           method: 'DELETE',
           signal: mutation.signal
         });
+        deletedFormatCount += 1;
+        onCommitted(committedMessage());
       }
       if (!isSettingsOperationCurrent(mutation)) return;
       const refreshed = await load({ silent: true, owner: mutation });
@@ -1542,7 +1557,9 @@ export function createSettingsController({
     } catch (error) {
       if (!isSettingsOperationCurrent(mutation)) return;
       if (committed) {
-        notify('Settings saved, but a follow-up action failed. Reload before editing again.', 'error');
+        notify(totalFormatDeletes > 0
+          ? `${committedMessage()} A follow-up action failed. Reload before editing again.`
+          : 'Settings saved, but a follow-up action failed. Reload before editing again.', 'error');
         return;
       }
       if (isUnconfirmedMutationFailure(error, mutation)) {
@@ -1589,7 +1606,7 @@ export function createSettingsController({
       committed = true;
       state.data.version = response?.data?.version || state.data.version;
       state.awaitingReload = true;
-      onCommitted();
+      onCommitted('Inherited overrides reset.');
       notify('Inherited overrides reset. Refreshing current values...', 'success');
       const refreshed = await load({ silent: true, owner: mutation });
       if (isSettingsOperationCurrent(mutation)) notify(refreshed ? 'Inherited overrides reset.' :
@@ -1655,7 +1672,7 @@ export function createSettingsController({
       dom.brandingPreviewSource.textContent = 'Image change saved. Reloading the effective preview.';
       dom.brandingStatus.textContent = clear ? 'Image cleared; refreshing the effective logo.' : 'Logo saved; refreshing the effective logo.';
       notify(dom.brandingStatus.textContent, 'success');
-      onCommitted();
+      onCommitted(clear ? 'Logo cleared.' : 'Logo saved.');
       const refreshed = await load({ silent: true, owner: mutation });
       if (!isSettingsOperationCurrent(mutation)) return;
       dom.brandingStatus.textContent = refreshed
@@ -1731,8 +1748,12 @@ export function createSettingsController({
       });
       if (!isSettingsOperationCurrent(mutation)) return;
       dom.syncResult.textContent = `Synchronized ${response.data?.received || 0} organizations.`;
-      await load({ silent: true });
-      if (isSettingsOperationCurrent(mutation)) notify('Polaris organizations synchronized.', 'success');
+      onCommitted('Polaris organizations synchronized.');
+      const refreshed = await load({ silent: true });
+      if (isSettingsOperationCurrent(mutation)) notify(refreshed
+        ? 'Polaris organizations synchronized.'
+        : 'Polaris organizations synchronized, but current values could not be refreshed.',
+      refreshed ? 'success' : 'error');
     } catch (error) {
       if (isSettingsOperationCurrent(mutation) && error.status !== 401 && !isAbortError(error)) {
         notify(error.message || 'Organizations could not be synchronized.', 'error');
@@ -1753,8 +1774,13 @@ export function createSettingsController({
         signal: mutation.signal
       });
       if (!isSettingsOperationCurrent(mutation)) return;
-      await load({ silent: true });
-      if (isSettingsOperationCurrent(mutation)) notify(`${organization.name} ${active ? 'activated' : 'deactivated'}.`, 'success');
+      const committedMessage = `${organization.name} ${active ? 'activated' : 'deactivated'}.`;
+      onCommitted(committedMessage);
+      const refreshed = await load({ silent: true });
+      if (isSettingsOperationCurrent(mutation)) notify(refreshed
+        ? committedMessage
+        : `${committedMessage} Current values could not be refreshed.`,
+      refreshed ? 'success' : 'error');
     } catch (error) {
       if (!isSettingsOperationCurrent(mutation)) return;
       if (error.status === 409) {

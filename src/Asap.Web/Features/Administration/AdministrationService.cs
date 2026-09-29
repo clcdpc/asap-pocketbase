@@ -534,7 +534,16 @@ public sealed class AdministrationService(
             return new AdministrationResult("staff_scope_forbidden");
         }
 
-        var snapshots = await polarisProvider.GetOrganizationsAsync(cancellationToken);
+        IReadOnlyList<PolarisOrganizationSnapshot> snapshots;
+        try
+        {
+            snapshots = await polarisProvider.GetOrganizationsAsync(cancellationToken);
+        }
+        catch (PolarisOperationalException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return new AdministrationResult("polaris_unavailable", Message: "Polaris organizations could not be loaded.");
+        }
         if (snapshots.Count == 0)
         {
             return new AdministrationResult("polaris_organizations_empty");
@@ -843,11 +852,8 @@ public sealed class AdministrationService(
         var branding = await context.Branding.SingleOrDefaultAsync(
             item => item.OrganizationId == organizationId,
             cancellationToken);
+        var isNew = branding is null;
         branding ??= new Branding { OrganizationId = organizationId };
-        if (context.Entry(branding).State == EntityState.Detached)
-        {
-            context.Branding.Add(branding);
-        }
         if (clearLogo)
         {
             branding.LogoData = null;
@@ -860,11 +866,22 @@ public sealed class AdministrationService(
             branding.LogoContentType = logoInfo!.ContentType;
             branding.LogoFileName = Clean(fileName) ?? "logo";
         }
-        if (altText is not null)
+        if (altText is not null || (clearLogo && organizationId != 1))
         {
             branding.LogoAltText = Clean(altText);
         }
         branding.UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime;
+        if (organizationId != 1 && IsEmpty(branding))
+        {
+            if (!isNew)
+            {
+                context.Branding.Remove(branding);
+            }
+        }
+        else if (isNew)
+        {
+            context.Branding.Add(branding);
+        }
         await AddAuditAsync(
             context,
             actor,
@@ -1068,6 +1085,10 @@ public sealed class AdministrationService(
                 organizationId,
                 cancellationToken);
         }
+        if (context.Entry(workflow).State == EntityState.Detached && !IsEmpty(workflow))
+        {
+            context.WorkflowSettings.Add(workflow);
+        }
 
         var patron = await GetOrCreatePatronAsync(context, organizationId, cancellationToken);
         foreach (var field in PatronTextColumns)
@@ -1075,10 +1096,18 @@ public sealed class AdministrationService(
             ApplyText(patronSection, field.Key, value => SetPatronText(patron, field.Value, value, isSystem));
         }
         ApplyDuplicateLabels(patronSection, patron, isSystem);
+        if (context.Entry(patron).State == EntityState.Detached && !IsEmpty(patron))
+        {
+            context.PatronSettings.Add(patron);
+        }
 
         var email = await GetOrCreateEmailAsync(context, organizationId, cancellationToken);
         ApplyText(emailSection, "fromAddress", value => email.FromAddress = NormalizeScopedText(value, isSystem));
         ApplyText(emailSection, "fromName", value => email.FromName = NormalizeScopedText(value, isSystem));
+        if (context.Entry(email).State == EntityState.Detached && !IsEmpty(email))
+        {
+            context.EmailSettings.Add(email);
+        }
         await ApplyWholeSetsAsync(context, organizationId, workflowSection, patronSection, cancellationToken);
         await ApplyProvidersAsync(context, organizationId, workflowSection, payload, cancellationToken);
         await ApplyFormatsAsync(context, organizationId, payload, patronSection, cancellationToken);
@@ -1422,28 +1451,19 @@ public sealed class AdministrationService(
     private static async Task<WorkflowSettings> GetOrCreateWorkflowAsync(AsapDbContext context, int organizationId, CancellationToken cancellationToken)
     {
         var row = await context.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
-        if (row is not null) return row;
-        row = new WorkflowSettings { OrganizationId = organizationId };
-        context.WorkflowSettings.Add(row);
-        return row;
+        return row ?? new WorkflowSettings { OrganizationId = organizationId };
     }
 
     private static async Task<PatronSettings> GetOrCreatePatronAsync(AsapDbContext context, int organizationId, CancellationToken cancellationToken)
     {
         var row = await context.PatronSettings.SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
-        if (row is not null) return row;
-        row = new PatronSettings { OrganizationId = organizationId };
-        context.PatronSettings.Add(row);
-        return row;
+        return row ?? new PatronSettings { OrganizationId = organizationId };
     }
 
     private static async Task<EmailSettings> GetOrCreateEmailAsync(AsapDbContext context, int organizationId, CancellationToken cancellationToken)
     {
         var row = await context.EmailSettings.SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
-        if (row is not null) return row;
-        row = new EmailSettings { OrganizationId = organizationId };
-        context.EmailSettings.Add(row);
-        return row;
+        return row ?? new EmailSettings { OrganizationId = organizationId };
     }
 
     private static void SetWorkflowText(WorkflowSettings row, string field, string? value, bool system)
@@ -2438,6 +2458,12 @@ public sealed class AdministrationService(
         var existing = await context.PatronEmbedAllowedOrigins
             .Where(item => item.OrganizationId == 1)
             .ToListAsync(cancellationToken);
+        var existingNormalized = existing.Select(item => item.NormalizedOrigin)
+            .Order(StringComparer.Ordinal).ToArray();
+        if (existingNormalized.SequenceEqual(normalized, StringComparer.Ordinal))
+        {
+            return;
+        }
         context.PatronEmbedAllowedOrigins.RemoveRange(existing);
         var now = timeProvider.GetUtcNow().UtcDateTime;
         context.PatronEmbedAllowedOrigins.AddRange(normalized.Select(origin => new PatronEmbedAllowedOrigin
@@ -2500,7 +2526,8 @@ public sealed class AdministrationService(
         if (TryGetAny(workflow, out var creators, "commonAuthorsList", "commonCreators", "commonCreatorsList"))
         {
             var values = ParseValues(creators);
-            await ReplaceCommonCreatorsAsync(context, organizationId, values, cancellationToken);
+            await ReplaceCommonCreatorsAsync(context, organizationId, values,
+                creators.ValueKind == JsonValueKind.Null, cancellationToken);
         }
 
         if (TryGetAny(workflow, out var patronCodes, "allowedPatronCodeIds", "patronCodeIds"))
@@ -2513,7 +2540,8 @@ public sealed class AdministrationService(
         if (TryGetAny(patron, out var publicationOptions, "publicationOptions", "publicationOptionSet"))
         {
             var values = ParseOptions(publicationOptions);
-            await ReplacePublicationOptionsAsync(context, organizationId, values, cancellationToken);
+            await ReplacePublicationOptionsAsync(context, organizationId, values,
+                publicationOptions.ValueKind == JsonValueKind.Null, cancellationToken);
         }
     }
 
@@ -2521,6 +2549,7 @@ public sealed class AdministrationService(
         AsapDbContext context,
         int organizationId,
         IReadOnlyList<string> values,
+        bool resetToSystem,
         CancellationToken cancellationToken)
     {
         var existingSet = await context.CommonCreatorSets
@@ -2528,10 +2557,21 @@ public sealed class AdministrationService(
         var terms = await context.CommonCreatorTerms
             .Where(item => item.OrganizationId == organizationId)
             .ToListAsync(cancellationToken);
-        if (organizationId != 1 && values.Count == 0)
+        if (organizationId != 1 && resetToSystem)
         {
+            if (existingSet is null && terms.Count == 0)
+            {
+                return;
+            }
             context.CommonCreatorTerms.RemoveRange(terms);
             if (existingSet is not null) context.CommonCreatorSets.Remove(existingSet);
+            return;
+        }
+
+        var existingTerms = terms.OrderBy(item => item.SortOrder).ThenBy(item => item.Id)
+            .Select(item => item.Value).ToArray();
+        if (existingSet is not null && existingTerms.SequenceEqual(values, StringComparer.Ordinal))
+        {
             return;
         }
 
@@ -2562,8 +2602,18 @@ public sealed class AdministrationService(
             .ToListAsync(cancellationToken);
         if (organizationId != 1 && resetToSystem)
         {
+            if (existingSet is null && members.Count == 0)
+            {
+                return;
+            }
             context.PatronCodeEligibilityMembers.RemoveRange(members);
             if (existingSet is not null) context.PatronCodeEligibilitySets.Remove(existingSet);
+            return;
+        }
+
+        var existingIds = members.Select(item => item.PatronCodeId).ToHashSet(StringComparer.Ordinal);
+        if (existingSet is not null && existingIds.Count == values.Count && existingIds.SetEquals(values))
+        {
             return;
         }
 
@@ -2583,6 +2633,7 @@ public sealed class AdministrationService(
         AsapDbContext context,
         int organizationId,
         IReadOnlyList<SetOption> values,
+        bool resetToSystem,
         CancellationToken cancellationToken)
     {
         var existingSet = await context.PublicationOptionSets
@@ -2590,10 +2641,24 @@ public sealed class AdministrationService(
         var options = await context.PublicationOptions
             .Where(item => item.OrganizationId == organizationId)
             .ToListAsync(cancellationToken);
-        if (organizationId != 1 && values.Count == 0)
+        if (organizationId != 1 && resetToSystem)
         {
+            if (existingSet is null && options.Count == 0)
+            {
+                return;
+            }
             context.PublicationOptions.RemoveRange(options);
             if (existingSet is not null) context.PublicationOptionSets.Remove(existingSet);
+            return;
+        }
+
+        var desiredOptions = values.Select(item => (item.Key, item.Label, item.Enabled, item.SortOrder))
+            .OrderBy(item => item.SortOrder).ThenBy(item => item.Key, StringComparer.Ordinal).ToArray();
+        var existingOptions = options.OrderBy(item => item.SortOrder)
+            .ThenBy(item => item.OptionKey, StringComparer.Ordinal)
+            .Select(item => (item.OptionKey, item.Label, item.IsEnabled, item.SortOrder)).ToArray();
+        if (existingSet is not null && existingOptions.SequenceEqual(desiredOptions))
+        {
             return;
         }
 
@@ -2962,15 +3027,28 @@ public sealed class AdministrationService(
                     var oldOptions = await context.PatronCustomFieldOptions
                         .Where(row => row.PatronCustomFieldId == field.Id)
                         .ToListAsync(cancellationToken);
-                    context.PatronCustomFieldOptions.RemoveRange(oldOptions);
-                    context.PatronCustomFieldOptions.AddRange(ParseOptions(options).Select(option => new PatronCustomFieldOption
+                    var desiredOptions = ParseOptions(options)
+                        .OrderBy(option => option.SortOrder)
+                        .ThenBy(option => option.Key, StringComparer.Ordinal)
+                        .ToArray();
+                    var existingOptions = oldOptions
+                        .OrderBy(option => option.SortOrder)
+                        .ThenBy(option => option.OptionKey, StringComparer.Ordinal)
+                        .Select(option => (option.OptionKey, option.Label, option.IsEnabled, option.SortOrder))
+                        .ToArray();
+                    if (!existingOptions.SequenceEqual(desiredOptions.Select(option =>
+                        (option.Key, option.Label, option.Enabled, option.SortOrder))))
                     {
-                        PatronCustomFieldId = field.Id,
-                        OptionKey = option.Key,
-                        Label = option.Label,
-                        IsEnabled = option.Enabled,
-                        SortOrder = option.SortOrder
-                    }));
+                        context.PatronCustomFieldOptions.RemoveRange(oldOptions);
+                        context.PatronCustomFieldOptions.AddRange(desiredOptions.Select(option => new PatronCustomFieldOption
+                        {
+                            PatronCustomFieldId = field.Id,
+                            OptionKey = option.Key,
+                            Label = option.Label,
+                            IsEnabled = option.Enabled,
+                            SortOrder = option.SortOrder
+                        }));
+                    }
                 }
             }
 
@@ -3001,13 +3079,13 @@ public sealed class AdministrationService(
         var currentRules = await context.MaterialFormatCustomFieldRules
             .Where(item => item.LibraryOrganizationId == organizationId)
             .ToListAsync(cancellationToken);
-        context.MaterialFormatCustomFieldRules.RemoveRange(currentRules);
         var fieldsByKey = await context.PatronCustomFields
             .Where(item => item.LibraryOrganizationId == organizationId)
             .ToDictionaryAsync(item => item.FieldKey, StringComparer.Ordinal, cancellationToken);
         var formatsInScope = await context.MaterialFormats
             .Where(item => item.OwnerOrganizationId == 1 || item.OwnerOrganizationId == organizationId)
             .ToListAsync(cancellationToken);
+        var desiredRules = new List<MaterialFormatCustomFieldRule>();
         foreach (var (formatCode, formatRule) in EnumerateFormatRules(rules))
         {
             var format = formatsInScope.SingleOrDefault(item => item.Code == formatCode);
@@ -3023,7 +3101,7 @@ public sealed class AdministrationService(
                     throw new InvalidOperationException("Custom field mode must be required, optional, or hidden.");
                 }
                 if (mode == "hidden") continue;
-                context.MaterialFormatCustomFieldRules.Add(new MaterialFormatCustomFieldRule
+                desiredRules.Add(new MaterialFormatCustomFieldRule
                 {
                     LibraryOrganizationId = organizationId,
                     MaterialFormatId = format.Id,
@@ -3032,6 +3110,21 @@ public sealed class AdministrationService(
                     LabelOverride = Clean(GetString(rule, "labelOverride") ?? GetString(rule, "label"))
                 });
             }
+        }
+        var existingRuleValues = currentRules
+            .Select(item => (item.MaterialFormatId, item.PatronCustomFieldId, item.Mode, item.LabelOverride))
+            .OrderBy(item => item.MaterialFormatId)
+            .ThenBy(item => item.PatronCustomFieldId)
+            .ToArray();
+        var desiredRuleValues = desiredRules
+            .Select(item => (item.MaterialFormatId, item.PatronCustomFieldId, item.Mode, item.LabelOverride))
+            .OrderBy(item => item.MaterialFormatId)
+            .ThenBy(item => item.PatronCustomFieldId)
+            .ToArray();
+        if (!existingRuleValues.SequenceEqual(desiredRuleValues))
+        {
+            context.MaterialFormatCustomFieldRules.RemoveRange(currentRules);
+            context.MaterialFormatCustomFieldRules.AddRange(desiredRules);
         }
     }
 
@@ -3254,11 +3347,8 @@ public sealed class AdministrationService(
         var clearLogo = GetBool(branding, "clearLogo") == true || GetBool(branding, "removeLogo") == true;
         if (!hasLogoData && !hasAlt && !clearLogo) return;
         var row = await context.Branding.SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
+        var isNew = row is null;
         row ??= new Branding { OrganizationId = organizationId };
-        if (row.OrganizationId == organizationId && context.Entry(row).State == EntityState.Detached)
-        {
-            context.Branding.Add(row);
-        }
         if (hasAlt)
         {
             row.LogoAltText = Clean(GetString(branding, "altText") ?? GetString(branding, "logoAlt") ?? GetString(branding, "logoAltText"));
@@ -3290,6 +3380,10 @@ public sealed class AdministrationService(
             row.LogoFileName = Clean(GetString(branding, "fileName") ?? GetString(branding, "logoFileName")) ?? "logo";
         }
         row.UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime;
+        if (isNew && !IsEmpty(row))
+        {
+            context.Branding.Add(row);
+        }
     }
 
     private static async Task RemoveEmptyOverrideRowsAsync(

@@ -116,9 +116,11 @@ public sealed partial class PatronJourneyTests
         await context.SaveChangesAsync();
         var format = await context.MaterialFormats.SingleAsync(item => item.OwnerOrganizationId == 1 && item.Code == "book");
         var now = timeProvider!.GetUtcNow().UtcDateTime;
+        var roleOrdinal = role switch { "staff" => 1, "admin" => 2, _ => 3 };
+        var barcode = $"200000000021{roleOrdinal}{(configured ? 1 : 0)}";
         TitleRequest NewRequest(string status) => new()
         {
-            LibraryOrganizationId = 2, MaterialFormatId = format.Id, Barcode = "20000000002105", Title = $"Scoped mail {Guid.NewGuid():N}",
+            LibraryOrganizationId = 2, MaterialFormatId = format.Id, Barcode = barcode, Title = $"Scoped mail {Guid.NewGuid():N}",
             Status = status, BibId = status == "pending_hold" ? "9001" : null,
             BibIdStaffVerified = status == "pending_hold", AutoHold = true, PreferredPickupBranchId = 101,
             PreferredPickupBranchName = "Main Library", IsbnCheckStatus = status == "pending_hold" ? "found" : "not_found", CreatedUtc = now, UpdatedUtc = now,
@@ -145,15 +147,20 @@ public sealed partial class PatronJourneyTests
             var created = await copies.CreateAsync(actor, source.Id, new AdditionalCopyCreateInput(StaffVersion.Encode(source.RowVersion), true), CancellationToken.None);
             Assert.AreEqual("created", created.Code);
             var copy = await context.AdditionalCopyRequests.AsNoTracking().SingleAsync(item => item.Id == created.RequestId);
+            Assert.AreEqual(now, copy.CreatedUtc, "A source rowversion bump must not future-date the new copy.");
+            Assert.AreEqual(now, copy.UpdatedUtc);
             Assert.AreEqual("updated", (await copies.AssignAsync(actor, copy.Id,
                 new AssignAdditionalCopyInput(StaffVersion.Encode(copy.RowVersion), staff.Id), CancellationToken.None)).Code);
             await context.Entry(source).ReloadAsync();
+            Assert.IsTrue(source.UpdatedUtc > now, "Creating a copy must invalidate a stale source preview.");
             var hold = await scoped.Services.GetRequiredService<HoldPlacementService>().PlaceAsync(actor, source.Id,
                 new VersionInput(StaffVersion.Encode(source.RowVersion)), CancellationToken.None);
             Assert.AreEqual("updated", hold.Code);
             CollectionAssert.AreEqual(new[] { 2, 2, 2, 2, 2 }, sender.Organizations.ToArray());
             var outboxes = await context.EmailOutbox.AsNoTracking().Where(item => item.Id > beforeId).ToListAsync();
-            Assert.AreEqual(5, outboxes.Count);
+            Assert.AreEqual(6, outboxes.Count);
+            Assert.IsTrue(outboxes.Any(item => item.BusinessKey != null &&
+                item.BusinessKey.StartsWith($"staff-patron-action:purchase_approved:{title.Id}:", StringComparison.Ordinal)));
             foreach (var outbox in outboxes)
             {
                 Assert.AreEqual(2, outbox.OrganizationId);
@@ -162,7 +169,7 @@ public sealed partial class PatronJourneyTests
                 Assert.AreEqual(configured ? "pending" : "suppressed", outbox.Status);
                 Assert.AreEqual(configured ? null : "mail_not_configured", outbox.SuppressionReason);
             }
-            Assert.AreEqual(configured ? 5 : 0, localDispatcher.EnqueuedIds.Count);
+            Assert.AreEqual(configured ? 6 : 0, localDispatcher.EnqueuedIds.Count);
         }
         finally
         {

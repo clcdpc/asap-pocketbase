@@ -563,12 +563,12 @@ public sealed partial class PatronJourneyTests
         await using var verified = await command.ExecuteReaderAsync();
         Assert.IsTrue(await verified.ReadAsync());
         Assert.AreEqual("Catalog title 9001 (Browser staff title edited)", verified.GetString(0));
-        Assert.AreEqual("pending_hold", verified.GetString(1));
+        Assert.AreEqual("closed", verified.GetString(1));
         Assert.AreEqual(seeded.SuperId, verified.GetInt64(2));
         Assert.IsTrue(verified.GetBoolean(3));
         Assert.AreEqual("browser-weekly@example.org", verified.GetString(4));
         Assert.IsTrue(verified.GetBoolean(5));
-        Assert.AreEqual(6, verified.GetInt32(6));
+        Assert.AreEqual(2, verified.GetInt32(6));
         Assert.AreEqual("Library backlist", verified.GetString(7));
         Assert.AreEqual("Edited audience", verified.GetString(8));
         Assert.AreEqual("hardback", verified.GetString(9));
@@ -633,7 +633,11 @@ public sealed partial class PatronJourneyTests
                 (SELECT COUNT(*) FROM [asap].[TitleRequest]
                  WHERE [Id]=@copySourceId
                    AND [Status]=N'hold_placed'
-                   AND [Notes] LIKE N'%Additional copy request created for BIB 92905.%'),
+                   AND COALESCE([Notes], N'') NOT LIKE N'%Additional copy request created for BIB 92905.%'),
+                (SELECT COUNT(*) FROM [asap].[TitleRequestEvent]
+                 WHERE [TitleRequestId]=@copySourceId
+                   AND [EventType]=N'additional_copy_created'
+                   AND [Message] LIKE N'%BIB 92905%'),
                 (SELECT COUNT(*) FROM [asap].[EmailOutbox]
                  WHERE [Subject]=N'ASAP additional-copy reminder'
                    AND [BodyText] LIKE N'%Browser additional copy source (BIB 92905)%'
@@ -667,7 +671,8 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(1, copyState.GetInt32(2));
         Assert.AreEqual(1, copyState.GetInt32(3));
         Assert.AreEqual(1, copyState.GetInt32(4));
-        Assert.AreEqual(0, copyState.GetInt32(5));
+        Assert.AreEqual(1, copyState.GetInt32(5));
+        Assert.AreEqual(0, copyState.GetInt32(6));
         }
         finally
         {
@@ -4444,8 +4449,9 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("outstanding_purchase", result.GetString(1));
         Assert.AreEqual("9780000002190", result.GetString(3));
         Assert.IsTrue(result.IsDBNull(4));
-        Assert.AreEqual("pending", result.GetString(5));
-        Assert.IsTrue(result.IsDBNull(6));
+        Assert.IsTrue(result.IsDBNull(5));
+        Assert.AreEqual("Identifier processing was not completed before this request left suggestions.",
+            result.GetString(6));
         Assert.AreEqual(0, result.GetInt32(7));
         Assert.IsTrue(result.IsDBNull(8));
         Assert.IsTrue(result.IsDBNull(9));
@@ -7411,6 +7417,32 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("9001", result.BibId);
         Assert.IsTrue(result.MultipleMatches, "TotalRecordsFound may exceed the current page row count.");
         Assert.AreEqual(4, handler.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task PolarisIdentifierLookupPreservesCancellationDuringOptionalBibDetail()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var handler = new SequenceResponseHandler(
+            (HttpStatusCode.OK,
+             """{"PAPIErrorCode":0,"TotalRecordsFound":1,"BibSearchRows":[{"ControlNumber":9001,"Title":"Catalog title"}]}"""),
+            (HttpStatusCode.OK, """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[]}"""),
+            (HttpStatusCode.OK, """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[]}"""));
+        handler.OnRequest = (count, token) =>
+        {
+            if (count == 4)
+            {
+                cancellation.Cancel();
+                token.ThrowIfCancellationRequested();
+            }
+        };
+        var provider = await CreatePolarisProviderAsync(handler);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+            await provider.LookupIdentifierAsync("9780000000001", cancellation.Token));
+
+        Assert.AreEqual(4, handler.RequestCount);
+        Assert.IsTrue(cancellation.IsCancellationRequested);
     }
 
     [TestMethod]
@@ -11705,6 +11737,7 @@ public sealed partial class PatronJourneyTests
 
         public int RequestCount { get; private set; }
         public List<Uri> RequestUris { get; } = [];
+        public Action<int, CancellationToken>? OnRequest { get; set; }
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -11713,6 +11746,7 @@ public sealed partial class PatronJourneyTests
             cancellationToken.ThrowIfCancellationRequested();
             RequestCount++;
             RequestUris.Add(request.RequestUri!);
+            OnRequest?.Invoke(RequestCount, cancellationToken);
             if (!remaining.TryDequeue(out var response))
             {
                 throw new InvalidOperationException("No fake Polaris response remains for this request.");

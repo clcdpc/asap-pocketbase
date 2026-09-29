@@ -47,7 +47,8 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       confirmMessages.push(message);
       return !(scenarioOptions.formatWarning || scenarioOptions.autoClaimOther ||
         scenarioOptions.autoHoldOffBib || scenarioOptions.autoHoldOffOutstandingPurchase ||
-        scenarioOptions.autoHoldOnlyOutstandingPurchase) ||
+        scenarioOptions.autoHoldOnlyOutstandingPurchase ||
+        scenarioOptions.legacyNoHoldOutstandingEdit || scenarioOptions.legacyNoHoldPendingEdit) ||
         confirmMessages.length > 1;
     };
     dom.window.gridjs = require(path.join(frontend, 'vendor/gridjs/6.2.0/gridjs.umd.js'));
@@ -67,14 +68,17 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     const request = {
       id, version: 'v1', type: 'title_request', title: 'Original title', author: null,
       libraryOrgId: 2, libraryOrgName: 'Library', barcode: '20000000000001',
-      status: scenarioOptions.autoHoldOffOutstandingPurchase || scenarioOptions.autoHoldOnlyOutstandingPurchase
+      status: scenarioOptions.autoHoldOffOutstandingPurchase || scenarioOptions.autoHoldOnlyOutstandingPurchase ||
+        scenarioOptions.legacyNoHoldOutstandingEdit
         ? 'outstanding_purchase'
         : scenarioOptions.pickupWrappedResponse || scenarioOptions.stalePickup ||
-          scenarioOptions.unverifiedPendingHold || scenarioOptions.verifiedPendingHold ? 'pending_hold' : 'suggestion',
+          scenarioOptions.unverifiedPendingHold || scenarioOptions.verifiedPendingHold ||
+          scenarioOptions.legacyNoHoldPendingEdit ? 'pending_hold' : 'suggestion',
       format: 'book', formatLabel: 'Book', identifier: null,
       bibid: scenarioOptions.verifyBib || scenarioOptions.verifiedUnchangedBib || scenarioOptions.purchaseVerifiedBib ||
         scenarioOptions.autoHoldOffBib || scenarioOptions.autoHoldOffOutstandingPurchase ||
         scenarioOptions.autoHoldOnlyOutstandingPurchase ||
+        scenarioOptions.legacyNoHoldOutstandingEdit || scenarioOptions.legacyNoHoldPendingEdit ||
         scenarioOptions.verifyBibAndInvalidateIdentifier ||
         scenarioOptions.unverifiedPendingHold || scenarioOptions.verifiedPendingHold ||
         scenarioOptions.verificationInvalidation ||
@@ -110,7 +114,12 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     let releaseTemplate = null;
     let releasePickup = null;
     let releaseMutation = null;
+    let releaseDuplicate = null;
+    let releaseDuplicateDetail = null;
+    let duplicateDetailDeferred = false;
     let releaseFollowupQueue = null;
+    const mutationPayloads = [];
+    let duplicateRejected = false;
     global.fetch = async (url, options = {}) => {
       if (url.endsWith('/session')) {
         return response(200, { authenticated: true, accessAllowed: true, antiforgeryToken: 'token', staff });
@@ -145,11 +154,19 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         }
         return response(200, { scope: scenarioOptions.supersededFollowup && !url.includes('scope=2') ? 'all' : '2',
           organizations: scenarioOptions.supersededFollowup ? [{ id: 2, name: 'Library' }] : [],
-          items: scenarioOptions.staleChoice || scenarioOptions.staleMutation
+          items: scenarioOptions.staleChoice || scenarioOptions.staleMutation ||
+            scenarioOptions.duplicateRecovery
             || scenarioOptions.stalePickup
             ? [currentRequest, otherRequest] : [currentRequest] });
       }
       if (new URL(url, 'http://localhost').pathname.endsWith(`/title-requests/${id}`)) {
+        if (scenarioOptions.duplicateNavigateDuringRefresh && duplicateRejected && !duplicateDetailDeferred) {
+          duplicateDetailDeferred = true;
+          return new Promise(resolve => { releaseDuplicateDetail = () => resolve(response(200, currentRequest)); });
+        }
+        if (scenarioOptions.duplicateDetailRefreshFails && duplicateRejected) {
+          return response(503, { message: 'Detail unavailable' });
+        }
         return committed && scenarioOptions.detailRefreshFails
           ? response(503, { message: 'Detail unavailable' })
           : response(200, currentRequest);
@@ -171,6 +188,20 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         }] };
         committed = true;
         return response(200, { request: currentRequest, pickupChanged: true, snapshotChanged: false });
+      }
+      if (url.endsWith(`/title-requests/${id}/place-hold`) && options.method === 'POST' &&
+          scenarioOptions.duplicateHoldRecovery) {
+        payload = JSON.parse(options.body);
+        mutationPayloads.push(payload);
+        duplicateRejected = true;
+        currentRequest = { ...currentRequest, version: 'v2' };
+        const conflict = response(409, { code: 'duplicate_open_request', providerOutcomeRecorded: false,
+          message: 'This patron already has an active request or hold for this BIB. No new hold was attempted.',
+          duplicate: { id: otherId, title: 'Existing <img src=x onerror=alert(1)>',
+            status: 'pending_hold', bibid: '09001', matchType: 'bibid' } });
+        return scenarioOptions.duplicateLateResponse
+          ? new Promise(resolve => { releaseDuplicate = () => resolve(conflict); })
+          : conflict;
       }
       if (url.endsWith(`/title-requests/${id}/place-hold`) && options.method === 'POST' &&
           scenarioOptions.holdTimeout) {
@@ -215,6 +246,21 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       }
       if (url.endsWith(`/title-requests/${id}/action`) && options.method === 'POST') {
         payload = JSON.parse(options.body);
+        mutationPayloads.push(payload);
+        if (scenarioOptions.duplicateRecovery && !duplicateRejected) {
+          duplicateRejected = true;
+          currentRequest = { ...currentRequest, version: 'v2' };
+          const conflict = response(409, { code: 'duplicate_open_request',
+            message: 'This patron already has an open request or hold for this BIB. The request was not changed.',
+            duplicate: { id: otherId, title: 'Existing <img src=x onerror=alert(1)>',
+              status: 'pending_hold', bibid: '09001', matchType: 'bibid' } });
+          return scenarioOptions.duplicateLateResponse
+            ? new Promise(resolve => { releaseDuplicate = () => resolve(conflict); })
+            : conflict;
+        }
+        if (scenarioOptions.duplicateCloseStale && payload.action === 'closeDuplicate') {
+          return response(409, { code: 'stale_version', message: 'The request changed. Reload it before continuing.' });
+        }
         if (scenarioOptions.mutationDependencyAbort) {
           throw Object.assign(new Error('Dependency aborted'), { name: 'AbortError' });
         }
@@ -238,8 +284,9 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
           return response(503, { code: 'notification_dependency_unavailable',
             message: 'Notification configuration is temporarily unavailable. The request was not changed.' });
         }
-        const finalStatus = action === 'reject' ? 'closed' : action === 'alreadyOwn' || scenarioOptions.purchaseVerifiedBib ? 'pending_hold' : 'outstanding_purchase';
-        currentRequest = { ...currentRequest, version: 'v2',
+        const finalStatus = payload.action === 'closeDuplicate' || action === 'reject' ? 'closed'
+          : action === 'alreadyOwn' || scenarioOptions.purchaseVerifiedBib ? 'pending_hold' : 'outstanding_purchase';
+        currentRequest = { ...currentRequest, version: scenarioOptions.duplicateRecovery ? 'v3' : 'v2',
           status: scenarioOptions.serverAdvancedStatus ? 'closed' : finalStatus,
           activity: [...currentRequest.activity, {
           id: '9007199254740999', eventType: 'status_changed', actorType: 'staff',
@@ -247,11 +294,15 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         }] };
         committed = true;
         const result = response(200, { committed: true,
-          request: scenarioOptions.detailRefreshFails ? null : currentRequest, finalStatus,
+          request: scenarioOptions.detailRefreshFails || scenarioOptions.refreshConcurrentStatus ? null : currentRequest,
+          finalStatus,
           notificationStatus: scenarioOptions.rejectEmailQueued ? 'queued'
             : action === 'purchase' && explicitChoice && !scenarioOptions.purchaseVerifiedBib ? 'suppressed' : 'not_requested',
           notificationReason: action === 'purchase' && explicitChoice && !scenarioOptions.purchaseVerifiedBib ? 'mail_not_configured' : null,
-          refreshUnavailable: Boolean(scenarioOptions.detailRefreshFails) });
+          patronNotificationStatus: action === 'purchase' && !scenarioOptions.purchaseVerifiedBib ? 'suppressed' : null,
+          patronNotificationReason: action === 'purchase' && !scenarioOptions.purchaseVerifiedBib
+            ? 'patron_refresh_unavailable' : null,
+          refreshUnavailable: Boolean(scenarioOptions.detailRefreshFails || scenarioOptions.refreshConcurrentStatus) });
         return scenarioOptions.staleMutation
           ? new Promise(resolve => { releaseMutation = () => resolve(result); })
           : result;
@@ -295,6 +346,12 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       const placeHold = [...document.querySelectorAll('.action-bar button')]
         .find(item => item.textContent.includes('Place hold'));
       assert.equal(Boolean(placeHold), Boolean(scenarioOptions.verifiedPendingHold));
+      if (scenarioOptions.duplicateHoldRecovery) {
+        placeHold.click();
+        await until(() => payload !== null, 'place-hold mutation starts');
+        await checkDuplicateRecovery('place-hold', 'Pending hold');
+        return;
+      }
       if (scenarioOptions.holdTimeout || scenarioOptions.holdProviderError ||
           scenarioOptions.holdRecordedForbidden || scenarioOptions.holdReviewRequired) {
         placeHold.click();
@@ -320,11 +377,26 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       const form = document.querySelector('.edit-form');
       form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
       assert.equal(payload, null, 'cancelled auto-hold-only change must not mutate');
-      assert.match(confirmMessages[0], /automatic purchase promotion may later close it without a hold/);
+      assert.match(confirmMessages[0], /request will close without placing a hold/);
       form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
       await until(() => payload !== null, 'confirmed auto-hold-only change submitted');
       assert.equal(payload.autohold, false);
       assert.equal(payload.staffSelectedBibId, undefined);
+      return;
+    }
+    if (scenarioOptions.legacyNoHoldOutstandingEdit || scenarioOptions.legacyNoHoldPendingEdit) {
+      const title = document.querySelector('.edit-form input');
+      title.value = 'Changed title';
+      title.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+      const form = document.querySelector('.edit-form');
+      form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+      assert.equal(payload, null, 'cancelled legacy no-hold close must not mutate');
+      assert.match(confirmMessages[0], /request will close without placing a hold/);
+      form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+      await until(() => payload !== null, 'confirmed legacy no-hold edit submitted');
+      assert.equal(payload.action, 'edit');
+      assert.equal(payload.bibid, '9001');
+      assert.equal(payload.autohold, false);
       return;
     }
     document.querySelector('.edit-form').dispatchEvent(
@@ -364,9 +436,9 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         assert.equal(document.querySelector('.edit-form button[type="submit"]').disabled, true);
         [...document.querySelectorAll('.action-bar button')]
           .find(item => item.textContent.includes('Already own')).click();
-        await until(() => payload !== null, 'unchanged verified BIB can enter Pending hold');
+        await until(() => payload !== null, 'unchanged verified BIB action submits');
         assert.equal(payload.action, 'alreadyOwn');
-        assert.match(confirmMessages[0], /Pending hold/);
+        assert.match(confirmMessages[0], /close it without a hold/);
         return;
       }
       if (!scenarioOptions.purchaseVerifiedBib) {
@@ -376,9 +448,9 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
           const form = document.querySelector('.edit-form');
           form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
           assert.equal(payload, null, 'cancelled no-auto-hold consequence must not mutate');
-          assert.match(confirmMessages[0], /No hold will be placed automatically/);
+          assert.match(confirmMessages[0], /close.*without placing a hold/);
           if (scenarioOptions.autoHoldOffOutstandingPurchase) {
-            assert.match(confirmMessages[0], /automatic purchase promotion may later close it without a hold/);
+            assert.match(confirmMessages[0], /request will close without placing a hold/);
           }
           form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
           await until(() => payload !== null, 'confirmed BIB save submitted');
@@ -412,7 +484,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
       if (scenarioOptions.formatWarning) {
         assert.equal(payload, null, 'cancelled format warning must not mutate');
-        assert.match(confirmMessages[0], /replaces the automatic format claim with your manual claim/);
+        assert.match(confirmMessages[0], /new format rule may reassign or clear the automatic claim/);
         form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
       } else {
         assert.deepEqual(confirmMessages, [], 'manual claim must not trigger automatic-claim warning');
@@ -516,7 +588,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     if (action === 'reject') assert.equal(payload.rejectionTemplateId, templateId);
     else assert.equal(payload.emailPurchaseReminder, scenarioOptions.purchaseVerifiedBib ? false : explicitChoice);
     if (scenarioOptions.purchaseVerifiedBib) {
-      assert.match(confirmMessages.at(-1), /cannot place a hold until it is enabled/);
+      assert.match(confirmMessages.at(-1), /Close this request without a hold/);
     }
     if (scenarioOptions.staleMutation) {
       await until(() => releaseMutation, 'purchase mutation starts');
@@ -532,6 +604,101 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       await new Promise(resolve => setImmediate(resolve));
       assert.equal(document.querySelector('#request-dialog-title').textContent, 'Other request');
       assert.equal(document.querySelector('#request-dialog .status-badge').textContent, 'Suggestion');
+      return;
+    }
+    async function checkDuplicateRecovery(expectedFirst, expectedStatus) {
+      assert.equal(mutationPayloads.length, 1);
+      assert.equal(mutationPayloads[0].action, expectedFirst === 'purchase' ? 'purchase' : undefined);
+      assert.equal(mutationPayloads[0].version, 'v1');
+      if (scenarioOptions.duplicateLateResponse) {
+        await until(() => releaseDuplicate, 'duplicate response is pending');
+        await until(() => document.querySelector(`[aria-label="Open request ${otherId}"]`),
+          'other request is in the queue');
+        document.querySelector(`[aria-label="Open request ${otherId}"]`).click();
+        await until(() => document.querySelector('#request-dialog-title').textContent === 'Other request',
+          'newer request takes ownership of the dialog');
+        releaseDuplicate();
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(document.querySelector('#request-dialog-title').textContent, 'Other request');
+        assert.equal(document.querySelector('.duplicate-recovery'), null);
+        assert.equal(mutationPayloads.length, 1, 'late duplicate response cannot close another request');
+        return;
+      }
+      if (scenarioOptions.duplicateNavigateDuringRefresh) {
+        await until(() => releaseDuplicateDetail, 'duplicate detail refresh is pending');
+        await until(() => document.querySelector(`[aria-label="Open request ${otherId}"]`),
+          'other request is in the queue');
+        document.querySelector(`[aria-label="Open request ${otherId}"]`).click();
+        await until(() => document.querySelector('#request-dialog-title').textContent === 'Other request',
+          'newer request takes ownership during refresh');
+        releaseDuplicateDetail();
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(document.querySelector('.duplicate-recovery'), null);
+        assert.equal(mutationPayloads.length, 1, 'stale refresh cannot start a close');
+        return;
+      }
+      if (scenarioOptions.duplicateDetailRefreshFails) {
+        await until(() => /Current details could not refresh/.test(document.querySelector('#app-status').textContent),
+          'duplicate detail refresh failure is explained');
+        assert.match(document.querySelector('#app-status').textContent, /attempted change was not saved/);
+        assert.equal(document.querySelector('.duplicate-recovery'), null);
+        assert.equal(mutationPayloads.length, 1);
+        return;
+      }
+      await until(() => document.querySelector('.duplicate-recovery'), 'duplicate recovery appears');
+      const panel = document.querySelector('.duplicate-recovery');
+      assert.match(panel.textContent, /Request 9007199254740994/);
+      assert.match(panel.textContent, /Existing <img src=x onerror=alert\(1\)>/);
+      assert.match(panel.textContent, /Pending hold/);
+      assert.match(panel.textContent, /BIB 09001/);
+      assert.equal(panel.querySelector('img'), null);
+      assert.match(panel.textContent, /attempted change was not saved/);
+      assert.doesNotMatch(document.querySelector('#app-status').textContent, /Workflow action completed|Final state:/);
+      if (expectedFirst === 'place-hold') {
+        assert.doesNotMatch(document.querySelector('#app-status').textContent, /hold outcome could not be confirmed|requires reconciliation/i);
+        assert.equal(document.querySelector('#signed-out').hidden, true);
+        assert.equal([...Array(dom.window.sessionStorage.length)].some((_, index) =>
+          /unconfirmed.hold|hold outcome could not be confirmed/i.test(
+            String(dom.window.sessionStorage.getItem(dom.window.sessionStorage.key(index))))), false);
+      }
+      assert.equal(mutationPayloads.length, 1, 'the rejected action remains rejected');
+      assert.equal(document.querySelector('#request-dialog .status-badge').textContent, expectedStatus);
+      if (scenarioOptions.duplicateNavigateAfterRefresh) {
+        const staleClose = [...panel.querySelectorAll('button')]
+          .find(item => item.textContent.includes('Close current'));
+        await openOtherRequest();
+        staleClose.click();
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(mutationPayloads.length, 1, 'stale recovery control cannot close another request');
+        assert.equal(document.querySelector('#request-dialog-title').textContent, 'Other request');
+        return;
+      }
+      if (scenarioOptions.duplicateDecline) {
+        [...panel.querySelectorAll('button')].find(item => item.textContent.includes('Continue')).click();
+        assert.equal(document.querySelector('.duplicate-recovery'), null);
+        assert.equal(mutationPayloads.length, 1, 'declining does not mutate');
+        assert.equal(document.querySelector('.edit-form input[inputmode="numeric"]') !== null, true);
+        assert.equal(document.querySelector('#request-dialog .status-badge').textContent, expectedStatus);
+        return;
+      }
+      [...panel.querySelectorAll('button')].find(item => item.textContent.includes('Close current')).click();
+      await until(() => mutationPayloads.length === 2, 'closeDuplicate follow-up submits');
+      assert.equal(mutationPayloads[1].action, 'closeDuplicate');
+      assert.equal(mutationPayloads[1].version, 'v2', 'close uses authoritative refreshed version');
+      if (scenarioOptions.duplicateCloseStale) {
+        await until(() => /The request changed/.test(document.querySelector('#app-status').textContent),
+          'stale follow-up close is rejected');
+        assert.equal(document.querySelector('#request-dialog .status-badge').textContent, expectedStatus);
+        assert.equal(mutationPayloads.length, 2);
+        return;
+      }
+      await until(() => document.querySelector('#request-dialog .status-badge').textContent === 'Closed',
+        'current request closes authoritatively');
+      assert.equal(document.querySelector('#request-dialog-title').textContent, 'Original title');
+      return;
+    }
+    if (scenarioOptions.duplicateRecovery) {
+      await checkDuplicateRecovery('purchase', 'Suggestion');
       return;
     }
     if (scenarioOptions.mutationNetworkFailureAfter401) {
@@ -559,6 +726,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       await until(() => !document.querySelector('#signed-out').hidden, 'session transition displays result');
       assert.match(document.querySelector('#signed-out-message').textContent, /Final state: Outstanding purchase/);
       assert.match(document.querySelector('#signed-out-message').textContent, /Purchase reminder suppressed/);
+      assert.match(document.querySelector('#signed-out-message').textContent, /Purchase approval email suppressed/);
     } else if (scenarioOptions.laterUnrelated401 || scenarioOptions.laterUnrelated403) {
       await until(() => postCommitQueueLoads === 1, 'committed follow-up queue load starts');
       if (scenarioOptions.closeDuringFollowup) {
@@ -609,6 +777,10 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         assert.match(document.querySelector('#app-status').textContent, /Final state: Closed/);
         assert.doesNotMatch(document.querySelector('#app-status').textContent, /Final state: Outstanding purchase/);
       }
+      if (scenarioOptions.refreshConcurrentStatus) {
+        assert.match(document.querySelector('#app-status').textContent, /Final state: Closed/);
+        assert.match(document.querySelector('#app-status').textContent, /Purchase approval email suppressed/);
+      }
       if (scenarioOptions.rejectEmailQueued) {
         assert.match(document.querySelector('#app-status').textContent, /Rejection email queued/);
       }
@@ -624,7 +796,22 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
   await scenario('purchase', true, false);
   await scenario('purchase', false, true);
   await scenario('purchase', false, true, { serverAdvancedStatus: true });
+  await scenario('purchase', false, true, { serverAdvancedStatus: true, refreshConcurrentStatus: true });
   await scenario('purchase', true, true, { purchaseVerifiedBib: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, duplicateRecovery: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, duplicateRecovery: true, duplicateDecline: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, duplicateRecovery: true, duplicateNavigateAfterRefresh: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, duplicateRecovery: true, duplicateLateResponse: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, duplicateRecovery: true, duplicateNavigateDuringRefresh: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, duplicateRecovery: true, duplicateDetailRefreshFails: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, duplicateRecovery: true, duplicateCloseStale: true });
+  await scenario('reject', false, false, { verifiedPendingHold: true, duplicateRecovery: true, duplicateHoldRecovery: true });
+  await scenario('reject', false, false, { verifiedPendingHold: true, duplicateRecovery: true, duplicateHoldRecovery: true, duplicateDecline: true });
+  await scenario('reject', false, false, { verifiedPendingHold: true, duplicateRecovery: true, duplicateHoldRecovery: true, duplicateNavigateAfterRefresh: true });
+  await scenario('reject', false, false, { verifiedPendingHold: true, duplicateRecovery: true, duplicateHoldRecovery: true, duplicateLateResponse: true });
+  await scenario('reject', false, false, { verifiedPendingHold: true, duplicateRecovery: true, duplicateHoldRecovery: true, duplicateNavigateDuringRefresh: true });
+  await scenario('reject', false, false, { verifiedPendingHold: true, duplicateRecovery: true, duplicateHoldRecovery: true, duplicateDetailRefreshFails: true });
+  await scenario('reject', false, false, { verifiedPendingHold: true, duplicateRecovery: true, duplicateHoldRecovery: true, duplicateCloseStale: true });
   await scenario('reject', false, true);
   await scenario('reject', false, true, { rejectEmailQueued: true });
   await scenario('purchase', false, true, { queue401: true });
@@ -659,6 +846,8 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
   await scenario('reject', false, false, { autoHoldOffBib: true });
   await scenario('reject', false, false, { autoHoldOffOutstandingPurchase: true });
   await scenario('reject', false, false, { autoHoldOnlyOutstandingPurchase: true });
+  await scenario('reject', false, false, { legacyNoHoldOutstandingEdit: true });
+  await scenario('reject', false, false, { legacyNoHoldPendingEdit: true });
   await scenario('reject', false, false, { unclaimedPreview: true });
   await scenario('reject', false, false, { formatWarning: true });
   await scenario('reject', false, false, { autoClaimOther: true });

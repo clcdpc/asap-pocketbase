@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Http.Json;
 using System.Text.Json;
 using Asap.Web.Features.Email;
 using Asap.Web.Features.Patron;
@@ -8,6 +10,7 @@ using Asap.Web.Infrastructure.Jobs;
 using Asap.Web.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Asap.Tests.Integration;
@@ -458,6 +461,215 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    [DataRow("catalogFound")]
+    [DataRow("purchase")]
+    [DataRow("alreadyOwn")]
+    [DataRow("edit")]
+    public async Task StaffBibActionsRejectActiveDuplicateBeforeAnyWrite(string action)
+    {
+        var actor = await GetOwnershipTestActorAsync();
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var target = await SeedBibOwnershipRequestAsync(
+            "duplicate-action-target", action == "edit" ? "9002" : "9001",
+            staffVerified: true, status: action == "edit" ? "pending_hold" : "suggestion",
+            autoHold: true);
+        var blocker = await SeedBibOwnershipRequestAsync(
+            "duplicate-action-blocker", "09001", staffVerified: true,
+            status: "pending_hold", autoHold: true);
+        try
+        {
+            byte[] blockerVersion;
+            await using (var setup = await contextFactory.CreateDbContextAsync())
+            {
+                var targetRow = await setup.TitleRequests.SingleAsync(item => item.Id == target.Id);
+                var blockerRow = await setup.TitleRequests.SingleAsync(item => item.Id == blocker.Id);
+                blockerRow.Barcode = targetRow.Barcode;
+                await setup.SaveChangesAsync();
+                blockerVersion = blockerRow.RowVersion.ToArray();
+            }
+            using var bib = JsonDocument.Parse("\"9001\"");
+            var result = await factory.Services.GetRequiredService<TitleRequestMutationService>().ActionAsync(
+                actor, target.Id, new TitleRequestActionInput
+                {
+                    Version = StaffVersion.Encode(target.RowVersion),
+                    Action = action,
+                    Bibid = action == "edit" ? bib.RootElement : default
+                }, CancellationToken.None);
+            Assert.AreEqual("duplicate_open_request", result.Code);
+            Assert.IsNotNull(result.Duplicate);
+            Assert.AreEqual(blocker.Id, result.Duplicate.Id);
+            Assert.AreEqual("Staff entered title", result.Duplicate.Title);
+            Assert.AreEqual("pending_hold", result.Duplicate.Status);
+            Assert.AreEqual("09001", result.Duplicate.BibId);
+            Assert.AreEqual("bibid", result.Duplicate.MatchType);
+            if (action == "purchase")
+            {
+                using var client = factory.CreateClient();
+                var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
+                client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actor.Id.ToString());
+                client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
+                using var session = await client.GetAsync("/api/asap/staff/session");
+                Assert.AreEqual(HttpStatusCode.OK, session.StatusCode);
+                using var sessionJson = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
+                client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery",
+                    sessionJson.RootElement.GetProperty("antiforgeryToken").GetString());
+                using var response = await client.PostAsJsonAsync($"/api/asap/staff/title-requests/{target.Id}/action",
+                    new { version = StaffVersion.Encode(target.RowVersion), action });
+                Assert.AreEqual(HttpStatusCode.Conflict, response.StatusCode);
+                using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                Assert.AreEqual("duplicate_open_request", body.RootElement.GetProperty("code").GetString());
+                Assert.AreEqual(JsonValueKind.String, body.RootElement.GetProperty("duplicate").GetProperty("id").ValueKind);
+                Assert.AreEqual(blocker.Id.ToString(), body.RootElement.GetProperty("duplicate").GetProperty("id").GetString());
+                Assert.AreEqual("Staff entered title", body.RootElement.GetProperty("duplicate").GetProperty("title").GetString());
+                Assert.AreEqual("pending_hold", body.RootElement.GetProperty("duplicate").GetProperty("status").GetString());
+                Assert.AreEqual("09001", body.RootElement.GetProperty("duplicate").GetProperty("bibid").GetString());
+                Assert.AreEqual("bibid", body.RootElement.GetProperty("duplicate").GetProperty("matchType").GetString());
+            }
+            await using var verify = await contextFactory.CreateDbContextAsync();
+            var unchanged = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == target.Id);
+            var unchangedBlocker = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == blocker.Id);
+            CollectionAssert.AreEqual(target.RowVersion, unchanged.RowVersion);
+            Assert.AreEqual(action == "edit" ? "pending_hold" : "suggestion", unchanged.Status);
+            Assert.AreEqual(action == "edit" ? "9002" : "9001", unchanged.BibId);
+            CollectionAssert.AreEqual(blockerVersion, unchangedBlocker.RowVersion);
+            Assert.AreEqual("pending_hold", unchangedBlocker.Status);
+            Assert.AreEqual("09001", unchangedBlocker.BibId);
+            Assert.IsFalse(await verify.TitleRequestEvents.AnyAsync(item => item.TitleRequestId == target.Id));
+            Assert.IsFalse(await verify.HoldPlacementOperations.AnyAsync(item => item.TitleRequestId == target.Id));
+        }
+        finally
+        {
+            await DeleteBibOwnershipRequestsAsync([target.Id, blocker.Id]);
+        }
+    }
+
+    [TestMethod]
+    public async Task ConcurrentStaffBibActionsAllowOnlyOnePendingHold()
+    {
+        var actor = await GetOwnershipTestActorAsync();
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var first = await SeedBibOwnershipRequestAsync("concurrent-bib-first", null, false, status: "suggestion", autoHold: true);
+        var second = await SeedBibOwnershipRequestAsync("concurrent-bib-second", null, false, status: "suggestion", autoHold: true);
+        try
+        {
+            byte[] secondVersion;
+            await using (var setup = await contextFactory.CreateDbContextAsync())
+            {
+                var firstRow = await setup.TitleRequests.SingleAsync(item => item.Id == first.Id);
+                var secondRow = await setup.TitleRequests.SingleAsync(item => item.Id == second.Id);
+                secondRow.Barcode = firstRow.Barcode;
+                await setup.SaveChangesAsync();
+                secondVersion = secondRow.RowVersion.ToArray();
+            }
+            var mutations = factory.Services.GetRequiredService<TitleRequestMutationService>();
+            using var bib = JsonDocument.Parse("\"9001\"");
+            var results = await Task.WhenAll(
+                mutations.ActionAsync(actor, first.Id, new TitleRequestActionInput
+                    { Version = StaffVersion.Encode(first.RowVersion), Action = "catalogFound", Bibid = bib.RootElement }, CancellationToken.None),
+                mutations.ActionAsync(actor, second.Id, new TitleRequestActionInput
+                    { Version = StaffVersion.Encode(secondVersion), Action = "catalogFound", Bibid = bib.RootElement }, CancellationToken.None));
+            CollectionAssert.AreEquivalent(new[] { "updated", "duplicate_open_request" },
+                results.Select(item => item.Code).ToArray(),
+                string.Join(", ", results.Select(item => item.Code)));
+            await using var verify = await contextFactory.CreateDbContextAsync();
+            var rows = await verify.TitleRequests.AsNoTracking()
+                .Where(item => item.Id == first.Id || item.Id == second.Id).ToListAsync();
+            Assert.AreEqual(1, rows.Count(item => item.Status == "pending_hold"));
+            var rejected = results[0].Code == "duplicate_open_request" ? first : second;
+            var rejectedRow = rows.Single(item => item.Id == rejected.Id);
+            CollectionAssert.AreEqual(rejected.Id == second.Id ? secondVersion : rejected.RowVersion, rejectedRow.RowVersion);
+            Assert.IsFalse(await verify.TitleRequestEvents.AnyAsync(item => item.TitleRequestId == rejected.Id));
+        }
+        finally
+        {
+            await DeleteBibOwnershipRequestsAsync([first.Id, second.Id]);
+        }
+    }
+
+    [TestMethod]
+    public async Task HoldAcquisitionRejectsPreexistingSamePatronBibDuplicates()
+    {
+        var actor = await GetOwnershipTestActorAsync();
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var holdProvider = ScriptedHoldProvider.ReplyRequiredThenSuccess();
+        await using var holdFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IPatronProvider>();
+                services.RemoveAll<IStaffPolarisProvider>();
+                services.AddSingleton<IPatronProvider>(holdProvider);
+                services.AddSingleton<IStaffPolarisProvider>(holdProvider);
+            }));
+        var first = await SeedBibOwnershipRequestAsync("duplicate-hold-first", "9001", true, status: "pending_hold", autoHold: true);
+        var second = await SeedBibOwnershipRequestAsync("duplicate-hold-second", "09001", true, status: "pending_hold", autoHold: true);
+        try
+        {
+            byte[] secondVersion;
+            await using (var setup = await contextFactory.CreateDbContextAsync())
+            {
+                var firstRow = await setup.TitleRequests.SingleAsync(item => item.Id == first.Id);
+                var secondRow = await setup.TitleRequests.SingleAsync(item => item.Id == second.Id);
+                secondRow.Barcode = firstRow.Barcode;
+                await setup.SaveChangesAsync();
+                secondVersion = secondRow.RowVersion.ToArray();
+            }
+            var result = await holdFactory.Services.GetRequiredService<HoldPlacementService>().PlaceAsync(
+                actor, first.Id, new VersionInput(StaffVersion.Encode(first.RowVersion)), CancellationToken.None);
+            Assert.AreEqual("duplicate_open_request", result.Code);
+            Assert.IsFalse(result.ProviderOutcomeRecorded);
+            Assert.IsNotNull(result.Duplicate);
+            Assert.AreEqual(second.Id, result.Duplicate.Id);
+            Assert.AreEqual("Staff entered title", result.Duplicate.Title);
+            Assert.AreEqual("pending_hold", result.Duplicate.Status);
+            Assert.AreEqual("09001", result.Duplicate.BibId);
+            Assert.AreEqual("bibid", result.Duplicate.MatchType);
+
+            using var client = holdFactory.CreateClient();
+            var identity = TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin;
+            client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actor.Id.ToString());
+            client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
+            using var session = await client.GetAsync("/api/asap/staff/session");
+            Assert.AreEqual(HttpStatusCode.OK, session.StatusCode);
+            using var sessionJson = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
+            client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery",
+                sessionJson.RootElement.GetProperty("antiforgeryToken").GetString());
+            using var response = await client.PostAsJsonAsync($"/api/asap/staff/title-requests/{first.Id}/place-hold",
+                new { version = StaffVersion.Encode(first.RowVersion) });
+            Assert.AreEqual(HttpStatusCode.Conflict, response.StatusCode);
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.AreEqual("duplicate_open_request", body.RootElement.GetProperty("code").GetString());
+            Assert.IsFalse(body.RootElement.GetProperty("providerOutcomeRecorded").GetBoolean());
+            Assert.AreEqual(JsonValueKind.String, body.RootElement.GetProperty("duplicate").GetProperty("id").ValueKind);
+            Assert.AreEqual(second.Id.ToString(), body.RootElement.GetProperty("duplicate").GetProperty("id").GetString());
+            Assert.AreEqual("Staff entered title", body.RootElement.GetProperty("duplicate").GetProperty("title").GetString());
+            Assert.AreEqual("pending_hold", body.RootElement.GetProperty("duplicate").GetProperty("status").GetString());
+            Assert.AreEqual("09001", body.RootElement.GetProperty("duplicate").GetProperty("bibid").GetString());
+            Assert.AreEqual("bibid", body.RootElement.GetProperty("duplicate").GetProperty("matchType").GetString());
+
+            await using var verify = await contextFactory.CreateDbContextAsync();
+            var unchangedFirst = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == first.Id);
+            var unchangedSecond = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == second.Id);
+            CollectionAssert.AreEqual(first.RowVersion, unchangedFirst.RowVersion);
+            CollectionAssert.AreEqual(secondVersion, unchangedSecond.RowVersion);
+            Assert.AreEqual("pending_hold", unchangedFirst.Status);
+            Assert.AreEqual("pending_hold", unchangedSecond.Status);
+            Assert.AreEqual("9001", unchangedFirst.BibId);
+            Assert.AreEqual("09001", unchangedSecond.BibId);
+            Assert.IsFalse(await verify.HoldPlacementOperations.AnyAsync(item =>
+                item.TitleRequestId == first.Id || item.TitleRequestId == second.Id));
+            Assert.IsFalse(await verify.TitleRequestEvents.AnyAsync(item =>
+                item.TitleRequestId == first.Id || item.TitleRequestId == second.Id));
+            Assert.AreEqual(0, holdProvider.CreateCount);
+            Assert.AreEqual(0, holdProvider.ReplyCount);
+            Assert.AreEqual(0, holdProvider.HoldReadCount);
+        }
+        finally
+        {
+            await DeleteBibOwnershipRequestsAsync([first.Id, second.Id]);
+        }
+    }
+
+    [TestMethod]
     public async Task IdentifierEditClearsStaffBibBeforePurchasePromotionWorkflow()
     {
         var actor = await GetOwnershipTestActorAsync();
@@ -499,6 +711,8 @@ public sealed partial class PatronJourneyTests
             identifierTags: true,
             libraryOrganizationId: scope);
         long? unverifiedId = null;
+        long? duplicateTargetId = null;
+        long? duplicateBlockerId = null;
 
         try
         {
@@ -519,8 +733,13 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("purchase-identifier-B", afterEdit.Identifier);
             Assert.IsNull(afterEdit.BibId);
             Assert.IsFalse(afterEdit.BibIdStaffVerified);
-            Assert.AreEqual("pending", afterEdit.IsbnCheckStatus);
-            AssertIdentifierEvidenceWasCleared(afterEdit);
+            Assert.IsNull(afterEdit.IsbnCheckStatus);
+            Assert.AreEqual("Identifier processing was not completed before this request left suggestions.",
+                afterEdit.IsbnCheckResult);
+            Assert.AreEqual(0, afterEdit.IsbnCheckRetryCount);
+            Assert.IsNull(afterEdit.IsbnCheckLastErrorCode);
+            Assert.IsNull(afterEdit.LastCheckedUtc);
+            Assert.AreEqual(0, afterEdit.IdentifierTags.Count);
 
             await PrepareSingleItemCycleAsync(QueueNames.PurchasePromotion, scope, seeded.Id);
             var workflow = factory.Services.GetRequiredService<WorkflowProcessingService>();
@@ -555,11 +774,39 @@ public sealed partial class PatronJourneyTests
             await using var verifyUnverified = await contextFactory.CreateDbContextAsync();
             Assert.IsFalse(await verifyUnverified.TitleRequestEvents.AnyAsync(item =>
                 item.TitleRequestId == unverified.Id && item.EventType == "promoted"));
+
+            var duplicateTarget = await SeedBibOwnershipRequestAsync(
+                "purchase-duplicate-target", "789", staffVerified: true,
+                status: "outstanding_purchase", autoHold: true,
+                libraryOrganizationId: scope);
+            duplicateTargetId = duplicateTarget.Id;
+            var duplicateBlocker = await SeedBibOwnershipRequestAsync(
+                "purchase-duplicate-blocker", "789", staffVerified: true,
+                status: "suggestion", autoHold: true,
+                libraryOrganizationId: scope);
+            duplicateBlockerId = duplicateBlocker.Id;
+            await using (var duplicateSetup = await contextFactory.CreateDbContextAsync())
+            {
+                var target = await duplicateSetup.TitleRequests.SingleAsync(item => item.Id == duplicateTarget.Id);
+                var blocker = await duplicateSetup.TitleRequests.SingleAsync(item => item.Id == duplicateBlocker.Id);
+                blocker.Barcode = target.Barcode;
+                await duplicateSetup.SaveChangesAsync();
+            }
+            await PrepareSingleItemCycleAsync(QueueNames.PurchasePromotion, scope, duplicateTarget.Id);
+            var duplicateCycle = await workflow.ProcessWorkflowAsync(scope, CancellationToken.None);
+            Assert.AreEqual("completed", duplicateCycle.Code);
+            var afterDuplicateCycle = await ReadBibOwnershipRequestAsync(duplicateTarget.Id);
+            Assert.AreEqual("outstanding_purchase", afterDuplicateCycle.Status,
+                "Promotion must not queue another open hold for the same patron and BIB.");
+            await using var verifyDuplicate = await contextFactory.CreateDbContextAsync();
+            Assert.IsFalse(await verifyDuplicate.TitleRequestEvents.AnyAsync(item =>
+                item.TitleRequestId == duplicateTarget.Id && item.EventType == "promoted"));
         }
         finally
         {
-            await DeleteBibOwnershipRequestsAsync(unverifiedId.HasValue
-                ? [seeded.Id, unverifiedId.Value] : [seeded.Id]);
+            await DeleteBibOwnershipRequestsAsync(new long?[]
+                { seeded.Id, unverifiedId, duplicateTargetId, duplicateBlockerId }
+                .Where(item => item.HasValue).Select(item => item!.Value));
             await using var restore = await contextFactory.CreateDbContextAsync();
             var settings = await restore.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == scope);
             if (!settingsExisted)

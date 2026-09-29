@@ -42,7 +42,12 @@ public sealed record TitleRequestMutationResult(
     IReadOnlyList<long>? DispatchOutboxIds = null,
     string? FinalStatus = null,
     string? NotificationStatus = null,
-    string? NotificationReason = null);
+    string? NotificationReason = null,
+    string? PatronNotificationStatus = null,
+    string? PatronNotificationReason = null,
+    TitleRequestDuplicateConflict? Duplicate = null);
+
+public sealed record TitleRequestDuplicateConflict(long Id, string Title, string Status, string BibId, string MatchType);
 
 public sealed class TitleRequestMutationService(
     IDbContextFactory<AsapDbContext> contextFactory,
@@ -51,11 +56,16 @@ public sealed class TitleRequestMutationService(
     RecipientDomainPolicy recipientDomainPolicy,
     IEmailOutboxDispatcher outboxDispatcher,
     IStaffPolarisProvider staffPolarisProvider,
+    IPatronProvider patronProvider,
+    PatronConfigurationService patronConfigurations,
     IIdentifierLookupDispatcher identifierLookupDispatcher,
     ILogger<TitleRequestMutationService> logger)
 {
+    private sealed record ActionClaimRuleSnapshot(long FormatId, long? RuleId, long? StaffUserId);
     private static readonly string[] IdentifierDerivedTagCodes =
         ["polaris_bib_found", "polaris_bib_not_found", "polaris_multiple_matches"];
+    private const string InterruptedIdentifierResult =
+        "Identifier processing was not completed before this request left suggestions.";
     private readonly HashSet<Guid> allowedTenantIds = configuration.Authentication.Entra.AllowedTenantIds!
         .Select(Guid.Parse)
         .ToHashSet();
@@ -313,7 +323,8 @@ public sealed class TitleRequestMutationService(
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var notificationRequest = await context.TitleRequests.AsNoTracking().Where(item => item.Id == requestId)
-            .Select(item => new { item.LibraryOrganizationId, item.Status, item.Identifier, item.BibId, item.RowVersion })
+            .Select(item => new { item.LibraryOrganizationId, item.Barcode, item.Status, item.Identifier, item.BibId,
+                item.MaterialFormatId, item.ClaimedByStaffUserId, item.ClaimType, item.RowVersion })
             .SingleOrDefaultAsync(cancellationToken);
         if (notificationRequest is null ||
             !TitleRequestViewService.CanAccess(actor, notificationRequest.LibraryOrganizationId))
@@ -331,6 +342,24 @@ public sealed class TitleRequestMutationService(
         {
             return new TitleRequestMutationResult("stale_version");
         }
+        ActionClaimRuleSnapshot? claimRuleSnapshot = null;
+        if (notificationRequest.ClaimedByStaffUserId == actor.Id &&
+            notificationRequest.ClaimType == "automatic_format_rule" &&
+            !string.IsNullOrWhiteSpace(input.Format))
+        {
+            var proposedFormatId = await ResolveFormatIdAsync(context, notificationRequest.LibraryOrganizationId,
+                input.Format, cancellationToken);
+            if (proposedFormatId.HasValue && proposedFormatId.Value != notificationRequest.MaterialFormatId)
+            {
+                var rule = await context.FormatAutoClaimRules.AsNoTracking()
+                    .Where(item => item.LibraryOrganizationId == notificationRequest.LibraryOrganizationId &&
+                        item.MaterialFormatId == proposedFormatId.Value && item.IsActive)
+                    .OrderBy(item => item.Id)
+                    .Select(item => new { item.Id, item.StaffUserId })
+                    .FirstOrDefaultAsync(cancellationToken);
+                claimRuleSnapshot = new ActionClaimRuleSnapshot(proposedFormatId.Value, rule?.Id, rule?.StaffUserId);
+            }
+        }
         var previewIdentifier = Clean(notificationRequest.Identifier);
         var previewBib = Clean(notificationRequest.BibId);
         var previewIdentifierChanged = IsSupplied(input.Identifier) &&
@@ -346,9 +375,32 @@ public sealed class TitleRequestMutationService(
         var notificationTargetStatus = ResolveStatus(input.Action, input.Status, notificationRequest.Status,
             ProjectBibAfterMutation(previewIdentifierChanged, previewBibChanged,
                 previewStaffSelectedBib, previewProposedBib));
-        var notificationRequested = input.Action == "reject" ||
-            input.Action == "purchase" && input.EmailPurchaseReminder &&
-            notificationTargetStatus == "outstanding_purchase";
+        var notificationRequested = input.Action is "reject" or "alreadyOwn" ||
+            input.Action == "purchase" && notificationTargetStatus == "outstanding_purchase";
+        PatronSnapshot? currentPatron = null;
+        if (input.Action is "reject" or "alreadyOwn" ||
+            input.Action == "purchase" && notificationTargetStatus == "outstanding_purchase")
+        {
+            try
+            {
+                var refreshed = await patronProvider.RefreshAsync(notificationRequest.Barcode, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (refreshed is not null &&
+                    string.Equals(refreshed.Barcode, notificationRequest.Barcode, StringComparison.Ordinal))
+                {
+                    currentPatron = refreshed;
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                logger.LogWarning(exception,
+                    "Patron refresh failed before action email for request {RequestId}.", requestId);
+            }
+        }
         var transportConfigured = false;
         if (notificationRequested)
         {
@@ -363,7 +415,10 @@ public sealed class TitleRequestMutationService(
             }
         }
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
-        var locked = await LockForMutationAsync(context, actor, requestId, [actor.Id], cancellationToken);
+        var staffIds = claimRuleSnapshot?.StaffUserId is long candidateId
+            ? new[] { actor.Id, candidateId }
+            : [actor.Id];
+        var locked = await LockForMutationAsync(context, actor, requestId, staffIds, cancellationToken);
         if (locked.Code != "locked")
         {
             return new TitleRequestMutationResult(locked.Code);
@@ -409,12 +464,18 @@ public sealed class TitleRequestMutationService(
             staffSelectedBib, proposedBib);
         var autoHoldSupplied = input.Autohold.ValueKind is JsonValueKind.True or JsonValueKind.False;
         var proposedAutoHold = autoHoldSupplied ? input.Autohold.GetBoolean() : request.AutoHold;
-        var targetStatus = ResolveStatus(input.Action, input.Status, request.Status, bibAfterMutation);
+        var requestedTarget = ResolveStatus(input.Action, input.Status, request.Status, bibAfterMutation);
+        var targetStatus = ResolveBibTargetStatus(input.Action, request.Status, requestedTarget,
+            bibAfterMutation, proposedAutoHold, bibSupplied);
         if (targetStatus is null)
         {
             return new TitleRequestMutationResult("invalid_transition");
         }
         var statusChanged = targetStatus != request.Status;
+        var autoHoldOptOut = targetStatus == "closed" &&
+            (requestedTarget == "pending_hold" ||
+             input.Action == "edit" && request.Status == "outstanding_purchase" &&
+             bibSupplied && bibAfterMutation is not null);
 
         if (incompleteOperation && (identifierChanged || bibChanged || statusChanged || proposedAutoHold != request.AutoHold))
         {
@@ -424,15 +485,16 @@ public sealed class TitleRequestMutationService(
         {
             return new TitleRequestMutationResult(capabilities.BlockingReason ?? "identifier_locked_by_stage");
         }
-        if (targetStatus is "hold_placed" or "closed" && (identifierChanged || bibChanged))
+        if ((targetStatus == "hold_placed" || targetStatus == "closed" && !autoHoldOptOut) &&
+            (identifierChanged || bibChanged))
         {
             return new TitleRequestMutationResult("identifier_locked_by_stage");
         }
-        if (targetStatus == "pending_hold" && statusChanged && string.IsNullOrWhiteSpace(bibAfterMutation))
+        if (requestedTarget == "pending_hold" && statusChanged && string.IsNullOrWhiteSpace(bibAfterMutation))
         {
             return new TitleRequestMutationResult("bib_required");
         }
-        if (targetStatus == "pending_hold" && statusChanged &&
+        if (requestedTarget == "pending_hold" && statusChanged &&
             !request.BibIdStaffVerified && !bibChanged && !staffSelectedBib)
         {
             return new TitleRequestMutationResult("bib_unverified");
@@ -440,6 +502,26 @@ public sealed class TitleRequestMutationService(
         if (bibChanged && proposedBib is not null && !IsPositiveInteger(proposedBib))
         {
             return new TitleRequestMutationResult("invalid_bib");
+        }
+        if (targetStatus == "pending_hold" && bibAfterMutation is not null &&
+            (request.Status != "pending_hold" || !request.AutoHold || bibChanged))
+        {
+            // LockForMutationAsync holds the library Organization row until commit. Patron
+            // creation and automatic promotion take the same lock before writing requests.
+            var otherOpenRequests = await context.TitleRequests.AsNoTracking().Where(item =>
+                item.LibraryOrganizationId == request.LibraryOrganizationId &&
+                item.Barcode == request.Barcode && item.BibId != null &&
+                item.Id != request.Id && item.Status != "closed")
+                .OrderBy(item => item.Id)
+                .Select(item => new { item.Id, item.Title, item.Status, item.BibId })
+                .ToListAsync(cancellationToken);
+            var duplicate = otherOpenRequests.FirstOrDefault(other => SameBibIdentity(other.BibId, bibAfterMutation));
+            if (duplicate is not null)
+            {
+                return new TitleRequestMutationResult("duplicate_open_request", Duplicate:
+                    new TitleRequestDuplicateConflict(duplicate.Id, duplicate.Title, duplicate.Status,
+                        duplicate.BibId!, "bibid"));
+            }
         }
 
         ResolvedRejectionTemplate? rejectionTemplate = null;
@@ -524,24 +606,6 @@ public sealed class TitleRequestMutationService(
         {
             request.ExactPublicationDate = proposedExactDate;
         }
-        var customFieldsChanged = false;
-        if (input.CustomFields.ValueKind == JsonValueKind.Object)
-        {
-            try
-            {
-                using var previousFields = JsonDocument.Parse(
-                    string.IsNullOrWhiteSpace(previousCustomFields) ? "{}" : previousCustomFields);
-                customFieldsChanged = !JsonElement.DeepEquals(previousFields.RootElement, input.CustomFields);
-            }
-            catch (JsonException)
-            {
-                customFieldsChanged = true;
-            }
-            if (customFieldsChanged)
-            {
-                request.CustomFieldsJson = input.CustomFields.GetRawText();
-            }
-        }
         if (autoHoldSupplied)
         {
             request.AutoHold = proposedAutoHold;
@@ -562,13 +626,58 @@ public sealed class TitleRequestMutationService(
                 request.MaterialFormatId = formatId.Value;
             }
         }
+        var customFieldsChanged = false;
+        if (input.CustomFields.ValueKind != JsonValueKind.Undefined ||
+            previousFormatId != request.MaterialFormatId)
+        {
+            JsonElement submittedFields = input.CustomFields;
+            if (submittedFields.ValueKind == JsonValueKind.Undefined)
+            {
+                try
+                {
+                    using var storedFields = JsonDocument.Parse(
+                        string.IsNullOrWhiteSpace(previousCustomFields) ? "{}" : previousCustomFields);
+                    submittedFields = storedFields.RootElement.Clone();
+                }
+                catch (JsonException)
+                {
+                    return new TitleRequestMutationResult("invalid_custom_fields");
+                }
+            }
+            if (submittedFields.ValueKind != JsonValueKind.Object)
+            {
+                return new TitleRequestMutationResult("invalid_custom_fields");
+            }
+            var customFields = await MergeCustomFieldsAsync(context, request, submittedFields, cancellationToken);
+            if (customFields.Error is not null)
+            {
+                return new TitleRequestMutationResult(customFields.Error);
+            }
+            customFieldsChanged = !string.Equals(previousCustomFields, customFields.Json, StringComparison.Ordinal);
+            if (customFieldsChanged)
+            {
+                request.CustomFieldsJson = customFields.Json;
+            }
+        }
 
         var now = DateTime.UtcNow;
         request.Status = targetStatus;
         request.CloseReason = targetStatus == "closed"
-            ? statusChanged ? ResolveCloseReason(input.Action) : request.CloseReason
+            ? autoHoldOptOut ? "purchased_no_hold"
+                : statusChanged ? ResolveCloseReason(input.Action) : request.CloseReason
             : null;
         request.UpdatedUtc = now;
+        if (targetStatus != "suggestion" && request.IsbnCheckStatus == "pending")
+        {
+            await ResolveUnreachableIdentifierCheckAsync(context, request, cancellationToken);
+        }
+        else if (input.Action == "reopen" && targetStatus == "suggestion" &&
+            request.IsbnCheckStatus is null &&
+            request.IsbnCheckResult == InterruptedIdentifierResult)
+        {
+            InvalidateIdentifierCheckState(request);
+            await RemoveIdentifierTagsAsync(context, request.Id, cancellationToken);
+        }
         if (statusChanged)
         {
             AddEvent(context, request, actor, "status_changed", $"Moved to {targetStatus}.", new
@@ -630,6 +739,13 @@ public sealed class TitleRequestMutationService(
                 AddEvent(context, request, actor, "request_edited", $"Updated {string.Join(", ", changed)}.");
             }
         }
+        if (autoHoldOptOut)
+        {
+            AddEvent(context, request, actor, "autohold_opt_out",
+                input.Action == "alreadyOwn"
+                    ? "Closed without hold because Already Own was selected and automatic hold placement was disabled."
+                    : "Closed without hold because a BIB ID was supplied and automatic hold placement was disabled.");
+        }
         if (rejectionTemplateId.HasValue)
         {
             AddEvent(context, request, actor, "rejection_template_selected",
@@ -641,17 +757,19 @@ public sealed class TitleRequestMutationService(
             AddEvent(context, request, actor, "rejection_template_default",
                 "Used the default rejection email.");
         }
-        var previousClaimantId = request.ClaimedByStaffUserId;
-        SetManualClaim(request, locked.Staff[actor.Id]);
-        AddEvent(context, request, actor,
-            previousClaimantId.HasValue && previousClaimantId != actor.Id
-                ? "claim_manual_transferred"
-                : "claim_manual_assigned",
-            $"Claim automatically set to {DisplayName(locked.Staff[actor.Id])} after staff action.");
+        var claimError = await ApplyActionClaimAsync(context, request, actor, locked.Staff,
+            previousFormatId != request.MaterialFormatId, claimRuleSnapshot, cancellationToken);
+        if (claimError is not null)
+        {
+            return new TitleRequestMutationResult(claimError);
+        }
 
         var outboxIds = new List<long>();
         string? notificationStatus = null;
         string? notificationReason = null;
+        string? patronNotificationStatus = null;
+        string? patronNotificationReason = null;
+        long? patronNotificationOutboxId = null;
         if (input.EmailPurchaseReminder && input.Action == "purchase" && targetStatus == "outstanding_purchase")
         {
             var outbox = await AddStaffNotificationAsync(
@@ -676,7 +794,7 @@ public sealed class TitleRequestMutationService(
         }
         if (rejectionTemplate is not null)
         {
-            var outbox = await AddRejectionEmailAsync(context, request, rejectionTemplate,
+            var outbox = await AddRejectionEmailAsync(context, request, currentPatron, rejectionTemplate,
                 expectedVersion, transportConfigured, cancellationToken);
             notificationStatus = outbox.Status == "pending" ? "queued" : "suppressed";
             notificationReason = outbox.SuppressionReason;
@@ -685,24 +803,55 @@ public sealed class TitleRequestMutationService(
                 outboxIds.Add(outbox.Id);
             }
         }
+        if (input.Action == "purchase" && targetStatus == "outstanding_purchase" ||
+            input.Action == "alreadyOwn")
+        {
+            var templateKey = input.Action == "purchase" ? "purchase_approved" : "already_owned";
+            var outbox = await AddPatronActionEmailAsync(context, request, currentPatron, templateKey,
+                expectedVersion, transportConfigured, cancellationToken);
+            if (outbox.Status == "pending")
+            {
+                outboxIds.Add(outbox.Id);
+            }
+            if (input.Action == "alreadyOwn")
+            {
+                notificationStatus = outbox.Status == "pending" ? "queued" : "suppressed";
+                notificationReason = outbox.SuppressionReason;
+            }
+            else
+            {
+                patronNotificationStatus = outbox.Status == "pending" ? "queued" : "suppressed";
+                patronNotificationReason = outbox.SuppressionReason;
+                patronNotificationOutboxId = outbox.Status == "pending" ? outbox.Id : null;
+            }
+        }
 
         await context.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        try
+        foreach (var outboxId in outboxIds)
         {
-            foreach (var outboxId in outboxIds)
+            try
             {
                 outboxDispatcher.Enqueue(outboxId);
             }
-        }
-        catch (Exception exception)
-        {
-            logger.LogError(exception, "Notification dispatch failed after request {RequestId} committed", request.Id);
-            notificationStatus = "dispatch_failed";
-            notificationReason = "queue_unavailable";
+            catch (Exception exception)
+            {
+                logger.LogError(exception, "Notification dispatch failed after request {RequestId} committed", request.Id);
+                if (patronNotificationOutboxId == outboxId)
+                {
+                    patronNotificationStatus = "dispatch_failed";
+                    patronNotificationReason = "queue_unavailable";
+                }
+                else
+                {
+                    notificationStatus = "dispatch_failed";
+                    notificationReason = "queue_unavailable";
+                }
+            }
         }
         return new TitleRequestMutationResult("updated", request.Id, outboxIds,
-            targetStatus, notificationStatus, notificationReason);
+            targetStatus, notificationStatus, notificationReason,
+            patronNotificationStatus, patronNotificationReason);
     }
 
     private async Task<string?> PreflightExplicitBibAsync(
@@ -1018,6 +1167,73 @@ public sealed class TitleRequestMutationService(
         (row.Role == "super_admin" && row.OrganizationId == 1 ||
          row.Role is "staff" or "admin" && row.OrganizationId == organizationId);
 
+    private async Task<string?> ApplyActionClaimAsync(
+        AsapDbContext context,
+        TitleRequest request,
+        CurrentStaff actor,
+        IReadOnlyDictionary<long, StaffUser> lockedStaff,
+        bool formatChanged,
+        ActionClaimRuleSnapshot? preflightRule,
+        CancellationToken cancellationToken)
+    {
+        if (request.ClaimedByStaffUserId != actor.Id)
+        {
+            var wasClaimed = request.ClaimedByStaffUserId.HasValue;
+            SetManualClaim(request, lockedStaff[actor.Id]);
+            AddEvent(context, request, actor,
+                wasClaimed ? "claim_manual_transferred" : "claim_manual_assigned",
+                $"Claim set to {DisplayName(lockedStaff[actor.Id])} after staff action.");
+            return null;
+        }
+
+        if (!formatChanged || request.ClaimType != "automatic_format_rule")
+        {
+            return null;
+        }
+
+        if (preflightRule?.FormatId != request.MaterialFormatId)
+        {
+            return "claim_rule_changed";
+        }
+        var rule = await context.FormatAutoClaimRules.FromSqlInterpolated(
+                $"SELECT * FROM [asap].[FormatAutoClaimRule] WITH (UPDLOCK,HOLDLOCK) WHERE [LibraryOrganizationId] = {request.LibraryOrganizationId} AND [MaterialFormatId] = {request.MaterialFormatId} AND [IsActive] = 1")
+            .OrderBy(item => item.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (rule?.Id != preflightRule.RuleId || rule?.StaffUserId != preflightRule.StaffUserId)
+        {
+            return "claim_rule_changed";
+        }
+
+        if (rule?.StaffUserId is long staffId && lockedStaff.TryGetValue(staffId, out var assignee) &&
+            IsEligibleForLibrary(assignee, request.LibraryOrganizationId))
+        {
+            request.ClaimedByStaffUserId = assignee.Id;
+            request.ClaimedByDisplayName = DisplayName(assignee);
+            request.ClaimedAtUtc = DateTime.UtcNow;
+            request.ClaimType = "automatic_format_rule";
+            request.ClaimRuleId = rule.Id;
+            AddEvent(context, request, actor, "claim_auto_reassigned",
+                $"Format rule reassigned this request to {DisplayName(assignee)}.");
+            return null;
+        }
+
+        if (rule is not null)
+        {
+            AddEvent(context, request, actor, "claim_auto_skipped",
+                "Auto-claim skipped because the configured claimant is unavailable or outside this library.");
+            return null;
+        }
+
+        request.ClaimedByStaffUserId = null;
+        request.ClaimedByDisplayName = null;
+        request.ClaimedAtUtc = null;
+        request.ClaimType = null;
+        request.ClaimRuleId = null;
+        AddEvent(context, request, actor, "claim_auto_cleared",
+            "Auto-claim cleared because no rule is configured for the new format.");
+        return null;
+    }
+
     private static void SetManualClaim(TitleRequest request, StaffUser staff)
     {
         request.ClaimedByStaffUserId = staff.Id;
@@ -1111,9 +1327,94 @@ public sealed class TitleRequestMutationService(
         return outbox;
     }
 
+    private async Task<EmailOutbox> AddPatronActionEmailAsync(
+        AsapDbContext context,
+        TitleRequest request,
+        PatronSnapshot? currentPatron,
+        string templateKey,
+        byte[] expectedVersion,
+        bool transportConfigured,
+        CancellationToken cancellationToken)
+    {
+        var systemTemplate = await context.EmailTemplates.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.OrganizationId == 1 && item.TemplateKey == templateKey,
+                cancellationToken);
+        var libraryTemplate = systemTemplate is null ? null : await context.EmailTemplates.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.OrganizationId == request.LibraryOrganizationId &&
+                item.SourceTemplateId == systemTemplate.Id, cancellationToken);
+        var (defaultSubject, defaultBody) = templateKey == "purchase_approved"
+            ? ("Update on your suggestion: {{title}}",
+                "Hello {{name}},\n\nYour suggestion for {{title}} has been approved for purchase.")
+            : ("Already in our collection: {{title}}",
+                "Hello {{name}},\n\n{{title}} is already in our collection.");
+        var template = new EffectiveEmailTemplate(templateKey,
+            Clean(libraryTemplate?.SubjectTemplate) ?? Clean(systemTemplate?.SubjectTemplate) ?? defaultSubject,
+            Clean(libraryTemplate?.BodyTemplate) ?? Clean(systemTemplate?.BodyTemplate) ?? defaultBody);
+        var formatLabel = await context.MaterialFormats.AsNoTracking()
+            .Where(item => item.Id == request.MaterialFormatId)
+            .Select(item => item.Label)
+            .SingleAsync(cancellationToken);
+        var patron = currentPatron ?? new PatronSnapshot(0, request.Barcode, null,
+            request.NameFirst, request.NameLast, request.PatronCodeId,
+            request.PatronCodeDescription, request.PatronOrganizationId ?? 0,
+            request.LibraryOrganizationId, request.LibraryNameSnapshot ?? string.Empty,
+            request.PreferredPickupBranchId);
+        var rendered = PatronEmailTemplateRenderer.Render(template, patron, request.Title,
+            request.Author, formatLabel, request.Barcode);
+        var systemEmail = await context.EmailSettings.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.OrganizationId == 1, cancellationToken);
+        var libraryEmail = await context.EmailSettings.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.OrganizationId == request.LibraryOrganizationId, cancellationToken);
+        var fromAddress = Clean(libraryEmail?.FromAddress) ?? Clean(systemEmail?.FromAddress);
+        var fromName = Clean(libraryEmail?.FromName) ?? Clean(systemEmail?.FromName);
+        var toAddress = Clean(currentPatron?.Email);
+        string? suppressionReason = currentPatron is null ? "patron_refresh_unavailable" :
+            systemTemplate?.IsHidden == true || libraryTemplate?.IsHidden == true
+                ? "template_hidden" : null;
+        if (suppressionReason is null && (toAddress is null || !MailAddress.TryCreate(toAddress, out var parsed) ||
+            parsed.Address != toAddress))
+        {
+            suppressionReason = "recipient_invalid";
+        }
+        else if (suppressionReason is null && !recipientDomainPolicy.IsAllowed(toAddress!))
+        {
+            suppressionReason = "recipient_domain_not_allowed";
+        }
+        else if (suppressionReason is null && fromAddress is null)
+        {
+            suppressionReason = "sender_missing";
+        }
+        else if (suppressionReason is null && !transportConfigured)
+        {
+            suppressionReason = "mail_not_configured";
+        }
+        var now = DateTime.UtcNow;
+        var outbox = new EmailOutbox
+        {
+            OrganizationId = request.LibraryOrganizationId,
+            BusinessKey = $"staff-patron-action:{templateKey}:{request.Id}:{Convert.ToHexString(expectedVersion)}",
+            DeliveryClass = "business_event",
+            ToAddress = toAddress,
+            FromAddress = fromAddress,
+            FromName = fromName,
+            Subject = rendered.Subject,
+            BodyText = rendered.BodyText,
+            BodyHtml = rendered.BodyHtml,
+            Status = suppressionReason is null ? "pending" : "suppressed",
+            SuppressionReason = suppressionReason,
+            NextAttemptUtc = suppressionReason is null ? now : null,
+            CreatedUtc = now,
+            SuppressedUtc = suppressionReason is null ? null : now
+        };
+        context.EmailOutbox.Add(outbox);
+        await context.SaveChangesAsync(cancellationToken);
+        return outbox;
+    }
+
     private async Task<EmailOutbox> AddRejectionEmailAsync(
         AsapDbContext context,
         TitleRequest request,
+        PatronSnapshot? currentPatron,
         ResolvedRejectionTemplate template,
         byte[] expectedVersion,
         bool transportConfigured,
@@ -1123,7 +1424,7 @@ public sealed class TitleRequestMutationService(
             .Where(item => item.Id == request.MaterialFormatId)
             .Select(item => item.Label)
             .SingleAsync(cancellationToken);
-        var patron = new PatronSnapshot(0, request.Barcode, request.Email,
+        var patron = currentPatron ?? new PatronSnapshot(0, request.Barcode, null,
             request.NameFirst, request.NameLast, request.PatronCodeId,
             request.PatronCodeDescription, request.PatronOrganizationId ?? 0,
             request.LibraryOrganizationId, request.LibraryNameSnapshot ?? string.Empty,
@@ -1137,8 +1438,9 @@ public sealed class TitleRequestMutationService(
             .SingleOrDefaultAsync(item => item.OrganizationId == request.LibraryOrganizationId, cancellationToken);
         var fromAddress = Clean(library?.FromAddress) ?? Clean(system?.FromAddress);
         var fromName = Clean(library?.FromName) ?? Clean(system?.FromName);
-        var toAddress = Clean(request.Email);
-        string? suppressionReason = template.IsHidden ? "template_hidden" : null;
+        var toAddress = Clean(currentPatron?.Email);
+        string? suppressionReason = currentPatron is null ? "patron_refresh_unavailable" :
+            template.IsHidden ? "template_hidden" : null;
         if (suppressionReason is null && (toAddress is null || !MailAddress.TryCreate(toAddress, out var parsed) ||
             parsed.Address != toAddress))
         {
@@ -1207,6 +1509,19 @@ public sealed class TitleRequestMutationService(
         request.IsbnCheckStatus = request.Identifier is null ? "skipped_no_isbn" : "pending";
     }
 
+    private static async Task ResolveUnreachableIdentifierCheckAsync(
+        AsapDbContext context,
+        TitleRequest request,
+        CancellationToken cancellationToken)
+    {
+        request.IsbnCheckStatus = request.Identifier is null ? "skipped_no_isbn" : null;
+        request.IsbnCheckResult = request.Identifier is null ? null : InterruptedIdentifierResult;
+        request.IsbnCheckRetryCount = 0;
+        request.IsbnCheckLastErrorCode = null;
+        request.LastCheckedUtc = null;
+        await RemoveIdentifierTagsAsync(context, request.Id, cancellationToken);
+    }
+
     private static async Task<long?> ResolveFormatIdAsync(
         AsapDbContext context,
         int libraryOrganizationId,
@@ -1218,6 +1533,107 @@ public sealed class TitleRequestMutationService(
             .OrderByDescending(item => item.OwnerOrganizationId == libraryOrganizationId)
             .Select(item => (long?)item.Id)
             .FirstOrDefaultAsync(cancellationToken);
+
+    private async Task<(string? Error, string? Json)> MergeCustomFieldsAsync(
+        AsapDbContext context,
+        TitleRequest request,
+        JsonElement submitted,
+        CancellationToken cancellationToken)
+    {
+        var configuration = await patronConfigurations.GetAsync(
+            context, request.LibraryOrganizationId, cancellationToken);
+        var format = configuration?.Formats.FirstOrDefault(item => item.Id == request.MaterialFormatId);
+        if (format is null)
+        {
+            return submitted.EnumerateObject().Any()
+                ? ("invalid_custom_fields", null)
+                : (null, request.CustomFieldsJson);
+        }
+
+        Dictionary<string, JsonElement> merged;
+        try
+        {
+            merged = string.IsNullOrWhiteSpace(request.CustomFieldsJson)
+                ? new(StringComparer.Ordinal)
+                : JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(request.CustomFieldsJson)
+                  ?? new(StringComparer.Ordinal);
+        }
+        catch (JsonException)
+        {
+            merged = new(StringComparer.Ordinal);
+        }
+
+        foreach (var field in format.CustomFields)
+        {
+            if (field.Value.Mode == "required" &&
+                configuration!.CustomFields.Any(item => item.Key == field.Key) &&
+                !submitted.TryGetProperty(field.Key, out _))
+            {
+                return ("invalid_custom_fields", null);
+            }
+        }
+
+        foreach (var property in submitted.EnumerateObject())
+        {
+            var definition = configuration!.CustomFields.FirstOrDefault(item => item.Key == property.Name);
+            if (definition is null || !format.CustomFields.TryGetValue(property.Name, out var rule) ||
+                rule.Mode == "hidden")
+            {
+                continue;
+            }
+            if (property.Value.ValueKind is not (JsonValueKind.String or JsonValueKind.Null or JsonValueKind.Object) ||
+                property.Value.ValueKind == JsonValueKind.Object &&
+                (!property.Value.TryGetProperty("value", out var nestedValue) ||
+                 nestedValue.ValueKind is not (JsonValueKind.String or JsonValueKind.Null)))
+            {
+                return ("invalid_custom_fields", null);
+            }
+            var raw = property.Value.ValueKind switch
+            {
+                JsonValueKind.String => property.Value.GetString(),
+                JsonValueKind.Object when property.Value.TryGetProperty("value", out var value) &&
+                    value.ValueKind == JsonValueKind.String => value.GetString(),
+                _ => null
+            };
+            var cleaned = Clean(raw);
+            if (cleaned is null)
+            {
+                if (rule.Mode == "required")
+                {
+                    return ("invalid_custom_fields", null);
+                }
+                merged.Remove(property.Name);
+                continue;
+            }
+            if (definition.Type == "select")
+            {
+                var option = definition.Options.FirstOrDefault(item => item.Key == cleaned || item.Label == cleaned);
+                if (option is null)
+                {
+                    return ("invalid_custom_fields", null);
+                }
+                merged[property.Name] = JsonSerializer.SerializeToElement(new
+                {
+                    label = rule.Label ?? definition.Label,
+                    type = definition.Type,
+                    value = option.Key,
+                    displayValue = option.Label
+                });
+            }
+            else
+            {
+                var maxLength = definition.Type == "textarea" ? 2000 : 250;
+                merged[property.Name] = JsonSerializer.SerializeToElement(new
+                {
+                    label = rule.Label ?? definition.Label,
+                    type = definition.Type,
+                    value = cleaned[..Math.Min(cleaned.Length, maxLength)]
+                });
+            }
+        }
+
+        return (null, merged.Count == 0 ? null : JsonSerializer.Serialize(merged));
+    }
 
     private static string? ResolveStatus(string? actionValue, string? requestedStatus, string current, string? bib)
     {
@@ -1239,6 +1655,22 @@ public sealed class TitleRequestMutationService(
         return target is not null && (requested is null || requested == target) ? target : null;
     }
 
+    private static string? ResolveBibTargetStatus(string? action, string current, string? requestedTarget,
+        string? bib, bool autoHold, bool bibSupplied)
+    {
+        if (requestedTarget is null)
+        {
+            return null;
+        }
+        var targetsHold = requestedTarget == "pending_hold" ||
+            action == "edit" && current == "outstanding_purchase" && bibSupplied && bib is not null;
+        if (!targetsHold)
+        {
+            return requestedTarget;
+        }
+        return autoHold ? "pending_hold" : "closed";
+    }
+
     private static string ResolveCloseReason(string? action) => action switch
     {
         "reject" => "rejected",
@@ -1257,6 +1689,10 @@ public sealed class TitleRequestMutationService(
         ? value.GetString()
         : value.ToString();
     private static bool IsPositiveInteger(string? value) => int.TryParse(value, out var result) && result > 0;
+
+    private static bool SameBibIdentity(string? first, string? second) =>
+        int.TryParse(first, out var firstId) && firstId > 0 &&
+        int.TryParse(second, out var secondId) && firstId == secondId;
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     private static string DisplayName(StaffUser value) =>
         Clean(value.DisplayName) ?? Clean(value.UserPrincipalName) ?? "Staff";

@@ -944,7 +944,20 @@ public sealed class WorkflowProcessingService(
             }
             else if (settings.AutoPromote == true && !string.IsNullOrWhiteSpace(request.BibId))
             {
-                if (request.AutoHold && !request.BibIdStaffVerified)
+                var otherOpenBibs = request.AutoHold ? await context.TitleRequests.AsNoTracking().Where(item =>
+                    item.LibraryOrganizationId == request.LibraryOrganizationId &&
+                    item.Barcode == request.Barcode && item.BibId != null &&
+                    item.Id != request.Id && item.Status != "closed")
+                    .Select(item => item.BibId!)
+                    .ToListAsync(cancellationToken) : [];
+                var duplicate = otherOpenBibs.Any(otherBib =>
+                    int.TryParse(otherBib, out var otherId) &&
+                    int.TryParse(request.BibId, out var requestId) && otherId > 0 && otherId == requestId);
+                if (duplicate)
+                {
+                    code = "duplicate_open_request";
+                }
+                else if (request.AutoHold && !request.BibIdStaffVerified)
                 {
                     code = "bib_unverified";
                 }
