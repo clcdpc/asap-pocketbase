@@ -93,6 +93,7 @@ async function flush() {
 
   try {
     const settingsModule = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings.js')).href);
+    const httpModule = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'http.js')).href);
 
     for (const outcome of ['success', 'conflict']) {
       const html = fs.readFileSync(path.join(frontendRoot, 'staff', 'index.html'), 'utf8');
@@ -109,7 +110,14 @@ async function flush() {
       let releaseSave;
       let saveRequestCount = 0;
       const settingsRequests = [];
-      global.fetch = async (url) => {
+      let holdNextSettingsGet = false;
+      let signalOldSettingsGet;
+      let releaseOldSettingsGet;
+      let oldSettingsGetStarted;
+      const oldSettingsGetSeen = new Promise(resolve => { oldSettingsGetStarted = resolve; });
+      let sessionInvalidations = 0;
+      httpModule.onSessionInvalid(() => { sessionInvalidations += 1; });
+      global.fetch = async (url, options) => {
         const requestUrl = String(url);
         if (requestUrl.endsWith('/api/asap/staff/session')) {
           return response(200, { authenticated: true, antiforgeryToken: 'test-token' });
@@ -117,6 +125,14 @@ async function flush() {
         if (requestUrl.includes('/api/asap/staff/settings?orgId=')) {
           const organizationId = decodeURIComponent(requestUrl.split('orgId=')[1]);
           settingsRequests.push(organizationId);
+          if (holdNextSettingsGet) {
+            holdNextSettingsGet = false;
+            signalOldSettingsGet = options.signal;
+            oldSettingsGetStarted();
+            return new Promise(resolve => {
+              releaseOldSettingsGet = () => resolve(response(401, { code: 'staff_session_invalid' }));
+            });
+          }
           const prefix = organizationId === '2' ? 'Two' : organizationId === '3' ? 'Three' : 'System';
           return response(200, settingsData(organizationId === 'system' ? 1 : Number(organizationId), `${organizationId}-version`, prefix));
         }
@@ -164,10 +180,37 @@ async function flush() {
       const libraryTwoDraft = document.getElementById('patron-login-note');
       libraryTwoDraft.value = 'Draft for library two';
       libraryTwoDraft.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+      holdNextSettingsGet = true;
+      const obsoleteLoad = controller.load({ silent: true });
+      await oldSettingsGetSeen;
       const saveFinished = new Promise(resolve => { saveStarted = resolve; });
       document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
       await saveFinished;
       assert.strictEqual(saveRequestCount, 1);
+      assert.strictEqual(signalOldSettingsGet.aborted, true);
+      releaseOldSettingsGet();
+      await obsoleteLoad;
+      assert.strictEqual(sessionInvalidations, 0,
+        'an aborted stale Settings GET must not invalidate the current session');
+
+      const announcementsBeforeBlockedSwitch = announcements.length;
+      scope.value = '3';
+      scope.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+      await flush();
+      assert.strictEqual(scope.value, '2', 'scope change must wait for the authoritative save result');
+      assert.strictEqual(document.getElementById('settings-form').inert, true);
+      assert.ok(announcements.slice(announcementsBeforeBlockedSwitch).some(item =>
+        /wait for the settings change/i.test(item.message)));
+      const requestsBeforeRelease = settingsRequests.length;
+
+      releaseSave();
+      for (let attempt = 0; attempt < 12 && document.getElementById('settings-form').inert; attempt++) {
+        await flush();
+      }
+      assert.strictEqual(document.getElementById('settings-form').inert, false);
+      assert.strictEqual(scope.value, '2');
+      assert.ok(settingsRequests.length > requestsBeforeRelease,
+        'the owning library must refresh after the save or conflict result');
 
       const announcementsBeforeSwitch = announcements.length;
       scope.value = '3';
@@ -177,9 +220,7 @@ async function flush() {
       const libraryThreeDraft = document.getElementById('patron-login-note');
       libraryThreeDraft.value = 'Draft for library three';
       libraryThreeDraft.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
-      const requestsBeforeRelease = settingsRequests.length;
-
-      releaseSave();
+      const requestsAfterSwitch = settingsRequests.length;
       await flush();
       await flush();
 
@@ -191,7 +232,7 @@ async function flush() {
       );
       assert.strictEqual(
         settingsRequests.length,
-        requestsBeforeRelease,
+        requestsAfterSwitch,
         `${outcome} completion must not reload the newer settings scope`
       );
       assert.deepStrictEqual(

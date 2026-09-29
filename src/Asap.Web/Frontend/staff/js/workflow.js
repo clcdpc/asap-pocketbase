@@ -848,6 +848,8 @@ export function createWorkflowApp() {
   }
 
   function showSignedOut(message) {
+    const settingsMutationUnconfirmed = settingsController.hasPendingMutation() &&
+      !state.settingsCommitPendingRefresh;
     invalidateNavigation();
     const storage = recentStorage();
     if (storage && state.recentKey) {
@@ -906,7 +908,10 @@ export function createWorkflowApp() {
     resetAnalytics();
     settingsController.signedOut();
     dom.signedOutMessage.textContent = state.settingsCommitPendingRefresh
-      ? 'Settings saved. Sign in again to review the current values.' : state.partialSessionFailureMessage ||
+      ? 'Settings saved. Sign in again to review the current values.'
+      : settingsMutationUnconfirmed
+        ? 'Settings change outcome is uncertain. Sign in again and check saved values before retrying.'
+        : state.partialSessionFailureMessage ||
       message || 'Sign in with your authorized library account.';
     dom.signedOut.hidden = false;
     dom.workspace.hidden = true;
@@ -1014,9 +1019,20 @@ export function createWorkflowApp() {
     const defaultSettingsScope = state.staff.role === 'super_admin'
       ? 'system' : String(state.staff.organizationId);
     const nextSettingsScope = requestedSettingsScope || defaultSettingsScope;
-    if (state.activeView === 'settings' && settingsController.isDirty() &&
-        (requestedSettingsStage !== 'settings' ||
-          nextSettingsScope !== settingsController.currentScope()) &&
+    const leavingSettingsContext = requestedSettingsStage !== 'settings' ||
+      nextSettingsScope !== settingsController.currentScope();
+    if (state.activeView === 'settings' && settingsController.hasPendingMutation() &&
+        leavingSettingsContext) {
+      const restoredUrl = new URL(window.location.href);
+      restoredUrl.searchParams.set('stage', 'settings');
+      restoredUrl.searchParams.set('settingsScope', settingsController.currentScope());
+      restoredUrl.searchParams.delete('request');
+      restoredUrl.hash = `settings-${settingsController.currentPanel()}`;
+      window.history.replaceState(null, '', `${restoredUrl.pathname}${restoredUrl.search}${restoredUrl.hash}`);
+      announce('Wait for the settings change to finish before navigating away.', 'warning');
+      return;
+    }
+    if (state.activeView === 'settings' && settingsController.isDirty() && leavingSettingsContext &&
         !window.confirm('Discard unsaved settings changes and navigate away?')) {
       const restoredUrl = new URL(window.location.href);
       restoredUrl.searchParams.set('stage', 'settings');
@@ -3810,6 +3826,11 @@ export function createWorkflowApp() {
     if ((name === 'settings' || name === 'operations') &&
         !['admin', 'super_admin'].includes(state.staff?.role)) return;
     const previousView = state.activeView;
+    if (previousView === 'settings' && name !== 'settings' &&
+        settingsController.hasPendingMutation()) {
+      announce('Wait for the settings change to finish before navigating away.', 'warning');
+      return;
+    }
     if (updateUrl && previousView === 'settings' && name !== 'settings' &&
         settingsController.isDirty() &&
         !window.confirm('Discard unsaved settings changes and navigate away?')) return;
