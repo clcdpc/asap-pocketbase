@@ -165,8 +165,8 @@ public sealed partial class PatronSuggestionService(
         IReadOnlyList<PickupBranch> pickupBranches;
         try
         {
-            patron = await patronProvider.RefreshAsync(session.Barcode, cancellationToken);
-            pickupBranches = await patronProvider.GetPickupBranchesAsync(patron, cancellationToken);
+            patron = await patronProvider.RefreshAsync(session.Barcode, session.EffectiveOrganizationId, cancellationToken);
+            pickupBranches = await patronProvider.GetPickupBranchesAsync(patron, session.EffectiveOrganizationId, cancellationToken);
         }
         catch (PolarisOperationalException exception)
         {
@@ -191,6 +191,7 @@ public sealed partial class PatronSuggestionService(
                 await patronProvider.UpdatePreferredPickupBranchAsync(
                     session.Barcode,
                     selectedBranch.Id,
+                    session.EffectiveOrganizationId,
                     cancellationToken);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
@@ -306,9 +307,9 @@ public sealed partial class PatronSuggestionService(
 
         var barcode = Clean(input.Barcode)
             ?? throw new PatronFlowException(400, "Verify a patron before submitting the suggestion.");
-        var patron = await RefreshStaffPatronAsync(barcode, cancellationToken);
+        var patron = await RefreshStaffPatronAsync(barcode, organizationId, cancellationToken);
         EnforceStaffPatronEligibility(configuration, patron);
-        var pickupBranches = await LoadPickupBranchesAsync(patron, cancellationToken);
+        var pickupBranches = await LoadPickupBranchesAsync(patron, organizationId, cancellationToken);
         var selectedBranch = pickupBranches.SingleOrDefault(
             branch => branch.Id == input.PreferredPickupBranchId);
         if (selectedBranch is null)
@@ -327,7 +328,7 @@ public sealed partial class PatronSuggestionService(
                 new { code = "pickup_changed_since_load" });
         }
 
-        var verifiedBibId = await ValidateStaffBibAsync(input.VerifiedBibId, cancellationToken);
+        var verifiedBibId = await ValidateStaffBibAsync(input.VerifiedBibId, organizationId, cancellationToken);
         var prepared = await PrepareStaffSuggestionMutationAsync(
             actor,
             organizationId,
@@ -352,6 +353,7 @@ public sealed partial class PatronSuggestionService(
                     await patronProvider.UpdatePreferredPickupBranchAsync(
                         barcode,
                         selectedBranch.Id,
+                        organizationId,
                         cancellationToken);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -371,9 +373,9 @@ public sealed partial class PatronSuggestionService(
 
                 // Refresh the snapshot after the external mutation so the persisted patron context
                 // is not merely the browser's earlier lookup row.
-                patron = await RefreshStaffPatronAsync(barcode, cancellationToken);
+                patron = await RefreshStaffPatronAsync(barcode, organizationId, cancellationToken);
                 EnforceStaffPatronEligibility(prepared.Configuration, patron);
-                pickupBranches = await LoadPickupBranchesAsync(patron, cancellationToken);
+                pickupBranches = await LoadPickupBranchesAsync(patron, organizationId, cancellationToken);
                 selectedBranch = pickupBranches.SingleOrDefault(branch => branch.Id == input.PreferredPickupBranchId)
                     ?? throw new PatronFlowException(
                         409,
@@ -507,11 +509,11 @@ public sealed partial class PatronSuggestionService(
 
     private async Task<PatronSnapshot> RefreshStaffPatronAsync(
         string barcode,
-        CancellationToken cancellationToken)
+        int organizationId, CancellationToken cancellationToken)
     {
         try
         {
-            return await patronProvider.RefreshAsync(barcode, cancellationToken);
+            return await patronProvider.RefreshAsync(barcode, organizationId, cancellationToken);
         }
         catch (PolarisOperationalException exception)
         {
@@ -546,11 +548,11 @@ public sealed partial class PatronSuggestionService(
 
     private async Task<IReadOnlyList<PickupBranch>> LoadPickupBranchesAsync(
         PatronSnapshot patron,
-        CancellationToken cancellationToken)
+        int organizationId, CancellationToken cancellationToken)
     {
         try
         {
-            return await patronProvider.GetPickupBranchesAsync(patron, cancellationToken);
+            return await patronProvider.GetPickupBranchesAsync(patron, organizationId, cancellationToken);
         }
         catch (PolarisOperationalException exception)
         {
@@ -576,7 +578,7 @@ public sealed partial class PatronSuggestionService(
 
     private async Task<int?> ValidateStaffBibAsync(
         int? bibId,
-        CancellationToken cancellationToken)
+        int organizationId, CancellationToken cancellationToken)
     {
         if (bibId is null)
         {
@@ -599,7 +601,7 @@ public sealed partial class PatronSuggestionService(
         BibValidationResult result;
         try
         {
-            result = await staffPolaris.ValidateBibAsync(bibId.Value, cancellationToken);
+            result = await staffPolaris.ValidateBibAsync(bibId.Value, organizationId, cancellationToken);
         }
         catch (PolarisOperationalException exception)
         {
@@ -1851,7 +1853,7 @@ public sealed partial class PatronSuggestionService(
         IdentifierLookupResult result;
         try
         {
-            result = await patronProvider.LookupIdentifierAsync(identifier, cancellationToken);
+            result = await patronProvider.LookupIdentifierAsync(identifier, organizationId, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

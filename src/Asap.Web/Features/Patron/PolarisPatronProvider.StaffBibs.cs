@@ -13,7 +13,7 @@ public sealed partial class PolarisPatronProvider
     private const int StaffBibSearchLimit = 10;
 
     public async Task<StaffBibSearchResult> SearchBibsAsync(
-        string mode, string query, string title, string author, CancellationToken cancellationToken)
+        string mode, string query, string title, string author, int organizationId, CancellationToken cancellationToken)
     {
         query = CleanSearch(query);
         title = CleanSearch(title);
@@ -38,10 +38,8 @@ public sealed partial class PolarisPatronProvider
 
         try
         {
-            var (client, settings) = await CreateClientAsync(cancellationToken);
-            var branch = settings.PickupOrganizationId is > 0
-                ? settings.PickupOrganizationId.Value
-                : settings.OrganizationIdForRequests is > 0 ? settings.OrganizationIdForRequests.Value : 1;
+            var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
+            var branch = organizationId;
             var results = new List<StaffBibSearchRow>();
             var seen = new HashSet<int>();
             var totalMatches = 0;
@@ -280,7 +278,7 @@ public sealed partial class PolarisPatronProvider
     {
         try
         {
-            var (client, _) = await CreateClientAsync(cancellationToken);
+            var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
             var response = await client.HoldingsGetAsync(bibId, cancellationToken);
             var data = response.Data;
             if (response.Response?.IsSuccessStatusCode != true || data is null)

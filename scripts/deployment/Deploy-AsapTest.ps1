@@ -258,7 +258,7 @@ function Test-DeploymentArchive {
         throw 'Deployment manifest buildUtc is not a UTC timestamp.'
     }
 
-    if ([int] $manifest.applicationSchemaVersion -ne 7 -or
+    if ([int] $manifest.applicationSchemaVersion -ne 8 -or
         [int] $manifest.hangfireSchemaVersion -ne 9) {
         throw 'Deployment manifest contains an unsupported schema contract.'
     }
@@ -610,6 +610,9 @@ function Invoke-HangfireSchemaInstall {
 function Invoke-DacpacPublish {
     param(
         [Parameter(Mandatory = $true)]
+        [string] $SqlCmdPath,
+
+        [Parameter(Mandatory = $true)]
         [string] $SqlPackagePath,
 
         [Parameter(Mandatory = $true)]
@@ -618,6 +621,33 @@ function Invoke-DacpacPublish {
         [Parameter(Mandatory = $true)]
         [string] $DacpacPath
     )
+
+    # Execute the validated DACPAC's own idempotent schema guards/retirements
+    # before SqlPackage builds its plan. Keep all other data-loss protection.
+    $package = [IO.Compression.ZipFile]::OpenRead($DacpacPath)
+    $preflightPath = [IO.Path]::GetTempFileName()
+    try {
+        $entry = $package.GetEntry('predeploy.sql')
+        if ($null -eq $entry) {
+            throw 'Application DACPAC has no pre-deployment contract.'
+        }
+        $reader = [IO.StreamReader]::new($entry.Open())
+        try {
+            [IO.File]::WriteAllText($preflightPath, $reader.ReadToEnd(), [Text.UTF8Encoding]::new($false))
+        }
+        finally {
+            $reader.Dispose()
+        }
+        $sqlArguments = @(Get-SqlCmdArguments -ConnectionString $ConnectionString)
+        & $SqlCmdPath @sqlArguments '-i' $preflightPath
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Application DACPAC pre-deployment contract failed.'
+        }
+    }
+    finally {
+        $package.Dispose()
+        Remove-Item -LiteralPath $preflightPath -Force -ErrorAction SilentlyContinue
+    }
 
     $arguments = @(
         '/Action:Publish',
@@ -858,6 +888,7 @@ try {
     Stop-TestAppPool -AppPoolName $hostConfig.IisAppPoolName
     if ($needsDacpac) {
         Invoke-DacpacPublish `
+            -SqlCmdPath $hostConfig.SqlCmdPath `
             -SqlPackagePath $hostConfig.SqlPackagePath `
             -ConnectionString $hostConfig.AsapDatabaseConnectionString `
             -DacpacPath $archive.DacpacPath

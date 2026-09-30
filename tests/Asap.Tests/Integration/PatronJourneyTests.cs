@@ -2178,6 +2178,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(HttpStatusCode.OK, baselineSession.StatusCode);
         }
 
+        await CreatePolarisProviderAsync(new StaticResponseHandler(HttpStatusCode.OK, "{}"));
         var isolatedTenantId = Guid.NewGuid();
         var isolatedObjectId = Guid.NewGuid();
         var settingsPath = await WriteStaffConfigurationAsync(
@@ -2204,6 +2205,7 @@ public sealed partial class PatronJourneyTests
 
         Assert.AreEqual(HttpStatusCode.OK, live.StatusCode);
         Assert.AreEqual(HttpStatusCode.OK, ready.StatusCode);
+        Assert.AreEqual("{\"status\":\"healthy\"}", await ready.Content.ReadAsStringAsync());
         Assert.AreEqual(HttpStatusCode.OK, business.StatusCode);
         Assert.AreEqual(HttpStatusCode.OK, staffShell.StatusCode);
 
@@ -5658,7 +5660,10 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task StaffHoldReconcileResumesDurableReplyReadyWithoutRepeatingCreate()
+    [DataRow(2)]
+    [DataRow(1)]
+    [DataRow(3)]
+    public async Task StaffHoldReconcileResumesDurableReplyReadyWithoutRepeatingCreate(int requestingOrganizationId)
     {
         var holdProvider = ScriptedHoldProvider.ReplyRequiredThenSuccess();
         await using var holdFactory = factory!.WithWebHostBuilder(builder =>
@@ -5696,7 +5701,7 @@ public sealed partial class PatronJourneyTests
                      [LeaseExpiresUtc], [RequestStartedUtc], [CreateStartedUtc], [CreateResponseObservedUtc],
                      [PolarisRequestGuid], [TxnGroupQualifier], [TxnQualifier], [ReplyAnswer], [ReplyState],
                      [ProviderStatusType], [ProviderStatusValue], [ResultCode], [OutcomeEvidenceKind])
-                VALUES (@requestId, N'20000000002130', N'7130', N'9030', 101, 1, 1, N'1', 1,
+                VALUES (@requestId, N'20000000002130', 7130, 9030, 101, @requestingOrg, 1, 1, 1,
                         N'in_progress', N'reply_ready', NEWID(), 1, DATEADD(minute, -1, SYSUTCDATETIME()),
                         DATEADD(minute, -5, SYSUTCDATETIME()), DATEADD(minute, -4, SYSUTCDATETIME()),
                         DATEADD(minute, -3, SYSUTCDATETIME()), @requestGuid, N'group-qualifier',
@@ -5705,7 +5710,8 @@ public sealed partial class PatronJourneyTests
                 SELECT @actorId, @requestId;
                 """;
             seed.Parameters.AddWithValue("@objectId", Guid.Parse(identity.ObjectId!));
-            seed.Parameters.AddWithValue("@requestGuid", holdProvider.RequestGuid.ToString());
+            seed.Parameters.AddWithValue("@requestGuid", holdProvider.RequestGuid);
+            seed.Parameters.AddWithValue("@requestingOrg", requestingOrganizationId);
             await using var reader = await seed.ExecuteReaderAsync();
             Assert.IsTrue(await reader.ReadAsync());
             actorId = reader.GetInt64(0);
@@ -5723,9 +5729,10 @@ public sealed partial class PatronJourneyTests
         using var reconcile = await client.PostAsJsonAsync(
             $"/api/asap/staff/hold-operations/{operation.GetProperty("id").GetString()}/reconcile",
             new { version = operation.GetProperty("version").GetString() });
-        Assert.AreEqual(HttpStatusCode.OK, reconcile.StatusCode, await reconcile.Content.ReadAsStringAsync());
+        Assert.AreEqual(requestingOrganizationId == 2 ? HttpStatusCode.OK : HttpStatusCode.Conflict,
+            reconcile.StatusCode, await reconcile.Content.ReadAsStringAsync());
         Assert.AreEqual(0, holdProvider.CreateCount);
-        Assert.AreEqual(1, holdProvider.ReplyCount);
+        Assert.AreEqual(requestingOrganizationId == 2 ? 1 : 0, holdProvider.ReplyCount);
 
         await using var verify = new SqlConnection(databaseConnectionString);
         await verify.OpenAsync();
@@ -5744,6 +5751,17 @@ public sealed partial class PatronJourneyTests
         command.Parameters.AddWithValue("@requestId", requestId);
         await using var result = await command.ExecuteReaderAsync();
         Assert.IsTrue(await result.ReadAsync());
+        if (requestingOrganizationId != 2)
+        {
+            Assert.AreEqual("pending_hold", result.GetString(0));
+            Assert.AreEqual("operator_required", result.GetString(1));
+            Assert.AreEqual("reply_ready", result.GetString(2));
+            Assert.IsTrue(result.IsDBNull(4));
+            Assert.IsTrue(result.IsDBNull(5));
+            Assert.IsTrue(result.IsDBNull(6));
+            Assert.AreEqual(0, result.GetInt32(8));
+            return;
+        }
         Assert.AreEqual("hold_placed", result.GetString(0));
         Assert.AreEqual("succeeded", result.GetString(1));
         Assert.AreEqual("result_recorded", result.GetString(2));
@@ -7137,7 +7155,7 @@ public sealed partial class PatronJourneyTests
         var handler = new StaticResponseHandler((HttpStatusCode)statusCode, "{}");
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.LookupIdentifierAsync("9780000000099", CancellationToken.None);
+        var result = await provider.LookupIdentifierAsync("9780000000099", 2, CancellationToken.None);
 
         Assert.AreEqual(expected, result.Outcome);
         Assert.AreEqual(1, handler.RequestCount);
@@ -7158,7 +7176,7 @@ public sealed partial class PatronJourneyTests
             """);
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var byIdentifier = await provider.SearchBibsAsync("identifier", "978-0000000001", "", "", CancellationToken.None);
+        var byIdentifier = await provider.SearchBibsAsync("identifier", "978-0000000001", "", "", 2, CancellationToken.None);
         Assert.AreEqual(2, byIdentifier.Results.Count);
         Assert.AreEqual(4, byIdentifier.TotalMatches);
         Assert.AreEqual(9001, byIdentifier.Results[0].BibId);
@@ -7176,9 +7194,9 @@ public sealed partial class PatronJourneyTests
             !Uri.UnescapeDataString(uri.Query).Contains("sort=", StringComparison.Ordinal)));
 
         handler.RequestUris.Clear();
-        await provider.SearchBibsAsync("title", "A title", "", "", CancellationToken.None);
-        await provider.SearchBibsAsync("author", "An author", "", "", CancellationToken.None);
-        await provider.SearchBibsAsync("title_author", "", "A title", "An author", CancellationToken.None);
+        await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None);
+        await provider.SearchBibsAsync("author", "An author", "", "", 2, CancellationToken.None);
+        await provider.SearchBibsAsync("title_author", "", "A title", "An author", 2, CancellationToken.None);
         CollectionAssert.AreEqual(new[] { "TI", "AU", "boolean", "TI" },
             handler.RequestUris.Select(uri => uri.AbsolutePath.Split('/').Last()).ToArray());
         StringAssert.Contains(Uri.UnescapeDataString(handler.RequestUris[2].Query),
@@ -7192,7 +7210,7 @@ public sealed partial class PatronJourneyTests
             """{"PAPIErrorCode":0,"TotalRecordsFound":1,"BibSearchRows":[{"ControlNumber":9001}]}""");
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.SearchBibsAsync("title", "A title", "", "", CancellationToken.None);
+        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None);
 
         Assert.AreEqual(1, result.Results.Count);
         Assert.AreEqual(9001, result.Results[0].BibId);
@@ -7210,7 +7228,7 @@ public sealed partial class PatronJourneyTests
         var provider = await CreatePolarisProviderAsync(handler);
 
         await Assert.ThrowsExactlyAsync<PolarisOperationalException>(() =>
-            provider.SearchBibsAsync("title", "A title", "", "", CancellationToken.None));
+            provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None));
     }
 
     [TestMethod]
@@ -7220,7 +7238,7 @@ public sealed partial class PatronJourneyTests
             """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[],"ErrorMessage":""}""");
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.SearchBibsAsync("title", "A title", "", "", CancellationToken.None);
+        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None);
 
         Assert.AreEqual(0, result.Results.Count);
         Assert.AreEqual(0, result.TotalMatches);
@@ -7234,7 +7252,7 @@ public sealed partial class PatronJourneyTests
             """{"PAPIErrorCode":0,"ErrorMessage":"Search terms normalized","TotalRecordsFound":0,"BibSearchRows":[]}""");
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.SearchBibsAsync("title", "A title", "", "", CancellationToken.None);
+        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None);
 
         Assert.AreEqual(0, result.Results.Count);
         Assert.AreEqual(0, result.TotalMatches);
@@ -7248,7 +7266,7 @@ public sealed partial class PatronJourneyTests
             """{"PAPIErrorCode":-1,"TotalRecordsFound":0,"BibSearchRows":[]}""");
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.SearchBibsAsync("title", "A title", "", "", CancellationToken.None);
+        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None);
 
         Assert.AreEqual(0, result.Results.Count);
         Assert.AreEqual(0, result.TotalMatches);
@@ -7262,7 +7280,7 @@ public sealed partial class PatronJourneyTests
             """{"PAPIErrorCode":1,"ErrorMessage":"Search terms normalized","TotalRecordsFound":1,"BibSearchRows":[{"ControlNumber":9001}]}""");
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.SearchBibsAsync("title", "A title", "", "", CancellationToken.None);
+        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None);
 
         Assert.AreEqual(9001, result.Results.Single().BibId);
     }
@@ -7274,7 +7292,7 @@ public sealed partial class PatronJourneyTests
             """{"PAPIErrorCode":0,"TotalRecordsFound":1,"BibSearchRows":[{"ControlNumber":9001,"PrimaryTypeOfMaterial":36}]}""");
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.SearchBibsAsync("title", "A title", "", "", CancellationToken.None);
+        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None);
 
         Assert.AreEqual(0, result.Results.Count);
         Assert.AreEqual(1, result.TotalMatches);
@@ -7316,7 +7334,7 @@ public sealed partial class PatronJourneyTests
         var provider = await CreatePolarisProviderAsync(handler);
 
         var failure = await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
-            await provider.SearchBibsAsync("title", "A title", "", "", CancellationToken.None));
+            await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None));
 
         Assert.AreEqual("polaris_bib_search_failed", failure.Code);
         Assert.AreEqual(1, handler.RequestCount);
@@ -7331,7 +7349,7 @@ public sealed partial class PatronJourneyTests
             (HttpStatusCode.ServiceUnavailable, "{}"),
             (HttpStatusCode.InternalServerError, "{}"));
         var firstProvider = await CreatePolarisProviderAsync(first);
-        var firstResult = await firstProvider.SearchBibsAsync("identifier", "9780000000001", "", "", CancellationToken.None);
+        var firstResult = await firstProvider.SearchBibsAsync("identifier", "9780000000001", "", "", 2, CancellationToken.None);
         Assert.AreEqual(9001, firstResult.Results.Single().BibId);
         Assert.AreEqual(3, first.RequestCount);
 
@@ -7341,7 +7359,7 @@ public sealed partial class PatronJourneyTests
             (HttpStatusCode.ServiceUnavailable, "{}"));
         var partialProvider = await CreatePolarisProviderAsync(partial);
 
-        var result = await partialProvider.SearchBibsAsync("identifier", "9780000000001", "", "", CancellationToken.None);
+        var result = await partialProvider.SearchBibsAsync("identifier", "9780000000001", "", "", 2, CancellationToken.None);
 
         Assert.AreEqual(1, result.Results.Count);
         Assert.AreEqual(9001, result.Results[0].BibId);
@@ -7352,7 +7370,7 @@ public sealed partial class PatronJourneyTests
             (HttpStatusCode.InternalServerError, "{}"),
             (HttpStatusCode.OK, valid));
         var lastProvider = await CreatePolarisProviderAsync(last);
-        var lastResult = await lastProvider.SearchBibsAsync("identifier", "9780000000001", "", "", CancellationToken.None);
+        var lastResult = await lastProvider.SearchBibsAsync("identifier", "9780000000001", "", "", 2, CancellationToken.None);
         Assert.AreEqual(9001, lastResult.Results.Single().BibId);
         Assert.AreEqual(3, last.RequestCount);
 
@@ -7362,7 +7380,7 @@ public sealed partial class PatronJourneyTests
             (HttpStatusCode.BadGateway, "{}"));
         var failedProvider = await CreatePolarisProviderAsync(failed);
         await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
-            await failedProvider.SearchBibsAsync("identifier", "9780000000001", "", "", CancellationToken.None));
+            await failedProvider.SearchBibsAsync("identifier", "9780000000001", "", "", 2, CancellationToken.None));
         Assert.AreEqual(3, failed.RequestCount);
 
         var empty = """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[]}""";
@@ -7371,7 +7389,7 @@ public sealed partial class PatronJourneyTests
             (HttpStatusCode.OK, empty),
             (HttpStatusCode.OK, """{"PAPIErrorCode":-1,"TotalRecordsFound":0,"BibSearchRows":[]}"""));
         var emptyProvider = await CreatePolarisProviderAsync(allEmpty);
-        var noMatches = await emptyProvider.SearchBibsAsync("identifier", "9780000000001", "", "", CancellationToken.None);
+        var noMatches = await emptyProvider.SearchBibsAsync("identifier", "9780000000001", "", "", 2, CancellationToken.None);
         Assert.AreEqual(0, noMatches.Results.Count);
         Assert.AreEqual(3, allEmpty.RequestCount);
 
@@ -7382,7 +7400,7 @@ public sealed partial class PatronJourneyTests
         var emptyAndFailedProvider = await CreatePolarisProviderAsync(emptyAndFailed);
         await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
             await emptyAndFailedProvider.SearchBibsAsync(
-                "identifier", "9780000000001", "", "", CancellationToken.None));
+                "identifier", "9780000000001", "", "", 2, CancellationToken.None));
         Assert.AreEqual(3, emptyAndFailed.RequestCount);
     }
 
@@ -7395,7 +7413,7 @@ public sealed partial class PatronJourneyTests
             (HttpStatusCode.OK, """{"PAPIErrorCode":-1,"TotalRecordsFound":0,"BibSearchRows":[]}"""));
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.LookupIdentifierAsync("9780000000001", CancellationToken.None);
+        var result = await provider.LookupIdentifierAsync("9780000000001", 2, CancellationToken.None);
 
         Assert.AreEqual(IdentifierLookupOutcome.NotFound, result.Outcome);
         Assert.AreEqual(3, handler.RequestCount);
@@ -7412,7 +7430,7 @@ public sealed partial class PatronJourneyTests
             (HttpStatusCode.OK, """{"PAPIErrorCode":-1,"ErrorMessage":"Invalid BibID","BibGetRows":null}"""));
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.LookupIdentifierAsync("9780000000001", CancellationToken.None);
+        var result = await provider.LookupIdentifierAsync("9780000000001", 2, CancellationToken.None);
 
         Assert.AreEqual(IdentifierLookupOutcome.Found, result.Outcome);
         Assert.AreEqual(9001, result.BibId);
@@ -7440,7 +7458,7 @@ public sealed partial class PatronJourneyTests
         var provider = await CreatePolarisProviderAsync(handler);
 
         await Assert.ThrowsAsync<OperationCanceledException>(async () =>
-            await provider.LookupIdentifierAsync("9780000000001", cancellation.Token));
+            await provider.LookupIdentifierAsync("9780000000001", 2, cancellation.Token));
 
         Assert.AreEqual(4, handler.RequestCount);
         Assert.IsTrue(cancellation.IsCancellationRequested);
@@ -7455,7 +7473,7 @@ public sealed partial class PatronJourneyTests
         var handler = new StaticResponseHandler(HttpStatusCode.OK, content);
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.LookupIdentifierAsync("9780000000001", CancellationToken.None);
+        var result = await provider.LookupIdentifierAsync("9780000000001", 2, CancellationToken.None);
 
         Assert.AreEqual(IdentifierLookupOutcome.DefinitiveNotFound, result.Outcome);
         Assert.AreEqual(3, handler.RequestCount);
@@ -7470,7 +7488,7 @@ public sealed partial class PatronJourneyTests
              """{"PAPIErrorCode":0,"TotalRecordsFound":1,"BibSearchRows":[{"ControlNumber":9002,"Title":"Fallback title","Author":"An author"}]}"""));
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.SearchBibsAsync("title_author", "", "A title", "An author", CancellationToken.None);
+        var result = await provider.SearchBibsAsync("title_author", "", "A title", "An author", 2, CancellationToken.None);
 
         Assert.AreEqual(1, result.Results.Count);
         Assert.AreEqual(9002, result.Results[0].BibId);
@@ -7489,7 +7507,7 @@ public sealed partial class PatronJourneyTests
         var canceled = false;
         try
         {
-            await provider.SearchBibsAsync("title", "A title", "", "", cancellation.Token);
+            await provider.SearchBibsAsync("title", "A title", "", "", 2, cancellation.Token);
         }
         catch (OperationCanceledException)
         {
@@ -7711,12 +7729,12 @@ public sealed partial class PatronJourneyTests
     {
         var emptyProvider = await CreatePolarisProviderAsync(new ProtectedSequenceResponseHandler(
             (HttpStatusCode.OK, """{"PAPIErrorCode":0,"PatronHoldRequestsGetRows":[]}""")));
-        var empty = await emptyProvider.GetPatronHoldsAsync("20000000000001", CancellationToken.None);
+        var empty = await emptyProvider.GetPatronHoldsAsync("20000000000001", 2, CancellationToken.None);
         Assert.AreEqual(0, empty.Count);
 
         var populatedProvider = await CreatePolarisProviderAsync(new ProtectedSequenceResponseHandler(
             (HttpStatusCode.OK, """{"PAPIErrorCode":0,"PatronHoldRequestsGetRows":[{"HoldRequestID":51,"BibID":9001,"StatusID":6,"StatusDescription":"Held","PickupBranchID":101}]}""")));
-        var populated = await populatedProvider.GetPatronHoldsAsync("20000000000001", CancellationToken.None);
+        var populated = await populatedProvider.GetPatronHoldsAsync("20000000000001", 2, CancellationToken.None);
         Assert.AreEqual(1, populated.Count);
         Assert.AreEqual(51, populated[0].HoldRequestId);
         Assert.AreEqual(9001, populated[0].BibId);
@@ -7733,7 +7751,7 @@ public sealed partial class PatronJourneyTests
         var provider = await CreatePolarisProviderAsync(new ProtectedSequenceResponseHandler(
             (HttpStatusCode.OK, """{"PAPIErrorCode":0,"PatronHoldRequestsGetRows":[{"HoldRequestID":51,"BibID":9001,"StatusID":8,"StatusDescription":"Unclaimed"}]}""")));
 
-        var holds = await provider.GetPatronHoldsAsync("20000000000001", CancellationToken.None);
+        var holds = await provider.GetPatronHoldsAsync("20000000000001", 2, CancellationToken.None);
 
         Assert.AreEqual(8, holds.Single().StatusId);
         Assert.AreEqual("Unclaimed", holds.Single().StatusDescription);
@@ -7746,7 +7764,7 @@ public sealed partial class PatronJourneyTests
         var provider = await CreatePolarisProviderAsync(new ProtectedSequenceResponseHandler(
             (HttpStatusCode.OK, """{"PAPIErrorCode":0,"PatronHoldRequestsGetRows":[{"HoldRequestID":"51","BibID":"9001","StatusID":"6","StatusDescription":" Held "}]}""")));
 
-        var holds = await provider.GetPatronHoldsAsync("20000000000001", CancellationToken.None);
+        var holds = await provider.GetPatronHoldsAsync("20000000000001", 2, CancellationToken.None);
 
         Assert.AreEqual(51, holds.Single().HoldRequestId);
         Assert.AreEqual(9001, holds.Single().BibId);
@@ -7796,7 +7814,7 @@ public sealed partial class PatronJourneyTests
             (HttpStatusCode.OK, content)));
 
         await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
-            await provider.GetPatronHoldsAsync("20000000000001", CancellationToken.None));
+            await provider.GetPatronHoldsAsync("20000000000001", 2, CancellationToken.None));
     }
 
     [TestMethod]
@@ -7815,7 +7833,7 @@ public sealed partial class PatronJourneyTests
             """);
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.ValidateBibAsync(9001, CancellationToken.None);
+        var result = await provider.ValidateBibAsync(9001, 2, CancellationToken.None);
 
         Assert.IsTrue(result.IsValid);
         Assert.AreEqual("Catalog title", result.Title);
@@ -7836,7 +7854,7 @@ public sealed partial class PatronJourneyTests
             """);
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.ValidateBibAsync(9001, CancellationToken.None);
+        var result = await provider.ValidateBibAsync(9001, 2, CancellationToken.None);
 
         Assert.IsTrue(result.IsValid);
         Assert.IsNull(result.Title);
@@ -7856,7 +7874,7 @@ public sealed partial class PatronJourneyTests
             """);
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.ValidateBibAsync(9001, CancellationToken.None);
+        var result = await provider.ValidateBibAsync(9001, 2, CancellationToken.None);
 
         Assert.IsFalse(result.IsValid);
         Assert.AreEqual(1, handler.RequestCount);
@@ -7871,7 +7889,7 @@ public sealed partial class PatronJourneyTests
             """));
 
         await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
-            await provider.ValidateBibAsync(9001, CancellationToken.None));
+            await provider.ValidateBibAsync(9001, 2, CancellationToken.None));
     }
 
     [TestMethod]
@@ -7881,7 +7899,7 @@ public sealed partial class PatronJourneyTests
             new StaticResponseHandler(HttpStatusCode.ServiceUnavailable, "{}"));
 
         await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
-            await provider.ValidateBibAsync(9001, CancellationToken.None));
+            await provider.ValidateBibAsync(9001, 2, CancellationToken.None));
     }
 
     [TestMethod]
@@ -7893,7 +7911,7 @@ public sealed partial class PatronJourneyTests
         cancellation.Cancel();
 
         await Assert.ThrowsExactlyAsync<OperationCanceledException>(async () =>
-            await provider.ValidateBibAsync(0, cancellation.Token));
+            await provider.ValidateBibAsync(0, 2, cancellation.Token));
         Assert.AreEqual(0, handler.RequestCount);
     }
 
@@ -7911,7 +7929,7 @@ public sealed partial class PatronJourneyTests
         var provider = await CreatePolarisProviderAsync(handler);
 
         await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
-            await provider.ValidateBibAsync(9001, CancellationToken.None));
+            await provider.ValidateBibAsync(9001, 2, CancellationToken.None));
     }
 
     [TestMethod]
@@ -7925,7 +7943,7 @@ public sealed partial class PatronJourneyTests
         var provider = await CreatePolarisProviderAsync(new StaticResponseHandler(HttpStatusCode.OK, content));
 
         await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
-            await provider.ValidateBibAsync(9001, CancellationToken.None));
+            await provider.ValidateBibAsync(9001, 2, CancellationToken.None));
     }
 
     [TestMethod]
@@ -7945,7 +7963,7 @@ public sealed partial class PatronJourneyTests
         var provider = await CreatePolarisProviderAsync(new StaticResponseHandler(HttpStatusCode.OK, content));
 
         var failure = await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
-            await provider.ValidateBibAsync(9001, CancellationToken.None));
+            await provider.ValidateBibAsync(9001, 2, CancellationToken.None));
 
         Assert.AreEqual("polaris_bib_validation_protocol_failed", failure.Code);
     }
@@ -7960,7 +7978,7 @@ public sealed partial class PatronJourneyTests
         var provider = await CreatePolarisProviderAsync(handler);
 
         var failure = await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
-            await provider.ValidateBibAsync(9001, CancellationToken.None));
+            await provider.ValidateBibAsync(9001, 2, CancellationToken.None));
         Assert.AreEqual("polaris_bib_validation_protocol_failed", failure.Code);
     }
 
@@ -8082,7 +8100,7 @@ public sealed partial class PatronJourneyTests
         var handler = new StaticResponseHandler(HttpStatusCode.OK, content);
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.LookupIdentifierAsync("9780000000098", CancellationToken.None);
+        var result = await provider.LookupIdentifierAsync("9780000000098", 2, CancellationToken.None);
 
         Assert.AreEqual(IdentifierLookupOutcome.OperationalFailure, result.Outcome);
         Assert.AreEqual(1, handler.RequestCount);
@@ -8099,7 +8117,7 @@ public sealed partial class PatronJourneyTests
         var handler = new StaticResponseHandler(HttpStatusCode.OK, content);
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.LookupIdentifierAsync("9780000000097", CancellationToken.None);
+        var result = await provider.LookupIdentifierAsync("9780000000097", 2, CancellationToken.None);
 
         Assert.AreEqual(IdentifierLookupOutcome.NotFound, result.Outcome);
         Assert.AreEqual(3, handler.RequestCount);
@@ -8167,22 +8185,22 @@ public sealed partial class PatronJourneyTests
             await missingCodeProvider.UpdatePreferredPickupBranchAsync(
                 "20000000000032",
                 101,
-                CancellationToken.None));
+                2, CancellationToken.None));
 
         var explicitSuccess = new ProtectedUpdateResponseHandler("{\"PAPIErrorCode\":0}");
         var successProvider = await CreatePolarisProviderAsync(explicitSuccess);
         await successProvider.UpdatePreferredPickupBranchAsync(
             "20000000000032",
             101,
-            CancellationToken.None);
+            2, CancellationToken.None);
 
         Assert.AreEqual(1, missingCode.UpdateRequestCount);
         Assert.AreEqual(1, explicitSuccess.UpdateRequestCount);
         StringAssert.Contains(
             explicitSuccess.UpdateRequestPath,
-            "/public/v1/1033/100/7/patron/20000000000032");
+            "/public/v1/1033/100/2/patron/20000000000032");
         using var body = JsonDocument.Parse(explicitSuccess.UpdateRequestBody);
-        Assert.AreEqual(7, body.RootElement.GetProperty("LogonBranchId").GetInt32());
+        Assert.AreEqual(2, body.RootElement.GetProperty("LogonBranchId").GetInt32());
         Assert.AreEqual(42, body.RootElement.GetProperty("LogonUserId").GetInt32());
         Assert.AreEqual(99, body.RootElement.GetProperty("LogonWorkstationId").GetInt32());
         Assert.AreEqual(101, body.RootElement.GetProperty("RequestPickupBranchID").GetInt32());
@@ -8202,7 +8220,7 @@ public sealed partial class PatronJourneyTests
         var provider = await CreatePolarisProviderAsync(handler);
         var branches = await provider.GetPickupBranchesAsync(
             new PatronSnapshot(30, "20000000000033", "patron@example.org", "Test", "Patron",
-                1, null, 77, 88, "Home Library", 4), CancellationToken.None);
+                1, null, 77, 88, "Home Library", 4), 2, CancellationToken.None);
         CollectionAssert.AreEqual(new[] { 4, 3 }, branches.Select(item => item.Id).ToArray());
         CollectionAssert.AreEqual(new[] { "Alpha Branch", "Zulu Branch" }, branches.Select(item => item.Label).ToArray());
         Assert.AreEqual(2, handler.RequestCount);
@@ -8224,7 +8242,7 @@ public sealed partial class PatronJourneyTests
         var provider = await CreatePolarisProviderAsync(handler);
         await Assert.ThrowsAsync<PolarisOperationalException>(() => provider.GetPickupBranchesAsync(
             new PatronSnapshot(30, "20000000000033", "patron@example.org", "Test", "Patron",
-                1, null, 77, 88, "Home Library", 4), CancellationToken.None));
+                1, null, 77, 88, "Home Library", 4), 2, CancellationToken.None));
         Assert.AreEqual(1, handler.RequestCount, "A malformed branch identity must not cause a context fallback.");
     }
 
@@ -10450,6 +10468,8 @@ public sealed partial class PatronJourneyTests
             VALUES (2, N'Test Library', N'TEST', 1);
             INSERT INTO [asap].[Organization] ([Id], [DisplayName], [Abbreviation], [IsActive])
             VALUES (101, N'Main Library Branch', N'MAIN', 0);
+            UPDATE [asap].[PolarisSettings]
+            SET [WorkstationId] = 99, [SystemPolarisUserId] = 42 WHERE [OrganizationId] = 1;
             UPDATE [asap].[EmailSettings]
             SET [FromAddress] = N'asap@example.org', [FromName] = N'ASAP Tests', [UpdatedUtc] = SYSUTCDATETIME()
             WHERE [OrganizationId] = 1;
@@ -10516,8 +10536,6 @@ public sealed partial class PatronJourneyTests
                     [ProtectedAdminPassword] = @password,
                     [WorkstationId] = 99,
                     [SystemPolarisUserId] = 42,
-                    [OrganizationIdForRequests] = 7,
-                    [PickupOrganizationId] = 101,
                     [UpdatedUtc] = SYSUTCDATETIME()
                 WHERE [OrganizationId] = 1;
                 """;
@@ -11205,23 +11223,23 @@ public sealed partial class PatronJourneyTests
                 "Test Library",
                 300));
 
-        public Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken) =>
+        public Task<PatronSnapshot> RefreshAsync(string barcode, int organizationId, CancellationToken cancellationToken) =>
             AuthenticateAsync(barcode, string.Empty, cancellationToken);
 
         public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(
             PatronSnapshot patron,
-            CancellationToken cancellationToken) =>
+            int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<PickupBranch>>([new PickupBranch(200, "Allowed Branch")]);
 
         public Task UpdatePreferredPickupBranchAsync(
             string barcode,
             int pickupBranchId,
-            CancellationToken cancellationToken) =>
+            int organizationId, CancellationToken cancellationToken) =>
             Task.CompletedTask;
 
         public Task<IdentifierLookupResult> LookupIdentifierAsync(
             string identifier,
-            CancellationToken cancellationToken) =>
+            int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult(new IdentifierLookupResult(IdentifierLookupOutcome.NotFound));
     }
 
@@ -11243,9 +11261,9 @@ public sealed partial class PatronJourneyTests
         public Task<PatronSnapshot> AuthenticateAsync(
             string barcode,
             string pin,
-            CancellationToken cancellationToken) => RefreshAsync(barcode, cancellationToken);
+            CancellationToken cancellationToken) => RefreshAsync(barcode, 2, cancellationToken);
 
-        public Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
+        public Task<PatronSnapshot> RefreshAsync(string barcode, int organizationId, CancellationToken cancellationToken)
         {
             RefreshCount++;
             BeforeRefresh?.Invoke(cancellationToken);
@@ -11270,7 +11288,7 @@ public sealed partial class PatronJourneyTests
 
         public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(
             PatronSnapshot patron,
-            CancellationToken cancellationToken)
+            int organizationId, CancellationToken cancellationToken)
         {
             BeforePickupBranches?.Invoke(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
@@ -11288,7 +11306,7 @@ public sealed partial class PatronJourneyTests
         public Task UpdatePreferredPickupBranchAsync(
             string barcode,
             int pickupBranchId,
-            CancellationToken cancellationToken)
+            int organizationId, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             UpdateCount++;
@@ -11303,7 +11321,7 @@ public sealed partial class PatronJourneyTests
 
         public Task<IdentifierLookupResult> LookupIdentifierAsync(
             string identifier,
-            CancellationToken cancellationToken)
+            int organizationId, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             BeforeIdentifierLookup?.Invoke();
@@ -11419,9 +11437,9 @@ public sealed partial class PatronJourneyTests
         public Task<PatronSnapshot> AuthenticateAsync(
             string barcode,
             string pin,
-            CancellationToken cancellationToken) => RefreshAsync(barcode, cancellationToken);
+            CancellationToken cancellationToken) => RefreshAsync(barcode, 2, cancellationToken);
 
-        public async Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
+        public async Task<PatronSnapshot> RefreshAsync(string barcode, int organizationId, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (PendingRefresh is not null)
@@ -11445,25 +11463,25 @@ public sealed partial class PatronJourneyTests
 
         public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(
             PatronSnapshot patron,
-            CancellationToken cancellationToken) =>
+            int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<PickupBranch>>([new PickupBranch(101, "Main Library")]);
 
         public Task UpdatePreferredPickupBranchAsync(
             string barcode,
             int pickupBranchId,
-            CancellationToken cancellationToken) => Task.CompletedTask;
+            int organizationId, CancellationToken cancellationToken) => Task.CompletedTask;
 
         public Task<IdentifierLookupResult> LookupIdentifierAsync(
             string identifier,
-            CancellationToken cancellationToken) =>
+            int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult(new IdentifierLookupResult(IdentifierLookupOutcome.NotFound));
 
-        public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken) =>
+        public Task<BibValidationResult> ValidateBibAsync(int bibId, int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult(new BibValidationResult(true));
 
         public async Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(
             string barcode,
-            CancellationToken cancellationToken)
+            int organizationId, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             HoldReadCount++;
@@ -11534,7 +11552,7 @@ public sealed partial class PatronJourneyTests
 
         public Task<IReadOnlyList<PatronSnapshot>> SearchPatronsAsync(
             string query,
-            CancellationToken cancellationToken)
+            int organizationId, CancellationToken cancellationToken)
         {
             SearchCount++;
             BeforeSearch?.Invoke(cancellationToken);
@@ -11547,7 +11565,7 @@ public sealed partial class PatronJourneyTests
             throw new NotSupportedException();
         }
 
-        public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken)
+        public Task<BibValidationResult> ValidateBibAsync(int bibId, int organizationId, CancellationToken cancellationToken)
         {
             ValidationCount++;
             BeforeValidation?.Invoke(cancellationToken);
@@ -11567,7 +11585,7 @@ public sealed partial class PatronJourneyTests
 
         public Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(
             string barcode,
-            CancellationToken cancellationToken) =>
+            int organizationId, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
         public Task<HoldProviderResult> CreateHoldAsync(

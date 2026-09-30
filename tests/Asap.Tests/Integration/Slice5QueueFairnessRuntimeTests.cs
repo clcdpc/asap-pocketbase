@@ -314,26 +314,26 @@ public sealed partial class PatronJourneyTests
         public IdentifierLookupResult IdentifierResult { get; set; } =
             new(IdentifierLookupOutcome.DefinitiveNotFound);
 
-        public Task<PatronSnapshot> AuthenticateAsync(string barcode, string pin, CancellationToken cancellationToken) => RefreshAsync(barcode, cancellationToken);
+        public Task<PatronSnapshot> AuthenticateAsync(string barcode, string pin, CancellationToken cancellationToken) => RefreshAsync(barcode, 2, cancellationToken);
 
-        public Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken) =>
+        public Task<PatronSnapshot> RefreshAsync(string barcode, int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult(new PatronSnapshot(7105, barcode, "fairness@example.org", "Fair", "Tester", 1, "Standard", 2, 2, "Library", 101));
 
-        public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(PatronSnapshot patron, CancellationToken cancellationToken) =>
+        public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(PatronSnapshot patron, int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<PickupBranch>>([]);
 
-        public Task UpdatePreferredPickupBranchAsync(string barcode, int pickupBranchId, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task UpdatePreferredPickupBranchAsync(string barcode, int pickupBranchId, int organizationId, CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public Task<IdentifierLookupResult> LookupIdentifierAsync(string identifier, CancellationToken cancellationToken) =>
+        public Task<IdentifierLookupResult> LookupIdentifierAsync(string identifier, int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult(IdentifierResult);
 
-        public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken) =>
+        public Task<BibValidationResult> ValidateBibAsync(int bibId, int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult(new BibValidationResult(true));
 
-        public Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(string barcode, CancellationToken cancellationToken) =>
+        public Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(string barcode, int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<PolarisHoldSnapshot>>([]);
 
-        public Task<IReadOnlyList<PolarisCheckoutSnapshot>> GetPatronCheckoutsAsync(string barcode, CancellationToken cancellationToken) =>
+        public Task<IReadOnlyList<PolarisCheckoutSnapshot>> GetPatronCheckoutsAsync(string barcode, int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<PolarisCheckoutSnapshot>>([]);
 
         public Task<HoldProviderResult> CreateHoldAsync(HoldCreateCommand command, CancellationToken cancellationToken)

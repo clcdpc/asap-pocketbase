@@ -9,16 +9,16 @@ public sealed partial class PolarisPatronProvider
 {
     public async Task<IReadOnlyList<PatronSnapshot>> SearchPatronsAsync(
         string query,
-        CancellationToken cancellationToken)
+        int organizationId, CancellationToken cancellationToken)
     {
         try
         {
-            var (client, settings) = await CreateClientAsync(cancellationToken);
+            var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
             var response = await client.PatronSearchAsync(
                 "PATNF=" + QuoteSearch(CleanSearch(query)),
                 pageSize: 10,
                 sortBy: PatronSortKeys.PATN,
-                orgId: settings.OrganizationIdForRequests,
+                orgId: organizationId,
                 cancellationToken: cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             var data = response.Data;

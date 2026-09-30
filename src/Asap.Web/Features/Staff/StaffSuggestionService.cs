@@ -49,13 +49,13 @@ public sealed class StaffSuggestionService(
         PatronSnapshot? direct = null;
         if (explicitBarcode is not null)
         {
-            direct = await RefreshAsync(explicitBarcode, cancellationToken);
+            direct = await RefreshAsync(explicitBarcode, scope.OrganizationId, cancellationToken);
         }
         else if (BarcodeLike.IsMatch(query!))
         {
             try
             {
-                direct = await RefreshAsync(query!, cancellationToken);
+                direct = await RefreshAsync(query!, scope.OrganizationId, cancellationToken);
             }
             catch (StaffSuggestionException exception) when (exception.Code == "patron_not_found")
             {
@@ -75,7 +75,7 @@ public sealed class StaffSuggestionService(
         IReadOnlyList<PatronSnapshot> candidates;
         try
         {
-            candidates = await polaris.SearchPatronsAsync(query!, cancellationToken);
+            candidates = await polaris.SearchPatronsAsync(query!, scope.OrganizationId, cancellationToken);
         }
         catch (PolarisOperationalException exception)
         {
@@ -109,7 +109,7 @@ public sealed class StaffSuggestionService(
             {
                 // Search rows are candidates only. Refresh the selected identity before it
                 // crosses into the browser-facing result.
-                patron = await RefreshAsync(barcode, cancellationToken);
+                patron = await RefreshAsync(barcode, scope.OrganizationId, cancellationToken);
             }
             catch (StaffSuggestionException exception) when (exception.Code == "patron_not_found")
             {
@@ -160,7 +160,7 @@ public sealed class StaffSuggestionService(
                 matches);
         }
 
-        var selected = await RefreshAsync(matches[0].Barcode, cancellationToken);
+        var selected = await RefreshAsync(matches[0].Barcode, scope.OrganizationId, cancellationToken);
         scope = await ResolveScopeAsync(actor, input.LibraryOrgId, cancellationToken);
         await EnsurePatronScopeAsync(selected, scope.Configuration, cancellationToken);
         return await VerifiedResultAsync(actor, input.LibraryOrgId, scope, selected, cancellationToken);
@@ -184,7 +184,7 @@ public sealed class StaffSuggestionService(
         // The lookup response is never authority for creation. The persistence service
         // refreshes again and performs the locked actor/configuration gate immediately before
         // any pickup mutation, then repeats its authoritative checks for the insert.
-        var patron = await RefreshAsync(barcode, cancellationToken);
+        var patron = await RefreshAsync(barcode, scope.OrganizationId, cancellationToken);
         scope = await ResolveScopeAsync(actor, input.LibraryOrgId, cancellationToken);
         await EnsurePatronScopeAsync(patron, scope.Configuration, cancellationToken);
 
@@ -297,11 +297,11 @@ public sealed class StaffSuggestionService(
 
     private async Task<PatronSnapshot> RefreshAsync(
         string barcode,
-        CancellationToken cancellationToken)
+        int organizationId, CancellationToken cancellationToken)
     {
         try
         {
-            return await patronProvider.RefreshAsync(barcode, cancellationToken);
+            return await patronProvider.RefreshAsync(barcode, organizationId, cancellationToken);
         }
         catch (PolarisOperationalException exception)
         {
@@ -392,7 +392,7 @@ public sealed class StaffSuggestionService(
         PatronSnapshot patron,
         CancellationToken cancellationToken)
     {
-        var branches = await GetPickupBranchesAsync(patron, cancellationToken);
+        var branches = await GetPickupBranchesAsync(patron, scope.OrganizationId, cancellationToken);
         scope = await ResolveScopeAsync(actor, requestedOrganizationId, cancellationToken);
         await EnsurePatronScopeAsync(patron, scope.Configuration, cancellationToken);
         var current = branches.SingleOrDefault(item => item.Id == patron.PreferredPickupBranchId);
@@ -420,11 +420,11 @@ public sealed class StaffSuggestionService(
 
     private async Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(
         PatronSnapshot patron,
-        CancellationToken cancellationToken)
+        int organizationId, CancellationToken cancellationToken)
     {
         try
         {
-            return await patronProvider.GetPickupBranchesAsync(patron, cancellationToken);
+            return await patronProvider.GetPickupBranchesAsync(patron, organizationId, cancellationToken);
         }
         catch (PolarisOperationalException exception)
         {

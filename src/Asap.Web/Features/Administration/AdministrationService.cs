@@ -294,6 +294,45 @@ public sealed class AdministrationService(
             return failure;
         }
 
+        var polarisSection = GetObject(payload, "polaris");
+        if (polarisSection.ValueKind == JsonValueKind.Undefined)
+        {
+            polarisSection = payload;
+        }
+        if (new[] { "organizationIdForRequests", "requestingOrgId", "pickupOrganizationId", "pickupOrgId" }
+            .Any(name => HasProperty(polarisSection, name)))
+        {
+            return new AdministrationResult("polaris_context_retired",
+                Message: "Requesting and pickup organizations belong to each operation.");
+        }
+        if (organizationId == 1)
+        {
+            foreach (var name in new[] { "workstationId", "systemPolarisUserId", "userId" })
+            {
+                if (HasProperty(polarisSection, name) &&
+                    polarisSection.GetProperty(name).ValueKind != JsonValueKind.Null &&
+                    GetInt(polarisSection, name) is not > 0)
+                {
+                    return new AdministrationResult("polaris_identity_invalid",
+                        Message: "Polaris integration IDs must be positive Int32 values.");
+                }
+            }
+            if (HasProperty(polarisSection, "host") &&
+                (polarisSection.GetProperty("host").ValueKind is not (JsonValueKind.Null or JsonValueKind.String) ||
+                 Clean(GetString(polarisSection, "host")) is { } host && !PolarisConfigurationValidation.IsHostValid(host)))
+            {
+                return new AdministrationResult("polaris_host_invalid",
+                    Message: "Enter an absolute HTTP or HTTPS Polaris service URL.");
+            }
+        }
+        else if (new[] { "workstationId", "systemPolarisUserId", "userId", "host", "accessId",
+                     "staffDomain", "adminUser", "apiKey", "adminPassword", "clearApiKey", "clearAdminPassword" }
+                 .Any(name => HasProperty(polarisSection, name)))
+        {
+            return new AdministrationResult("polaris_settings_system_only",
+                Message: "Polaris integration settings can only be changed at system scope.");
+        }
+
         var emailSection = GetObject(payload, "emails", "email");
         var smtpSection = GetObject(payload, "smtp");
         if (organizationId != 1 &&
@@ -1021,10 +1060,6 @@ public sealed class AdministrationService(
         ApplyInt(polarisSection, "workstationId", value => polaris.WorkstationId = value);
         ApplyInt(polarisSection, "systemPolarisUserId", value => polaris.SystemPolarisUserId = value);
         ApplyInt(polarisSection, "userId", value => polaris.SystemPolarisUserId = value);
-        ApplyInt(polarisSection, "organizationIdForRequests", value => polaris.OrganizationIdForRequests = value);
-        ApplyInt(polarisSection, "requestingOrgId", value => polaris.OrganizationIdForRequests = value);
-        ApplyInt(polarisSection, "pickupOrganizationId", value => polaris.PickupOrganizationId = value);
-        ApplyInt(polarisSection, "pickupOrgId", value => polaris.PickupOrganizationId = value);
         ApplySecret(polarisSection, "apiKey", value => polaris.ProtectedApiKey = credentialProtector.Protect(value));
         ApplySecret(polarisSection, "adminPassword", value => polaris.ProtectedAdminPassword = credentialProtector.Protect(value));
         if (GetBool(polarisSection, "clearApiKey") == true) polaris.ProtectedApiKey = null;
@@ -1758,8 +1793,6 @@ public sealed class AdministrationService(
         adminUser = row.AdminUser,
         workstationId = row.WorkstationId,
         systemPolarisUserId = row.SystemPolarisUserId,
-        organizationIdForRequests = row.OrganizationIdForRequests,
-        pickupOrganizationId = row.PickupOrganizationId,
         hasApiKey = !string.IsNullOrWhiteSpace(row.ProtectedApiKey),
         hasAdminPassword = !string.IsNullOrWhiteSpace(row.ProtectedAdminPassword),
         version = StaffVersion.Encode(row.RowVersion)

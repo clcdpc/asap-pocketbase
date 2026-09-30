@@ -210,14 +210,14 @@ public sealed partial class PatronJourneyTests
             (HttpStatusCode.OK,
              "{\"PAPIErrorCode\":-3000,\"ErrorMessage\":\"Patron not found\",\"PatronBasicData\":null}")));
         var notFoundFailure = await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
-            await notFound.RefreshAsync("missing", CancellationToken.None));
+            await notFound.RefreshAsync("missing", 2, CancellationToken.None));
         Assert.AreEqual("polaris_patron_not_found", notFoundFailure.Code, notFoundFailure.ToString());
 
         var unavailable = await CreatePolarisProviderAsync(new ProtectedSequenceResponseHandler(
             (HttpStatusCode.OK,
              "{\"PAPIErrorCode\":-1,\"ErrorMessage\":\"Provider reports patron not found while SQL is unavailable\",\"PatronBasicData\":null}")));
         var unavailableFailure = await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
-            await unavailable.RefreshAsync("provider-error", CancellationToken.None));
+            await unavailable.RefreshAsync("provider-error", 2, CancellationToken.None));
         Assert.AreEqual("polaris_patron_refresh_failed", unavailableFailure.Code);
     }
 
@@ -227,13 +227,13 @@ public sealed partial class PatronJourneyTests
         var empty = await CreatePolarisProviderAsync(new ProtectedSequenceResponseHandler(
             (HttpStatusCode.OK,
              "{\"PAPIErrorCode\":-1,\"ErrorMessage\":\"\",\"TotalRecordsFound\":0,\"PatronSearchRows\":[]}")));
-        Assert.AreEqual(0, (await empty.SearchPatronsAsync("none", CancellationToken.None)).Count);
+        Assert.AreEqual(0, (await empty.SearchPatronsAsync("none", 2, CancellationToken.None)).Count);
 
         var unavailable = await CreatePolarisProviderAsync(new ProtectedSequenceResponseHandler(
             (HttpStatusCode.OK,
              "{\"PAPIErrorCode\":-1,\"ErrorMessage\":\"SQL timeout\",\"TotalRecordsFound\":0,\"PatronSearchRows\":[]}")));
         var failure = await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
-            await unavailable.SearchPatronsAsync("provider-error", CancellationToken.None));
+            await unavailable.SearchPatronsAsync("provider-error", 2, CancellationToken.None));
         Assert.AreEqual("polaris_patron_search_failed", failure.Code);
     }
 
@@ -254,7 +254,7 @@ public sealed partial class PatronJourneyTests
         Exception? cancellationResult = null;
         try
         {
-            await cancelledProvider.SearchPatronsAsync("Alex Example", cancellation.Token);
+            await cancelledProvider.SearchPatronsAsync("Alex Example", 2, cancellation.Token);
         }
         catch (Exception exception)
         {
@@ -284,7 +284,7 @@ public sealed partial class PatronJourneyTests
         Exception? refreshCancellationResult = null;
         try
         {
-            await refreshProvider.SearchPatronsAsync("Alex Example", refreshCancellation.Token);
+            await refreshProvider.SearchPatronsAsync("Alex Example", 2, refreshCancellation.Token);
         }
         catch (Exception exception)
         {
@@ -299,7 +299,7 @@ public sealed partial class PatronJourneyTests
         };
         var timeoutProvider = await CreatePolarisProviderAsync(timeoutHandler);
         var failure = await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
-            await timeoutProvider.SearchPatronsAsync("Alex Example", CancellationToken.None));
+            await timeoutProvider.SearchPatronsAsync("Alex Example", 2, CancellationToken.None));
         Assert.AreEqual("polaris_patron_search_failed", failure.Code);
     }
 
@@ -319,7 +319,7 @@ public sealed partial class PatronJourneyTests
         Exception? cancellationResult = null;
         try
         {
-            await cancelledProvider.ValidateBibAsync(9001, cancellation.Token);
+            await cancelledProvider.ValidateBibAsync(9001, 2, cancellation.Token);
         }
         catch (Exception exception)
         {
@@ -333,7 +333,7 @@ public sealed partial class PatronJourneyTests
         };
         var timeoutProvider = await CreatePolarisProviderAsync(timeoutHandler);
         var failure = await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
-            await timeoutProvider.ValidateBibAsync(9001, CancellationToken.None));
+            await timeoutProvider.ValidateBibAsync(9001, 2, CancellationToken.None));
         Assert.AreEqual("polaris_bib_validation_transport_failed", failure.Code);
     }
 
@@ -353,7 +353,7 @@ public sealed partial class PatronJourneyTests
         Exception? refreshResult = null;
         try
         {
-            await refreshProvider.RefreshAsync("20000000000045", refreshCancellation.Token);
+            await refreshProvider.RefreshAsync("20000000000045", 2, refreshCancellation.Token);
         }
         catch (Exception exception)
         {
@@ -377,7 +377,7 @@ public sealed partial class PatronJourneyTests
         Exception? pickupResult = null;
         try
         {
-            await pickupProvider.GetPickupBranchesAsync(patron, pickupCancellation.Token);
+            await pickupProvider.GetPickupBranchesAsync(patron, 2, pickupCancellation.Token);
         }
         catch (Exception exception)
         {

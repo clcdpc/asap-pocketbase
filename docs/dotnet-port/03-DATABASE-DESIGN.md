@@ -30,7 +30,7 @@ UpdatedUtc datetime2 NOT NULL
 
 The integer changes only for contract-affecting schema changes. Application startup compares the expected build value with SQL. Mismatch keeps liveness healthy but readiness unhealthy and blocks normal application functions. It is not used to decide whether a DACPAC needs deployment.
 
-Schema 7 is the pre-release reset boundary for native Polaris identities. Recreate pre-7 databases from the schema-7 DACPAC; no string-to-number upgrade or compatibility columns are retained. Pre-deployment rejects older versions before altering schema, fresh import parses numeric source identities, and repeat deployment preserves existing native data.
+Schema 7 is the pre-release reset boundary for native Polaris identities; current schema 8 upgrades native schema-7 targets in place. Recreate pre-7 databases from the current DACPAC; no string-to-number upgrade or compatibility columns are retained. Run the DACPAC's embedded pre-deployment script before plan generation: it rejects unidentified/pre-7/newer targets, retires only the two obsolete global requesting/pickup columns, and clears nonpositive integration IDs to NULL. Valid credentials, identity and native business data survive. Publish retains normal data-loss protection and preserves unowned objects; the post-deployment script advances compatible schema 7 to 8. Fresh import parses numeric source identities, and repeat deployment preserves existing native data.
 
 ### `[asap].[DeploymentState]`
 
@@ -158,13 +158,13 @@ Host nvarchar(...) NULL
 AccessId nvarchar(...) NULL
 ProtectedApiKey nvarchar(max) NULL
 ... other required non-legacy system/application credential fields ...
-WorkstationId nvarchar(...) NULL
-SystemPolarisUserId nvarchar(...) NULL
+WorkstationId int NULL CHECK (WorkstationId IS NULL OR WorkstationId > 0)
+SystemPolarisUserId int NULL CHECK (SystemPolarisUserId IS NULL OR SystemPolarisUserId > 0)
 UpdatedUtc datetime2 NOT NULL
 RowVersion rowversion
 ```
 
-Do not reproduce legacy per-staff Polaris authentication fields. Protected credential columns contain Data Protection ciphertext, never plaintext.
+Do not reproduce legacy per-staff Polaris authentication or global member requesting/pickup fields. The system-only seed contains no invented operational defaults. Protected credential columns contain Data Protection ciphertext, never plaintext.
 
 ### `[asap].[WorkflowSettings]`
 

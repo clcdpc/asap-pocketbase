@@ -411,7 +411,7 @@ public sealed class TitleRequestMutationService(
         {
             try
             {
-                var refreshed = await patronProvider.RefreshAsync(notificationRequest.Barcode, cancellationToken);
+                var refreshed = await patronProvider.RefreshAsync(notificationRequest.Barcode, notificationRequest.LibraryOrganizationId, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 if (refreshed is not null &&
                     string.Equals(refreshed.Barcode, notificationRequest.Barcode, StringComparison.Ordinal))
@@ -1008,7 +1008,7 @@ public sealed class TitleRequestMutationService(
 
         try
         {
-            var result = await staffPolarisProvider.ValidateBibAsync(proposedBib.Value, cancellationToken);
+            var result = await staffPolarisProvider.ValidateBibAsync(proposedBib.Value, request.LibraryOrganizationId, cancellationToken);
             return result.IsValid ? null : "bib_not_found";
         }
         catch (PolarisOperationalException)

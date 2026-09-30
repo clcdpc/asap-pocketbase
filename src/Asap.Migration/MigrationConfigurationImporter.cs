@@ -455,8 +455,7 @@ internal static class MigrationConfigurationImporter
                 SET [Host] = @host, [AccessId] = @accessId, [ProtectedApiKey] = @protectedApiKey,
                     [StaffDomain] = @staffDomain, [AdminUser] = @adminUser,
                     [ProtectedAdminPassword] = @protectedAdminPassword, [WorkstationId] = @workstationId,
-                    [SystemPolarisUserId] = @userId, [OrganizationIdForRequests] = @requestingOrgId,
-                    [PickupOrganizationId] = @pickupOrgId, [UpdatedUtc] = @updatedUtc
+                    [SystemPolarisUserId] = @userId, [UpdatedUtc] = @updatedUtc
                 WHERE [OrganizationId] = 1;
                 """,
                 connection,
@@ -467,10 +466,8 @@ internal static class MigrationConfigurationImporter
             command.Parameters.AddWithValue("@staffDomain", Db(row.String("staffDomain")));
             command.Parameters.AddWithValue("@adminUser", Db(row.String("adminUser")));
             command.Parameters.AddWithValue("@protectedAdminPassword", Db(adminPassword is null ? null : credentialProtector!.Protect(adminPassword)));
-            command.Parameters.AddWithValue("@workstationId", Db(row.Int32("workstationId")));
-            command.Parameters.AddWithValue("@userId", Db(row.Int32("userId")));
-            command.Parameters.AddWithValue("@requestingOrgId", Db(row.Int32("requestingOrgId")));
-            command.Parameters.AddWithValue("@pickupOrgId", Db(row.Int32("pickupOrgId")));
+            command.Parameters.AddWithValue("@workstationId", Db(row.PositiveInt32("workstationId", "source_polaris_identity_invalid")));
+            command.Parameters.AddWithValue("@userId", Db(row.PositiveInt32("userId", "source_polaris_identity_invalid")));
             command.Parameters.AddWithValue("@updatedUtc", row.UtcDateTime("updated") ?? exportedAtUtc);
             command.ExecuteNonQuery();
             transformations.Add(new
@@ -478,7 +475,10 @@ internal static class MigrationConfigurationImporter
                 entity = "polaris_settings",
                 sourceId = row.RequiredString("id"),
                 apiKeyProtected = apiKey is not null,
-                adminPasswordProtected = adminPassword is not null
+                adminPasswordProtected = adminPassword is not null,
+                retiredRequestingOrganizationSource = row.String("requestingOrgId"),
+                retiredPickupOrganizationSource = row.String("pickupOrgId"),
+                operationContextSource = "owning_request_or_effective_servicing_library"
             });
         }
         importedCounts["polaris_settings"] = rows.Count;
@@ -1073,7 +1073,7 @@ internal static class MigrationConfigurationImporter
         var row = MigrationPackageReader.ReadRows(package, "polaris-settings.json", "polaris_settings").SingleOrDefault();
         if (row is null) return;
         using var command = new SqlCommand(
-            "SELECT [Host], [AccessId], [ProtectedApiKey], [StaffDomain], [AdminUser], [ProtectedAdminPassword], [WorkstationId], [SystemPolarisUserId], [OrganizationIdForRequests], [PickupOrganizationId] FROM [asap].[PolarisSettings] WHERE [OrganizationId] = 1;",
+            "SELECT [Host], [AccessId], [ProtectedApiKey], [StaffDomain], [AdminUser], [ProtectedAdminPassword], [WorkstationId], [SystemPolarisUserId] FROM [asap].[PolarisSettings] WHERE [OrganizationId] = 1;",
             connection,
             transaction);
         using var reader = command.ExecuteReader();
@@ -1085,13 +1085,11 @@ internal static class MigrationConfigurationImporter
             StringEquals(reader, 3, row.String("staffDomain")) &&
             StringEquals(reader, 4, row.String("adminUser")) &&
             ProtectedPresenceEquals(reader, 5, row.String("adminPassword")) &&
-            IntEquals(reader, 6, row.Int32("workstationId")) &&
-            IntEquals(reader, 7, row.Int32("userId")) &&
-            IntEquals(reader, 8, row.Int32("requestingOrgId")) &&
-            IntEquals(reader, 9, row.Int32("pickupOrgId")),
+            IntEquals(reader, 6, row.PositiveInt32("workstationId", "source_polaris_identity_invalid")) &&
+            IntEquals(reader, 7, row.PositiveInt32("userId", "source_polaris_identity_invalid")),
             "Polaris settings");
         counter.Rows++;
-        counter.Fields += 10;
+        counter.Fields += 8;
     }
 
     private static void ReconcileEmailSettings(

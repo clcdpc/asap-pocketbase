@@ -62,7 +62,7 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
         return Task.FromResult(CreatePatron(barcode));
     }
 
-    public Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
+    public Task<PatronSnapshot> RefreshAsync(string barcode, int organizationId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (barcode.Trim() is "MULTIPLE" or "INELIGIBLE" or "PROVIDER" or "UNRESOLVED")
@@ -95,7 +95,7 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
         });
     }
 
-    public Task<int?> GetPatronIdAsync(string barcode, CancellationToken cancellationToken)
+    public Task<int?> GetPatronIdAsync(string barcode, int organizationId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult<int?>(CreatePatron(barcode).PatronId);
@@ -103,7 +103,7 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
 
     public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(
         PatronSnapshot patron,
-        CancellationToken cancellationToken)
+        int organizationId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult(Branches);
@@ -112,7 +112,7 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
     public Task UpdatePreferredPickupBranchAsync(
         string barcode,
         int pickupBranchId,
-        CancellationToken cancellationToken)
+        int organizationId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!Branches.Any(branch => branch.Id == pickupBranchId))
@@ -125,7 +125,7 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
 
     public Task<IdentifierLookupResult> LookupIdentifierAsync(
         string identifier,
-        CancellationToken cancellationToken)
+        int organizationId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var normalized = identifier.Trim().ToUpperInvariant();
@@ -149,7 +149,7 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
         return Task.FromResult(result);
     }
 
-    public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken)
+    public Task<BibValidationResult> ValidateBibAsync(int bibId, int organizationId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult(new BibValidationResult(bibId > 0, $"Catalog title {bibId}",
@@ -157,7 +157,7 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
     }
 
     public Task<StaffBibSearchResult> SearchBibsAsync(
-        string mode, string query, string title, string author, CancellationToken cancellationToken)
+        string mode, string query, string title, string author, int organizationId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var search = mode == "title_author" ? $"{title} {author}" : query;
@@ -170,7 +170,7 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
 
     public Task<IReadOnlyList<PatronSnapshot>> SearchPatronsAsync(
         string query,
-        CancellationToken cancellationToken)
+        int organizationId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (query.Contains("PROVIDER", StringComparison.OrdinalIgnoreCase))
@@ -220,7 +220,7 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
 
     public Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(
         string barcode,
-        CancellationToken cancellationToken)
+        int organizationId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult<IReadOnlyList<PolarisHoldSnapshot>>([]);

@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using Microsoft.SqlServer.Dac;
 
@@ -23,6 +24,7 @@ public sealed class DacpacDeploymentService
         };
 
         using var package = DacPackage.Load(dacpacPath);
+        RunPackagePreflight(package, target.ConnectionString, databaseConnectionString, databaseName);
         var services = new DacServices(target.ConnectionString);
         services.Deploy(package, databaseName, upgradeExisting: true, options);
 
@@ -38,6 +40,37 @@ public sealed class DacpacDeploymentService
             """;
         command.Parameters.AddWithValue("@hash", hash);
         command.ExecuteNonQuery();
+    }
+
+    private static void RunPackagePreflight(
+        DacPackage package, string masterConnectionString, string databaseConnectionString, string databaseName)
+    {
+        using var master = new SqlConnection(masterConnectionString);
+        master.Open();
+        using var exists = master.CreateCommand();
+        exists.CommandText = "SELECT DB_ID(@name);";
+        exists.Parameters.AddWithValue("@name", databaseName);
+        if (exists.ExecuteScalar() is null or DBNull)
+        {
+            return;
+        }
+
+        // The DACPAC remains the only DDL owner. Run its idempotent guards and
+        // narrowly specified retirements before DacFx computes data-loss guards.
+        using var script = package.PreDeploymentScript;
+        using var reader = new StreamReader(script);
+        using var connection = new SqlConnection(databaseConnectionString);
+        connection.Open();
+        foreach (var batch in Regex.Split(reader.ReadToEnd(), @"^GO\s*$", RegexOptions.Multiline | RegexOptions.IgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(batch))
+            {
+                continue;
+            }
+            using var command = connection.CreateCommand();
+            command.CommandText = batch;
+            command.ExecuteNonQuery();
+        }
     }
 
     internal static void ValidateDevelopmentDatabaseName(string databaseName)

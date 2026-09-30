@@ -72,8 +72,8 @@ public sealed class StaffPickupService(
 
         try
         {
-            var patron = await patronProvider.RefreshAsync(request.Barcode, cancellationToken);
-            var branches = await patronProvider.GetPickupBranchesAsync(patron, cancellationToken);
+            var patron = await patronProvider.RefreshAsync(request.Barcode, request.LibraryOrganizationId, cancellationToken);
+            var branches = await patronProvider.GetPickupBranchesAsync(patron, request.LibraryOrganizationId, cancellationToken);
             var options = BuildOptions(request, patron, branches, timeProvider.GetUtcNow());
             return new StaffPickupResult("loaded", options);
         }
@@ -96,6 +96,7 @@ public sealed class StaffPickupService(
         }
 
         string barcode;
+        int organizationId;
         await using (var context = await contextFactory.CreateDbContextAsync(cancellationToken))
         await using (var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken))
         {
@@ -111,6 +112,7 @@ public sealed class StaffPickupService(
                 return new StaffPickupResult("hold_operation_incomplete");
             }
             barcode = request.Barcode;
+            organizationId = request.LibraryOrganizationId;
             await transaction.CommitAsync(cancellationToken);
         }
 
@@ -120,8 +122,8 @@ public sealed class StaffPickupService(
         string? oldName;
         try
         {
-            patron = await patronProvider.RefreshAsync(barcode, cancellationToken);
-            var branches = await patronProvider.GetPickupBranchesAsync(patron, cancellationToken);
+            patron = await patronProvider.RefreshAsync(barcode, organizationId, cancellationToken);
+            var branches = await patronProvider.GetPickupBranchesAsync(patron, organizationId, cancellationToken);
             selectedBranch = branches.SingleOrDefault(item => item.Id == input.PreferredPickupBranchId.Value)
                 ?? throw new InvalidPickupSelectionException();
             var liveCurrentId = patron.PreferredPickupBranchId;
@@ -135,7 +137,7 @@ public sealed class StaffPickupService(
             pickupChanged = selectedBranch.Id != liveCurrentId;
             if (pickupChanged)
             {
-                await patronProvider.UpdatePreferredPickupBranchAsync(barcode, selectedBranch.Id, cancellationToken);
+                await patronProvider.UpdatePreferredPickupBranchAsync(barcode, selectedBranch.Id, organizationId, cancellationToken);
             }
         }
         catch (InvalidPickupSelectionException)

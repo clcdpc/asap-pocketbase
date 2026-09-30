@@ -11,16 +11,16 @@ public interface IStaffPolarisProvider
                 "polaris_organization_read_unimplemented",
                 "The selected Polaris provider does not implement organization reference reads."));
 
-    Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken);
+    Task<BibValidationResult> ValidateBibAsync(int bibId, int organizationId, CancellationToken cancellationToken);
 
     Task<StaffBibSearchResult> SearchBibsAsync(
-        string mode, string query, string title, string author, CancellationToken cancellationToken) =>
+        string mode, string query, string title, string author, int organizationId, CancellationToken cancellationToken) =>
         Task.FromException<StaffBibSearchResult>(new PolarisOperationalException(
             "polaris_bib_search_unimplemented", "The selected Polaris provider does not implement BIB search."));
 
     Task<IReadOnlyList<PatronSnapshot>> SearchPatronsAsync(
         string query,
-        CancellationToken cancellationToken) =>
+        int organizationId, CancellationToken cancellationToken) =>
         Task.FromException<IReadOnlyList<PatronSnapshot>>(new PolarisOperationalException(
             "polaris_patron_search_unimplemented", "The selected Polaris provider does not implement patron search."));
 
@@ -31,7 +31,7 @@ public interface IStaffPolarisProvider
 
     Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(
         string barcode,
-        CancellationToken cancellationToken);
+        int organizationId, CancellationToken cancellationToken);
 
     Task<HoldProviderResult> CreateHoldAsync(
         HoldCreateCommand command,
@@ -43,7 +43,7 @@ public interface IStaffPolarisProvider
 
     Task<IReadOnlyList<PolarisCheckoutSnapshot>> GetPatronCheckoutsAsync(
         string barcode,
-        CancellationToken cancellationToken) =>
+        int organizationId, CancellationToken cancellationToken) =>
         Task.FromException<IReadOnlyList<PolarisCheckoutSnapshot>>(
             new PolarisOperationalException(
                 "polaris_checkout_read_unimplemented",

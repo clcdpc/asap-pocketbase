@@ -123,7 +123,7 @@ public static class PatronEndpoints
         string warning = string.Empty;
         try
         {
-            branches = await patronProvider.GetPickupBranchesAsync(patron, cancellationToken);
+            branches = await patronProvider.GetPickupBranchesAsync(patron, effective.OrganizationId, cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -187,8 +187,8 @@ public static class PatronEndpoints
 
         try
         {
-            var patron = await patronProvider.RefreshAsync(session.Barcode, cancellationToken);
-            var branches = await patronProvider.GetPickupBranchesAsync(patron, cancellationToken);
+            var patron = await patronProvider.RefreshAsync(session.Barcode, session.EffectiveOrganizationId, cancellationToken);
+            var branches = await patronProvider.GetPickupBranchesAsync(patron, session.EffectiveOrganizationId, cancellationToken);
             var selected = branches.Any(item => item.Id == patron.PreferredPickupBranchId)
                 ? patron.PreferredPickupBranchId
                 : null;

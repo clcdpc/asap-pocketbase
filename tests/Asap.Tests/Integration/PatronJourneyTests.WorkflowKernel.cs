@@ -703,20 +703,20 @@ public sealed partial class PatronJourneyTests
 
         public Task<PatronSnapshot> RefreshAsync(
             string barcode,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
+            int organizationId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(
             PatronSnapshot patron,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
+            int organizationId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task UpdatePreferredPickupBranchAsync(
             string barcode,
             int pickupBranchId,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
+            int organizationId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<IdentifierLookupResult> LookupIdentifierAsync(
             string identifier,
-            CancellationToken cancellationToken)
+            int organizationId, CancellationToken cancellationToken)
         {
             LookupCount++;
             return Task.FromResult(new IdentifierLookupResult(
@@ -745,12 +745,12 @@ public sealed partial class PatronJourneyTests
         public void CompleteBlockedCheckout(IReadOnlyList<PolarisCheckoutSnapshot> checkouts) =>
             PendingCheckoutRead!.TrySetResult(checkouts);
 
-        public Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken) =>
+        public Task<BibValidationResult> ValidateBibAsync(int bibId, int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult(new BibValidationResult(true));
 
         public Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(
             string barcode,
-            CancellationToken cancellationToken)
+            int organizationId, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             HoldReadCount++;
@@ -761,7 +761,7 @@ public sealed partial class PatronJourneyTests
 
         public Task<IReadOnlyList<PolarisCheckoutSnapshot>> GetPatronCheckoutsAsync(
             string barcode,
-            CancellationToken cancellationToken)
+            int organizationId, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             CheckoutReadCount++;

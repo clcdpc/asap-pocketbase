@@ -41,9 +41,9 @@ public sealed class MigrationCliTests
             "150b30b776565194260cc327eeeffdfb46475e81",
             contract.RootElement.GetProperty("pocketBaseBaselineSha").GetString());
         Assert.AreEqual(
-            "polaris-native-v1",
+            "polaris-context-v2",
             contract.RootElement.GetProperty("contractVersion").GetString());
-        Assert.AreEqual(7, contract.RootElement.GetProperty("expectedSchemaVersion").GetInt32());
+        Assert.AreEqual(8, contract.RootElement.GetProperty("expectedSchemaVersion").GetInt32());
         Assert.AreEqual(
             "CLC.ASAP",
             contract.RootElement.GetProperty("dataProtectionApplicationName").GetString());
@@ -1528,7 +1528,15 @@ public sealed class MigrationCliTests
                     item.GetProperty("entity").GetString() == "title_request_bib_authority");
                 Assert.AreEqual("automation_derived", authorityTransform.GetProperty("classification").GetString());
                 Assert.IsFalse(authorityTransform.GetProperty("bibIdStaffVerified").GetBoolean());
+                var polarisTransform = authorityReport.RootElement.GetProperty("transformations").EnumerateArray()
+                    .Single(item => item.GetProperty("entity").GetString() == "polaris_settings");
+                Assert.AreEqual("7", polarisTransform.GetProperty("retiredRequestingOrganizationSource").GetString());
+                Assert.AreEqual("3", polarisTransform.GetProperty("retiredPickupOrganizationSource").GetString());
             }
+            Assert.AreEqual(0, await ScalarAsync(connection,
+                "SELECT COUNT(*) FROM sys.columns WHERE object_id = OBJECT_ID(N'asap.PolarisSettings') AND name IN (N'OrganizationIdForRequests', N'PickupOrganizationId');"));
+            Assert.AreEqual(1, await ScalarAsync(connection,
+                "SELECT COUNT(*) FROM [asap].[PolarisSettings] WHERE [WorkstationId] = 99 AND [SystemPolarisUserId] = 42;"));
             Assert.AreEqual(1, await ScalarAsync(
                 connection,
                 "SELECT COUNT(*) FROM [asap].[TitleRequestWorkflowTag] j JOIN [asap].[WorkflowTag] t ON t.[Id] = j.[WorkflowTagId] WHERE t.[Code] = N'polaris_bib_found';"));
@@ -1754,6 +1762,60 @@ public sealed class MigrationCliTests
         finally
         {
             Environment.SetEnvironmentVariable(connectionEnvironmentName, null);
+            await DropDatabaseAsync(master, databaseName);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ImportRejectsInvalidPolarisIntegrationIdentityWithoutPartialSqlState()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"asap-migration-polaris-identity-{Guid.NewGuid():N}");
+        var databaseName = $"AsapMigrationPolarisIdentity_{Guid.NewGuid():N}";
+        var master = new SqlConnectionStringBuilder(
+            Environment.GetEnvironmentVariable("ASAP_TEST_SQL_CONNECTION_STRING") ??
+            "Server=localhost;Database=master;Integrated Security=True;TrustServerCertificate=True")
+            { InitialCatalog = "master" }.ConnectionString;
+        var target = new SqlConnectionStringBuilder(master) { InitialCatalog = databaseName }.ConnectionString;
+        var environmentName = $"ASAP_MIGRATION_TEST_{Guid.NewGuid():N}";
+        Directory.CreateDirectory(root);
+        try
+        {
+            DeployDacpac(master, databaseName);
+            Environment.SetEnvironmentVariable(environmentName, target);
+            var index = 0;
+            foreach (var field in new[] { "workstationId", "userId" })
+            {
+                foreach (var value in new[] { "0", "-1", "2147483648", "bad" })
+                {
+                    var caseRoot = Path.Combine(root, $"case-{index++}");
+                    Directory.CreateDirectory(caseRoot);
+                    var workstation = field == "workstationId" ? value : "99";
+                    var user = field == "userId" ? value : "42";
+                    var package = CreateMinimalPackage(caseRoot, $"""
+                        CREATE TABLE [polaris_settings] ([id] TEXT PRIMARY KEY,
+                            [workstationId] TEXT, [userId] TEXT, [requestingOrgId] TEXT, [pickupOrgId] TEXT);
+                        INSERT INTO [polaris_settings] VALUES ('native-identity', '{workstation}', '{user}', '7', '3');
+                        """);
+                    using var error = new StringWriter();
+                    Assert.AreEqual(1, MigrationCli.Run([
+                        "import", "--package", package, "--connection-string-env", environmentName,
+                        "--allowed-tenant-ids", "00000000-0000-0000-0000-000000000002",
+                        "--report", Path.Combine(caseRoot, "report.json"),
+                        "--external-config", ExternalConfigurationPath(package)
+                    ], TextWriter.Null, error), $"{field}: {value}");
+                    StringAssert.Contains(error.ToString(), "source_polaris_identity_invalid");
+                    await using var connection = new SqlConnection(target);
+                    await connection.OpenAsync();
+                    Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[StaffUser];"));
+                    Assert.AreEqual(1, await ScalarAsync(connection,
+                        "SELECT COUNT(*) FROM [asap].[PolarisSettings] WHERE [WorkstationId] IS NULL AND [SystemPolarisUserId] IS NULL;"));
+                }
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(environmentName, null);
             await DropDatabaseAsync(master, databaseName);
             Directory.Delete(root, recursive: true);
         }

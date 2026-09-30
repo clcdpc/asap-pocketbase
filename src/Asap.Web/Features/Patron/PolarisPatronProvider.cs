@@ -42,7 +42,7 @@ public sealed partial class PolarisPatronProvider(
     {
         try
         {
-            var (client, _) = await CreateClientAsync(cancellationToken);
+            var (client, _) = await CreateClientAsync(PolarisConfigurationValidation.SystemOrganizationId, cancellationToken);
             var rows = await LoadOrganizationsAsync(client, cancellationToken);
             return rows
                 .Where(row => row.OrganizationID > 0)
@@ -73,7 +73,7 @@ public sealed partial class PolarisPatronProvider(
     {
         try
         {
-            var (client, _) = await CreateClientAsync(cancellationToken);
+            var (client, _) = await CreateClientAsync(PolarisConfigurationValidation.SystemOrganizationId, cancellationToken);
             var response = await client.PatronCodesGetAsync(null, cancellationToken);
             var result = response.Data;
             if (response.Response?.IsSuccessStatusCode != true ||
@@ -114,7 +114,7 @@ public sealed partial class PolarisPatronProvider(
         string pin,
         CancellationToken cancellationToken)
     {
-        var (client, _) = await CreateClientAsync(cancellationToken);
+        var (client, _) = await CreateClientAsync(PolarisConfigurationValidation.SystemOrganizationId, cancellationToken);
         try
         {
             var response = await client.AuthenticatePatronAsync(barcode, pin, cancellationToken);
@@ -172,9 +172,9 @@ public sealed partial class PolarisPatronProvider(
         }
     }
 
-    public async Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
+    public async Task<PatronSnapshot> RefreshAsync(string barcode, int organizationId, CancellationToken cancellationToken)
     {
-        var (client, _) = await CreateClientAsync(cancellationToken);
+        var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
         try
         {
             return await LoadPatronAsync(client, barcode, string.Empty, cancellationToken);
@@ -193,11 +193,11 @@ public sealed partial class PolarisPatronProvider(
         }
     }
 
-    public async Task<int?> GetPatronIdAsync(string barcode, CancellationToken cancellationToken)
+    public async Task<int?> GetPatronIdAsync(string barcode, int organizationId, CancellationToken cancellationToken)
     {
         try
         {
-            var (client, _) = await CreateClientAsync(cancellationToken);
+            var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
             var response = await client.PatronBasicDataGetAsync(
                 barcode,
                 string.Empty,
@@ -249,33 +249,25 @@ public sealed partial class PolarisPatronProvider(
 
     public async Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(
         PatronSnapshot patron,
-        CancellationToken cancellationToken)
+        int organizationId, CancellationToken cancellationToken)
     {
-        var (client, settings) = await CreateClientAsync(cancellationToken);
+        var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
         try
         {
-            var candidates = new[]
+            if (patron.PatronOrganizationId <= 1)
             {
-                patron.PatronOrganizationId,
-                settings.PickupOrganizationId is > 0 ? settings.PickupOrganizationId.Value : 0,
-                settings.OrganizationIdForRequests is > 0 ? settings.OrganizationIdForRequests.Value : 0,
-                patron.HomeLibraryOrganizationId
-            }.Where(item => item > 0).Distinct();
-            IReadOnlyList<int> branchIds = [];
-            foreach (var organizationId in candidates)
-            {
-                var response = await client.PickupBranchesGetAsync(organizationId, cancellationToken);
-                if (response.Response?.IsSuccessStatusCode != true)
-                {
-                    continue;
-                }
-
-                branchIds = ReadPickupBranchIds(response);
-                if (branchIds.Count > 0)
-                {
-                    break;
-                }
+                throw new PolarisOperationalException("polaris_patron_organization_invalid",
+                    "The patron's registered branch is missing.");
             }
+            // Polaris defines pickup eligibility by the patron's live registered branch,
+            // while the client carries the explicitly selected servicing library.
+            var response = await client.PickupBranchesGetAsync(patron.PatronOrganizationId, cancellationToken);
+            if (response.Response?.IsSuccessStatusCode != true)
+            {
+                throw new PolarisOperationalException("polaris_pickup_branches_failed",
+                    "Polaris pickup branches were unavailable.");
+            }
+            var branchIds = ReadPickupBranchIds(response);
 
             if (branchIds.Count == 0)
             {
@@ -307,23 +299,20 @@ public sealed partial class PolarisPatronProvider(
     public async Task UpdatePreferredPickupBranchAsync(
         string barcode,
         int pickupBranchId,
-        CancellationToken cancellationToken)
+        int organizationId, CancellationToken cancellationToken)
     {
-        var (client, settings) = await CreateClientAsync(cancellationToken);
+        var (client, settings) = await CreateMemberClientAsync(organizationId, cancellationToken);
         try
         {
-            var organizationId = settings.OrganizationIdForRequests is > 0
-                ? settings.OrganizationIdForRequests.Value
-                : 1;
+            if (pickupBranchId <= 1)
+            {
+                throw new ArgumentOutOfRangeException(nameof(pickupBranchId));
+            }
             var update = new PatronUpdateParams
             {
                 LogonBranchId = organizationId,
-                LogonUserId = settings.SystemPolarisUserId is > 0
-                    ? settings.SystemPolarisUserId.Value
-                    : 1,
-                LogonWorkstationId = settings.WorkstationId is > 0
-                    ? settings.WorkstationId.Value
-                    : 1,
+                LogonUserId = settings.SystemPolarisUserId!.Value,
+                LogonWorkstationId = settings.WorkstationId!.Value,
                 RequestPickupBranchID = pickupBranchId
             };
             var response = await client.PatronUpdateAsync(
@@ -348,16 +337,12 @@ public sealed partial class PolarisPatronProvider(
 
     public async Task<IdentifierLookupResult> LookupIdentifierAsync(
         string identifier,
-        CancellationToken cancellationToken)
+        int organizationId, CancellationToken cancellationToken)
     {
         try
         {
-            var (client, settings) = await CreateClientAsync(cancellationToken);
-            var branch = settings.PickupOrganizationId is > 0
-                ? settings.PickupOrganizationId.Value
-                : settings.OrganizationIdForRequests is > 0
-                    ? settings.OrganizationIdForRequests.Value
-                    : 1;
+            var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
+            var branch = organizationId;
             var attempts = new List<SearchAttempt>();
 
             var isbn = InspectSearchResponse(
@@ -465,7 +450,7 @@ public sealed partial class PolarisPatronProvider(
         }
     }
 
-    public async Task<BibValidationResult> ValidateBibAsync(int bibId, CancellationToken cancellationToken)
+    public async Task<BibValidationResult> ValidateBibAsync(int bibId, int organizationId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (bibId <= 0)
@@ -474,10 +459,8 @@ public sealed partial class PolarisPatronProvider(
         }
         try
         {
-            var (client, settings) = await CreateClientAsync(cancellationToken);
-            var branchId = settings.PickupOrganizationId is > 0
-                ? settings.PickupOrganizationId
-                : settings.OrganizationIdForRequests;
+            var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
+            var branchId = organizationId;
             var response = await client.BibGetAsync(bibId, branchId, cancellationToken);
             var data = response.Data;
             if (response.Response?.IsSuccessStatusCode != true)
@@ -543,11 +526,11 @@ public sealed partial class PolarisPatronProvider(
 
     public async Task<IReadOnlyList<PolarisHoldSnapshot>> GetPatronHoldsAsync(
         string barcode,
-        CancellationToken cancellationToken)
+        int organizationId, CancellationToken cancellationToken)
     {
         try
         {
-            var (client, _) = await CreateClientAsync(cancellationToken);
+            var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
             var response = await client.PatronHoldRequestsGetAsync(
                 barcode,
                 PatronHoldStatus.all,
@@ -651,11 +634,11 @@ public sealed partial class PolarisPatronProvider(
 
     public async Task<IReadOnlyList<PolarisCheckoutSnapshot>> GetPatronCheckoutsAsync(
         string barcode,
-        CancellationToken cancellationToken)
+        int organizationId, CancellationToken cancellationToken)
     {
         try
         {
-            var (client, _) = await CreateClientAsync(cancellationToken);
+            var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
             var response = await client.PatronItemsOutGetAsync(
                 barcode,
                 PatronItemsOutGetStatus.All,
@@ -697,7 +680,7 @@ public sealed partial class PolarisPatronProvider(
     {
         try
         {
-            var (client, _) = await CreateClientAsync(cancellationToken);
+            var (client, _) = await CreateMemberClientAsync(command.RequestingOrganizationId, cancellationToken);
             var response = await client.HoldRequestCreateAsync(new HoldRequestCreateParams
             {
                 PatronID = command.PatronId,
@@ -738,7 +721,7 @@ public sealed partial class PolarisPatronProvider(
     {
         try
         {
-            var (client, _) = await CreateClientAsync(cancellationToken);
+            var (client, _) = await CreateMemberClientAsync(command.RequestingOrganizationId, cancellationToken);
             var createContext = new HoldRequestCreateResult
             {
                 RequestGuid = command.RequestGuid,
@@ -986,8 +969,20 @@ public sealed partial class PolarisPatronProvider(
         return result.OrganizationsGetRows;
     }
 
+    private Task<(PapiClient Client, PolarisSettings Settings)> CreateMemberClientAsync(
+        int organizationId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (organizationId <= PolarisConfigurationValidation.SystemOrganizationId)
+        {
+            throw new PolarisOperationalException("polaris_operation_context_missing",
+                "A member operation requires an explicit servicing library.");
+        }
+        return CreateClientAsync(organizationId, cancellationToken);
+    }
+
     private async Task<(PapiClient Client, PolarisSettings Settings)> CreateClientAsync(
-        CancellationToken cancellationToken)
+        int organizationId, CancellationToken cancellationToken)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var settings = await context.PolarisSettings.AsNoTracking()
@@ -996,43 +991,27 @@ public sealed partial class PolarisPatronProvider(
                 "polaris_configuration_missing",
                 "Polaris configuration is missing.");
 
-        if (string.IsNullOrWhiteSpace(settings.Host) ||
-            string.IsNullOrWhiteSpace(settings.AccessId) ||
-            string.IsNullOrWhiteSpace(settings.ProtectedApiKey) ||
-            string.IsNullOrWhiteSpace(settings.StaffDomain) ||
-            string.IsNullOrWhiteSpace(settings.AdminUser) ||
-            string.IsNullOrWhiteSpace(settings.ProtectedAdminPassword))
+        if (!PolarisConfigurationValidation.TryReadCredentials(
+                settings, credentialProtector, out var accessKey, out var password))
         {
             throw new PolarisOperationalException(
                 "polaris_configuration_incomplete",
-                "Polaris configuration is incomplete.");
-        }
-
-        string accessKey;
-        string password;
-        try
-        {
-            accessKey = credentialProtector.Unprotect(settings.ProtectedApiKey);
-            password = credentialProtector.Unprotect(settings.ProtectedAdminPassword);
-        }
-        catch (Exception exception)
-        {
-            throw Operational("polaris_credentials_unavailable", exception);
+                "Polaris configuration is incomplete or its credentials are unavailable.");
         }
 
         var client = new PapiClient(
             httpClientFactory.CreateClient("Polaris"),
             new PapiSettings
             {
-                Hostname = settings.Host,
-                AccessId = settings.AccessId,
+                Hostname = settings.Host!,
+                AccessId = settings.AccessId!,
                 AccessKey = accessKey,
-                OrganizationId = settings.OrganizationIdForRequests ?? 1,
-                UserId = settings.SystemPolarisUserId ?? 1,
-                WorkstationId = settings.WorkstationId ?? 1,
+                OrganizationId = organizationId,
+                UserId = settings.SystemPolarisUserId!.Value,
+                WorkstationId = settings.WorkstationId!.Value,
                 PolarisOverrideAccount = new PolarisUser(
-                    settings.StaffDomain,
-                    settings.AdminUser,
+                    settings.StaffDomain!,
+                    settings.AdminUser!,
                     password)
             });
         return (client, settings);

@@ -19,7 +19,7 @@ public sealed partial class PatronJourneyTests
              """{"PAPIErrorCode":0,"PatronBasicData":{"PatronID":123,"Barcode":"20000000000036","PatronOrgID":300}}"""));
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var patronId = await provider.GetPatronIdAsync(barcode, CancellationToken.None);
+        var patronId = await provider.GetPatronIdAsync(barcode, 2, CancellationToken.None);
 
         Assert.AreEqual<int?>(123, patronId);
         var patronReads = handler.RequestUris.Count(uri =>
@@ -134,7 +134,7 @@ public sealed partial class PatronJourneyTests
         public int RefreshCount { get; private set; }
         public bool FailPatronIdRead { get; set; }
 
-        public Task<int?> GetPatronIdAsync(string barcode, CancellationToken cancellationToken)
+        public Task<int?> GetPatronIdAsync(string barcode, int organizationId, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             PatronIdReadCount++;
@@ -150,7 +150,7 @@ public sealed partial class PatronJourneyTests
             string pin,
             CancellationToken cancellationToken) => throw new NotSupportedException();
 
-        public Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
+        public Task<PatronSnapshot> RefreshAsync(string barcode, int organizationId, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             RefreshCount++;
@@ -170,16 +170,16 @@ public sealed partial class PatronJourneyTests
 
         public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(
             PatronSnapshot patron,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
+            int organizationId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task UpdatePreferredPickupBranchAsync(
             string barcode,
             int pickupBranchId,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
+            int organizationId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<IdentifierLookupResult> LookupIdentifierAsync(
             string identifier,
-            CancellationToken cancellationToken) =>
+            int organizationId, CancellationToken cancellationToken) =>
             Task.FromResult(new IdentifierLookupResult(IdentifierLookupOutcome.DefinitiveNotFound));
     }
 }

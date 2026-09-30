@@ -392,7 +392,7 @@ Version tags produce:
 
 Release/deployment tests must cover changed DACPAC with unchanged SchemaVersion, unchanged DACPAC with no dependency DDL (true file-only), unchanged DACPAC with required Hangfire DDL (database-changing), and inconsistent changed SchemaVersion with unchanged DACPAC (blocked). Section 10.1 R7 and `05-DEPLOYMENT-OPERATIONS.md` sections 9-10 govern backup/quiescence, compatibility, and failure ordering; application SchemaVersion alone cannot authorize restart/rollback.
 
-For the schema-7 native Polaris revision, test fresh DACPAC creation and the pre-release hard boundary separately: a fresh database has only the final email-based StaffUser/EmailOutbox shape, while a target reporting an application schema below 7 is rejected and must be recreated. Deployment/package tests require exact application schema version 7, retain `BlockOnPossibleDataLoss=True` and `DropObjectsNotInSource=False`, and reject manifests carrying any other application schema version.
+For the schema-7 native Polaris revision, test fresh DACPAC creation, native schema-7 to 8 retirement with valid credentials/identity preserved, and the pre-release hard boundary separately: a fresh database has only the final email-based StaffUser/EmailOutbox shape, while a target reporting an application schema below 7 is rejected and must be recreated. Deployment/package tests require exact application schema version 8, retain `BlockOnPossibleDataLoss=True` and `DropObjectsNotInSource=False`, and reject manifests carrying any other application schema version.
 
 Do not rebuild production from an untagged branch state after a rehearsal. If a fix changes code, create a new tag/artifact and rehearse that exact replacement.
 

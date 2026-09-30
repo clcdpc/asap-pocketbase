@@ -1013,20 +1013,20 @@ public sealed partial class PatronJourneyTests
 
         public Task<PatronSnapshot> RefreshAsync(
             string barcode,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
+            int organizationId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(
             PatronSnapshot patron,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
+            int organizationId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task UpdatePreferredPickupBranchAsync(
             string barcode,
             int pickupBranchId,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
+            int organizationId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<IdentifierLookupResult> LookupIdentifierAsync(
             string identifier,
-            CancellationToken cancellationToken)
+            int organizationId, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(result);

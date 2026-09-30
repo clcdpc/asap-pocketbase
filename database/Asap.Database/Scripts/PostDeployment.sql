@@ -3,16 +3,21 @@ ALTER DATABASE CURRENT SET COMPATIBILITY_LEVEL = 160;
 IF NOT EXISTS (SELECT 1 FROM [asap].[SchemaVersion] WHERE [Id] = 1)
 BEGIN
     INSERT INTO [asap].[SchemaVersion] ([Id], [Version], [UpdatedUtc])
-    VALUES (1, 7, SYSUTCDATETIME());
+    VALUES (1, 8, SYSUTCDATETIME());
 END;
 ELSE IF (SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1) < 7
 BEGIN
     THROW 51000, 'Schema 7 is a pre-release reset boundary. Recreate the application database from this DACPAC.', 1;
 END;
-ELSE IF (SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1) > 7
+ELSE IF (SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1) > 8
 BEGIN
     THROW 51000, 'The database schema is newer than this DACPAC.', 1;
 END;
+
+-- Schema 8 retires global member context; native schema-7 data upgrades in place.
+UPDATE [asap].[SchemaVersion]
+SET [Version] = 8, [UpdatedUtc] = SYSUTCDATETIME()
+WHERE [Id] = 1 AND [Version] = 7;
 
 IF NOT EXISTS (SELECT 1 FROM [asap].[DeploymentState] WHERE [Id] = 1)
 BEGIN
@@ -39,9 +44,8 @@ END;
 IF NOT EXISTS (SELECT 1 FROM [asap].[PolarisSettings] WHERE [OrganizationId] = 1)
 BEGIN
     INSERT INTO [asap].[PolarisSettings]
-        ([OrganizationId], [AccessId], [WorkstationId], [SystemPolarisUserId],
-         [OrganizationIdForRequests], [PickupOrganizationId], [UpdatedUtc])
-    VALUES (1, N'SuggestAPI', 1, 1, 3, 0, SYSUTCDATETIME());
+        ([OrganizationId], [UpdatedUtc])
+    VALUES (1, SYSUTCDATETIME());
 END;
 
 IF NOT EXISTS (SELECT 1 FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = 1)

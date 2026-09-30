@@ -18,7 +18,7 @@ public sealed partial class PatronJourneyTests
             (HttpStatusCode.OK, SearchResponse()));
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.SearchBibsAsync("identifier", "978-0000000001", "", "", CancellationToken.None);
+        var result = await provider.SearchBibsAsync("identifier", "978-0000000001", "", "", 2, CancellationToken.None);
 
         Assert.AreEqual(10, result.Results.Count);
         Assert.AreEqual(1, handler.RequestCount);
@@ -36,7 +36,7 @@ public sealed partial class PatronJourneyTests
             (HttpStatusCode.OK, """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[]}"""));
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.SearchBibsAsync("identifier", "978-0000000001", "", "", CancellationToken.None);
+        var result = await provider.SearchBibsAsync("identifier", "978-0000000001", "", "", 2, CancellationToken.None);
 
         CollectionAssert.AreEqual(new[] { 9102, 9101 }, result.Results.Select(row => row.BibId).ToArray());
         Assert.AreEqual(3, handler.RequestCount, "Fallback attempts run while fewer than ten candidates have been accepted.");
@@ -64,7 +64,7 @@ public sealed partial class PatronJourneyTests
             (HttpStatusCode.OK, SearchResponse()));
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.SearchBibsAsync("identifier", "978-0000000001", "", "", CancellationToken.None);
+        var result = await provider.SearchBibsAsync("identifier", "978-0000000001", "", "", 2, CancellationToken.None);
 
         Assert.AreEqual(10, result.Results.Count);
         Assert.AreEqual(2, handler.RequestCount);
@@ -83,7 +83,7 @@ public sealed partial class PatronJourneyTests
             (HttpStatusCode.OK, SearchResponse(SearchRow(9601, "A title fallback", author: "An author"))));
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.SearchBibsAsync("title_author", "", "A title", "An author", CancellationToken.None);
+        var result = await provider.SearchBibsAsync("title_author", "", "A title", "An author", 2, CancellationToken.None);
 
         Assert.AreEqual(10, result.Results.Count);
         Assert.AreEqual(1, handler.RequestCount);
@@ -98,7 +98,7 @@ public sealed partial class PatronJourneyTests
             (HttpStatusCode.OK, SearchResponse(SearchRow(9202, "A title", author: "An author", publication: "1901"))));
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.SearchBibsAsync("title_author", "", "A title", "An author", CancellationToken.None);
+        var result = await provider.SearchBibsAsync("title_author", "", "A title", "An author", 2, CancellationToken.None);
 
         CollectionAssert.AreEqual(new[] { 9202, 9201 }, result.Results.Select(row => row.BibId).ToArray());
         Assert.AreEqual(2, handler.RequestCount);
@@ -116,7 +116,7 @@ public sealed partial class PatronJourneyTests
             (HttpStatusCode.OK, """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[]}"""));
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.SearchBibsAsync("identifier", "9780000000001", "", "", CancellationToken.None);
+        var result = await provider.SearchBibsAsync("identifier", "9780000000001", "", "", 2, CancellationToken.None);
 
         CollectionAssert.AreEqual(new[] { 9301, 9302 }, result.Results.Select(row => row.BibId).ToArray());
     }
@@ -132,7 +132,7 @@ public sealed partial class PatronJourneyTests
             (HttpStatusCode.OK, """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[]}"""));
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.SearchBibsAsync("identifier", "9780000000001", "", "", CancellationToken.None);
+        var result = await provider.SearchBibsAsync("identifier", "9780000000001", "", "", 2, CancellationToken.None);
 
         CollectionAssert.AreEqual(new[] { 9501, 9502 }, result.Results.Select(row => row.BibId).ToArray());
         Assert.AreEqual("First accepted title", result.Results[0].Title,

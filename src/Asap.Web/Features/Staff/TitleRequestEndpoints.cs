@@ -221,7 +221,7 @@ public static class TitleRequestEndpoints
         {
             try
             {
-                var resolvedPatronId = await patrons.GetPatronIdAsync(request.Barcode, cancellationToken);
+                var resolvedPatronId = await patrons.GetPatronIdAsync(request.Barcode, scope.OrganizationId, cancellationToken);
                 if (resolvedPatronId is > 0)
                 {
                     patronId = resolvedPatronId;
@@ -299,12 +299,12 @@ public static class TitleRequestEndpoints
         {
             if (!exact)
             {
-                var search = await polaris.SearchBibsAsync(mode!, query, title, author, cancellationToken);
+                var search = await polaris.SearchBibsAsync(mode!, query, title, author, scope.OrganizationId, cancellationToken);
                 return Results.Json(new { status = search.Results.Count == 0 ? "not_found" : "found",
                     search.TotalMatches, results = search.Results.Take(10) });
             }
             var bibId = input.BibId!.Value;
-            var bib = await polaris.ValidateBibAsync(bibId, cancellationToken);
+            var bib = await polaris.ValidateBibAsync(bibId, scope.OrganizationId, cancellationToken);
             if (!bib.IsValid)
             {
                 return Results.NotFound(new { code = "bib_not_found", message = "The Polaris BIB was not found." });
@@ -324,7 +324,7 @@ public static class TitleRequestEndpoints
             {
                 try
                 {
-                    var holds = await polaris.GetPatronHoldsAsync(request.Barcode, cancellationToken);
+                    var holds = await polaris.GetPatronHoldsAsync(request.Barcode, scope.OrganizationId, cancellationToken);
                     patronHasHold = holds.Any(hold => hold.BibId == bibId &&
                         !HoldPlacementService.IsTerminal(hold.StatusId));
                 }

@@ -1052,7 +1052,7 @@ public sealed class WorkflowProcessingService(
         IReadOnlyList<PolarisCheckoutSnapshot> checkouts;
         try
         {
-            checkouts = await polaris.GetPatronCheckoutsAsync(candidate.Barcode, cancellationToken);
+            checkouts = await polaris.GetPatronCheckoutsAsync(candidate.Barcode, candidate.LibraryOrganizationId, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1098,7 +1098,7 @@ public sealed class WorkflowProcessingService(
         IReadOnlyList<PolarisHoldSnapshot> holds;
         try
         {
-            holds = await polaris.GetPatronHoldsAsync(candidate.Barcode, cancellationToken);
+            holds = await polaris.GetPatronHoldsAsync(candidate.Barcode, candidate.LibraryOrganizationId, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

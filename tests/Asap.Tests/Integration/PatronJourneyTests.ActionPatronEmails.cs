@@ -238,7 +238,7 @@ public sealed partial class PatronJourneyTests
         public HashSet<string> UnavailableBarcodes { get; } = [];
         public Action<CancellationToken>? BeforeRefresh { get; set; }
 
-        public Task<PatronSnapshot> RefreshAsync(string barcode, CancellationToken cancellationToken)
+        public Task<PatronSnapshot> RefreshAsync(string barcode, int organizationId, CancellationToken cancellationToken)
         {
             BeforeRefresh?.Invoke(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
@@ -252,15 +252,15 @@ public sealed partial class PatronJourneyTests
         }
 
         public Task<PatronSnapshot> AuthenticateAsync(string barcode, string pin,
-            CancellationToken cancellationToken) => RefreshAsync(barcode, cancellationToken);
+            CancellationToken cancellationToken) => RefreshAsync(barcode, 2, cancellationToken);
 
         public Task<IReadOnlyList<PickupBranch>> GetPickupBranchesAsync(PatronSnapshot patron,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
+            int organizationId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task UpdatePreferredPickupBranchAsync(string barcode, int pickupBranchId,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
+            int organizationId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<IdentifierLookupResult> LookupIdentifierAsync(string identifier,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
+            int organizationId, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 }
