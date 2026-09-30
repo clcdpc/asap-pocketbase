@@ -41,9 +41,9 @@ public sealed class MigrationCliTests
             "150b30b776565194260cc327eeeffdfb46475e81",
             contract.RootElement.GetProperty("pocketBaseBaselineSha").GetString());
         Assert.AreEqual(
-            "polaris-context-v2",
+            "pickup-journal-v3",
             contract.RootElement.GetProperty("contractVersion").GetString());
-        Assert.AreEqual(8, contract.RootElement.GetProperty("expectedSchemaVersion").GetInt32());
+        Assert.AreEqual(9, contract.RootElement.GetProperty("expectedSchemaVersion").GetInt32());
         Assert.AreEqual(
             "CLC.ASAP",
             contract.RootElement.GetProperty("dataProtectionApplicationName").GetString());

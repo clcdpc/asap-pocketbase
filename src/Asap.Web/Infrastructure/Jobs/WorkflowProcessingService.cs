@@ -936,7 +936,8 @@ public sealed class WorkflowProcessingService(
             request.Status == "outstanding_purchase")
         {
             var settings = await EffectiveWorkflowAsync(context, request.LibraryOrganizationId, cancellationToken);
-            var incomplete = await context.HoldPlacementOperations.AnyAsync(
+            var incomplete = await PickupPreferenceMutationService.HasIncompleteAsync(context, request.Id, cancellationToken) ||
+                await context.HoldPlacementOperations.AnyAsync(
                 item => item.TitleRequestId == request.Id && item.CompletedUtc == null,
                 cancellationToken);
             if (incomplete)
@@ -1186,7 +1187,8 @@ public sealed class WorkflowProcessingService(
                 manualActorEvidence);
         }
 
-        if (!IsTerminal(trackedHold.StatusDescription))
+        var terminalReason = PolarisHoldStatusPolicy.TerminalReason(trackedHold.StatusId);
+        if (terminalReason is null)
         {
             return new WorkflowItemResult("not_terminal");
         }
@@ -1194,7 +1196,7 @@ public sealed class WorkflowProcessingService(
         return await CloseFulfilledAsync(
             candidate,
             scanScope,
-            new FulfillmentEvidence(TerminalReason(trackedHold.StatusDescription), operation),
+            new FulfillmentEvidence(terminalReason, operation),
             expectedProgressVersion,
             cancellationToken,
             manualActorEvidence);
@@ -1259,7 +1261,8 @@ public sealed class WorkflowProcessingService(
             request.RowVersion.SequenceEqual(candidate.RowVersion) &&
             request.Status == StatusFor(family))
         {
-            var incomplete = await context.HoldPlacementOperations.AnyAsync(
+            var incomplete = await PickupPreferenceMutationService.HasIncompleteAsync(context, request.Id, cancellationToken) ||
+                await context.HoldPlacementOperations.AnyAsync(
                 item => item.TitleRequestId == request.Id && item.CompletedUtc == null,
                 cancellationToken);
             var settings = await EffectiveWorkflowAsync(context, request.LibraryOrganizationId, cancellationToken);
@@ -1430,7 +1433,8 @@ public sealed class WorkflowProcessingService(
         {
             var settings = await EffectiveWorkflowAsync(context, request.LibraryOrganizationId, cancellationToken);
             var (timeoutEnabled, timeoutDays) = TimeoutSetting(settings, TimeoutFamily.HoldPickupTimeout);
-            var incomplete = await context.HoldPlacementOperations.AnyAsync(
+            var incomplete = await PickupPreferenceMutationService.HasIncompleteAsync(context, request.Id, cancellationToken) ||
+                await context.HoldPlacementOperations.AnyAsync(
                 item => item.TitleRequestId == request.Id && item.CompletedUtc == null,
                 cancellationToken);
             if (incomplete)
@@ -1731,6 +1735,10 @@ public sealed class WorkflowProcessingService(
         long requestId,
         CancellationToken cancellationToken)
     {
+        if (await PickupPreferenceMutationService.HasIncompleteAsync(context, requestId, cancellationToken))
+        {
+            return true;
+        }
         if (await context.HoldPlacementOperations.AnyAsync(
                 item => item.TitleRequestId == requestId && item.CompletedUtc == null,
                 cancellationToken) ||
@@ -1942,13 +1950,6 @@ public sealed class WorkflowProcessingService(
         TimeoutFamily.PendingHoldTimeout => "pending_hold",
         TimeoutFamily.HoldPickupTimeout => "hold_placed",
         _ => ""
-    };
-    private static bool IsTerminal(string? status) => status?.Trim().ToLowerInvariant() is "unclaimed" or "cancelled" or "expired";
-    private static string TerminalReason(string? status) => status?.Trim().ToLowerInvariant() switch
-    {
-        "cancelled" => "hold_cancelled",
-        "expired" => "hold_expired",
-        _ => "hold_unclaimed"
     };
     private static string WeeklyBody(
         IReadOnlyList<TitleRequest> submissions,

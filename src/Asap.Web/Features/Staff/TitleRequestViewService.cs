@@ -27,6 +27,10 @@ public sealed record HoldOperationSummary(
     bool CanResolveSucceeded,
     bool CanResolveNotPerformed);
 
+public sealed record PickupOperationSummary(Guid Id, int State, int TargetBranchId, string TargetBranchName);
+
+internal sealed record PickupOperationRead(long RequestId, Guid Id, int State, int TargetBranchId, string TargetBranchName);
+
 public sealed record TitleRequestActivity(
     string Id,
     string EventType,
@@ -104,6 +108,7 @@ public sealed record TitleRequestDto(
 {
     public RelatedRequestSummary? RelatedRequests { get; init; }
     public RequestWorkflowContext? WorkflowContext { get; init; }
+    public PickupOperationSummary? PickupOperation { get; init; }
 }
 
 public sealed record TitleRequestScopeResult(
@@ -119,8 +124,13 @@ public static class TitleRequestCapabilityPolicy
     public static TitleRequestCapabilities Evaluate(
         TitleRequest request,
         bool hasIncompleteOperation,
-        bool hasPlacedProtection)
+        bool hasPlacedProtection,
+        bool hasIncompletePickup = false)
     {
+        if (hasIncompletePickup)
+        {
+            return new TitleRequestCapabilities(false, false, false, false, "pickup_reconciliation_required");
+        }
         if (hasIncompleteOperation)
         {
             return new TitleRequestCapabilities(
@@ -356,6 +366,11 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
         var latestSuccessful = operations.Where(item => item.State == "succeeded")
             .GroupBy(item => item.TitleRequestId)
             .ToDictionary(item => item.Key, item => item.First());
+        var pendingPickups = await context.Database.SqlQuery<PickupOperationRead>($"""
+            SELECT [TitleRequestId] AS [RequestId], [Id], [State],
+                   [ToPickupBranchId] AS [TargetBranchId], [ToPickupBranchName] AS [TargetBranchName]
+            FROM [asap].[PickupPreferenceOperation] WHERE [CompletedUtc] IS NULL AND [TitleRequestId] IS NOT NULL
+            """).Where(item => ids.Contains(item.RequestId)).ToDictionaryAsync(item => item.RequestId, cancellationToken);
 
         var result = new List<TitleRequestDto>(requests.Count);
         foreach (var request in requests)
@@ -366,7 +381,9 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
             var operation = incompleteOperation ??
                 (successfulOperation is { PolarisHoldId: null } ? successfulOperation : null);
             var protectedHistory = successfulOperation is not null || HasLegacyPlacedProtection(requestEvents);
-            var capabilities = TitleRequestCapabilityPolicy.Evaluate(request, incompleteOperation is not null, protectedHistory);
+            var pendingPickup = pendingPickups.GetValueOrDefault(request.Id);
+            var capabilities = TitleRequestCapabilityPolicy.Evaluate(request, incompleteOperation is not null,
+                protectedHistory, pendingPickup is not null);
             var canTakeOverOperation = incompleteOperation is not null &&
                                        (!incompleteOperation.OwnerToken.HasValue ||
                                         incompleteOperation.LeaseExpiresUtc <= DateTime.UtcNow);
@@ -459,6 +476,8 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
                     item.Message,
                     AsUtc(item.CreatedUtc))).ToArray() : [])
             {
+                PickupOperation = pendingPickup is null ? null : new PickupOperationSummary(pendingPickup.Id,
+                    pendingPickup.State, pendingPickup.TargetBranchId, pendingPickup.TargetBranchName),
                 RelatedRequests = new RelatedRequestSummary(related.Count, relatedCounts),
                 WorkflowContext = new RequestWorkflowContext(
                     libraryWorkflow?.AutoPromote ?? systemWorkflow?.AutoPromote == true,

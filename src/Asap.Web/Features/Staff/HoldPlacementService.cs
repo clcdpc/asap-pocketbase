@@ -13,6 +13,8 @@ using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Jobs;
 using Asap.Web.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Data.SqlClient;
 
 namespace Asap.Web.Features.Staff;
 
@@ -777,6 +779,12 @@ public sealed class HoldPlacementService(
         {
             return new AcquisitionResult("not_found");
         }
+        if (!await PatronMutationLock.TryAcquireAsync(
+                (SqlConnection)context.Database.GetDbConnection(), (SqlTransaction)transaction.GetDbTransaction(),
+                snapshot.Barcode, cancellationToken))
+        {
+            return new AcquisitionResult("hold_operation_incomplete");
+        }
         if (!await LockAuthorityOrganizationsAsync(
                 context, actor is not null || manualActorEvidence is not null,
                 snapshot.LibraryOrganizationId, cancellationToken))
@@ -823,6 +831,15 @@ public sealed class HoldPlacementService(
         var bibId = request.BibId.Value;
         if (!request.BibIdStaffVerified) return new AcquisitionResult("bib_unverified");
         if (string.IsNullOrWhiteSpace(request.Barcode)) return new AcquisitionResult("patron_barcode_missing");
+
+        var pickupPending = await context.Database.SqlQuery<int>($"""
+            SELECT COUNT(*) AS [Value] FROM [asap].[PickupPreferenceOperation]
+            WHERE [Barcode] = {request.Barcode} AND [CompletedUtc] IS NULL
+            """).SingleAsync(cancellationToken);
+        if (pickupPending != 0)
+        {
+            return new AcquisitionResult("pickup_reconciliation_required");
+        }
 
         var existing = await context.HoldPlacementOperations.FromSqlInterpolated(
                 $"SELECT * FROM [asap].[HoldPlacementOperation] WITH (UPDLOCK,HOLDLOCK) WHERE [TitleRequestId] = {requestId} AND [CompletedUtc] IS NULL")
@@ -1840,7 +1857,7 @@ public sealed class HoldPlacementService(
     }
 
     // Polaris PatronHoldRequestsGet defines 8 as Unclaimed, 9 as Expired, and 16 as Cancelled.
-    internal static bool IsTerminal(int statusId) => statusId is 8 or 9 or 16;
+    internal static bool IsTerminal(int statusId) => PolarisHoldStatusPolicy.IsTerminal(statusId);
 
     private static string ResultCode(HoldProviderResult result) => result.Outcome switch
     {

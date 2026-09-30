@@ -876,7 +876,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("request_not_created_pickup_changed", body.RootElement.GetProperty("code").GetString());
             Assert.IsTrue(body.RootElement.GetProperty("pickupPreferenceChanged").GetBoolean());
             var message = body.RootElement.GetProperty("message").GetString()!;
-            StringAssert.Contains(message, "suggestion was not created");
+            StringAssert.Contains(message, "suggestion was not confirmed");
             StringAssert.Contains(message, "preferred pickup location was changed successfully");
             Assert.AreEqual(1, provider.UpdateCount);
             await using var verify = await contextFactory.CreateDbContextAsync();
@@ -1026,10 +1026,10 @@ public sealed partial class PatronJourneyTests
 
         using (var failed = await SubmitAsync("failed", 101, 102, fail: true))
         {
-            Assert.AreEqual(HttpStatusCode.BadGateway, failed.StatusCode,
+            Assert.AreEqual(HttpStatusCode.Conflict, failed.StatusCode,
                 await failed.Content.ReadAsStringAsync());
             using var body = JsonDocument.Parse(await failed.Content.ReadAsStringAsync());
-            Assert.AreEqual("pickup_update_failed", body.RootElement.GetProperty("code").GetString());
+            Assert.AreEqual("pickup_outcome_unconfirmed", body.RootElement.GetProperty("code").GetString());
         }
 
         await using var context = await contextFactory.CreateDbContextAsync();

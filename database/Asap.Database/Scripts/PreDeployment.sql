@@ -10,7 +10,7 @@ BEGIN
     BEGIN
         THROW 51000, 'Schema 7 is a pre-release reset boundary. Recreate the application database from this DACPAC.', 1;
     END;
-    IF EXISTS (SELECT 1 FROM [asap].[SchemaVersion] WHERE [Id] = 1 AND [Version] > 8)
+    IF EXISTS (SELECT 1 FROM [asap].[SchemaVersion] WHERE [Id] = 1 AND [Version] > 9)
     BEGIN
         THROW 51000, 'The database schema is newer than this DACPAC.', 1;
     END;

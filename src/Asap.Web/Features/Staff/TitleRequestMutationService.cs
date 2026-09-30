@@ -462,6 +462,10 @@ public sealed class TitleRequestMutationService(
             .Where(item => item.TitleRequestId == request.Id)
             .OrderBy(item => item.Id)
             .ToListAsync(cancellationToken);
+        if (await PickupPreferenceMutationService.HasIncompleteAsync(context, request.Id, cancellationToken))
+        {
+            return new TitleRequestMutationResult("pickup_reconciliation_required");
+        }
         var incompleteOperation = await context.HoldPlacementOperations.AnyAsync(
             item => item.TitleRequestId == request.Id && item.CompletedUtc == null,
             cancellationToken);
@@ -1111,6 +1115,10 @@ public sealed class TitleRequestMutationService(
         }
         if (!request.RowVersion.SequenceEqual(expectedVersion)) return new TitleRequestMutationResult("stale_version");
         if (request.Status != "closed") return new TitleRequestMutationResult("request_not_closed");
+        if (await PickupPreferenceMutationService.HasIncompleteAsync(context, request.Id, cancellationToken))
+        {
+            return new TitleRequestMutationResult("pickup_reconciliation_required");
+        }
         if (await context.HoldPlacementOperations.AnyAsync(item => item.TitleRequestId == request.Id, cancellationToken))
         {
             return new TitleRequestMutationResult("hold_history_retained");

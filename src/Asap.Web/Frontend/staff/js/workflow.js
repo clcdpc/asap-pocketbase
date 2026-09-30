@@ -2618,7 +2618,9 @@ export function createWorkflowApp() {
     if (request.capabilities && request.capabilities.blockingReason) {
       body.append(element('p', {
         className: 'blocked-callout',
-        text: request.capabilities.blockingReason === 'hold_operation_incomplete'
+        text: request.capabilities.blockingReason === 'pickup_reconciliation_required'
+          ? 'Pickup preference needs reconciliation. Review the live preference before continuing; an uncertain provider write will not be repeated.'
+          : request.capabilities.blockingReason === 'hold_operation_incomplete'
           ? 'Workflow-changing edits are blocked while hold placement needs recovery.'
           : request.capabilities.blockingReason === 'hold_history_retained'
           ? 'Reopen is unavailable because placed-hold history has no confirmed external reversal.'
@@ -2732,7 +2734,8 @@ export function createWorkflowApp() {
         'primary-button', workflowBlocked));
     } else if (request.status === 'pending_hold') {
       bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, event.currentTarget), 'secondary-button', !request.bibid));
-      bar.append(commandButton('Pickup', 'map-marker', () => showPickup(request), 'secondary-button', workflowBlocked));
+      bar.append(commandButton('Pickup', 'map-marker', () => showPickup(request), 'secondary-button',
+        workflowBlocked && request.capabilities?.blockingReason !== 'pickup_reconciliation_required'));
       if (request.autohold && request.bibid && request.bibidStaffVerified === true) {
         bar.append(commandButton('Place hold', 'bookmark', () => {
           if (confirmCurrent(request, 'title_request',
@@ -3489,22 +3492,25 @@ export function createWorkflowApp() {
         ['request_outcome_unconfirmed', 'hold_outcome_unconfirmed', 'hold_provider_error']
           .includes(error.response?.code);
       const holdReviewRequired = path.endsWith('/place-hold') && error.status === 409;
+      const pickupReviewRequired = path.endsWith('/pickup-preference') && Boolean(error.response?.operationId);
       if (error.status === 409 || outcomeUnknown || recordedProviderOutcome) {
-        const message = recordedProviderOutcome
+        const message = pickupReviewRequired
+          ? error.message || 'Pickup reconciliation is required. Review the live preference before retrying.'
+          : recordedProviderOutcome
           ? 'Polaris returned a hold result, but request finalization was deferred after staff access changed. Review the hold operation with an authorized account.'
           : outcomeUnknown
           ? path.endsWith('/place-hold')
             ? 'The hold outcome could not be confirmed. Reload the operation before trying again.'
             : 'The request outcome could not be confirmed. Reload before trying again.'
           : error.message || 'The request changed. Review the refreshed version before trying again.';
-        if ((outcomeUnknown || recordedProviderOutcome || holdReviewRequired) &&
+        if ((outcomeUnknown || recordedProviderOutcome || holdReviewRequired || pickupReviewRequired) &&
             isCurrentDialogMutation(mutation, request, 'title_request')) {
           retainUnconfirmedOutcome(message, mutation.token);
         }
         const refreshed = await loadQueue({ skipDeepLink: true, silent: true });
         if (!isCurrentDialogMutation(mutation, request, 'title_request')) return;
         const detailLoaded = await openRequest(request.id);
-        if ((outcomeUnknown || recordedProviderOutcome || holdReviewRequired) &&
+        if ((outcomeUnknown || recordedProviderOutcome || holdReviewRequired || pickupReviewRequired) &&
             refreshed === true && detailLoaded === true) {
           clearCommittedSessionFallback(mutation.token);
         }
@@ -3625,7 +3631,7 @@ export function createWorkflowApp() {
       if (!load.isCurrent() || !isCurrentDialogRequest(request, 'title_request')) return;
       const select = element('select', { 'aria-label': 'Preferred pickup branch' });
       for (const branch of options.pickupBranches || []) {
-        select.append(element('option', { value: branch.id, text: branch.name }));
+        select.append(element('option', { value: branch.id, text: branch.label }));
       }
       if (options.selectedPickupBranchId) select.value = String(options.selectedPickupBranchId);
       const form = element('form', { className: 'inline-form' }, [
@@ -3639,9 +3645,26 @@ export function createWorkflowApp() {
         await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/pickup-preference`, {
           version: options.version,
           preferredPickupBranchId: Number(select.value),
-          currentPreferredPickupBranchIdAtLoad: options.currentPreferredPickupBranchId
+          currentPreferredPickupBranchIdAtLoad: options.currentPreferredPickupBranchId,
+          currentPreferredPickupBranchObservedAtLoad: true
         }, 'Pickup preference updated.');
       });
+      if (request.pickupOperation && state.staff?.role === 'super_admin') {
+        const acknowledged = element('input', { type: 'checkbox' });
+        form.append(labeledInput('I inspected the original invocation and confirmed it has ended', acknowledged));
+        form.append(commandButton('Accept observed live preference', 'check', async () => {
+          if (!acknowledged.checked || !form.isConnected || !isCurrentDialogRequest(request, 'title_request')) {
+            announce('Confirm the original invocation has ended before resolving its operation.', 'error');
+            return;
+          }
+          await mutateRequest(request, `/api/asap/staff/pickup-operations/${request.pickupOperation.id}/reconcile`, {
+            version: options.version,
+            currentPreferredPickupBranchIdAtLoad: options.currentPreferredPickupBranchId,
+            currentPreferredPickupBranchObservedAtLoad: true,
+            confirmOriginalDispatchEnded: true
+          }, 'Observed pickup preference reconciled.');
+        }, 'secondary-button'));
+      }
       dom.dialogBody.prepend(form);
       select.focus();
       announce('Current pickup preference loaded.');

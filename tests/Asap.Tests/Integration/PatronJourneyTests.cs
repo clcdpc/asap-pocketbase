@@ -196,6 +196,9 @@ public sealed partial class PatronJourneyTests
         {
             await factory.DisposeAsync();
         }
+        // Failed external writes intentionally leave durable evidence. Each test
+        // owns its journal rows; clear them after all assertions, including recovery.
+        await ExecuteNonQueryAsync("DELETE FROM [asap].[PickupPreferenceOperation];");
         await CleanupSharedSlice2TestConfigurationAsync();
     }
 
@@ -5078,6 +5081,8 @@ public sealed partial class PatronJourneyTests
             "X-ASAP-Antiforgery",
             sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
 
+        timeProvider!.SetUtcNow(DateTimeOffset.UtcNow);
+
         using var options = await client.PostAsJsonAsync(
             $"/api/asap/staff/title-requests/{requestId}/pickup-options",
             new { forceRefresh = false });
@@ -5099,23 +5104,31 @@ public sealed partial class PatronJourneyTests
         using var failed = await client.PostAsJsonAsync(
             $"/api/asap/staff/title-requests/{requestId}/pickup-preference",
             new { version, preferredPickupBranchId = 102, currentPreferredPickupBranchIdAtLoad = 101 });
-        Assert.AreEqual(HttpStatusCode.BadGateway, failed.StatusCode, await failed.Content.ReadAsStringAsync());
+        Assert.AreEqual(HttpStatusCode.Conflict, failed.StatusCode, await failed.Content.ReadAsStringAsync());
         Assert.AreEqual(1, pickupProvider.UpdateCount);
         Assert.AreEqual(101, await ReadPickupSnapshotAsync(requestId));
 
         pickupProvider.FailUpdate = false;
+        using var uncertainRetry = await client.PostAsJsonAsync(
+            $"/api/asap/staff/title-requests/{requestId}/pickup-preference",
+            new { version, preferredPickupBranchId = 102, currentPreferredPickupBranchIdAtLoad = 101 });
+        Assert.AreEqual(HttpStatusCode.Conflict, uncertainRetry.StatusCode);
+        Assert.AreEqual(1, pickupProvider.UpdateCount, "An uncertain dispatch must not be repeated.");
+
+        // A subsequent authoritative read proves the desired value is now live.
+        pickupProvider.CurrentPickupBranchId = 102;
         using var updated = await client.PostAsJsonAsync(
             $"/api/asap/staff/title-requests/{requestId}/pickup-preference",
             new { version, preferredPickupBranchId = 102, currentPreferredPickupBranchIdAtLoad = 101 });
         Assert.AreEqual(HttpStatusCode.OK, updated.StatusCode, await updated.Content.ReadAsStringAsync());
-        Assert.AreEqual(2, pickupProvider.UpdateCount);
+        Assert.AreEqual(1, pickupProvider.UpdateCount);
         Assert.AreEqual(102, pickupProvider.CurrentPickupBranchId);
         Assert.AreEqual(102, await ReadPickupSnapshotAsync(requestId));
 
         await using var verify = new SqlConnection(databaseConnectionString);
         await verify.OpenAsync();
         await using var eventCount = new SqlCommand(
-            "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [TitleRequestId] = @id AND [EventType] = N'pickup_preference_changed';",
+            "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [TitleRequestId] = @id AND [EventType] = N'pickup_preference_reconciled';",
             verify);
         eventCount.Parameters.AddWithValue("@id", requestId);
         Assert.AreEqual(1, Convert.ToInt32(await eventCount.ExecuteScalarAsync()));

@@ -49,7 +49,8 @@ public sealed record PatronSuggestionDuplicateConflict(
 
 public sealed record PatronSuggestionPickupChangedFailure(
     string Message,
-    PatronSuggestionDuplicateConflict? DuplicateConflict = null)
+    PatronSuggestionDuplicateConflict? DuplicateConflict = null,
+    Guid? OperationId = null)
 {
     public string Code => "request_not_created_pickup_changed";
     public bool PickupPreferenceChanged => true;
@@ -83,7 +84,8 @@ internal sealed record CreationActor(
     string? ActorName,
     int? StaffLibraryOrganizationId,
     bool EmailPatronConfirmation,
-    bool PickupPreferenceChanged);
+    bool PickupPreferenceChanged,
+    bool PickupPreferenceReconciled = false);
 
 internal sealed record SubmissionEmailResult(long? OutboxId, string Status);
 
@@ -108,7 +110,8 @@ public sealed partial class PatronSuggestionService(
     ILogger<PatronSuggestionService> logger,
     IDbContextFactory<AsapDbContext>? contextFactory = null,
     StaffEligibilityService? staffEligibility = null,
-    IStaffPolarisProvider? staffPolaris = null)
+    IStaffPolarisProvider? staffPolaris = null,
+    PickupPreferenceMutationService? pickupMutationService = null)
 {
     private static readonly CreationActor PatronActor = new(
         "patron",
@@ -119,6 +122,11 @@ public sealed partial class PatronSuggestionService(
         false);
     private const string IdentifierMutationBarrierPredicate = """
               AND [Status] = N'suggestion'
+              AND NOT EXISTS
+              (
+                  SELECT 1 FROM [asap].[PickupPreferenceOperation] AS pickup
+                  WHERE pickup.[TitleRequestId] = request.[Id] AND pickup.[CompletedUtc] IS NULL
+              )
               AND NOT EXISTS
               (
                   SELECT 1
@@ -144,6 +152,8 @@ public sealed partial class PatronSuggestionService(
         """;
 
     private readonly string connectionString = externalConfiguration.ConnectionStrings.AsapDatabase!;
+    private readonly PickupPreferenceMutationService pickupMutations = pickupMutationService ??
+        new PickupPreferenceMutationService(externalConfiguration, patronProvider, timeProvider);
     private readonly TimeZoneInfo businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(
         externalConfiguration.Application.BusinessTimeZone!);
 
@@ -184,25 +194,6 @@ public sealed partial class PatronSuggestionService(
             throw new PatronFlowException(400, "Choose a valid preferred pickup location.");
         }
 
-        if (patron.PreferredPickupBranchId != selectedBranch.Id)
-        {
-            try
-            {
-                await patronProvider.UpdatePreferredPickupBranchAsync(
-                    session.Barcode,
-                    selectedBranch.Id,
-                    session.EffectiveOrganizationId,
-                    cancellationToken);
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                throw new PatronFlowException(
-                    502,
-                    "Your preferred pickup location could not be updated in Polaris. Please try again.",
-                    innerException: exception);
-            }
-        }
-
         var suggestion = Validate(input, configuration);
         EmailTransportReadiness emailTransportReadiness;
         try
@@ -216,43 +207,56 @@ public sealed partial class PatronSuggestionService(
             throw new PatronFlowException(502, "Email readiness could not be checked. Please try again.",
                 new { code = "notification_dependency_unavailable" }, exception);
         }
+        var pickupReceipt = await ChangePickupForSuggestionAsync(patron, configuration.OrganizationId,
+            selectedBranch, pickupBranches, "patron_suggestion", null, cancellationToken);
         long requestId = 0;
         long? outboxId = null;
         var notificationStatus = "queued";
         byte[] expectedRowVersion = [];
-        for (var attempt = 1; attempt <= 5; attempt++)
+        try
         {
-            var autoClaimCandidate = await FindAutoClaimCandidateAsync(
-                configuration.OrganizationId,
-                suggestion.Format.Id,
-                cancellationToken);
-            try
+            for (var attempt = 1; attempt <= 5; attempt++)
             {
-                (requestId, outboxId, notificationStatus, expectedRowVersion) = await InsertAsync(
-                    session.Barcode,
-                    patron,
-                    selectedBranch,
-                    suggestion,
-                    configuration,
-                    autoClaimCandidate,
-                    emailTransportReadiness,
-                    PatronActor,
-                    enforcePatronLimit: true,
-                    sendSubmissionEmail: true,
+                var autoClaimCandidate = await FindAutoClaimCandidateAsync(
+                    configuration.OrganizationId,
+                    suggestion.Format.Id,
                     cancellationToken);
-                break;
+                try
+                {
+                    (requestId, outboxId, notificationStatus, expectedRowVersion) = await InsertAsync(
+                        session.Barcode,
+                        patron,
+                        selectedBranch,
+                        suggestion,
+                        configuration,
+                        autoClaimCandidate,
+                        emailTransportReadiness,
+                        PatronActor with { PickupPreferenceChanged = pickupReceipt is { ConfirmedByRead: false },
+                            PickupPreferenceReconciled = pickupReceipt is { ConfirmedByRead: true } },
+                        pickupReceipt,
+                        enforcePatronLimit: true,
+                        sendSubmissionEmail: true,
+                        cancellationToken);
+                    break;
+                }
+                catch (AutoClaimCandidateChangedException) when (attempt < 5)
+                {
+                    continue;
+                }
+                catch (AutoClaimCandidateChangedException exception)
+                {
+                    throw new PatronFlowException(
+                        409,
+                        "The automatic assignment changed while the suggestion was submitted. Please try again.",
+                        innerException: exception);
+                }
             }
-            catch (AutoClaimCandidateChangedException) when (attempt < 5)
-            {
-                continue;
-            }
-            catch (AutoClaimCandidateChangedException exception)
-            {
-                throw new PatronFlowException(
-                    409,
-                    "The automatic assignment changed while the suggestion was submitted. Please try again.",
-                    innerException: exception);
-            }
+
+        }
+        catch (Exception exception) when (pickupReceipt is not null &&
+                                         exception is PatronFlowException or SqlException or PickupMutationException)
+        {
+            throw PickupChangedCreationFailure(exception, pickupReceipt);
         }
 
         if (outboxId.HasValue)
@@ -339,6 +343,7 @@ public sealed partial class PatronSuggestionService(
             cancellationToken);
         var pickupChanged = patron.PreferredPickupBranchId != selectedBranch.Id;
         var pickupUpdated = false;
+        PickupMutationReceipt? pickupReceipt = null;
         long requestId = 0;
         long? outboxId = null;
         string? persistedIdentifier = null;
@@ -346,31 +351,12 @@ public sealed partial class PatronSuggestionService(
         byte[] expectedRowVersion = [];
         try
         {
-            if (pickupChanged)
+            pickupReceipt = await ChangePickupForSuggestionAsync(patron, organizationId,
+                selectedBranch, pickupBranches, "staff_suggestion", actor.Id, cancellationToken);
+            pickupUpdated = pickupReceipt is not null;
+            pickupChanged = pickupUpdated;
+            if (pickupUpdated)
             {
-                try
-                {
-                    await patronProvider.UpdatePreferredPickupBranchAsync(
-                        barcode,
-                        selectedBranch.Id,
-                        organizationId,
-                        cancellationToken);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
-                {
-                    throw new PatronFlowException(
-                        502,
-                        "The patron's preferred pickup location could not be updated in Polaris. The suggestion was not created.",
-                        new { code = "pickup_update_failed" },
-                        exception);
-                }
-
-                pickupUpdated = true;
-
                 // Refresh the snapshot after the external mutation so the persisted patron context
                 // is not merely the browser's earlier lookup row.
                 patron = await RefreshStaffPatronAsync(barcode, organizationId, cancellationToken);
@@ -405,7 +391,8 @@ public sealed partial class PatronSuggestionService(
                 actor.DisplayName ?? actor.UserPrincipalName ?? actor.AuthenticationEmail,
                 organizationId,
                 input.EmailPatronConfirmation,
-                pickupChanged);
+                pickupChanged && pickupReceipt?.ConfirmedByRead != true,
+                pickupReceipt?.ConfirmedByRead == true);
             for (var attempt = 1; attempt <= 5; attempt++)
             {
                 var autoClaimCandidate = await FindAutoClaimCandidateAsync(
@@ -425,6 +412,7 @@ public sealed partial class PatronSuggestionService(
                         autoClaimCandidate,
                         emailReadiness,
                         creationActor,
+                        pickupReceipt,
                         cancellationToken);
                     break;
                 }
@@ -445,19 +433,10 @@ public sealed partial class PatronSuggestionService(
         {
             throw;
         }
-        catch (Exception exception) when (pickupUpdated && !cancellationToken.IsCancellationRequested)
+        catch (Exception exception) when (pickupUpdated && !cancellationToken.IsCancellationRequested &&
+                                         exception is PatronFlowException or SqlException or DbUpdateException or PickupMutationException)
         {
-            var flowException = exception as PatronFlowException;
-            var detail = flowException?.Message ?? "The suggestion could not be created.";
-            var partialMessage =
-                $"The suggestion was not created, but the patron's preferred pickup location was changed successfully. {detail}";
-            throw new PatronFlowException(
-                flowException?.StatusCode ?? 502,
-                partialMessage,
-                new PatronSuggestionPickupChangedFailure(
-                    partialMessage,
-                    flowException?.Response as PatronSuggestionDuplicateConflict),
-                exception);
+            throw PickupChangedCreationFailure(exception, pickupReceipt!);
         }
 
         if (outboxId.HasValue)
@@ -505,6 +484,41 @@ public sealed partial class PatronSuggestionService(
             prepared.Configuration.SuccessMessage,
             notificationStatus,
             organizationId);
+    }
+
+    private async Task<PickupMutationReceipt?> ChangePickupForSuggestionAsync(
+        PatronSnapshot patron, int organizationId, PickupBranch selected,
+        IReadOnlyList<PickupBranch> branches, string origin, long? actorId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await pickupMutations.ChangeAsync(patron, organizationId, selected,
+                branches.SingleOrDefault(branch => branch.Id == patron.PreferredPickupBranchId)?.Label,
+                origin, null, actorId, cancellationToken);
+        }
+        catch (PickupMutationException exception)
+        {
+            throw new PatronFlowException(409,
+                "The pickup outcome is durably recorded. Reload the patron's live preference before retrying; an uncertain write will not be repeated.",
+                new { exception.Code, exception.OperationId, exception.PickupPreferenceChanged,
+                    outcomeUnconfirmed = !exception.PickupPreferenceChanged }, exception);
+        }
+        catch (PickupMutationBlockedException exception)
+        {
+            throw new PatronFlowException(409, "A patron write is already in progress. Reload before continuing.",
+                new { exception.Code }, exception);
+        }
+    }
+
+    private static PatronFlowException PickupChangedCreationFailure(Exception exception, PickupMutationReceipt receipt)
+    {
+        var flowException = exception as PatronFlowException;
+        var message = "The suggestion was not confirmed, but the patron's preferred pickup location was changed successfully. " +
+                      (flowException?.Message ?? "Reload the live patron and request state before retrying.");
+        return new PatronFlowException(flowException?.StatusCode ?? 502, message,
+            new PatronSuggestionPickupChangedFailure(message,
+                flowException?.Response as PatronSuggestionDuplicateConflict, receipt.OperationId), exception);
     }
 
     private async Task<PatronSnapshot> RefreshStaffPatronAsync(
@@ -755,6 +769,7 @@ public sealed partial class PatronSuggestionService(
         AutoClaimCandidate? autoClaimCandidate,
         EmailTransportReadiness emailTransportReadiness,
         CreationActor creationActor,
+        PickupMutationReceipt? pickupReceipt,
         CancellationToken cancellationToken)
     {
         if (contextFactory is null || staffEligibility is null)
@@ -960,6 +975,8 @@ public sealed partial class PatronSuggestionService(
             rowVersion = (byte[])(await version.ExecuteScalarAsync(cancellationToken))!;
         }
 
+        await PickupPreferenceMutationService.CompleteAsync(connection, transaction, pickupReceipt,
+            requestId, timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
         await databaseTransaction.CommitAsync(cancellationToken);
         return (requestId, email.OutboxId, email.Status, rowVersion, currentSuggestion.Identifier);
     }
@@ -986,6 +1003,7 @@ public sealed partial class PatronSuggestionService(
         AutoClaimCandidate? autoClaimCandidate,
         EmailTransportReadiness emailTransportReadiness,
         CreationActor creationActor,
+        PickupMutationReceipt? pickupReceipt,
         bool enforcePatronLimit,
         bool sendSubmissionEmail,
         CancellationToken cancellationToken)
@@ -1130,6 +1148,8 @@ public sealed partial class PatronSuggestionService(
             rowVersion = (byte[])(await version.ExecuteScalarAsync(cancellationToken))!;
         }
 
+        await PickupPreferenceMutationService.CompleteAsync(connection, transaction, pickupReceipt,
+            requestId, timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return (requestId, email.OutboxId, email.Status, rowVersion);
     }
@@ -1718,7 +1738,8 @@ public sealed partial class PatronSuggestionService(
             patronOrganizationId = patron.PatronOrganizationId,
             homeLibraryOrganizationId = patron.HomeLibraryOrganizationId,
             emailPatronConfirmation = actor.EmailPatronConfirmation,
-            pickupPreferenceChanged = actor.PickupPreferenceChanged
+            pickupPreferenceChanged = actor.PickupPreferenceChanged,
+            pickupPreferenceReconciled = actor.PickupPreferenceReconciled
         });
         await using var command = new SqlCommand(
             """

@@ -599,6 +599,7 @@ public static class MigrationImporter
                 (SELECT COUNT(*) FROM [asap].[DeletedRequestAudit]),
                 (SELECT COUNT(*) FROM [asap].[AdministrativeAudit]),
                 (SELECT COUNT(*) FROM [asap].[HoldPlacementOperation]),
+                (SELECT COUNT(*) FROM [asap].[PickupPreferenceOperation]),
                 (SELECT COUNT(*) FROM [asap].[PatronSession]),
                 (SELECT COUNT(*) FROM [asap].[EmailOutbox]),
                 (SELECT COUNT(*) FROM [asap].[EmailDeliveryEvent]),

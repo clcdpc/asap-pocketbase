@@ -53,7 +53,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     };
     dom.window.gridjs = require(path.join(frontend, 'vendor/gridjs/6.2.0/gridjs.umd.js'));
     const staff = {
-      id: '20', role: scenarioOptions.supersededFollowup ? 'super_admin' : 'staff',
+      id: '20', role: scenarioOptions.supersededFollowup || scenarioOptions.pickupOperator ? 'super_admin' : 'staff',
       organizationId: 2, organizationName: 'Library',
       displayName: 'Staff', userPrincipalName: 'staff@example.org',
       purchaseReminderDefault: profileDefault, defaultMineUnclaimedFilter: false
@@ -102,6 +102,11 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
           actorName: 'Named <img src=x onerror=alert(1)>', message: 'Second', created: '2026-01-01T00:00:00Z' }
       ]
     };
+    if (scenarioOptions.pickupOperator) {
+      request.pickupOperation = { id: '00000000-0000-0000-0000-000000000001', state: 1, targetBranchId: 10 };
+      request.capabilities = { canEditIdentifier: false, canChangeBib: false, canChangeWorkflowState: false,
+        blockingReason: 'pickup_reconciliation_required' };
+    }
     let currentRequest = request;
     const otherRequest = { ...request, id: otherId, title: 'Other request',
       status: scenarioOptions.stalePickup ? 'suggestion' : request.status, activity: [] };
@@ -176,12 +181,25 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         if (scenarioOptions.stalePickup) {
           return new Promise(resolve => { releasePickup = resolve; });
         }
-        return response(200, { pickupBranches: [{ id: 10, name: 'Main' }],
+        return response(200, { pickupBranches: [{ id: 10, label: 'Main' }],
           selectedPickupBranchId: 10, currentPreferredPickupBranchId: 10,
           version: 'v1', readOnly: false });
       }
+      if (url.endsWith('/pickup-operations/00000000-0000-0000-0000-000000000001/reconcile') && options.method === 'POST') {
+        payload = JSON.parse(options.body);
+        currentRequest = { ...currentRequest, version: 'v2', pickupOperation: null,
+          capabilities: { canEditIdentifier: true, canChangeBib: true, canChangeWorkflowState: true } };
+        committed = true;
+        return response(200, { committed: true, request: currentRequest, finalStatus: currentRequest.status,
+          snapshotChanged: false, confirmedByRead: true });
+      }
       if (url.endsWith(`/title-requests/${id}/pickup-preference`) && options.method === 'POST') {
         payload = JSON.parse(options.body);
+        if (scenarioOptions.pickupPartial) {
+          return response(409, { code: 'pickup_changed_request_not_updated', pickupPreferenceChanged: true,
+            operationId: '00000000-0000-0000-0000-000000000001',
+            message: 'Polaris pickup changed, but this request was not updated. Review the live preference.' });
+        }
         currentRequest = { ...currentRequest, version: 'v2', activity: [...currentRequest.activity, {
           id: '9007199254741000', eventType: 'pickup_changed', actorType: 'staff',
           actorName: 'Staff', message: 'Pickup changed', created: '2026-01-02T00:00:00Z'
@@ -512,7 +530,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       if (scenarioOptions.stalePickup) {
         await until(() => releasePickup, 'first pickup request starts');
         await openOtherRequest();
-        releasePickup(response(200, { pickupBranches: [{ id: 10, name: 'Main' }],
+        releasePickup(response(200, { pickupBranches: [{ id: 10, label: 'Main' }],
           selectedPickupBranchId: 10, currentPreferredPickupBranchId: 10,
           version: 'v1', readOnly: false }));
         await new Promise(resolve => setImmediate(resolve));
@@ -522,9 +540,35 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       } else {
         await until(() => document.querySelector('.inline-form select[aria-label="Preferred pickup branch"]'),
           'pickup choices load');
+        assert.equal(document.querySelector('.inline-form select option').textContent, 'Main',
+          'the options must display the real label contract');
+        if (scenarioOptions.pickupOperator) {
+          const resolve = [...document.querySelectorAll('.inline-form button')]
+            .find(button => button.textContent.includes('Accept observed live preference'));
+          assert.ok(resolve, 'pickup recovery stays available while other workflow actions are blocked');
+          resolve.click();
+          assert.equal(payload, null, 'operator inspection acknowledgment is required');
+          document.querySelector('.inline-form input[type="checkbox"]').checked = true;
+          resolve.click();
+          await until(() => payload !== null, 'operator observation submits');
+          assert.equal(payload.confirmOriginalDispatchEnded, true);
+          assert.equal(payload.currentPreferredPickupBranchObservedAtLoad, true);
+          assert.equal(payload.currentPreferredPickupBranchIdAtLoad, 10);
+          await until(() => document.querySelector('#app-status').textContent.includes('Observed pickup preference reconciled'),
+            'reconciliation stays distinct from another provider write');
+          return;
+        }
         document.querySelector('.inline-form').dispatchEvent(
           new dom.window.Event('submit', { bubbles: true, cancelable: true }));
         await until(() => payload !== null, 'pickup preference submits');
+        assert.equal(payload.currentPreferredPickupBranchObservedAtLoad, true);
+        assert.equal(payload.currentPreferredPickupBranchIdAtLoad, 10);
+        if (scenarioOptions.pickupPartial) {
+          await until(() => document.querySelector('#app-status').textContent.includes('Polaris pickup changed'),
+            'partial pickup outcome remains visible after request refresh');
+          assert.doesNotMatch(document.querySelector('#app-status').textContent, /Pickup preference updated/);
+          return;
+        }
         await until(() => document.querySelector('.request-activity [data-event-id="9007199254741000"]'),
           'wrapped pickup response renders authoritative detail');
         assert.equal(document.querySelector('#request-dialog-title').textContent, 'Original title');
@@ -853,6 +897,8 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
   await scenario('reject', false, false, { autoClaimOther: true });
   await scenario('reject', false, false, { manualFormat: true });
   await scenario('purchase', false, false, { pickupWrappedResponse: true });
+  await scenario('purchase', false, false, { pickupWrappedResponse: true, pickupPartial: true });
+  await scenario('purchase', false, false, { pickupWrappedResponse: true, pickupOperator: true });
   await scenario('purchase', false, false, { stalePickup: true });
   console.log('Staff request action choice, preview, activity, safe text, and exact ID UI checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

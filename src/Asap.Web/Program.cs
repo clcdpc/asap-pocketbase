@@ -110,6 +110,7 @@ if (externalConfiguration is not null)
     builder.Services.AddSingleton<PatronConfigurationService>();
     builder.Services.AddSingleton<PatronSessionService>();
     builder.Services.AddSingleton<PatronSuggestionService>();
+    builder.Services.AddSingleton<PickupPreferenceMutationService>();
     builder.Services.AddSingleton<StaffSuggestionService>();
     builder.Services.AddTransient<IdentifierLookupJobs>();
     builder.Services.AddSingleton<IIdentifierLookupDispatcher, IdentifierLookupDispatcher>();

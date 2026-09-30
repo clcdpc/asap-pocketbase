@@ -146,6 +146,7 @@ public sealed partial class PatronJourneyTests
                 DELETE FROM [asap].[PatronSession] WHERE [EffectiveOrganizationId] = @org;
                 DELETE FROM [asap].[QueueProgress] WHERE [ScopeOrganizationId] = @org;
                 DELETE FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = @org;
+                DELETE FROM [asap].[PickupPreferenceOperation] WHERE [LibraryOrganizationId] = @org;
                 DELETE FROM [asap].[Organization] WHERE [Id] IN (@org, 3472, @branch);
                 """, ("@org", organizationId), ("@branch", provider.RegisteredBranchId));
         }

@@ -258,7 +258,7 @@ function Test-DeploymentArchive {
         throw 'Deployment manifest buildUtc is not a UTC timestamp.'
     }
 
-    if ([int] $manifest.applicationSchemaVersion -ne 8 -or
+    if ([int] $manifest.applicationSchemaVersion -ne 9 -or
         [int] $manifest.hangfireSchemaVersion -ne 9) {
         throw 'Deployment manifest contains an unsupported schema contract.'
     }

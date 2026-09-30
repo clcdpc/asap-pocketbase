@@ -83,13 +83,63 @@ public sealed class DatabaseBaselineTests
 
         Assert.AreEqual(16, Convert.ToInt32(await Scalar(connection, "SELECT CAST(SERVERPROPERTY('ProductMajorVersion') AS int);")));
         Assert.AreEqual(160, Convert.ToInt32(await Scalar(connection, "SELECT compatibility_level FROM sys.databases WHERE name = DB_NAME();")));
-        Assert.AreEqual(8, Convert.ToInt32(await Scalar(connection, "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
+        Assert.AreEqual(9, Convert.ToInt32(await Scalar(connection, "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
         Assert.AreEqual(1, Convert.ToInt32(await Scalar(connection, "SELECT COUNT(*) FROM [asap].[DeploymentState] WHERE [Id] = 1;")));
         var expectedHash = Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(_dacpacPath))).ToLowerInvariant();
         Assert.AreEqual(
             expectedHash,
             Convert.ToString(await Scalar(connection, "SELECT [LastDacpacSha256] FROM [asap].[DeploymentState] WHERE [Id] = 1;")));
+    }
+
+    [TestMethod]
+    public async Task NativeSchemaEightUpgradeAddsPickupJournalWithoutReplacingExistingSettings()
+    {
+        await using var connection = new SqlConnection(_databaseConnectionString);
+        await connection.OpenAsync();
+        await NonQuery(connection, """
+            DROP TABLE [asap].[PickupPreferenceOperation];
+            UPDATE [asap].[SchemaVersion] SET [Version] = 8 WHERE [Id] = 1;
+            UPDATE [asap].[PolarisSettings] SET [AccessId] = N'native-eight-preservation' WHERE [OrganizationId] = 1;
+            """);
+        try
+        {
+            new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
+            Assert.AreEqual(9, Convert.ToInt32(await Scalar(connection,
+                "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
+            Assert.AreEqual("native-eight-preservation", await Scalar(connection,
+                "SELECT [AccessId] FROM [asap].[PolarisSettings] WHERE [OrganizationId] = 1;"));
+            Assert.AreEqual(0, Convert.ToInt32(await Scalar(connection,
+                "SELECT COUNT(*) FROM [asap].[PickupPreferenceOperation];")));
+        }
+        finally
+        {
+            new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
+            await NonQuery(connection, "UPDATE [asap].[PolarisSettings] SET [AccessId] = NULL WHERE [OrganizationId] = 1;");
+        }
+    }
+
+    [TestMethod]
+    public async Task RuntimeRoleCanAcquirePatronWriteIntentLocksWithoutSchemaPermissions()
+    {
+        await using var connection = new SqlConnection(_databaseConnectionString);
+        await connection.OpenAsync();
+        await NonQuery(connection, """
+            CREATE USER [pickup_runtime_probe] WITHOUT LOGIN;
+            ALTER ROLE [asap_runtime] ADD MEMBER [pickup_runtime_probe];
+            """);
+        try
+        {
+            await NonQuery(connection, "EXECUTE AS USER = 'pickup_runtime_probe';");
+            await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync();
+            Assert.IsTrue(await PatronMutationLock.TryAcquireAsync(connection, transaction,
+                "runtime-probe", CancellationToken.None));
+            await transaction.RollbackAsync();
+        }
+        finally
+        {
+            await NonQuery(connection, "REVERT; DROP USER [pickup_runtime_probe];");
+        }
     }
 
     [TestMethod]
@@ -244,7 +294,7 @@ public sealed class DatabaseBaselineTests
             await NonQuery(connection, """
                 ALTER TABLE [asap].[DeploymentState] ALTER COLUMN [LastHangfireSchemaVersion] int NULL;
                 UPDATE [asap].[DeploymentState] SET [LastHangfireSchemaVersion] = NULL WHERE [Id] = 1;
-                UPDATE [asap].[SchemaVersion] SET [Version] = 8 WHERE [Id] = 1;
+                UPDATE [asap].[SchemaVersion] SET [Version] = 9 WHERE [Id] = 1;
                 """);
         }
     }
@@ -268,7 +318,7 @@ public sealed class DatabaseBaselineTests
         {
             await NonQuery(connection, """
                 INSERT INTO [asap].[SchemaVersion] ([Id], [Version], [UpdatedUtc])
-                VALUES (1, 8, SYSUTCDATETIME());
+                VALUES (1, 9, SYSUTCDATETIME());
                 """);
         }
     }
@@ -346,7 +396,7 @@ public sealed class DatabaseBaselineTests
         {
             context.Entry(settings).CurrentValues.SetValues(original);
             await context.SaveChangesAsync();
-            await context.Database.ExecuteSqlRawAsync("UPDATE [asap].[SchemaVersion] SET [Version] = 8 WHERE [Id] = 1;");
+            await context.Database.ExecuteSqlRawAsync("UPDATE [asap].[SchemaVersion] SET [Version] = 9 WHERE [Id] = 1;");
         }
     }
 
@@ -417,7 +467,7 @@ public sealed class DatabaseBaselineTests
                 await Scalar(connection, "SELECT [WorkstationId] FROM [asap].[PolarisSettings];"));
             Assert.AreEqual(userId > 0 ? (object)userId : DBNull.Value,
                 await Scalar(connection, "SELECT [SystemPolarisUserId] FROM [asap].[PolarisSettings];"));
-            Assert.AreEqual(8, Convert.ToInt32(await Scalar(connection,
+            Assert.AreEqual(9, Convert.ToInt32(await Scalar(connection,
                 "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
             var preservedVersion = (byte[])(await Scalar(connection,
                 "SELECT [RowVersion] FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] = 73470;"))!;
@@ -450,7 +500,7 @@ public sealed class DatabaseBaselineTests
                     ALTER TABLE [asap].[PolarisSettings] ADD CONSTRAINT [CK_PolarisSettings_IntegrationIdentity]
                         CHECK (([WorkstationId] IS NULL OR [WorkstationId] > 0) AND
                                ([SystemPolarisUserId] IS NULL OR [SystemPolarisUserId] > 0));
-                UPDATE [asap].[SchemaVersion] SET [Version] = 8 WHERE [Id] = 1;
+                UPDATE [asap].[SchemaVersion] SET [Version] = 9 WHERE [Id] = 1;
                 """);
         }
     }
@@ -481,7 +531,7 @@ public sealed class DatabaseBaselineTests
         {
             await using var connection = new SqlConnection(_databaseConnectionString);
             await connection.OpenAsync();
-            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 8 WHERE [Id] = 1;");
+            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 9 WHERE [Id] = 1;");
         }
     }
 

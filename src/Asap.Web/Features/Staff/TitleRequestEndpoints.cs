@@ -49,6 +49,9 @@ public static class TitleRequestEndpoints
             .AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/pickup-preference", PickupPreferenceAsync)
             .AddEndpointFilter<StaffAntiforgeryFilter>();
+        endpoints.MapPost("/api/asap/staff/pickup-operations/{id:guid}/reconcile", ReconcilePickupAsync)
+            .RequireAuthorization()
+            .AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/place-hold", PlaceHoldAsync)
             .AddEndpointFilter<StaffAntiforgeryFilter>();
         endpoints.MapPost("/api/asap/staff/hold-operations/{id:long}/reconcile", ReconcileHoldAsync)
@@ -627,6 +630,20 @@ public static class TitleRequestEndpoints
         var result = await pickup.UpdateAsync(Current(context), id, input, cancellationToken);
         if (result.Code != "updated")
         {
+            if (result.OperationId is not null)
+            {
+                return Results.Conflict(new
+                {
+                    result.Code,
+                    pickupPreferenceChanged = result.PickupChanged,
+                    outcomeUnconfirmed = result.Code is "pickup_outcome_unconfirmed" or "pickup_reconciliation_required",
+                    result.OperationId,
+                    result.LocalFailureCode,
+                    message = result.PickupChanged
+                        ? "Polaris pickup changed, but this request was not updated. Reload the request and live pickup preference before retrying. The operation is durably recorded."
+                        : "The pickup outcome requires reconciliation. Reload the live preference; another write will not be attempted while this operation is uncertain."
+                });
+            }
             return PickupError(result.Code);
         }
         var row = await TryLoadCommittedAsync(context, id, views, loggerFactory, cancellationToken);
@@ -639,6 +656,23 @@ public static class TitleRequestEndpoints
             result.SnapshotChanged,
             refreshUnavailable = row is null
         });
+    }
+
+    private static async Task<IResult> ReconcilePickupAsync(
+        HttpContext context, Guid id, PickupReconciliationInput input, StaffPickupService pickup,
+        TitleRequestViewService views, ILoggerFactory loggerFactory, CancellationToken cancellationToken)
+    {
+        var result = await pickup.ReconcileAsync(Current(context), id, input, cancellationToken);
+        if (result.Code != "updated")
+        {
+            return PickupError(result.Code);
+        }
+        var row = result.RequestId is { } requestId
+            ? await TryLoadCommittedAsync(context, requestId, views, loggerFactory, cancellationToken)
+            : null;
+        return Results.Json(new { committed = true, request = row, result.FinalStatus,
+            result.OperationId, result.SnapshotChanged, refreshUnavailable = row is null,
+            pickupPreferenceChanged = false, confirmedByRead = true });
     }
 
     private static async Task<IResult> PlaceHoldAsync(
@@ -809,7 +843,7 @@ public static class TitleRequestEndpoints
         }),
         "stale_version" or "actor_changed_since_preview" or "claim_conflict" or "claim_rule_changed" or "hold_operation_incomplete" or
             "identifier_locked_by_stage" or "identifier_retry_not_allowed" or "organization_inactive" or
-            "hold_history_retained" => Results.Conflict(new
+            "hold_history_retained" or "pickup_reconciliation_required" => Results.Conflict(new
             {
                 code = result.Code,
                 message = "The request changed or is blocked by its current workflow state. Reload it before continuing."
@@ -852,7 +886,7 @@ public static class TitleRequestEndpoints
         "pickup_provider_error" => Results.Json(
             new { code, message = "Preferred pickup information is temporarily unavailable." },
             statusCode: StatusCodes.Status502BadGateway),
-        "stale_version" or "hold_operation_incomplete" or "pickup_changed_since_load" or "pickup_read_only" =>
+        "stale_version" or "hold_operation_incomplete" or "pickup_reconciliation_required" or "pickup_changed_since_load" or "pickup_read_only" =>
             Results.Conflict(new { code, message = "Pickup information changed or is blocked. Reload before continuing." }),
         "staff_scope_forbidden" => Results.Json(new { code }, statusCode: StatusCodes.Status403Forbidden),
         _ => Results.BadRequest(new { code, message = "The pickup preference is invalid." })
@@ -877,7 +911,7 @@ public static class TitleRequestEndpoints
                 matchType = duplicate.MatchType
             } : null
         }),
-        "stale_version" or "hold_operation_incomplete" or "operation_ownership_lost" or
+        "stale_version" or "hold_operation_incomplete" or "pickup_reconciliation_required" or "operation_ownership_lost" or
             "hold_identity_ambiguous" or "hold_operator_required" =>
             Results.Conflict(new { result.Code, result.ProviderOutcomeRecorded,
                 message = "Hold placement is blocked or requires reconciliation." }),

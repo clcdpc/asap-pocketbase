@@ -325,12 +325,12 @@ public sealed partial class PatronJourneyTests
         {
             Holds = historicalFirst
                 ? [
-                    new PolarisHoldSnapshot(100, 9902, 3, "Expired", 101),
-                    new PolarisHoldSnapshot(200, 9902, 3, "Expired", 101)
+                    new PolarisHoldSnapshot(100, 9902, 9, "Expired", 101),
+                    new PolarisHoldSnapshot(200, 9902, 9, "Expired", 101)
                 ]
                 : [
-                    new PolarisHoldSnapshot(200, 9902, 3, "Expired", 101),
-                    new PolarisHoldSnapshot(100, 9902, 3, "Expired", 101)
+                    new PolarisHoldSnapshot(200, 9902, 9, "Expired", 101),
+                    new PolarisHoldSnapshot(100, 9902, 9, "Expired", 101)
                 ]
         };
         await using var evidenceFactory = factory!.WithWebHostBuilder(builder =>
@@ -373,7 +373,7 @@ public sealed partial class PatronJourneyTests
         {
             Holds = [
                 new PolarisHoldSnapshot(200, 9903, 1, "Active", 101),
-                new PolarisHoldSnapshot(100, 9903, 3, "Expired", 101)
+                new PolarisHoldSnapshot(100, 9903, 9, "Expired", 101)
             ]
         };
         await using var evidenceFactory = factory!.WithWebHostBuilder(builder =>
@@ -419,7 +419,7 @@ public sealed partial class PatronJourneyTests
         var provider = new FulfillmentEvidenceProvider
         {
             Holds = [
-                new PolarisHoldSnapshot(200, 9904, 3, "Expired", 101),
+                new PolarisHoldSnapshot(200, 9904, 9, "Expired", 101),
                 new PolarisHoldSnapshot(200, 9904, 1, "Active", 101)
             ]
         };
@@ -505,6 +505,38 @@ public sealed partial class PatronJourneyTests
         {
             await DeleteRequestAsync(pending.RequestId);
             await DeleteRequestAsync(placed.RequestId);
+        }
+    }
+
+    [TestMethod]
+    [DataRow(8, "Active", "closed", "hold_unclaimed")]
+    [DataRow(9, "ACTIVE", "closed", "hold_expired")]
+    [DataRow(16, "Unknown translation", "closed", "hold_cancelled")]
+    [DataRow(3, "Expired", "hold_placed", null)]
+    public async Task FulfillmentClassifiesTheTrackedHoldByStatusId(
+        int status, string description, string expectedState, string? expectedReason)
+    {
+        var provider = new FulfillmentEvidenceProvider {
+            Holds = [new PolarisHoldSnapshot(8123, 9907, status, description, 101)] };
+        await using var scoped = factory!.WithWebHostBuilder(builder => builder.ConfigureServices(services => {
+            services.RemoveAll<IStaffPolarisProvider>();
+            services.AddSingleton<IStaffPolarisProvider>(provider);
+        }));
+        var seeded = await SeedCompletedHoldIdentityAsync("fulfillment-native-terminal",
+            $"2000000000{Random.Shared.Next(100000, 999999)}", 9907, holdRequestId: 8123);
+        try
+        {
+            await PrepareSingleItemCycleAsync(QueueNames.FulfillmentTracking, 2, seeded.RequestId);
+            Assert.AreEqual("completed", (await scoped.Services.GetRequiredService<WorkflowProcessingService>()
+                .ProcessWorkflowAsync(2, CancellationToken.None)).Code);
+            Assert.AreEqual(expectedState, await ReadStringAsync(
+                "SELECT [Status] FROM [asap].[TitleRequest] WHERE [Id] = @id;", "@id", seeded.RequestId));
+            Assert.AreEqual(expectedReason, await ReadNullableStringAsync(
+                "SELECT [CloseReason] FROM [asap].[TitleRequest] WHERE [Id] = @id;", "@id", seeded.RequestId));
+        }
+        finally
+        {
+            await DeleteRequestAsync(seeded.RequestId);
         }
     }
 
