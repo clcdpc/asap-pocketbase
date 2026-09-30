@@ -47,16 +47,14 @@ public sealed class WorkflowProcessingService(
     IEmailSender emailSender,
     IEmailOutboxDispatcher outboxDispatcher,
     TimeProvider timeProvider,
-    ILogger<WorkflowProcessingService> logger)
+    ILogger<WorkflowProcessingService> logger,
+    StaffEligibilityService staffEligibility)
 {
     private static readonly string[] IdentifierDerivedTagCodes =
         ["polaris_bib_found", "polaris_bib_not_found", "polaris_multiple_matches"];
 
     private readonly TimeZoneInfo businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(
         configuration.Application.BusinessTimeZone!);
-    private readonly HashSet<Guid> allowedTenantIds = configuration.Authentication.Entra.AllowedTenantIds!
-        .Select(Guid.Parse)
-        .ToHashSet();
 
     public async Task<WorkflowRunResult> ProcessIdentifierAsync(
         int? scopeOrganizationId = null,
@@ -69,7 +67,7 @@ public sealed class WorkflowProcessingService(
             return await ProcessTitleQueueAsync(
                 QueueNames.IdentifierProcessing,
                 scopeOrganizationId,
-                item => item.Status == "suggestion" && item.IsbnCheckStatus == "pending",
+                item => item.Status == RequestStatus.Suggestion && item.IsbnCheckStatus == IdentifierCheckState.Pending,
                 ProcessIdentifierRowAsync,
                 cancellationToken);
         }
@@ -99,19 +97,19 @@ public sealed class WorkflowProcessingService(
             () => ProcessTitleQueueAsync(
                 QueueNames.PurchasePromotion,
                 scopeOrganizationId,
-                item => item.Status == "outstanding_purchase",
+                item => item.Status == RequestStatus.OutstandingPurchase,
                 (item, scanScope, expectedVersion, token) => PromoteRowAsync(item, scanScope, expectedVersion, manualActorEvidence, token),
                 cancellationToken),
             () => ProcessTitleQueueAsync(
                 QueueNames.HoldPlacement,
                 scopeOrganizationId,
-                item => item.Status == "pending_hold" && item.AutoHold,
+                TitleRequestWorkflowPolicy.HoldPlacementStage,
                 (item, scanScope, expectedVersion, token) => PlaceHoldRowAsync(item, scanScope, expectedVersion, manualActorEvidence, token),
                 cancellationToken),
             () => ProcessTitleQueueAsync(
                 QueueNames.FulfillmentTracking,
                 scopeOrganizationId,
-                item => item.Status == "hold_placed",
+                item => item.Status == RequestStatus.HoldPlaced,
                 (item, scanScope, expectedVersion, token) => FulfillRowAsync(item, scanScope, expectedVersion, manualActorEvidence, token),
                 cancellationToken)
         };
@@ -200,7 +198,7 @@ public sealed class WorkflowProcessingService(
                 {
                     ActorStaffUserId = manualActorEvidence.StaffUserId,
                     ActorName = manualActorEvidence.AuthenticationEmail,
-                    OrganizationId = scopeOrganizationId ?? 1,
+                    OrganizationId = scopeOrganizationId ?? LibraryScope.SystemOrganizationId,
                     Action = "weekly_summary_force_queued",
                     TargetType = "WeeklyStaffSummary",
                     TargetId = manualRunAuditKey,
@@ -221,33 +219,33 @@ public sealed class WorkflowProcessingService(
             .Where(item => item.IsActive && item.WeeklyActionSummaryEnabled &&
                            item.NormalizedUserPrincipalName != null &&
                            (!scopeOrganizationId.HasValue || item.OrganizationId == scopeOrganizationId.Value ||
-                            item.Role == "super_admin" && item.OrganizationId == 1))
+                            item.Role == StaffRole.SuperAdmin && item.OrganizationId == LibraryScope.SystemOrganizationId))
             .OrderBy(item => item.Id)
             .ToListAsync(cancellationToken);
         var titleRequests = await readContext.TitleRequests.AsNoTracking()
             .Where(item => organizationIds.Contains(item.LibraryOrganizationId) &&
-                          (item.Status == "suggestion" || item.Status == "outstanding_purchase"))
+                          (item.Status == RequestStatus.Suggestion || item.Status == RequestStatus.OutstandingPurchase))
             .ToListAsync(cancellationToken);
         var copyRequests = await readContext.AdditionalCopyRequests.AsNoTracking()
             .Where(item => organizationIds.Contains(item.LibraryOrganizationId) && item.Status == "open")
             .ToListAsync(cancellationToken);
         var systemSettings = await readContext.SystemSettings.AsNoTracking()
-            .SingleOrDefaultAsync(item => item.OrganizationId == 1, cancellationToken);
+            .SingleOrDefaultAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
         var staffUrl = systemSettings?.StaffApplicationUrl;
         var createdCount = 0;
         var visited = 0;
         foreach (var recipientSnapshot in staff)
         {
             visited++;
-            var authorizationOrganizationId = recipientSnapshot.Role == "super_admin" ? 1 : recipientSnapshot.OrganizationId;
-            if (authorizationOrganizationId != 1 && !organizationIds.Contains(authorizationOrganizationId)) continue;
-            var recipientRequests = titleRequests.Where(item => authorizationOrganizationId == 1 ||
+            var authorizationOrganizationId = recipientSnapshot.Role == StaffRole.SuperAdmin ? LibraryScope.SystemOrganizationId : recipientSnapshot.OrganizationId;
+            if (authorizationOrganizationId != LibraryScope.SystemOrganizationId && !organizationIds.Contains(authorizationOrganizationId)) continue;
+            var recipientRequests = titleRequests.Where(item => authorizationOrganizationId == LibraryScope.SystemOrganizationId ||
                 item.LibraryOrganizationId == authorizationOrganizationId).ToList();
-            var newSubmissions = recipientRequests.Where(item => item.Status == "suggestion")
+            var newSubmissions = recipientRequests.Where(item => item.Status == RequestStatus.Suggestion)
                 .OrderByDescending(item => item.CreatedUtc).ThenByDescending(item => item.Id).ToList();
-            var purchases = recipientRequests.Where(item => item.Status == "outstanding_purchase" && item.BibId == null)
+            var purchases = recipientRequests.Where(item => item.Status == RequestStatus.OutstandingPurchase && item.BibId == null)
                 .OrderByDescending(item => item.UpdatedUtc).ThenByDescending(item => item.Id).ToList();
-            var copies = copyRequests.Where(item => authorizationOrganizationId == 1 ||
+            var copies = copyRequests.Where(item => authorizationOrganizationId == LibraryScope.SystemOrganizationId ||
                 item.LibraryOrganizationId == authorizationOrganizationId)
                 .OrderByDescending(item => item.CreatedUtc).ThenByDescending(item => item.Id).ToList();
             if (newSubmissions.Count == 0 && purchases.Count == 0 && copies.Count == 0) continue;
@@ -256,9 +254,11 @@ public sealed class WorkflowProcessingService(
             {
                 readiness = await emailSender.CheckReadinessAsync(authorizationOrganizationId, cancellationToken);
             }
-            catch (Exception) when (!cancellationToken.IsCancellationRequested)
+            catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
             {
-                throw new InvalidOperationException("Email transport readiness is unavailable.");
+                logger.LogWarning("Weekly summary readiness failed ({FailureType}).", exception.GetType().Name);
+                return new WorkflowRunResult("operational_failure", visited, createdCount, visited - createdCount, manualRunId);
             }
             var businessKey = manualRunId is null
                 ? $"weekly-summary:{recipientSnapshot.Id}:{periodStart:yyyyMMdd}-{periodEnd:yyyyMMdd}"
@@ -297,7 +297,7 @@ public sealed class WorkflowProcessingService(
             var librarySettings = await context.EmailSettings.AsNoTracking()
                 .SingleOrDefaultAsync(item => item.OrganizationId == recipient.OrganizationId, cancellationToken);
             var systemEmail = await context.EmailSettings.AsNoTracking()
-                .SingleOrDefaultAsync(item => item.OrganizationId == 1, cancellationToken);
+                .SingleOrDefaultAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
             var fromAddress = Clean(librarySettings?.FromAddress) ?? Clean(systemEmail?.FromAddress);
             var fromName = Clean(librarySettings?.FromName) ?? Clean(systemEmail?.FromName);
             var currentAddress = !string.IsNullOrWhiteSpace(recipient.WeeklyActionSummaryEmail)
@@ -690,7 +690,7 @@ public sealed class WorkflowProcessingService(
 
         var maxId = recovery
             ? await context.HoldPlacementOperations
-                .Where(item => item.Id > 0 && item.CompletedUtc == null && item.State != "operator_required" &&
+                .Where(item => item.Id > 0 && item.CompletedUtc == null && item.State != HoldOperationState.OperatorRequired &&
                                (scopeId == 1 || context.TitleRequests.Any(request =>
                                    request.Id == item.TitleRequestId && request.LibraryOrganizationId == scopeId)))
                 .Select(item => (long?)item.Id)
@@ -829,7 +829,7 @@ public sealed class WorkflowProcessingService(
             var eligible = organization?.IsActive == true && request is not null &&
                           request.LibraryOrganizationId == candidate.LibraryOrganizationId &&
                           request.RowVersion.SequenceEqual(candidate.RowVersion) &&
-                          request.Status == "suggestion" && request.IsbnCheckStatus == "pending";
+                          request.Status == RequestStatus.Suggestion && request.IsbnCheckStatus == IdentifierCheckState.Pending;
             var protectedByHistoryOrOperation = eligible &&
                 await IsIdentifierMutationProtectedAsync(context, request!.Id, cancellationToken);
             var changed = eligible && !protectedByHistoryOrOperation;
@@ -845,7 +845,7 @@ public sealed class WorkflowProcessingService(
                 {
                     request.BibId = null;
                 }
-                request!.IsbnCheckStatus = "skipped_no_isbn";
+                request!.IsbnCheckStatus = IdentifierCheckState.SkippedNoIdentifier;
                 request.IsbnCheckRetryCount = 0;
                 request.IsbnCheckResult = null;
                 request.IsbnCheckLastErrorCode = null;
@@ -933,7 +933,7 @@ public sealed class WorkflowProcessingService(
         if (organization?.IsActive == true && request is not null &&
             request.LibraryOrganizationId == candidate.LibraryOrganizationId &&
             request.RowVersion.SequenceEqual(candidate.RowVersion) &&
-            request.Status == "outstanding_purchase")
+            request.Status == RequestStatus.OutstandingPurchase)
         {
             var settings = await EffectiveWorkflowAsync(context, request.LibraryOrganizationId, cancellationToken);
             var incomplete = await PickupPreferenceMutationService.HasIncompleteAsync(context, request.Id, cancellationToken) ||
@@ -949,7 +949,7 @@ public sealed class WorkflowProcessingService(
                 var otherOpenBibs = request.AutoHold ? await context.TitleRequests.AsNoTracking().Where(item =>
                     item.LibraryOrganizationId == request.LibraryOrganizationId &&
                     item.Barcode == request.Barcode && item.BibId != null &&
-                    item.Id != request.Id && item.Status != "closed")
+                    item.Id != request.Id && item.Status != RequestStatus.Closed)
                     .Select(item => item.BibId!)
                     .ToListAsync(cancellationToken) : [];
                 var duplicate = otherOpenBibs.Contains(request.BibId);
@@ -963,7 +963,7 @@ public sealed class WorkflowProcessingService(
                 }
                 else
                 {
-                    request.Status = request.AutoHold ? "pending_hold" : "closed";
+                    request.Status = TitleRequestWorkflowPolicy.AfterCatalogMatch(request.AutoHold);
                     request.CloseReason = request.AutoHold ? null : "purchased_no_hold";
                     request.LastPromoterCheckUtc = UtcNow();
                     request.UpdatedUtc = UtcNow();
@@ -1059,7 +1059,7 @@ public sealed class WorkflowProcessingService(
         {
             throw;
         }
-        catch (Exception exception)
+        catch (PolarisOperationalException exception)
         {
             logger.LogWarning(exception, "Patron checkout evidence unavailable for request {RequestId}.", candidate.Id);
             return await RecordFulfillmentDiagnosticAsync(
@@ -1105,7 +1105,7 @@ public sealed class WorkflowProcessingService(
         {
             throw;
         }
-        catch (Exception exception)
+        catch (PolarisOperationalException exception)
         {
             logger.LogWarning(exception, "Patron hold evidence unavailable for request {RequestId}.", candidate.Id);
             return await RecordFulfillmentDiagnosticAsync(
@@ -1224,9 +1224,11 @@ public sealed class WorkflowProcessingService(
                 {
                     readiness = await emailSender.CheckReadinessAsync(candidate.LibraryOrganizationId, cancellationToken);
                 }
-                catch (Exception) when (!cancellationToken.IsCancellationRequested)
+                catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
                 {
-                    throw new InvalidOperationException("Email transport readiness is unavailable.");
+                    logger.LogWarning("Timeout email readiness failed ({FailureType}).", exception.GetType().Name);
+                    return new WorkflowItemResult("operational_failure", Stop: true);
                 }
             }
         }
@@ -1271,7 +1273,7 @@ public sealed class WorkflowProcessingService(
             if (!incomplete && enabled && days.HasValue &&
                 TimeoutSemantics.IsExpired(age, timeProvider.GetUtcNow(), businessTimeZone, days.Value))
             {
-                request.Status = "closed";
+                request.Status = RequestStatus.Closed;
                 request.CloseReason = family == TimeoutFamily.HoldPickupTimeout ? "hold_not_picked_up" : "rejected";
                 request.UpdatedUtc = UtcNow();
                 var note = $"{family} closed this request after the configured timeout.";
@@ -1280,7 +1282,7 @@ public sealed class WorkflowProcessingService(
                 {
                     TitleRequestId = request.Id,
                     EventType = "timeout_closed",
-                    Status = "closed",
+                    Status = RequestStatus.Closed,
                     CloseReason = request.CloseReason,
                     ActorType = "system",
                     Message = note,
@@ -1323,6 +1325,7 @@ public sealed class WorkflowProcessingService(
         {
             outboxDispatcher.Enqueue(outbox.Id);
         }
+        // Local state and the outbox are committed; the scheduled sweep retries delivery after any dispatch failure.
         catch (Exception exception)
         {
             logger.LogWarning("Email outbox {OutboxId} awaits the scheduled sweep after dispatch failure ({FailureType}).",
@@ -1370,7 +1373,7 @@ public sealed class WorkflowProcessingService(
             if (settings.AdditionalCopyTimeoutEnabled == true && settings.AdditionalCopyTimeoutDays.HasValue &&
                 TimeoutSemantics.IsExpired(request.UpdatedUtc, timeProvider.GetUtcNow(), businessTimeZone, settings.AdditionalCopyTimeoutDays.Value))
             {
-                request.Status = "closed";
+                request.Status = RequestStatus.Closed;
                 request.ClosedUtc = UtcNow();
                 request.UpdatedUtc = UtcNow();
                 request.Notes = AppendNote(request.Notes, "Additional-copy task closed after the configured timeout.");
@@ -1427,7 +1430,7 @@ public sealed class WorkflowProcessingService(
         if (organization?.IsActive == true && request is not null &&
             request.LibraryOrganizationId == candidate.LibraryOrganizationId &&
             request.RowVersion.SequenceEqual(candidate.RowVersion) &&
-            request.Status == "hold_placed" &&
+            request.Status == RequestStatus.HoldPlaced &&
             request.BibId == candidate.BibId &&
             string.Equals(request.Barcode, candidate.Barcode, StringComparison.Ordinal))
         {
@@ -1479,14 +1482,14 @@ public sealed class WorkflowProcessingService(
 
             if (changed)
             {
-                request.Status = "closed";
+                request.Status = RequestStatus.Closed;
                 request.CloseReason = evidence.TerminalReason ?? "hold_completed";
                 request.UpdatedUtc = UtcNow();
                 context.TitleRequestEvents.Add(new TitleRequestEvent
                 {
                     TitleRequestId = request.Id,
                     EventType = "fulfilled",
-                    Status = "closed",
+                    Status = RequestStatus.Closed,
                     CloseReason = request.CloseReason,
                     ActorType = "system",
                     Message = "Polaris checkout/hold evidence completed this request.",
@@ -1541,7 +1544,7 @@ public sealed class WorkflowProcessingService(
         if (expectedOperation is not null && request is not null &&
             request.LibraryOrganizationId == candidate.LibraryOrganizationId &&
             request.RowVersion.SequenceEqual(candidate.RowVersion) &&
-            request.Status == "hold_placed")
+            request.Status == RequestStatus.HoldPlaced)
         {
             var operation = await LoadLockedOperationAsync(context, expectedOperation.Id, cancellationToken);
             if (operation is not null && SameOperationIdentity(operation, expectedOperation))
@@ -1572,8 +1575,8 @@ public sealed class WorkflowProcessingService(
         CancellationToken cancellationToken)
     {
         var systemEmail = await context.EmailSettings.AsNoTracking()
-            .SingleOrDefaultAsync(item => item.OrganizationId == 1, cancellationToken);
-        var libraryEmail = request.LibraryOrganizationId == 1
+            .SingleOrDefaultAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
+        var libraryEmail = request.LibraryOrganizationId == LibraryScope.SystemOrganizationId
             ? null
             : await context.EmailSettings.AsNoTracking()
                 .SingleOrDefaultAsync(item => item.OrganizationId == request.LibraryOrganizationId, cancellationToken);
@@ -1665,7 +1668,7 @@ public sealed class WorkflowProcessingService(
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var query = context.HoldPlacementOperations.AsNoTracking().Where(item =>
-            item.CompletedUtc == null && item.State != "operator_required");
+            item.CompletedUtc == null && item.State != HoldOperationState.OperatorRequired);
         if (progress.CycleMaxId.HasValue) query = query.Where(item => item.Id <= progress.CycleMaxId.Value);
         if (scope != 1)
         {
@@ -1716,7 +1719,7 @@ public sealed class WorkflowProcessingService(
         var request = await context.TitleRequests.AsNoTracking()
             .SingleOrDefaultAsync(item => item.Id == candidate.Id, cancellationToken);
         if (request is null || request.LibraryOrganizationId != candidate.LibraryOrganizationId ||
-            !request.RowVersion.SequenceEqual(candidate.RowVersion) || request.Status != "hold_placed")
+            !request.RowVersion.SequenceEqual(candidate.RowVersion) || request.Status != RequestStatus.HoldPlaced)
         {
             return false;
         }
@@ -1743,16 +1746,14 @@ public sealed class WorkflowProcessingService(
                 item => item.TitleRequestId == requestId && item.CompletedUtc == null,
                 cancellationToken) ||
             await context.HoldPlacementOperations.AnyAsync(
-                item => item.TitleRequestId == requestId && item.State == "succeeded",
+                item => item.TitleRequestId == requestId && item.State == HoldOperationState.Succeeded,
                 cancellationToken))
         {
             return true;
         }
 
-        var events = await context.TitleRequestEvents.AsNoTracking()
-            .Where(item => item.TitleRequestId == requestId)
-            .ToListAsync(cancellationToken);
-        return TitleRequestViewService.HasLegacyPlacedProtection(events);
+        return await context.TitleRequests.AsNoTracking().Where(item => item.Id == requestId)
+            .Select(item => item.LegacyHoldProtected).SingleAsync(cancellationToken);
     }
 
     private async Task<WorkflowItemResult> CommitLocalOutcomeAsync(
@@ -1833,11 +1834,8 @@ public sealed class WorkflowProcessingService(
         var actor = await context.StaffUsers.FromSqlInterpolated(
                 $"SELECT * FROM [asap].[StaffUser] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {evidence.StaffUserId}")
             .SingleOrDefaultAsync(cancellationToken);
-        return actor is not null && actor.IsActive &&
-            allowedTenantIds.Contains(evidence.TenantId) &&
-            StaffEmail.MatchesAuthenticationEmail(actor, evidence.AuthenticationEmail) &&
-            (actor.Role == "super_admin" && actor.OrganizationId == 1 ||
-            actor.Role == "admin" && actor.OrganizationId == targetOrganizationId);
+        return actor is not null && StaffEligibilityService.HasLockedActiveOrganization(context, actor) &&
+            staffEligibility.IsCurrentAndEligible(evidence, actor, targetOrganizationId, StaffRoleRequirement.Admin);
     }
 
     private static async Task<bool> LockManualOrganizationsAsync(
@@ -1862,8 +1860,8 @@ public sealed class WorkflowProcessingService(
         int organizationId,
         CancellationToken cancellationToken = default)
     {
-        var system = await context.WorkflowSettings.AsNoTracking().SingleOrDefaultAsync(item => item.OrganizationId == 1, cancellationToken) ?? new WorkflowSettings();
-        var library = organizationId == 1 ? null : await context.WorkflowSettings.AsNoTracking().SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
+        var system = await context.WorkflowSettings.AsNoTracking().SingleOrDefaultAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken) ?? new WorkflowSettings();
+        var library = organizationId == LibraryScope.SystemOrganizationId ? null : await context.WorkflowSettings.AsNoTracking().SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
         return new WorkflowSettings
         {
             OrganizationId = organizationId,
@@ -1887,7 +1885,7 @@ public sealed class WorkflowProcessingService(
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         return await context.HoldPlacementOperations.AsNoTracking()
-            .Where(item => item.TitleRequestId == requestId && item.State == "succeeded" && item.CompletedUtc != null)
+            .Where(item => item.TitleRequestId == requestId && item.State == HoldOperationState.Succeeded && item.CompletedUtc != null)
             .OrderByDescending(item => item.AttemptNumber)
             .ThenByDescending(item => item.Id)
             .FirstOrDefaultAsync(cancellationToken);
@@ -1911,7 +1909,7 @@ public sealed class WorkflowProcessingService(
 
     private static bool SameOperationIdentity(HoldPlacementOperation current, HoldPlacementOperation expected) =>
         current.Id == expected.Id && current.AttemptNumber == expected.AttemptNumber &&
-        current.State == "succeeded" && current.CompletedUtc.HasValue &&
+        current.State == HoldOperationState.Succeeded && current.CompletedUtc.HasValue &&
         current.RowVersion.SequenceEqual(expected.RowVersion) &&
         string.Equals(current.PatronBarcodeSnapshot, expected.PatronBarcodeSnapshot, StringComparison.Ordinal) &&
         current.BibIdSnapshot == expected.BibIdSnapshot &&
@@ -1946,9 +1944,9 @@ public sealed class WorkflowProcessingService(
     private DateTime UtcNow() => timeProvider.GetUtcNow().UtcDateTime;
     private static string StatusFor(TimeoutFamily family) => family switch
     {
-        TimeoutFamily.OutstandingTimeout => "suggestion",
-        TimeoutFamily.PendingHoldTimeout => "pending_hold",
-        TimeoutFamily.HoldPickupTimeout => "hold_placed",
+        TimeoutFamily.OutstandingTimeout => RequestStatus.Suggestion,
+        TimeoutFamily.PendingHoldTimeout => RequestStatus.PendingHold,
+        TimeoutFamily.HoldPickupTimeout => RequestStatus.HoldPlaced,
         _ => ""
     };
     private static string WeeklyBody(
@@ -1997,10 +1995,7 @@ public sealed class WorkflowProcessingService(
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static bool IsWeeklyRecipientRoleAllowed(StaffUser recipient, int authorizationOrganizationId) =>
-        StaffEmail.IsValidAuthenticationEmail(recipient) &&
-        (recipient.Role == "super_admin" && recipient.OrganizationId == 1 && authorizationOrganizationId == 1 ||
-         recipient.Role is "staff" or "admin" && recipient.OrganizationId == authorizationOrganizationId &&
-         authorizationOrganizationId > 1);
+        StaffEligibilityService.IsAssignmentEligible(recipient, authorizationOrganizationId);
 
     private static string AppendNote(string? current, string note) => string.IsNullOrWhiteSpace(current) ? note : $"{current.TrimEnd()}\n{note}";
     private static async Task<bool> SaveWithConcurrencyAsync(AsapDbContext context, CancellationToken cancellationToken)

@@ -37,7 +37,7 @@ public sealed partial class StaffPickupService
                 FROM [asap].[PickupPreferenceOperation] WHERE [Id] = {operationId}
                 """).SingleOrDefaultAsync(cancellationToken);
         }
-        if (operation is null || actor.Role != "super_admin")
+        if (operation is null || actor.Role != StaffRole.SuperAdmin)
         {
             return new StaffPickupResult("not_found");
         }
@@ -102,7 +102,7 @@ public sealed partial class StaffPickupService
         var snapshotChanged = false;
         if (locked.Request is { } request)
         {
-            if (request.Status is not ("closed" or "hold_placed"))
+            if (request.Status is not (RequestStatus.Closed or RequestStatus.HoldPlaced))
             {
                 snapshotChanged = request.PreferredPickupBranchId != patron.PreferredPickupBranchId ||
                                   request.PreferredPickupBranchName != selected?.Label;
@@ -114,7 +114,7 @@ public sealed partial class StaffPickupService
             request.UpdatedUtc = now;
             finalContext.TitleRequestEvents.Add(new TitleRequestEvent {
                 TitleRequestId = request.Id, EventType = "pickup_preference_reconciled", Status = request.Status,
-                ActorType = "staff", StaffUserId = actor.Id, ActorName = actor.DisplayName,
+                ActorType = StaffRole.Staff, StaffUserId = actor.Id, ActorName = actor.DisplayName,
                 Message = note, MetadataJson = JsonSerializer.Serialize(new { operationId,
                     observedPickupBranchId = patron.PreferredPickupBranchId, confirmedByRead = true }), CreatedUtc = now });
         }

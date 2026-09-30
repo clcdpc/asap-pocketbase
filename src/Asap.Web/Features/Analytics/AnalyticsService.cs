@@ -74,20 +74,20 @@ public sealed class AnalyticsService(
 {
     private static readonly string[] StageOrder =
     [
-        "suggestion",
-        "outstanding_purchase",
-        "pending_hold",
-        "hold_placed",
-        "closed",
+        RequestStatus.Suggestion,
+        RequestStatus.OutstandingPurchase,
+        RequestStatus.PendingHold,
+        RequestStatus.HoldPlaced,
+        RequestStatus.Closed,
         "additional_copies"
     ];
 
     private static readonly string[] OpenStageOrder =
     [
-        "suggestion",
-        "outstanding_purchase",
-        "pending_hold",
-        "hold_placed",
+        RequestStatus.Suggestion,
+        RequestStatus.OutstandingPurchase,
+        RequestStatus.PendingHold,
+        RequestStatus.HoldPlaced,
         "additional_copies"
     ];
 
@@ -299,8 +299,7 @@ public sealed class AnalyticsService(
 
     public async Task<AnalyticsResult> GetAsync(
         CurrentStaff staff,
-        string? scope,
-        string? orgId,
+        LibraryScope scope,
         string? range,
         CancellationToken cancellationToken)
     {
@@ -312,8 +311,7 @@ public sealed class AnalyticsService(
             .Select(item => new AnalyticsLibrary(item.Id, item.DisplayName))
             .ToListAsync(cancellationToken);
 
-        var selectedScope = string.IsNullOrWhiteSpace(scope) ? orgId : scope;
-        var resolvedScope = ResolveScope(staff, selectedScope, organizations);
+        var resolvedScope = ResolveScope(staff, scope, organizations);
         if (!resolvedScope.IsValid)
         {
             return AnalyticsResult.InvalidScope();
@@ -378,13 +376,13 @@ public sealed class AnalyticsService(
             identifierFailures = reader.GetInt64(1);
         }
 
-        var availableLibraries = staff.Role == "super_admin" ? organizations : [];
+        var availableLibraries = staff.Role == StaffRole.SuperAdmin ? organizations : [];
         var response = new AnalyticsResponse(
             new AnalyticsScope(
                 resolvedScope.Mode,
                 resolvedScope.LibraryOrgId,
                 resolvedScope.Label,
-                staff.Role == "super_admin"),
+                staff.Role == StaffRole.SuperAdmin),
             new AnalyticsDateRange(resolvedRange.Key, resolvedRange.Start, resolvedRange.End),
             availableLibraries,
             summary,
@@ -397,21 +395,18 @@ public sealed class AnalyticsService(
 
     public static AnalyticsResolvedScope ResolveScope(
         CurrentStaff staff,
-        string? selectedScope,
+        LibraryScope selectedScope,
         IReadOnlyCollection<AnalyticsLibrary> organizations)
     {
-        var cleanSelected = selectedScope?.Trim() ?? string.Empty;
-        if (staff.Role == "super_admin")
+        if (staff.Role == StaffRole.SuperAdmin)
         {
-            if (string.IsNullOrEmpty(cleanSelected) ||
-                cleanSelected.Equals("all", StringComparison.OrdinalIgnoreCase) ||
-                cleanSelected.Equals("system", StringComparison.OrdinalIgnoreCase))
+            if (selectedScope.Kind == LibraryScopeKind.All)
             {
                 return new AnalyticsResolvedScope(true, null, "all", null, "All libraries");
             }
 
-            if (int.TryParse(cleanSelected, out var selectedId) &&
-                organizations.Any(item => item.OrgId == selectedId))
+            if (selectedScope.Kind == LibraryScopeKind.Library &&
+                selectedScope.OrganizationId is { } selectedId && organizations.Any(item => item.OrgId == selectedId))
             {
                 var organization = organizations.Single(item => item.OrgId == selectedId);
                 return new AnalyticsResolvedScope(true, selectedId, "library", organization.OrgId, organization.Name);

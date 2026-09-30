@@ -77,20 +77,14 @@ public sealed class StaffSuggestionService(
         {
             candidates = await polaris.SearchPatronsAsync(query!, scope.OrganizationId, cancellationToken);
         }
-        catch (PolarisOperationalException exception)
+        catch (Exception exception) when (exception is PolarisOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             throw ProviderFailure(exception);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
-        }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw new StaffSuggestionException(
-                StatusCodes.Status502BadGateway,
-                "polaris_unavailable",
-                "Current patron information could not be loaded from Polaris.");
         }
 
         var refreshedPatrons = new List<PatronSnapshot>();
@@ -217,7 +211,7 @@ public sealed class StaffSuggestionService(
         int? requestedOrganizationId,
         CancellationToken cancellationToken)
     {
-        if (actor.Role == "super_admin" && requestedOrganizationId is null)
+        if (actor.Role == StaffRole.SuperAdmin && requestedOrganizationId is null)
         {
             throw new StaffSuggestionException(
                 StatusCodes.Status400BadRequest,
@@ -225,7 +219,7 @@ public sealed class StaffSuggestionService(
                 "Choose a servicing library before continuing.");
         }
 
-        if (actor.Role != "super_admin" && requestedOrganizationId.HasValue &&
+        if (actor.Role != StaffRole.SuperAdmin && requestedOrganizationId.HasValue &&
             requestedOrganizationId.Value != actor.OrganizationId)
         {
             throw new StaffSuggestionException(
@@ -234,7 +228,7 @@ public sealed class StaffSuggestionService(
                 "This servicing library is outside your authorized scope.");
         }
 
-        var organizationId = actor.Role == "super_admin"
+        var organizationId = actor.Role == StaffRole.SuperAdmin
             ? requestedOrganizationId
             : actor.OrganizationId;
         if (organizationId is null or <= 1)
@@ -303,9 +297,10 @@ public sealed class StaffSuggestionService(
         {
             return await patronProvider.RefreshAsync(barcode, organizationId, cancellationToken);
         }
-        catch (PolarisOperationalException exception)
+        catch (Exception exception) when (exception is PolarisOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
-            if (exception.Code is "polaris_patron_not_found" or "polaris_patron_invalid_barcode")
+            if (exception is PolarisOperationalException { Code: "polaris_patron_not_found" or "polaris_patron_invalid_barcode" })
             {
                 throw new StaffSuggestionException(
                     StatusCodes.Status404NotFound,
@@ -320,13 +315,6 @@ public sealed class StaffSuggestionService(
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
-        }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw new StaffSuggestionException(
-                StatusCodes.Status502BadGateway,
-                "polaris_unavailable",
-                "Current patron information could not be loaded from Polaris.");
         }
     }
 
@@ -426,7 +414,8 @@ public sealed class StaffSuggestionService(
         {
             return await patronProvider.GetPickupBranchesAsync(patron, organizationId, cancellationToken);
         }
-        catch (PolarisOperationalException exception)
+        catch (Exception exception) when (exception is PolarisOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             throw new StaffSuggestionException(
                 StatusCodes.Status502BadGateway,
@@ -438,13 +427,6 @@ public sealed class StaffSuggestionService(
         {
             throw;
         }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw new StaffSuggestionException(
-                StatusCodes.Status502BadGateway,
-                "pickup_branches_unavailable",
-                "Eligible pickup locations could not be loaded from Polaris.");
-        }
     }
 
     private static StaffPatronMatch ToMatch(PatronSnapshot patron) => new(
@@ -455,7 +437,7 @@ public sealed class StaffSuggestionService(
         patron.HomeLibraryOrganizationId,
         patron.HomeLibraryOrganizationName);
 
-    private static StaffSuggestionException ProviderFailure(PolarisOperationalException exception) => new(
+    private static StaffSuggestionException ProviderFailure(Exception exception) => new(
         StatusCodes.Status502BadGateway,
         "polaris_unavailable",
         "Current patron information could not be loaded from Polaris.",

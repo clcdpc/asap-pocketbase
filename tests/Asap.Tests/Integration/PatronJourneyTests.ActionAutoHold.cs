@@ -33,13 +33,13 @@ public sealed partial class PatronJourneyTests
                     Action = action,
                     Autohold = JsonSerializer.SerializeToElement(false),
                     Bibid = 9001
-                }
+                }.ToCommand()
                 : new TitleRequestActionInput
                 {
                     Version = StaffVersion.Encode(seeded.RowVersion),
                     Action = action,
                     Autohold = JsonSerializer.SerializeToElement(false)
-                };
+                }.ToCommand();
             var result = await factory!.Services.GetRequiredService<TitleRequestMutationService>()
                 .ActionAsync(actor, seeded.Id, input, CancellationToken.None);
             Assert.AreEqual("updated", result.Code);

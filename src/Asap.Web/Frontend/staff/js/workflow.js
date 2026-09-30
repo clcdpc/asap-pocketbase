@@ -2707,6 +2707,7 @@ export function createWorkflowApp() {
   function buildActionBar(request) {
     const bar = element('div', { className: 'action-bar', 'aria-label': 'Request actions' });
     const workflowBlocked = request.capabilities?.canChangeWorkflowState !== true;
+    const allowedActions = new Set(request.capabilities?.allowedActions || []);
     if (request.status !== 'closed') {
       if (request.claimedByStaffUserId === state.staff?.id) {
         bar.append(commandButton('Unclaim', 'user-times', () => mutateSimple(request, 'unclaim')));
@@ -2724,19 +2725,19 @@ export function createWorkflowApp() {
     }
     if (request.status === 'suggestion') {
       bar.append(
-        commandButton('Purchase', 'shopping-cart', event => showActionChoice(request, 'purchase', event.currentTarget), 'primary-button', workflowBlocked),
-        commandButton('Already own', 'book', () => runAction(request, 'alreadyOwn'), 'secondary-button', workflowBlocked),
-        commandButton('Reject', 'ban', event => showActionChoice(request, 'reject', event.currentTarget), 'danger-button', workflowBlocked),
-        commandButton('Close silently', 'archive', () => runAction(request, 'silentClose'), 'secondary-button', workflowBlocked)
+        commandButton('Purchase', 'shopping-cart', event => showActionChoice(request, 'purchase', event.currentTarget), 'primary-button', !allowedActions.has('purchase')),
+        commandButton('Already own', 'book', () => runAction(request, 'alreadyOwn'), 'secondary-button', !allowedActions.has('alreadyOwn')),
+        commandButton('Reject', 'ban', event => showActionChoice(request, 'reject', event.currentTarget), 'danger-button', !allowedActions.has('reject')),
+        commandButton('Close silently', 'archive', () => runAction(request, 'silentClose'), 'secondary-button', !allowedActions.has('silentClose'))
       );
     } else if (request.status === 'outstanding_purchase') {
       bar.append(commandButton(request.autohold ? 'Ready for hold' : 'Close without hold', 'arrow-right', () => runAction(request, 'catalogFound'),
-        'primary-button', workflowBlocked));
+        'primary-button', !allowedActions.has('catalogFound')));
     } else if (request.status === 'pending_hold') {
       bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, event.currentTarget), 'secondary-button', !request.bibid));
       bar.append(commandButton('Pickup', 'map-marker', () => showPickup(request), 'secondary-button',
         workflowBlocked && request.capabilities?.blockingReason !== 'pickup_reconciliation_required'));
-      if (request.autohold && request.bibid && request.bibidStaffVerified === true) {
+      if (request.capabilities?.canPlaceHold === true) {
         bar.append(commandButton('Place hold', 'bookmark', () => {
           if (confirmCurrent(request, 'title_request',
             `Place a Polaris hold for BIB ${request.bibid} and this patron? If the provider outcome is uncertain, recovery will be required before another attempt.`)) {
@@ -2745,13 +2746,13 @@ export function createWorkflowApp() {
         }, 'primary-button', workflowBlocked));
       }
       if ((request.workflowTags || []).includes('Hold exists (same patron)')) {
-        bar.append(commandButton('Close duplicate', 'clone', () => runAction(request, 'closeDuplicate'), 'secondary-button', workflowBlocked));
+        bar.append(commandButton('Close duplicate', 'clone', () => runAction(request, 'closeDuplicate'), 'secondary-button', !allowedActions.has('closeDuplicate')));
       }
     } else if (request.status === 'hold_placed') {
       bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, event.currentTarget), 'secondary-button', !request.bibid));
-      bar.append(commandButton('Close request', 'check', () => runAction(request, 'close'), 'primary-button', workflowBlocked));
+      bar.append(commandButton('Close request', 'check', () => runAction(request, 'close'), 'primary-button', !allowedActions.has('close')));
     } else if (request.status === 'closed') {
-      if (!workflowBlocked) {
+      if (allowedActions.has('reopen')) {
         bar.append(commandButton('Reopen', 'undo', () => runAction(request, 'reopen'), 'primary-button'));
       }
       if (['admin', 'super_admin'].includes(state.staff?.role)) {
@@ -3625,7 +3626,7 @@ export function createWorkflowApp() {
     try {
       const options = await authorizedJson(`/api/asap/staff/title-requests/${request.id}/pickup-options`, {
         method: 'POST',
-        body: { forceRefresh: false },
+        body: {},
         signal: load.signal
       });
       if (!load.isCurrent() || !isCurrentDialogRequest(request, 'title_request')) return;

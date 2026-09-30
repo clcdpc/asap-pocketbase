@@ -41,6 +41,24 @@ public sealed partial class PatronJourneyTests
             providerFailure: new TaskCanceledException("Polaris timed out."));
 
     [TestMethod]
+    public async Task StaffSuggestionDoesNotTranslateProgrammingDefectsIntoProviderOutages()
+    {
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var pickup = new ControllablePickupPatronProvider();
+        var bib = new RejectingBibStaffProvider
+        {
+            ValidationException = new InvalidOperationException("Broken adapter mapping")
+        };
+        await using var scopedFactory = CreateStaffBibFailureFactory(pickup, bib);
+        var service = scopedFactory.Services.GetRequiredService<StaffSuggestionService>();
+        var title = $"Programming fault {Guid.NewGuid():N}";
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () =>
+            await service.CreateAsync(actor, StaffBibInput(title, 9001), CancellationToken.None));
+        Assert.AreEqual(0, pickup.UpdateCount);
+        await AssertNoStaffBibRequestAsync(title);
+    }
+
+    [TestMethod]
     public async Task StaffSuggestionBibValidationCancellationPropagates()
     {
         var actor = await ReadConfiguredSuperAdminAsync();
@@ -1114,8 +1132,8 @@ public sealed partial class PatronJourneyTests
                 AutoHold = true,
                 Status = "closed",
                 CloseReason = "rejected",
-                CreatedUtc = DateTime.UtcNow,
-                UpdatedUtc = DateTime.UtcNow
+                CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime,
+                UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime
             };
             seed.TitleRequests.Add(existing);
             await seed.SaveChangesAsync();
@@ -1210,7 +1228,7 @@ public sealed partial class PatronJourneyTests
         var publicService = CreatePatronSuggestionService(["example.org"], new RecordingOutboxDispatcher());
         var rejected = await Assert.ThrowsExactlyAsync<PatronFlowException>(async () =>
             await publicService.CreateAsync(
-                new PatronSessionContext(7004, barcode, 2, 2, 2, DateTime.UtcNow.AddHours(1)),
+                new PatronSessionContext(7004, barcode, 2, 2, 2, timeProvider!.GetUtcNow().UtcDateTime.AddHours(1)),
                 Suggestion($"Patron informational ebook {Guid.NewGuid():N}") with
                 {
                     Format = "ebook",
@@ -1316,8 +1334,8 @@ public sealed partial class PatronJourneyTests
                 PreferredPickupBranchName = "Main Library",
                 LibraryNameSnapshot = "Test Library",
                 AutoHold = true,
-                CreatedUtc = DateTime.UtcNow,
-                UpdatedUtc = DateTime.UtcNow
+                CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime,
+                UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime
             };
             context.TitleRequests.Add(existing);
             await context.SaveChangesAsync();
@@ -1332,7 +1350,7 @@ public sealed partial class PatronJourneyTests
                 new RecordingOutboxDispatcher());
             var publicFailure = await Assert.ThrowsExactlyAsync<PatronFlowException>(async () =>
                 await publicService.CreateAsync(
-                    new PatronSessionContext(7004, barcode, 2, 2, 2, DateTime.UtcNow.AddHours(1)),
+                    new PatronSessionContext(7004, barcode, 2, 2, 2, timeProvider!.GetUtcNow().UtcDateTime.AddHours(1)),
                     Suggestion(title),
                     CancellationToken.None));
             Assert.AreEqual(406, publicFailure.StatusCode);
@@ -1464,7 +1482,7 @@ public sealed partial class PatronJourneyTests
                 ["example.org"],
                 new RecordingOutboxDispatcher());
             var patronResult = await publicService.CreateAsync(
-                new PatronSessionContext(0, barcode, 2, 2, 2, DateTime.UtcNow.AddHours(1)),
+                new PatronSessionContext(0, barcode, 2, 2, 2, timeProvider!.GetUtcNow().UtcDateTime.AddHours(1)),
                 Suggestion($"{prefix} patron") with { Autohold = false },
                 CancellationToken.None);
 
@@ -1993,8 +2011,8 @@ public sealed partial class PatronJourneyTests
                     MaterialFormatId = formatId,
                     AutoHold = true,
                     Status = "suggestion",
-                    CreatedUtc = DateTime.UtcNow,
-                    UpdatedUtc = DateTime.UtcNow
+                    CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime,
+                    UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime
                 },
                 new TitleRequest
                 {
@@ -2006,8 +2024,8 @@ public sealed partial class PatronJourneyTests
                     MaterialFormatId = formatId,
                     AutoHold = true,
                     Status = "suggestion",
-                    CreatedUtc = DateTime.UtcNow,
-                    UpdatedUtc = DateTime.UtcNow
+                    CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime,
+                    UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime
                 });
             await setup.SaveChangesAsync();
         }
@@ -2061,8 +2079,8 @@ public sealed partial class PatronJourneyTests
                     AutoHold = true,
                     Status = "closed",
                     CloseReason = "rejected",
-                    CreatedUtc = DateTime.UtcNow,
-                    UpdatedUtc = DateTime.UtcNow
+                    CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime,
+                    UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime
                 };
                 seed.TitleRequests.Add(precedence);
                 await seed.SaveChangesAsync();

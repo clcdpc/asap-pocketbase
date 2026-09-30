@@ -176,7 +176,7 @@ public sealed partial class PatronJourneyTests
         var missingCopyLegacyId = $"legacy-missing-copy-{suffix}";
         var deletedCopyLegacyId = $"legacy-deleted-copy-{suffix}";
         var outOfScopeCopyLegacyId = $"legacy-out-copy-{suffix}";
-        var now = DateTime.UtcNow;
+        var now = timeProvider!.GetUtcNow().UtcDateTime;
         var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
 
         await using var context = await contextFactory.CreateDbContextAsync();

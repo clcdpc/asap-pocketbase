@@ -73,7 +73,7 @@ public sealed partial class PatronJourneyTests
                 {"audience_note":{"label":"Audience note","type":"text","value":"Old"},
                  "retired_note":{"label":"Retired note","type":"text","value":"Keep"}}
                 """,
-            CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow
+            CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime, UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime
         };
         seed.TitleRequests.Add(request);
         await seed.SaveChangesAsync();
@@ -89,7 +89,7 @@ public sealed partial class PatronJourneyTests
                     audience_code = new { value = "Youth" },
                     injected = new { value = "Ignore" }
                 })
-            }, CancellationToken.None);
+            }.ToCommand(), CancellationToken.None);
             Assert.AreEqual("updated", valid.Code);
             await using var afterValid = await contexts.CreateDbContextAsync();
             var current = await afterValid.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == request.Id);
@@ -114,7 +114,7 @@ public sealed partial class PatronJourneyTests
                 {
                     Version = StaffVersion.Encode(current.RowVersion), Action = "edit",
                     Title = "Must not persist", CustomFields = rejectedFields
-                }, CancellationToken.None);
+                }.ToCommand(), CancellationToken.None);
                 Assert.AreEqual("invalid_custom_fields", rejected.Code);
                 await using var unchangedContext = await contexts.CreateDbContextAsync();
                 var unchanged = await unchangedContext.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == request.Id);
@@ -126,7 +126,7 @@ public sealed partial class PatronJourneyTests
             {
                 Version = StaffVersion.Encode(current.RowVersion), Action = "edit", Format = "dvd",
                 CustomFields = JsonSerializer.SerializeToElement(new { })
-            }, CancellationToken.None);
+            }.ToCommand(), CancellationToken.None);
             Assert.AreEqual("invalid_custom_fields", changedFormatRejected.Code);
             await using (var unchangedFormat = await contexts.CreateDbContextAsync())
             {
@@ -137,7 +137,7 @@ public sealed partial class PatronJourneyTests
             var omittedPayloadRejected = await mutations.ActionAsync(actor, request.Id, new TitleRequestActionInput
             {
                 Version = StaffVersion.Encode(current.RowVersion), Action = "edit", Format = "dvd"
-            }, CancellationToken.None);
+            }.ToCommand(), CancellationToken.None);
             Assert.AreEqual("invalid_custom_fields", omittedPayloadRejected.Code);
             await using (var unchangedFormat = await contexts.CreateDbContextAsync())
             {
@@ -154,7 +154,7 @@ public sealed partial class PatronJourneyTests
                 {
                     audience_note = " ", audience_code = "youth"
                 })
-            }, CancellationToken.None);
+            }.ToCommand(), CancellationToken.None);
             Assert.AreEqual("updated", optionalCleared.Code);
             await using var afterClear = await contexts.CreateDbContextAsync();
             var cleared = await afterClear.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == request.Id);

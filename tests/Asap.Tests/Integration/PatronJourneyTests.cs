@@ -2457,7 +2457,7 @@ public sealed partial class PatronJourneyTests
             await using var command = new SqlCommand(
                 "SELECT [Id] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = N'ADMIN@EXAMPLE.ORG';",
                 connection);
-            actorId = Convert.ToInt64(await command.ExecuteScalarAsync());
+            actorId = Convert.ToInt64(await WithFixtureClock(command).ExecuteScalarAsync());
         }
 
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actorId.ToString());
@@ -2538,7 +2538,7 @@ public sealed partial class PatronJourneyTests
                 SELECT CAST(SCOPE_IDENTITY() AS bigint);
                 """;
             command.Parameters.AddWithValue("@staffId", staffId);
-            openRequestId = Convert.ToInt64(await command.ExecuteScalarAsync());
+            openRequestId = Convert.ToInt64(await WithFixtureClock(command).ExecuteScalarAsync());
 
             command.CommandText =
                 """
@@ -2550,7 +2550,7 @@ public sealed partial class PatronJourneyTests
                         @staffId, N'Workflow Staff', SYSUTCDATETIME(), N'manual', SYSUTCDATETIME(), SYSUTCDATETIME());
                 SELECT CAST(SCOPE_IDENTITY() AS bigint);
                 """;
-            closedRequestId = Convert.ToInt64(await command.ExecuteScalarAsync());
+            closedRequestId = Convert.ToInt64(await WithFixtureClock(command).ExecuteScalarAsync());
         }
 
         using var deactivateRequest = new HttpRequestMessage(HttpMethod.Delete, $"/api/asap/staff/users/{staffId}")
@@ -2580,7 +2580,7 @@ public sealed partial class PatronJourneyTests
         verifyCommand.Parameters.AddWithValue("@staffId", staffId);
         verifyCommand.Parameters.AddWithValue("@openId", openRequestId);
         verifyCommand.Parameters.AddWithValue("@closedId", closedRequestId);
-        await using var reader = await verifyCommand.ExecuteReaderAsync();
+        await using var reader = await WithFixtureClock(verifyCommand).ExecuteReaderAsync();
         Assert.IsTrue(await reader.ReadAsync());
         Assert.IsFalse(reader.GetBoolean(0));
         Assert.IsTrue(reader.IsDBNull(1));
@@ -2651,7 +2651,7 @@ public sealed partial class PatronJourneyTests
             seed.Parameters.AddWithValue("@actorObjectId", Guid.Parse(identity.ObjectId!));
             seed.Parameters.AddWithValue("@tenantId", Guid.Parse(identity.TenantId!));
             seed.Parameters.AddWithValue("@targetObjectId", targetObjectId);
-            await using var reader = await seed.ExecuteReaderAsync();
+            await using var reader = await WithFixtureClock(seed).ExecuteReaderAsync();
             Assert.IsTrue(await reader.ReadAsync());
             actorId = reader.GetInt64(0);
             targetId = reader.GetInt64(1);
@@ -2698,7 +2698,7 @@ public sealed partial class PatronJourneyTests
         command.Parameters.AddWithValue("@inScopeId", inScopeRequestId);
         command.Parameters.AddWithValue("@outOfScopeId", outOfScopeRequestId);
         command.Parameters.AddWithValue("@closedId", closedRequestId);
-        await using var result = await command.ExecuteReaderAsync();
+        await using var result = await WithFixtureClock(command).ExecuteReaderAsync();
         Assert.IsTrue(await result.ReadAsync());
         Assert.AreEqual("admin", result.GetString(0));
         Assert.AreEqual(2, result.GetInt32(1));
@@ -3139,6 +3139,12 @@ public sealed partial class PatronJourneyTests
 
             firstResult = await submit;
             Assert.AreEqual("updated", (await deactivate).Code);
+        }
+        await using (var clockContext = await factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>().CreateDbContextAsync())
+        {
+            var created = await clockContext.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == firstResult.Id);
+            Assert.AreEqual(timeProvider!.GetUtcNow().UtcDateTime, created.CreatedUtc);
+            Assert.AreEqual(created.CreatedUtc, created.UpdatedUtc);
         }
         await AssertAutomaticRuleRaceStateAsync(
             submissionFirst,
@@ -4063,6 +4069,7 @@ public sealed partial class PatronJourneyTests
                     ([TitleRequestId], [EventType], [Status], [ActorType], [Message], [MetadataJson], [CreatedUtc])
                 VALUES (@protectedId, N'legacy_status_imported', N'hold_placed', N'system', N'Imported placement evidence.',
                         N'{"legacyBibProtection":true,"legacyBibId":null}', DATEADD(day, -1, SYSUTCDATETIME()));
+                UPDATE [asap].[TitleRequest] SET [LegacyHoldProtected] = 1 WHERE [Id] = @protectedId;
                 SELECT @requestId, @protectedId;
                 """;
             await using var seeded = await seed.ExecuteReaderAsync();
@@ -4223,6 +4230,7 @@ public sealed partial class PatronJourneyTests
                     ([TitleRequestId], [EventType], [Status], [ActorType], [Message], [MetadataJson], [CreatedUtc])
                 VALUES (@legacyId, N'legacy_status_imported', N'closed', N'system', N'Imported placement evidence.',
                         N'{"legacyBibProtection":true,"bibId":"9040"}', DATEADD(day, -1, SYSUTCDATETIME()));
+                UPDATE [asap].[TitleRequest] SET [LegacyHoldProtected] = 1 WHERE [Id] = @legacyId;
 
                 INSERT INTO [asap].[TitleRequest]
                     ([LibraryOrganizationId], [Barcode], [Title], [Identifier], [AutoHold], [MaterialFormatId],
@@ -4349,7 +4357,7 @@ public sealed partial class PatronJourneyTests
                 SELECT @actorId, @outstandingId, @pendingHoldId, @placedId, @closedId;
                 """;
             seed.Parameters.AddWithValue("@objectId", Guid.Parse(identity.ObjectId!));
-            await using var reader = await seed.ExecuteReaderAsync();
+            await using var reader = await WithFixtureClock(seed).ExecuteReaderAsync();
             Assert.IsTrue(await reader.ReadAsync());
             actorId = reader.GetInt64(0);
             outstandingId = reader.GetInt64(1);
@@ -4448,7 +4456,7 @@ public sealed partial class PatronJourneyTests
         command.Parameters.AddWithValue("@pendingHoldId", pendingHoldId);
         command.Parameters.AddWithValue("@placedId", placedId);
         command.Parameters.AddWithValue("@closedId", closedId);
-        await using var result = await command.ExecuteReaderAsync();
+        await using var result = await WithFixtureClock(command).ExecuteReaderAsync();
         Assert.IsTrue(await result.ReadAsync());
         Assert.AreEqual(outstandingId, result.GetInt64(0));
         Assert.AreEqual("outstanding_purchase", result.GetString(1));
@@ -4648,7 +4656,7 @@ public sealed partial class PatronJourneyTests
                 SELECT @actorId, CONVERT(bigint, SCOPE_IDENTITY());
                 """;
             seed.Parameters.AddWithValue("@objectId", Guid.Parse(identity.ObjectId!));
-            await using var reader = await seed.ExecuteReaderAsync();
+            await using var reader = await WithFixtureClock(seed).ExecuteReaderAsync();
             Assert.IsTrue(await reader.ReadAsync());
             actorId = reader.GetInt64(0);
             requestId = reader.GetInt64(1);
@@ -4657,7 +4665,7 @@ public sealed partial class PatronJourneyTests
             await using var count = new SqlCommand(
                 "SELECT COUNT(*) FROM [HangFire].[Job] WHERE [InvocationData] LIKE N'%IdentifierLookupJobs%';",
                 connection);
-            initialIdentifierJobCount = Convert.ToInt32(await count.ExecuteScalarAsync());
+            initialIdentifierJobCount = Convert.ToInt32(await WithFixtureClock(count).ExecuteScalarAsync());
         }
 
         client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actorId.ToString());
@@ -4690,7 +4698,7 @@ public sealed partial class PatronJourneyTests
             """,
             verify);
         command.Parameters.AddWithValue("@id", requestId);
-        await using var result = await command.ExecuteReaderAsync();
+        await using var result = await WithFixtureClock(command).ExecuteReaderAsync();
         Assert.IsTrue(await result.ReadAsync());
         Assert.AreEqual("pending", result.GetString(0));
         Assert.AreEqual(0, result.GetInt32(1));
@@ -4738,7 +4746,7 @@ public sealed partial class PatronJourneyTests
                 SELECT @actorId, CONVERT(bigint, SCOPE_IDENTITY());
                 """;
             seed.Parameters.AddWithValue("@objectId", Guid.Parse(identity.ObjectId!));
-            await using var reader = await seed.ExecuteReaderAsync();
+            await using var reader = await WithFixtureClock(seed).ExecuteReaderAsync();
             Assert.IsTrue(await reader.ReadAsync());
             actorId = reader.GetInt64(0);
             requestId = reader.GetInt64(1);
@@ -4774,7 +4782,7 @@ public sealed partial class PatronJourneyTests
                 WHERE r.[Id] = @id;
                 """;
             baselineCommand.Parameters.AddWithValue("@id", requestId);
-            await using var baselineReader = await baselineCommand.ExecuteReaderAsync();
+            await using var baselineReader = await WithFixtureClock(baselineCommand).ExecuteReaderAsync();
             Assert.IsTrue(await baselineReader.ReadAsync());
             originalTitle = baselineReader.GetString(0);
             originalStatus = baselineReader.GetString(1);
@@ -4877,7 +4885,7 @@ public sealed partial class PatronJourneyTests
             """,
             verify);
         command.Parameters.AddWithValue("@id", requestId);
-        await using (var reader = await command.ExecuteReaderAsync())
+        await using (var reader = await WithFixtureClock(command).ExecuteReaderAsync())
         {
             Assert.IsTrue(await reader.ReadAsync());
             Assert.AreEqual(originalTitle, reader.GetString(0));
@@ -6423,7 +6431,7 @@ public sealed partial class PatronJourneyTests
     public async Task StaffHoldReplyExceptionPersistsMarkedAmbiguityAndNeverReplaysReply()
     {
         var holdProvider = ScriptedHoldProvider.ReplyRequiredThenSuccess();
-        holdProvider.ReplyException = new InvalidOperationException("synthetic reply disconnect");
+        holdProvider.ReplyException = new PolarisOperationalException("provider_transport_ambiguous", "synthetic reply disconnect");
         await using var holdFactory = factory!.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
             {
@@ -8352,7 +8360,7 @@ public sealed partial class PatronJourneyTests
             command.Parameters.AddWithValue("@tenantId", tenantId);
             command.Parameters.AddWithValue("@objectId", objectId);
             command.Parameters.AddWithValue("@businessKey", $"sensitive-inactive:{Guid.NewGuid():N}");
-            outboxId = Convert.ToInt64(await command.ExecuteScalarAsync());
+            outboxId = Convert.ToInt64(await WithFixtureClock(command).ExecuteScalarAsync());
             await using var deactivate = connection.CreateCommand();
             deactivate.CommandText = "UPDATE [asap].[Organization] SET [IsActive] = 0 WHERE [Id] = 2;";
             await deactivate.ExecuteNonQueryAsync();
@@ -8572,6 +8580,7 @@ public sealed partial class PatronJourneyTests
         var delivery = jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
         await WaitForOutboxStatusAsync(seeded.OutboxId, "sending", TimeSpan.FromSeconds(5));
         await Task.Delay(300);
+        timeProvider!.SetUtcNow(timeProvider.GetUtcNow().AddMilliseconds(300));
         await transaction.CommitAsync();
         await delivery;
 
@@ -8831,7 +8840,7 @@ public sealed partial class PatronJourneyTests
         var seeded = await SeedSensitiveOutboxAsync("readiness-unavailable");
         var sender = new MutableReadinessEmailSender(isConfigured: true)
         {
-            ReadinessException = new InvalidOperationException("Synthetic provider diagnostic")
+            ReadinessException = new EmailOperationalException("Synthetic provider diagnostic")
         };
         await CreateEmailOutboxJobs(sender, EmailOutboxRuntimeOptions.Default)
             .DeliverAsync(seeded.OutboxId, CancellationToken.None);
@@ -9586,7 +9595,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(expectedAuditCount, reader.GetInt32(1));
     }
 
-    private static async Task<LifecycleClaimRaceSeed> SeedLifecycleClaimRaceAsync(
+    private async Task<LifecycleClaimRaceSeed> SeedLifecycleClaimRaceAsync(
         string suffix,
         string barcode)
     {
@@ -9623,7 +9632,7 @@ public sealed partial class PatronJourneyTests
         seed.Parameters.AddWithValue("@objectId", objectId);
         seed.Parameters.AddWithValue("@suffix", suffix);
         seed.Parameters.AddWithValue("@barcode", barcode);
-        await using var reader = await seed.ExecuteReaderAsync();
+        await using var reader = await WithFixtureClock(seed).ExecuteReaderAsync();
         Assert.IsTrue(await reader.ReadAsync());
         return new LifecycleClaimRaceSeed(
             reader.GetInt64(0),
@@ -9664,7 +9673,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(expectedCleanupEvents, reader.GetInt32(4));
     }
 
-    private static async Task<LifecycleAutoClaimRaceSeed> SeedLifecycleAutoClaimRaceAsync(string suffix)
+    private async Task<LifecycleAutoClaimRaceSeed> SeedLifecycleAutoClaimRaceAsync(string suffix)
     {
         var tenantId = Guid.Parse(TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin.TenantId!);
         var objectId = Guid.NewGuid();
@@ -9692,7 +9701,7 @@ public sealed partial class PatronJourneyTests
         seed.Parameters.AddWithValue("@tenantId", tenantId);
         seed.Parameters.AddWithValue("@objectId", objectId);
         seed.Parameters.AddWithValue("@suffix", suffix);
-        await using var reader = await seed.ExecuteReaderAsync();
+        await using var reader = await WithFixtureClock(seed).ExecuteReaderAsync();
         Assert.IsTrue(await reader.ReadAsync());
         return new LifecycleAutoClaimRaceSeed(
             reader.GetInt64(0),
@@ -10146,7 +10155,7 @@ public sealed partial class PatronJourneyTests
         return new SeededStaffBibLookupState(reader.GetInt64(0), reader.GetInt64(1), email);
     }
 
-    private static async Task<SeededStaffBrowserState> SeedStaffBrowserStateAsync(
+    private async Task<SeededStaffBrowserState> SeedStaffBrowserStateAsync(
         Guid tenantId,
         Guid superObjectId,
         Guid staffObjectId)
@@ -10421,7 +10430,7 @@ public sealed partial class PatronJourneyTests
         seed.Parameters.AddWithValue("@invalidTenantId", invalidTenantId);
         seed.Parameters.AddWithValue("@invalidTenantStaffObjectId", invalidTenantStaffObjectId);
         seed.Parameters.AddWithValue("@legacyId", legacyRequestId);
-        await using var result = await seed.ExecuteReaderAsync();
+        await using var result = await WithFixtureClock(seed).ExecuteReaderAsync();
         Assert.IsTrue(await result.ReadAsync());
         return new SeededStaffBrowserState(
             result.GetInt64(0),
@@ -10560,7 +10569,7 @@ public sealed partial class PatronJourneyTests
         return new PolarisPatronProvider(
             services.GetRequiredService<IDbContextFactory<AsapDbContext>>(),
             protector,
-            new SingleClientFactory(new HttpClient(handler)));
+            new SingleClientFactory(new HttpClient(handler)), services.GetRequiredService<TimeProvider>());
     }
 
     private async Task<SeededSensitiveOutbox> SeedSensitiveOutboxAsync(
@@ -10619,7 +10628,7 @@ public sealed partial class PatronJourneyTests
         command.Parameters.AddWithValue("@weeklyEmail", (object?)weeklyEmail ?? DBNull.Value);
         command.Parameters.AddWithValue("@toAddress", toAddress);
         command.Parameters.AddWithValue("@businessKey", $"sensitive-{key}:{Guid.NewGuid():N}");
-        await using var reader = await command.ExecuteReaderAsync();
+        await using var reader = await WithFixtureClock(command).ExecuteReaderAsync();
         Assert.IsTrue(await reader.ReadAsync());
         return new SeededSensitiveOutbox(reader.GetInt64(0), reader.GetInt64(1), toAddress);
     }
@@ -10639,7 +10648,7 @@ public sealed partial class PatronJourneyTests
             new RecipientDomainPolicy(configuration),
             dispatcher!,
             options,
-            NullLogger<EmailOutboxJobs>.Instance);
+            NullLogger<EmailOutboxJobs>.Instance, timeProvider!);
     }
 
     private PatronSuggestionService CreatePatronSuggestionService(
@@ -10657,7 +10666,7 @@ public sealed partial class PatronJourneyTests
             outboxDispatcher,
             emailSender ?? new RecordingEmailSender(),
             new RecipientDomainPolicy(configuration),
-            TimeProvider.System,
+            timeProvider!,
             NullLogger<PatronSuggestionService>.Instance);
     }
 
@@ -11020,7 +11029,7 @@ public sealed partial class PatronJourneyTests
             reader.IsDBNull(7) ? null : reader.GetDateTime(7));
     }
 
-    private static async Task MakeOutboxDueAsync(long outboxId)
+    private async Task MakeOutboxDueAsync(long outboxId)
     {
         await using var connection = new SqlConnection(databaseConnectionString);
         await connection.OpenAsync();
@@ -11028,7 +11037,7 @@ public sealed partial class PatronJourneyTests
             "UPDATE [asap].[EmailOutbox] SET [NextAttemptUtc] = DATEADD(second, -1, SYSUTCDATETIME()) WHERE [Id] = @id;",
             connection);
         command.Parameters.AddWithValue("@id", outboxId);
-        Assert.AreEqual(1, await command.ExecuteNonQueryAsync());
+        Assert.AreEqual(1, await WithFixtureClock(command).ExecuteNonQueryAsync());
     }
 
     private sealed record PreSendOutboxState(
@@ -11879,6 +11888,25 @@ public sealed partial class PatronJourneyTests
                 RequestMessage = request
             };
         }
+    }
+
+    // SQL fixture creation and application mutations share the same deterministic clock.
+    private SqlCommand WithFixtureClock(SqlCommand command)
+    {
+        if (command.CommandText.Contains("SYSUTCDATETIME()", StringComparison.OrdinalIgnoreCase))
+        {
+            command.CommandText = command.CommandText.Replace(
+                "SYSUTCDATETIME()", "@fixtureUtc", StringComparison.OrdinalIgnoreCase);
+            if (command.Parameters.Contains("@fixtureUtc"))
+            {
+                command.Parameters["@fixtureUtc"].Value = timeProvider!.GetUtcNow().UtcDateTime;
+            }
+            else
+            {
+                command.Parameters.Add("@fixtureUtc", System.Data.SqlDbType.DateTime2).Value = timeProvider!.GetUtcNow().UtcDateTime;
+            }
+        }
+        return command;
     }
 
     private sealed class MutableTimeProvider(DateTimeOffset initialUtc) : TimeProvider

@@ -31,11 +31,9 @@ public sealed record StaffAssignmentCandidate(long Id, string DisplayName);
 
 public sealed class StaffLifecycleService(
     IDbContextFactory<AsapDbContext> contextFactory,
-    ExternalConfiguration configuration)
+    StaffEligibilityService staffEligibility,
+    TimeProvider timeProvider)
 {
-    private readonly HashSet<Guid> allowedTenantIds = configuration.Authentication.Entra.AllowedTenantIds!
-        .Select(Guid.Parse)
-        .ToHashSet();
 
     public async Task<IReadOnlyList<StaffUser>> ListAsync(
         CurrentStaff actor,
@@ -44,9 +42,9 @@ public sealed class StaffLifecycleService(
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var query = context.StaffUsers.AsNoTracking();
-        if (actor.Role != "super_admin")
+        if (actor.Role != StaffRole.SuperAdmin)
         {
-            query = query.Where(item => item.OrganizationId == actor.OrganizationId && item.Role != "super_admin");
+            query = query.Where(item => item.OrganizationId == actor.OrganizationId && item.Role != StaffRole.SuperAdmin);
         }
         else if (organizationId.HasValue)
         {
@@ -66,30 +64,26 @@ public sealed class StaffLifecycleService(
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var libraryIsActive = await context.Organizations.AsNoTracking().AnyAsync(
-            item => item.Id == libraryOrganizationId && item.Id != 1 && item.IsActive,
+            item => item.Id == libraryOrganizationId && item.Id > LibraryScope.SystemOrganizationId && item.IsActive,
             cancellationToken);
         if (!libraryIsActive)
         {
             return [];
         }
 
-        var rows = await context.StaffUsers.AsNoTracking()
-            .Where(item => item.IsActive &&
-                           item.NormalizedUserPrincipalName != null &&
-                           (item.Role == "super_admin" && item.OrganizationId == 1 ||
-                            (item.Role == "staff" || item.Role == "admin") &&
-                            item.OrganizationId == libraryOrganizationId))
+        var rows = await (from staff in context.StaffUsers.AsNoTracking()
+                          join owner in context.Organizations.AsNoTracking()
+                              on staff.OrganizationId equals owner.Id
+                          where owner.IsActive && staff.IsActive &&
+                              (staff.OrganizationId == libraryOrganizationId ||
+                               staff.OrganizationId == LibraryScope.SystemOrganizationId)
+                          select staff)
             .OrderBy(item => item.DisplayName)
             .ThenBy(item => item.UserPrincipalName)
             .ThenBy(item => item.Id)
-            .Select(item => new { item.Id, item.DisplayName, item.UserPrincipalName, item.NormalizedUserPrincipalName })
             .ToListAsync(cancellationToken);
 
-        return rows.Where(item => StaffEmail.TryNormalizeAuthenticationEmail(
-                item.UserPrincipalName,
-                out _,
-                out var normalizedEmail) &&
-            string.Equals(normalizedEmail, item.NormalizedUserPrincipalName, StringComparison.Ordinal))
+        return rows.Where(item => StaffEligibilityService.IsAssignmentEligible(item, libraryOrganizationId))
             .Select(item => new StaffAssignmentCandidate(
                 item.Id,
                 item.DisplayName ?? item.UserPrincipalName ?? $"Staff {item.Id}"))
@@ -157,7 +151,7 @@ public sealed class StaffLifecycleService(
         {
             return new StaffLifecycleResult("staff_scope_forbidden");
         }
-        if (role != "super_admin" && !organizations[organizationId].IsActive)
+        if (role != StaffRole.SuperAdmin && !organizations[organizationId].IsActive)
         {
             return new StaffLifecycleResult("organization_inactive");
         }
@@ -371,7 +365,7 @@ public sealed class StaffLifecycleService(
         }
         var role = requestedRole is null ? targetSnapshot.Role : requestedRole.Trim().ToLowerInvariant();
         var organizationId = requestedOrganizationId ??
-            (role == "super_admin" ? 1 : targetSnapshot.OrganizationId);
+            (role == StaffRole.SuperAdmin ? LibraryScope.SystemOrganizationId : targetSnapshot.OrganizationId);
         if (!TryNormalizeRoleOrganization(role, organizationId, out role, out organizationId))
         {
             return new StaffLifecycleResult("invalid_role_scope");
@@ -416,17 +410,17 @@ public sealed class StaffLifecycleService(
         }
 
         var newActive = requestedActive ?? target.IsActive;
-        if (newActive && role != "super_admin" && !organizations[organizationId].IsActive)
+        if (newActive && role != StaffRole.SuperAdmin && !organizations[organizationId].IsActive)
         {
             return new StaffLifecycleResult("organization_inactive");
         }
 
-        var targetWillBeUsableSuperAdmin = newActive && role == "super_admin" && organizationId == 1 &&
+        var targetWillBeUsableSuperAdmin = newActive && role == StaffRole.SuperAdmin && organizationId == LibraryScope.SystemOrganizationId &&
                                            StaffEmail.IsValidAuthenticationEmail(target);
         var otherSuperAdmins = await context.StaffUsers.AsNoTracking()
             .Where(
-            item => item.Id != target.Id && item.IsActive && item.Role == "super_admin" &&
-                    item.OrganizationId == 1 && item.NormalizedUserPrincipalName != null)
+            item => item.Id != target.Id && item.IsActive && item.Role == StaffRole.SuperAdmin &&
+                    item.OrganizationId == LibraryScope.SystemOrganizationId && item.NormalizedUserPrincipalName != null)
             .Select(item => new { item.UserPrincipalName, item.NormalizedUserPrincipalName })
             .ToListAsync(cancellationToken);
         var hasOtherUsableSuperAdmin = otherSuperAdmins.Any(item =>
@@ -438,18 +432,18 @@ public sealed class StaffLifecycleService(
         }
 
         var scopeContracts = target.IsActive &&
-                             (!newActive || target.Role == "super_admin" && role != "super_admin" ||
-                              target.Role != "super_admin" &&
-                              (role == "super_admin" ? false : target.OrganizationId != organizationId));
+                             (!newActive || target.Role == StaffRole.SuperAdmin && role != StaffRole.SuperAdmin ||
+                              target.Role != StaffRole.SuperAdmin &&
+                              (role == StaffRole.SuperAdmin ? false : target.OrganizationId != organizationId));
         var rulesDeactivated = 0;
         var titleClaimsCleared = 0;
         var additionalCopyClaimsCleared = 0;
         if (scopeContracts)
         {
-            var cleanupUtc = DateTime.UtcNow;
+            var cleanupUtc = timeProvider.GetUtcNow().UtcDateTime;
             var rules = await context.FormatAutoClaimRules
                 .Where(item => item.IsActive && item.StaffUserId == target.Id &&
-                               (!newActive || role != "super_admin" && item.LibraryOrganizationId != organizationId))
+                               (!newActive || role != StaffRole.SuperAdmin && item.LibraryOrganizationId != organizationId))
                 .OrderBy(item => item.Id)
                 .ToListAsync(cancellationToken);
             foreach (var rule in rules)
@@ -537,16 +531,10 @@ public sealed class StaffLifecycleService(
         Organization? lockedActorOrganization,
         int targetOrganizationId,
         string targetRole) =>
-        lockedActor is not null && lockedActor.IsActive &&
-        lockedActorOrganization is not null && lockedActorOrganization.IsActive &&
+        lockedActor is not null && lockedActorOrganization is { IsActive: true } &&
         lockedActorOrganization.Id == lockedActor.OrganizationId &&
-        allowedTenantIds.Contains(ticketActor.EntraTenantId) &&
-        StaffEmail.MatchesAuthenticationEmail(lockedActor, ticketActor.AuthenticationEmail) &&
-        ticketActor.EntraTenantId != Guid.Empty &&
-        (lockedActor.Role == "super_admin" && lockedActor.OrganizationId == 1 ||
-         lockedActor.Role == "admin" && lockedActor.OrganizationId > 1) &&
-        (lockedActor.Role == "super_admin" ||
-         lockedActor.OrganizationId == targetOrganizationId && targetRole != "super_admin");
+        staffEligibility.IsCurrentAndEligible(ticketActor, lockedActor, targetOrganizationId, StaffRoleRequirement.Admin) &&
+        (lockedActor.Role == StaffRole.SuperAdmin || targetRole != StaffRole.SuperAdmin);
 
     private static bool TryNormalizeRoleOrganization(
         string? roleValue,
@@ -554,14 +542,13 @@ public sealed class StaffLifecycleService(
         out string role,
         out int organizationId)
     {
-        role = roleValue?.Trim().ToLowerInvariant() ?? "staff";
+        role = roleValue?.Trim().ToLowerInvariant() ?? StaffRole.Staff;
         organizationId = organizationIdValue ?? 0;
-        if (role == "super_admin")
+        if (role == StaffRole.SuperAdmin)
         {
-            organizationId = 1;
-            return true;
+            organizationId = LibraryScope.SystemOrganizationId;
         }
-        return role is "staff" or "admin" && organizationId > 1;
+        return StaffEligibilityService.IsValidRoleOrganization(role, organizationId);
     }
 
     private static async Task<bool> AcquireLifecycleLockAsync(
@@ -592,7 +579,7 @@ public sealed class StaffLifecycleService(
                 $"SELECT * FROM [asap].[StaffUser] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {id}")
             .SingleOrDefaultAsync(cancellationToken);
 
-    private static void AddAudit(
+    private void AddAudit(
         AsapDbContext context,
         CurrentStaff actor,
         long targetId,
@@ -608,7 +595,7 @@ public sealed class StaffLifecycleService(
             TargetType = "StaffUser",
             TargetId = targetId.ToString(),
             DetailsJson = JsonSerializer.Serialize(details),
-            CreatedUtc = DateTime.UtcNow
+            CreatedUtc = timeProvider.GetUtcNow().UtcDateTime
         });
 
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();

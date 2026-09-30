@@ -357,6 +357,7 @@ public sealed class TitleRequest
     public string? CloseReason { get; set; }
     public int? BibId { get; set; }
     public bool BibIdStaffVerified { get; set; }
+    public bool LegacyHoldProtected { get; set; }
     public string? Notes { get; set; }
     public long? ClaimedByStaffUserId { get; set; }
     public string? ClaimedByDisplayName { get; set; }

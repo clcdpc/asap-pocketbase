@@ -26,6 +26,7 @@ CREATE TABLE [asap].[TitleRequest]
     [CloseReason] nvarchar(64) NULL,
     [BibId] int NULL,
     [BibIdStaffVerified] bit NOT NULL CONSTRAINT [DF_TitleRequest_BibIdStaffVerified] DEFAULT (0),
+    [LegacyHoldProtected] bit NOT NULL CONSTRAINT [DF_TitleRequest_LegacyHoldProtected] DEFAULT (0),
     [Notes] nvarchar(max) NULL,
     [ClaimedByStaffUserId] bigint NULL,
     [ClaimedByDisplayName] nvarchar(256) NULL,

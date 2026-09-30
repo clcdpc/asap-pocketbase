@@ -96,8 +96,8 @@ public sealed partial class PatronJourneyTests
             BibId = bib,
             BibIdStaffVerified = bib is not null,
             AutoHold = autoHold,
-            CreatedUtc = DateTime.UtcNow,
-            UpdatedUtc = DateTime.UtcNow
+            CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime,
+            UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime
         };
         var purchase = Request("Purchase title", null, true);
         var purchaseWithBib = Request("Pending title", 9001, true);
@@ -119,7 +119,7 @@ public sealed partial class PatronJourneyTests
             new TitleRequestActionInput
             {
                 Version = Convert.ToBase64String(purchase.RowVersion), Action = "purchase"
-            }, CancellationToken.None);
+            }.ToCommand(), CancellationToken.None);
         Assert.AreEqual("updated", purchaseResult.Code);
         Assert.AreEqual("not_requested", purchaseResult.NotificationStatus);
         Assert.AreEqual("queued", purchaseResult.PatronNotificationStatus);
@@ -127,32 +127,32 @@ public sealed partial class PatronJourneyTests
             new TitleRequestActionInput
             {
                 Version = Convert.ToBase64String(purchaseWithBib.RowVersion), Action = "purchase"
-            }, CancellationToken.None)).Code);
+            }.ToCommand(), CancellationToken.None)).Code);
         Assert.AreEqual("updated", (await mutations.ActionAsync(actor, alreadyOwned.Id,
             new TitleRequestActionInput
             {
                 Version = Convert.ToBase64String(alreadyOwned.RowVersion), Action = "alreadyOwn"
-            }, CancellationToken.None)).Code);
+            }.ToCommand(), CancellationToken.None)).Code);
         Assert.AreEqual("updated", (await mutations.ActionAsync(actor, missingRecipient.Id,
             new TitleRequestActionInput
             {
                 Version = Convert.ToBase64String(missingRecipient.RowVersion), Action = "alreadyOwn"
-            }, CancellationToken.None)).Code);
+            }.ToCommand(), CancellationToken.None)).Code);
         Assert.AreEqual("updated", (await mutations.ActionAsync(actor, unavailableRecipient.Id,
             new TitleRequestActionInput
             {
                 Version = Convert.ToBase64String(unavailableRecipient.RowVersion), Action = "alreadyOwn"
-            }, CancellationToken.None)).Code);
+            }.ToCommand(), CancellationToken.None)).Code);
         Assert.AreEqual("updated", (await mutations.ActionAsync(actor, rejected.Id,
             new TitleRequestActionInput
             {
                 Version = Convert.ToBase64String(rejected.RowVersion), Action = "reject"
-            }, CancellationToken.None)).Code);
+            }.ToCommand(), CancellationToken.None)).Code);
         Assert.AreEqual("updated", (await mutations.ActionAsync(actor, rejectedUnavailable.Id,
             new TitleRequestActionInput
             {
                 Version = Convert.ToBase64String(rejectedUnavailable.RowVersion), Action = "reject"
-            }, CancellationToken.None)).Code);
+            }.ToCommand(), CancellationToken.None)).Code);
         using var cancellation = new CancellationTokenSource();
         patronProvider.BeforeRefresh = _ => cancellation.Cancel();
         await Assert.ThrowsAsync<OperationCanceledException>(async () =>
@@ -160,7 +160,7 @@ public sealed partial class PatronJourneyTests
                 new TitleRequestActionInput
                 {
                     Version = Convert.ToBase64String(cancelledPurchase.RowVersion), Action = "purchase"
-                }, cancellation.Token));
+                }.ToCommand(), cancellation.Token));
         patronProvider.BeforeRefresh = null;
 
         await using var verify = await contexts.CreateDbContextAsync();

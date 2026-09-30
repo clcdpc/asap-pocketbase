@@ -119,6 +119,7 @@ public sealed class HangfireWorkerHostedService(
         {
             throw;
         }
+        // Worker initialization is a fail-closed host boundary, with the failure recorded for readiness.
         catch (Exception exception)
         {
             initializationState.MarkFailed("hangfire_unavailable");

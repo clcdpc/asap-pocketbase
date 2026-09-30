@@ -141,7 +141,7 @@ public sealed partial class PatronJourneyTests
             var purchased = await titles.ActionAsync(actor, title.Id, new TitleRequestActionInput
             {
                 Version = StaffVersion.Encode(title.RowVersion), Action = "purchase", EmailPurchaseReminder = true
-            }, CancellationToken.None);
+            }.ToCommand(), CancellationToken.None);
             Assert.AreEqual("updated", purchased.Code);
             var copies = scoped.Services.GetRequiredService<AdditionalCopyService>();
             var created = await copies.CreateAsync(actor, source.Id, new AdditionalCopyCreateInput(StaffVersion.Encode(source.RowVersion), true), CancellationToken.None);

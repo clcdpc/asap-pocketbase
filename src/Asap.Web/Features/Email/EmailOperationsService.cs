@@ -33,7 +33,9 @@ public sealed class EmailOperationsService(
     StaffEligibilityService staffEligibility,
     ILogger<EmailOperationsService>? logger = null)
 {
-    public static bool CanOperate(CurrentStaff actor) => actor.Role is "admin" or "super_admin";
+    public static bool CanOperate(CurrentStaff actor) =>
+        StaffEligibilityService.RoleMeets(actor.Role, StaffRoleRequirement.Admin) &&
+        StaffEligibilityService.IsValidRoleOrganization(actor.Role, actor.OrganizationId);
 
     public async Task<EmailOperationResult> GetReadinessAsync(
         CurrentStaff actor,
@@ -41,12 +43,12 @@ public sealed class EmailOperationsService(
         int? requestedOrganizationId = null)
     {
         if (requestedOrganizationId <= 0 ||
-            actor.Role != "super_admin" && requestedOrganizationId.HasValue &&
+            actor.Role != StaffRole.SuperAdmin && requestedOrganizationId.HasValue &&
             requestedOrganizationId != actor.OrganizationId)
         {
             return new EmailOperationResult("staff_scope_forbidden");
         }
-        var organizationId = actor.Role == "super_admin"
+        var organizationId = actor.Role == StaffRole.SuperAdmin
             ? requestedOrganizationId ?? 1 : actor.OrganizationId;
         try
         {
@@ -74,7 +76,8 @@ public sealed class EmailOperationsService(
         {
             return new EmailOperationResult("ok", new { state = "unavailable", organizationId });
         }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             return new EmailOperationResult("ok", new { state = "unavailable", organizationId });
         }
@@ -105,7 +108,8 @@ public sealed class EmailOperationsService(
         {
             readiness = await emailSender.CheckReadinessAsync(targetOrganizationId, cancellationToken);
         }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             return new EmailOperationResult("email_transport_unavailable");
         }
@@ -165,6 +169,7 @@ public sealed class EmailOperationsService(
             {
                 dispatcher.Enqueue(outbox.Id);
             }
+            // The durable outbox is committed; preserve acceptance and recover through the scheduled sweep.
             catch (Exception exception)
             {
                 dispatchDelayed = true;
@@ -268,6 +273,7 @@ public sealed class EmailOperationsService(
         {
             dispatcher.Enqueue(row.Id);
         }
+        // Retry state is committed; report delayed dispatch and retain the pending row for the sweep.
         catch (Exception exception)
         {
             dispatchDelayed = true;
@@ -340,7 +346,7 @@ public sealed class EmailOperationsService(
             scope = null;
             return false;
         }
-        if (actor.Role == "super_admin")
+        if (actor.Role == StaffRole.SuperAdmin)
         {
             scope = requested;
             return !requested.HasValue || requested.Value > 0;

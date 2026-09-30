@@ -21,7 +21,7 @@ public sealed partial class PatronJourneyTests
         var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         var titles = factory.Services.GetRequiredService<TitleRequestMutationService>();
         var copies = factory.Services.GetRequiredService<AdditionalCopyService>();
-        var now = DateTime.UtcNow;
+        var now = timeProvider!.GetUtcNow().UtcDateTime;
         await using var seed = await contextFactory.CreateDbContextAsync();
         var formatId = await seed.MaterialFormats.Where(item => item.OwnerOrganizationId == 1 && item.Code == "book")
             .Select(item => item.Id).SingleAsync();
@@ -56,7 +56,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("request_not_closed", (await titles.DeleteClosedAsync(actor, forgedOpen.Id,
             new VersionInput(openVersion, actorVersion), CancellationToken.None)).Code);
         Assert.AreEqual("updated", (await titles.ActionAsync(actor, reopened.Id,
-            new TitleRequestActionInput { Version = reopenedVersion, Action = "reopen", Status = "suggestion" },
+            new TitleRequestActionInput { Version = reopenedVersion, Action = "reopen", Status = "suggestion" }.ToCommand(),
             CancellationToken.None)).Code);
         Assert.AreEqual("stale_version", (await titles.DeleteClosedAsync(actor, reopened.Id,
             new VersionInput(reopenedVersion, actorVersion), CancellationToken.None)).Code);
@@ -97,7 +97,7 @@ public sealed partial class PatronJourneyTests
         var actorVersion = StaffVersion.Encode(actor.RowVersion);
         var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         await using var seed = await contextFactory.CreateDbContextAsync();
-        var now = DateTime.UtcNow;
+        var now = timeProvider!.GetUtcNow().UtcDateTime;
         var title = new TitleRequest
         {
             LibraryOrganizationId = 2, Barcode = Guid.NewGuid().ToString("N"),
@@ -190,7 +190,7 @@ public sealed partial class PatronJourneyTests
                         LibraryOrganizationId = 2, BibId = 12345, Title = "Privileged copy race",
                         Status = delete ? "closed" : "open", ClaimedByStaffUserId = assignee.Id,
                         ClaimedByDisplayName = assignee.DisplayName ?? assignee.UserPrincipalName,
-                        ClaimType = "manual", ClaimedAtUtc = DateTime.UtcNow,
+                        ClaimType = "manual", ClaimedAtUtc = timeProvider!.GetUtcNow().UtcDateTime,
                         Notes = "Committed copy history.", CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime, UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime,
                         ClosedUtc = delete ? timeProvider.GetUtcNow().UtcDateTime : null
                     };
@@ -207,8 +207,8 @@ public sealed partial class PatronJourneyTests
                         MaterialFormatId = await context.MaterialFormats.Where(item => item.OwnerOrganizationId == 1 && item.Code == "book").Select(item => item.Id).SingleAsync(),
                         Status = delete ? "closed" : "suggestion", CloseReason = delete ? "manual" : null, ClaimedByStaffUserId = assignee.Id,
                         ClaimedByDisplayName = assignee.DisplayName ?? assignee.UserPrincipalName,
-                        ClaimType = "manual", ClaimedAtUtc = DateTime.UtcNow,
-                        CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow
+                        ClaimType = "manual", ClaimedAtUtc = timeProvider!.GetUtcNow().UtcDateTime,
+                        CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime, UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime
                     };
                     context.TitleRequests.Add(row);
                     await context.SaveChangesAsync();

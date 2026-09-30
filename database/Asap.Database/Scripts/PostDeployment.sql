@@ -3,21 +3,41 @@ ALTER DATABASE CURRENT SET COMPATIBILITY_LEVEL = 160;
 IF NOT EXISTS (SELECT 1 FROM [asap].[SchemaVersion] WHERE [Id] = 1)
 BEGIN
     INSERT INTO [asap].[SchemaVersion] ([Id], [Version], [UpdatedUtc])
-    VALUES (1, 9, SYSUTCDATETIME());
+    VALUES (1, 10, SYSUTCDATETIME());
 END;
 ELSE IF (SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1) < 7
 BEGIN
     THROW 51000, 'Schema 7 is a pre-release reset boundary. Recreate the application database from this DACPAC.', 1;
 END;
-ELSE IF (SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1) > 9
+ELSE IF (SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1) > 10
 BEGIN
     THROW 51000, 'The database schema is newer than this DACPAC.', 1;
 END;
 
--- Schema 9 adds durable pickup dispatch evidence; native schema 7/8 upgrades in place.
+-- Materialize historical protection once at the upgrade boundary. From schema 10
+-- onward event JSON is diagnostic history and cannot create runtime authority.
+IF EXISTS (SELECT 1 FROM [asap].[SchemaVersion] WHERE [Id] = 1 AND [Version] IN (7, 8, 9))
+BEGIN
+    UPDATE request SET [LegacyHoldProtected] = 1
+    FROM [asap].[TitleRequest] AS request
+    WHERE EXISTS
+    (
+        SELECT 1 FROM [asap].[TitleRequestEvent] AS history
+        WHERE history.[TitleRequestId] = request.[Id]
+          AND EXISTS
+          (
+              SELECT 1 FROM OPENJSON(CASE WHEN ISJSON(history.[MetadataJson]) = 1
+                  THEN history.[MetadataJson] ELSE N'{}' END) AS marker
+              WHERE marker.[key] COLLATE Latin1_General_100_BIN2 = N'legacyBibProtection'
+                AND marker.[type] = 3 AND marker.[value] = N'true'
+          )
+    );
+END;
+
+-- Native schemas 7/8/9 upgrade in place.
 UPDATE [asap].[SchemaVersion]
-SET [Version] = 9, [UpdatedUtc] = SYSUTCDATETIME()
-WHERE [Id] = 1 AND [Version] IN (7, 8);
+SET [Version] = 10, [UpdatedUtc] = SYSUTCDATETIME()
+WHERE [Id] = 1 AND [Version] IN (7, 8, 9);
 
 IF NOT EXISTS (SELECT 1 FROM [asap].[DeploymentState] WHERE [Id] = 1)
 BEGIN

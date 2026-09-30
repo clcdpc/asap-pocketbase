@@ -27,7 +27,7 @@ public sealed partial class PatronJourneyTests
                 Version = StaffVersion.Encode(seeded.RowVersion),
                 Action = action,
                 Bibid = bibId
-            };
+            }.ToCommand();
             var result = await factory!.Services.GetRequiredService<TitleRequestMutationService>()
                 .ActionAsync(actor, seeded.Id, input, CancellationToken.None);
             Assert.AreEqual("updated", result.Code);
@@ -52,7 +52,7 @@ public sealed partial class PatronJourneyTests
                     {
                         Version = StaffVersion.Encode(current.RowVersion),
                         Action = "reopen"
-                    }, CancellationToken.None);
+                    }.ToCommand(), CancellationToken.None);
                 Assert.AreEqual("updated", reopened.Code);
                 var afterReopen = await ReadBibOwnershipRequestAsync(seeded.Id);
                 Assert.AreEqual("suggestion", afterReopen.Status);

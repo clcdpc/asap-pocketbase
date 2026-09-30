@@ -5,8 +5,8 @@ namespace Asap.Migration;
 public static class MigrationContract
 {
     public const string PocketBaseBaselineSha = "150b30b776565194260cc327eeeffdfb46475e81";
-    public const int ExpectedSchemaVersion = 9;
-    public const string ContractVersion = "pickup-journal-v3";
+    public const int ExpectedSchemaVersion = 10;
+    public const string ContractVersion = "structured-policy-v4";
 
     public static object Describe() => new
     {

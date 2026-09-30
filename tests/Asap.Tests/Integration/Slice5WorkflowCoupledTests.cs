@@ -110,7 +110,7 @@ public sealed partial class PatronJourneyTests
         }
     }
 
-    private static async Task<CoupledSeed> SeedCoupledRowsAsync(
+    private async Task<CoupledSeed> SeedCoupledRowsAsync(
         IDbContextFactory<AsapDbContext> contextFactory,
         int scope,
         int recoveryCount,
@@ -119,7 +119,7 @@ public sealed partial class PatronJourneyTests
     {
         await using var context = await contextFactory.CreateDbContextAsync();
         var format = await context.MaterialFormats.SingleAsync(item => item.Code == "book");
-        var baseUtc = DateTime.UtcNow.AddMinutes(-10);
+        var baseUtc = timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(-10);
         var requestScope = requestLibraryOrganizationId ?? scope;
         var recoveryRequests = Enumerable.Range(0, recoveryCount).Select(index => new TitleRequest
         {
@@ -179,7 +179,7 @@ public sealed partial class PatronJourneyTests
             progress.LastOutcomeItemId = null;
             progress.LastOutcomeCode = null;
             progress.LastOutcomeUtc = null;
-            progress.UpdatedUtc = DateTime.UtcNow;
+            progress.UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime;
         }
         await context.SaveChangesAsync();
         return new CoupledSeed(
@@ -188,7 +188,7 @@ public sealed partial class PatronJourneyTests
             recoveryRequests.Concat(placementRequests).Select(item => item.Id).ToArray());
     }
 
-    private static async Task<bool> SetOrganizationActiveAsync(
+    private async Task<bool> SetOrganizationActiveAsync(
         IDbContextFactory<AsapDbContext> contextFactory,
         int organizationId,
         bool? active = null)
@@ -204,7 +204,7 @@ public sealed partial class PatronJourneyTests
         return previous;
     }
 
-    private static async Task DeleteCoupledRowsAsync(
+    private async Task DeleteCoupledRowsAsync(
         IDbContextFactory<AsapDbContext> contextFactory,
         CoupledSeed seed,
         int scope)
@@ -226,7 +226,7 @@ public sealed partial class PatronJourneyTests
             progress.LastOutcomeItemId = null;
             progress.LastOutcomeCode = null;
             progress.LastOutcomeUtc = null;
-            progress.UpdatedUtc = DateTime.UtcNow;
+            progress.UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime;
         }
         await context.SaveChangesAsync();
     }

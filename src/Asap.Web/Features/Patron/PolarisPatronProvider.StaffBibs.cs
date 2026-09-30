@@ -464,7 +464,7 @@ public sealed partial class PolarisPatronProvider
 
     private static string CleanSearch(string? value) => Regex.Replace(value ?? string.Empty, "\\s+", " ").Trim();
 
-    private static double ScoreStaffBib(StaffBibSearchRow result, string query, string title, string author)
+    private double ScoreStaffBib(StaffBibSearchRow result, string query, string title, string author)
     {
         var score = 0d;
         var targetTitle = NormalizeLabel(title.Length > 0 ? title : query);
@@ -496,7 +496,7 @@ public sealed partial class PolarisPatronProvider
         var publicationDigits = Regex.Replace(result.Publication ?? string.Empty, "\\D", string.Empty);
         if (publicationDigits.Length >= 4 &&
             int.TryParse(publicationDigits.AsSpan(0, 4), NumberStyles.None, CultureInfo.InvariantCulture, out var year) &&
-            year > 1900 && year <= DateTime.UtcNow.Year)
+            year > 1900 && year <= timeProvider.GetUtcNow().Year)
         {
             score += Math.Min(5d, (year - 1900) / 20d);
         }

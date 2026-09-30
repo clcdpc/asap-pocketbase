@@ -125,7 +125,8 @@ public static class PatronEndpoints
         {
             branches = await patronProvider.GetPickupBranchesAsync(patron, effective.OrganizationId, cancellationToken);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (Exception exception) when (exception is PolarisOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             branches = [];
             warning = "Pickup locations are temporarily unavailable. Please try again.";
@@ -204,7 +205,8 @@ public static class PatronEndpoints
                 session.ExperienceOrganizationId.HasValue &&
                 session.ExperienceOrganizationId != session.HomeOrganizationId));
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (Exception exception) when (exception is PolarisOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             return Results.Json(
                 new { message = "Current patron information could not be loaded. Please log in again." },

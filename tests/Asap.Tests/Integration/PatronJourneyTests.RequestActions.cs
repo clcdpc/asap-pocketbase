@@ -52,12 +52,12 @@ public sealed partial class PatronJourneyTests
                 var systemFormat = new MaterialFormat
                 {
                     OwnerOrganizationId = 1, Code = collidingCode, Label = "System action format",
-                    IsEnabled = true, CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow
+                    IsEnabled = true, CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime, UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime
                 };
                 var libraryFormat = new MaterialFormat
                 {
                     OwnerOrganizationId = 2, Code = collidingCode, Label = "Library action format",
-                    IsEnabled = true, CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow
+                    IsEnabled = true, CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime, UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime
                 };
                 context.MaterialFormats.AddRange(systemFormat, libraryFormat);
                 await context.SaveChangesAsync();
@@ -97,8 +97,8 @@ public sealed partial class PatronJourneyTests
                         AutoHold = index == 6,
                         Status = "suggestion",
                         IsbnCheckStatus = "skipped_no_isbn",
-                        CreatedUtc = DateTime.UtcNow,
-                        UpdatedUtc = DateTime.UtcNow
+                        CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime,
+                        UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime
                     });
                 }
                 await context.SaveChangesAsync();
@@ -114,7 +114,7 @@ public sealed partial class PatronJourneyTests
             await using (var context = await factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>()
                              .CreateDbContextAsync())
             {
-                var timestamp = DateTime.UtcNow;
+                var timestamp = timeProvider!.GetUtcNow().UtcDateTime;
                 context.TitleRequestEvents.AddRange(
                     new TitleRequestEvent { TitleRequestId = requestIds[0], EventType = "staff_note",
                         ActorType = "staff", Message = "<svg onload=alert(1)>", CreatedUtc = timestamp },
@@ -319,7 +319,7 @@ public sealed partial class PatronJourneyTests
                         Version = afterTimeout.RootElement.GetProperty("version").GetString(),
                         Action = "purchase",
                         EmailPurchaseReminder = true
-                    }, cancellation.Token);
+                    }.ToCommand(), cancellation.Token);
             }
             catch (OperationCanceledException)
             {

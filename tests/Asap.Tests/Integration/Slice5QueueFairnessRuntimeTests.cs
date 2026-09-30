@@ -14,7 +14,7 @@ public sealed partial class PatronJourneyTests
 {
     private const int Slice5IsolatedLibraryId = 99001;
 
-    private static async Task EnsureSlice5IsolatedLibraryAsync(
+    private async Task EnsureSlice5IsolatedLibraryAsync(
         IDbContextFactory<AsapDbContext> contextFactory,
         int organizationId = Slice5IsolatedLibraryId)
     {
@@ -119,7 +119,7 @@ public sealed partial class PatronJourneyTests
         }
     }
 
-    private static async Task IsolateOtherWorkflowQueuesAsync(
+    private async Task IsolateOtherWorkflowQueuesAsync(
         IDbContextFactory<AsapDbContext> contextFactory,
         string targetQueue,
         int scope = 2)
@@ -139,12 +139,12 @@ public sealed partial class PatronJourneyTests
             progress.LastOutcomeItemId = null;
             progress.LastOutcomeCode = "test_isolated_empty";
             progress.LastOutcomeUtc = null;
-            progress.UpdatedUtc = DateTime.UtcNow;
+            progress.UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime;
         }
         await context.SaveChangesAsync();
     }
 
-    private static async Task<FairnessSeed> SeedFairnessRowsAsync(
+    private async Task<FairnessSeed> SeedFairnessRowsAsync(
         IDbContextFactory<AsapDbContext> contextFactory,
         string queueName,
         int scope = Slice5IsolatedLibraryId)
@@ -152,7 +152,7 @@ public sealed partial class PatronJourneyTests
         await EnsureSlice5IsolatedLibraryAsync(contextFactory, scope);
         await using var context = await contextFactory.CreateDbContextAsync();
         var format = await context.MaterialFormats.SingleAsync(item => item.Code == "book");
-        var baseUtc = DateTime.UtcNow.AddDays(-60);
+        var baseUtc = timeProvider!.GetUtcNow().UtcDateTime.AddDays(-60);
         var requests = new List<TitleRequest>();
         var operations = new List<HoldPlacementOperation>();
         var copies = new List<AdditionalCopyRequest>();
@@ -262,12 +262,12 @@ public sealed partial class PatronJourneyTests
         progress.LastOutcomeItemId = null;
         progress.LastOutcomeCode = "test_cycle_started";
         progress.LastOutcomeUtc = null;
-        progress.UpdatedUtc = DateTime.UtcNow;
+        progress.UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime;
         await context.SaveChangesAsync();
         return new FairnessSeed(scope, cursorIds, operations.Select(item => item.Id).ToList(), requests.Select(item => item.Id).ToList(), copies.Select(item => item.Id).ToList());
     }
 
-    private static async Task DeleteFairnessRowsAsync(
+    private async Task DeleteFairnessRowsAsync(
         IDbContextFactory<AsapDbContext> contextFactory,
         string queueName,
         FairnessSeed seed)
@@ -295,7 +295,7 @@ public sealed partial class PatronJourneyTests
             progress.LastOutcomeItemId = null;
             progress.LastOutcomeCode = null;
             progress.LastOutcomeUtc = null;
-            progress.UpdatedUtc = DateTime.UtcNow;
+            progress.UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime;
             await context.SaveChangesAsync();
         }
     }

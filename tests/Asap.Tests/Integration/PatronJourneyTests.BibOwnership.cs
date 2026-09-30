@@ -70,7 +70,7 @@ public sealed partial class PatronJourneyTests
                     Identifier = selection.RootElement.GetProperty("identifier"),
                     Bibid = ReadNativeBib(selection.RootElement.GetProperty("bibid")),
                     StaffSelectedBibId = ReadNativeBib(selection.RootElement.GetProperty("staffSelectedBibId"))
-                };
+                }.ToCommand();
 
                 var mutation = await mutations.ActionAsync(actor, seeded.Id, input, CancellationToken.None);
                 Assert.AreEqual("updated", mutation.Code);
@@ -125,7 +125,7 @@ public sealed partial class PatronJourneyTests
                     Status = "suggestion",
                     Identifier = edit.RootElement.GetProperty("identifier"),
                     Bibid = ReadNativeBib(edit.RootElement.GetProperty("bibid"))
-                }, CancellationToken.None);
+                }.ToCommand(), CancellationToken.None);
                 Assert.AreEqual("updated", result.Code);
             }
 
@@ -148,7 +148,7 @@ public sealed partial class PatronJourneyTests
                     Title = edit.RootElement.GetProperty("title").GetString(),
                     Identifier = edit.RootElement.GetProperty("identifier"),
                     Bibid = ReadNativeBib(edit.RootElement.GetProperty("bibid"))
-                }, CancellationToken.None);
+                }.ToCommand(), CancellationToken.None);
                 Assert.AreEqual("updated", result.Code);
             }
 
@@ -169,7 +169,7 @@ public sealed partial class PatronJourneyTests
                     Status = "pending_hold",
                     Identifier = action.RootElement.GetProperty("identifier"),
                     Bibid = ReadNativeBib(action.RootElement.GetProperty("bibid"))
-                }, CancellationToken.None);
+                }.ToCommand(), CancellationToken.None);
                 Assert.AreEqual("bib_required", result.Code,
                     "A transition must not pass using an automation BIB that the identifier edit will clear.");
             }
@@ -193,7 +193,7 @@ public sealed partial class PatronJourneyTests
                     Identifier = edit.RootElement.GetProperty("identifier"),
                     Bibid = ReadNativeBib(edit.RootElement.GetProperty("bibid")),
                     StaffSelectedBibId = ReadNativeBib(edit.RootElement.GetProperty("staffSelectedBibId"))
-                }, CancellationToken.None);
+                }.ToCommand(), CancellationToken.None);
                 Assert.AreEqual("updated", result.Code);
             }
 
@@ -238,7 +238,7 @@ public sealed partial class PatronJourneyTests
                     Status = "suggestion",
                     Identifier = edit.RootElement.GetProperty("identifier"),
                     Bibid = ReadNativeBib(edit.RootElement.GetProperty("bibid"))
-                }, CancellationToken.None);
+                }.ToCommand(), CancellationToken.None);
                 Assert.AreEqual("updated", result.Code);
             }
 
@@ -267,7 +267,7 @@ public sealed partial class PatronJourneyTests
                     Status = "suggestion",
                     Identifier = edit.RootElement.GetProperty("identifier"),
                     Bibid = ReadNativeBib(edit.RootElement.GetProperty("bibid"))
-                }, CancellationToken.None);
+                }.ToCommand(), CancellationToken.None);
                 Assert.AreEqual("updated", result.Code);
             }
 
@@ -297,7 +297,7 @@ public sealed partial class PatronJourneyTests
                     Identifier = edit.RootElement.GetProperty("identifier"),
                     Bibid = ReadNativeBib(edit.RootElement.GetProperty("bibid")),
                     StaffSelectedBibId = ReadNativeBib(edit.RootElement.GetProperty("staffSelectedBibId"))
-                }, CancellationToken.None);
+                }.ToCommand(), CancellationToken.None);
                 Assert.AreEqual("updated", result.Code);
             }
 
@@ -326,7 +326,7 @@ public sealed partial class PatronJourneyTests
                     Status = "suggestion",
                     Identifier = edit.RootElement.GetProperty("identifier"),
                     Bibid = ReadNativeBib(edit.RootElement.GetProperty("bibid"))
-                }, CancellationToken.None);
+                }.ToCommand(), CancellationToken.None);
                 Assert.AreEqual("updated", result.Code);
             }
 
@@ -370,7 +370,7 @@ public sealed partial class PatronJourneyTests
                     Status = "suggestion",
                     Identifier = edit.RootElement.GetProperty("identifier"),
                     Bibid = ReadNativeBib(edit.RootElement.GetProperty("bibid"))
-                }, CancellationToken.None);
+                }.ToCommand(), CancellationToken.None);
                 Assert.AreEqual("updated", result.Code,
                     "Clearing an identifier-derived BIB must complete without violating CK_TitleRequest_FoundHasBib.");
             }
@@ -399,7 +399,7 @@ public sealed partial class PatronJourneyTests
                     Status = "suggestion",
                     Identifier = edit.RootElement.GetProperty("identifier"),
                     Bibid = ReadNativeBib(edit.RootElement.GetProperty("bibid"))
-                }, CancellationToken.None);
+                }.ToCommand(), CancellationToken.None);
                 Assert.AreEqual("updated", result.Code);
             }
 
@@ -428,7 +428,7 @@ public sealed partial class PatronJourneyTests
                     Status = "suggestion",
                     Identifier = rejectedEdit.RootElement.GetProperty("identifier"),
                     Bibid = ReadNativeBib(rejectedEdit.RootElement.GetProperty("bibid"))
-                }, CancellationToken.None);
+                }.ToCommand(), CancellationToken.None);
                 Assert.AreEqual("invalid_bib", result.Code);
             }
 
@@ -450,7 +450,7 @@ public sealed partial class PatronJourneyTests
                     Status = "suggestion",
                     Identifier = edit.RootElement.GetProperty("identifier"),
                     Bibid = ReadNativeBib(edit.RootElement.GetProperty("bibid"))
-                }, CancellationToken.None);
+                }.ToCommand(), CancellationToken.None);
                 Assert.AreEqual("updated", result.Code);
             }
 
@@ -500,12 +500,12 @@ public sealed partial class PatronJourneyTests
                     Version = StaffVersion.Encode(target.RowVersion),
                     Action = action,
                     Bibid = ReadNativeBib(bib.RootElement)
-                }
+                }.ToCommand()
                 : new TitleRequestActionInput
                 {
                     Version = StaffVersion.Encode(target.RowVersion),
                     Action = action
-                };
+                }.ToCommand();
             var result = await factory.Services.GetRequiredService<TitleRequestMutationService>().ActionAsync(
                 actor, target.Id, input, CancellationToken.None);
             Assert.AreEqual("duplicate_open_request", result.Code);
@@ -588,9 +588,9 @@ public sealed partial class PatronJourneyTests
             using var bib = JsonDocument.Parse("\"9001\"");
             var results = await Task.WhenAll(
                 mutations.ActionAsync(actor, first.Id, new TitleRequestActionInput
-                    { Version = StaffVersion.Encode(first.RowVersion), Action = "catalogFound", Bibid = ReadNativeBib(bib.RootElement) }, CancellationToken.None),
+                    { Version = StaffVersion.Encode(first.RowVersion), Action = "catalogFound", Bibid = ReadNativeBib(bib.RootElement) }.ToCommand(), CancellationToken.None),
                 mutations.ActionAsync(actor, second.Id, new TitleRequestActionInput
-                    { Version = StaffVersion.Encode(secondVersion), Action = "catalogFound", Bibid = ReadNativeBib(bib.RootElement) }, CancellationToken.None));
+                    { Version = StaffVersion.Encode(secondVersion), Action = "catalogFound", Bibid = ReadNativeBib(bib.RootElement) }.ToCommand(), CancellationToken.None));
             CollectionAssert.AreEquivalent(new[] { "updated", "duplicate_open_request" },
                 results.Select(item => item.Code).ToArray(),
                 string.Join(", ", results.Select(item => item.Code)));
@@ -748,7 +748,7 @@ public sealed partial class PatronJourneyTests
                     Status = "outstanding_purchase",
                     Identifier = edit.RootElement.GetProperty("identifier"),
                     Bibid = ReadNativeBib(edit.RootElement.GetProperty("bibid"))
-                }, CancellationToken.None);
+                }.ToCommand(), CancellationToken.None);
                 Assert.AreEqual("updated", result.Code);
             }
 

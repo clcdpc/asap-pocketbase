@@ -33,7 +33,7 @@ public sealed record QueueProgressSnapshot(
     DateTime UpdatedUtc,
     string Version);
 
-public sealed class QueueProgressService(IDbContextFactory<AsapDbContext> contextFactory)
+public sealed class QueueProgressService(IDbContextFactory<AsapDbContext> contextFactory, TimeProvider timeProvider)
 {
     public async Task<QueueProgress> GetOrCreateAsync(
         string queueName,
@@ -61,7 +61,7 @@ public sealed class QueueProgressService(IDbContextFactory<AsapDbContext> contex
             QueueName = queueName,
             ScopeOrganizationId = scope,
             CycleMaxId = null,
-            UpdatedUtc = DateTime.UtcNow
+            UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime
         };
         context.QueueProgress.Add(progress);
         await context.SaveChangesAsync(cancellationToken);
@@ -105,5 +105,5 @@ public sealed class QueueProgressService(IDbContextFactory<AsapDbContext> contex
                 Convert.ToBase64String(progress.RowVersion));
     }
 
-    public static int NormalizeScope(int? scopeOrganizationId) => scopeOrganizationId ?? 1;
+    public static int NormalizeScope(int? scopeOrganizationId) => scopeOrganizationId ?? LibraryScope.SystemOrganizationId;
 }

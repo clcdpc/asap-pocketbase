@@ -27,7 +27,7 @@ public sealed partial class PatronJourneyTests
         {
             using var superClient = factory!.CreateClient();
             AddTestingStaffHeaders(superClient, superAdmin.Id, superAdmin.EntraTenantId, superAdmin.AuthenticationEmail);
-            using var baseline = await superClient.GetAsync("/api/asap/staff/analytics?scope=system&range=last30");
+            using var baseline = await superClient.GetAsync("/api/asap/staff/analytics?scope=all&range=last30");
             Assert.AreEqual(HttpStatusCode.OK, baseline.StatusCode, await baseline.Content.ReadAsStringAsync());
             using var baselineBody = JsonDocument.Parse(await baseline.Content.ReadAsStringAsync());
 
@@ -41,11 +41,8 @@ public sealed partial class PatronJourneyTests
             AssertAnalyticsMetricsEqual(baselineBody.RootElement, allWithSystemRowsBody.RootElement);
 
             using var systemWithSystemRows = await superClient.GetAsync("/api/asap/staff/analytics?scope=system&range=last30");
-            Assert.AreEqual(HttpStatusCode.OK, systemWithSystemRows.StatusCode,
-                await systemWithSystemRows.Content.ReadAsStringAsync());
-            using var systemWithSystemRowsBody = JsonDocument.Parse(await systemWithSystemRows.Content.ReadAsStringAsync());
-            AssertAnalyticsScope(systemWithSystemRowsBody.RootElement, null, "all");
-            AssertAnalyticsMetricsEqual(baselineBody.RootElement, systemWithSystemRowsBody.RootElement);
+            Assert.AreEqual(HttpStatusCode.BadRequest, systemWithSystemRows.StatusCode,
+                "System settings scope cannot authorize an all-library metric view.");
 
             await SeedAnalyticsFixtureAsync(organizationA, organizationB, suffix);
             ordinaryRow = await CreateCorrectiveStaffAsync(superAdmin, "staff", organizationA);
@@ -115,7 +112,7 @@ public sealed partial class PatronJourneyTests
             await DeactivateAnalyticsOrganizationAsync(organizationB);
 
             using var systemAfterDeactivation = await superClient.GetAsync(
-                "/api/asap/staff/analytics?scope=system&range=last30");
+                "/api/asap/staff/analytics?scope=all&range=last30");
             Assert.AreEqual(HttpStatusCode.OK, systemAfterDeactivation.StatusCode,
                 await systemAfterDeactivation.Content.ReadAsStringAsync());
             using var systemAfterDeactivationBody =

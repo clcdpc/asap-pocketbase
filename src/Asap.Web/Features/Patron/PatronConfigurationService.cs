@@ -119,19 +119,19 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
         }
 
         var systemWorkflow = await context.WorkflowSettings.AsNoTracking()
-            .SingleAsync(item => item.OrganizationId == 1, cancellationToken);
-        var libraryWorkflow = organizationId == 1
+            .SingleAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
+        var libraryWorkflow = organizationId == LibraryScope.SystemOrganizationId
             ? null
             : await context.WorkflowSettings.AsNoTracking()
                 .SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
         var systemPatron = await context.PatronSettings.AsNoTracking()
-            .SingleAsync(item => item.OrganizationId == 1, cancellationToken);
-        var libraryPatron = organizationId == 1
+            .SingleAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
+        var libraryPatron = organizationId == LibraryScope.SystemOrganizationId
             ? null
             : await context.PatronSettings.AsNoTracking()
                 .SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
         var systemSettings = await context.SystemSettings.AsNoTracking()
-            .SingleAsync(item => item.OrganizationId == 1, cancellationToken);
+            .SingleAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
 
         var formats = await LoadFormatsAsync(context, organizationId, cancellationToken);
         var customFields = await LoadCustomFieldsAsync(context, organizationId, cancellationToken);
@@ -147,11 +147,11 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
             cancellationToken);
         var duplicateStatusLabels = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["suggestion"] = Pick(libraryPatron?.SuggestionStatusLabel, systemPatron.SuggestionStatusLabel, "Received"),
-            ["outstanding_purchase"] = Pick(libraryPatron?.OutstandingPurchaseStatusLabel, systemPatron.OutstandingPurchaseStatusLabel, "Under review"),
-            ["pending_hold"] = Pick(libraryPatron?.PendingHoldStatusLabel, systemPatron.PendingHoldStatusLabel, "Being prepared"),
-            ["hold_placed"] = Pick(libraryPatron?.HoldPlacedStatusLabel, systemPatron.HoldPlacedStatusLabel, "Hold placed"),
-            ["closed"] = Pick(libraryPatron?.ClosedStatusLabel, systemPatron.ClosedStatusLabel, "Completed"),
+            [RequestStatus.Suggestion] = Pick(libraryPatron?.SuggestionStatusLabel, systemPatron.SuggestionStatusLabel, "Received"),
+            [RequestStatus.OutstandingPurchase] = Pick(libraryPatron?.OutstandingPurchaseStatusLabel, systemPatron.OutstandingPurchaseStatusLabel, "Under review"),
+            [RequestStatus.PendingHold] = Pick(libraryPatron?.PendingHoldStatusLabel, systemPatron.PendingHoldStatusLabel, "Being prepared"),
+            [RequestStatus.HoldPlaced] = Pick(libraryPatron?.HoldPlacedStatusLabel, systemPatron.HoldPlacedStatusLabel, "Hold placed"),
+            [RequestStatus.Closed] = Pick(libraryPatron?.ClosedStatusLabel, systemPatron.ClosedStatusLabel, "Completed"),
             ["rejected"] = Pick(libraryPatron?.RejectedStatusLabel, systemPatron.RejectedStatusLabel, "Not selected for purchase"),
             ["hold_completed"] = Pick(libraryPatron?.HoldCompletedStatusLabel, systemPatron.HoldCompletedStatusLabel, "Completed"),
             ["hold_not_picked_up"] = Pick(libraryPatron?.HoldNotPickedUpStatusLabel, systemPatron.HoldNotPickedUpStatusLabel, "Closed"),
@@ -233,24 +233,24 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
         CancellationToken cancellationToken)
     {
         var formats = await context.MaterialFormats.AsNoTracking()
-            .Where(item => item.OwnerOrganizationId == 1 || item.OwnerOrganizationId == organizationId)
+            .Where(item => item.OwnerOrganizationId == LibraryScope.SystemOrganizationId || item.OwnerOrganizationId == organizationId)
             .ToListAsync(cancellationToken);
         // A library custom format is a distinct owned identity. If legacy data ever
         // contains a colliding code, keep the selected library identity deterministic
         // so runtime validation cannot fail with SingleOrDefault on duplicate codes.
         formats = formats
             .GroupBy(item => item.Code, StringComparer.Ordinal)
-            .Select(group => organizationId != 1
+            .Select(group => organizationId != LibraryScope.SystemOrganizationId
                 ? group.OrderByDescending(item => item.OwnerOrganizationId == organizationId).ThenBy(item => item.Id).First()
                 : group.OrderBy(item => item.Id).First())
             .ToList();
-        var overrides = organizationId == 1
+        var overrides = organizationId == LibraryScope.SystemOrganizationId
             ? []
             : await context.MaterialFormatOverrides.AsNoTracking()
                 .Where(item => item.LibraryOrganizationId == organizationId)
                 .ToListAsync(cancellationToken);
         var overrideByFormat = overrides.ToDictionary(item => item.MaterialFormatId);
-        var customRules = organizationId == 1
+        var customRules = organizationId == LibraryScope.SystemOrganizationId
             ? []
             : await context.MaterialFormatCustomFieldRules.AsNoTracking()
                 .Where(item => item.LibraryOrganizationId == organizationId)
@@ -299,7 +299,7 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
         int organizationId,
         CancellationToken cancellationToken)
     {
-        if (organizationId == 1)
+        if (organizationId == LibraryScope.SystemOrganizationId)
         {
             return [];
         }
@@ -334,7 +334,7 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
         int organizationId,
         CancellationToken cancellationToken)
     {
-        var ownerId = organizationId != 1 && await context.PublicationOptionSets.AsNoTracking()
+        var ownerId = organizationId != LibraryScope.SystemOrganizationId && await context.PublicationOptionSets.AsNoTracking()
             .AnyAsync(item => item.OrganizationId == organizationId, cancellationToken)
             ? organizationId
             : 1;
@@ -351,7 +351,7 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
         int organizationId,
         CancellationToken cancellationToken)
     {
-        var ownerId = organizationId != 1 && await context.CommonCreatorSets.AsNoTracking()
+        var ownerId = organizationId != LibraryScope.SystemOrganizationId && await context.CommonCreatorSets.AsNoTracking()
             .AnyAsync(item => item.OrganizationId == organizationId, cancellationToken)
             ? organizationId
             : 1;
@@ -368,7 +368,7 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
         int organizationId,
         CancellationToken cancellationToken)
     {
-        var ownerId = organizationId != 1 && await context.PatronCodeEligibilitySets.AsNoTracking()
+        var ownerId = organizationId != LibraryScope.SystemOrganizationId && await context.PatronCodeEligibilitySets.AsNoTracking()
             .AnyAsync(item => item.OrganizationId == organizationId, cancellationToken)
             ? organizationId
             : 1;
@@ -385,8 +385,8 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
         CancellationToken cancellationToken)
     {
         var system = await context.EmailSettings.AsNoTracking()
-            .SingleAsync(item => item.OrganizationId == 1, cancellationToken);
-        var library = organizationId == 1
+            .SingleAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
+        var library = organizationId == LibraryScope.SystemOrganizationId
             ? null
             : await context.EmailSettings.AsNoTracking()
                 .SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
@@ -403,14 +403,14 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
     {
         var system = await context.EmailTemplates.AsNoTracking()
             .SingleOrDefaultAsync(
-                item => item.OrganizationId == 1 && item.TemplateKey == "suggestion_submitted",
+                item => item.OrganizationId == LibraryScope.SystemOrganizationId && item.TemplateKey == "suggestion_submitted",
                 cancellationToken);
         if (system is null)
         {
             return null;
         }
 
-        var library = organizationId == 1
+        var library = organizationId == LibraryScope.SystemOrganizationId
             ? null
             : await context.EmailTemplates.AsNoTracking()
                 .SingleOrDefaultAsync(
@@ -435,8 +435,8 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
         CancellationToken cancellationToken)
     {
         var system = await context.Branding.AsNoTracking()
-            .SingleOrDefaultAsync(item => item.OrganizationId == 1, cancellationToken);
-        var library = organizationId == 1
+            .SingleOrDefaultAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
+        var library = organizationId == LibraryScope.SystemOrganizationId
             ? null
             : await context.Branding.AsNoTracking()
                 .SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
@@ -454,11 +454,11 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
         CancellationToken cancellationToken)
     {
         var providers = await context.ExternalSearchProviders.AsNoTracking()
-            .Where(item => item.OrganizationId == 1)
+            .Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId)
             .OrderBy(item => item.SortOrder)
             .ThenBy(item => item.Id)
             .ToListAsync(cancellationToken);
-        var overrides = organizationId == 1
+        var overrides = organizationId == LibraryScope.SystemOrganizationId
             ? []
             : await context.ExternalSearchProviderOverrides.AsNoTracking()
                 .Where(item => item.LibraryOrganizationId == organizationId)

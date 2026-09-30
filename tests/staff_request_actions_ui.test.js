@@ -94,7 +94,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       customFields: { shelf: { value: 'Reference', type: 'text', label: 'Shelf' } },
       workflowTags: [], phaseEnteredAt: '2026-01-01T00:00:00Z',
       created: '2026-01-01T00:00:00Z', updated: '2026-01-01T00:00:00Z',
-      capabilities: { canEditIdentifier: true, canChangeBib: true, canChangeWorkflowState: true },
+      capabilities: { canEditIdentifier: true, canChangeBib: true, canChangeWorkflowState: true, canPlaceHold: Boolean(scenarioOptions.verifiedPendingHold), allowedActions: ['edit', 'purchase', 'alreadyOwn', 'catalogFound', 'reject', 'silentClose', 'closeDuplicate', 'close', 'reopen'] },
       activity: [
         { id: '9007199254740997', eventType: 'status_changed', actorType: 'staff',
           actorName: null, message: '<svg onload=alert(1)>', created: '2026-01-01T00:00:00Z' },
@@ -102,6 +102,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
           actorName: 'Named <img src=x onerror=alert(1)>', message: 'Second', created: '2026-01-01T00:00:00Z' }
       ]
     };
+    if (scenarioOptions.serverDeniesActions) request.capabilities.allowedActions = [];
     if (scenarioOptions.pickupOperator) {
       request.pickupOperation = { id: '00000000-0000-0000-0000-000000000001', state: 1, targetBranchId: 10 };
       request.capabilities = { canEditIdentifier: false, canChangeBib: false, canChangeWorkflowState: false,
@@ -188,7 +189,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       if (url.endsWith('/pickup-operations/00000000-0000-0000-0000-000000000001/reconcile') && options.method === 'POST') {
         payload = JSON.parse(options.body);
         currentRequest = { ...currentRequest, version: 'v2', pickupOperation: null,
-          capabilities: { canEditIdentifier: true, canChangeBib: true, canChangeWorkflowState: true } };
+          capabilities: { canEditIdentifier: true, canChangeBib: true, canChangeWorkflowState: true, allowedActions: ['edit', 'purchase', 'alreadyOwn', 'catalogFound', 'reject', 'silentClose', 'closeDuplicate', 'close', 'reopen'] } };
         committed = true;
         return response(200, { committed: true, request: currentRequest, finalStatus: currentRequest.status,
           snapshotChanged: false, confirmedByRead: true });
@@ -330,6 +331,15 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     const workflow = await import(pathToFileURL(path.join(temporary, 'staff/js/workflow.js')).href);
     await workflow.createWorkflowApp().start();
     await until(() => document.querySelector('#request-dialog').open, 'request detail opens');
+    if (scenarioOptions.serverDeniesActions) {
+      const buttons = [...document.querySelectorAll('.action-bar button')];
+      const purchase = buttons.find(button => button.textContent.includes('Purchase'));
+      assert.ok(purchase, 'the request presentation still shows the suggestion action group');
+      assert.equal(purchase.disabled, true, 'the server transition policy must disable purchase');
+      assert.equal(buttons.find(button => button.textContent.includes('Reject')).disabled, true);
+      assert.equal(payload, null);
+      return;
+    }
     const events = document.querySelectorAll('.request-activity li');
     assert.equal(events.length, 2);
     assert.equal(events[0].dataset.eventId, '9007199254740997');
@@ -837,6 +847,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
 }
 
 (async () => {
+  await scenario('purchase', true, false, { serverDeniesActions: true });
   await scenario('purchase', true, false);
   await scenario('purchase', false, true);
   await scenario('purchase', false, true, { serverAdvancedStatus: true });

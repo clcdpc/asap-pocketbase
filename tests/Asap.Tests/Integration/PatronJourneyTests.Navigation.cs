@@ -60,7 +60,7 @@ public sealed partial class PatronJourneyTests
                     Id = otherLibraryId, DisplayName = "Related foreign library", IsActive = true
                 });
                 var formatId = await context.MaterialFormats.Select(item => item.Id).FirstAsync();
-                var now = DateTime.UtcNow;
+                var now = timeProvider!.GetUtcNow().UtcDateTime;
                 var first = new TitleRequest
                 {
                     LibraryOrganizationId = 2, Barcode = "20000000009341", Title = title,
@@ -95,7 +95,7 @@ public sealed partial class PatronJourneyTests
 
             var titles = factory.Services.GetRequiredService<TitleRequestViewService>();
             var copies = factory.Services.GetRequiredService<AdditionalCopyService>();
-            var scoped = await titles.ListAsync(libraryStaff, "all", CancellationToken.None);
+            var scoped = await titles.ListAsync(libraryStaff, LibraryScope.All, CancellationToken.None);
             Assert.IsNotNull(scoped);
             var firstScoped = scoped.Items.Single(item => item.Id == firstId.ToString());
             Assert.AreEqual(1, firstScoped.RelatedRequests?.Count);
@@ -107,22 +107,22 @@ public sealed partial class PatronJourneyTests
 
             var detail = await titles.GetAsync(libraryStaff, firstId.ToString(), CancellationToken.None);
             Assert.AreEqual(1, detail?.RelatedRequests?.Count);
-            var all = await titles.ListAsync(superAdmin, "all", CancellationToken.None);
+            var all = await titles.ListAsync(superAdmin, LibraryScope.All, CancellationToken.None);
             Assert.IsNotNull(all);
             Assert.AreEqual(2, all.Items.Single(item => item.Id == firstId.ToString()).RelatedRequests?.Count);
-            var selected = await titles.ListAsync(superAdmin, "2", CancellationToken.None);
+            var selected = await titles.ListAsync(superAdmin, LibraryScope.ForLibrary(2), CancellationToken.None);
             Assert.IsNotNull(selected);
             Assert.AreEqual(1, selected.Items.Single(item => item.Id == firstId.ToString()).RelatedRequests?.Count);
-            Assert.AreEqual(1, (await titles.GetAsync(superAdmin, firstId.ToString(), CancellationToken.None, "2"))?.RelatedRequests?.Count);
-            Assert.AreEqual(2, (await titles.GetAsync(superAdmin, firstId.ToString(), CancellationToken.None, "all"))?.RelatedRequests?.Count);
-            Assert.IsNull(await titles.GetAsync(superAdmin, foreignId.ToString(), CancellationToken.None, "2"));
+            Assert.AreEqual(1, (await titles.GetAsync(superAdmin, firstId.ToString(), CancellationToken.None, LibraryScope.ForLibrary(2)))?.RelatedRequests?.Count);
+            Assert.AreEqual(2, (await titles.GetAsync(superAdmin, firstId.ToString(), CancellationToken.None, LibraryScope.All))?.RelatedRequests?.Count);
+            Assert.IsNull(await titles.GetAsync(superAdmin, foreignId.ToString(), CancellationToken.None, LibraryScope.ForLibrary(2)));
             var foreignDto = all.Items.Single(item => item.Id == foreignId.ToString());
             Assert.IsTrue(foreignDto.WorkflowContext!.AutoPromote);
             Assert.IsTrue(foreignDto.WorkflowContext.OutstandingTimeoutEnabled);
             Assert.AreEqual(8, foreignDto.WorkflowContext.OutstandingTimeoutDays);
             Assert.AreEqual(2, all.Items.Single(item => item.Id == secondId.ToString()).RelatedRequests?.Count);
 
-            var scopedCopies = await copies.ListAsync(libraryStaff, "all", "open", CancellationToken.None);
+            var scopedCopies = await copies.ListAsync(libraryStaff, LibraryScope.All, "open", CancellationToken.None);
             Assert.IsNotNull(scopedCopies);
             Assert.IsFalse(scopedCopies.Items.Single(item => item.Id == copyId.ToString()).TimeoutContext!.Enabled);
 
@@ -132,10 +132,10 @@ public sealed partial class PatronJourneyTests
                 organization.IsActive = false;
                 await context.SaveChangesAsync();
             }
-            Assert.IsNull(await titles.ListAsync(superAdmin, otherLibraryId.ToString(), CancellationToken.None));
-            Assert.IsTrue((await titles.ListAsync(superAdmin, "all", CancellationToken.None))!
+            Assert.IsNull(await titles.ListAsync(superAdmin, LibraryScope.ForLibrary(otherLibraryId), CancellationToken.None));
+            Assert.IsTrue((await titles.ListAsync(superAdmin, LibraryScope.All, CancellationToken.None))!
                 .Items.Any(item => item.Id == foreignId.ToString()));
-            Assert.IsNotNull(await titles.GetAsync(superAdmin, foreignId.ToString(), CancellationToken.None, "all"));
+            Assert.IsNotNull(await titles.GetAsync(superAdmin, foreignId.ToString(), CancellationToken.None, LibraryScope.All));
         }
         finally
         {

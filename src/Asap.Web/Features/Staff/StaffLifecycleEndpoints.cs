@@ -1,3 +1,4 @@
+using Asap.Web.Infrastructure.Data;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Asap.Web.Features.Staff;
@@ -25,7 +26,7 @@ public static class StaffLifecycleEndpoints
         CancellationToken cancellationToken)
     {
         var actor = StaffAuthenticationEndpoints.RequireCurrentStaff(context);
-        if (libraryOrgId <= 1 || actor.Role != "super_admin" && actor.OrganizationId != libraryOrgId)
+        if (libraryOrgId <= LibraryScope.SystemOrganizationId || !StaffEligibilityService.CanAccess(actor, libraryOrgId))
         {
             return Results.Json(
                 new { code = "staff_scope_forbidden", message = "Staff access is not available for this library." },
@@ -50,7 +51,7 @@ public static class StaffLifecycleEndpoints
         CancellationToken cancellationToken)
     {
         var actor = StaffAuthenticationEndpoints.RequireCurrentStaff(context);
-        if (actor.Role is not ("admin" or "super_admin"))
+        if (!StaffEligibilityService.RoleMeets(actor.Role, StaffRoleRequirement.Admin))
         {
             return Forbidden();
         }
@@ -58,7 +59,7 @@ public static class StaffLifecycleEndpoints
         var users = await lifecycle.ListAsync(actor, orgId, cancellationToken);
         return Results.Json(new
         {
-            canAssignSuperAdmin = actor.Role == "super_admin",
+            canAssignSuperAdmin = actor.Role == StaffRole.SuperAdmin,
             users = users.Select(ToDto)
         });
     }

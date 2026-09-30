@@ -349,7 +349,7 @@ public sealed partial class PatronJourneyTests
         }
     }
 
-    private static async Task PrepareTimeoutCycleAsync(
+    private async Task PrepareTimeoutCycleAsync(
         IDbContextFactory<AsapDbContext> contextFactory,
         string queueName,
         long requestId,
@@ -369,11 +369,11 @@ public sealed partial class PatronJourneyTests
         progress.LastOutcomeItemId = null;
         progress.LastOutcomeCode = "test_cycle_started";
         progress.LastOutcomeUtc = request.CreatedUtc;
-        progress.UpdatedUtc = DateTime.UtcNow;
+        progress.UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime;
         await context.SaveChangesAsync();
     }
 
-    private static async Task<string?> ReadRequestStatusAsync(
+    private async Task<string?> ReadRequestStatusAsync(
         IDbContextFactory<AsapDbContext> contextFactory,
         long requestId)
     {
@@ -384,7 +384,7 @@ public sealed partial class PatronJourneyTests
             .SingleAsync();
     }
 
-    private static async Task DeleteRequestIdsAsync(
+    private async Task DeleteRequestIdsAsync(
         IDbContextFactory<AsapDbContext> contextFactory,
         IReadOnlyCollection<long> requestIds)
     {

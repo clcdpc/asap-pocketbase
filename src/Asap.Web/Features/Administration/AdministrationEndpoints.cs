@@ -1,3 +1,4 @@
+using Asap.Web.Infrastructure.Data;
 using Asap.Shared;
 using Asap.Web.Features.Staff;
 using Asap.Web.Features.Email;
@@ -84,11 +85,11 @@ public static class AdministrationEndpoints
         {
             var result = await service.GetSettingsAsync(
                 StaffAuthenticationEndpoints.RequireCurrentStaff(context),
-                orgId,
+                ParseSettingsScope(context, orgId),
                 cancellationToken);
             return result.Code == "ok" ? Results.Json(result.Data) : ToResult(result);
         }
-        catch (InvalidOperationException exception)
+        catch (AdministrationInputException exception)
         {
             return Invalid(exception);
         }
@@ -117,10 +118,10 @@ public static class AdministrationEndpoints
         {
             return ToResult(await service.SaveSettingsAsync(
                 StaffAuthenticationEndpoints.RequireCurrentStaff(context),
-                payload,
+                AdministrationSettingsBinding.Bind(StaffAuthenticationEndpoints.RequireCurrentStaff(context), payload),
                 cancellationToken));
         }
-        catch (InvalidOperationException exception)
+        catch (AdministrationInputException exception)
         {
             return Invalid(exception);
         }
@@ -141,7 +142,7 @@ public static class AdministrationEndpoints
                 input.Version,
                 cancellationToken));
         }
-        catch (InvalidOperationException exception)
+        catch (AdministrationInputException exception)
         {
             return Invalid(exception);
         }
@@ -161,7 +162,7 @@ public static class AdministrationEndpoints
             var clear = string.Equals(form["clearLogo"].FirstOrDefault(), "true", StringComparison.OrdinalIgnoreCase);
             var result = await service.SaveLogoAsync(
                 StaffAuthenticationEndpoints.RequireCurrentStaff(context),
-                orgId,
+                ParseSettingsScope(context, orgId),
                 data,
                 file?.ContentType ?? "image/*",
                 file?.FileName ?? "logo",
@@ -171,7 +172,7 @@ public static class AdministrationEndpoints
                 cancellationToken);
             return ToResult(result);
         }
-        catch (InvalidOperationException exception)
+        catch (AdministrationInputException exception)
         {
             return Invalid(exception);
         }
@@ -188,7 +189,7 @@ public static class AdministrationEndpoints
         {
             return ToResult(await service.SaveLogoAsync(
                 StaffAuthenticationEndpoints.RequireCurrentStaff(context),
-                orgId,
+                ParseSettingsScope(context, orgId),
                 [],
                 "image/*",
                 "logo",
@@ -197,7 +198,7 @@ public static class AdministrationEndpoints
                 version,
                 cancellationToken));
         }
-        catch (InvalidOperationException exception)
+        catch (AdministrationInputException exception)
         {
             return Invalid(exception);
         }
@@ -218,7 +219,7 @@ public static class AdministrationEndpoints
                 version,
                 cancellationToken));
         }
-        catch (InvalidOperationException exception)
+        catch (AdministrationInputException exception)
         {
             return Invalid(exception);
         }
@@ -243,7 +244,7 @@ public static class AdministrationEndpoints
                 StaffAuthenticationEndpoints.RequireCurrentStaff(context),
                 cancellationToken));
         }
-        catch (InvalidOperationException exception)
+        catch (AdministrationInputException exception)
         {
             return Invalid(exception);
         }
@@ -287,15 +288,29 @@ public static class AdministrationEndpoints
             StaffAuthenticationEndpoints.RequireCurrentStaff(context),
             cancellationToken));
 
+    private static LibraryScope ParseSettingsScope(HttpContext context, string? value)
+    {
+        var actor = StaffAuthenticationEndpoints.RequireCurrentStaff(context);
+        if (!LibraryScope.TryParse(value, AdministrationSettingsBinding.DefaultScope(actor), out var scope))
+        {
+            throw new AdministrationInputException("The selected settings scope is invalid.");
+        }
+        return scope;
+    }
+
     private static async Task<IResult> ListPatronCodesAsync(
         HttpContext context,
         string? orgId,
         AdministrationService service,
-        CancellationToken cancellationToken) =>
-        ToResult(await service.ListPatronCodesAsync(
-            StaffAuthenticationEndpoints.RequireCurrentStaff(context),
-            orgId,
-            cancellationToken));
+        CancellationToken cancellationToken)
+    {
+        var actor = StaffAuthenticationEndpoints.RequireCurrentStaff(context);
+        if (!LibraryScope.TryParse(orgId, AdministrationSettingsBinding.DefaultScope(actor), out var scope))
+        {
+            return Results.BadRequest(new { code = "organization_invalid" });
+        }
+        return ToResult(await service.ListPatronCodesAsync(actor, scope, cancellationToken));
+    }
 
     private static async Task<IResult> ListAuditAsync(
         HttpContext context,
@@ -315,17 +330,16 @@ public static class AdministrationEndpoints
         IBackgroundJobClient jobs)
     {
         var actor = StaffAuthenticationEndpoints.RequireCurrentStaff(context);
-        if (actor.Role is not ("admin" or "super_admin") ||
-            actor.Role != "super_admin" && organizationId.HasValue && organizationId != actor.OrganizationId ||
-            actor.Role != "super_admin" && actor.OrganizationId <= 1)
+        if (!StaffEligibilityService.RoleMeets(actor.Role, StaffRoleRequirement.Admin) ||
+            !StaffEligibilityService.CanAccess(actor, organizationId ?? actor.OrganizationId))
         {
             return Results.Json(new { code = "staff_scope_forbidden" }, statusCode: StatusCodes.Status403Forbidden);
         }
-        var effectiveScope = actor.Role == "super_admin" ? organizationId : actor.OrganizationId;
+        var effectiveScope = actor.Role == StaffRole.SuperAdmin ? organizationId : actor.OrganizationId;
         var evidence = new StaffJobEvidence(actor.Id, actor.AuthenticationEmail, actor.EntraTenantId);
         var jobId = jobs.Enqueue<BackgroundWorkflowJobs>(job =>
-            job.ProcessManualWorkflowAsync(evidence, effectiveScope ?? 1, CancellationToken.None));
-        return Results.Accepted(value: new { code = "queued", jobId, organizationId = effectiveScope ?? 1 });
+            job.ProcessManualWorkflowAsync(evidence, effectiveScope ?? LibraryScope.SystemOrganizationId, CancellationToken.None));
+        return Results.Accepted(value: new { code = "queued", jobId, organizationId = effectiveScope ?? LibraryScope.SystemOrganizationId });
     }
 
     private static IResult RunWeeklySummaryNowAsync(
@@ -335,14 +349,13 @@ public static class AdministrationEndpoints
         bool force = false)
     {
         var actor = StaffAuthenticationEndpoints.RequireCurrentStaff(context);
-        if (actor.Role is not ("admin" or "super_admin") ||
-            actor.Role != "super_admin" && organizationId.HasValue && organizationId != actor.OrganizationId ||
-            actor.Role != "super_admin" && actor.OrganizationId <= 1)
+        if (!StaffEligibilityService.RoleMeets(actor.Role, StaffRoleRequirement.Admin) ||
+            !StaffEligibilityService.CanAccess(actor, organizationId ?? actor.OrganizationId))
         {
             return Results.Json(new { code = "staff_scope_forbidden" }, statusCode: StatusCodes.Status403Forbidden);
         }
 
-        var effectiveScope = actor.Role == "super_admin" ? organizationId : actor.OrganizationId;
+        var effectiveScope = actor.Role == StaffRole.SuperAdmin ? organizationId : actor.OrganizationId;
         var evidence = new StaffJobEvidence(actor.Id, actor.AuthenticationEmail, actor.EntraTenantId);
         if (!force)
         {
@@ -352,7 +365,7 @@ public static class AdministrationEndpoints
             {
                 code = "queued",
                 jobId = ordinaryJobId,
-                organizationId = effectiveScope ?? 1
+                organizationId = effectiveScope ?? LibraryScope.SystemOrganizationId
             });
         }
 
@@ -364,7 +377,7 @@ public static class AdministrationEndpoints
             code = "queued",
             jobId,
             manualRunId,
-            organizationId = effectiveScope ?? 1
+            organizationId = effectiveScope ?? LibraryScope.SystemOrganizationId
         });
     }
 
@@ -375,11 +388,11 @@ public static class AdministrationEndpoints
         CancellationToken cancellationToken)
     {
         var actor = StaffAuthenticationEndpoints.RequireCurrentStaff(context);
-        if (actor.Role != "super_admin" && organizationId.HasValue && organizationId != actor.OrganizationId)
+        if (actor.Role != StaffRole.SuperAdmin && organizationId.HasValue && organizationId != actor.OrganizationId)
         {
             return Results.Json(new { code = "staff_scope_forbidden" }, statusCode: StatusCodes.Status403Forbidden);
         }
-        var scope = organizationId ?? (actor.Role == "super_admin" ? 1 : actor.OrganizationId);
+        var scope = organizationId ?? (actor.Role == StaffRole.SuperAdmin ? 1 : actor.OrganizationId);
         var items = new List<object>();
         foreach (var queue in QueueNames.Configured.Append(QueueNames.HoldRecovery))
         {
@@ -401,7 +414,7 @@ public static class AdministrationEndpoints
         {
             return Results.Json(new { code = "staff_scope_forbidden" }, statusCode: StatusCodes.Status403Forbidden);
         }
-        if (actor.Role != "super_admin" && organizationId.HasValue && organizationId != actor.OrganizationId)
+        if (actor.Role != StaffRole.SuperAdmin && organizationId.HasValue && organizationId != actor.OrganizationId)
         {
             return Results.Json(new { code = "staff_scope_forbidden" }, statusCode: StatusCodes.Status403Forbidden);
         }
@@ -466,14 +479,14 @@ public static class AdministrationEndpoints
         return Results.Json(new { code = result.Code, message = result.Message, data = result.Data }, statusCode: statusCode);
     }
 
-    private static IResult Invalid(InvalidOperationException exception) =>
+    private static IResult Invalid(AdministrationInputException exception) =>
         Results.BadRequest(new { code = "settings_invalid", message = exception.Message });
 
     private static async Task<byte[]> ReadFileAsync(IFormFile file, CancellationToken cancellationToken)
     {
         if (file.Length > LogoImageValidator.MaxBytes)
         {
-            throw new InvalidOperationException("The logo must be between 1 byte and 2 MB.");
+            throw new AdministrationInputException("The logo must be between 1 byte and 2 MB.");
         }
         await using var input = file.OpenReadStream();
         await using var stream = new MemoryStream(Math.Min((int)Math.Max(file.Length, 0), LogoImageValidator.MaxBytes));
@@ -483,13 +496,13 @@ public static class AdministrationEndpoints
         {
             if (stream.Length + read > LogoImageValidator.MaxBytes)
             {
-                throw new InvalidOperationException("The logo must be between 1 byte and 2 MB.");
+                throw new AdministrationInputException("The logo must be between 1 byte and 2 MB.");
             }
             await stream.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
         }
         if (stream.Length == 0)
         {
-            throw new InvalidOperationException("The logo must be between 1 byte and 2 MB.");
+            throw new AdministrationInputException("The logo must be between 1 byte and 2 MB.");
         }
         return stream.ToArray();
     }

@@ -234,7 +234,7 @@ public static class TitleRequestEndpoints
             {
                 throw;
             }
-            catch (Exception exception)
+            catch (PolarisOperationalException exception)
             {
                 loggerFactory.CreateLogger("Asap.Web.Features.Staff.TitleRequestEndpoints")
                     .LogWarning(exception, "Patron ID was unavailable for request research links");
@@ -456,7 +456,11 @@ public static class TitleRequestEndpoints
         TitleRequestViewService views,
         CancellationToken cancellationToken)
     {
-        var result = await views.ListAsync(Current(context), scope, cancellationToken);
+        if (!LibraryScope.TryParse(scope, LibraryScope.All, out var parsedScope))
+        {
+            return Results.BadRequest(new { code = "invalid_scope" });
+        }
+        var result = await views.ListAsync(Current(context), parsedScope, cancellationToken);
         return result is null
             ? Results.BadRequest(new { code = "invalid_scope", message = "The workflow scope is invalid." })
             : Results.Json(result);
@@ -469,7 +473,11 @@ public static class TitleRequestEndpoints
         TitleRequestViewService views,
         CancellationToken cancellationToken)
     {
-        var result = await views.GetAsync(Current(context), id, cancellationToken, scope);
+        if (!LibraryScope.TryParse(scope, LibraryScope.All, out var parsedScope))
+        {
+            return Results.BadRequest(new { code = "invalid_scope" });
+        }
+        var result = await views.GetAsync(Current(context), id, cancellationToken, parsedScope);
         return result is null ? Results.NotFound() : Results.Json(result);
     }
 
@@ -549,7 +557,7 @@ public static class TitleRequestEndpoints
         TitleRequestMutationResult result;
         try
         {
-            result = await mutations.ActionAsync(Current(context), id, input, cancellationToken);
+            result = await mutations.ActionAsync(Current(context), id, input.ToCommand(), cancellationToken);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -566,6 +574,7 @@ public static class TitleRequestEndpoints
         {
             row = await views.GetAsync(Current(context), id.ToString(CultureInfo.InvariantCulture), cancellationToken);
         }
+        // The mutation committed; a detail-refresh failure must still return the accepted outcome.
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
             loggerFactory.CreateLogger("Asap.Web.Features.Staff.TitleRequestEndpoints")
@@ -610,11 +619,10 @@ public static class TitleRequestEndpoints
     private static async Task<IResult> PickupOptionsAsync(
         HttpContext context,
         long id,
-        PickupOptionsInput input,
         StaffPickupService pickup,
         CancellationToken cancellationToken)
     {
-        var result = await pickup.GetOptionsAsync(Current(context), id, input, cancellationToken);
+        var result = await pickup.GetOptionsAsync(Current(context), id, cancellationToken);
         return result.Code == "loaded" ? Results.Json(result.Options) : PickupError(result.Code);
     }
 
@@ -812,6 +820,7 @@ public static class TitleRequestEndpoints
         {
             return await views.GetAsync(Current(context), id.ToString(CultureInfo.InvariantCulture), cancellationToken);
         }
+        // This read follows a committed mutation; log its failure and return explicit committed metadata.
         catch (Exception exception)
         {
             cancellationToken.ThrowIfCancellationRequested();

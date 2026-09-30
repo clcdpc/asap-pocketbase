@@ -64,7 +64,7 @@ public sealed record AdditionalCopyScopeResult(
     IReadOnlyList<AdditionalCopyDto> Items,
     string Scope,
     string Status,
-    IReadOnlyList<object> AvailableLibraries);
+    IReadOnlyList<OrganizationChoice> AvailableLibraries);
 
 public sealed record AdditionalCopyPreview(
     int Bibid,
@@ -90,25 +90,22 @@ public sealed record AdditionalCopyMutationResult(
 
 public sealed class AdditionalCopyService(
     IDbContextFactory<AsapDbContext> contextFactory,
-    ExternalConfiguration configuration,
     IEmailSender emailSender,
     RecipientDomainPolicy recipientDomainPolicy,
     IEmailOutboxDispatcher outboxDispatcher,
     TimeProvider timeProvider,
-    ILogger<AdditionalCopyService> logger)
+    ILogger<AdditionalCopyService> logger,
+    StaffEligibilityService staffEligibility)
 {
-    private readonly HashSet<Guid> allowedTenantIds = configuration.Authentication.Entra.AllowedTenantIds!
-        .Select(Guid.Parse)
-        .ToHashSet();
 
     public async Task<AdditionalCopyScopeResult?> ListAsync(
         CurrentStaff actor,
-        string? scope,
+        LibraryScope scope,
         string? status,
         CancellationToken cancellationToken)
     {
         var normalizedStatus = string.IsNullOrWhiteSpace(status) ? "open" : status.Trim().ToLowerInvariant();
-        if (normalizedStatus is not ("open" or "closed"))
+        if (normalizedStatus is not ("open" or RequestStatus.Closed))
         {
             return null;
         }
@@ -136,7 +133,7 @@ public sealed class AdditionalCopyService(
             await BuildDtosAsync(context, requests, actor, null, cancellationToken),
             resolved.Scope,
             normalizedStatus,
-            organizations.Select(item => (object)new { id = item.Id, name = item.DisplayName }).ToList());
+            organizations.Select(item => new OrganizationChoice(item.Id, item.DisplayName)).ToList());
     }
 
     public async Task<AdditionalCopyDto?> GetAsync(
@@ -178,7 +175,7 @@ public sealed class AdditionalCopyService(
         {
             return ("not_found", null);
         }
-        if (source.Status is not ("pending_hold" or "hold_placed"))
+        if (source.Status is not (RequestStatus.PendingHold or RequestStatus.HoldPlaced))
         {
             return ("source_stage_invalid", null);
         }
@@ -238,7 +235,8 @@ public sealed class AdditionalCopyService(
                 ? await emailSender.CheckReadinessAsync(snapshot.LibraryOrganizationId, cancellationToken)
                 : EmailTransportReadiness.NotConfigured;
         }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             return new AdditionalCopyMutationResult("notification_dependency_unavailable");
         }
@@ -264,7 +262,7 @@ public sealed class AdditionalCopyService(
         {
             return new AdditionalCopyMutationResult("stale_version");
         }
-        if (source.Status is not ("pending_hold" or "hold_placed"))
+        if (source.Status is not (RequestStatus.PendingHold or RequestStatus.HoldPlaced))
         {
             return new AdditionalCopyMutationResult("source_stage_invalid");
         }
@@ -315,7 +313,7 @@ public sealed class AdditionalCopyService(
         context.AdditionalCopyRequests.Add(request);
 
         var openCountAfter = openCount + 1;
-        var holdText = source.Status == "hold_placed" ? "placed" : "queued";
+        var holdText = source.Status == RequestStatus.HoldPlaced ? "placed" : "queued";
         source.UpdatedUtc = now <= source.UpdatedUtc
             ? source.UpdatedUtc.AddTicks(1)
             : now;
@@ -326,7 +324,7 @@ public sealed class AdditionalCopyService(
             EventType = "additional_copy_created",
             Status = source.Status,
             CloseReason = source.CloseReason,
-            ActorType = "staff",
+            ActorType = StaffRole.Staff,
             StaffUserId = actor.Id,
             ActorName = DisplayName(locked.Staff[actor.Id]),
             Message = $"Additional-copy task {request.Id} created for BIB {source.BibId}. Patron hold remains {holdText} for the same BIB. Open additional-copy tasks for this library/BIB: {openCountAfter}.",
@@ -357,6 +355,7 @@ public sealed class AdditionalCopyService(
         {
             Dispatch(outbox);
         }
+        // The accepted task and outbox are durable; return the dispatch outcome without misreporting a rollback.
         catch (Exception exception)
         {
             logger.LogError(exception, "Additional-copy reminder dispatch failed after task {RequestId} committed", request.Id);
@@ -447,7 +446,8 @@ public sealed class AdditionalCopyService(
                 ? await emailSender.CheckReadinessAsync(snapshot.LibraryOrganizationId, cancellationToken)
                 : EmailTransportReadiness.NotConfigured;
         }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             return new AdditionalCopyMutationResult("notification_dependency_unavailable");
         }
@@ -476,7 +476,7 @@ public sealed class AdditionalCopyService(
 
         if (unclaim)
         {
-            if (clearOther && (locked.Staff[actor.Id].Role is not ("admin" or "super_admin") ||
+            if (clearOther && (locked.Staff[actor.Id].Role is not (StaffRole.Admin or StaffRole.SuperAdmin) ||
                 !request.ClaimedByStaffUserId.HasValue || request.ClaimedByStaffUserId == actor.Id))
             {
                 return new AdditionalCopyMutationResult("claim_forbidden");
@@ -538,6 +538,7 @@ public sealed class AdditionalCopyService(
         {
             Dispatch(outbox);
         }
+        // The accepted task and outbox are durable; return the dispatch outcome without misreporting a rollback.
         catch (Exception exception)
         {
             logger.LogError(exception, "Additional-copy assignment dispatch failed after task {RequestId} committed", request.Id);
@@ -582,7 +583,7 @@ public sealed class AdditionalCopyService(
         {
             return new AdditionalCopyMutationResult(validation);
         }
-        if (reopen && request!.Status == "open" || !reopen && request!.Status == "closed")
+        if (reopen && request!.Status == "open" || !reopen && request!.Status == RequestStatus.Closed)
         {
             await transaction.CommitAsync(cancellationToken);
             return new AdditionalCopyMutationResult("updated", request.Id, FinalStatus: request.Status);
@@ -606,7 +607,7 @@ public sealed class AdditionalCopyService(
         }
         else
         {
-            request!.Status = "closed";
+            request!.Status = RequestStatus.Closed;
             request.ClosedByStaffUserId = actor.Id;
             request.ClosedByDisplayName = DisplayName(locked.Staff[actor.Id]);
             request.ClosedUtc = now;
@@ -625,7 +626,7 @@ public sealed class AdditionalCopyService(
         CancellationToken cancellationToken)
     {
         if (!StaffVersion.TryDecode(input.Version, out var expectedVersion) ||
-            actor.Role is not ("admin" or "super_admin"))
+            actor.Role is not (StaffRole.Admin or StaffRole.SuperAdmin))
         {
             return new AdditionalCopyMutationResult("delete_forbidden");
         }
@@ -660,11 +661,11 @@ public sealed class AdditionalCopyService(
         {
             return new AdditionalCopyMutationResult(validation);
         }
-        if (request!.Status != "closed")
+        if (request!.Status != RequestStatus.Closed)
         {
             return new AdditionalCopyMutationResult("delete_requires_closed");
         }
-        if (locked.Staff[actor.Id].Role is not ("admin" or "super_admin"))
+        if (locked.Staff[actor.Id].Role is not (StaffRole.Admin or StaffRole.SuperAdmin))
         {
             return new AdditionalCopyMutationResult("delete_forbidden");
         }
@@ -700,10 +701,13 @@ public sealed class AdditionalCopyService(
         IEnumerable<long?> staffIds,
         CancellationToken cancellationToken)
     {
-        var organization = await context.Organizations.FromSqlInterpolated(
-                $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {organizationId}")
-            .SingleOrDefaultAsync(cancellationToken);
-        if (organization?.IsActive != true)
+        if (!await StaffEligibilityService.LockOrganizationsAsync(context,
+                [LibraryScope.SystemOrganizationId, organizationId], cancellationToken))
+        {
+            return new LockedRelationshipContext("organization_inactive");
+        }
+        var organization = context.Organizations.Local.Single(item => item.Id == organizationId);
+        if (!organization.IsActive)
         {
             return new LockedRelationshipContext("organization_inactive");
         }
@@ -720,7 +724,8 @@ public sealed class AdditionalCopyService(
         }
         if (!staff.TryGetValue(actor.Id, out var lockedActor) ||
             !IsSameCurrentActor(actor, lockedActor) ||
-            !IsRelationshipEligible(lockedActor, organizationId))
+            !IsRelationshipEligible(lockedActor, organizationId) ||
+            !StaffEligibilityService.HasLockedActiveOrganization(context, lockedActor))
         {
             return new LockedRelationshipContext("staff_scope_forbidden");
         }
@@ -728,13 +733,10 @@ public sealed class AdditionalCopyService(
     }
 
     private bool IsSameCurrentActor(CurrentStaff actor, StaffUser row) =>
-        allowedTenantIds.Contains(actor.EntraTenantId) &&
-        StaffEmail.MatchesAuthenticationEmail(row, actor.AuthenticationEmail);
+        staffEligibility.IsCurrentIdentity(actor, row);
 
     private bool IsRelationshipEligible(StaffUser row, int organizationId) =>
-        row.IsActive && StaffEmail.IsValidAuthenticationEmail(row) &&
-        (row.Role == "super_admin" && row.OrganizationId == 1 ||
-         row.Role is "staff" or "admin" && row.OrganizationId == organizationId);
+        StaffEligibilityService.IsAssignmentEligible(row, organizationId);
 
     private string? RetainedClaimInvalidReason(
         AdditionalCopyRequest request,
@@ -778,7 +780,7 @@ public sealed class AdditionalCopyService(
             return null;
         }
         var system = await context.EmailSettings.AsNoTracking()
-            .SingleOrDefaultAsync(item => item.OrganizationId == 1, cancellationToken);
+            .SingleOrDefaultAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
         var library = await context.EmailSettings.AsNoTracking()
             .SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
         var fromAddress = Clean(library?.FromAddress) ?? Clean(system?.FromAddress);
@@ -907,7 +909,7 @@ public sealed class AdditionalCopyService(
         request.ClaimedByStaffUserId = staff.Id;
         request.ClaimedByDisplayName = DisplayName(staff);
         request.ClaimedAtUtc = now;
-        request.ClaimType = "manual";
+        request.ClaimType = ClaimType.Manual;
         request.ClaimRuleId = null;
     }
 
@@ -932,7 +934,7 @@ public sealed class AdditionalCopyService(
     private DateTime UtcNow() => timeProvider.GetUtcNow().UtcDateTime;
     private static string UtcIso(DateTime value) => AsUtc(value).ToString("O");
     private static bool CanAccess(CurrentStaff actor, int organizationId) =>
-        actor.Role == "super_admin" || actor.OrganizationId == organizationId;
+        StaffEligibilityService.CanAccess(actor, organizationId);
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     private static string DisplayName(StaffUser value) =>
         Clean(value.DisplayName) ?? Clean(value.UserPrincipalName) ?? "Staff";
@@ -941,19 +943,19 @@ public sealed class AdditionalCopyService(
 
     private static ScopeResolution ResolveScope(
         CurrentStaff actor,
-        string? scope,
+        LibraryScope scope,
         IReadOnlyCollection<Organization> organizations)
     {
-        if (actor.Role != "super_admin")
+        if (actor.Role != StaffRole.SuperAdmin)
         {
             return new ScopeResolution(true, actor.OrganizationId, actor.OrganizationId.ToString());
         }
-        if (string.IsNullOrWhiteSpace(scope) || string.Equals(scope, "all", StringComparison.OrdinalIgnoreCase))
+        if (scope.Kind == LibraryScopeKind.All)
         {
             return new ScopeResolution(true, null, "all");
         }
-        return int.TryParse(scope, out var id) && organizations.Any(item => item.Id == id)
-            ? new ScopeResolution(true, id, id.ToString())
+        return scope.Kind == LibraryScopeKind.Library && organizations.Any(item => item.Id == scope.OrganizationId)
+            ? new ScopeResolution(true, scope.OrganizationId, scope.ToTransportValue())
             : new ScopeResolution(false, null, string.Empty);
     }
 
@@ -984,7 +986,7 @@ public sealed class AdditionalCopyService(
             .ToDictionaryAsync(item => item.Id, cancellationToken);
         var organizationIds = requests.Select(item => item.LibraryOrganizationId).Distinct().ToArray();
         var workflowRows = await context.WorkflowSettings.AsNoTracking()
-            .Where(item => item.OrganizationId == 1 || organizationIds.Contains(item.OrganizationId))
+            .Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId || organizationIds.Contains(item.OrganizationId))
             .ToDictionaryAsync(item => item.OrganizationId, cancellationToken);
         workflowRows.TryGetValue(1, out var systemWorkflow);
         return requests.Select(request =>
@@ -1031,9 +1033,9 @@ public sealed class AdditionalCopyService(
                     isOpen,
                     isOpen,
                     !isOpen,
-                    !isOpen && actor.Role is "admin" or "super_admin",
+                    !isOpen && actor.Role is StaffRole.Admin or StaffRole.SuperAdmin,
                     isOpen && request.ClaimedByStaffUserId.HasValue && !claimedByActor &&
-                    (actor.Role is "admin" or "super_admin")))
+                    (actor.Role is StaffRole.Admin or StaffRole.SuperAdmin)))
             {
                 TimeoutContext = new AdditionalCopyTimeoutContext(
                     libraryWorkflow?.AdditionalCopyTimeoutEnabled ?? systemWorkflow?.AdditionalCopyTimeoutEnabled == true,

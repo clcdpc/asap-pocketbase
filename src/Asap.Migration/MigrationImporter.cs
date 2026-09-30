@@ -2257,6 +2257,7 @@ public static class MigrationImporter
             });
             using var marker = new SqlCommand(
                 """
+                UPDATE [asap].[TitleRequest] SET [LegacyHoldProtected] = 1 WHERE [Id] = @requestId;
                 INSERT INTO [asap].[TitleRequestEvent]
                     ([TitleRequestId], [EventType], [Status], [CloseReason], [ActorType], [ActorName],
                      [Message], [MetadataJson], [CreatedUtc])
@@ -3380,6 +3381,15 @@ public static class MigrationImporter
                 DateEquals(reader, 7, exportedAtUtc),
                 "placed BIB protection marker");
             EnsureSemantic(!reader.Read(), "placed BIB protection marker count");
+        }
+        // Independently verify structured authority; preserved marker JSON is provenance.
+        foreach (var item in transformations)
+        {
+            using var protection = new SqlCommand(
+                "SELECT [LegacyHoldProtected] FROM [asap].[TitleRequest] WHERE [Id] = @id;", connection, transaction);
+            protection.Parameters.AddWithValue("@id", requestIds[item.SourceId]);
+            EnsureSemantic(Convert.ToBoolean(protection.ExecuteScalar()) == (item.Action == "inserted"),
+                "structured legacy hold protection");
         }
         using var count = new SqlCommand(
             "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [EventType] = N'legacy' AND JSON_VALUE([MetadataJson], '$.transform') = N'placed_bib_protection_v1';",

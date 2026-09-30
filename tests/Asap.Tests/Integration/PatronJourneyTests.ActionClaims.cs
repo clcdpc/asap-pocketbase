@@ -39,17 +39,17 @@ public sealed partial class PatronJourneyTests
         var bookRule = new FormatAutoClaimRule
         {
             LibraryOrganizationId = libraryId, MaterialFormatId = formats["book"],
-            StaffUserId = actor.Id, IsActive = true, CreatedUtc = DateTime.UtcNow
+            StaffUserId = actor.Id, IsActive = true, CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime
         };
         var dvdRule = new FormatAutoClaimRule
         {
             LibraryOrganizationId = libraryId, MaterialFormatId = formats["dvd"],
-            StaffUserId = assignee.Id, IsActive = true, CreatedUtc = DateTime.UtcNow
+            StaffUserId = assignee.Id, IsActive = true, CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime
         };
         var ebookRule = new FormatAutoClaimRule
         {
             LibraryOrganizationId = libraryId, MaterialFormatId = formats["ebook"],
-            StaffUserId = inactiveCandidate.Id, IsActive = true, CreatedUtc = DateTime.UtcNow
+            StaffUserId = inactiveCandidate.Id, IsActive = true, CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime
         };
         seed.FormatAutoClaimRules.AddRange(bookRule, dvdRule, ebookRule);
         await seed.SaveChangesAsync();
@@ -57,9 +57,9 @@ public sealed partial class PatronJourneyTests
         {
             LibraryOrganizationId = libraryId, Barcode = $"2{Guid.NewGuid():N}"[..14],
             Title = title, MaterialFormatId = formats["book"], Status = "suggestion", AutoHold = true,
-            ClaimedByStaffUserId = actor.Id, ClaimedByDisplayName = "Actor", ClaimedAtUtc = DateTime.UtcNow,
+            ClaimedByStaffUserId = actor.Id, ClaimedByDisplayName = "Actor", ClaimedAtUtc = timeProvider!.GetUtcNow().UtcDateTime,
             ClaimType = "automatic_format_rule", ClaimRuleId = bookRule.Id,
-            CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow
+            CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime, UpdatedUtc = timeProvider!.GetUtcNow().UtcDateTime
         };
         var request = NewRequest("Preserve claim");
         var noRule = NewRequest("Clear claim");
@@ -73,7 +73,7 @@ public sealed partial class PatronJourneyTests
                 new TitleRequestActionInput
                 {
                     Version = StaffVersion.Encode(request.RowVersion), Action = "edit", Title = "Edited title"
-                }, CancellationToken.None)).Code);
+                }.ToCommand(), CancellationToken.None)).Code);
             await using var afterEdit = await contexts.CreateDbContextAsync();
             var preserved = await afterEdit.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == request.Id);
             Assert.AreEqual("automatic_format_rule", preserved.ClaimType);
@@ -84,7 +84,7 @@ public sealed partial class PatronJourneyTests
                 new TitleRequestActionInput
                 {
                     Version = StaffVersion.Encode(preserved.RowVersion), Action = "edit", Format = "dvd"
-                }, CancellationToken.None)).Code);
+                }.ToCommand(), CancellationToken.None)).Code);
             await using var afterFormat = await contexts.CreateDbContextAsync();
             var reassigned = await afterFormat.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == request.Id);
             Assert.AreEqual("automatic_format_rule", reassigned.ClaimType);
@@ -97,7 +97,7 @@ public sealed partial class PatronJourneyTests
                 new TitleRequestActionInput
                 {
                     Version = StaffVersion.Encode(noRule.RowVersion), Action = "edit", Format = "music_cd"
-                }, CancellationToken.None)).Code);
+                }.ToCommand(), CancellationToken.None)).Code);
             await using var afterNoRule = await contexts.CreateDbContextAsync();
             var cleared = await afterNoRule.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == noRule.Id);
             Assert.IsNull(cleared.ClaimedByStaffUserId);
@@ -110,7 +110,7 @@ public sealed partial class PatronJourneyTests
                 new TitleRequestActionInput
                 {
                     Version = StaffVersion.Encode(skipped.RowVersion), Action = "edit", Format = "ebook"
-                }, CancellationToken.None)).Code);
+                }.ToCommand(), CancellationToken.None)).Code);
             await using var afterSkipped = await contexts.CreateDbContextAsync();
             var preservedOnSkip = await afterSkipped.TitleRequests.AsNoTracking()
                 .SingleAsync(item => item.Id == skipped.Id);
@@ -124,7 +124,7 @@ public sealed partial class PatronJourneyTests
                 new TitleRequestActionInput
                 {
                     Version = StaffVersion.Encode(reassigned.RowVersion), Action = "edit", Title = "Transferred title"
-                }, CancellationToken.None)).Code);
+                }.ToCommand(), CancellationToken.None)).Code);
             await using var afterTransfer = await contexts.CreateDbContextAsync();
             var transferred = await afterTransfer.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == request.Id);
             Assert.AreEqual("manual", transferred.ClaimType);

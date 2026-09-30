@@ -141,14 +141,7 @@ public sealed partial class PatronSuggestionService(
                   WHERE successful.[TitleRequestId] = request.[Id]
                     AND successful.[State] = N'succeeded'
               )
-              AND NOT EXISTS
-              (
-                  SELECT 1
-                  FROM [asap].[TitleRequestEvent] AS legacy
-                  WHERE legacy.[TitleRequestId] = request.[Id]
-                    AND ISJSON(legacy.[MetadataJson]) = 1
-                    AND JSON_VALUE(legacy.[MetadataJson], '$.legacyBibProtection') = N'true'
-              )
+              AND request.[LegacyHoldProtected] = 0
         """;
 
     private readonly string connectionString = externalConfiguration.ConnectionStrings.AsapDatabase!;
@@ -178,7 +171,8 @@ public sealed partial class PatronSuggestionService(
             patron = await patronProvider.RefreshAsync(session.Barcode, session.EffectiveOrganizationId, cancellationToken);
             pickupBranches = await patronProvider.GetPickupBranchesAsync(patron, session.EffectiveOrganizationId, cancellationToken);
         }
-        catch (PolarisOperationalException exception)
+        catch (Exception exception) when (exception is PolarisOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             throw new PatronFlowException(
                 502,
@@ -202,7 +196,8 @@ public sealed partial class PatronSuggestionService(
                 configuration.OrganizationId,
                 cancellationToken);
         }
-        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             throw new PatronFlowException(502, "Email readiness could not be checked. Please try again.",
                 new { code = "notification_dependency_unavailable" }, exception);
@@ -265,6 +260,7 @@ public sealed partial class PatronSuggestionService(
             {
                 outboxDispatcher.Enqueue(outboxId.Value);
             }
+            // The request/outbox are committed; the sweeper recovers immediate enqueue failures.
             catch (Exception exception)
             {
                 logger.LogWarning(
@@ -379,7 +375,8 @@ public sealed partial class PatronSuggestionService(
                     ? await emailSender.CheckReadinessAsync(organizationId, cancellationToken)
                     : EmailTransportReadiness.NotConfigured;
             }
-            catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+            catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
             {
                 throw new PatronFlowException(502, "Email readiness could not be checked. Please try again.",
                     new { code = "notification_dependency_unavailable" }, exception);
@@ -445,6 +442,7 @@ public sealed partial class PatronSuggestionService(
             {
                 outboxDispatcher.Enqueue(outboxId.Value);
             }
+            // Preserve the committed suggestion and durable outbox; the sweeper owns dispatch recovery.
             catch (Exception exception)
             {
                 logger.LogWarning(
@@ -469,6 +467,7 @@ public sealed partial class PatronSuggestionService(
             {
                 throw;
             }
+            // Suggestion acceptance is committed; recurring identifier processing recovers this optional follow-up.
             catch (Exception exception)
             {
                 logger.LogWarning(
@@ -529,9 +528,10 @@ public sealed partial class PatronSuggestionService(
         {
             return await patronProvider.RefreshAsync(barcode, organizationId, cancellationToken);
         }
-        catch (PolarisOperationalException exception)
+        catch (Exception exception) when (exception is PolarisOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
-            if (exception.Code is "polaris_patron_not_found" or "polaris_patron_invalid_barcode")
+            if (exception is PolarisOperationalException { Code: "polaris_patron_not_found" or "polaris_patron_invalid_barcode" })
             {
                 throw new PatronFlowException(
                     404,
@@ -550,14 +550,6 @@ public sealed partial class PatronSuggestionService(
         {
             throw;
         }
-        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw new PatronFlowException(
-                502,
-                "Current patron information could not be loaded from Polaris. Please try again.",
-                new { code = "polaris_unavailable" },
-                exception);
-        }
     }
 
     private async Task<IReadOnlyList<PickupBranch>> LoadPickupBranchesAsync(
@@ -568,7 +560,8 @@ public sealed partial class PatronSuggestionService(
         {
             return await patronProvider.GetPickupBranchesAsync(patron, organizationId, cancellationToken);
         }
-        catch (PolarisOperationalException exception)
+        catch (Exception exception) when (exception is PolarisOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             throw new PatronFlowException(
                 502,
@@ -579,14 +572,6 @@ public sealed partial class PatronSuggestionService(
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
-        }
-        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw new PatronFlowException(
-                502,
-                "Eligible pickup locations could not be loaded from Polaris.",
-                new { code = "pickup_branches_unavailable" },
-                exception);
         }
     }
 
@@ -617,7 +602,8 @@ public sealed partial class PatronSuggestionService(
         {
             result = await staffPolaris.ValidateBibAsync(bibId.Value, organizationId, cancellationToken);
         }
-        catch (PolarisOperationalException exception)
+        catch (Exception exception) when (exception is PolarisOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             throw new PatronFlowException(
                 502,
@@ -628,14 +614,6 @@ public sealed partial class PatronSuggestionService(
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
-        }
-        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw new PatronFlowException(
-                502,
-                "Catalog lookup is temporarily unavailable.",
-                new { code = "bib_validation_unavailable" },
-                exception);
         }
 
         if (!result.IsValid)
@@ -785,7 +763,7 @@ public sealed partial class PatronSuggestionService(
         var transaction = (SqlTransaction)databaseTransaction.GetDbTransaction();
         var lockedOrganizationIds = new HashSet<int>();
         foreach (var currentOrganizationId in new[]
-                     { configuration.OrganizationId, actor.OrganizationId, patron.PatronOrganizationId, patron.HomeLibraryOrganizationId }
+                     { LibraryScope.SystemOrganizationId, configuration.OrganizationId, actor.OrganizationId, patron.PatronOrganizationId, patron.HomeLibraryOrganizationId }
                      .Where(item => item > 0)
                      .Distinct()
                      .Order())
@@ -896,11 +874,12 @@ public sealed partial class PatronSuggestionService(
                  @nameFirst, @nameLast, @patronCodeId, @patronCodeDescription,
                  @pickupBranchId, @pickupBranchName, @libraryName,
                  @title, @author, @identifier, @publication, @exactPublicationDate, @customFieldsJson, @autoHold, @notes,
-                 @bibId, @bibIdStaffVerified, @materialFormatId, N'suggestion', @isbnCheckStatus, SYSUTCDATETIME(), SYSUTCDATETIME());
+                 @bibId, @bibIdStaffVerified, @materialFormatId, N'suggestion', @isbnCheckStatus, @now, @now);
             """,
             connection,
             transaction))
         {
+            Add(insert, "@now", SqlDbType.DateTime2, timeProvider.GetUtcNow().UtcDateTime);
             Add(insert, "@libraryOrganizationId", SqlDbType.Int, currentConfiguration.OrganizationId);
             Add(insert, "@patronOrganizationId", SqlDbType.Int, patron.PatronOrganizationId);
             Add(insert, "@staffLibraryOrganizationIdCreatedBy", SqlDbType.Int, creationActor.StaffLibraryOrganizationId);
@@ -1065,11 +1044,12 @@ public sealed partial class PatronSuggestionService(
                  @pickupBranchId, @pickupBranchName, @libraryName,
                  @title, @author, @identifier, @publication, @exactPublicationDate, @customFieldsJson, @autoHold, @notes,
                  @bibId, @bibIdStaffVerified,
-                 @materialFormatId, N'suggestion', @isbnCheckStatus, SYSUTCDATETIME(), SYSUTCDATETIME());
+                 @materialFormatId, N'suggestion', @isbnCheckStatus, @now, @now);
             """,
             connection,
             transaction))
         {
+            Add(insert, "@now", SqlDbType.DateTime2, timeProvider.GetUtcNow().UtcDateTime);
             Add(insert, "@libraryOrganizationId", SqlDbType.Int, configuration.OrganizationId);
             Add(insert, "@patronOrganizationId", SqlDbType.Int, patron.PatronOrganizationId);
             Add(insert, "@staffLibraryOrganizationIdCreatedBy", SqlDbType.Int, creationActor.StaffLibraryOrganizationId);
@@ -1160,14 +1140,17 @@ public sealed partial class PatronSuggestionService(
         EffectivePatronConfiguration configuration,
         CancellationToken cancellationToken)
     {
-        await using var command = new SqlCommand(
-            "SELECT [IsActive] FROM [asap].[Organization] WITH (UPDLOCK, HOLDLOCK) WHERE [Id] = @id;",
-            connection,
-            transaction);
-        Add(command, "@id", SqlDbType.Int, configuration.OrganizationId);
-        if (await command.ExecuteScalarAsync(cancellationToken) is not true)
+        foreach (var id in new[] { LibraryScope.SystemOrganizationId, configuration.OrganizationId }.Distinct().Order())
         {
-            throw new PatronFlowException(403, configuration.SystemNotEnabledMessage);
+            await using var command = new SqlCommand(
+                "SELECT [IsActive] FROM [asap].[Organization] WITH (UPDLOCK, HOLDLOCK) WHERE [Id] = @id;",
+                connection,
+                transaction);
+            Add(command, "@id", SqlDbType.Int, id);
+            if (await command.ExecuteScalarAsync(cancellationToken) is not true)
+            {
+                throw new PatronFlowException(403, configuration.SystemNotEnabledMessage);
+            }
         }
     }
 
@@ -1509,36 +1492,33 @@ public sealed partial class PatronSuggestionService(
 
         await using var command = new SqlCommand(
             """
-            SELECT [DisplayName], [UserPrincipalName]
+            SELECT [DisplayName], [UserPrincipalName], [NormalizedUserPrincipalName], [Role], [OrganizationId], [IsActive]
             FROM [asap].[StaffUser] WITH (UPDLOCK, HOLDLOCK)
-            WHERE [Id] = @staffId
-              AND [IsActive] = 1
-              AND NULLIF(LTRIM(RTRIM([UserPrincipalName])), N'') IS NOT NULL
-              AND [NormalizedUserPrincipalName] = UPPER(LTRIM(RTRIM([UserPrincipalName])))
-              AND
-              (
-                  ([Role] IN (N'staff', N'admin') AND [OrganizationId] = @organizationId) OR
-                  ([Role] = N'super_admin' AND [OrganizationId] = 1)
-              );
+            WHERE [Id] = @staffId;
             """,
             connection,
             transaction);
         Add(command, "@staffId", SqlDbType.BigInt, candidate.StaffUserId);
-        Add(command, "@organizationId", SqlDbType.Int, organizationId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
         {
             return null;
         }
 
-        var displayName = reader.IsDBNull(0) ? null : reader.GetString(0);
-        var userPrincipalName = reader.IsDBNull(1) ? null : reader.GetString(1);
-        return new LockedAutoClaimTarget(
-            candidate.StaffUserId,
-            displayName ?? userPrincipalName ?? "Staff");
+        var row = new StaffUser
+        {
+            Id = candidate.StaffUserId,
+            DisplayName = reader.IsDBNull(0) ? null : reader.GetString(0),
+            UserPrincipalName = reader.IsDBNull(1) ? null : reader.GetString(1),
+            NormalizedUserPrincipalName = reader.IsDBNull(2) ? null : reader.GetString(2),
+            Role = reader.GetString(3), OrganizationId = reader.GetInt32(4), IsActive = reader.GetBoolean(5)
+        };
+        return StaffEligibilityService.IsAssignmentEligible(row, organizationId)
+            ? new LockedAutoClaimTarget(row.Id, row.DisplayName ?? row.UserPrincipalName ?? "Staff")
+            : null;
     }
 
-    private static async Task ApplyAutoClaimAsync(
+    private async Task ApplyAutoClaimAsync(
         SqlConnection connection,
         SqlTransaction transaction,
         long requestId,
@@ -1593,10 +1573,11 @@ public sealed partial class PatronSuggestionService(
                 VALUES
                     (@requestId, N'claim_auto_skipped', N'suggestion', N'system', N'system',
                      N'Auto-claim skipped because the configured claimant is unavailable or outside this library.',
-                     @metadataJson, SYSUTCDATETIME());
+                     @metadataJson, @now);
                 """,
                 connection,
                 transaction);
+            Add(skipped, "@now", SqlDbType.DateTime2, timeProvider.GetUtcNow().UtcDateTime);
             Add(skipped, "@requestId", SqlDbType.BigInt, requestId);
             Add(
                 skipped,
@@ -1617,14 +1598,15 @@ public sealed partial class PatronSuggestionService(
             UPDATE [asap].[TitleRequest] WITH (UPDLOCK, HOLDLOCK)
             SET [ClaimedByStaffUserId] = @staffId,
                 [ClaimedByDisplayName] = @displayName,
-                [ClaimedAtUtc] = SYSUTCDATETIME(),
+                [ClaimedAtUtc] = @now,
                 [ClaimType] = N'automatic_format_rule',
                 [ClaimRuleId] = @ruleId,
-                [UpdatedUtc] = SYSUTCDATETIME()
+                [UpdatedUtc] = @now
             WHERE [Id] = @requestId;
             """,
             connection,
             transaction);
+        Add(update, "@now", SqlDbType.DateTime2, timeProvider.GetUtcNow().UtcDateTime);
         Add(update, "@staffId", SqlDbType.BigInt, target.StaffUserId);
         Add(update, "@displayName", SqlDbType.NVarChar, target.DisplayName, 256);
         Add(update, "@ruleId", SqlDbType.BigInt, candidate.RuleId);
@@ -1638,10 +1620,11 @@ public sealed partial class PatronSuggestionService(
                  [Message], [MetadataJson], [CreatedUtc])
             VALUES
                 (@requestId, N'claim_auto_assigned', N'suggestion', N'system', N'system',
-                 @message, @metadataJson, SYSUTCDATETIME());
+                 @message, @metadataJson, @now);
             """,
             connection,
             transaction);
+        Add(assigned, "@now", SqlDbType.DateTime2, timeProvider.GetUtcNow().UtcDateTime);
         Add(assigned, "@requestId", SqlDbType.BigInt, requestId);
         Add(
             assigned,
@@ -1661,7 +1644,7 @@ public sealed partial class PatronSuggestionService(
         await assigned.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static async Task ApplyCrossPatronDuplicateTagAsync(
+    private async Task ApplyCrossPatronDuplicateTagAsync(
         SqlConnection connection,
         SqlTransaction transaction,
         long requestId,
@@ -1701,12 +1684,13 @@ public sealed partial class PatronSuggestionService(
                 SET [Notes] =
                         CASE WHEN NULLIF([Notes], N'') IS NULL THEN @note
                              ELSE [Notes] + CHAR(13) + CHAR(10) + @note END,
-                    [UpdatedUtc] = SYSUTCDATETIME()
+                    [UpdatedUtc] = @now
                 WHERE [Id] = @requestId;
             END;
             """,
             connection,
             transaction);
+        Add(command, "@now", SqlDbType.DateTime2, timeProvider.GetUtcNow().UtcDateTime);
         Add(command, "@organizationId", SqlDbType.Int, organizationId);
         Add(command, "@identifier", SqlDbType.NVarChar, identifier, 100);
         Add(command, "@barcode", SqlDbType.NVarChar, barcode, 50);
@@ -1720,7 +1704,7 @@ public sealed partial class PatronSuggestionService(
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static async Task InsertCreationEventAsync(
+    private async Task InsertCreationEventAsync(
         SqlConnection connection,
         SqlTransaction transaction,
         long requestId,
@@ -1746,10 +1730,11 @@ public sealed partial class PatronSuggestionService(
             INSERT INTO [asap].[TitleRequestEvent]
                 ([TitleRequestId], [EventType], [Status], [ActorType], [StaffUserId], [ActorName], [Message], [MetadataJson], [CreatedUtc])
             VALUES
-                (@requestId, N'created', N'suggestion', @actorType, @staffUserId, @actorName, @message, @metadataJson, SYSUTCDATETIME());
+                (@requestId, N'created', N'suggestion', @actorType, @staffUserId, @actorName, @message, @metadataJson, @now);
             """,
             connection,
             transaction);
+        Add(command, "@now", SqlDbType.DateTime2, timeProvider.GetUtcNow().UtcDateTime);
         Add(command, "@requestId", SqlDbType.BigInt, requestId);
         Add(command, "@actorType", SqlDbType.NVarChar, actor.ActorType, 16);
         Add(command, "@staffUserId", SqlDbType.BigInt, actor.StaffUserId);
@@ -1796,12 +1781,13 @@ public sealed partial class PatronSuggestionService(
             VALUES
                 (@organizationId, @businessKey, N'business_event', @toAddress, @fromAddress,
                  @fromName, @subject, @bodyText, @bodyHtml, @status, @suppressionReason,
-                 CASE WHEN @status = N'pending' THEN SYSUTCDATETIME() ELSE NULL END,
-                 SYSUTCDATETIME(),
-                 CASE WHEN @status = N'suppressed' THEN SYSUTCDATETIME() ELSE NULL END);
+                 CASE WHEN @status = N'pending' THEN @now ELSE NULL END,
+                 @now,
+                 CASE WHEN @status = N'suppressed' THEN @now ELSE NULL END);
             """,
             connection,
             transaction);
+        Add(command, "@now", SqlDbType.DateTime2, timeProvider.GetUtcNow().UtcDateTime);
         Add(command, "@organizationId", SqlDbType.Int, configuration.OrganizationId);
         Add(command, "@businessKey", SqlDbType.NVarChar, $"patron-submission:{requestId}", 450);
         Add(command, "@toAddress", SqlDbType.NVarChar, patron.Email, 320);
@@ -1880,7 +1866,8 @@ public sealed partial class PatronSuggestionService(
         {
             throw;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (exception is PolarisOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             logger.LogWarning(
                 exception,
@@ -2039,8 +2026,8 @@ public sealed partial class PatronSuggestionService(
                     CASE WHEN @note IS NULL THEN [Notes]
                          WHEN NULLIF([Notes], N'') IS NULL THEN @note
                          ELSE [Notes] + CHAR(13) + CHAR(10) + @note END,
-                [LastCheckedUtc] = SYSUTCDATETIME(),
-                [UpdatedUtc] = SYSUTCDATETIME()
+                [LastCheckedUtc] = @now,
+                [UpdatedUtc] = @now
             FROM [asap].[TitleRequest] AS request
             WHERE request.[Id] = @requestId
               AND request.[LibraryOrganizationId] = @organizationId
@@ -2052,6 +2039,7 @@ public sealed partial class PatronSuggestionService(
             connection,
             transaction))
         {
+            Add(update, "@now", SqlDbType.DateTime2, timeProvider.GetUtcNow().UtcDateTime);
             Add(update, "@status", SqlDbType.NVarChar, status, 32);
             Add(update, "@retryIncrement", SqlDbType.Int, retryIncrement);
             Add(update, "@bibId", SqlDbType.Int, result.BibId);
@@ -2130,8 +2118,8 @@ public sealed partial class PatronSuggestionService(
                     [LastItemId] = @itemId,
                     [LastOutcomeItemId] = @itemId,
                     [LastOutcomeCode] = @outcome,
-                    [LastOutcomeUtc] = SYSUTCDATETIME(),
-                    [UpdatedUtc] = SYSUTCDATETIME()
+                    [LastOutcomeUtc] = @now,
+                    [UpdatedUtc] = @now
                 OUTPUT inserted.[RowVersion]
                 WHERE [QueueName] = @queueName
                   AND [ScopeOrganizationId] = @scope
@@ -2139,6 +2127,7 @@ public sealed partial class PatronSuggestionService(
                 """,
                 connection,
                 transaction);
+            Add(progress, "@now", SqlDbType.DateTime2, timeProvider.GetUtcNow().UtcDateTime);
             Add(progress, "@createdUtc", SqlDbType.DateTime2, queueCreatedUtc);
             Add(progress, "@itemId", SqlDbType.BigInt, queueItemId);
             Add(

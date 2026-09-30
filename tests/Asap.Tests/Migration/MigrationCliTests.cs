@@ -41,9 +41,9 @@ public sealed class MigrationCliTests
             "150b30b776565194260cc327eeeffdfb46475e81",
             contract.RootElement.GetProperty("pocketBaseBaselineSha").GetString());
         Assert.AreEqual(
-            "pickup-journal-v3",
+            "structured-policy-v4",
             contract.RootElement.GetProperty("contractVersion").GetString());
-        Assert.AreEqual(9, contract.RootElement.GetProperty("expectedSchemaVersion").GetInt32());
+        Assert.AreEqual(10, contract.RootElement.GetProperty("expectedSchemaVersion").GetInt32());
         Assert.AreEqual(
             "CLC.ASAP",
             contract.RootElement.GetProperty("dataProtectionApplicationName").GetString());
@@ -2259,6 +2259,8 @@ public sealed class MigrationCliTests
             await using (var connection = new SqlConnection(target))
             {
                 await connection.OpenAsync();
+                Assert.AreEqual(10, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[TitleRequest] WHERE [LegacyHoldProtected] = 1;"));
+                Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[TitleRequest] WHERE [Title] = N'No placement evidence' AND [LegacyHoldProtected] = 0;"));
                 Assert.AreEqual(10, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] WHERE [EventType] = N'legacy' AND JSON_VALUE([MetadataJson], '$.legacyBibProtection') = N'true';"));
                 Assert.AreEqual(1, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] e JOIN [asap].[TitleRequest] r ON r.[Id] = e.[TitleRequestId] WHERE r.[Title] = N'Dedicated event' AND JSON_VALUE(e.[MetadataJson], '$.bibId') = N'7';"));
                 Assert.AreEqual(0, await ScalarAsync(connection, "SELECT COUNT(*) FROM [asap].[TitleRequestEvent] e JOIN [asap].[TitleRequest] r ON r.[Id] = e.[TitleRequestId] WHERE r.[Title] = N'No placement evidence' AND JSON_VALUE(e.[MetadataJson], '$.legacyBibProtection') = N'true';"));

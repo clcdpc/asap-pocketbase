@@ -59,8 +59,8 @@ const schemaVersions = {
   migrationProject: Number(migrationProject.match(/ExpectedSchemaVersion" Value="(\d+)"/)?.[1])
 };
 assert.ok(
-  Object.values(schemaVersions).every((version) => version === 9),
-  `application schema version must be 9 in every package/runtime contract: ${JSON.stringify(schemaVersions)}`
+  Object.values(schemaVersions).every((version) => version === 10),
+  `application schema version must be 10 in every package/runtime contract: ${JSON.stringify(schemaVersions)}`
 );
 assert.match(
   postDeployment,

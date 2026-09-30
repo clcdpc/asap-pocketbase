@@ -95,7 +95,7 @@ public sealed partial class PatronJourneyTests
             FromAddress = "system@example.org",
             Subject = "Retry test",
             BodyText = "Retry test body",
-            CreatedUtc = DateTime.UtcNow.AddMinutes(-1)
+            CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(-1)
         };
         context.EmailOutbox.Add(row);
         await context.SaveChangesAsync();
@@ -322,15 +322,19 @@ public sealed partial class PatronJourneyTests
             Assert.IsFalse((await sender.CheckReadinessAsync(2, CancellationToken.None)).IsConfigured);
             Assert.AreEqual("not_configured", await ReadStateAsync());
             readinessStatus = HttpStatusCode.ServiceUnavailable;
-            await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () =>
+            await Assert.ThrowsExactlyAsync<EmailOperationalException>(async () =>
                 await sender.CheckReadinessAsync(2, CancellationToken.None));
             Assert.AreEqual("unavailable", await ReadStateAsync());
             readinessStatus = HttpStatusCode.OK;
             readinessTimeout = true;
-            await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+            await Assert.ThrowsExactlyAsync<EmailOperationalException>(async () =>
                 await sender.CheckReadinessAsync(2, CancellationToken.None));
             Assert.AreEqual("unavailable", await ReadStateAsync());
             readinessTimeout = false;
+            using var cancelled = new CancellationTokenSource();
+            cancelled.Cancel();
+            await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+                await sender.CheckReadinessAsync(2, cancelled.Token));
             var result = await sender.SendAsync(new EmailEnvelope(1, 2, null,
                 "admin@example.org", "library@example.org", "Library Notices", "Test", "Body", null),
                 CancellationToken.None);
@@ -540,7 +544,7 @@ public sealed partial class PatronJourneyTests
                 FromAddress = "system@example.org",
                 Subject = "Retry test",
                 BodyText = "Retry test body",
-                CreatedUtc = DateTime.UtcNow.AddMinutes(-1)
+                CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(-1)
             };
             seed.EmailOutbox.Add(row);
             await seed.SaveChangesAsync();
@@ -586,17 +590,17 @@ public sealed partial class PatronJourneyTests
             {
                 OrganizationId = 2, DeliveryClass = "operational_test", BusinessKey = $"{businessKeyPrefix}:failed", Status = "failed",
                 LastErrorCode = "retained_failure", ToAddress = "retained@example.org", FromAddress = "system@example.org",
-                Subject = "Retained failure", BodyText = "Retained failure body", CreatedUtc = DateTime.UtcNow.AddDays(-30)
+                Subject = "Retained failure", BodyText = "Retained failure body", CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddDays(-30)
             };
             seed.EmailOutbox.Add(oldFailure);
             seed.EmailOutbox.AddRange(Enumerable.Range(0, 500).Select(index => new EmailOutbox
             {
                 OrganizationId = 2, DeliveryClass = "operational_test", BusinessKey = $"{businessKeyPrefix}:terminal:{index}", Status = index % 2 == 0 ? "sent" : "suppressed",
                 ToAddress = "terminal@example.org", FromAddress = "system@example.org", Subject = "Terminal", BodyText = "Terminal body",
-                SentUtc = index % 2 == 0 ? DateTime.UtcNow.AddMinutes(index) : null,
-                SuppressedUtc = index % 2 == 0 ? null : DateTime.UtcNow.AddMinutes(index),
+                SentUtc = index % 2 == 0 ? timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(index) : null,
+                SuppressedUtc = index % 2 == 0 ? null : timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(index),
                 SuppressionReason = index % 2 == 0 ? null : "test_terminal",
-                CreatedUtc = DateTime.UtcNow.AddMinutes(index)
+                CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddMinutes(index)
             }));
             await seed.SaveChangesAsync();
             ids.Add(oldFailure.Id);
@@ -710,7 +714,7 @@ public sealed partial class PatronJourneyTests
     public async Task SessionCleanupRemovesExpiredAndOldRevokedSessionsButRetainsActiveAndRecentlyRevoked()
     {
         var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
-        var now = DateTime.UtcNow;
+        var now = timeProvider!.GetUtcNow().UtcDateTime;
         var marker = Guid.NewGuid().ToString("N");
         var sessionIds = new List<long>();
         await using (var seed = await contextFactory.CreateDbContextAsync())
@@ -763,7 +767,7 @@ public sealed partial class PatronJourneyTests
     public async Task EmailPayloadCleanupPurgesOnlyOldTerminalPayloadsAcrossInactiveLibraries()
     {
         var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
-        var now = DateTime.UtcNow;
+        var now = timeProvider!.GetUtcNow().UtcDateTime;
         var prefix = $"slice5-payload-cleanup:{Guid.NewGuid():N}";
         var old = now.AddDays(-100);
         var recent = now.AddDays(-30);

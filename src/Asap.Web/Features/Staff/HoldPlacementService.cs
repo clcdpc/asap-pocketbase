@@ -52,14 +52,12 @@ public sealed class HoldPlacementService(
     IEmailOutboxDispatcher outboxDispatcher,
     WorkflowProcessingGuard workflowProcessingGuard,
     TimeProvider timeProvider,
-    ILogger<HoldPlacementService> logger)
+    ILogger<HoldPlacementService> logger,
+    StaffEligibilityService staffEligibility)
 {
     private static readonly TimeSpan LeaseDuration = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ProviderTimeout = TimeSpan.FromSeconds(60);
-    private readonly HashSet<Guid> allowedTenantIds = configuration.Authentication.Entra.AllowedTenantIds!
-        .Select(Guid.Parse)
-        .ToHashSet();
     private readonly TimeZoneInfo businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(
         configuration.Application.BusinessTimeZone!);
 
@@ -82,7 +80,7 @@ public sealed class HoldPlacementService(
             queueScope: null,
             expectedQueueVersion: null,
             cancellationToken);
-        if (acquisition.Code != "acquired")
+        if (acquisition.Code != HoldOperationPhase.Acquired)
         {
             return new HoldPlacementResult(acquisition.Code, acquisition.OperationId, Duplicate: acquisition.Duplicate);
         }
@@ -104,7 +102,7 @@ public sealed class HoldPlacementService(
             expectedQueueVersion: null,
             cancellationToken,
             manualActorEvidence);
-        if (acquisition.Code != "acquired")
+        if (acquisition.Code != HoldOperationPhase.Acquired)
         {
             return new HoldPlacementResult(acquisition.Code, acquisition.OperationId, Duplicate: acquisition.Duplicate);
         }
@@ -129,7 +127,7 @@ public sealed class HoldPlacementService(
             expectedQueueVersion,
             cancellationToken,
             manualActorEvidence);
-        if (acquisition.Code != "acquired")
+        if (acquisition.Code != HoldOperationPhase.Acquired)
         {
             return new HoldPlacementResult(acquisition.Code, acquisition.OperationId, Duplicate: acquisition.Duplicate);
         }
@@ -140,7 +138,7 @@ public sealed class HoldPlacementService(
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var operationIds = await context.HoldPlacementOperations.AsNoTracking()
-            .Where(item => item.CompletedUtc == null && item.State != "operator_required")
+            .Where(item => item.CompletedUtc == null && item.State != HoldOperationState.OperatorRequired)
             .OrderBy(item => item.RequestStartedUtc)
             .ThenBy(item => item.Id)
             .Select(item => item.Id)
@@ -200,7 +198,7 @@ public sealed class HoldPlacementService(
                     $"SELECT * FROM [asap].[HoldPlacementOperation] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {operationId}")
                 .SingleOrDefaultAsync(cancellationToken);
             if (operation is null || operation.CompletedUtc.HasValue) return new HoldPlacementResult("not_found", operationId);
-            if (operation.State == "operator_required") return new HoldPlacementResult("hold_operator_required", operationId);
+            if (operation.State == HoldOperationState.OperatorRequired) return new HoldPlacementResult("hold_operator_required", operationId);
             var now = await SqlClockAsync(context, cancellationToken);
             if (operation.OwnerToken.HasValue && operation.LeaseExpiresUtc > now)
             {
@@ -209,16 +207,16 @@ public sealed class HoldPlacementService(
             operation.OwnerToken = Guid.NewGuid();
             operation.ExecutionEpoch++;
             operation.LeaseExpiresUtc = now.Add(LeaseDuration);
-            operation.State = operation.Phase is "acquired" or "reply_ready" or "result_recorded"
-                ? "in_progress"
-                : "ambiguous";
+            operation.State = operation.Phase is HoldOperationPhase.Acquired or HoldOperationPhase.ReplyReady or HoldOperationPhase.ResultRecorded
+                ? HoldOperationState.InProgress
+                : HoldOperationState.Ambiguous;
             owner = new OwnedOperation(operation.Id, operation.OwnerToken.Value, operation.ExecutionEpoch, IsRecovery: true);
             phase = operation.Phase;
             await context.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }
 
-        return phase is "create_started" or "reply_started"
+        return phase is HoldOperationPhase.CreateStarted or HoldOperationPhase.ReplyStarted
             ? await ObserveMarkedAmbiguityAsync(owner, cancellationToken)
             : await ExecuteOwnedAsync(owner, null, null, cancellationToken);
     }
@@ -229,7 +227,7 @@ public sealed class HoldPlacementService(
         VersionInput input,
         CancellationToken cancellationToken)
     {
-        if (actor.Role != "super_admin") return new HoldPlacementResult("hold_resolution_forbidden", operationId);
+        if (actor.Role != StaffRole.SuperAdmin) return new HoldPlacementResult("hold_resolution_forbidden", operationId);
         if (!StaffVersion.TryDecode(input.Version, out var expectedVersion))
         {
             return new HoldPlacementResult("invalid_version", operationId);
@@ -299,16 +297,16 @@ public sealed class HoldPlacementService(
             operation.OwnerToken = Guid.NewGuid();
             operation.ExecutionEpoch++;
             operation.LeaseExpiresUtc = now.Add(LeaseDuration);
-            operation.State = operation.Phase is "acquired" or "reply_ready" or "result_recorded"
-                ? "in_progress"
-                : "ambiguous";
+            operation.State = operation.Phase is HoldOperationPhase.Acquired or HoldOperationPhase.ReplyReady or HoldOperationPhase.ResultRecorded
+                ? HoldOperationState.InProgress
+                : HoldOperationState.Ambiguous;
             owner = new OwnedOperation(operation.Id, operation.OwnerToken.Value, operation.ExecutionEpoch, IsRecovery: true);
             phase = operation.Phase;
             await context.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }
 
-        return phase is "create_started" or "reply_started"
+        return phase is HoldOperationPhase.CreateStarted or HoldOperationPhase.ReplyStarted
             ? await ObserveMarkedAmbiguityAsync(owner, cancellationToken)
             : await ExecuteOwnedAsync(owner, actor, null, cancellationToken);
     }
@@ -328,17 +326,17 @@ public sealed class HoldPlacementService(
         var provenFinalHoldId = input.ProvenFinalHoldId;
         var exclusionReference = Clean(input.ExecutorExclusionReference);
         var exclusionExplanation = Clean(input.ExecutorExclusionExplanation);
-        if (actor.Role != "super_admin") return new HoldPlacementResult("hold_resolution_forbidden", operationId);
+        if (actor.Role != StaffRole.SuperAdmin) return new HoldPlacementResult("hold_resolution_forbidden", operationId);
         if (!StaffVersion.TryDecode(input.Version, out var expectedVersion) ||
             !StaffVersion.TryDecode(input.RequestVersion, out var expectedRequestVersion) ||
-            outcome is not ("succeeded" or "not_performed") ||
+            outcome is not (HoldOperationState.Succeeded or "not_performed") ||
             reason is null or { Length: > 2000 })
         {
             return new HoldPlacementResult("invalid_resolution", operationId);
         }
         var succeededEvidence = evidenceKind is "provider_final_success" or "authoritative_correlated_hold";
         var noEffectEvidence = evidenceKind is "provider_final_no_effect" or "fenced_never_dispatched";
-        if (outcome == "succeeded" && !succeededEvidence || outcome == "not_performed" && !noEffectEvidence)
+        if (outcome == HoldOperationState.Succeeded && !succeededEvidence || outcome == "not_performed" && !noEffectEvidence)
         {
             return new HoldPlacementResult("unsupported_resolution_evidence", operationId);
         }
@@ -405,7 +403,7 @@ public sealed class HoldPlacementService(
                 return new HoldPlacementResult("stale_version", operationId);
             }
         }
-        var markedMutation = preOperation.Phase is "create_started" or "reply_started";
+        var markedMutation = preOperation.Phase is HoldOperationPhase.CreateStarted or HoldOperationPhase.ReplyStarted;
         if (markedMutation &&
             (!input.OriginalExecutorExcluded || !input.ExecutorExclusionAttested ||
              exclusionReference is null or { Length: > 1000 } ||
@@ -414,25 +412,26 @@ public sealed class HoldPlacementService(
             return new HoldPlacementResult("original_executor_not_excluded", operationId);
         }
         if (serverFencedNeverDispatched &&
-            (preOperation.Phase != "acquired" || preOperation.CreateStartedUtc.HasValue || preOperation.ReplyStartedUtc.HasValue))
+            (preOperation.Phase != HoldOperationPhase.Acquired || preOperation.CreateStartedUtc.HasValue || preOperation.ReplyStartedUtc.HasValue))
         {
             return new HoldPlacementResult("unsupported_resolution_evidence", operationId);
         }
-        if (!serverFencedNeverDispatched && preOperation.Phase == "acquired")
+        if (!serverFencedNeverDispatched && preOperation.Phase == HoldOperationPhase.Acquired)
         {
             return new HoldPlacementResult("unsupported_resolution_evidence", operationId);
         }
 
         PatronSnapshot? patron = null;
         EmailTransportReadiness readiness = EmailTransportReadiness.NotConfigured;
-        if (outcome == "succeeded")
+        if (outcome == HoldOperationState.Succeeded)
         {
             try
             {
                 patron = await TryRefreshPatronAsync(preOperation.PatronBarcodeSnapshot, preRequest.LibraryOrganizationId, cancellationToken);
                 readiness = await emailSender.CheckReadinessAsync(preRequest.LibraryOrganizationId, cancellationToken);
             }
-            catch (Exception) when (!cancellationToken.IsCancellationRequested)
+            catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
             {
                 return new HoldPlacementResult("hold_resolution_dependency_unavailable", operationId);
             }
@@ -471,13 +470,13 @@ public sealed class HoldPlacementService(
             return new HoldPlacementResult("stale_version", operationId);
         }
         if (request.Id != preRequest.Id || request.LibraryOrganizationId != preRequest.LibraryOrganizationId ||
-            operation.TitleRequestId != request.Id || request.Status != "pending_hold" ||
+            operation.TitleRequestId != request.Id || request.Status != RequestStatus.PendingHold ||
             !string.Equals(request.Barcode, operation.PatronBarcodeSnapshot, StringComparison.Ordinal) ||
             !SameBibIdentity(request.BibId, operation.BibIdSnapshot))
         {
             return new HoldPlacementResult("request_state_conflict", operationId);
         }
-        if (operation.State != "operator_required" || operation.CompletedUtc.HasValue)
+        if (operation.State != HoldOperationState.OperatorRequired || operation.CompletedUtc.HasValue)
         {
             return new HoldPlacementResult("hold_resolution_not_allowed", operationId);
         }
@@ -485,7 +484,7 @@ public sealed class HoldPlacementService(
         {
             return new HoldPlacementResult("hold_operation_owned", operationId);
         }
-        var finalMarkedMutation = operation.Phase is "create_started" or "reply_started";
+        var finalMarkedMutation = operation.Phase is HoldOperationPhase.CreateStarted or HoldOperationPhase.ReplyStarted;
         if (finalMarkedMutation &&
             (!input.OriginalExecutorExcluded || !input.ExecutorExclusionAttested ||
              exclusionReference is null or { Length: > 1000 } ||
@@ -494,11 +493,11 @@ public sealed class HoldPlacementService(
             return new HoldPlacementResult("original_executor_not_excluded", operationId);
         }
         if (serverFencedNeverDispatched &&
-            (operation.Phase != "acquired" || operation.CreateStartedUtc.HasValue || operation.ReplyStartedUtc.HasValue))
+            (operation.Phase != HoldOperationPhase.Acquired || operation.CreateStartedUtc.HasValue || operation.ReplyStartedUtc.HasValue))
         {
             return new HoldPlacementResult("unsupported_resolution_evidence", operationId);
         }
-        if (!serverFencedNeverDispatched && operation.Phase == "acquired" ||
+        if (!serverFencedNeverDispatched && operation.Phase == HoldOperationPhase.Acquired ||
             outcome == "not_performed" && operation.PolarisHoldId is not null)
         {
             return new HoldPlacementResult("unsupported_resolution_evidence", operationId);
@@ -523,8 +522,8 @@ public sealed class HoldPlacementService(
             ownerToken = operation.OwnerToken?.ToString(),
             operation.LeaseExpiresUtc
         };
-        var afterState = outcome == "succeeded" ? "succeeded" : "no_hold";
-        var afterPhase = outcome == "succeeded" ? "result_recorded" : operation.Phase;
+        var afterState = outcome == HoldOperationState.Succeeded ? HoldOperationState.Succeeded : HoldOperationState.NoHold;
+        var afterPhase = outcome == HoldOperationState.Succeeded ? HoldOperationPhase.ResultRecorded : operation.Phase;
         var outcomeEvidenceKind = serverFencedNeverDispatched
             ? "server_verified:fenced_never_dispatched"
             : $"operator_verified:{evidenceKind}";
@@ -564,7 +563,7 @@ public sealed class HoldPlacementService(
                 {
                     state = afterState,
                     phase = afterPhase,
-                    resultCode = outcome == "succeeded" ? "success" : "definitive_no_effect",
+                    resultCode = outcome == HoldOperationState.Succeeded ? "success" : "definitive_no_effect",
                     outcomeEvidenceKind,
                     polarisHoldId = provenFinalHoldId ?? operation.PolarisHoldId,
                     ownerToken = (string?)null,
@@ -584,14 +583,14 @@ public sealed class HoldPlacementService(
         operation.LeaseExpiresUtc = null;
         operation.CompletedUtc = now;
 
-        if (outcome == "succeeded")
+        if (outcome == HoldOperationState.Succeeded)
         {
             if (provenFinalHoldId is not null) operation.PolarisHoldId = provenFinalHoldId;
-            operation.State = "succeeded";
-            operation.Phase = "result_recorded";
+            operation.State = HoldOperationState.Succeeded;
+            operation.Phase = HoldOperationPhase.ResultRecorded;
             operation.ResultCode = "success";
             operation.LastErrorCode = operation.PolarisHoldId is null ? "hold_identity_unavailable" : null;
-            request.Status = "hold_placed";
+            request.Status = RequestStatus.HoldPlaced;
             request.CloseReason = null;
             request.UpdatedUtc = now;
             const string note = "Hold placement confirmed by operator resolution.";
@@ -599,9 +598,9 @@ public sealed class HoldPlacementService(
             context.TitleRequestEvents.Add(new TitleRequestEvent
             {
                 TitleRequestId = request.Id,
-                EventType = "hold_placed",
-                Status = "hold_placed",
-                ActorType = "staff",
+                EventType = RequestStatus.HoldPlaced,
+                Status = RequestStatus.HoldPlaced,
+                ActorType = StaffRole.Staff,
                 StaffUserId = actor.Id,
                 ActorName = actor.DisplayName ?? actor.UserPrincipalName,
                 Message = note,
@@ -619,14 +618,14 @@ public sealed class HoldPlacementService(
         }
         else
         {
-            operation.State = "no_hold";
+            operation.State = HoldOperationState.NoHold;
             operation.ResultCode = "definitive_no_effect";
             context.TitleRequestEvents.Add(new TitleRequestEvent
             {
                 TitleRequestId = request.Id,
                 EventType = "hold_operation_resolved_not_performed",
                 Status = request.Status,
-                ActorType = "staff",
+                ActorType = StaffRole.Staff,
                 StaffUserId = actor.Id,
                 ActorName = actor.DisplayName ?? actor.UserPrincipalName,
                 Message = "Hold operation resolved as not performed.",
@@ -639,7 +638,7 @@ public sealed class HoldPlacementService(
             ActorStaffUserId = actor.Id,
             ActorName = actor.DisplayName ?? actor.UserPrincipalName,
             OrganizationId = request.LibraryOrganizationId,
-            Action = outcome == "succeeded" ? "hold_operation_resolved_succeeded" : "hold_operation_resolved_not_performed",
+            Action = outcome == HoldOperationState.Succeeded ? "hold_operation_resolved_succeeded" : "hold_operation_resolved_not_performed",
             TargetType = "hold_placement_operation",
             TargetId = operation.Id.ToString(),
             DetailsJson = details,
@@ -728,17 +727,17 @@ public sealed class HoldPlacementService(
         }
 
         var latestSucceededAttempt = await context.HoldPlacementOperations
-            .Where(item => item.TitleRequestId == request.Id && item.State == "succeeded")
+            .Where(item => item.TitleRequestId == request.Id && item.State == HoldOperationState.Succeeded)
             .Select(item => (int?)item.AttemptNumber)
             .MaxAsync(cancellationToken);
-        if (operation.State != "succeeded" || operation.Phase != "result_recorded" ||
+        if (operation.State != HoldOperationState.Succeeded || operation.Phase != HoldOperationPhase.ResultRecorded ||
             operation.ResultCode != "success" || !operation.CompletedUtc.HasValue ||
             operation.OwnerToken.HasValue || operation.LeaseExpiresUtc.HasValue ||
             latestSucceededAttempt != operation.AttemptNumber)
         {
             return new HoldPlacementResult("hold_identity_not_enrichable", operationId);
         }
-        if (request.Status != "hold_placed" ||
+        if (request.Status != RequestStatus.HoldPlaced ||
             request.Barcode != operation.PatronBarcodeSnapshot ||
             !SameBibIdentity(request.BibId, operation.BibIdSnapshot))
         {
@@ -823,7 +822,8 @@ public sealed class HoldPlacementService(
             return new AcquisitionResult("not_found");
         }
         if (!request.RowVersion.SequenceEqual(expectedVersion)) return new AcquisitionResult("stale_version");
-        if (request.Status != "pending_hold" || !request.AutoHold) return new AcquisitionResult("hold_not_eligible");
+        if (request.Status != RequestStatus.PendingHold || !request.AutoHold) return new AcquisitionResult("hold_not_eligible");
+        if (request.LegacyHoldProtected) return new AcquisitionResult("hold_history_retained");
         if (request.BibId is not > 0)
         {
             return new AcquisitionResult("bib_required");
@@ -848,7 +848,7 @@ public sealed class HoldPlacementService(
         var otherActiveRequests = await context.TitleRequests.AsNoTracking()
             .Where(item => item.LibraryOrganizationId == request.LibraryOrganizationId &&
                 item.Barcode == request.Barcode && item.Id != request.Id &&
-                (item.Status == "pending_hold" || item.Status == "hold_placed") && item.BibId != null)
+                (item.Status == RequestStatus.PendingHold || item.Status == RequestStatus.HoldPlaced) && item.BibId != null)
             .OrderBy(item => item.Id)
             .Select(item => new { item.Id, item.Title, item.Status, item.BibId })
             .ToListAsync(cancellationToken);
@@ -896,8 +896,8 @@ public sealed class HoldPlacementService(
             RequestingOrganizationIdSnapshot = request.LibraryOrganizationId,
             PickupBranchIdSnapshot = request.PreferredPickupBranchId,
             AttemptNumber = checked(attempt + 1),
-            State = "in_progress",
-            Phase = "acquired",
+            State = HoldOperationState.InProgress,
+            Phase = HoldOperationPhase.Acquired,
             OwnerToken = token,
             ExecutionEpoch = 1,
             LeaseExpiresUtc = now.Add(LeaseDuration),
@@ -906,7 +906,7 @@ public sealed class HoldPlacementService(
         context.HoldPlacementOperations.Add(operation);
         await context.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return new AcquisitionResult("acquired", operation.Id, new OwnedOperation(operation.Id, token, 1));
+        return new AcquisitionResult(HoldOperationPhase.Acquired, operation.Id, new OwnedOperation(operation.Id, token, 1));
     }
 
     private async Task<HoldPlacementResult> ExecuteOwnedAsync(
@@ -918,19 +918,19 @@ public sealed class HoldPlacementService(
         var operation = await LoadOperationAsync(owner.Id, cancellationToken);
         if (operation is null || operation.CompletedUtc.HasValue) return new HoldPlacementResult("operation_not_available", owner.Id);
 
-        if (operation.Phase == "result_recorded")
+        if (operation.Phase == HoldOperationPhase.ResultRecorded)
         {
             return await CompleteRecordedResultAsync(owner, actor, null, cancellationToken, manualActorEvidence);
         }
-        if (operation.Phase == "reply_ready")
+        if (operation.Phase == HoldOperationPhase.ReplyReady)
         {
             return await ExecuteReplyAsync(owner, actor, null, cancellationToken, manualActorEvidence);
         }
-        if (operation.Phase is "create_started" or "reply_started")
+        if (operation.Phase is HoldOperationPhase.CreateStarted or HoldOperationPhase.ReplyStarted)
         {
             return await ObserveMarkedAmbiguityAsync(owner, cancellationToken);
         }
-        if (operation.Phase != "acquired") return new HoldPlacementResult("operation_phase_invalid", owner.Id);
+        if (operation.Phase != HoldOperationPhase.Acquired) return new HoldPlacementResult("operation_phase_invalid", owner.Id);
 
         var sourceError = await AcquiredSourceErrorAsync(operation, cancellationToken);
         if (sourceError is not null)
@@ -952,7 +952,7 @@ public sealed class HoldPlacementService(
         {
             return new HoldPlacementResult("operation_ownership_lost", owner.Id);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (Exception exception) when (exception is PolarisOperationalException or ProviderCallTimeoutException)
         {
             await FinishWithoutDispatchAsync(owner, "failed", "provider_precheck_failed", exception is ProviderCallTimeoutException ? "provider_timeout" : "provider_read_error", cancellationToken);
             return new HoldPlacementResult("hold_provider_error", owner.Id);
@@ -974,7 +974,7 @@ public sealed class HoldPlacementService(
         }
         if (patron.PreferredPickupBranchId is not > 0)
         {
-            await FinishWithoutDispatchAsync(owner, "no_hold", "pickup_missing", "pickup_missing", cancellationToken);
+            await FinishWithoutDispatchAsync(owner, HoldOperationState.NoHold, "pickup_missing", "pickup_missing", cancellationToken);
             return new HoldPlacementResult("pickup_missing", owner.Id);
         }
 
@@ -1021,7 +1021,7 @@ public sealed class HoldPlacementService(
         {
             createResult = AmbiguousResult("create_provider_timeout", "provider_timeout");
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (PolarisOperationalException exception)
         {
             createResult = AmbiguousResult("create_provider_exception", SafeProviderErrorCode(exception));
         }
@@ -1044,10 +1044,14 @@ public sealed class HoldPlacementService(
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var request = await context.TitleRequests.AsNoTracking()
             .SingleOrDefaultAsync(item => item.Id == operation.TitleRequestId, cancellationToken);
-        if (request is null || request.Status != "pending_hold" || !request.AutoHold ||
+        if (request is null || request.Status != RequestStatus.PendingHold || !request.AutoHold ||
             !SameBibIdentity(request.BibId, operation.BibIdSnapshot))
         {
             return "hold_not_eligible";
+        }
+        if (request.LegacyHoldProtected)
+        {
+            return "hold_history_retained";
         }
         return request.BibIdStaffVerified ? null : "bib_unverified";
     }
@@ -1060,7 +1064,7 @@ public sealed class HoldPlacementService(
         StaffIdentityEvidence? manualActorEvidence = null)
     {
         var operation = await LoadOperationAsync(owner.Id, cancellationToken);
-        if (operation is null || operation.Phase != "reply_ready" ||
+        if (operation is null || operation.Phase != HoldOperationPhase.ReplyReady ||
             operation.PolarisRequestGuid is null || operation.PolarisRequestGuid == Guid.Empty ||
             string.IsNullOrWhiteSpace(operation.TxnGroupQualifier) ||
             string.IsNullOrWhiteSpace(operation.TxnQualifier) ||
@@ -1108,7 +1112,7 @@ public sealed class HoldPlacementService(
                 TxnQualifier = operation.TxnQualifier
             };
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (PolarisOperationalException exception)
         {
             replyResult = AmbiguousResult("reply_provider_exception", SafeProviderErrorCode(exception)) with
             {
@@ -1143,7 +1147,7 @@ public sealed class HoldPlacementService(
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var detail = JsonSerializer.Serialize(new { preexistingHoldIds = baseline.Select(item => item.HoldRequestId).Order().ToArray() });
         return await MarkProviderStartedAsync(
-            context, owner, actor, manualActorEvidence, "acquired",
+            context, owner, actor, manualActorEvidence, HoldOperationPhase.Acquired,
             async () => await context.Database.ExecuteSqlInterpolatedAsync(
             $"""
             UPDATE [asap].[HoldPlacementOperation]
@@ -1160,6 +1164,7 @@ public sealed class HoldPlacementService(
               AND EXISTS (SELECT 1 FROM [asap].[TitleRequest] AS request
                   WHERE request.[Id] = [TitleRequestId] AND request.[Status] = N'pending_hold'
                     AND request.[AutoHold] = 1 AND request.[BibIdStaffVerified] = 1
+                    AND request.[LegacyHoldProtected] = 0
                     AND request.[LibraryOrganizationId] = {organizationId}
                     AND request.[BibId] = [BibIdSnapshot])
               AND [LeaseExpiresUtc] > SYSUTCDATETIME();
@@ -1172,11 +1177,11 @@ public sealed class HoldPlacementService(
         HoldProviderResult result,
         CancellationToken cancellationToken)
     {
-        var phase = result.Outcome == HoldProviderOutcome.ReplyRequired ? "reply_ready" :
+        var phase = result.Outcome == HoldProviderOutcome.ReplyRequired ? HoldOperationPhase.ReplyReady :
             result.Outcome is HoldProviderOutcome.FinalSuccess or HoldProviderOutcome.DefinitiveNoEffect
-                ? "result_recorded"
-                : "create_started";
-        var state = result.Outcome == HoldProviderOutcome.Ambiguous ? "ambiguous" : "in_progress";
+                ? HoldOperationPhase.ResultRecorded
+                : HoldOperationPhase.CreateStarted;
+        var state = result.Outcome == HoldProviderOutcome.Ambiguous ? HoldOperationState.Ambiguous : HoldOperationState.InProgress;
         var resultCode = ResultCode(result);
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var changed = await context.Database.ExecuteSqlInterpolatedAsync(
@@ -1205,7 +1210,7 @@ public sealed class HoldPlacementService(
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         return await MarkProviderStartedAsync(
-            context, owner, actor, manualActorEvidence, "reply_ready",
+            context, owner, actor, manualActorEvidence, HoldOperationPhase.ReplyReady,
             async () => await context.Database.ExecuteSqlInterpolatedAsync(
             $"""
             UPDATE [asap].[HoldPlacementOperation]
@@ -1218,6 +1223,7 @@ public sealed class HoldPlacementService(
               AND EXISTS (SELECT 1 FROM [asap].[TitleRequest] AS request
                   WHERE request.[Id] = [TitleRequestId] AND request.[Status] = N'pending_hold'
                     AND request.[AutoHold] = 1 AND request.[BibIdStaffVerified] = 1
+                    AND request.[LegacyHoldProtected] = 0
                     AND request.[LibraryOrganizationId] = [RequestingOrganizationIdSnapshot]
                     AND request.[BibId] = [BibIdSnapshot]);
             """,
@@ -1269,7 +1275,7 @@ public sealed class HoldPlacementService(
             {
                 var released = await ReleaseOwnedOperationAsync(
                     context, owner, expectedPhase, cancellationToken,
-                    fenceAcquiredAuthorityRejection: expectedPhase == "acquired");
+                    fenceAcquiredAuthorityRejection: expectedPhase == HoldOperationPhase.Acquired);
                 await transaction.CommitAsync(cancellationToken);
                 return released
                     ? actor is not null && owner.IsRecovery ? "hold_resolution_forbidden" : "staff_scope_forbidden"
@@ -1294,9 +1300,9 @@ public sealed class HoldPlacementService(
             .AsNoTracking()
             .SingleOrDefaultAsync(cancellationToken);
         var now = await SqlClockAsync(context, cancellationToken);
-        var startedPhase = expectedPhase == "acquired" ? "create_started" : "reply_started";
+        var startedPhase = expectedPhase == HoldOperationPhase.Acquired ? HoldOperationPhase.CreateStarted : HoldOperationPhase.ReplyStarted;
         if (marked is null || marked.OwnerToken != owner.Token || marked.ExecutionEpoch != owner.Epoch ||
-            marked.State != "in_progress" || marked.Phase != startedPhase ||
+            marked.State != HoldOperationState.InProgress || marked.Phase != startedPhase ||
             marked.LeaseExpiresUtc is null || marked.LeaseExpiresUtc <= now)
         {
             await transaction.CommitAsync(cancellationToken);
@@ -1332,8 +1338,8 @@ public sealed class HoldPlacementService(
         CancellationToken cancellationToken)
     {
         var final = result.Outcome is HoldProviderOutcome.FinalSuccess or HoldProviderOutcome.DefinitiveNoEffect;
-        var phase = final ? "result_recorded" : "reply_started";
-        var state = final ? "in_progress" : "ambiguous";
+        var phase = final ? HoldOperationPhase.ResultRecorded : HoldOperationPhase.ReplyStarted;
+        var state = final ? HoldOperationState.InProgress : HoldOperationState.Ambiguous;
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         return await context.Database.ExecuteSqlInterpolatedAsync(
             $"""
@@ -1369,6 +1375,7 @@ public sealed class HoldPlacementService(
               AND EXISTS (SELECT 1 FROM [asap].[TitleRequest] AS request
                   WHERE request.[Id] = [TitleRequestId] AND request.[Status] = N'pending_hold'
                     AND request.[AutoHold] = 1 AND request.[BibIdStaffVerified] = 1
+                    AND request.[LegacyHoldProtected] = 0
                     AND ([RequestingOrganizationIdSnapshot] IS NULL OR
                          request.[LibraryOrganizationId] = [RequestingOrganizationIdSnapshot])
                     AND request.[BibId] = [BibIdSnapshot])
@@ -1388,9 +1395,9 @@ public sealed class HoldPlacementService(
         if (snapshot is null) return new HoldPlacementResult("operation_not_available", owner.Id);
         if (snapshot.ResultCode != "success")
         {
-            var terminal = snapshot.ResultCode == "definitive_no_effect" ? "no_hold" : "failed";
+            var terminal = snapshot.ResultCode == "definitive_no_effect" ? HoldOperationState.NoHold : "failed";
             await FinishWithoutDispatchAsync(owner, terminal, snapshot.ResultCode ?? "hold_failed", snapshot.LastErrorCode, cancellationToken);
-            return new HoldPlacementResult(terminal == "no_hold" ? "hold_not_placed" : "hold_failed", owner.Id);
+            return new HoldPlacementResult(terminal == HoldOperationState.NoHold ? "hold_not_placed" : "hold_failed", owner.Id);
         }
 
         long? outboxId = null;
@@ -1407,7 +1414,8 @@ public sealed class HoldPlacementService(
         {
             readiness = await emailSender.CheckReadinessAsync(requestSnapshot.LibraryOrganizationId, cancellationToken);
         }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             return new HoldPlacementResult("hold_resolution_dependency_unavailable", owner.Id,
                 ProviderOutcomeRecorded: true);
@@ -1419,7 +1427,7 @@ public sealed class HoldPlacementService(
                 requestSnapshot.LibraryOrganizationId,
                 cancellationToken))
         {
-            await ReleaseOwnedOperationAsync(context, owner, "result_recorded", cancellationToken);
+            await ReleaseOwnedOperationAsync(context, owner, HoldOperationPhase.ResultRecorded, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return new HoldPlacementResult("staff_scope_forbidden", owner.Id, ProviderOutcomeRecorded: true);
         }
@@ -1442,7 +1450,7 @@ public sealed class HoldPlacementService(
                     : IsManualEvidenceEligible(manualActorEvidence!, manualStaff, requestSnapshot.LibraryOrganizationId));
             if (!permitted)
             {
-                await ReleaseOwnedOperationAsync(context, owner, "result_recorded", cancellationToken);
+                await ReleaseOwnedOperationAsync(context, owner, HoldOperationPhase.ResultRecorded, cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 return new HoldPlacementResult(actor is not null && owner.IsRecovery
                     ? "hold_resolution_forbidden" : "staff_scope_forbidden", owner.Id,
@@ -1457,7 +1465,7 @@ public sealed class HoldPlacementService(
             .SingleAsync(cancellationToken);
         var now = await SqlClockAsync(context, cancellationToken);
         if (operation.OwnerToken != owner.Token || operation.ExecutionEpoch != owner.Epoch ||
-            operation.LeaseExpiresUtc <= now || operation.Phase != "result_recorded" || operation.ResultCode != "success")
+            operation.LeaseExpiresUtc <= now || operation.Phase != HoldOperationPhase.ResultRecorded || operation.ResultCode != "success")
         {
             return new HoldPlacementResult("operation_ownership_lost", owner.Id,
                 ProviderOutcomeRecorded: true);
@@ -1476,7 +1484,7 @@ public sealed class HoldPlacementService(
             return new HoldPlacementResult("hold_timeout_due", owner.Id, ProviderOutcomeRecorded: true);
         }
         if (request.LibraryOrganizationId != requestSnapshot.LibraryOrganizationId ||
-            !SameBibIdentity(request.BibId, operation.BibIdSnapshot) || request.Status != "pending_hold")
+            !SameBibIdentity(request.BibId, operation.BibIdSnapshot) || request.Status != RequestStatus.PendingHold)
         {
             await RequireOperatorInTransactionAsync(operation, now, "request_state_conflict");
             await context.SaveChangesAsync(cancellationToken);
@@ -1485,7 +1493,7 @@ public sealed class HoldPlacementService(
                 ProviderOutcomeRecorded: true);
         }
 
-        request.Status = "hold_placed";
+        request.Status = RequestStatus.HoldPlaced;
         request.CloseReason = null;
         request.UpdatedUtc = now;
         var actorName = manualStaff?.DisplayName ?? manualStaff?.UserPrincipalName;
@@ -1494,9 +1502,9 @@ public sealed class HoldPlacementService(
         context.TitleRequestEvents.Add(new TitleRequestEvent
         {
             TitleRequestId = request.Id,
-            EventType = "hold_placed",
-            Status = "hold_placed",
-            ActorType = actor is null && manualStaff is null ? "system" : "staff",
+            EventType = RequestStatus.HoldPlaced,
+            Status = RequestStatus.HoldPlaced,
+            ActorType = actor is null && manualStaff is null ? "system" : StaffRole.Staff,
             StaffUserId = manualStaff?.Id,
             ActorName = actorName,
             Message = note,
@@ -1509,7 +1517,7 @@ public sealed class HoldPlacementService(
             }),
             CreatedUtc = now
         });
-        operation.State = "succeeded";
+        operation.State = HoldOperationState.Succeeded;
         operation.CompletedUtc = now;
         operation.OwnerToken = null;
         operation.LeaseExpiresUtc = null;
@@ -1543,6 +1551,7 @@ public sealed class HoldPlacementService(
             outboxDispatcher.Enqueue(outboxId);
             return true;
         }
+        // Hold completion and its outbox are committed; delivery is recoverable by the scheduled sweep.
         catch (Exception exception)
         {
             logger.LogError(exception, "Hold notification dispatch failed after request {RequestId} committed", requestId);
@@ -1643,7 +1652,7 @@ public sealed class HoldPlacementService(
         DateTime now,
         string errorCode)
     {
-        operation.State = "operator_required";
+        operation.State = HoldOperationState.OperatorRequired;
         operation.RecoveryAttemptCount++;
         operation.LastRecoveryUtc = now;
         operation.LastErrorCode = errorCode;
@@ -1793,24 +1802,16 @@ public sealed class HoldPlacementService(
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
     private bool IsCurrentAndEligible(CurrentStaff actor, StaffUser row, int organizationId) =>
-        row.IsActive && allowedTenantIds.Contains(actor.EntraTenantId) &&
-        StaffEmail.MatchesAuthenticationEmail(row, actor.AuthenticationEmail) &&
-        (row.Role == "super_admin" && row.OrganizationId == 1 ||
-         row.Role is "staff" or "admin" && row.OrganizationId == organizationId);
+        staffEligibility.IsCurrentAndEligible(actor, row, organizationId);
 
     private bool IsCurrentSuperAdmin(CurrentStaff actor, StaffUser row) =>
-        row.IsActive && row.Role == "super_admin" && row.OrganizationId == 1 &&
-        allowedTenantIds.Contains(actor.EntraTenantId) &&
-        StaffEmail.MatchesAuthenticationEmail(row, actor.AuthenticationEmail);
+        staffEligibility.IsCurrentAndEligible(actor, row, LibraryScope.SystemOrganizationId, StaffRoleRequirement.SuperAdmin);
 
     private bool IsManualEvidenceEligible(StaffIdentityEvidence evidence, StaffUser row, int organizationId) =>
-        row.IsActive && allowedTenantIds.Contains(evidence.TenantId) &&
-        StaffEmail.MatchesAuthenticationEmail(row, evidence.AuthenticationEmail) &&
-        (row.Role == "super_admin" && row.OrganizationId == 1 ||
-         row.Role == "admin" && row.OrganizationId == organizationId);
+        staffEligibility.IsCurrentAndEligible(evidence, row, organizationId, StaffRoleRequirement.Admin);
 
     private static bool IsLockedActorOrganizationActive(AsapDbContext context, StaffUser row) =>
-        context.Organizations.Local.SingleOrDefault(item => item.Id == row.OrganizationId)?.IsActive == true;
+        StaffEligibilityService.HasLockedActiveOrganization(context, row);
 
     private static async Task<bool> LockAuthorityOrganizationsAsync(
         AsapDbContext context,
@@ -1864,7 +1865,7 @@ public sealed class HoldPlacementService(
         HoldProviderOutcome.FinalSuccess => "success",
         HoldProviderOutcome.DefinitiveNoEffect => "definitive_no_effect",
         HoldProviderOutcome.ReplyRequired => "reply_required",
-        _ => "ambiguous"
+        _ => HoldOperationState.Ambiguous
     };
 
     private static HoldProviderResult AmbiguousResult(string evidence, string code) => new(

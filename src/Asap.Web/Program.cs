@@ -161,8 +161,9 @@ if (externalConfiguration is not null)
     }
     else
     {
-        builder.Services.AddSingleton<IEmailSender>(_ => new FileEmailSender(
-            Path.Combine(builder.Environment.ContentRootPath, ".artifacts", "dev-email")));
+        builder.Services.AddSingleton<IEmailSender>(services => new FileEmailSender(
+            Path.Combine(builder.Environment.ContentRootPath, ".artifacts", "dev-email"),
+            services.GetRequiredService<TimeProvider>()));
     }
     builder.Services.AddSingleton<DacpacDeploymentService>();
     builder.Services.AddHostedService<DevelopmentDatabaseInitializer>();

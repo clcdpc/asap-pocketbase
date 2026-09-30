@@ -201,7 +201,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("updated", (await factory.Services.GetRequiredService<AdditionalCopyService>().AssignAsync(actor, copy.Id,
                 new AssignAdditionalCopyInput(StaffVersion.Encode(copy.RowVersion), historical.Id), CancellationToken.None)).Code);
             var administration = factory.Services.GetRequiredService<AdministrationService>();
-            var settings = JsonSerializer.SerializeToElement((await administration.GetSettingsAsync(actor, "2", CancellationToken.None)).Data);
+            var settings = JsonSerializer.SerializeToElement((await administration.GetSettingsAsync(actor, LibraryScope.ForLibrary(2), CancellationToken.None)).Data);
             Assert.IsTrue(settings.GetProperty("autoClaimStaff").EnumerateArray().Any(item => item.GetProperty("id").GetString() == historical.Id.ToString()));
             await context.Entry(title).ReloadAsync();
             await context.Entry(copy).ReloadAsync();

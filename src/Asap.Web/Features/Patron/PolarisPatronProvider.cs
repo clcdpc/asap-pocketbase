@@ -14,7 +14,8 @@ namespace Asap.Web.Features.Patron;
 public sealed partial class PolarisPatronProvider(
     IDbContextFactory<AsapDbContext> contextFactory,
     IntegrationCredentialProtector credentialProtector,
-    IHttpClientFactory httpClientFactory) : IPatronProvider, IStaffPolarisProvider, IPolarisReferenceProvider
+    IHttpClientFactory httpClientFactory,
+    TimeProvider timeProvider) : IPatronProvider, IStaffPolarisProvider, IPolarisReferenceProvider
 {
     private static readonly HashSet<int> DocumentedCreateNoEffectStatuses =
         [6, -4002, -4004, -4006, -4007, -4020, -4021, -4022];

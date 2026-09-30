@@ -184,7 +184,7 @@ try {
         versionOrLabel = 'schema-contract-test'
         commitSha = '1111111111111111111111111111111111111111'
         buildUtc = '2026-09-17T00:00:00.000Z'
-        applicationSchemaVersion = 9
+        applicationSchemaVersion = 10
         hangfireSchemaVersion = 9
         dacpacSha256 = (Get-FileHash -LiteralPath (Join-Path $databaseRoot 'Asap.Database.dacpac') -Algorithm SHA256).Hash.ToLowerInvariant()
         webPayloadSha256 = $webIdentity.Hash
@@ -203,7 +203,7 @@ try {
         -ExpectedCommit $manifest.commitSha `
         -ExpectedLabel $manifest.versionOrLabel `
         -StagingPath (Join-Path $archiveFixtureRoot 'valid-staging')
-    if ([int] $accepted.Manifest.applicationSchemaVersion -ne 9) {
+    if ([int] $accepted.Manifest.applicationSchemaVersion -ne 10) {
         throw 'Schema 9 deployment manifest was not accepted.'
     }
 

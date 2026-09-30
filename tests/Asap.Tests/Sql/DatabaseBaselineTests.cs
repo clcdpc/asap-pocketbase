@@ -15,7 +15,7 @@ using Microsoft.SqlServer.Dac;
 namespace Asap.Tests.Sql;
 
 [TestClass]
-public sealed class DatabaseBaselineTests
+public sealed partial class DatabaseBaselineTests
 {
     private static string _databaseName = null!;
     private static string _masterConnectionString = null!;
@@ -83,7 +83,7 @@ public sealed class DatabaseBaselineTests
 
         Assert.AreEqual(16, Convert.ToInt32(await Scalar(connection, "SELECT CAST(SERVERPROPERTY('ProductMajorVersion') AS int);")));
         Assert.AreEqual(160, Convert.ToInt32(await Scalar(connection, "SELECT compatibility_level FROM sys.databases WHERE name = DB_NAME();")));
-        Assert.AreEqual(9, Convert.ToInt32(await Scalar(connection, "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
+        Assert.AreEqual(10, Convert.ToInt32(await Scalar(connection, "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
         Assert.AreEqual(1, Convert.ToInt32(await Scalar(connection, "SELECT COUNT(*) FROM [asap].[DeploymentState] WHERE [Id] = 1;")));
         var expectedHash = Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(_dacpacPath))).ToLowerInvariant();
@@ -105,7 +105,7 @@ public sealed class DatabaseBaselineTests
         try
         {
             new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
-            Assert.AreEqual(9, Convert.ToInt32(await Scalar(connection,
+            Assert.AreEqual(10, Convert.ToInt32(await Scalar(connection,
                 "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
             Assert.AreEqual("native-eight-preservation", await Scalar(connection,
                 "SELECT [AccessId] FROM [asap].[PolarisSettings] WHERE [OrganizationId] = 1;"));
@@ -294,7 +294,7 @@ public sealed class DatabaseBaselineTests
             await NonQuery(connection, """
                 ALTER TABLE [asap].[DeploymentState] ALTER COLUMN [LastHangfireSchemaVersion] int NULL;
                 UPDATE [asap].[DeploymentState] SET [LastHangfireSchemaVersion] = NULL WHERE [Id] = 1;
-                UPDATE [asap].[SchemaVersion] SET [Version] = 9 WHERE [Id] = 1;
+                UPDATE [asap].[SchemaVersion] SET [Version] = 10 WHERE [Id] = 1;
                 """);
         }
     }
@@ -318,7 +318,7 @@ public sealed class DatabaseBaselineTests
         {
             await NonQuery(connection, """
                 INSERT INTO [asap].[SchemaVersion] ([Id], [Version], [UpdatedUtc])
-                VALUES (1, 9, SYSUTCDATETIME());
+                VALUES (1, 10, SYSUTCDATETIME());
                 """);
         }
     }
@@ -396,7 +396,7 @@ public sealed class DatabaseBaselineTests
         {
             context.Entry(settings).CurrentValues.SetValues(original);
             await context.SaveChangesAsync();
-            await context.Database.ExecuteSqlRawAsync("UPDATE [asap].[SchemaVersion] SET [Version] = 9 WHERE [Id] = 1;");
+            await context.Database.ExecuteSqlRawAsync("UPDATE [asap].[SchemaVersion] SET [Version] = 10 WHERE [Id] = 1;");
         }
     }
 
@@ -467,7 +467,7 @@ public sealed class DatabaseBaselineTests
                 await Scalar(connection, "SELECT [WorkstationId] FROM [asap].[PolarisSettings];"));
             Assert.AreEqual(userId > 0 ? (object)userId : DBNull.Value,
                 await Scalar(connection, "SELECT [SystemPolarisUserId] FROM [asap].[PolarisSettings];"));
-            Assert.AreEqual(9, Convert.ToInt32(await Scalar(connection,
+            Assert.AreEqual(10, Convert.ToInt32(await Scalar(connection,
                 "SELECT [Version] FROM [asap].[SchemaVersion] WHERE [Id] = 1;")));
             var preservedVersion = (byte[])(await Scalar(connection,
                 "SELECT [RowVersion] FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] = 73470;"))!;
@@ -500,7 +500,7 @@ public sealed class DatabaseBaselineTests
                     ALTER TABLE [asap].[PolarisSettings] ADD CONSTRAINT [CK_PolarisSettings_IntegrationIdentity]
                         CHECK (([WorkstationId] IS NULL OR [WorkstationId] > 0) AND
                                ([SystemPolarisUserId] IS NULL OR [SystemPolarisUserId] > 0));
-                UPDATE [asap].[SchemaVersion] SET [Version] = 9 WHERE [Id] = 1;
+                UPDATE [asap].[SchemaVersion] SET [Version] = 10 WHERE [Id] = 1;
                 """);
         }
     }
@@ -531,7 +531,7 @@ public sealed class DatabaseBaselineTests
         {
             await using var connection = new SqlConnection(_databaseConnectionString);
             await connection.OpenAsync();
-            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 9 WHERE [Id] = 1;");
+            await NonQuery(connection, "UPDATE [asap].[SchemaVersion] SET [Version] = 10 WHERE [Id] = 1;");
         }
     }
 

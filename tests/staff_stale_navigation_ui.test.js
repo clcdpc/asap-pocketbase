@@ -59,7 +59,7 @@ async function until(predicate, message) {
       id, type: 'title_request', version: 'v1', title: id === firstId ? 'First title' : 'Second title',
       libraryOrgId: 2, libraryOrgName: 'Library', barcode: '20000000000001',
       status: 'suggestion', format: 'book', formatLabel: 'Book', autohold: true,
-      workflowTags: [], activity: [], capabilities: { canEditIdentifier: true, canChangeBib: true, canChangeWorkflowState: true },
+      workflowTags: [], activity: [], capabilities: { canEditIdentifier: true, canChangeBib: true, canChangeWorkflowState: true, allowedActions: ['edit', 'purchase', 'alreadyOwn', 'catalogFound', 'reject', 'silentClose', 'closeDuplicate', 'close', 'reopen'] },
       created: '2026-01-01T00:00:00Z', updated: '2026-01-01T00:00:00Z',
       phaseEnteredAt: '2026-01-01T00:00:00Z'
     });

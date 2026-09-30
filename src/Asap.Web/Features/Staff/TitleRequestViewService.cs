@@ -10,7 +10,11 @@ public sealed record TitleRequestCapabilities(
     bool CanChangeBib,
     bool CanRetryIdentifierCheck,
     bool CanChangeWorkflowState,
-    string? BlockingReason);
+    string? BlockingReason)
+{
+    public IReadOnlyList<string> AllowedActions { get; init; } = [];
+    public bool CanPlaceHold { get; init; }
+}
 
 public sealed record HoldOperationSummary(
     string Id,
@@ -72,7 +76,7 @@ public sealed record TitleRequestDto(
     string? Identifier,
     string? Publication,
     DateOnly? ExactPublicationDate,
-    object CustomFields,
+    IReadOnlyDictionary<string, JsonElement> CustomFields,
     bool Autohold,
     string Format,
     string FormatLabel,
@@ -114,62 +118,14 @@ public sealed record TitleRequestDto(
 public sealed record TitleRequestScopeResult(
     IReadOnlyList<TitleRequestDto> Items,
     string Scope,
-    IReadOnlyList<object> Organizations);
+    IReadOnlyList<OrganizationChoice> Organizations);
 
-public static class TitleRequestCapabilityPolicy
-{
-    private static readonly HashSet<string> PrePlacementStatuses =
-        ["suggestion", "outstanding_purchase", "pending_hold"];
 
-    public static TitleRequestCapabilities Evaluate(
-        TitleRequest request,
-        bool hasIncompleteOperation,
-        bool hasPlacedProtection,
-        bool hasIncompletePickup = false)
-    {
-        if (hasIncompletePickup)
-        {
-            return new TitleRequestCapabilities(false, false, false, false, "pickup_reconciliation_required");
-        }
-        if (hasIncompleteOperation)
-        {
-            return new TitleRequestCapabilities(
-                false,
-                false,
-                false,
-                false,
-                "hold_operation_incomplete");
-        }
-
-        if (request.Status is "hold_placed" or "closed" || hasPlacedProtection)
-        {
-            return new TitleRequestCapabilities(
-                false,
-                false,
-                false,
-                request.Status != "closed" || !hasPlacedProtection,
-                request.Status == "closed" && hasPlacedProtection
-                    ? "hold_history_retained"
-                    : "identifier_locked_by_stage");
-        }
-
-        var canEdit = PrePlacementStatuses.Contains(request.Status);
-        return new TitleRequestCapabilities(
-            canEdit,
-            canEdit,
-            request.Status == "suggestion" &&
-            !string.IsNullOrWhiteSpace(request.Identifier) &&
-            request.IsbnCheckStatus == "error_max_retries",
-            true,
-            canEdit ? null : "identifier_locked_by_stage");
-    }
-}
-
-public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> contextFactory)
+public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> contextFactory, TimeProvider timeProvider)
 {
     public async Task<TitleRequestScopeResult?> ListAsync(
         CurrentStaff staff,
-        string? scope,
+        LibraryScope scope,
         CancellationToken cancellationToken)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
@@ -179,30 +135,14 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
             .ThenBy(item => item.Id)
             .ToListAsync(cancellationToken);
 
-        int? organizationId;
-        string normalizedScope;
-        if (staff.Role == "super_admin")
+        var resolvedScope = staff.Role == StaffRole.SuperAdmin ? scope : LibraryScope.ForLibrary(staff.OrganizationId);
+        if (resolvedScope.Kind == LibraryScopeKind.System ||
+            resolvedScope.Kind == LibraryScopeKind.Library && !organizations.Any(item => item.Id == resolvedScope.OrganizationId))
         {
-            if (string.IsNullOrWhiteSpace(scope) || string.Equals(scope, "all", StringComparison.OrdinalIgnoreCase))
-            {
-                organizationId = null;
-                normalizedScope = "all";
-            }
-            else if (int.TryParse(scope, out var selectedId) && organizations.Any(item => item.Id == selectedId))
-            {
-                organizationId = selectedId;
-                normalizedScope = selectedId.ToString();
-            }
-            else
-            {
-                return null;
-            }
+            return null;
         }
-        else
-        {
-            organizationId = staff.OrganizationId;
-            normalizedScope = staff.OrganizationId.ToString();
-        }
+        var organizationId = resolvedScope.OrganizationId;
+        var normalizedScope = resolvedScope.ToTransportValue();
 
         var requestQuery = context.TitleRequests.AsNoTracking()
             .Where(item => organizationId == null || item.LibraryOrganizationId == organizationId);
@@ -211,14 +151,14 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
         return new TitleRequestScopeResult(
             items,
             normalizedScope,
-            organizations.Select(item => (object)new { id = item.Id, name = item.DisplayName }).ToList());
+            organizations.Select(item => new OrganizationChoice(item.Id, item.DisplayName)).ToList());
     }
 
     public async Task<TitleRequestDto?> GetAsync(
         CurrentStaff staff,
         string id,
         CancellationToken cancellationToken,
-        string? scope = null)
+        LibraryScope? scope = null)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var requestId = await LegacyRequestLinkResolver.ResolveAsync(
@@ -238,18 +178,17 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
         {
             return null;
         }
-        int? relatedOrganizationId = staff.Role == "super_admin" ? null : staff.OrganizationId;
-        if (staff.Role == "super_admin" && !string.IsNullOrWhiteSpace(scope) &&
-            !string.Equals(scope, "all", StringComparison.OrdinalIgnoreCase))
+        int? relatedOrganizationId = staff.Role == StaffRole.SuperAdmin ? null : staff.OrganizationId;
+        if (staff.Role == StaffRole.SuperAdmin && scope is { Kind: not LibraryScopeKind.All } selectedScope)
         {
-            if (!int.TryParse(scope, out var selectedOrganizationId) ||
-                selectedOrganizationId != request.LibraryOrganizationId ||
+            if (selectedScope.Kind != LibraryScopeKind.Library ||
+                selectedScope.OrganizationId != request.LibraryOrganizationId ||
                 !await context.Organizations.AsNoTracking().AnyAsync(item =>
-                    item.Id == selectedOrganizationId && item.IsActive, cancellationToken))
+                    item.Id == selectedScope.OrganizationId && item.IsActive, cancellationToken))
             {
                 return null;
             }
-            relatedOrganizationId = selectedOrganizationId;
+            relatedOrganizationId = selectedScope.OrganizationId;
         }
         var relatedCandidates = await context.TitleRequests.AsNoTracking()
             .Where(item => relatedOrganizationId == null || item.LibraryOrganizationId == relatedOrganizationId)
@@ -269,41 +208,15 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
         }
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var rows = await context.EmailTemplates.AsNoTracking()
-            .Where(item => item.OrganizationId == 1 || item.OrganizationId == request.LibraryOrgId)
+            .Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId || item.OrganizationId == request.LibraryOrgId)
             .ToListAsync(cancellationToken);
         return RejectionTemplatePolicy.Choices(rows, request.LibraryOrgId);
     }
 
     internal static bool CanAccess(CurrentStaff staff, int organizationId) =>
-        staff.Role == "super_admin" || staff.OrganizationId == organizationId;
+        StaffEligibilityService.CanAccess(staff, organizationId);
 
-    internal static bool HasLegacyPlacedProtection(IEnumerable<TitleRequestEvent> events)
-    {
-        foreach (var item in events)
-        {
-            if (string.IsNullOrWhiteSpace(item.MetadataJson))
-            {
-                continue;
-            }
-            try
-            {
-                using var document = JsonDocument.Parse(item.MetadataJson);
-                if (document.RootElement.ValueKind == JsonValueKind.Object &&
-                    document.RootElement.TryGetProperty("legacyBibProtection", out var marker) &&
-                    marker.ValueKind == JsonValueKind.True)
-                {
-                    return true;
-                }
-            }
-            catch (JsonException)
-            {
-                // Database constraints keep new metadata valid; malformed imported evidence is not authority.
-            }
-        }
-        return false;
-    }
-
-    private static async Task<IReadOnlyList<TitleRequestDto>> BuildDtosAsync(
+    private async Task<IReadOnlyList<TitleRequestDto>> BuildDtosAsync(
         AsapDbContext context,
         IReadOnlyList<TitleRequest> requests,
         IReadOnlyList<TitleRequest> relatedCandidates,
@@ -321,7 +234,7 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
             .Where(item => visibleOrganizationIds.Contains(item.Id))
             .ToDictionaryAsync(item => item.Id, cancellationToken);
         var workflowRows = await context.WorkflowSettings.AsNoTracking()
-            .Where(item => item.OrganizationId == 1 || visibleOrganizationIds.Contains(item.OrganizationId))
+            .Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId || visibleOrganizationIds.Contains(item.OrganizationId))
             .ToDictionaryAsync(item => item.OrganizationId, cancellationToken);
         workflowRows.TryGetValue(1, out var systemWorkflow);
         var relatedByKey = new Dictionary<string, List<TitleRequest>>(StringComparer.Ordinal);
@@ -363,7 +276,7 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
         var incomplete = operations.Where(item => item.CompletedUtc == null)
             .GroupBy(item => item.TitleRequestId)
             .ToDictionary(item => item.Key, item => item.First());
-        var latestSuccessful = operations.Where(item => item.State == "succeeded")
+        var latestSuccessful = operations.Where(item => item.State == HoldOperationState.Succeeded)
             .GroupBy(item => item.TitleRequestId)
             .ToDictionary(item => item.Key, item => item.First());
         var pendingPickups = await context.Database.SqlQuery<PickupOperationRead>($"""
@@ -380,14 +293,14 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
             var successfulOperation = latestSuccessful.GetValueOrDefault(request.Id);
             var operation = incompleteOperation ??
                 (successfulOperation is { PolarisHoldId: null } ? successfulOperation : null);
-            var protectedHistory = successfulOperation is not null || HasLegacyPlacedProtection(requestEvents);
+            var protectedHistory = successfulOperation is not null || request.LegacyHoldProtected;
             var pendingPickup = pendingPickups.GetValueOrDefault(request.Id);
-            var capabilities = TitleRequestCapabilityPolicy.Evaluate(request, incompleteOperation is not null,
+            var capabilities = TitleRequestWorkflowPolicy.Evaluate(request, incompleteOperation is not null,
                 protectedHistory, pendingPickup is not null);
             var canTakeOverOperation = incompleteOperation is not null &&
                                        (!incompleteOperation.OwnerToken.HasValue ||
-                                        incompleteOperation.LeaseExpiresUtc <= DateTime.UtcNow);
-            var canResolveOperation = canTakeOverOperation && operation!.State == "operator_required";
+                                        incompleteOperation.LeaseExpiresUtc <= timeProvider.GetUtcNow().UtcDateTime);
+            var canResolveOperation = canTakeOverOperation && operation!.State == HoldOperationState.OperatorRequired;
             var phaseEnteredAt = requestEvents
                 .Where(item => item.EventType == "status_changed" && item.Status == request.Status)
                 .Select(item => (DateTime?)item.CreatedUtc)
@@ -465,9 +378,9 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
                     StaffVersion.Encode(operation.RowVersion),
                     AsUtc(operation.LastRecoveryUtc),
                     operation.LastErrorCode,
-                    staff.Role == "super_admin" && canTakeOverOperation,
-                    staff.Role == "super_admin" && canResolveOperation && operation.Phase != "acquired",
-                    staff.Role == "super_admin" && canResolveOperation),
+                    staff.Role == StaffRole.SuperAdmin && canTakeOverOperation,
+                    staff.Role == StaffRole.SuperAdmin && canResolveOperation && operation.Phase != HoldOperationPhase.Acquired,
+                    staff.Role == StaffRole.SuperAdmin && canResolveOperation),
                 includeActivity ? requestEvents.Select(item => new TitleRequestActivity(
                     item.Id.ToString(CultureInfo.InvariantCulture),
                     item.EventType,
@@ -519,19 +432,19 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
     private static string NormalizeSimilarityValue(string? value) =>
         new((value ?? string.Empty).Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
 
-    private static object ParseCustomFields(string? value)
+    private static IReadOnlyDictionary<string, JsonElement> ParseCustomFields(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
-            return new Dictionary<string, object?>();
+            return new Dictionary<string, JsonElement>();
         }
         try
         {
-            return JsonSerializer.Deserialize<Dictionary<string, object?>>(value) ?? [];
+            return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(value) ?? [];
         }
         catch (JsonException)
         {
-            return new Dictionary<string, object?>();
+            return new Dictionary<string, JsonElement>();
         }
     }
 

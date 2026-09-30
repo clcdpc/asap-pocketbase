@@ -41,60 +41,14 @@ public sealed class AdministrationService(
     IPolarisReferenceProvider polarisProvider,
     TimeProvider timeProvider)
 {
-    private static readonly string[] WorkflowTextFields =
-    [
-        "suggestionLimitMessage", "commonAuthorsLabel", "commonAuthorsHelp", "commonAuthorsMessage",
-        "patronCodeEligibilityMessage"
-    ];
-
-    private static readonly string[] WorkflowBoolFields =
-    [
-        "outstandingTimeoutEnabled", "outstandingTimeoutSendEmail", "holdPickupTimeoutEnabled",
-        "pendingHoldTimeoutEnabled", "additionalCopyTimeoutEnabled", "autoPromote", "commonAuthorsEnabled",
-        "allowPatronAutoholdOptOut", "allowAnyRegisteredCardLogin", "patronCodeEligibilityEnabled"
-    ];
-
-    private static readonly string[] WorkflowIntFields =
-    [
-        "suggestionLimit", "outstandingTimeoutDays", "holdPickupTimeoutDays", "pendingHoldTimeoutDays",
-        "additionalCopyTimeoutDays"
-    ];
-
-    private static readonly IReadOnlyDictionary<string, string> PatronTextColumns =
-        new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["pageTitle"] = nameof(PatronSettings.PageTitle),
-            ["barcodeLabel"] = nameof(PatronSettings.BarcodeLabel),
-            ["pinLabel"] = nameof(PatronSettings.PinLabel),
-            ["loginPrompt"] = nameof(PatronSettings.LoginPrompt),
-            ["loginNote"] = nameof(PatronSettings.LoginNote),
-            ["suggestionFormNote"] = nameof(PatronSettings.SuggestionFormNote),
-            ["noEmailMessage"] = nameof(PatronSettings.NoEmailMessage),
-            ["successTitle"] = nameof(PatronSettings.SuccessTitle),
-            ["successMessage"] = nameof(PatronSettings.SuccessMessage),
-            ["alreadySubmittedMessage"] = nameof(PatronSettings.AlreadySubmittedMessage),
-            ["ebookMessage"] = nameof(PatronSettings.EbookMessage),
-            ["eaudiobookMessage"] = nameof(PatronSettings.EaudiobookMessage),
-            ["suggestionStatusLabel"] = nameof(PatronSettings.SuggestionStatusLabel),
-            ["outstandingPurchaseStatusLabel"] = nameof(PatronSettings.OutstandingPurchaseStatusLabel),
-            ["pendingHoldStatusLabel"] = nameof(PatronSettings.PendingHoldStatusLabel),
-            ["holdPlacedStatusLabel"] = nameof(PatronSettings.HoldPlacedStatusLabel),
-            ["closedStatusLabel"] = nameof(PatronSettings.ClosedStatusLabel),
-            ["rejectedStatusLabel"] = nameof(PatronSettings.RejectedStatusLabel),
-            ["holdCompletedStatusLabel"] = nameof(PatronSettings.HoldCompletedStatusLabel),
-            ["holdNotPickedUpStatusLabel"] = nameof(PatronSettings.HoldNotPickedUpStatusLabel),
-            ["manualStatusLabel"] = nameof(PatronSettings.ManualStatusLabel),
-            ["silentStatusLabel"] = nameof(PatronSettings.SilentStatusLabel)
-        };
-
     private static readonly IReadOnlyDictionary<string, string> DuplicateLabelFields =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["suggestion"] = nameof(PatronSettings.SuggestionStatusLabel),
-            ["outstanding_purchase"] = nameof(PatronSettings.OutstandingPurchaseStatusLabel),
-            ["pending_hold"] = nameof(PatronSettings.PendingHoldStatusLabel),
-            ["hold_placed"] = nameof(PatronSettings.HoldPlacedStatusLabel),
-            ["closed"] = nameof(PatronSettings.ClosedStatusLabel),
+            [RequestStatus.Suggestion] = nameof(PatronSettings.SuggestionStatusLabel),
+            [RequestStatus.OutstandingPurchase] = nameof(PatronSettings.OutstandingPurchaseStatusLabel),
+            [RequestStatus.PendingHold] = nameof(PatronSettings.PendingHoldStatusLabel),
+            [RequestStatus.HoldPlaced] = nameof(PatronSettings.HoldPlacedStatusLabel),
+            [RequestStatus.Closed] = nameof(PatronSettings.ClosedStatusLabel),
             ["rejected"] = nameof(PatronSettings.RejectedStatusLabel),
             ["hold_completed"] = nameof(PatronSettings.HoldCompletedStatusLabel),
             ["hold_not_picked_up"] = nameof(PatronSettings.HoldNotPickedUpStatusLabel),
@@ -104,10 +58,10 @@ public sealed class AdministrationService(
 
     public async Task<AdministrationResult> GetSettingsAsync(
         CurrentStaff actor,
-        string? requestedOrganization,
+        LibraryScope requestedScope,
         CancellationToken cancellationToken)
     {
-        if (!TryResolveScope(actor, requestedOrganization, out var organizationId, out var failure))
+        if (!TryResolveScope(actor, requestedScope, out var organizationId, out var failure))
         {
             return failure;
         }
@@ -126,24 +80,24 @@ public sealed class AdministrationService(
         }
 
         var systemSettings = await context.SystemSettings.AsNoTracking()
-            .SingleAsync(item => item.OrganizationId == 1, cancellationToken);
+            .SingleAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
         var systemPolaris = await context.PolarisSettings.AsNoTracking()
-            .SingleAsync(item => item.OrganizationId == 1, cancellationToken);
+            .SingleAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
         var systemWorkflow = await context.WorkflowSettings.AsNoTracking()
-            .SingleAsync(item => item.OrganizationId == 1, cancellationToken);
+            .SingleAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
         var systemPatron = await context.PatronSettings.AsNoTracking()
-            .SingleAsync(item => item.OrganizationId == 1, cancellationToken);
+            .SingleAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
         var systemEmail = await context.EmailSettings.AsNoTracking()
-            .SingleAsync(item => item.OrganizationId == 1, cancellationToken);
-        var libraryWorkflow = organizationId == 1
+            .SingleAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
+        var libraryWorkflow = organizationId == LibraryScope.SystemOrganizationId
             ? null
             : await context.WorkflowSettings.AsNoTracking().SingleOrDefaultAsync(
                 item => item.OrganizationId == organizationId, cancellationToken);
-        var libraryPatron = organizationId == 1
+        var libraryPatron = organizationId == LibraryScope.SystemOrganizationId
             ? null
             : await context.PatronSettings.AsNoTracking().SingleOrDefaultAsync(
                 item => item.OrganizationId == organizationId, cancellationToken);
-        var libraryEmail = organizationId == 1
+        var libraryEmail = organizationId == LibraryScope.SystemOrganizationId
             ? null
             : await context.EmailSettings.AsNoTracking().SingleOrDefaultAsync(
                 item => item.OrganizationId == organizationId, cancellationToken);
@@ -154,32 +108,33 @@ public sealed class AdministrationService(
         }
 
         var origins = await context.PatronEmbedAllowedOrigins.AsNoTracking()
-            .Where(item => item.OrganizationId == 1)
+            .Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId)
             .OrderBy(item => item.NormalizedOrigin)
             .Select(item => item.Origin)
             .ToListAsync(cancellationToken);
         var providers = await LoadProvidersAsync(context, organizationId, cancellationToken);
         var formats = await LoadFormatsAsync(context, organizationId, cancellationToken);
-        var customFields = organizationId == 1
+        var customFields = organizationId == LibraryScope.SystemOrganizationId
             ? []
             : await LoadCustomFieldsAsync(context, organizationId, cancellationToken);
         var templates = await LoadTemplatesAsync(context, organizationId, cancellationToken);
         var publicationOptions = await LoadPublicationOptionsAsync(context, organizationId, cancellationToken);
         var commonCreators = await LoadCommonCreatorsAsync(context, organizationId, cancellationToken);
         var patronCodes = await LoadPatronCodesAsync(context, organizationId, cancellationToken);
-        var autoClaimRules = organizationId == 1
+        var autoClaimRules = organizationId == LibraryScope.SystemOrganizationId
             ? []
             : await LoadAutoClaimRulesAsync(context, organizationId, cancellationToken);
-        var autoClaimStaff = organizationId == 1
+        var autoClaimStaff = organizationId == LibraryScope.SystemOrganizationId
             ? Array.Empty<object>()
             : (await context.StaffUsers.AsNoTracking()
                 .Where(item => item.IsActive &&
-                    (((item.Role == "staff" || item.Role == "admin") && item.OrganizationId == organizationId) ||
-                     (item.Role == "super_admin" && item.OrganizationId == 1)))
+                    (((item.Role == StaffRole.Staff || item.Role == StaffRole.Admin) && item.OrganizationId == organizationId) ||
+                     (item.Role == StaffRole.SuperAdmin && item.OrganizationId == LibraryScope.SystemOrganizationId)))
                 .OrderBy(item => item.DisplayName)
                 .ThenBy(item => item.UserPrincipalName)
                 .ToListAsync(cancellationToken))
-                .Where(item => staffEligibility.IsAssignmentEligible(item, organizationId))
+                .Where(item => StaffEligibilityService.IsAssignmentEligible(item, organizationId) &&
+                    StaffEligibilityService.HasLockedActiveOrganization(context, item))
                 .Select(item => (object)new
                 {
                     id = item.Id.ToString(),
@@ -188,11 +143,11 @@ public sealed class AdministrationService(
                 .ToArray();
         var branding = await context.Branding.AsNoTracking()
             .SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
-        var systemBranding = organizationId == 1
+        var systemBranding = organizationId == LibraryScope.SystemOrganizationId
             ? branding
             : await context.Branding.AsNoTracking()
-                .SingleOrDefaultAsync(item => item.OrganizationId == 1, cancellationToken);
-        var hasOverrides = organizationId != 1 && await HasLibraryOverridesAsync(context, organizationId, cancellationToken);
+                .SingleOrDefaultAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
+        var hasOverrides = organizationId != LibraryScope.SystemOrganizationId && await HasLibraryOverridesAsync(context, organizationId, cancellationToken);
         var version = await ComputeSettingsVersionAsync(context, organizationId, cancellationToken);
 
         var configuredSystem = new
@@ -208,7 +163,7 @@ public sealed class AdministrationService(
             templates = await LoadRawTemplatesAsync(context, 1, cancellationToken),
             branding = ToBranding(systemBranding)
         };
-        var libraryOverride = organizationId == 1
+        var libraryOverride = organizationId == LibraryScope.SystemOrganizationId
             ? null
             : new
             {
@@ -249,7 +204,7 @@ public sealed class AdministrationService(
             "ok",
             new
             {
-                orgId = organizationId == 1 ? "system" : organizationId.ToString(),
+                orgId = organizationId == LibraryScope.SystemOrganizationId ? "system" : organizationId.ToString(),
                 organization = new
                 {
                     id = organization.Id,
@@ -264,12 +219,12 @@ public sealed class AdministrationService(
                 stored,
                 effective = effectiveDto,
                 // These aliases preserve the shape used by the existing vanilla settings workflow.
-                workflow = ToWorkflow(effective, system: libraryWorkflow is null || organizationId == 1),
+                workflow = ToWorkflow(effective, system: libraryWorkflow is null || organizationId == LibraryScope.SystemOrganizationId),
                 ui_text = ToEffectivePatronText(effective),
                 emails = await ToEffectiveEmailAsync(context, organizationId, effective, cancellationToken),
                 templatePlaceholders = PatronEmailTemplateRenderer.SupportedPlaceholders,
                 publicPatron = PublicPatronLinkBuilder.Build(systemSettings.StaffApplicationUrl, organizationId, organization.IsActive),
-                publicPatronUnavailableReason = organizationId == 1
+                publicPatronUnavailableReason = organizationId == LibraryScope.SystemOrganizationId
                     ? "Select an active library to get its public patron URL."
                     : !organization.IsActive
                         ? "This library is inactive; activate it before sharing its patron URL."
@@ -286,74 +241,20 @@ public sealed class AdministrationService(
 
     public async Task<AdministrationResult> SaveSettingsAsync(
         CurrentStaff actor,
-        JsonElement payload,
+        AdministrationSettingsCommand command,
         CancellationToken cancellationToken)
     {
-        if (!TryResolveScope(actor, GetString(payload, "orgId") ?? GetString(payload, "organizationId"), out var organizationId, out var failure))
+        if (command.BindingError is not null)
+        {
+            return new AdministrationResult(command.BindingError);
+        }
+        var payload = command.CollectionEdits;
+        if (!TryResolveScope(actor, command.Scope, out var organizationId, out var failure))
         {
             return failure;
         }
 
-        var polarisSection = GetObject(payload, "polaris");
-        if (polarisSection.ValueKind == JsonValueKind.Undefined)
-        {
-            polarisSection = payload;
-        }
-        if (new[] { "organizationIdForRequests", "requestingOrgId", "pickupOrganizationId", "pickupOrgId" }
-            .Any(name => HasProperty(polarisSection, name)))
-        {
-            return new AdministrationResult("polaris_context_retired",
-                Message: "Requesting and pickup organizations belong to each operation.");
-        }
-        if (organizationId == 1)
-        {
-            foreach (var name in new[] { "workstationId", "systemPolarisUserId", "userId" })
-            {
-                if (HasProperty(polarisSection, name) &&
-                    polarisSection.GetProperty(name).ValueKind != JsonValueKind.Null &&
-                    GetInt(polarisSection, name) is not > 0)
-                {
-                    return new AdministrationResult("polaris_identity_invalid",
-                        Message: "Polaris integration IDs must be positive Int32 values.");
-                }
-            }
-            if (HasProperty(polarisSection, "host") &&
-                (polarisSection.GetProperty("host").ValueKind is not (JsonValueKind.Null or JsonValueKind.String) ||
-                 Clean(GetString(polarisSection, "host")) is { } host && !PolarisConfigurationValidation.IsHostValid(host)))
-            {
-                return new AdministrationResult("polaris_host_invalid",
-                    Message: "Enter an absolute HTTP or HTTPS Polaris service URL.");
-            }
-        }
-        else if (new[] { "workstationId", "systemPolarisUserId", "userId", "host", "accessId",
-                     "staffDomain", "adminUser", "apiKey", "adminPassword", "clearApiKey", "clearAdminPassword" }
-                 .Any(name => HasProperty(polarisSection, name)))
-        {
-            return new AdministrationResult("polaris_settings_system_only",
-                Message: "Polaris integration settings can only be changed at system scope.");
-        }
-
-        var emailSection = GetObject(payload, "emails", "email");
-        var smtpSection = GetObject(payload, "smtp");
-        if (organizationId != 1 &&
-            (HasTokenMutation(payload) || HasTokenMutation(emailSection) || HasTokenMutation(smtpSection)))
-        {
-            return new AdministrationResult("postmark_token_system_only",
-                Message: "The Postmark server token can only be changed at system scope.");
-        }
-        if (organizationId == 1 &&
-            (HasTokenReplacement(emailSection) || HasTokenReplacement(payload)) &&
-            (GetBool(emailSection, "clearPostmarkToken") == true ||
-             GetBool(emailSection, "clearServerToken") == true ||
-             GetBool(payload, "clearPostmarkToken") == true ||
-             GetBool(payload, "clearServerToken") == true))
-        {
-            return new AdministrationResult("postmark_token_intent_conflict",
-                Message: "Choose either a replacement Postmark token or clear, not both.");
-        }
-
-        var isReset = organizationId != 1 &&
-                      string.Equals(GetString(payload, "action"), "reset", StringComparison.OrdinalIgnoreCase);
+        var isReset = organizationId != LibraryScope.SystemOrganizationId && command.Reset;
         var patronCodeValidation = isReset
             ? (Snapshot: (PatronCodeValidation?)null, Failure: (AdministrationResult?)null)
             : await PreparePatronCodeValidationAsync(payload, organizationId, cancellationToken);
@@ -365,7 +266,7 @@ public sealed class AdministrationService(
         await using var transaction = await context.Database.BeginTransactionAsync(
             System.Data.IsolationLevel.Serializable,
             cancellationToken);
-        var autoClaimStaffIds = organizationId != 1 &&
+        var autoClaimStaffIds = organizationId != LibraryScope.SystemOrganizationId &&
             TryGetAny(payload, out var autoClaimRules, "autoClaimRules", "formatClaimRules") &&
             autoClaimRules.ValueKind == JsonValueKind.Array
             ? autoClaimRules.EnumerateArray()
@@ -378,7 +279,7 @@ public sealed class AdministrationService(
             organizationId,
             [],
             cancellationToken,
-            includeAllOrganizations: organizationId == 1,
+            includeAllOrganizations: organizationId == LibraryScope.SystemOrganizationId,
             additionalStaffIds: autoClaimStaffIds);
         if (locked.Failure is not null)
         {
@@ -386,7 +287,7 @@ public sealed class AdministrationService(
         }
         var organization = locked.Organizations[organizationId];
 
-        var expectedVersion = GetString(payload, "version");
+        var expectedVersion = command.Version;
         if (!TryValidateSettingsVersion(expectedVersion, out var versionFailure))
         {
             return versionFailure!;
@@ -409,7 +310,7 @@ public sealed class AdministrationService(
             }
         }
 
-        if (!isReset && organizationId != 1 &&
+        if (!isReset && organizationId != LibraryScope.SystemOrganizationId &&
             await ReferencesDeletedCustomTemplateAsync(context, organizationId, payload, cancellationToken))
         {
             return new AdministrationResult("template_referenced",
@@ -422,11 +323,11 @@ public sealed class AdministrationService(
         }
         else
         {
-            if (organizationId == 1)
+            if (organizationId == LibraryScope.SystemOrganizationId)
             {
-                await ApplySystemSettingsAsync(context, payload, cancellationToken);
+                await ApplySystemSettingsAsync(context, command, cancellationToken);
             }
-            await ApplyScopedSettingsAsync(context, organizationId, payload, cancellationToken);
+            await ApplyScopedSettingsAsync(context, organizationId, command, cancellationToken);
         }
 
         if (!isReset)
@@ -435,13 +336,13 @@ public sealed class AdministrationService(
                 context,
                 actor,
                 organizationId,
-                organizationId == 1 ? "system_settings_updated" : "library_settings_updated",
+                organizationId == LibraryScope.SystemOrganizationId ? "system_settings_updated" : "library_settings_updated",
                 "Configuration",
                 organizationId.ToString(),
                 new
                 {
                     action = "save",
-                    scope = organizationId == 1 ? "system" : "library",
+                    scope = organizationId == LibraryScope.SystemOrganizationId ? "system" : "library",
                     sections = payload.ValueKind == JsonValueKind.Object
                         ? payload.EnumerateObject().Select(item => item.Name).Where(item => item is not "version" and not "orgId").Order().ToArray()
                         : []
@@ -454,7 +355,7 @@ public sealed class AdministrationService(
             "saved",
             new
             {
-                orgId = organizationId == 1 ? "system" : organizationId.ToString(),
+                orgId = organizationId == LibraryScope.SystemOrganizationId ? "system" : organizationId.ToString(),
                 version = savedVersion
             });
     }
@@ -465,7 +366,8 @@ public sealed class AdministrationService(
         string? expectedVersion,
         CancellationToken cancellationToken)
     {
-        if (!TryResolveScope(actor, organizationId.ToString(), out var resolved, out var failure) || resolved == 1)
+        if (!TryResolveScope(actor, organizationId > LibraryScope.SystemOrganizationId
+                ? LibraryScope.ForLibrary(organizationId) : LibraryScope.System, out var resolved, out var failure) || resolved == LibraryScope.SystemOrganizationId)
         {
             return failure.Code == "ok" ? new AdministrationResult("staff_scope_forbidden") : failure;
         }
@@ -506,14 +408,14 @@ public sealed class AdministrationService(
         CurrentStaff actor,
         CancellationToken cancellationToken)
     {
-        if (actor.Role is not ("admin" or "super_admin"))
+        if (actor.Role is not (StaffRole.Admin or StaffRole.SuperAdmin))
         {
             return new AdministrationResult("staff_scope_forbidden");
         }
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var query = context.Organizations.AsNoTracking();
-        if (actor.Role != "super_admin")
+        if (actor.Role != StaffRole.SuperAdmin)
         {
             query = query.Where(item => item.Id == actor.OrganizationId);
         }
@@ -531,10 +433,10 @@ public sealed class AdministrationService(
 
     public async Task<AdministrationResult> ListPatronCodesAsync(
         CurrentStaff actor,
-        string? requestedOrganization,
+        LibraryScope requestedScope,
         CancellationToken cancellationToken)
     {
-        if (!TryResolveScope(actor, requestedOrganization, out _, out var failure))
+        if (!TryResolveScope(actor, requestedScope, out _, out var failure))
         {
             return failure;
         }
@@ -556,19 +458,13 @@ public sealed class AdministrationService(
                 "patron_codes_unavailable",
                 Message: exception.Message);
         }
-        catch (Exception)
-        {
-            return new AdministrationResult(
-                "patron_codes_unavailable",
-                Message: "Patron-code reference data is unavailable.");
-        }
     }
 
     public async Task<AdministrationResult> SyncOrganizationsAsync(
         CurrentStaff actor,
         CancellationToken cancellationToken)
     {
-        if (actor.Role != "super_admin")
+        if (actor.Role != StaffRole.SuperAdmin)
         {
             return new AdministrationResult("staff_scope_forbidden");
         }
@@ -678,7 +574,7 @@ public sealed class AdministrationService(
         string? expectedVersion,
         CancellationToken cancellationToken)
     {
-        if (actor.Role != "super_admin" || organizationId <= 1)
+        if (actor.Role != StaffRole.SuperAdmin || organizationId <= LibraryScope.SystemOrganizationId)
         {
             return new AdministrationResult("staff_scope_forbidden");
         }
@@ -744,7 +640,7 @@ public sealed class AdministrationService(
         CurrentStaff actor,
         CancellationToken cancellationToken)
     {
-        if (actor.Role != "super_admin")
+        if (actor.Role != StaffRole.SuperAdmin)
         {
             return new AdministrationResult("staff_scope_forbidden");
         }
@@ -788,17 +684,17 @@ public sealed class AdministrationService(
         int limit,
         CancellationToken cancellationToken)
     {
-        if (actor.Role is not ("admin" or "super_admin"))
+        if (actor.Role is not (StaffRole.Admin or StaffRole.SuperAdmin))
         {
             return new AdministrationResult("staff_scope_forbidden");
         }
-        if (actor.Role != "super_admin" && organizationId.HasValue && organizationId != actor.OrganizationId)
+        if (actor.Role != StaffRole.SuperAdmin && organizationId.HasValue && organizationId != actor.OrganizationId)
         {
             return new AdministrationResult("staff_scope_forbidden");
         }
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        var scope = actor.Role == "super_admin" ? organizationId : actor.OrganizationId;
+        var scope = actor.Role == StaffRole.SuperAdmin ? organizationId : actor.OrganizationId;
         // Audit reads participate in the same scope boundary as the mutations they expose.
         // Lock routing organizations before the actor row so a changed binding, role, or
         // organization cannot authorize a stale request while lifecycle code is committing.
@@ -838,7 +734,7 @@ public sealed class AdministrationService(
 
     public async Task<AdministrationResult> SaveLogoAsync(
         CurrentStaff actor,
-        string? requestedOrganization,
+        LibraryScope requestedScope,
         byte[] data,
         string contentType,
         string fileName,
@@ -847,7 +743,7 @@ public sealed class AdministrationService(
         string? expectedVersion,
         CancellationToken cancellationToken)
     {
-        if (!TryResolveScope(actor, requestedOrganization, out var organizationId, out var failure))
+        if (!TryResolveScope(actor, requestedScope, out var organizationId, out var failure))
         {
             return failure;
         }
@@ -872,7 +768,7 @@ public sealed class AdministrationService(
             organizationId,
             [],
             cancellationToken,
-            includeAllOrganizations: organizationId == 1);
+            includeAllOrganizations: organizationId == LibraryScope.SystemOrganizationId);
         if (locked.Failure is not null)
         {
             return locked.Failure;
@@ -905,12 +801,12 @@ public sealed class AdministrationService(
             branding.LogoContentType = logoInfo!.ContentType;
             branding.LogoFileName = Clean(fileName) ?? "logo";
         }
-        if (altText is not null || (clearLogo && organizationId != 1))
+        if (altText is not null || (clearLogo && organizationId != LibraryScope.SystemOrganizationId))
         {
             branding.LogoAltText = Clean(altText);
         }
         branding.UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime;
-        if (organizationId != 1 && IsEmpty(branding))
+        if (organizationId != LibraryScope.SystemOrganizationId && IsEmpty(branding))
         {
             if (!isNew)
             {
@@ -941,7 +837,7 @@ public sealed class AdministrationService(
         string? expectedVersion,
         CancellationToken cancellationToken)
     {
-        if (actor.Role is not ("admin" or "super_admin"))
+        if (actor.Role is not (StaffRole.Admin or StaffRole.SuperAdmin))
         {
             return new AdministrationResult("staff_scope_forbidden");
         }
@@ -979,7 +875,7 @@ public sealed class AdministrationService(
         {
             return new AdministrationResult("format_not_found");
         }
-        if (format.OwnerOrganizationId == 1)
+        if (format.OwnerOrganizationId == LibraryScope.SystemOrganizationId)
         {
             return new AdministrationResult("system_format_durable");
         }
@@ -1019,90 +915,155 @@ public sealed class AdministrationService(
 
     private async Task ApplySystemSettingsAsync(
         AsapDbContext context,
-        JsonElement payload,
+        AdministrationSettingsCommand command,
         CancellationToken cancellationToken)
     {
-        var system = await context.SystemSettings.SingleAsync(item => item.OrganizationId == 1, cancellationToken);
-        var polaris = await context.PolarisSettings.SingleAsync(item => item.OrganizationId == 1, cancellationToken);
-        var email = await context.EmailSettings.SingleAsync(item => item.OrganizationId == 1, cancellationToken);
-        var systemSection = GetObject(payload, "systemSettings", "system");
-        var patronSection = GetObject(payload, "ui_text", "patron");
-        var emailSection = GetObject(payload, "emails", "email");
-        var polarisSection = GetObject(payload, "polaris");
-        var smtpSection = GetObject(payload, "smtp");
-        if (systemSection.ValueKind == JsonValueKind.Undefined) systemSection = payload;
-        if (patronSection.ValueKind == JsonValueKind.Undefined) patronSection = payload;
-        if (emailSection.ValueKind == JsonValueKind.Undefined) emailSection = payload;
-        if (polarisSection.ValueKind == JsonValueKind.Undefined) polarisSection = payload;
-        if (smtpSection.ValueKind == JsonValueKind.Undefined) smtpSection = payload;
+        var system = await context.SystemSettings.SingleAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
+        var polaris = await context.PolarisSettings.SingleAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
+        var email = await context.EmailSettings.SingleAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
+        Apply(command.System.StaffUrl, value => system.StaffApplicationUrl = NormalizeSystemText(value));
+        Apply(command.System.LeapBibUrlPattern, value => system.LeapBibUrlPattern = NormalizeSystemText(value));
+        Apply(command.System.LeapPatronUrlPattern, value => system.LeapPatronUrlPattern = NormalizeSystemText(value));
+        Apply(command.System.FormatIconUrlPattern, value => system.MaterialTypeIconUrlPattern = NormalizeSystemText(value));
+        Apply(command.System.SystemNotEnabledMessage, value => system.SystemNotEnabledMessage = NormalizeSystemText(value));
+        Apply(command.System.MisconfiguredMessage, value => system.MisconfiguredMessage = NormalizeSystemText(value));
+        var systemSection = GetObject(command.CollectionEdits, "systemSettings", "system");
+        await ReplaceOriginsIfPresentAsync(context, command.CollectionEdits, systemSection, cancellationToken);
+        await ApplyParticipationAsync(context, command.CollectionEdits, systemSection, cancellationToken);
 
-        ApplyText(systemSection, "staffUrl", value => system.StaffApplicationUrl = NormalizeSystemText(value));
-        ApplyText(payload, "staffUrl", value => system.StaffApplicationUrl = NormalizeSystemText(value));
-        ApplyText(systemSection, "leapBibUrlPattern", value => system.LeapBibUrlPattern = NormalizeSystemText(value));
-        ApplyText(payload, "leapBibUrlPattern", value => system.LeapBibUrlPattern = NormalizeSystemText(value));
-        ApplyText(systemSection, "leapPatronUrlPattern", value => system.LeapPatronUrlPattern = NormalizeSystemText(value));
-        ApplyText(payload, "leapPatronUrlPattern", value => system.LeapPatronUrlPattern = NormalizeSystemText(value));
-        ApplyText(systemSection, "formatIconUrlPattern", value => system.MaterialTypeIconUrlPattern = NormalizeSystemText(value));
-        ApplyText(payload, "formatIconUrlPattern", value => system.MaterialTypeIconUrlPattern = NormalizeSystemText(value));
-        ApplyText(systemSection, "systemNotEnabledMessage", value => system.SystemNotEnabledMessage = NormalizeSystemText(value));
-        ApplyText(payload, "systemNotEnabledMessage", value => system.SystemNotEnabledMessage = NormalizeSystemText(value));
-        ApplyText(patronSection, "systemNotEnabledMessage", value => system.SystemNotEnabledMessage = NormalizeSystemText(value));
-        ApplyText(systemSection, "misconfiguredMessage", value => system.MisconfiguredMessage = NormalizeSystemText(value));
-        ApplyText(payload, "misconfiguredMessage", value => system.MisconfiguredMessage = NormalizeSystemText(value));
-        ApplyText(patronSection, "misconfiguredMessage", value => system.MisconfiguredMessage = NormalizeSystemText(value));
-        await ReplaceOriginsIfPresentAsync(context, payload, systemSection, cancellationToken);
-        await ApplyParticipationAsync(context, payload, systemSection, cancellationToken);
-
-        ApplyText(polarisSection, "host", value => polaris.Host = NormalizeSystemText(value));
-        ApplyText(polarisSection, "accessId", value => polaris.AccessId = NormalizeSystemText(value));
-        ApplyText(polarisSection, "staffDomain", value => polaris.StaffDomain = NormalizeSystemText(value));
-        ApplyText(polarisSection, "adminUser", value => polaris.AdminUser = NormalizeSystemText(value));
-        ApplyInt(polarisSection, "workstationId", value => polaris.WorkstationId = value);
-        ApplyInt(polarisSection, "systemPolarisUserId", value => polaris.SystemPolarisUserId = value);
-        ApplyInt(polarisSection, "userId", value => polaris.SystemPolarisUserId = value);
-        ApplySecret(polarisSection, "apiKey", value => polaris.ProtectedApiKey = credentialProtector.Protect(value));
-        ApplySecret(polarisSection, "adminPassword", value => polaris.ProtectedAdminPassword = credentialProtector.Protect(value));
-        if (GetBool(polarisSection, "clearApiKey") == true) polaris.ProtectedApiKey = null;
-        if (GetBool(polarisSection, "clearAdminPassword") == true) polaris.ProtectedAdminPassword = null;
-
-        ApplyText(emailSection, "fromAddress", value => email.FromAddress = NormalizeSystemText(value));
-        ApplyText(emailSection, "fromName", value => email.FromName = NormalizeSystemText(value));
-        ApplyText(smtpSection, "fromAddress", value => email.FromAddress = NormalizeSystemText(value));
-        ApplyText(smtpSection, "fromName", value => email.FromName = NormalizeSystemText(value));
-        ApplySecret(emailSection, "postmarkToken", value => email.ProtectedServerToken = credentialProtector.Protect(value));
-        ApplySecret(emailSection, "serverToken", value => email.ProtectedServerToken = credentialProtector.Protect(value));
-        if (GetBool(emailSection, "clearPostmarkToken") == true || GetBool(emailSection, "clearServerToken") == true)
+        Apply(command.Polaris.Host, value => polaris.Host = NormalizeSystemText(value));
+        Apply(command.Polaris.AccessId, value => polaris.AccessId = NormalizeSystemText(value));
+        Apply(command.Polaris.StaffDomain, value => polaris.StaffDomain = NormalizeSystemText(value));
+        Apply(command.Polaris.AdminUser, value => polaris.AdminUser = NormalizeSystemText(value));
+        Apply(command.Polaris.WorkstationId, value => polaris.WorkstationId = value);
+        Apply(command.Polaris.SystemPolarisUserId, value => polaris.SystemPolarisUserId = value);
+        if (Clean(command.Polaris.ApiKey.Value) is { } apiKey)
+        {
+            polaris.ProtectedApiKey = credentialProtector.Protect(apiKey);
+        }
+        if (Clean(command.Polaris.AdminPassword.Value) is { } password)
+        {
+            polaris.ProtectedAdminPassword = credentialProtector.Protect(password);
+        }
+        if (command.Polaris.ClearApiKey.Value == true)
+        {
+            polaris.ProtectedApiKey = null;
+        }
+        if (command.Polaris.ClearAdminPassword.Value == true)
+        {
+            polaris.ProtectedAdminPassword = null;
+        }
+        if (Clean(command.Email.ServerToken.Value) is { } token)
+        {
+            email.ProtectedServerToken = credentialProtector.Protect(token);
+        }
+        if (command.Email.ClearServerToken.Value == true)
         {
             email.ProtectedServerToken = null;
+        }
+    }
+
+    private static void Apply<T>(SuppliedValue<T> patch, Action<T> setter)
+    {
+        if (patch.IsSupplied)
+        {
+            setter(patch.Value);
         }
     }
 
     private async Task ApplyScopedSettingsAsync(
         AsapDbContext context,
         int organizationId,
-        JsonElement payload,
+        AdministrationSettingsCommand command,
         CancellationToken cancellationToken)
     {
+        var payload = command.CollectionEdits;
         var workflowSection = GetObject(payload, "workflow");
         var patronSection = GetObject(payload, "ui_text", "patron");
-        var emailSection = GetObject(payload, "emails", "email");
         if (workflowSection.ValueKind == JsonValueKind.Undefined) workflowSection = payload;
         if (patronSection.ValueKind == JsonValueKind.Undefined) patronSection = payload;
-        if (emailSection.ValueKind == JsonValueKind.Undefined) emailSection = payload;
-        var isSystem = organizationId == 1;
+        var isSystem = organizationId == LibraryScope.SystemOrganizationId;
 
         var workflow = await GetOrCreateWorkflowAsync(context, organizationId, cancellationToken);
-        foreach (var field in WorkflowTextFields)
+        if (command.Workflow.SuggestionLimitMessage.IsSupplied)
         {
-            ApplyText(workflowSection, field, value => SetWorkflowText(workflow, field, value, isSystem));
+            workflow.SuggestionLimitMessage = NormalizeScopedText(command.Workflow.SuggestionLimitMessage.Value);
         }
-        foreach (var field in WorkflowBoolFields)
+        if (command.Workflow.CommonAuthorsLabel.IsSupplied)
         {
-            ApplyBool(workflowSection, field, value => SetWorkflowBool(workflow, field, value, isSystem));
+            workflow.CommonAuthorsLabel = NormalizeScopedText(command.Workflow.CommonAuthorsLabel.Value);
         }
-        foreach (var field in WorkflowIntFields)
+        if (command.Workflow.CommonAuthorsHelp.IsSupplied)
         {
-            ApplyInt(workflowSection, field, value => SetWorkflowInt(workflow, field, value, isSystem));
+            workflow.CommonAuthorsHelp = NormalizeScopedText(command.Workflow.CommonAuthorsHelp.Value);
+        }
+        if (command.Workflow.CommonAuthorsMessage.IsSupplied)
+        {
+            workflow.CommonAuthorsMessage = NormalizeScopedText(command.Workflow.CommonAuthorsMessage.Value);
+        }
+        if (command.Workflow.PatronCodeEligibilityMessage.IsSupplied)
+        {
+            workflow.PatronCodeEligibilityMessage = NormalizeScopedText(command.Workflow.PatronCodeEligibilityMessage.Value);
+        }
+        if (command.Workflow.OutstandingTimeoutEnabled.IsSupplied)
+        {
+            workflow.OutstandingTimeoutEnabled = command.Workflow.OutstandingTimeoutEnabled.Value ?? (isSystem ? false : (bool?)null);
+        }
+        if (command.Workflow.OutstandingTimeoutSendEmail.IsSupplied)
+        {
+            workflow.OutstandingTimeoutSendEmail = command.Workflow.OutstandingTimeoutSendEmail.Value ?? (isSystem ? false : (bool?)null);
+        }
+        if (command.Workflow.HoldPickupTimeoutEnabled.IsSupplied)
+        {
+            workflow.HoldPickupTimeoutEnabled = command.Workflow.HoldPickupTimeoutEnabled.Value ?? (isSystem ? false : (bool?)null);
+        }
+        if (command.Workflow.PendingHoldTimeoutEnabled.IsSupplied)
+        {
+            workflow.PendingHoldTimeoutEnabled = command.Workflow.PendingHoldTimeoutEnabled.Value ?? (isSystem ? false : (bool?)null);
+        }
+        if (command.Workflow.AdditionalCopyTimeoutEnabled.IsSupplied)
+        {
+            workflow.AdditionalCopyTimeoutEnabled = command.Workflow.AdditionalCopyTimeoutEnabled.Value ?? (isSystem ? false : (bool?)null);
+        }
+        if (command.Workflow.AutoPromote.IsSupplied)
+        {
+            workflow.AutoPromote = command.Workflow.AutoPromote.Value ?? (isSystem ? false : (bool?)null);
+        }
+        if (command.Workflow.CommonAuthorsEnabled.IsSupplied)
+        {
+            workflow.CommonAuthorsEnabled = command.Workflow.CommonAuthorsEnabled.Value ?? (isSystem ? false : (bool?)null);
+        }
+        if (command.Workflow.AllowPatronAutoholdOptOut.IsSupplied)
+        {
+            workflow.AllowPatronAutoholdOptOut = command.Workflow.AllowPatronAutoholdOptOut.Value ?? (isSystem ? false : (bool?)null);
+        }
+        if (command.Workflow.AllowAnyRegisteredCardLogin.IsSupplied)
+        {
+            workflow.AllowAnyRegisteredCardLogin = command.Workflow.AllowAnyRegisteredCardLogin.Value ?? (isSystem ? false : (bool?)null);
+        }
+        if (command.Workflow.PatronCodeEligibilityEnabled.IsSupplied)
+        {
+            workflow.PatronCodeEligibilityEnabled = command.Workflow.PatronCodeEligibilityEnabled.Value ?? (isSystem ? false : (bool?)null);
+        }
+        if (command.Workflow.SuggestionLimit.IsSupplied)
+        {
+            workflow.SuggestionLimit = command.Workflow.SuggestionLimit.Value;
+        }
+        if (command.Workflow.OutstandingTimeoutDays.IsSupplied)
+        {
+            workflow.OutstandingTimeoutDays = command.Workflow.OutstandingTimeoutDays.Value;
+        }
+        if (command.Workflow.HoldPickupTimeoutDays.IsSupplied)
+        {
+            workflow.HoldPickupTimeoutDays = command.Workflow.HoldPickupTimeoutDays.Value;
+        }
+        if (command.Workflow.PendingHoldTimeoutDays.IsSupplied)
+        {
+            workflow.PendingHoldTimeoutDays = command.Workflow.PendingHoldTimeoutDays.Value;
+        }
+        if (command.Workflow.AdditionalCopyTimeoutDays.IsSupplied)
+        {
+            workflow.AdditionalCopyTimeoutDays = command.Workflow.AdditionalCopyTimeoutDays.Value;
         }
         if (HasProperty(workflowSection, "outstandingTimeoutRejectionTemplateId"))
         {
@@ -1126,9 +1087,93 @@ public sealed class AdministrationService(
         }
 
         var patron = await GetOrCreatePatronAsync(context, organizationId, cancellationToken);
-        foreach (var field in PatronTextColumns)
+        if (command.Patron.PageTitle.IsSupplied)
         {
-            ApplyText(patronSection, field.Key, value => SetPatronText(patron, field.Value, value, isSystem));
+            patron.PageTitle = NormalizeScopedText(command.Patron.PageTitle.Value);
+        }
+        if (command.Patron.BarcodeLabel.IsSupplied)
+        {
+            patron.BarcodeLabel = NormalizeScopedText(command.Patron.BarcodeLabel.Value);
+        }
+        if (command.Patron.PinLabel.IsSupplied)
+        {
+            patron.PinLabel = NormalizeScopedText(command.Patron.PinLabel.Value);
+        }
+        if (command.Patron.LoginPrompt.IsSupplied)
+        {
+            patron.LoginPrompt = NormalizeScopedText(command.Patron.LoginPrompt.Value);
+        }
+        if (command.Patron.LoginNote.IsSupplied)
+        {
+            patron.LoginNote = NormalizeScopedText(command.Patron.LoginNote.Value);
+        }
+        if (command.Patron.SuggestionFormNote.IsSupplied)
+        {
+            patron.SuggestionFormNote = NormalizeScopedText(command.Patron.SuggestionFormNote.Value);
+        }
+        if (command.Patron.NoEmailMessage.IsSupplied)
+        {
+            patron.NoEmailMessage = NormalizeScopedText(command.Patron.NoEmailMessage.Value);
+        }
+        if (command.Patron.SuccessTitle.IsSupplied)
+        {
+            patron.SuccessTitle = NormalizeScopedText(command.Patron.SuccessTitle.Value);
+        }
+        if (command.Patron.SuccessMessage.IsSupplied)
+        {
+            patron.SuccessMessage = NormalizeScopedText(command.Patron.SuccessMessage.Value);
+        }
+        if (command.Patron.AlreadySubmittedMessage.IsSupplied)
+        {
+            patron.AlreadySubmittedMessage = NormalizeScopedText(command.Patron.AlreadySubmittedMessage.Value);
+        }
+        if (command.Patron.EbookMessage.IsSupplied)
+        {
+            patron.EbookMessage = NormalizeScopedText(command.Patron.EbookMessage.Value);
+        }
+        if (command.Patron.EaudiobookMessage.IsSupplied)
+        {
+            patron.EaudiobookMessage = NormalizeScopedText(command.Patron.EaudiobookMessage.Value);
+        }
+        if (command.Patron.SuggestionStatusLabel.IsSupplied)
+        {
+            patron.SuggestionStatusLabel = NormalizeScopedText(command.Patron.SuggestionStatusLabel.Value);
+        }
+        if (command.Patron.OutstandingPurchaseStatusLabel.IsSupplied)
+        {
+            patron.OutstandingPurchaseStatusLabel = NormalizeScopedText(command.Patron.OutstandingPurchaseStatusLabel.Value);
+        }
+        if (command.Patron.PendingHoldStatusLabel.IsSupplied)
+        {
+            patron.PendingHoldStatusLabel = NormalizeScopedText(command.Patron.PendingHoldStatusLabel.Value);
+        }
+        if (command.Patron.HoldPlacedStatusLabel.IsSupplied)
+        {
+            patron.HoldPlacedStatusLabel = NormalizeScopedText(command.Patron.HoldPlacedStatusLabel.Value);
+        }
+        if (command.Patron.ClosedStatusLabel.IsSupplied)
+        {
+            patron.ClosedStatusLabel = NormalizeScopedText(command.Patron.ClosedStatusLabel.Value);
+        }
+        if (command.Patron.RejectedStatusLabel.IsSupplied)
+        {
+            patron.RejectedStatusLabel = NormalizeScopedText(command.Patron.RejectedStatusLabel.Value);
+        }
+        if (command.Patron.HoldCompletedStatusLabel.IsSupplied)
+        {
+            patron.HoldCompletedStatusLabel = NormalizeScopedText(command.Patron.HoldCompletedStatusLabel.Value);
+        }
+        if (command.Patron.HoldNotPickedUpStatusLabel.IsSupplied)
+        {
+            patron.HoldNotPickedUpStatusLabel = NormalizeScopedText(command.Patron.HoldNotPickedUpStatusLabel.Value);
+        }
+        if (command.Patron.ManualStatusLabel.IsSupplied)
+        {
+            patron.ManualStatusLabel = NormalizeScopedText(command.Patron.ManualStatusLabel.Value);
+        }
+        if (command.Patron.SilentStatusLabel.IsSupplied)
+        {
+            patron.SilentStatusLabel = NormalizeScopedText(command.Patron.SilentStatusLabel.Value);
         }
         ApplyDuplicateLabels(patronSection, patron, isSystem);
         if (context.Entry(patron).State == EntityState.Detached && !IsEmpty(patron))
@@ -1137,8 +1182,8 @@ public sealed class AdministrationService(
         }
 
         var email = await GetOrCreateEmailAsync(context, organizationId, cancellationToken);
-        ApplyText(emailSection, "fromAddress", value => email.FromAddress = NormalizeScopedText(value, isSystem));
-        ApplyText(emailSection, "fromName", value => email.FromName = NormalizeScopedText(value, isSystem));
+        Apply(command.Email.FromAddress, value => email.FromAddress = NormalizeScopedText(value));
+        Apply(command.Email.FromName, value => email.FromName = NormalizeScopedText(value));
         if (context.Entry(email).State == EntityState.Detached && !IsEmpty(email))
         {
             context.EmailSettings.Add(email);
@@ -1206,36 +1251,17 @@ public sealed class AdministrationService(
     }
 
     private static bool TryResolveScope(
-        CurrentStaff actor,
-        string? requested,
-        out int organizationId,
-        out AdministrationResult failure)
+        CurrentStaff actor, LibraryScope requested, out int organizationId, out AdministrationResult failure)
     {
-        organizationId = 0;
+        organizationId = requested.OrganizationId ?? 0;
         failure = new AdministrationResult("ok");
-        if (actor.Role is not ("admin" or "super_admin"))
-        {
-            failure = new AdministrationResult("staff_scope_forbidden");
-            return false;
-        }
-
-        var normalized = Clean(requested);
-        if (string.IsNullOrEmpty(normalized))
-        {
-            organizationId = actor.Role == "super_admin" ? 1 : actor.OrganizationId;
-        }
-        else if (string.Equals(normalized, "system", StringComparison.OrdinalIgnoreCase))
-        {
-            organizationId = 1;
-        }
-        else if (!int.TryParse(normalized, out organizationId) || organizationId <= 1)
+        if (requested.Kind == LibraryScopeKind.All)
         {
             failure = new AdministrationResult("organization_invalid");
             return false;
         }
-
-        if (organizationId == 1 && actor.Role != "super_admin" ||
-            organizationId != 1 && actor.Role != "super_admin" && actor.OrganizationId != organizationId)
+        if (!StaffEligibilityService.RoleMeets(actor.Role, StaffRoleRequirement.Admin) ||
+            !StaffEligibilityService.CanAccess(actor, organizationId))
         {
             failure = new AdministrationResult("staff_scope_forbidden");
             return false;
@@ -1349,7 +1375,7 @@ public sealed class AdministrationService(
         }
         if (value.ValueKind == JsonValueKind.Null)
         {
-            return (null, organizationId == 1
+            return (null, organizationId == LibraryScope.SystemOrganizationId
                 ? new AdministrationResult("patron_codes_invalid",
                     Message: "System patron-code IDs cannot inherit another scope. Use an empty array to clear them.")
                 : null);
@@ -1386,12 +1412,6 @@ public sealed class AdministrationService(
                 "patron_codes_unavailable",
                 Message: exception.Message));
         }
-        catch (Exception)
-        {
-            return (null, new AdministrationResult(
-                "patron_codes_unavailable",
-                Message: "Patron-code reference data is unavailable."));
-        }
 
         var known = choices.Where(item => item.Id > 0).Select(item => item.Id).ToHashSet();
         return (new PatronCodeValidation(requested, known), null);
@@ -1404,7 +1424,7 @@ public sealed class AdministrationService(
         CancellationToken cancellationToken)
     {
         var sourceOrganizationId = organizationId;
-        if (organizationId != 1 && !await context.PatronCodeEligibilitySets.AsNoTracking()
+        if (organizationId != LibraryScope.SystemOrganizationId && !await context.PatronCodeEligibilitySets.AsNoTracking()
                 .AnyAsync(item => item.OrganizationId == organizationId, cancellationToken))
         {
             sourceOrganizationId = 1;
@@ -1501,61 +1521,9 @@ public sealed class AdministrationService(
         return row ?? new EmailSettings { OrganizationId = organizationId };
     }
 
-    private static void SetWorkflowText(WorkflowSettings row, string field, string? value, bool system)
-    {
-        var normalized = NormalizeScopedText(value, system);
-        switch (field)
-        {
-            case "suggestionLimitMessage": row.SuggestionLimitMessage = normalized; break;
-            case "commonAuthorsLabel": row.CommonAuthorsLabel = normalized; break;
-            case "commonAuthorsHelp": row.CommonAuthorsHelp = normalized; break;
-            case "commonAuthorsMessage": row.CommonAuthorsMessage = normalized; break;
-            case "patronCodeEligibilityMessage": row.PatronCodeEligibilityMessage = normalized; break;
-        }
-    }
-
-    private static void SetWorkflowBool(WorkflowSettings row, string field, bool? value, bool system)
-    {
-        var normalized = system ? value ?? false : value;
-        switch (field)
-        {
-            case "outstandingTimeoutEnabled": row.OutstandingTimeoutEnabled = normalized; break;
-            case "outstandingTimeoutSendEmail": row.OutstandingTimeoutSendEmail = normalized; break;
-            case "holdPickupTimeoutEnabled": row.HoldPickupTimeoutEnabled = normalized; break;
-            case "pendingHoldTimeoutEnabled": row.PendingHoldTimeoutEnabled = normalized; break;
-            case "additionalCopyTimeoutEnabled": row.AdditionalCopyTimeoutEnabled = normalized; break;
-            case "autoPromote": row.AutoPromote = normalized; break;
-            case "commonAuthorsEnabled": row.CommonAuthorsEnabled = normalized; break;
-            case "allowPatronAutoholdOptOut": row.AllowPatronAutoholdOptOut = normalized; break;
-            case "allowAnyRegisteredCardLogin": row.AllowAnyRegisteredCardLogin = normalized; break;
-            case "patronCodeEligibilityEnabled": row.PatronCodeEligibilityEnabled = normalized; break;
-        }
-    }
-
-    private static void SetWorkflowInt(WorkflowSettings row, string field, int? value, bool system)
-    {
-        var normalized = value;
-        if (normalized is <= 0 or > 3650 && field.EndsWith("Days", StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException($"{field} must be between 1 and 3650.");
-        }
-        if (field == "suggestionLimit" && normalized is <= 0 or > 1000)
-        {
-            throw new InvalidOperationException("suggestionLimit must be between 1 and 1000.");
-        }
-        switch (field)
-        {
-            case "suggestionLimit": row.SuggestionLimit = normalized; break;
-            case "outstandingTimeoutDays": row.OutstandingTimeoutDays = normalized; break;
-            case "holdPickupTimeoutDays": row.HoldPickupTimeoutDays = normalized; break;
-            case "pendingHoldTimeoutDays": row.PendingHoldTimeoutDays = normalized; break;
-            case "additionalCopyTimeoutDays": row.AdditionalCopyTimeoutDays = normalized; break;
-        }
-    }
-
     private static void SetPatronText(PatronSettings row, string property, string? value, bool system)
     {
-        var normalized = NormalizeScopedText(value, system);
+        var normalized = NormalizeScopedText(value);
         switch (property)
         {
             case nameof(PatronSettings.PageTitle): row.PageTitle = normalized; break;
@@ -1594,8 +1562,8 @@ public sealed class AdministrationService(
 
     private static string? NormalizeSystemText(string? value) => Clean(value);
 
-    private static string? NormalizeScopedText(string? value, bool system) =>
-        system ? Clean(value) : Clean(value);
+    private static string? NormalizeScopedText(string? value) =>
+        Clean(value);
 
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
@@ -1614,14 +1582,6 @@ public sealed class AdministrationService(
 
     private static bool HasProperty(JsonElement root, string name) =>
         root.ValueKind == JsonValueKind.Object && root.TryGetProperty(name, out _);
-
-    private static bool HasTokenMutation(JsonElement section) =>
-        HasProperty(section, "postmarkToken") || HasProperty(section, "serverToken") ||
-        HasProperty(section, "clearPostmarkToken") || HasProperty(section, "clearServerToken");
-
-    private static bool HasTokenReplacement(JsonElement section) =>
-        !string.IsNullOrWhiteSpace(GetString(section, "postmarkToken")) ||
-        !string.IsNullOrWhiteSpace(GetString(section, "serverToken"));
 
     private static async Task<bool> ReferencesDeletedCustomTemplateAsync(
         AsapDbContext context,
@@ -1757,74 +1717,58 @@ public sealed class AdministrationService(
         if (HasProperty(root, name)) setter(GetString(root, name));
     }
 
-    private static void ApplyBool(JsonElement root, string name, Action<bool?> setter)
+    private static SystemSettingsView ToSystemSettings(SystemSettings row, IReadOnlyList<string> origins) => new SystemSettingsView
     {
-        if (HasProperty(root, name)) setter(GetBool(root, name));
-    }
-
-    private static void ApplyInt(JsonElement root, string name, Action<int?> setter)
-    {
-        if (HasProperty(root, name)) setter(GetInt(root, name));
-    }
-
-    private static void ApplySecret(JsonElement root, string name, Action<string> setter)
-    {
-        var value = Clean(GetString(root, name));
-        if (value is not null) setter(value);
-    }
-
-    private static object ToSystemSettings(SystemSettings row, IReadOnlyList<string> origins) => new
-    {
-        staffUrl = row.StaffApplicationUrl,
-        leapBibUrlPattern = row.LeapBibUrlPattern,
-        leapPatronUrlPattern = row.LeapPatronUrlPattern,
-        formatIconUrlPattern = row.MaterialTypeIconUrlPattern,
-        systemNotEnabledMessage = row.SystemNotEnabledMessage,
-        misconfiguredMessage = row.MisconfiguredMessage,
-        patronEmbedAllowedOrigins = origins,
-        version = StaffVersion.Encode(row.RowVersion)
+        StaffUrl = row.StaffApplicationUrl,
+        LeapBibUrlPattern = row.LeapBibUrlPattern,
+        LeapPatronUrlPattern = row.LeapPatronUrlPattern,
+        FormatIconUrlPattern = row.MaterialTypeIconUrlPattern,
+        SystemNotEnabledMessage = row.SystemNotEnabledMessage,
+        MisconfiguredMessage = row.MisconfiguredMessage,
+        PatronEmbedAllowedOrigins = origins,
+        Version = StaffVersion.Encode(row.RowVersion)
     };
 
-    private static object ToPolarisSettings(PolarisSettings row) => new
+    private static PolarisSettingsView ToPolarisSettings(PolarisSettings row) => new PolarisSettingsView
     {
-        host = row.Host,
-        accessId = row.AccessId,
-        staffDomain = row.StaffDomain,
-        adminUser = row.AdminUser,
-        workstationId = row.WorkstationId,
-        systemPolarisUserId = row.SystemPolarisUserId,
-        hasApiKey = !string.IsNullOrWhiteSpace(row.ProtectedApiKey),
-        hasAdminPassword = !string.IsNullOrWhiteSpace(row.ProtectedAdminPassword),
-        version = StaffVersion.Encode(row.RowVersion)
+        Host = row.Host,
+        AccessId = row.AccessId,
+        StaffDomain = row.StaffDomain,
+        AdminUser = row.AdminUser,
+        WorkstationId = row.WorkstationId,
+        SystemPolarisUserId = row.SystemPolarisUserId,
+        HasApiKey = !string.IsNullOrWhiteSpace(row.ProtectedApiKey),
+        HasAdminPassword = !string.IsNullOrWhiteSpace(row.ProtectedAdminPassword),
+        Version = StaffVersion.Encode(row.RowVersion)
     };
 
-    private static object ToWorkflowRow(WorkflowSettings row) => new
+    private static WorkflowSettingsView ToWorkflowRow(WorkflowSettings row) => new WorkflowSettingsView
     {
-        suggestionLimit = row.SuggestionLimit,
-        suggestionLimitMessage = row.SuggestionLimitMessage,
-        outstandingTimeoutEnabled = row.OutstandingTimeoutEnabled,
-        outstandingTimeoutDays = row.OutstandingTimeoutDays,
-        outstandingTimeoutSendEmail = row.OutstandingTimeoutSendEmail,
-        outstandingTimeoutRejectionTemplateId = row.OutstandingTimeoutRejectionTemplateId?.ToString(),
-        holdPickupTimeoutEnabled = row.HoldPickupTimeoutEnabled,
-        holdPickupTimeoutDays = row.HoldPickupTimeoutDays,
-        pendingHoldTimeoutEnabled = row.PendingHoldTimeoutEnabled,
-        pendingHoldTimeoutDays = row.PendingHoldTimeoutDays,
-        additionalCopyTimeoutEnabled = row.AdditionalCopyTimeoutEnabled,
-        additionalCopyTimeoutDays = row.AdditionalCopyTimeoutDays,
-        autoPromote = row.AutoPromote,
-        commonAuthorsEnabled = row.CommonAuthorsEnabled,
-        commonAuthorsLabel = row.CommonAuthorsLabel,
-        commonAuthorsHelp = row.CommonAuthorsHelp,
-        commonAuthorsMessage = row.CommonAuthorsMessage,
-        allowPatronAutoholdOptOut = row.AllowPatronAutoholdOptOut,
-        allowAnyRegisteredCardLogin = row.AllowAnyRegisteredCardLogin,
-        patronCodeEligibilityEnabled = row.PatronCodeEligibilityEnabled,
-        patronCodeEligibilityMessage = row.PatronCodeEligibilityMessage,
-        version = StaffVersion.Encode(row.RowVersion)
+        SuggestionLimit = row.SuggestionLimit,
+        SuggestionLimitMessage = row.SuggestionLimitMessage,
+        OutstandingTimeoutEnabled = row.OutstandingTimeoutEnabled,
+        OutstandingTimeoutDays = row.OutstandingTimeoutDays,
+        OutstandingTimeoutSendEmail = row.OutstandingTimeoutSendEmail,
+        OutstandingTimeoutRejectionTemplateId = row.OutstandingTimeoutRejectionTemplateId?.ToString(),
+        HoldPickupTimeoutEnabled = row.HoldPickupTimeoutEnabled,
+        HoldPickupTimeoutDays = row.HoldPickupTimeoutDays,
+        PendingHoldTimeoutEnabled = row.PendingHoldTimeoutEnabled,
+        PendingHoldTimeoutDays = row.PendingHoldTimeoutDays,
+        AdditionalCopyTimeoutEnabled = row.AdditionalCopyTimeoutEnabled,
+        AdditionalCopyTimeoutDays = row.AdditionalCopyTimeoutDays,
+        AutoPromote = row.AutoPromote,
+        CommonAuthorsEnabled = row.CommonAuthorsEnabled,
+        CommonAuthorsLabel = row.CommonAuthorsLabel,
+        CommonAuthorsHelp = row.CommonAuthorsHelp,
+        CommonAuthorsMessage = row.CommonAuthorsMessage,
+        AllowPatronAutoholdOptOut = row.AllowPatronAutoholdOptOut,
+        AllowAnyRegisteredCardLogin = row.AllowAnyRegisteredCardLogin,
+        PatronCodeEligibilityEnabled = row.PatronCodeEligibilityEnabled,
+        PatronCodeEligibilityMessage = row.PatronCodeEligibilityMessage,
+        Version = StaffVersion.Encode(row.RowVersion)
     };
 
-    private static object? ToWorkflow(WorkflowSettings? row) => row is null ? null : ToWorkflowRow(row);
+    private static WorkflowSettingsView? ToWorkflow(WorkflowSettings? row) => row is null ? null : ToWorkflowRow(row);
 
     private static object ToWorkflow(EffectivePatronConfiguration row, bool system) => new
     {
@@ -1841,51 +1785,51 @@ public sealed class AdministrationService(
         system
     };
 
-    private static object ToPatronRow(PatronSettings row) => new Dictionary<string, object?>(StringComparer.Ordinal)
+    private static PatronTextSettingsView ToPatronRow(PatronSettings row) => new()
     {
-        ["pageTitle"] = row.PageTitle,
-        ["barcodeLabel"] = row.BarcodeLabel,
-        ["pinLabel"] = row.PinLabel,
-        ["loginPrompt"] = row.LoginPrompt,
-        ["loginNote"] = row.LoginNote,
-        ["suggestionFormNote"] = row.SuggestionFormNote,
-        ["noEmailMessage"] = row.NoEmailMessage,
-        ["successTitle"] = row.SuccessTitle,
-        ["successMessage"] = row.SuccessMessage,
-        ["alreadySubmittedMessage"] = row.AlreadySubmittedMessage,
-        ["ebookMessage"] = row.EbookMessage,
-        ["eaudiobookMessage"] = row.EaudiobookMessage,
-        ["suggestionStatusLabel"] = row.SuggestionStatusLabel,
-        ["outstandingPurchaseStatusLabel"] = row.OutstandingPurchaseStatusLabel,
-        ["pendingHoldStatusLabel"] = row.PendingHoldStatusLabel,
-        ["holdPlacedStatusLabel"] = row.HoldPlacedStatusLabel,
-        ["closedStatusLabel"] = row.ClosedStatusLabel,
-        ["rejectedStatusLabel"] = row.RejectedStatusLabel,
-        ["holdCompletedStatusLabel"] = row.HoldCompletedStatusLabel,
-        ["holdNotPickedUpStatusLabel"] = row.HoldNotPickedUpStatusLabel,
-        ["manualStatusLabel"] = row.ManualStatusLabel,
-        ["silentStatusLabel"] = row.SilentStatusLabel
+        PageTitle = row.PageTitle,
+        BarcodeLabel = row.BarcodeLabel,
+        PinLabel = row.PinLabel,
+        LoginPrompt = row.LoginPrompt,
+        LoginNote = row.LoginNote,
+        SuggestionFormNote = row.SuggestionFormNote,
+        NoEmailMessage = row.NoEmailMessage,
+        SuccessTitle = row.SuccessTitle,
+        SuccessMessage = row.SuccessMessage,
+        AlreadySubmittedMessage = row.AlreadySubmittedMessage,
+        EbookMessage = row.EbookMessage,
+        EaudiobookMessage = row.EaudiobookMessage,
+        SuggestionStatusLabel = row.SuggestionStatusLabel,
+        OutstandingPurchaseStatusLabel = row.OutstandingPurchaseStatusLabel,
+        PendingHoldStatusLabel = row.PendingHoldStatusLabel,
+        HoldPlacedStatusLabel = row.HoldPlacedStatusLabel,
+        ClosedStatusLabel = row.ClosedStatusLabel,
+        RejectedStatusLabel = row.RejectedStatusLabel,
+        HoldCompletedStatusLabel = row.HoldCompletedStatusLabel,
+        HoldNotPickedUpStatusLabel = row.HoldNotPickedUpStatusLabel,
+        ManualStatusLabel = row.ManualStatusLabel,
+        SilentStatusLabel = row.SilentStatusLabel,
     };
 
-    private static object? ToPatron(PatronSettings? row) => row is null ? null : ToPatronRow(row);
+    private static PatronTextSettingsView? ToPatron(PatronSettings? row) => row is null ? null : ToPatronRow(row);
 
-    private static object ToEmailRow(EmailSettings row) => new
+    private static EmailSettingsView ToEmailRow(EmailSettings row) => new EmailSettingsView
     {
-        fromAddress = row.FromAddress,
-        fromName = row.FromName,
-        hasPostmarkToken = row.OrganizationId == 1 && !string.IsNullOrWhiteSpace(row.ProtectedServerToken),
-        version = StaffVersion.Encode(row.RowVersion)
+        FromAddress = row.FromAddress,
+        FromName = row.FromName,
+        HasPostmarkToken = row.OrganizationId == LibraryScope.SystemOrganizationId && !string.IsNullOrWhiteSpace(row.ProtectedServerToken),
+        Version = StaffVersion.Encode(row.RowVersion)
     };
 
-    private static object? ToEmail(EmailSettings? row) => row is null ? null : ToEmailRow(row);
+    private static EmailSettingsView? ToEmail(EmailSettings? row) => row is null ? null : ToEmailRow(row);
 
-    private static object ToBranding(Branding? row) => new
+    private static BrandingSettingsView ToBranding(Branding? row) => new BrandingSettingsView
     {
-        hasLogo = row?.LogoData is { Length: > 0 },
-        contentType = row?.LogoContentType,
-        fileName = row?.LogoFileName,
-        altText = row?.LogoAltText,
-        version = row is null ? null : StaffVersion.Encode(row.RowVersion)
+        HasLogo = row?.LogoData is { Length: > 0 },
+        ContentType = row?.LogoContentType,
+        FileName = row?.LogoFileName,
+        AltText = row?.LogoAltText,
+        Version = row is null ? null : StaffVersion.Encode(row.RowVersion)
     };
 
     private static object ToEffectiveConfiguration(
@@ -2116,10 +2060,10 @@ public sealed class AdministrationService(
         int organizationId,
         CancellationToken cancellationToken)
     {
-        if (organizationId == 1)
+        if (organizationId == LibraryScope.SystemOrganizationId)
         {
             var providers = await context.ExternalSearchProviders.AsNoTracking()
-                .Where(item => item.OrganizationId == 1)
+                .Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId)
                 .OrderBy(item => item.SortOrder)
                 .ThenBy(item => item.Id)
                 .ToListAsync(cancellationToken);
@@ -2163,7 +2107,7 @@ public sealed class AdministrationService(
             .ToListAsync(cancellationToken);
         var values = formats.Select(item => (object)new
         {
-            kind = organizationId == 1 ? "system" : "custom",
+            kind = organizationId == LibraryScope.SystemOrganizationId ? "system" : "custom",
             id = item.Id.ToString(),
             materialFormatId = (string?)null,
             ownerOrganizationId = item.OwnerOrganizationId.ToString(),
@@ -2183,7 +2127,7 @@ public sealed class AdministrationService(
             publicationLabel = item.PublicationLabel,
             version = StaffVersion.Encode(item.RowVersion)
         }).ToList();
-        if (organizationId == 1)
+        if (organizationId == LibraryScope.SystemOrganizationId)
         {
             return values;
         }
@@ -2246,10 +2190,10 @@ public sealed class AdministrationService(
     private static async Task<IReadOnlyList<object>> LoadProvidersAsync(AsapDbContext context, int organizationId, CancellationToken cancellationToken)
     {
         var providers = await context.ExternalSearchProviders.AsNoTracking()
-            .Where(item => item.OrganizationId == 1)
+            .Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId)
             .OrderBy(item => item.SortOrder).ThenBy(item => item.Id)
             .ToListAsync(cancellationToken);
-        var overrides = organizationId == 1
+        var overrides = organizationId == LibraryScope.SystemOrganizationId
             ? []
             : await context.ExternalSearchProviderOverrides.AsNoTracking()
                 .Where(item => item.LibraryOrganizationId == organizationId)
@@ -2274,10 +2218,10 @@ public sealed class AdministrationService(
     private static async Task<IReadOnlyList<object>> LoadFormatsAsync(AsapDbContext context, int organizationId, CancellationToken cancellationToken)
     {
         var formats = await context.MaterialFormats.AsNoTracking()
-            .Where(item => item.OwnerOrganizationId == 1 || item.OwnerOrganizationId == organizationId)
+            .Where(item => item.OwnerOrganizationId == LibraryScope.SystemOrganizationId || item.OwnerOrganizationId == organizationId)
             .OrderBy(item => item.SortOrder).ThenBy(item => item.Id)
             .ToListAsync(cancellationToken);
-        var overrides = organizationId == 1
+        var overrides = organizationId == LibraryScope.SystemOrganizationId
             ? []
             : await context.MaterialFormatOverrides.AsNoTracking()
                 .Where(item => item.LibraryOrganizationId == organizationId)
@@ -2344,10 +2288,10 @@ public sealed class AdministrationService(
     private static async Task<IReadOnlyList<object>> LoadTemplatesAsync(AsapDbContext context, int organizationId, CancellationToken cancellationToken)
     {
         var system = await context.EmailTemplates.AsNoTracking()
-            .Where(item => item.OrganizationId == 1)
+            .Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId)
             .OrderBy(item => item.SortOrder).ThenBy(item => item.Id)
             .ToListAsync(cancellationToken);
-        var library = organizationId == 1
+        var library = organizationId == LibraryScope.SystemOrganizationId
             ? []
             : await context.EmailTemplates.AsNoTracking()
                 .Where(item => item.OrganizationId == organizationId)
@@ -2372,7 +2316,7 @@ public sealed class AdministrationService(
     private static async Task<IReadOnlyList<object>> LoadPublicationOptionsAsync(AsapDbContext context, int organizationId, CancellationToken cancellationToken)
     {
         var rows = await context.PublicationOptions.AsNoTracking()
-            .Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId)
+            .Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId || item.OrganizationId == organizationId)
             .OrderBy(item => item.OrganizationId).ThenBy(item => item.SortOrder).ThenBy(item => item.Id)
             .Select(item => new { item.OrganizationId, item.OptionKey, item.Label, item.IsEnabled, item.SortOrder })
             .ToListAsync(cancellationToken);
@@ -2389,11 +2333,11 @@ public sealed class AdministrationService(
     private static async Task<IReadOnlyList<string>> LoadCommonCreatorsAsync(AsapDbContext context, int organizationId, CancellationToken cancellationToken)
     {
         var rows = await context.CommonCreatorTerms.AsNoTracking()
-            .Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId)
+            .Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId || item.OrganizationId == organizationId)
             .OrderBy(item => item.OrganizationId).ThenBy(item => item.SortOrder).ThenBy(item => item.Id)
             .Select(item => new { item.OrganizationId, item.Value })
             .ToListAsync(cancellationToken);
-        var owner = organizationId != 1 && rows.Any(item => item.OrganizationId == organizationId)
+        var owner = organizationId != LibraryScope.SystemOrganizationId && rows.Any(item => item.OrganizationId == organizationId)
             ? organizationId
             : 1;
         return rows.Where(item => item.OrganizationId == owner).Select(item => item.Value).ToArray();
@@ -2401,7 +2345,7 @@ public sealed class AdministrationService(
 
     private static async Task<IReadOnlyList<int>> LoadPatronCodesAsync(AsapDbContext context, int organizationId, CancellationToken cancellationToken)
     {
-        var owner = organizationId != 1 && await context.PatronCodeEligibilitySets.AsNoTracking()
+        var owner = organizationId != LibraryScope.SystemOrganizationId && await context.PatronCodeEligibilitySets.AsNoTracking()
             .AnyAsync(item => item.OrganizationId == organizationId, cancellationToken)
             ? organizationId
             : 1;
@@ -2442,29 +2386,29 @@ public sealed class AdministrationService(
 
         await AddVersionsAsync(
             context.Organizations.AsNoTracking()
-                .Where(item => organizationId == 1 || item.Id == 1 || item.Id == organizationId).OrderBy(item => item.Id),
+                .Where(item => organizationId == LibraryScope.SystemOrganizationId || item.Id == 1 || item.Id == organizationId).OrderBy(item => item.Id),
             item => item.RowVersion);
         await AddVersionsAsync(context.SystemSettings.AsNoTracking().OrderBy(item => item.OrganizationId), item => item.RowVersion);
         await AddVersionsAsync(context.PolarisSettings.AsNoTracking().OrderBy(item => item.OrganizationId), item => item.RowVersion);
-        await AddVersionsAsync(context.WorkflowSettings.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId), item => item.RowVersion);
-        await AddVersionsAsync(context.PatronSettings.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId), item => item.RowVersion);
-        await AddVersionsAsync(context.EmailSettings.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId), item => item.RowVersion);
-        await AddVersionsAsync(context.CommonCreatorSets.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId), item => item.RowVersion);
-        await AddVersionsAsync(context.PatronCodeEligibilitySets.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId), item => item.RowVersion);
-        await AddVersionsAsync(context.PublicationOptionSets.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId), item => item.RowVersion);
+        await AddVersionsAsync(context.WorkflowSettings.AsNoTracking().Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId), item => item.RowVersion);
+        await AddVersionsAsync(context.PatronSettings.AsNoTracking().Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId), item => item.RowVersion);
+        await AddVersionsAsync(context.EmailSettings.AsNoTracking().Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId), item => item.RowVersion);
+        await AddVersionsAsync(context.CommonCreatorSets.AsNoTracking().Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId), item => item.RowVersion);
+        await AddVersionsAsync(context.PatronCodeEligibilitySets.AsNoTracking().Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId), item => item.RowVersion);
+        await AddVersionsAsync(context.PublicationOptionSets.AsNoTracking().Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId), item => item.RowVersion);
         await AddVersionsAsync(context.ExternalSearchProviders.AsNoTracking().OrderBy(item => item.Id), item => item.RowVersion);
         await AddVersionsAsync(context.ExternalSearchProviderOverrides.AsNoTracking().Where(item => item.LibraryOrganizationId == organizationId).OrderBy(item => item.ExternalSearchProviderId), item => item.RowVersion);
         await AddVersionsAsync(context.PatronCustomFields.AsNoTracking().Where(item => item.LibraryOrganizationId == organizationId).OrderBy(item => item.Id), item => item.RowVersion);
-        await AddVersionsAsync(context.MaterialFormats.AsNoTracking().Where(item => item.OwnerOrganizationId == 1 || item.OwnerOrganizationId == organizationId).OrderBy(item => item.Id), item => item.RowVersion);
+        await AddVersionsAsync(context.MaterialFormats.AsNoTracking().Where(item => item.OwnerOrganizationId == LibraryScope.SystemOrganizationId || item.OwnerOrganizationId == organizationId).OrderBy(item => item.Id), item => item.RowVersion);
         await AddVersionsAsync(context.MaterialFormatOverrides.AsNoTracking().Where(item => item.LibraryOrganizationId == organizationId).OrderBy(item => item.MaterialFormatId), item => item.RowVersion);
         await AddVersionsAsync(context.MaterialFormatCustomFieldRules.AsNoTracking().Where(item => item.LibraryOrganizationId == organizationId).OrderBy(item => item.MaterialFormatId).ThenBy(item => item.PatronCustomFieldId), item => item.RowVersion);
         await AddVersionsAsync(context.FormatAutoClaimRules.AsNoTracking().Where(item => item.LibraryOrganizationId == organizationId).OrderBy(item => item.Id), item => item.RowVersion);
-        await AddVersionsAsync(context.EmailTemplates.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId).OrderBy(item => item.Id), item => item.RowVersion);
-        await AddVersionsAsync(context.Branding.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId), item => item.RowVersion);
-        parts.Add(JsonSerializer.Serialize(await context.PatronEmbedAllowedOrigins.AsNoTracking().Where(item => item.OrganizationId == 1).OrderBy(item => item.NormalizedOrigin).Select(item => new { item.Origin, item.NormalizedOrigin }).ToListAsync(cancellationToken)));
-        parts.Add(JsonSerializer.Serialize(await context.CommonCreatorTerms.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId).OrderBy(item => item.Id).Select(item => new { item.OrganizationId, item.Value, item.SortOrder }).ToListAsync(cancellationToken)));
-        parts.Add(JsonSerializer.Serialize(await context.PatronCodeEligibilityMembers.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId).ThenBy(item => item.PatronCodeId).Select(item => new { item.OrganizationId, item.PatronCodeId }).ToListAsync(cancellationToken)));
-        parts.Add(JsonSerializer.Serialize(await context.PublicationOptions.AsNoTracking().Where(item => item.OrganizationId == 1 || item.OrganizationId == organizationId).OrderBy(item => item.Id).Select(item => new { item.OrganizationId, item.OptionKey, item.Label, item.IsEnabled, item.SortOrder }).ToListAsync(cancellationToken)));
+        await AddVersionsAsync(context.EmailTemplates.AsNoTracking().Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId || item.OrganizationId == organizationId).OrderBy(item => item.Id), item => item.RowVersion);
+        await AddVersionsAsync(context.Branding.AsNoTracking().Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId), item => item.RowVersion);
+        parts.Add(JsonSerializer.Serialize(await context.PatronEmbedAllowedOrigins.AsNoTracking().Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId).OrderBy(item => item.NormalizedOrigin).Select(item => new { item.Origin, item.NormalizedOrigin }).ToListAsync(cancellationToken)));
+        parts.Add(JsonSerializer.Serialize(await context.CommonCreatorTerms.AsNoTracking().Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId || item.OrganizationId == organizationId).OrderBy(item => item.Id).Select(item => new { item.OrganizationId, item.Value, item.SortOrder }).ToListAsync(cancellationToken)));
+        parts.Add(JsonSerializer.Serialize(await context.PatronCodeEligibilityMembers.AsNoTracking().Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId).ThenBy(item => item.PatronCodeId).Select(item => new { item.OrganizationId, item.PatronCodeId }).ToListAsync(cancellationToken)));
+        parts.Add(JsonSerializer.Serialize(await context.PublicationOptions.AsNoTracking().Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId || item.OrganizationId == organizationId).OrderBy(item => item.Id).Select(item => new { item.OrganizationId, item.OptionKey, item.Label, item.IsEnabled, item.SortOrder }).ToListAsync(cancellationToken)));
         parts.Add(JsonSerializer.Serialize(await context.PatronCustomFieldOptions.AsNoTracking().Where(item => context.PatronCustomFields.Any(field => field.Id == item.PatronCustomFieldId && field.LibraryOrganizationId == organizationId)).OrderBy(item => item.Id).Select(item => new { item.PatronCustomFieldId, item.OptionKey, item.Label, item.IsEnabled, item.SortOrder }).ToListAsync(cancellationToken)));
         return Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("|", parts))));
     }
@@ -2489,7 +2433,7 @@ public sealed class AdministrationService(
             .Order(StringComparer.Ordinal)
             .ToArray();
         var existing = await context.PatronEmbedAllowedOrigins
-            .Where(item => item.OrganizationId == 1)
+            .Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId)
             .ToListAsync(cancellationToken);
         var existingNormalized = existing.Select(item => item.NormalizedOrigin)
             .Order(StringComparer.Ordinal).ToArray();
@@ -2593,7 +2537,7 @@ public sealed class AdministrationService(
         var terms = await context.CommonCreatorTerms
             .Where(item => item.OrganizationId == organizationId)
             .ToListAsync(cancellationToken);
-        if (organizationId != 1 && resetToSystem)
+        if (organizationId != LibraryScope.SystemOrganizationId && resetToSystem)
         {
             if (existingSet is null && terms.Count == 0)
             {
@@ -2636,7 +2580,7 @@ public sealed class AdministrationService(
         var members = await context.PatronCodeEligibilityMembers
             .Where(item => item.OrganizationId == organizationId)
             .ToListAsync(cancellationToken);
-        if (organizationId != 1 && resetToSystem)
+        if (organizationId != LibraryScope.SystemOrganizationId && resetToSystem)
         {
             if (existingSet is null && members.Count == 0)
             {
@@ -2677,7 +2621,7 @@ public sealed class AdministrationService(
         var options = await context.PublicationOptions
             .Where(item => item.OrganizationId == organizationId)
             .ToListAsync(cancellationToken);
-        if (organizationId != 1 && resetToSystem)
+        if (organizationId != LibraryScope.SystemOrganizationId && resetToSystem)
         {
             if (existingSet is null && options.Count == 0)
             {
@@ -2728,7 +2672,7 @@ public sealed class AdministrationService(
         if (inputs.Count == 0) return;
 
         var systemProviders = await context.ExternalSearchProviders
-            .Where(item => item.OrganizationId == 1)
+            .Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId)
             .ToListAsync(cancellationToken);
         foreach (var input in inputs)
         {
@@ -2737,9 +2681,9 @@ public sealed class AdministrationService(
                 : systemProviders.SingleOrDefault(item => item.ProviderKey == input.Key);
             if (provider is null)
             {
-                if (organizationId != 1)
+                if (organizationId != LibraryScope.SystemOrganizationId)
                 {
-                    throw new InvalidOperationException("A library may only override an existing external provider.");
+                    throw new AdministrationInputException("A library may only override an existing external provider.");
                 }
 
                 var key = Clean(input.Key);
@@ -2747,7 +2691,7 @@ public sealed class AdministrationService(
                 var url = Clean(input.UrlTemplate);
                 if (key is null || label is null || url is null)
                 {
-                    throw new InvalidOperationException("A system external provider requires a key, label, and URL template.");
+                    throw new AdministrationInputException("A system external provider requires a key, label, and URL template.");
                 }
 
                 provider = new ExternalSearchProvider
@@ -2763,7 +2707,7 @@ public sealed class AdministrationService(
                 systemProviders.Add(provider);
             }
 
-            if (organizationId == 1)
+            if (organizationId == LibraryScope.SystemOrganizationId)
             {
                 if (input.IsEnabled.HasValue) provider.IsEnabled = input.IsEnabled.Value;
                 if (input.Label is not null) provider.Label = RequireText(input.Label, "Provider label");
@@ -2821,12 +2765,12 @@ public sealed class AdministrationService(
                        TryGetAny(patron, out rulesValue, "formatRules", "patronFormatRules");
         if (!hasFormats && !hasRules &&
             !TryGetAny(patron, out _, "formatLabels", "formatOrder", "availableFormats")) return;
-        if (hasFormats && value.ValueKind != JsonValueKind.Array) throw new InvalidOperationException("formats must be an array.");
+        if (hasFormats && value.ValueKind != JsonValueKind.Array) throw new AdministrationInputException("formats must be an array.");
 
         var systemFormats = await context.MaterialFormats
-            .Where(item => item.OwnerOrganizationId == 1)
+            .Where(item => item.OwnerOrganizationId == LibraryScope.SystemOrganizationId)
             .ToListAsync(cancellationToken);
-        var customFormats = organizationId == 1
+        var customFormats = organizationId == LibraryScope.SystemOrganizationId
             ? []
             : await context.MaterialFormats
                 .Where(item => item.OwnerOrganizationId == organizationId)
@@ -2843,10 +2787,10 @@ public sealed class AdministrationService(
         {
             foreach (var (code, item) in EnumerateFormatRules(rulesValue))
             {
-                var target = (organizationId != 1 ? customFormats.SingleOrDefault(format => format.Code == code) : null) ??
+                var target = (organizationId != LibraryScope.SystemOrganizationId ? customFormats.SingleOrDefault(format => format.Code == code) : null) ??
                              systemFormats.SingleOrDefault(format => format.Code == code);
-                if (target is null) throw new InvalidOperationException($"The format rule for {code} is outside the selected scope.");
-                if (organizationId == 1 || target.OwnerOrganizationId == organizationId)
+                if (target is null) throw new AdministrationInputException($"The format rule for {code} is outside the selected scope.");
+                if (organizationId == LibraryScope.SystemOrganizationId || target.OwnerOrganizationId == organizationId)
                 {
                     ApplyOwnedFormat(target, item, allowCode: false);
                 }
@@ -2883,13 +2827,13 @@ public sealed class AdministrationService(
         var id = GetLong(item, "id");
         var code = Clean(GetString(item, "code"));
         var owner = GetInt(item, "ownerOrganizationId") ?? (GetBool(item, "custom") == true ? organizationId : 1);
-        if (organizationId == 1)
+        if (organizationId == LibraryScope.SystemOrganizationId)
         {
             var target = (id.HasValue ? systemFormats.SingleOrDefault(format => format.Id == id.Value) : null) ??
                          (code is null ? null : systemFormats.SingleOrDefault(format => format.Code == code));
             if (target is null)
             {
-                if (owner != 1) throw new InvalidOperationException("System settings cannot create a library-owned format.");
+                if (owner != 1) throw new AdministrationInputException("System settings cannot create a library-owned format.");
                 target = CreateFormat(item, code, 1);
                 context.MaterialFormats.Add(target);
                 if (systemFormats is List<MaterialFormat> mutableSystemFormats) mutableSystemFormats.Add(target);
@@ -2911,7 +2855,7 @@ public sealed class AdministrationService(
             {
                 if (code is null || systemFormats.Any(format => format.Code == code))
                 {
-                    throw new InvalidOperationException("A custom format code must be present and must not collide with a system format.");
+                    throw new AdministrationInputException("A custom format code must be present and must not collide with a system format.");
                 }
                 custom = CreateFormat(item, code, organizationId);
                 context.MaterialFormats.Add(custom);
@@ -2925,7 +2869,7 @@ public sealed class AdministrationService(
                      (code is null ? null : systemFormats.SingleOrDefault(format => format.Code == code));
         if (system is null)
         {
-            throw new InvalidOperationException("The selected system format is not available in this library scope.");
+            throw new AdministrationInputException("The selected system format is not available in this library scope.");
         }
 
         var existing = await context.MaterialFormatOverrides
@@ -2981,7 +2925,7 @@ public sealed class AdministrationService(
                 .FirstOrDefault();
             int? itemOrder = position.HasValue ? (position.Value + 1) * 10 : null;
             var itemEnabled = available?.Contains(format.Code);
-            if (organizationId == 1 || format.OwnerOrganizationId == organizationId)
+            if (organizationId == LibraryScope.SystemOrganizationId || format.OwnerOrganizationId == organizationId)
             {
                 if (itemLabel is not null) format.Label = RequireText(itemLabel, "Format label");
                 if (itemOrder.HasValue) format.SortOrder = itemOrder.Value;
@@ -3015,12 +2959,12 @@ public sealed class AdministrationService(
         JsonElement payload,
         CancellationToken cancellationToken)
     {
-        if (organizationId == 1) return;
+        if (organizationId == LibraryScope.SystemOrganizationId) return;
         var hasDefinitions = TryGetAny(payload, out var definitions, "customFields", "additionalFieldDefinitions") ||
                              TryGetAny(patron, out definitions, "customFields", "additionalFieldDefinitions");
         if (hasDefinitions)
         {
-            if (definitions.ValueKind != JsonValueKind.Array) throw new InvalidOperationException("customFields must be an array.");
+            if (definitions.ValueKind != JsonValueKind.Array) throw new AdministrationInputException("customFields must be an array.");
             var existing = await context.PatronCustomFields
                 .Where(item => item.LibraryOrganizationId == organizationId)
                 .ToListAsync(cancellationToken);
@@ -3030,7 +2974,7 @@ public sealed class AdministrationService(
                 if (item.ValueKind != JsonValueKind.Object) continue;
                 var id = GetLong(item, "id");
                 var key = Clean(GetString(item, "key") ?? GetString(item, "fieldKey"));
-                if (key is null) throw new InvalidOperationException("Each custom field requires a stable key.");
+                if (key is null) throw new AdministrationInputException("Each custom field requires a stable key.");
                 var field = (id.HasValue ? existing.SingleOrDefault(row => row.Id == id.Value) : null) ??
                             existing.SingleOrDefault(row => row.FieldKey == key);
                 var isNewField = field is null;
@@ -3119,13 +3063,13 @@ public sealed class AdministrationService(
             .Where(item => item.LibraryOrganizationId == organizationId)
             .ToDictionaryAsync(item => item.FieldKey, StringComparer.Ordinal, cancellationToken);
         var formatsInScope = await context.MaterialFormats
-            .Where(item => item.OwnerOrganizationId == 1 || item.OwnerOrganizationId == organizationId)
+            .Where(item => item.OwnerOrganizationId == LibraryScope.SystemOrganizationId || item.OwnerOrganizationId == organizationId)
             .ToListAsync(cancellationToken);
         var desiredRules = new List<MaterialFormatCustomFieldRule>();
         foreach (var (formatCode, formatRule) in EnumerateFormatRules(rules))
         {
             var format = formatsInScope.SingleOrDefault(item => item.Code == formatCode);
-            if (format is null) throw new InvalidOperationException($"Format rule {formatCode} is outside the selected library scope.");
+            if (format is null) throw new AdministrationInputException($"Format rule {formatCode} is outside the selected library scope.");
             if (!TryGetAny(formatRule, out var custom, "customFields") || custom.ValueKind != JsonValueKind.Object) continue;
             foreach (var fieldProperty in custom.EnumerateObject())
             {
@@ -3134,7 +3078,7 @@ public sealed class AdministrationService(
                 var mode = GetString(rule, "mode") ?? "hidden";
                 if (mode is not ("required" or "optional" or "hidden"))
                 {
-                    throw new InvalidOperationException("Custom field mode must be required, optional, or hidden.");
+                    throw new AdministrationInputException("Custom field mode must be required, optional, or hidden.");
                 }
                 if (mode == "hidden") continue;
                 desiredRules.Add(new MaterialFormatCustomFieldRule
@@ -3170,12 +3114,12 @@ public sealed class AdministrationService(
         JsonElement payload,
         CancellationToken cancellationToken)
     {
-        if (organizationId == 1 ||
+        if (organizationId == LibraryScope.SystemOrganizationId ||
             !TryGetAny(payload, out var value, "autoClaimRules", "formatClaimRules")) return;
-        if (value.ValueKind != JsonValueKind.Array) throw new InvalidOperationException("autoClaimRules must be an array.");
+        if (value.ValueKind != JsonValueKind.Array) throw new AdministrationInputException("autoClaimRules must be an array.");
 
         var formats = await context.MaterialFormats
-            .Where(item => item.OwnerOrganizationId == 1 || item.OwnerOrganizationId == organizationId)
+            .Where(item => item.OwnerOrganizationId == LibraryScope.SystemOrganizationId || item.OwnerOrganizationId == organizationId)
             .ToListAsync(cancellationToken);
         var active = await context.FormatAutoClaimRules
             .Where(item => item.LibraryOrganizationId == organizationId && item.IsActive)
@@ -3187,7 +3131,7 @@ public sealed class AdministrationService(
             var formatId = GetLong(item, "materialFormatId") ?? GetLong(item, "formatId");
             if (!formatId.HasValue || formats.All(format => format.Id != formatId.Value))
             {
-                throw new InvalidOperationException("Each auto-claim rule must reference a format in the selected library scope.");
+                throw new AdministrationInputException("Each auto-claim rule must reference a format in the selected library scope.");
             }
             if (GetBool(item, "active") == false || GetBool(item, "isActive") == false)
             {
@@ -3195,12 +3139,12 @@ public sealed class AdministrationService(
                 continue;
             }
             var staffId = GetLong(item, "staffUserId") ?? GetLong(item, "staffId");
-            if (!staffId.HasValue) throw new InvalidOperationException("An active auto-claim rule requires a staff user.");
-            if (desired.ContainsKey(formatId.Value)) throw new InvalidOperationException("Only one active auto-claim rule is allowed per format.");
+            if (!staffId.HasValue) throw new AdministrationInputException("An active auto-claim rule requires a staff user.");
+            if (desired.ContainsKey(formatId.Value)) throw new AdministrationInputException("Only one active auto-claim rule is allowed per format.");
             var staff = context.StaffUsers.Local.SingleOrDefault(itemRow => itemRow.Id == staffId.Value);
-            if (staff is null || !staffEligibility.IsAssignmentEligible(staff, organizationId))
+            if (staff is null || !StaffEligibilityService.IsAssignmentEligible(staff, organizationId))
             {
-                throw new InvalidOperationException("The auto-claim staff user is not active or is outside the selected scope.");
+                throw new AdministrationInputException("The auto-claim staff user is not active or is outside the selected scope.");
             }
             desired[formatId.Value] = staffId.Value;
         }
@@ -3236,7 +3180,7 @@ public sealed class AdministrationService(
     {
         if (TryGetAny(payload, out var templates, "templates", "emailTemplates"))
         {
-            if (templates.ValueKind != JsonValueKind.Array) throw new InvalidOperationException("templates must be an array.");
+            if (templates.ValueKind != JsonValueKind.Array) throw new AdministrationInputException("templates must be an array.");
             foreach (var item in templates.EnumerateArray())
             {
                 if (item.ValueKind == JsonValueKind.Object)
@@ -3277,17 +3221,17 @@ public sealed class AdministrationService(
         CancellationToken cancellationToken)
     {
         var itemOrganization = GetInt(item, "organizationId");
-        if (itemOrganization.HasValue && itemOrganization.Value != organizationId && organizationId != 1) return;
+        if (itemOrganization.HasValue && itemOrganization.Value != organizationId && organizationId != LibraryScope.SystemOrganizationId) return;
         var key = Clean(GetString(item, "templateKey") ?? GetString(item, "key") ?? legacyKey);
         var sourceId = GetLong(item, "sourceTemplateId") ?? GetLong(item, "sourceId");
         var reset = GetBool(item, "reset") == true || GetBool(item, "useSystemDefault") == true || GetBool(item, "overridden") == false;
         var isCustom = GetBool(item, "isCustom") == true || GetBool(item, "custom") == true;
-        if (organizationId == 1)
+        if (organizationId == LibraryScope.SystemOrganizationId)
         {
-            if (sourceId.HasValue || isCustom) throw new InvalidOperationException("System templates cannot use library lineage or custom ownership.");
-            if (key is null) throw new InvalidOperationException("A system template requires a template key.");
+            if (sourceId.HasValue || isCustom) throw new AdministrationInputException("System templates cannot use library lineage or custom ownership.");
+            if (key is null) throw new AdministrationInputException("A system template requires a template key.");
             var template = await context.EmailTemplates.SingleOrDefaultAsync(
-                row => row.OrganizationId == 1 && row.TemplateKey == key, cancellationToken);
+                row => row.OrganizationId == LibraryScope.SystemOrganizationId && row.TemplateKey == key, cancellationToken);
             template ??= new EmailTemplate
             {
                 OrganizationId = 1,
@@ -3302,7 +3246,7 @@ public sealed class AdministrationService(
 
         if (isCustom || (!sourceId.HasValue && key is not null && GetBool(item, "libraryCustom") == true))
         {
-            if (key is null) throw new InvalidOperationException("A custom template requires a template key.");
+            if (key is null) throw new AdministrationInputException("A custom template requires a template key.");
             var custom = await context.EmailTemplates.SingleOrDefaultAsync(
                 row => row.OrganizationId == organizationId && row.IsCustom && row.TemplateKey == key, cancellationToken);
             if (reset)
@@ -3323,11 +3267,11 @@ public sealed class AdministrationService(
         }
 
         EmailTemplate? source = sourceId.HasValue
-            ? await context.EmailTemplates.SingleOrDefaultAsync(row => row.Id == sourceId.Value && row.OrganizationId == 1, cancellationToken)
+            ? await context.EmailTemplates.SingleOrDefaultAsync(row => row.Id == sourceId.Value && row.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken)
             : key is null
                 ? null
-                : await context.EmailTemplates.SingleOrDefaultAsync(row => row.OrganizationId == 1 && row.TemplateKey == key, cancellationToken);
-        if (source is null) throw new InvalidOperationException("A library template override must reference a system template.");
+                : await context.EmailTemplates.SingleOrDefaultAsync(row => row.OrganizationId == LibraryScope.SystemOrganizationId && row.TemplateKey == key, cancellationToken);
+        if (source is null) throw new AdministrationInputException("A library template override must reference a system template.");
         var overrideRow = await context.EmailTemplates.SingleOrDefaultAsync(
             row => row.OrganizationId == organizationId && row.SourceTemplateId == source.Id, cancellationToken);
         if (reset)
@@ -3360,7 +3304,7 @@ public sealed class AdministrationService(
         if (GetInt(item, "sortOrder").HasValue) template.SortOrder = GetInt(item, "sortOrder")!.Value;
         if (requireContent && (string.IsNullOrWhiteSpace(template.SubjectTemplate) || string.IsNullOrWhiteSpace(template.BodyTemplate)))
         {
-            throw new InvalidOperationException("A system or custom email template requires both subject and body content.");
+            throw new AdministrationInputException("A system or custom email template requires both subject and body content.");
         }
     }
 
@@ -3400,16 +3344,16 @@ public sealed class AdministrationService(
             var encoded = Clean(GetString(branding, "logoData"));
             if (encoded is null)
             {
-                throw new InvalidOperationException("logoData must contain a base64 encoded PNG, JPEG, or GIF image.");
+                throw new AdministrationInputException("logoData must contain a base64 encoded PNG, JPEG, or GIF image.");
             }
 
             byte[] data;
             try { data = Convert.FromBase64String(encoded); }
-            catch (FormatException) { throw new InvalidOperationException("logoData must be valid base64."); }
+            catch (FormatException) { throw new AdministrationInputException("logoData must be valid base64."); }
             var contentType = Clean(GetString(branding, "contentType") ?? GetString(branding, "logoContentType"));
             if (!LogoImageValidator.TryValidate(data, contentType, out var logoInfo, out var logoError))
             {
-                throw new InvalidOperationException(logoError);
+                throw new AdministrationInputException(logoError);
             }
             row.LogoData = data;
             row.LogoContentType = logoInfo!.ContentType;
@@ -3579,7 +3523,7 @@ public sealed class AdministrationService(
         var normalized = Clean(value) ?? "none";
         return normalized is "none" or "message" or "ebookMessage" or "eaudiobookMessage"
             ? normalized
-            : throw new InvalidOperationException("Message behavior is invalid.");
+            : throw new AdministrationInputException("Message behavior is invalid.");
     }
 
     private static string NormalizeFieldMode(string value, bool forceRequired)
@@ -3588,13 +3532,13 @@ public sealed class AdministrationService(
         if (forceRequired) return "required";
         return normalized is "required" or "optional" or "hidden"
             ? normalized
-            : throw new InvalidOperationException("Format field mode is invalid.");
+            : throw new AdministrationInputException("Format field mode is invalid.");
     }
 
     private static string NormalizeFieldType(string value) =>
         value is "text" or "textarea" or "select"
             ? value
-            : throw new InvalidOperationException("Custom field type is invalid.");
+            : throw new AdministrationInputException("Custom field type is invalid.");
 
     private static IReadOnlyList<ProviderInput> ParseProviders(JsonElement value)
     {
@@ -3650,7 +3594,7 @@ public sealed class AdministrationService(
                 : Clean(GetString(item, "label") ?? GetString(item, "value") ?? GetString(item, "name"));
             if (label is null) continue;
             var key = Clean(GetString(item, "id") ?? GetString(item, "key")) ?? OptionKey(label, index);
-            if (!seen.Add(key)) throw new InvalidOperationException("Set option IDs must be unique.");
+            if (!seen.Add(key)) throw new AdministrationInputException("Set option IDs must be unique.");
             result.Add(new SetOption(key, label, GetBool(item, "enabled") ?? true, GetInt(item, "sortOrder") ?? ((index + 1) * 10)));
             index++;
         }
@@ -3737,12 +3681,12 @@ public sealed class AdministrationService(
 
     private static string NormalizeOrigin(string value)
     {
-        var normalized = Clean(value) ?? throw new InvalidOperationException("Embed origins cannot be blank.");
+        var normalized = Clean(value) ?? throw new AdministrationInputException("Embed origins cannot be blank.");
         if (normalized.StartsWith("https://*.", StringComparison.OrdinalIgnoreCase))
         {
             if (normalized.Contains('/', StringComparison.Ordinal) || normalized.Contains('?', StringComparison.Ordinal) || normalized.Contains('#', StringComparison.Ordinal))
             {
-                throw new InvalidOperationException("Wildcard embed origins may not include a path or query.");
+                throw new AdministrationInputException("Wildcard embed origins may not include a path or query.");
             }
             return "https://*." + normalized[10..].ToLowerInvariant();
         }
@@ -3750,7 +3694,7 @@ public sealed class AdministrationService(
             uri.AbsolutePath != "/" || !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment) ||
             (uri.Scheme == "http" && uri.Host is not ("localhost" or "127.0.0.1" or "[::1]")))
         {
-            throw new InvalidOperationException("Embed origins must be HTTPS origins, with localhost allowed for HTTP development origins.");
+            throw new AdministrationInputException("Embed origins must be HTTPS origins, with localhost allowed for HTTP development origins.");
         }
         var port = uri.IsDefaultPort ? string.Empty : $":{uri.Port}";
         return $"{uri.Scheme.ToLowerInvariant()}://{uri.Host.ToLowerInvariant()}{port}";
@@ -3766,7 +3710,7 @@ public sealed class AdministrationService(
     private static bool Same(string? left, string? right) => string.Equals(left, right, StringComparison.Ordinal);
 
     private static string RequireText(string? value, string label) =>
-        Clean(value) ?? throw new InvalidOperationException($"{label} cannot be blank.");
+        Clean(value) ?? throw new AdministrationInputException($"{label} cannot be blank.");
 
     private sealed record SetOption(string Key, string Label, bool Enabled, int SortOrder);
 
@@ -3806,26 +3750,26 @@ public sealed class AdministrationService(
         {
             var forceSystem = normalized.StartsWith("system:", StringComparison.OrdinalIgnoreCase);
             var key = forceSystem ? normalized[7..] : normalized;
-            if (!forceSystem && organizationId != 1)
+            if (!forceSystem && organizationId != LibraryScope.SystemOrganizationId)
             {
                 var custom = rows.Where(item => item.OrganizationId == organizationId &&
                         item.IsCustom && string.Equals(item.TemplateKey, key, StringComparison.Ordinal))
                     .ToArray();
                 if (custom.Length > 1)
                 {
-                    throw new InvalidOperationException("The timeout rejection template reference is ambiguous in this library scope.");
+                    throw new AdministrationInputException("The timeout rejection template reference is ambiguous in this library scope.");
                 }
                 template = custom.Length == 1
                     ? ResolveEffectiveTemplate(rows, custom[0].Id, organizationId)
                     : null;
                 if (template is null)
                 {
-                    var system = rows.Where(item => item.OrganizationId == 1 &&
+                    var system = rows.Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId &&
                             string.Equals(item.TemplateKey, key, StringComparison.Ordinal))
                         .ToArray();
                     if (system.Length > 1)
                     {
-                        throw new InvalidOperationException("The timeout rejection template reference is ambiguous at system scope.");
+                        throw new AdministrationInputException("The timeout rejection template reference is ambiguous at system scope.");
                     }
                     template = system.Length == 1
                         ? ResolveEffectiveTemplate(rows, system[0].Id, organizationId)
@@ -3834,12 +3778,12 @@ public sealed class AdministrationService(
             }
             else
             {
-                var system = rows.Where(item => item.OrganizationId == 1 &&
+                var system = rows.Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId &&
                         string.Equals(item.TemplateKey, key, StringComparison.Ordinal))
                     .ToArray();
                 if (system.Length > 1)
                 {
-                    throw new InvalidOperationException("The timeout rejection template reference is ambiguous at system scope.");
+                    throw new AdministrationInputException("The timeout rejection template reference is ambiguous at system scope.");
                 }
                 template = system.Length == 1
                     ? ResolveEffectiveTemplate(rows, system[0].Id, organizationId)
@@ -3848,7 +3792,7 @@ public sealed class AdministrationService(
         }
         if (template is null || !IsEligibleRejectionTemplate(template))
         {
-            throw new InvalidOperationException("The timeout rejection template is unavailable, hidden, or outside the selected configuration scope.");
+            throw new AdministrationInputException("The timeout rejection template is unavailable, hidden, or outside the selected configuration scope.");
         }
         return template.ReferenceId;
     }
@@ -3866,9 +3810,9 @@ public sealed class AdministrationService(
     {
         var requested = rows.SingleOrDefault(item => item.Id == requestedId);
         if (requested is null) return null;
-        if (requested.OrganizationId == 1)
+        if (requested.OrganizationId == LibraryScope.SystemOrganizationId)
         {
-            var overrideRow = organizationId == 1
+            var overrideRow = organizationId == LibraryScope.SystemOrganizationId
                 ? null
                 : rows.SingleOrDefault(item => item.OrganizationId == organizationId &&
                     !item.IsCustom && item.SourceTemplateId == requested.Id);
@@ -3885,7 +3829,7 @@ public sealed class AdministrationService(
                 Clean(requested.SubjectTemplate),
                 Clean(requested.BodyTemplate));
         }
-        var source = rows.SingleOrDefault(item => item.OrganizationId == 1 && item.Id == requested.SourceTemplateId.Value);
+        var source = rows.SingleOrDefault(item => item.OrganizationId == LibraryScope.SystemOrganizationId && item.Id == requested.SourceTemplateId.Value);
         return source is null ? null : ToEffectiveTemplate(source, requested, requested.Id);
     }
 
@@ -3961,7 +3905,7 @@ public sealed class AdministrationService(
     {
         var templates = await LoadTemplateRowsIncludingPendingAsync(context, cancellationToken);
         var workflows = await LoadWorkflowRowsIncludingPendingAsync(context, cancellationToken);
-        var selected = organizationId == 1
+        var selected = organizationId == LibraryScope.SystemOrganizationId
             ? workflows
             : workflows.Where(item => item.OrganizationId == organizationId).ToList();
         foreach (var workflow in selected)
@@ -3973,7 +3917,7 @@ public sealed class AdministrationService(
                 workflow.OrganizationId);
             if (template is null || !IsEligibleRejectionTemplate(template))
             {
-                throw new InvalidOperationException("The effective timeout rejection template is unavailable, hidden, or outside the selected configuration scope.");
+                throw new AdministrationInputException("The effective timeout rejection template is unavailable, hidden, or outside the selected configuration scope.");
             }
         }
     }

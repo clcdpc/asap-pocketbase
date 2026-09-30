@@ -20,6 +20,19 @@ public sealed class PostmarkEmailSender(
         int organizationId,
         CancellationToken cancellationToken)
     {
+        try
+        {
+            return await CheckProviderReadinessAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is HttpRequestException or JsonException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+        {
+            throw new EmailOperationalException("Postmark readiness could not be checked.", exception);
+        }
+    }
+
+    private async Task<EmailTransportReadiness> CheckProviderReadinessAsync(CancellationToken cancellationToken)
+    {
         var token = await ReadSystemTokenAsync(cancellationToken);
         if (token is null)
         {
@@ -39,26 +52,27 @@ public sealed class PostmarkEmailSender(
         }
         if (!response.IsSuccessStatusCode)
         {
-            throw new InvalidOperationException("Postmark server readiness could not be checked.");
+            throw new EmailOperationalException("Postmark server readiness could not be checked.");
         }
 
         await using var content = await response.Content.ReadAsStreamAsync(timeout.Token);
         using var result = await JsonDocument.ParseAsync(content, cancellationToken: timeout.Token);
-        if (!result.RootElement.TryGetProperty("ID", out var id) ||
+        if (result.RootElement.ValueKind != JsonValueKind.Object ||
+            !result.RootElement.TryGetProperty("ID", out var id) ||
             id.ValueKind != JsonValueKind.Number || !id.TryGetInt64(out var serverId) || serverId <= 0)
         {
-            throw new InvalidOperationException("Postmark server readiness response was invalid.");
+            throw new EmailOperationalException("Postmark server readiness response was invalid.");
         }
         if (!result.RootElement.TryGetProperty("DeliveryType", out var deliveryType) ||
             deliveryType.ValueKind != JsonValueKind.String)
         {
-            throw new InvalidOperationException("Postmark server delivery type was unavailable.");
+            throw new EmailOperationalException("Postmark server delivery type was unavailable.");
         }
         return deliveryType.GetString() switch
         {
             "Live" => EmailTransportReadiness.Configured,
             "Sandbox" => EmailTransportReadiness.Sandbox,
-            _ => throw new InvalidOperationException("Postmark server delivery type was unknown.")
+            _ => throw new EmailOperationalException("Postmark server delivery type was unknown.")
         };
     }
 

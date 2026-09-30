@@ -76,7 +76,7 @@ public sealed partial class PatronJourneyTests
             }
 
             provider.AfterEffect = null;
-            var options = await service.GetOptionsAsync(actor, request.Id, new(), CancellationToken.None);
+            var options = await service.GetOptionsAsync(actor, request.Id, CancellationToken.None);
             Assert.AreEqual("loaded", options.Code);
             var recovered = await service.UpdateAsync(actor, request.Id,
                 new(options.Options!.Version, provider.SecondBranch, provider.SecondBranch, true), CancellationToken.None);

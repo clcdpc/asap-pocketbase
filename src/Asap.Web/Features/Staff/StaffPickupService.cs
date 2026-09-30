@@ -9,8 +9,6 @@ using Microsoft.Data.SqlClient;
 
 namespace Asap.Web.Features.Staff;
 
-public sealed record PickupOptionsInput(bool ForceRefresh = false);
-
 public sealed record PickupPreferenceInput(
     string? Version,
     int? PreferredPickupBranchId,
@@ -47,19 +45,14 @@ public sealed record StaffPickupResult(
 public sealed partial class StaffPickupService(
     IDbContextFactory<AsapDbContext> contextFactory,
     IPatronProvider patronProvider,
-    ExternalConfiguration configuration,
     TimeProvider timeProvider,
     PickupPreferenceMutationService pickupMutations,
     StaffEligibilityService staffEligibility)
 {
-    private readonly HashSet<Guid> allowedTenantIds = configuration.Authentication.Entra.AllowedTenantIds!
-        .Select(Guid.Parse)
-        .ToHashSet();
 
     public async Task<StaffPickupResult> GetOptionsAsync(
         CurrentStaff actor,
         long requestId,
-        PickupOptionsInput input,
         CancellationToken cancellationToken)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
@@ -113,7 +106,7 @@ public sealed partial class StaffPickupService(
             if (locked.Code != "locked") return new StaffPickupResult(locked.Code);
             var request = locked.Request!;
             if (!request.RowVersion.SequenceEqual(expectedVersion)) return new StaffPickupResult("stale_version");
-            if (request.Status is "hold_placed" or "closed") return new StaffPickupResult("pickup_read_only");
+            if (request.Status is RequestStatus.HoldPlaced or RequestStatus.Closed) return new StaffPickupResult("pickup_read_only");
             if (await context.HoldPlacementOperations.AnyAsync(
                     item => item.TitleRequestId == request.Id && item.CompletedUtc == null,
                     cancellationToken))
@@ -189,7 +182,7 @@ public sealed partial class StaffPickupService(
                 {
                     return LocalFailure("stale_version", receipt);
                 }
-                if (request.Status is "hold_placed" or "closed")
+                if (request.Status is RequestStatus.HoldPlaced or RequestStatus.Closed)
                 {
                     return LocalFailure("pickup_read_only", receipt);
                 }
@@ -274,7 +267,7 @@ public sealed partial class StaffPickupService(
         {
             return "stale_version";
         }
-        if (request.Status is "hold_placed" or "closed")
+        if (request.Status is RequestStatus.HoldPlaced or RequestStatus.Closed)
         {
             return "pickup_read_only";
         }
@@ -298,7 +291,7 @@ public sealed partial class StaffPickupService(
             request.Id,
             StaffVersion.Encode(request.RowVersion),
             request.Status,
-            request.Status is "hold_placed" or "closed",
+            request.Status is RequestStatus.HoldPlaced or RequestStatus.Closed,
             request.PreferredPickupBranchId,
             request.PreferredPickupBranchName,
             branches,
@@ -324,14 +317,18 @@ public sealed partial class StaffPickupService(
         {
             return new LockedPickup("not_found");
         }
-        var organization = await context.Organizations.FromSqlInterpolated(
-                $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {snapshot.LibraryOrganizationId}")
-            .SingleOrDefaultAsync(cancellationToken);
+        if (!await StaffEligibilityService.LockOrganizationsAsync(context,
+                [LibraryScope.SystemOrganizationId, snapshot.LibraryOrganizationId], cancellationToken))
+        {
+            return new LockedPickup("organization_inactive");
+        }
+        var organization = context.Organizations.Local.Single(item => item.Id == snapshot.LibraryOrganizationId);
         if (organization?.IsActive != true) return new LockedPickup("organization_inactive");
         var staff = await context.StaffUsers.FromSqlInterpolated(
                 $"SELECT * FROM [asap].[StaffUser] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {actor.Id}")
             .SingleOrDefaultAsync(cancellationToken);
-        if (staff is null || !IsCurrentAndEligible(actor, staff, snapshot.LibraryOrganizationId))
+        if (staff is null || !IsCurrentAndEligible(actor, staff, snapshot.LibraryOrganizationId) ||
+            !StaffEligibilityService.HasLockedActiveOrganization(context, staff))
         {
             return new LockedPickup("staff_scope_forbidden");
         }
@@ -344,10 +341,7 @@ public sealed partial class StaffPickupService(
     }
 
     private bool IsCurrentAndEligible(CurrentStaff actor, StaffUser row, int organizationId) =>
-        row.IsActive && allowedTenantIds.Contains(actor.EntraTenantId) &&
-        StaffEmail.MatchesAuthenticationEmail(row, actor.AuthenticationEmail) &&
-        (row.Role == "super_admin" && row.OrganizationId == 1 ||
-         row.Role is "staff" or "admin" && row.OrganizationId == organizationId);
+        staffEligibility.IsCurrentAndEligible(actor, row, organizationId);
 
     private static string AppendNote(string? current, string note) =>
         string.IsNullOrWhiteSpace(current) ? note : $"{current.TrimEnd()}\n{note}";

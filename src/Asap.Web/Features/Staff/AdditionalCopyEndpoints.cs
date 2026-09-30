@@ -1,3 +1,4 @@
+using Asap.Web.Infrastructure.Data;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Asap.Web.Features.Staff;
@@ -31,7 +32,11 @@ public static class AdditionalCopyEndpoints
         AdditionalCopyService service,
         CancellationToken cancellationToken)
     {
-        var result = await service.ListAsync(Current(context), scope, status, cancellationToken);
+        if (!LibraryScope.TryParse(scope, LibraryScope.All, out var parsedScope))
+        {
+            return Results.BadRequest(new { code = "invalid_scope_or_status" });
+        }
+        var result = await service.ListAsync(Current(context), parsedScope, status, cancellationToken);
         return result is null
             ? Results.BadRequest(new { code = "invalid_scope_or_status" })
             : Results.Json(result);
@@ -223,6 +228,7 @@ public static class AdditionalCopyEndpoints
         {
             return await service.GetAsync(Current(context), id.ToString(), claimClearedReason, cancellationToken);
         }
+        // The task mutation committed; preserve that accepted outcome if the optional detail refresh fails.
         catch (Exception exception)
         {
             cancellationToken.ThrowIfCancellationRequested();
